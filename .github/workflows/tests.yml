@@ -29,4 +29,5 @@ jobs:
           python -m unittest discover -s tests -v
       - run: python -m compileall -q openteamily tests
       - run: python -m openteamily.server --help
-      - run: git diff --check
+      - name: Whitespace check excluding imported upstream snapshots
+        run: git diff --check -- . ':(exclude)runtime/flybot' ':(exclude)services/bot-social'
