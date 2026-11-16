@@ -84,7 +84,7 @@ class SettingsPageTests(unittest.TestCase):
         html = self.raw.call('GET', '/settings')['body'].decode()
         for name in ('appearance', 'appearance_schedule', 'language', 'chat_language', 'auto_translate',
                      'send_shortcut', 'message_folding', 'document_cards', 'link_previews',
-                     'task_completion_reminders', 'likes_visibility', 'favorites_visibility'):
+                     'task_completion_reminders', 'likes_visible', 'favorites_visible'):
             self.assertIn(f'name="{name}"', html)
         self.assertIn('sunset_sunrise', html)
         self.assertNotIn('name="fold_long_messages"', html)

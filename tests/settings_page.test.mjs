@@ -14,7 +14,7 @@ test('diff emits only changed settings keys', () => {
                    language: 'zh-CN', chat_language: 'auto', auto_translate: false,
                    send_shortcut: 'enter', message_folding: 'standard', document_cards: false,
                    link_previews: true, task_completion_reminders: true,
-                   likes_visibility: 'everyone', favorites_visibility: 'everyone'};
+                   likes_visible: true, favorites_visible: true};
   assert.deepEqual(diff(current, current), {});
   assert.deepEqual(diff(current, {...current, appearance: 'dark', document_cards: true}),
                    {appearance: 'dark', document_cards: true});
@@ -25,7 +25,6 @@ test('readForm maps radios, select and checkboxes', () => {
     appearance: 'light', appearance_schedule: 'custom', appearance_start: '21:00',
     appearance_end: '06:00', language: 'en', chat_language: 'ja',
     send_shortcut: 'mod_enter', message_folding: 'compact',
-    likes_visibility: 'private', favorites_visibility: 'everyone',
   };
   const fake = {
     get(name) { return form[name]; },
@@ -39,7 +38,7 @@ test('readForm maps radios, select and checkboxes', () => {
       appearance_end: '06:00', language: 'en', chat_language: 'ja', auto_translate: false,
       send_shortcut: 'mod_enter', message_folding: 'compact', document_cards: true,
       link_previews: true, task_completion_reminders: false,
-      likes_visibility: 'private', favorites_visibility: 'everyone',
+      likes_visible: false, favorites_visible: false,
     });
   } finally {
     globalThis.FormData = original;

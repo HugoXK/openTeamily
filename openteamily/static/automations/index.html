@@ -12,7 +12,7 @@
   <header>
     <p class="brand">OpenTeamily / FlyBot</p>
     <h1>自动化</h1>
-    <p class="note">选项语义按 2026-11-16 第一轮对照补齐。生活类模板当时没有记下来，这一页不会编造。还不能写成已经功能对等。启用后不会在这个网页进程里自动计时，需要明确触发一次。</p>
+    <p class="note">选项语义按 2026-11-16 第一轮对照补齐。生活模板、意图动词和时间选项已按 2026-11-16 第二轮对照补齐。每月的日期输入仍未完整记下。还不能写成已经功能对等。启用后不会在这个网页进程里自动计时，需要明确触发一次。</p>
     <nav>
       <a href="/settings">账号设置</a>
       <a href="/team">创建团队</a>
@@ -54,11 +54,21 @@
       </fieldset>
       <fieldset>
         <legend>标签</legend>
-        <label>意图 <input type="text" name="intent" maxlength="80" autocomplete="off"></label>
+        <label>意图
+          <select name="intent">
+            <option value="">（不指定）</option>
+            <option value="research">研究</option>
+            <option value="monitor">监测</option>
+            <option value="create">创作</option>
+            <option value="analyze">分析</option>
+            <option value="plan">规划</option>
+            <option value="collaborate">协同</option>
+          </select>
+        </label>
         <label>范围
           <select name="scope">
-            <option value="once">只运行一次</option>
-            <option value="ongoing">长期运行</option>
+            <option value="once">单次（交付一次即完成）</option>
+            <option value="ongoing">长期（一直运行，直到停掉）</option>
           </select>
         </label>
         <label>参与成员（用户名，逗号分隔） <input type="text" name="participants" maxlength="512" autocomplete="off"></label>
@@ -67,7 +77,7 @@
       <fieldset>
         <legend>时间安排</legend>
         <label><input type="radio" name="kind" value="now"> 立即运行</label>
-        <label><input type="radio" name="kind" value="later"> 稍后一次</label>
+        <label><input type="radio" name="kind" value="later"> 稍后</label>
         <label><input type="radio" name="kind" value="daily"> 每天</label>
         <label><input type="radio" name="kind" value="weekly"> 每周</label>
         <label><input type="radio" name="kind" value="monthly"> 每月</label>
@@ -86,6 +96,7 @@
           </select>
         </label>
         <label>每月第几天 <input type="number" name="day" min="1" max="31" value="1"></label>
+        <p class="note">每月的日期输入还没有从对照里完整记下，这里暂用 1–31，未经核对。</p>
         <label>时区 <input type="text" name="time_zone" value="Asia/Shanghai" maxlength="64" autocomplete="off"></label>
       </fieldset>
       <fieldset>

@@ -1,9 +1,10 @@
 """Per-account interface preferences (issue #4, domain 10).
 
 Self-written for OpenTeamily; no upstream or Teamily source. Option semantics
-follow the 2026-11-16 round-1 Teamily settings contrast. The 18 language codes
-were not listed in that report, so this is a documented candidate list, not a
-claim that Teamily's exact locale set has been recaptured.
+follow the 2026-11-16 Teamily contrasts (rounds 1 and 2). Teamily does not
+expose locale codes; the codes below are our mapping of the recaptured labels.
+Custom appearance period fields were not captured; start/end stay as HH:MM
+and are unverified. Still not settings parity.
 """
 import json
 import re
@@ -14,9 +15,14 @@ CREATE TABLE IF NOT EXISTS user_settings (
  document TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 1), updated INTEGER NOT NULL);
 '''
 
+# Codes are OpenTeamily mappings of labels recaptured from Teamily's lists.
 LANGUAGES = (
-    'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'fr', 'de', 'es', 'pt-BR', 'ru',
-    'it', 'vi', 'th', 'id', 'ar', 'hi', 'tr', 'ms',
+    'en', 'fa', 'fr', 'de', 'es', 'it', 'pt-BR', 'ru',
+    'id', 'ms', 'hi', 'bn', 'th', 'ja', 'ko', 'zh-HK', 'zh-TW', 'zh-CN',
+)
+CHAT_LANGUAGES = (
+    'en', 'fa', 'fr', 'de', 'es', 'pt', 'it', 'ru',
+    'id', 'vi', 'bn', 'th', 'ar', 'ja', 'ko', 'zh-Hant', 'zh-CN',
 )
 TIME = re.compile(r'(?:[01]\d|2[0-3]):[0-5]\d')
 
@@ -27,15 +33,15 @@ FIELDS = {
     'appearance_start': ('time', '18:00'),
     'appearance_end': ('time', '07:00'),
     'language': (LANGUAGES, 'zh-CN'),
-    'chat_language': (('auto',) + LANGUAGES, 'auto'),
+    'chat_language': (('auto',) + CHAT_LANGUAGES, 'auto'),
     'auto_translate': ((True, False), False),
     'send_shortcut': (('enter', 'mod_enter'), 'enter'),
     'message_folding': (('compact', 'standard', 'none'), 'standard'),
     'document_cards': ((True, False), False),
     'link_previews': ((True, False), True),
     'task_completion_reminders': ((True, False), True),
-    'likes_visibility': (('everyone', 'private'), 'everyone'),
-    'favorites_visibility': (('everyone', 'private'), 'everyone'),
+    'likes_visible': ((True, False), True),
+    'favorites_visible': ((True, False), True),
 }
 
 
@@ -57,12 +63,21 @@ def migrate(stored):
     result = {}
     if not isinstance(stored, dict):
         return result
+    stored = dict(stored)
     if 'message_folding' not in stored and 'fold_long_messages' in stored:
         flag = stored['fold_long_messages']
         if flag is True:
-            stored = dict(stored, message_folding='standard')
+            stored['message_folding'] = 'standard'
         elif flag is False:
-            stored = dict(stored, message_folding='none')
+            stored['message_folding'] = 'none'
+    for old_name, new_name in (('likes_visibility', 'likes_visible'),
+                               ('favorites_visibility', 'favorites_visible')):
+        if new_name not in stored and old_name in stored:
+            flag = stored[old_name]
+            if flag == 'everyone':
+                stored[new_name] = True
+            elif flag == 'private':
+                stored[new_name] = False
     for name, value in stored.items():
         if name in FIELDS and valid_value(name, value):
             result[name] = value
@@ -95,6 +110,11 @@ def normalize_changes(changes):
             if type(value) is not bool:
                 return None
             result['message_folding'] = 'standard' if value else 'none'
+            continue
+        if name in ('likes_visibility', 'favorites_visibility'):
+            if value not in ('everyone', 'private'):
+                return None
+            result['likes_visible' if name == 'likes_visibility' else 'favorites_visible'] = value == 'everyone'
             continue
         if name not in FIELDS or not valid_value(name, value):
             return None

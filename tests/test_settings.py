@@ -14,7 +14,7 @@ DEFAULTS = {
     'language': 'zh-CN', 'chat_language': 'auto', 'auto_translate': False,
     'send_shortcut': 'enter', 'message_folding': 'standard', 'document_cards': False,
     'link_previews': True, 'task_completion_reminders': True,
-    'likes_visibility': 'everyone', 'favorites_visibility': 'everyone',
+    'likes_visible': True, 'favorites_visible': True,
 }
 
 
@@ -106,6 +106,10 @@ class SettingsTests(unittest.TestCase):
         })
         self.assertEqual(custom['status'], 200, custom)
         self.assertEqual(self.save(self.alice, 2, {'appearance_start': '25:00'})['status'], 400)
+        migrated_privacy = self.save(self.alice, 2, {'likes_visibility': 'private'})
+        self.assertEqual(migrated_privacy['status'], 200, migrated_privacy)
+        self.assertFalse(migrated_privacy['body']['settings']['values']['likes_visible'])
+        self.assertNotIn('likes_visibility', migrated_privacy['body']['settings']['values'])
 
     def test_skill_secrets_are_write_only_and_isolated(self):
         created = self.alice.call('POST', '/v1/skill-secrets', {'name': 'GITHUB_TOKEN', 'action': 'set', 'value': 'gh-secret-value'})

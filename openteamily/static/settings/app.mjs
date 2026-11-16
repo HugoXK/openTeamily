@@ -1,6 +1,6 @@
 const KEYS = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end', 'language',
               'chat_language', 'auto_translate', 'send_shortcut', 'message_folding', 'document_cards',
-              'link_previews', 'task_completion_reminders', 'likes_visibility', 'favorites_visibility'];
+              'link_previews', 'task_completion_reminders', 'likes_visible', 'favorites_visible'];
 
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -22,8 +22,8 @@ export function readForm(form) {
     document_cards: data.has('document_cards'),
     link_previews: data.has('link_previews'),
     task_completion_reminders: data.has('task_completion_reminders'),
-    likes_visibility: data.get('likes_visibility'),
-    favorites_visibility: data.get('favorites_visibility'),
+    likes_visible: data.has('likes_visible'),
+    favorites_visible: data.has('favorites_visible'),
   };
 }
 
@@ -71,10 +71,10 @@ export function fillForm(form, values) {
     option.checked = option.value === values[option.name];
   }
   for (const name of ['appearance_schedule', 'appearance_start', 'appearance_end', 'language',
-                      'chat_language', 'message_folding', 'likes_visibility', 'favorites_visibility']) {
+                      'chat_language', 'message_folding']) {
     form.elements[name].value = values[name];
   }
-  for (const name of ['auto_translate', 'document_cards', 'link_previews', 'task_completion_reminders']) {
+  for (const name of ['auto_translate', 'document_cards', 'link_previews', 'task_completion_reminders', 'likes_visible', 'favorites_visible']) {
     form.elements[name].checked = values[name];
   }
 }
