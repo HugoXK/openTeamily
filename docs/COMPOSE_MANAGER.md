@@ -220,3 +220,27 @@ Official command references verified during implementation:
 [up](https://docs.docker.com/reference/cli/docker/compose/up/),
 [ps](https://docs.docker.com/reference/cli/docker/compose/ps/),
 [restart](https://docs.docker.com/reference/cli/docker/compose/restart/).
+
+### Exact volume preflight (F-PR19-01)
+
+The manager now runs `docker volume inspect ot-<instance_id>` directly. It does
+not use `volume ls` name filters or infer absence from a successful empty list.
+An existing volume must have exactly the expected name, local driver/scope, no
+driver options, and the expected Compose project/data labels.
+
+Only exit status 1, JSON stdout `[]`, and a single exact, target-bound English
+missing-volume diagnostic are classified as absence. Supported diagnostic forms
+are `Error response from daemon: get <name>: no such volume` and
+`Error: No such volume: <name>`. Other errors, extra diagnostics, wrong names,
+unexpected exit status, invalid metadata, or warnings fail closed. The child
+locale remains `C.UTF-8`. An unrecognized Docker/CLI variant needs operator
+investigation; it is not silently treated as an absent volume. Child output is
+bounded and retained only for internal classification; public exceptions remain
+codes, never raw engine diagnostics.
+
+The disposable subprocess stub now has a literal-substring filter model and
+exact inspect errors. Its regression proves preflight does not depend on that
+model's filtering, plus wrong ownership/driver/options/metadata and error denial.
+This is **not** a real-daemon confirmation of the old filter's behavior or a
+successful Docker/volume-retention acceptance. No Docker engine is available in
+the implementation environment; real Docker/FlyBot compatibility remains pending.

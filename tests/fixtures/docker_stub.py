@@ -20,10 +20,22 @@ def emit(value):
     print(json.dumps(value))
 
 if args[:2] == ['volume', 'ls']:
-    if state.get('volume'):
+    # Literal-substring fixture model exposes callers relying on regex anchors.
+    # This model is not evidence of any particular real daemon's semantics.
+    fragment = args[args.index('--filter') + 1].removeprefix('name=') if '--filter' in args else ''
+    if state.get('volume') and fragment in state['project']:
         print(state['project'])
 elif args[:2] == ['volume', 'inspect']:
-    emit([{'Name': args[2], 'Driver': 'local', 'Scope': 'local', 'Options': {'device': '/untrusted'} if ctrl.get('volume_driver_options') else None, 'Labels': {'com.docker.compose.project': 'wrong' if ctrl.get('wrong_volume') else args[2], 'com.docker.compose.volume': 'data'}}])
+    error = ctrl.get('volume_inspect_error')
+    if error or not state.get('volume') or args[2] != state.get('project'):
+        print(ctrl.get('volume_error_stdout', '[]'))
+        print(error or ('Error response from daemon: get ' + args[2] + ': no such volume'), file=sys.stderr)
+        raise SystemExit(ctrl.get('volume_error_code', 1))
+    if ctrl.get('volume_inspect_raw') is not None:
+        print(ctrl['volume_inspect_raw']); raise SystemExit(0)
+    if ctrl.get('volume_inspect_warning'):
+        print('unexpected warning', file=sys.stderr)
+    emit([{'Name': args[2], 'Driver': ctrl.get('volume_driver', 'local'), 'Scope': ctrl.get('volume_scope', 'local'), 'Options': {'device': '/untrusted'} if ctrl.get('volume_driver_options') else None, 'Labels': {'com.docker.compose.project': 'wrong' if ctrl.get('wrong_volume') else args[2], 'com.docker.compose.volume': 'data'}}])
 elif args[0] == 'inspect':
     iid = state['project'][3:]
     manifest = json.loads((root / ('compose-' + iid + '.json')).read_text())

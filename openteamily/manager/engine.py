@@ -42,6 +42,13 @@ def manifest(iid, entry):
     return {'services': {'flybot': service}, 'volumes': {'data': {'name': 'ot-' + iid}}}
 
 
+class EngineFailure(ManagerError):
+    """Bounded child diagnostics for internal classification, never error text/log output."""
+    def __init__(self, returncode, stdout, stderr):
+        super().__init__('engine_failure')
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
 class Registry:
     def __init__(self, config_path):
         self.config_path = str(config_path)
@@ -117,8 +124,10 @@ class Runner:
                         require(len(out) + len(err) <= LIMIT, 'output_limit')
                 code = proc.wait(timeout=1)
             heartbeat()
-            require(code == 0, 'engine_failure')
-            return out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
+            stdout, stderr = out.decode('utf-8', 'replace'), err.decode('utf-8', 'replace')
+            if code != 0:
+                raise EngineFailure(code, stdout, stderr)
+            return stdout, stderr
         finally:
             # Kill only this subprocess group, never a container or any other job.
             # The daemon may continue an already submitted action: no automatic retry.
@@ -154,16 +163,24 @@ class ComposeEngine:
 
     def volume_check(self, iid, heartbeat=lambda: None):
         name = 'ot-' + check_id(iid)
-        raw, _ = self.runner.run(['volume', 'ls', '--filter', 'name=^' + name + '$', '--format', '{{.Name}}'], heartbeat=heartbeat)
-        names = raw.split()
-        require(names in ([], [name]), 'volume_scope')
-        if names:
-            raw, _ = self.runner.run(['volume', 'inspect', name], heartbeat=heartbeat)
-            data = json_loads(raw)
-            require(isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict) and data[0].get('Name') == name, 'volume_scope')
-            require(data[0].get('Driver') == 'local' and data[0].get('Scope') == 'local' and not data[0].get('Options'), 'volume_driver')
-            labels = data[0].get('Labels')
-            require(isinstance(labels, dict) and labels.get('com.docker.compose.project') == name and labels.get('com.docker.compose.volume') == 'data', 'volume_owner')
+        # Exact lookup, independent of Docker name-filter matching semantics.
+        try:
+            raw, stderr = self.runner.run(['volume', 'inspect', name], heartbeat=heartbeat)
+        except EngineFailure as error:
+            # Only one exact missing object is safe to treat as absent. Connectivity,
+            # permission, driver, malformed/unknown or mixed errors must fail closed.
+            # CLI/localization variants not listed here remain unsupported errors.
+            missing = {f'Error response from daemon: get {name}: no such volume',
+                       f'Error: No such volume: {name}'}
+            require(error.returncode == 1 and error.stdout.strip() == '[]'
+                    and error.stderr.strip() in missing, 'engine_failure')
+            return
+        require(not stderr.strip(), 'volume_inspect_warning')
+        data = json_loads(raw)
+        require(isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict) and data[0].get('Name') == name, 'volume_scope')
+        require(data[0].get('Driver') == 'local' and data[0].get('Scope') == 'local' and not data[0].get('Options'), 'volume_driver')
+        labels = data[0].get('Labels')
+        require(isinstance(labels, dict) and labels.get('com.docker.compose.project') == name and labels.get('com.docker.compose.volume') == 'data', 'volume_owner')
 
     def inspect(self, iid, heartbeat=lambda: None):
         entry, _ = self.registry.entry(iid)

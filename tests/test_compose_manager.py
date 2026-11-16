@@ -286,6 +286,57 @@ class ComposeManagerTests(unittest.TestCase):
             self.engine.compose(self.iid, 'logs')
         self.assertEqual(error.exception.code, 'output_limit')
 
+    def test_exact_volume_inspect_rejects_existing_untrusted_volume_under_substring_filter_model(self):
+        self.engine.compose(self.iid, 'create')
+        name = 'ot-' + self.iid
+        # Regression fixture: anchored filter misses the existing name. Not a real-daemon claim.
+        raw, _ = self.engine.runner.run(['volume', 'ls', '--filter', 'name=^' + name + '$', '--format', '{{.Name}}'])
+        self.assertEqual(raw, '')
+        self.controls(wrong_volume=True)
+        with patch.object(self.engine.runner, 'run', wraps=self.engine.runner.run) as run:
+            with self.assertRaises(ManagerError) as error:
+                self.engine.volume_check(self.iid)
+            self.assertEqual(error.exception.code, 'volume_owner')
+            self.assertEqual([c.args[0] for c in run.call_args_list], [['volume', 'inspect', name]])
+
+    def test_exact_volume_missing_is_distinguished_from_all_other_nonzero_errors(self):
+        name = 'ot-' + self.iid
+        self.engine.volume_check(self.iid)  # exact missing response from actual subprocess stub
+        self.controls(volume_inspect_error='Error: No such volume: ' + name)
+        self.engine.volume_check(self.iid)
+        for ctrl in (
+                {'volume_inspect_error': 'permission denied'},
+                {'volume_inspect_error': 'Cannot connect to the Docker daemon'},
+                {'volume_inspect_error': 'Error response from daemon: get ot-wrong: no such volume'},
+                {'volume_inspect_error': 'Error: No such volume: ' + name + '\npermission denied'},
+                {'volume_error_code': 2}, {'volume_error_stdout': ''},
+                {'volume_error_stdout': '[{}]'}, {'volume_error_stdout': 'garbled'}):
+            with self.subTest(ctrl=ctrl):
+                self.controls(**ctrl)
+                with self.assertRaises(ManagerError) as error:
+                    self.engine.volume_check(self.iid)
+                self.assertEqual(error.exception.code, 'engine_failure')
+
+    def test_volume_inspect_success_is_not_absence_and_invalid_metadata_fails_closed(self):
+        self.engine.compose(self.iid, 'create')
+        self.engine.volume_check(self.iid)
+        for ctrl in ({'volume_inspect_raw': '[]'}, {'volume_inspect_raw': '{}'},
+                     {'volume_inspect_raw': 'invalid'}, {'volume_inspect_warning': True},
+                     {'volume_inspect_raw': '[{"Name":"wrong"}]'}, {'volume_driver': 'remote'},
+                     {'volume_scope': 'global'}, {'volume_driver_options': True}, {'wrong_volume': True}):
+            with self.subTest(ctrl=ctrl):
+                self.controls(**ctrl)
+                with self.assertRaises(ManagerError):
+                    self.engine.volume_check(self.iid)
+
+    def test_volume_failure_diagnostics_never_become_public_exception_text(self):
+        secret = 'synthetic-secret-never-log-this'
+        self.controls(volume_inspect_error='permission denied password=' + secret)
+        with self.assertRaises(ManagerError) as error:
+            self.engine.volume_check(self.iid)
+        self.assertEqual(str(error.exception), 'engine_failure')
+        self.assertNotIn(secret, repr(error.exception))
+
     def test_claim_validation_binds_requested_target_revision_and_operation(self):
         claim = self.runtime.claim(self.identity, self.iid)
         client = ManagerClient('http://127.0.0.1:8080', 'manager-a', self.token, enabled=True)
