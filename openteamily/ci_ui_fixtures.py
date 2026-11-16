@@ -35,6 +35,21 @@ MEDIA_TITLE = '[CI FIXTURE] Media'
 BOARD_TITLE = '[CI FIXTURE] Whiteboard'
 BOARD_TEXT = 'CI FIXTURE'
 RUNTIME_KEY_NAME = 'ci-fixture-desk'
+MEMORY_TITLE = '[CI FIXTURE] Memory page'
+MEMORY_BODY = 'This is synthetic CI screenshot fixture text for a memory page, not production data.'
+MEMORY_CREATE_TITLE = '[CI FIXTURE] Memory page created in UI'
+MEMORY_CREATE_BODY = 'Synthetic body entered in the CI screenshot script, not production data.'
+MEMORY_EDITED_TITLE = '[CI FIXTURE] Memory page after edit'
+MEMORY_EDITED_BODY = 'Synthetic body after the CI screenshot script edited this page.'
+ACTION_TITLE = '[CI FIXTURE] Next action'
+ACTION_NOTES = 'Synthetic CI fixture follow-up notes, not production data.'
+ACTION_DUE_AT = 1767139200  # 2026-12-31 00:00:00 UTC
+ACTION_DUE = '2026-12-31'
+ACTION_CREATE_TITLE = '[CI FIXTURE] Next action created in UI'
+ACTION_CREATE_NOTES = 'Synthetic notes entered in the CI screenshot script.'
+ACTION_CREATE_DUE = '2026-12-15'
+ACTION_EDITED_TITLE = '[CI FIXTURE] Next action after edit'
+ACTION_EDITED_NOTES = 'Synthetic notes after the CI screenshot script edited this action.'
 PROVIDER_TEXT = '[CI FIXTURE] Fake provider briefing. Not a real vendor response.'
 
 
@@ -156,6 +171,15 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
             ],
         },
     }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-board-0001'}), (201,), 'create the fixture whiteboard')
+    memory = _require(owner.call('POST', '/v1/workspaces/%s/memory' % wid, {
+        'title': MEMORY_TITLE, 'body': MEMORY_BODY,
+    }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-memory-0001'}), (201,), 'create the fixture memory page')
+    memory_id = memory['body']['page']['id']
+    action = _require(owner.call('POST', '/v1/workspaces/%s/memory/actions' % wid, {
+        'title': ACTION_TITLE, 'notes': ACTION_NOTES, 'due_at': ACTION_DUE_AT,
+        'memory_page_id': memory_id,
+    }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-action-0001'}), (201,), 'create the fixture next action')
+    action_id = action['body']['action']['id']
     issued = _require(owner.call('POST', '/v1/runtime-keys', {'name': RUNTIME_KEY_NAME}),
                       (200, 201), 'issue a fixture runtime key')
     runtime_token = issued['body']['token']
@@ -183,6 +207,22 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         'media_title': MEDIA_TITLE,
         'board_title': BOARD_TITLE,
         'board_text': BOARD_TEXT,
+        'memory_id': memory_id,
+        'memory_title': MEMORY_TITLE,
+        'memory_body': MEMORY_BODY,
+        'memory_create_title': MEMORY_CREATE_TITLE,
+        'memory_create_body': MEMORY_CREATE_BODY,
+        'memory_edited_title': MEMORY_EDITED_TITLE,
+        'memory_edited_body': MEMORY_EDITED_BODY,
+        'action_id': action_id,
+        'action_title': ACTION_TITLE,
+        'action_notes': ACTION_NOTES,
+        'action_due': ACTION_DUE,
+        'action_create_title': ACTION_CREATE_TITLE,
+        'action_create_notes': ACTION_CREATE_NOTES,
+        'action_create_due': ACTION_CREATE_DUE,
+        'action_edited_title': ACTION_EDITED_TITLE,
+        'action_edited_notes': ACTION_EDITED_NOTES,
         'runtime_key_name': RUNTIME_KEY_NAME,
         'provider_text': PROVIDER_TEXT,
         'invite_id': invite_id,
