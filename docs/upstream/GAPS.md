@@ -17,8 +17,10 @@ system.”
   `runtime/flybot-web-slots/`. Live Bot Social onboarding is enabled when a
   server URL is configured (CI uses a fake server and `ot-fake-` tokens only).
   Management-plane injection of that URL, composer `@` mentions / Bot details
-  in the official ds-bot drawer, richer group/DM façade flows, and a
-  license-complete public image release are still open.
+  in the official ds-bot drawer, and a license-complete public image release
+  are still open. The social façade now posts group/DM lines and hosts
+  face-to-face rooms on the v0.3.6 ledger; Teamily comparison of those
+  flows is not done.
 - Host-integration tests that imported FlyBot `core/` were removed, not ported.
   The new adapter tests cover façade + ledger + `apply()` on the v0.3.6 host.
 
