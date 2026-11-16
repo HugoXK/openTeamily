@@ -37,6 +37,7 @@ class AutomationsPageTests(unittest.TestCase):
         self.assertIn('value="now"', html)
         self.assertIn('value="monthly"', html)
         self.assertIn('value="weekdays"', html)
+        self.assertIn('运行记录', html)
         self.assertIn('/v1/workspaces', html)
         self.assertIn('default-src \'none\'', page['headers']['Content-Security-Policy'])
         self.assertEqual(page['headers']['Cache-Control'], 'no-store')

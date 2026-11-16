@@ -12,6 +12,7 @@ from uuid import uuid4
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
 from . import automations, bot_social, invites, members, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
+from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
 class APIError(Exception):
@@ -45,6 +46,7 @@ class Config:
     max_rate_buckets: int = 4096
     runtime_heartbeat_seconds: int = 45
     runtime_task_timeout_seconds: int = 60
+    automation_interval_seconds: int = 5
 
     def __post_init__(self):
         parsed = urlsplit(self.origin)
@@ -83,9 +85,11 @@ class App:
     def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None):
         self.store, self.config, self.clock = store, config, clock
         self.lifecycle, self.manager_auth = lifecycle, manager_auth
-        self.automation_backend = automation_backend
+        self.automation_backend = automation_backend or AgentAutomationBackend(
+            stale=config.runtime_heartbeat_seconds, timeout=config.runtime_task_timeout_seconds)
         self.operator_admin = operator_admin
         self.oidc_registry = oidc_registry
+        self._automation_worker = None
 
     def __call__(self, env, start_response):
         headers = [('Content-Type', 'application/json; charset=utf-8'), ('Cache-Control', 'no-store'),
@@ -670,7 +674,7 @@ class App:
             if path == '/v1/automation-templates' and method == 'GET' and not query:
                 return 200, {'items': automations.templates()}, []
             auto_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove|runs))?))?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel))?)?)?))?', path)
             if auto_path:
                 return self.automation_dispatch(db, session, method, query, now, env, *auto_path.groups())
             if path == '/v1/invites/accept' and method == 'POST' and not query:
@@ -820,7 +824,10 @@ class App:
         meta = runtime_connect.load_meta(db, task['id'])
         workspace_id = meta['workspace_id'] if meta else None
         if workspace_id:
-            public, secret, source = model_api.resolve(db, self.store, workspace_id=workspace_id)
+            workspace = db.execute('SELECT * FROM workspaces WHERE id=?', (workspace_id,)).fetchone()
+            owner_id = workspace['owner_id'] if workspace is not None else connection['user_id']
+            public, secret, source = model_api.resolve(
+                db, self.store, workspace_id=workspace_id, user_id=owner_id)
         else:
             public, secret, source = model_api.resolve(db, self.store, user_id=connection['user_id'])
         if not secret or not public.get('provider') or not public.get('base_url') or not public.get('model'):
@@ -1000,20 +1007,39 @@ class App:
         )
         return 200, {'removed': members.view(target)}, []
 
-    def automation_dispatch(self, db, session, method, query, now, env, workspace_id, ticking, target_id, action):
+    def make_scheduler(self):
+        return Scheduler(self.store, self.automation_backend, clock=self.clock,
+                         max_runs=self.config.max_runs_per_automation,
+                         stale=self.config.runtime_heartbeat_seconds,
+                         timeout=self.config.runtime_task_timeout_seconds)
+
+    def start_automation_worker(self):
+        if self._automation_worker is not None:
+            return self._automation_worker
+        worker = BackgroundWorker(self.make_scheduler(), self.config.automation_interval_seconds)
+        self._automation_worker = worker.start()
+        return worker
+
+    def stop_automation_worker(self):
+        worker = self._automation_worker
+        self._automation_worker = None
+        if worker is not None:
+            worker.stop()
+
+    def automation_dispatch(self, db, session, method, query, now, env, workspace_id, ticking, target_id, removing, runs, run_id, cancelling):
         workspace = members.load(db, workspace_id, session['user_id'])
         if workspace is None:
             refuse(404, 'not_found', 'Workspace not found')
         actor = members.role_of(db, workspace, session['user_id'])
+        scheduler = self.make_scheduler()
         if ticking:
             if method != 'POST' or query:
                 refuse(400, 'invalid', 'Invalid automation request')
             if actor not in ('owner', 'admin'):
                 refuse(403, 'forbidden', 'Not allowed to change automations')
             self.body(env, [])
-            from .scheduler import Scheduler
-            fired = Scheduler(self.store, self.automation_backend, clock=self.clock,
-                              max_runs=self.config.max_runs_per_automation).tick_workspace(db, workspace['id'], now)
+            scheduler.reconcile_workspace(db, workspace['id'], now)
+            fired = scheduler.tick_workspace(db, workspace['id'], now)
             return 200, {'items': fired}, []
         if target_id is None and method == 'GET':
             try:
@@ -1055,7 +1081,36 @@ class App:
         ).fetchone()
         if row is None:
             refuse(404, 'not_found', 'Automation not found')
-        if action == 'runs':
+        if runs:
+            if run_id and cancelling:
+                if method != 'POST' or query:
+                    refuse(400, 'invalid', 'Invalid automation request')
+                if actor not in ('owner', 'admin'):
+                    refuse(403, 'forbidden', 'Not allowed to change automations')
+                self.body(env, [])
+                item = db.execute(
+                    'SELECT * FROM automation_runs WHERE id=? AND automation_id=? AND workspace_id=?',
+                    (run_id, row['id'], workspace['id']),
+                ).fetchone()
+                if item is None:
+                    refuse(404, 'not_found', 'Automation run not found')
+                cancelled = scheduler.cancel_run(db, item, now)
+                if cancelled is None:
+                    refuse(409, 'conflict', 'Automation run cannot be cancelled')
+                return 200, {'run': cancelled}, []
+            if run_id:
+                if method != 'GET' or query:
+                    refuse(400, 'invalid', 'Invalid automation request')
+                item = db.execute(
+                    'SELECT * FROM automation_runs WHERE id=? AND automation_id=? AND workspace_id=?',
+                    (run_id, row['id'], workspace['id']),
+                ).fetchone()
+                if item is None:
+                    refuse(404, 'not_found', 'Automation run not found')
+                if item['status'] == 'queued':
+                    scheduler._reconcile_one(db, item, now)
+                    item = db.execute('SELECT * FROM automation_runs WHERE id=?', (run_id,)).fetchone()
+                return 200, {'run': automations.run_view(item)}, []
             if method != 'GET':
                 refuse(400, 'invalid', 'Invalid automation request')
             try:
@@ -1064,17 +1119,18 @@ class App:
                 raise
             except Exception:
                 refuse(400, 'invalid', 'Invalid pagination parameters')
+            scheduler.reconcile_workspace(db, workspace['id'], now)
             rows = db.execute(
                 'SELECT * FROM automation_runs WHERE automation_id=? AND id>? ORDER BY id LIMIT ?',
                 (row['id'], cursor, limit + 1),
             ).fetchall()
             return 200, {'items': [automations.run_view(item) for item in rows[:limit]],
                          'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
-        if method == 'GET' and action is None and not query:
+        if method == 'GET' and removing is None and not query:
             return 200, {'automation': self.automation_view(db, row, session['user_id'])}, []
         if method != 'POST' or query:
             refuse(400, 'invalid', 'Invalid automation request')
-        if action == 'remove':
+        if removing == 'remove':
             if actor not in ('owner', 'admin'):
                 refuse(403, 'forbidden', 'Not allowed to change automations')
             self.body(env, [])
