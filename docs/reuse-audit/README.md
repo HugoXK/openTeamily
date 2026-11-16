@@ -21,6 +21,9 @@
 
 随后已在 [`runtime/third_party/libreoffice-kit/`](../../runtime/third_party/libreoffice-kit/) 放入 0.1.5 的对应源码与通知要约（办公功能保留；未排除 office 技能）。公开 git 仍未找到 0.1.5 对应提交，要约是否满足再分发镜像的 MPL 义务尚未作出法律解释，因此不得把镜像称为可再分发的公开发行物。相关跟踪仍保持开放：issue 3。
 
+构建成品的现场文件/软件包/许可清单由 CI 在已有的 FlyBot runtime image 作业中收集，并作为 `flybot-runtime-image-license-inventory` artifact 上传（不发布镜像）。收集程序和夹具测试见 [`runtime/flybot-image/inventory/`](../../runtime/flybot-image/inventory/)。该 artifact 记录全局 DSH、额外包与 profile 的已安装闭包、Debian 版权哈希与 deb-src 指针、Claude 载荷是否出现及找到的条款文本、字体/OFL 通知，以及 `/opt/licenses` 中的 NOTICE 与商标字样。这是合规收集，不是法律意见，也不是公开发行授权。对照 artifact 的审阅、MPL 3.2/3.3 解释、tarball 与 git 已编译 JS 的对应、Debian 源码要约是否充分等事项仍然开放。相关跟踪仍保持开放：issue 3。
+
+
 
 ## 方法
 

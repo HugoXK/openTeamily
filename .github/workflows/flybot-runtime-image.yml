@@ -1,7 +1,10 @@
 name: FlyBot runtime image
 # Builds the OpenTeamily-authored runtime/flybot-image recipe and smokes it under
-# the compose manager contract (UID 1000, read-only, /data, port 8080). Does not
-# close issue #3 or authorize a public redistributable release.
+# the compose manager contract (UID 1000, read-only, /data, port 8080). After the
+# smoke, inventories packages and licenses in the built image and uploads that
+# listing as a CI artifact. The image is not published. Related tracking remains
+# open: issue 1, issue 3, issue 5. This job does not authorize a public
+# redistributable release.
 on:
   push:
   pull_request:
@@ -58,3 +61,16 @@ jobs:
             runtime
       - name: Smoke the image as the compose manager would start it
         run: node runtime/flybot-image/test/smoke.mjs openteamily-flybot:test
+
+      - name: Inventory licenses in the built image
+        run: |
+          out="${RUNNER_TEMP}/image-inventory"
+          mkdir -p "$out"
+          bash runtime/flybot-image/inventory/run-in-image.sh openteamily-flybot:test "$out"
+      - name: Upload the image license inventory
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flybot-runtime-image-license-inventory
+          path: ${{ runner.temp }}/image-inventory
+          if-no-files-found: error
+          retention-days: 30

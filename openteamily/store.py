@@ -36,6 +36,7 @@ class Store:
         info = directory.stat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise ValueError('Data directory must be private and owned by this process user')
+        self.data_dir = directory
         self.path = directory / 'management.sqlite3'
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:

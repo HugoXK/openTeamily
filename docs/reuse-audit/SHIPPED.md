@@ -6,7 +6,7 @@
 
 机器可读钉扎见 [shipped-pins.json](shipped-pins.json)。#18 对既有来源的审计记录仍在 [README.md](README.md) 与 [pins.json](pins.json)；本文件不追溯改写那些结论。Project / Timeline 的静态风险仍以 #18 记录为准，这两个插件**未被导入**；若日后复用须先修那些风险。
 
-方法：只读本仓库已提交文件、公开 npm 注册表元数据，以及通过 GitHub 读取的 `deepseek-ai/deepseek-harness` 标签 `dsh-v0.2.2-rc.1`（提交 `66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db`）上的 `LICENSE`、`THIRD_PARTY_NOTICES.md` 和 `Montserrat-OFL.txt`。未执行 `npm install`，未展开完整传递闭包，本机没有 Docker，因此没有对构建成品做文件清单。npm 的 `license` 字段不能代替逐文件阅读上游 LICENSE。
+方法：只读本仓库已提交文件、公开 npm 注册表元数据，以及通过 GitHub 读取的 `deepseek-ai/deepseek-harness` 标签 `dsh-v0.2.2-rc.1`（提交 `66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db`）上的 `LICENSE`、`THIRD_PARTY_NOTICES.md` 和 `Montserrat-OFL.txt`。未执行本机 `npm install`，也未在本文件中内嵌构建成品清单。源码侧记录仍以仓库文件和公开注册表为准。CI 的 FlyBot runtime image 作业会在已经构建的 `openteamily-flybot:test` 上运行 `runtime/flybot-image/inventory/collect.mjs`，并把实际安装闭包、Debian 版权哈希与 deb-src 指针、Claude/Anthropic 扫描、字体/OFL 文本以及 `/opt/licenses` 中的 NOTICE 与归属文件作为 `flybot-runtime-image-license-inventory` artifact 上传（不推送镜像）。该 artifact 才是对应构建的现场清单；本文件不是它的替身。npm 的 `license` 字段不能代替逐文件阅读上游 LICENSE。
 
 ## 1. 本仓库内的许可文本
 
@@ -20,7 +20,7 @@
 
 新撰写且声明 MIT 的运行时包：`runtime/flybot-image`、`runtime/flybot-image/plugin`、`runtime/flybot-social-host`、`runtime/flybot-web-slots`、`runtime/flybot-web-slots/social-web`（均 `license: MIT`）。`manager/compose-planner/package.json` 没有 `license` 字段，按根 MIT 覆盖的新撰写材料处理，除非日后证明另有来源。`ORIGIN.md` / `OPENTEAMILY.md` / `UPSTREAM.md` 是 OpenTeamily 文档覆层，适用根 MIT，不改变相邻上游文件的许可。
 
-管理面（`openteamily/`）为 Python 3 标准库实现，本仓库没有 Python 第三方 `requirements` 锁。CI 使用钉扎的 GitHub Actions：`actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803`（v6）、`actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020`（v4.4.0）以及部分工作流中的 `actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1`（v7.1.0）、`actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1`（v6）。这些是 CI 用软件，不是运行时镜像内容。
+管理面（`openteamily/`）为 Python 3 标准库实现，本仓库没有 Python 第三方 `requirements` 锁。CI 使用钉扎的 GitHub Actions：`actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803`（v6）、`actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020`（v4.4.0）以及部分工作流中的 `actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1`（v7.1.0）、`actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1`（v6）、`actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9`（v7.0.2，仅用于上传镜像许可清单 artifact）。这些是 CI 用软件，不是运行时镜像内容。
 
 未获许可的 [Birfy/flybot-control-plane](https://github.com/Birfy/flybot-control-plane) **仍禁止导入**（根目录无 LICENSE）。商标与品牌资产仍待核，不得把 Teamily 专有资产或未核商标的标识导入本仓。
 
@@ -59,7 +59,7 @@ Bot Social 是可选适配，不是架构必选第三服务。
 | tarball 与 git 标签的字节对应 | **未核实** |
 | 该标签上 `LICENSE` | sha256 `ebb4f09972aee8608be255debaf78451a68e95c290f55c240dec2ecfa16ea6be`（1065 字节），与 #18 所核 `dsh-v0.2.1-rc.2` 的 LICENSE 相同 |
 | 该标签上 `THIRD_PARTY_NOTICES.md` | sha256 `4bd8832885ca31daf3e480fb950b9e849446438c0089b05fab67d6c2673fa2ef`（26763 字节），**不同于** #18 的 `aeea7aa2…`（25003 字节） |
-| 该标签上 `Montserrat-OFL.txt` | sha256 `861d64229728cd65a98d119612c12769582574d1a092f0b63c8b0fd474e7065f`（4400 字节），SIL Open Font License 1.1。若再分发包含该字体的 UI，须保留 OFL 文本，不得改许可，也不得单独出售字体。本次未从构建成品中确认字体文件是否被拷入默认镜像。 |
+| 该标签上 `Montserrat-OFL.txt` | sha256 `861d64229728cd65a98d119612c12769582574d1a092f0b63c8b0fd474e7065f`（4400 字节），SIL Open Font License 1.1。若再分发包含该字体的 UI，须保留 OFL 文本，不得改许可，也不得单独出售字体。字体文件是否进入默认镜像，以对应 CI 构建上传的 `flybot-runtime-image-license-inventory` artifact 为准，不在本文件内嵌现场清单。 |
 
 该 CLI 包有 **90** 个生产直接依赖。向 npm 查询后，这 90 个在已声明的确切版本或（8 个范围声明的）满足范围的候选版本上，**全部声明 MIT**。8 个范围为：`@deepseek-ai/cordis@~4.1.0`（候选 4.1.0）、`cordis-plugin-include@~1.1.0`、`cordis-plugin-loader@~1.1.0`、`cordis-plugin-timer@~1.2.0`、`schemastery@~3.19.0`、`commander@^15.0.0`（候选 15.1.0）、`js-yaml@^4.3.2`（候选 4.3.2，不是 5.x）、`node-addon-require-builtin@^0.1.9`（候选 0.1.9）。这些候选是 2026-11-16 注册表上满足范围的版本，**不是**锁文件钉扎。完整表见 `shipped-pins.json`。已解析的 `@deepseek-ai/*@0.2.2-rc.1` 包同样没有 `gitHead`。
 
@@ -69,18 +69,24 @@ Bot Social 是可选适配，不是架构必选第三服务。
 
 DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包声明 MPL-2.0，且「Recipients must have access to those corresponding sources and notices。」默认执行配方中的 `npm install -g @deepseek-ai/dsh@0.2.2-rc.1` 就会经由 office 技能带入该组件。本仓库**保留**该办公转换能力，不借排除组件来回避义务。已在 [`runtime/third_party/libreoffice-kit/`](../../runtime/third_party/libreoffice-kit/) 放入 0.1.5 入口包的完整 npm 内容（含经验证的 MPL-2.0 `LICENSE` 与 `NOTICE` 文本），以及 Linux 可选引擎 `@deepseek-ai/libreoffice-kit-wasm@0.1.5` 包内自带的 `licenses/` 与 `sources/`（含 LibreOffice/core 修订 `bce0998afefdbc355585ca324285661a2170ba77` 的声明）。未把 `soffice.wasm` 等引擎二进制纳入本仓。公开 git 默认分支目前是 0.1.3，**未找到** 0.1.5 的公开标签或提交，因此该确切修订的 TypeScript 首选形式尚未钉到公开 git 对象。本要约是否满足 MPL 对再分发镜像的要求，属于**尚未作出的法律解释**。在该点以及清单中其余未知项解决之前，仍不得把运行时镜像称为可再分发的公开发行物。
 
-### 3.3 Claude / Anthropic 载荷（未证明是否进入默认镜像）
+### 3.3 Claude / Anthropic 载荷（以 CI 构建成品扫描为准）
 
 `@anthropic-ai/claude-agent-sdk` **不是** `@deepseek-ai/dsh@0.2.2-rc.1` 的生产直接依赖。CLI 包的 `devDependencies` 含 `@deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.1`（声明 MIT，其直接依赖只有 `schemastery`）。按通常的 `npm install -g` 行为，devDependencies 不会被安装，但这不是对完整闭包的证明。
 
-同一标签的 `THIRD_PARTY_NOTICES.md` 仍列出官方 `@anthropic-ai/claude-agent-sdk`（声明 “SEE LICENSE IN README.md”）及其 0.3.263 平台可选包（声明 “SEE LICENSE IN LICENSE.md”），并写明这套条款不被当作宽松许可。本次**未阅读**那些 README / LICENSE.md 正文，也**未证明**默认镜像不含这些载荷。在条款核清且能证明默认安装不会分发它们之前，不得宣称「完整 DSH 运行时已可再分发」。
+同一标签的 `THIRD_PARTY_NOTICES.md` 仍列出官方 `@anthropic-ai/claude-agent-sdk`（声明 “SEE LICENSE IN README.md”）及其 0.3.263 平台可选包（声明 “SEE LICENSE IN LICENSE.md”），并写明这套条款不被当作宽松许可。是否进入默认镜像，由 CI 对已构建镜像的扫描写入 `flybot-runtime-image-license-inventory`（`claude.present` 与若存在则附带的许可文件正文）。本文件不内嵌某次构建的结论。若 artifact 显示存在这些载荷，须阅读其中摘录的条款；收集到文本不等于已经完成法律解释，也不得把未读条款写成已核清。
 
-### 3.4 其它未完成项
+### 3.4 构建成品现场清单（CI artifact）
 
-- KaTeX 在 DSH 通知中列为 MIT；其发行中的字体附件是否另有 OFL / 附属文本，本次未逐文件核对。
-- `node:24-bookworm-slim` 以及镜像内 Debian 组件（至少包括 `git`，GPL-2.0）的版权清单与源码提供方式，本次未枚举。发布镜像前须补齐。
-- 配方中的 `pnpm --dir /opt/dsh-template/profiles/web install` 会再拉一层依赖，本次未展开。
+收集程序见 [`runtime/flybot-image/inventory/`](../../runtime/flybot-image/inventory/)。单元测试用夹具离线运行，不依赖 Docker，也不在本机执行 `npm install`。CI 在已有的镜像构建作业中对 `openteamily-flybot:test` 收集并上传 artifact，不发布镜像。
+
+下载对应构建的 `flybot-runtime-image-license-inventory` 后，可以核对：全局 DSH、ds-bot 前缀和 web profile 的已安装 npm 闭包与声明许可、Debian 包版权文件哈希与 deb-src 指针、Claude/Anthropic 扫描结果、字体与 OFL/附属文本，以及 `/opt/licenses` 中的 NOTICE 与商标字样出现记录。这是合规收集任务，不是法律解释，也不是公开发行授权。
+
+### 3.5 仍待完成的审阅与解释（不因收集程序就关闭）
+
+- KaTeX 与 Montserrat 等字体：以 artifact 中的实际路径和附属文本为准，再做逐条阅读；本文件不做法律结论。
+- Debian / `git` 等系统组件：artifact 会列出版权哈希与 `apt-get source` 指针。本仓仍不托管 Debian 源码；源码要约是否充分属于法律解释。
 - 上游 DS-Bot v0.3.6 NOTICE 的新增第三方声明尚未逐条法律重读（哈希已记录）。
+- 商标出现记录只说明 bundled notice 中含有该词，不是商标授权核实。
 
 ## 4. 建议动作
 
@@ -89,7 +95,7 @@ DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包
 | 本仓新撰写材料、管理面、自写 stub | 可按根 MIT 再分发源码；保留根 LICENSE 与 NOTICE，并附带导入树的许可文本。 |
 | 已导入的 FlyBot / DS-Bot / Bot Social 树 | 保持原许可与 NOTICE / 版权，不得改标为本仓 MIT。 |
 | 自托管构建本镜像供自己运行 | 可以按配方构建；CI 已证明镜像能构建并启动。这不等于已取得公开发行授权。 |
-| 公开发布预构建运行时镜像或其它发行物 | **先不要做。** 至少需要：处理 LibreOffice kit 的 MPL 源码义务或从默认镜像排除它；枚举基础镜像与 `git` 等 Debian 组件并准备源码要约；展开并记录默认安装的完整依赖闭包；核实 npm tarball 与 git 标签对应；核清 Claude 载荷条款及其是否进入默认镜像；按需处理 OFL 字体。 |
+| 公开发布预构建运行时镜像或其它发行物 | **先不要做。** 至少需要：对 LibreOffice kit 的 MPL 源码要约是否满足再分发镜像义务作出法律解释（办公功能保留，不靠排除组件回避）；根据 CI artifact 审阅 Debian/`git` 版权与源码指针并判断要约是否充分；根据 artifact 审阅默认安装闭包、字体/OFL 与 Claude 扫描（若存在则阅读条款）；核实 npm tarball 与 git 标签中已编译 JS 的字节对应。收集清单是合规任务，审阅与解释仍未完成。 |
 | Project / Timeline 插件 | 现在不复制；若复用须先修 #18 记录的静态风险。 |
 | Birfy/flybot-control-plane | 禁止导入。 |
 
@@ -97,11 +103,11 @@ DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包
 
 书面清单已经覆盖当前仓库交付的主要来源、版本、声明许可、已知限制和建议动作，并记录了 #18 的 Project / Timeline 风险。下列事项仍然未知或未解决，因此不能把 issue 3 写成已经完成，也不能把本仓镜像称为可再分发的公开发行物：
 
-1. MPL-2.0 LibreOffice kit 仍会随默认 DSH 安装进入镜像（办公功能保留）。本仓已提供 0.1.5 的源码与通知要约，但公开 git 没有找到 0.1.5 对应提交，且该要约是否满足再分发镜像的 MPL 义务尚未作出法律解释。
-2. `@deepseek-ai/dsh@0.2.2-rc.1` 的 npm tarball 与 git 标签 `dsh-v0.2.2-rc.1` 尚未做字节对应。
-3. 默认镜像的完整传递依赖闭包（含全局 DSH、ds-bot 额外包、profile `pnpm install`）尚未展开。
-4. 基础镜像与 Debian/`git` 的版权清单与源码提供方式尚未枚举。
-5. Claude 官方载荷的条款未阅读，是否进入默认镜像未证明。
-6. KaTeX 字体附件与 v0.3.6 NOTICE 新增声明尚未逐条核对；商标待核。
+1. MPL-2.0 LibreOffice kit 仍会随默认 DSH 安装进入镜像（办公功能保留）。本仓已提供 0.1.5 的源码与通知要约，但公开 git 没有找到 0.1.5 对应提交，且该要约是否满足再分发镜像的 MPL 义务尚未作出法律解释。这是法律解释项，不是再收集一次清单就能关闭的产品取舍。
+2. `@deepseek-ai/dsh@0.2.2-rc.1` 的 npm tarball 与 git 标签 `dsh-v0.2.2-rc.1` 的已编译 JS 尚未做字节对应。
+3. 默认镜像的完整传递依赖闭包、Debian 版权指针、Claude 扫描、字体通知和 `/opt/licenses` 归属文件由 CI artifact `flybot-runtime-image-license-inventory` 记录。收集程序已经就位，但本文件不内嵌某次构建的现场清单；仍须对照 artifact 审阅，这一合规审阅任务尚未完成。
+4. 本仓仍不托管 Debian 源码。artifact 中的 deb-src 指针是否构成充分的源码要约，属于法律解释。
+5. 若 artifact 显示存在 Claude/Anthropic 载荷，须阅读其中摘录的条款；未出现则只证明所扫描的 npm 树中没有匹配包名，不是对启动后可选下载的证明。收集到的文本不等于已经完成法律解释。
+6. KaTeX / OFL 字体与 v0.3.6 NOTICE 新增声明须依据 artifact 与已记录哈希做逐条阅读；商标待核。这些是审阅任务，不是新的产品决策。
 
 校验：在仓库根目录运行 `python3 scripts/verify-reuse-audit-pins.py`（离线检查历史钉扎与本清单哈希）。`python3 -m unittest tests.test_shipped_licenses` 检查根 NOTICE / 导入树许可文件是否存在，且磁盘哈希与 `shipped-pins.json` 一致。

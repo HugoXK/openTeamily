@@ -1,6 +1,7 @@
 """WSGI management API. No Docker, subprocess, host mounts, or runtime credentials."""
 from dataclasses import dataclass
 from http.cookies import CookieError, SimpleCookie
+import hashlib
 import hmac
 import json
 import re
@@ -140,14 +141,14 @@ class App:
         except (CookieError, ValueError):
             refuse(400, 'invalid', 'Malformed cookies')
 
-    def body(self, env, allowed):
+    def body(self, env, allowed, limit=16384):
         if env.get('HTTP_TRANSFER_ENCODING'):
             refuse(400, 'invalid', 'Transfer encoding is not supported')
         length = env.get('CONTENT_LENGTH', '')
-        if not re.fullmatch(r'[0-9]{1,6}', length):
+        if not re.fullmatch(r'[0-9]{1,8}', length):
             refuse(411, 'invalid', 'A bounded Content-Length is required')
         length = int(length)
-        if length > 16384:
+        if length > limit:
             refuse(413, 'invalid', 'Request body is too large')
         if env.get('CONTENT_TYPE', '').split(';', 1)[0].strip().lower() != 'application/json':
             refuse(415, 'invalid', 'Use application/json')
@@ -694,7 +695,7 @@ class App:
             if auto_path:
                 return self.automation_dispatch(db, session, method, query, now, env, *auto_path.groups())
             artifact_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|preview|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|preview|file|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
             if artifact_path:
                 return self.artifact_dispatch(db, session, method, query, now, env, *artifact_path.groups())
             if path == '/v1/invites/accept' and method == 'POST' and not query:
@@ -1206,12 +1207,25 @@ class App:
             if not artifacts.can_edit(actor, session['user_id'], row):
                 refuse(403, 'forbidden', 'Not allowed to change this document')
             self.body(env, [])
+            digest_hex = row['media_sha256']
             db.execute('DELETE FROM artifacts WHERE id=?', (row['id'],))
+            if digest_hex:
+                artifacts.unlink_media(self.store.data_dir, workspace['id'], digest_hex, db)
             return 200, {'removed': artifacts.view(row, include_body=False)}, []
         if action == 'preview':
             if method != 'GET' or query:
                 refuse(400, 'invalid', 'Invalid artifact request')
-            return 200, artifacts.render_page(row).encode('utf-8'), artifacts.share_headers()
+            return self.artifact_content(row, preview=True)
+        if action == 'file':
+            if query:
+                refuse(400, 'invalid', 'Invalid artifact request')
+            if method == 'GET':
+                return self.artifact_content(row, preview=False)
+            if method != 'POST':
+                refuse(400, 'invalid', 'Invalid artifact request')
+            if not artifacts.can_edit(actor, session['user_id'], row) or artifacts.public_kind(row) != 'media':
+                refuse(403, 'forbidden', 'Not allowed to change this document')
+            return self.replace_media_artifact(db, workspace, session, row, now, env)
         if action and action.startswith('shares'):
             return self.artifact_share_dispatch(db, session, method, query, now, env, actor, row, share_id, share_revoking)
         if action:
@@ -1220,18 +1234,31 @@ class App:
             return 200, {'artifact': artifacts.view(row)}, []
         if method != 'POST' or query:
             refuse(400, 'invalid', 'Invalid artifact request')
-        return self.update_artifact(db, workspace, session, actor, row, now, self.body(env, ['revision', 'changes']))
+        return self.update_artifact(db, workspace, session, actor, row, now, self.body(env, ['revision', 'changes'], limit=70000))
 
     def create_artifact(self, db, workspace, session, actor, now, env):
-        body = self.body(env, ['title', 'body', 'kind'])
+        content_type = env.get('CONTENT_TYPE', '')
+        if content_type.split(';', 1)[0].strip().lower() == 'multipart/form-data':
+            return self.create_media_artifact(db, workspace, session, now, env)
+        body = self.body(env, ['title', 'body', 'kind', 'board'], limit=70000)
         title, content, kind = body.get('title'), body.get('body', ''), body.get('kind', 'document')
-        if kind not in artifacts.KINDS or not artifacts.valid_title(title) or not artifacts.valid_body(content):
+        board = None
+        if kind == 'media':
+            refuse(400, 'invalid', 'Upload media as multipart form data')
+        if kind == 'whiteboard':
+            board = artifacts.normalize_board(body.get('board') or artifacts.EMPTY_BOARD)
+            if board is None or not artifacts.valid_title(title) or (content and not artifacts.valid_body(content)):
+                refuse(400, 'invalid', 'Provide a whiteboard title and board')
+            content = content if artifacts.valid_body(content) else ''
+        elif kind not in ('document', 'website') or not artifacts.valid_title(title) or not artifacts.valid_body(content):
             refuse(400, 'invalid', 'Provide a document or website title and body')
         title = title.strip()
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         payload = {'title': title, 'body': content, 'kind': kind}
+        if board is not None:
+            payload['board'] = board
         key_hash, request_hash = digest('artifact:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         )
@@ -1257,6 +1284,8 @@ class App:
              session['user_id'], session['user_id'], key_hash, request_hash),
         )
         artifacts.set_render(db, aid, kind)
+        if board is not None and not artifacts.attach_board(db, aid, board):
+            refuse(400, 'invalid', 'Provide a whiteboard title and board')
         return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], aid))}, []
 
     def update_artifact(self, db, workspace, session, actor, row, now, body):
@@ -1265,13 +1294,20 @@ class App:
         revision, changes = body.get('revision'), body.get('changes')
         if type(revision) is not int or not 0 <= revision <= 2 ** 31 or not isinstance(changes, dict) or not changes:
             refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
-        if set(changes) - {'title', 'body'}:
+        kind = artifacts.public_kind(row)
+        allowed = {'title', 'body'}
+        if kind == 'whiteboard':
+            allowed = {'title', 'board', 'operations'}
+        elif kind == 'media':
+            allowed = {'title'}
+        if set(changes) - allowed:
             refuse(400, 'invalid', 'Unknown artifact field')
         if revision != row['revision']:
             raise RuntimeFault(409, 'conflict', 'Document changed elsewhere; reload and retry',
                                artifacts.view(row))
         title = row['title']
         content = row['body']
+        board = artifacts.decode_board(row['board_json']) if kind == 'whiteboard' else None
         if 'title' in changes:
             if not artifacts.valid_title(changes['title']):
                 refuse(400, 'invalid', 'Provide a document title and body')
@@ -1280,7 +1316,18 @@ class App:
             if not artifacts.valid_body(changes['body']):
                 refuse(400, 'invalid', 'Provide a document title and body')
             content = changes['body']
-        if title == row['title'] and content == row['body']:
+        if 'board' in changes:
+            board = artifacts.normalize_board(changes['board'])
+            if board is None:
+                refuse(400, 'invalid', 'Provide a valid board')
+        if 'operations' in changes:
+            board = artifacts.apply_board_operations(board or artifacts.EMPTY_BOARD, changes['operations'])
+            if board is None:
+                refuse(400, 'invalid', 'Provide valid board operations')
+        unchanged = title == row['title'] and content == row['body']
+        if kind == 'whiteboard':
+            unchanged = title == row['title'] and artifacts.board_json(board) == row['board_json']
+        if unchanged:
             return 200, {'artifact': artifacts.view(row)}, []
         title_digest = artifacts.title_hash(title)
         if title != row['title'] and db.execute(
@@ -1292,6 +1339,8 @@ class App:
             'UPDATE artifacts SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
             (title, title_digest, content, row['revision'] + 1, now, session['user_id'], row['id']),
         )
+        if kind == 'whiteboard' and not artifacts.attach_board(db, row['id'], board):
+            refuse(400, 'invalid', 'Provide a valid board')
         return 200, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], row['id']))}, []
 
 
@@ -1341,7 +1390,128 @@ class App:
             row = artifacts.load_share_by_token(db, token, now)
         if row is None:
             refuse(404, 'not_found', 'Share not found')
+        return self.artifact_content(row, preview=True)
+
+    def artifact_content(self, row, preview=False):
+        kind = artifacts.public_kind(row)
+        if kind == 'media' and not preview:
+            try:
+                payload = artifacts.read_media_bytes(
+                    self.store.data_dir, row['workspace_id'], row['media_sha256'], row['media_bytes']
+                )
+            except (OSError, ValueError):
+                refuse(404, 'not_found', 'Artifact not found')
+            return 200, payload, artifacts.media_headers(row)
         return 200, artifacts.render_page(row).encode('utf-8'), artifacts.share_headers()
+
+    def _media_upload(self, env, limit=None):
+        limit = artifacts.MAX_MEDIA_BYTES + 8192 if limit is None else limit
+        if env.get('HTTP_TRANSFER_ENCODING'):
+            refuse(400, 'invalid', 'Transfer encoding is not supported')
+        length = env.get('CONTENT_LENGTH', '')
+        if not re.fullmatch(r'[0-9]{1,8}', length):
+            refuse(411, 'invalid', 'A bounded Content-Length is required')
+        length = int(length)
+        if length > limit:
+            refuse(413, 'invalid', 'Request body is too large')
+        raw = env['wsgi.input'].read(length)
+        if len(raw) != length:
+            refuse(400, 'invalid', 'Incomplete request body')
+        parsed = artifacts.parse_multipart(env.get('CONTENT_TYPE', ''), raw)
+        if not parsed or 'file' not in parsed['files']:
+            refuse(400, 'invalid', 'Upload a media file')
+        upload = parsed['files']['file']
+        data = upload['data']
+        if not data or len(data) > artifacts.MAX_MEDIA_BYTES:
+            refuse(413 if data and len(data) > artifacts.MAX_MEDIA_BYTES else 400, 'invalid',
+                   'Media file is missing or too large' if not data else 'Request body is too large')
+        mime = artifacts.sniff_mime(data)
+        if mime is None or mime not in artifacts.MEDIA_MIMES:
+            refuse(400, 'invalid', 'Unsupported or unrecognizable media type')
+        filename = artifacts.clean_filename(upload['filename'])
+        title = parsed['fields'].get('title')
+        return parsed['fields'], data, mime, filename, title
+
+    def create_media_artifact(self, db, workspace, session, now, env):
+        fields, data, mime, filename, title = self._media_upload(env)
+        if fields.get('kind', 'media') not in ('', 'media'):
+            refuse(400, 'invalid', 'Upload a media file')
+        if not artifacts.valid_title(title):
+            refuse(400, 'invalid', 'Provide a document title and body')
+        title = title.strip()
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        digest_hex = hashlib.sha256(data).hexdigest()
+        payload = {'title': title, 'kind': 'media', 'sha256': digest_hex, 'mime': mime, 'filename': filename}
+        key_hash, request_hash = digest('artifact:' + key), digest(
+            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+        )
+        prior = db.execute(
+            'SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?', (workspace['id'], key_hash)
+        ).fetchone()
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], prior['id']))}, []
+        title_digest = artifacts.title_hash(title)
+        if db.execute(
+            'SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=?', (workspace['id'], title_digest)
+        ).fetchone():
+            refuse(409, 'conflict', 'A document with this title already exists')
+        if (db.execute('SELECT COUNT(*) FROM artifacts WHERE workspace_id=?', (workspace['id'],)).fetchone()[0]
+                >= self.config.max_artifacts_per_workspace):
+            refuse(429, 'quota', 'Artifact capacity reached')
+        try:
+            stored = artifacts.write_media(self.store.data_dir, workspace['id'], data)
+        except OSError:
+            refuse(503, 'unavailable', 'Storage is temporarily unavailable')
+        if stored != digest_hex:
+            refuse(500, 'internal', 'Internal service error')
+        aid = uuid4().hex
+        db.execute(
+            'INSERT INTO artifacts VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?)',
+            (aid, workspace['id'], title, title_digest, 'document', '', now, now,
+             session['user_id'], session['user_id'], key_hash, request_hash),
+        )
+        artifacts.attach_media(db, aid, mime, len(data), digest_hex, filename)
+        return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], aid))}, []
+
+    def replace_media_artifact(self, db, workspace, session, row, now, env):
+        fields, data, mime, filename, title = self._media_upload(env)
+        revision = fields.get('revision')
+        try:
+            revision = int(revision)
+        except (TypeError, ValueError):
+            refuse(400, 'invalid', 'Provide the current revision and a media file')
+        if revision != row['revision']:
+            raise RuntimeFault(409, 'conflict', 'Document changed elsewhere; reload and retry',
+                               artifacts.view(row))
+        if title and artifacts.valid_title(title):
+            new_title = title.strip()
+        elif title:
+            refuse(400, 'invalid', 'Provide a document title and body')
+        else:
+            new_title = row['title']
+        title_digest = artifacts.title_hash(new_title)
+        if new_title != row['title'] and db.execute(
+            'SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?',
+            (workspace['id'], title_digest, row['id']),
+        ).fetchone():
+            refuse(409, 'conflict', 'A document with this title already exists')
+        previous = row['media_sha256']
+        try:
+            digest_hex = artifacts.write_media(self.store.data_dir, workspace['id'], data)
+        except OSError:
+            refuse(503, 'unavailable', 'Storage is temporarily unavailable')
+        db.execute(
+            'UPDATE artifacts SET title=?, title_hash=?, revision=?, updated=?, updated_by=? WHERE id=?',
+            (new_title, title_digest, row['revision'] + 1, now, session['user_id'], row['id']),
+        )
+        artifacts.attach_media(db, row['id'], mime, len(data), digest_hex, filename)
+        if previous and previous != digest_hex:
+            artifacts.unlink_media(self.store.data_dir, workspace['id'], previous, db)
+        return 200, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], row['id']))}, []
 
     def save_run_artifact(self, db, workspace, session, automation, run, now, body):
         title = body.get('title')
