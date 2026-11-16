@@ -1,0 +1,581 @@
+/* Shared FlyBot management shell. Self-written; no Teamily assets.
+   Pages keep their own forms, IDs, and APIs. This file only styles chrome. */
+:root {
+  --ot-bg: #f3f1ec;
+  --ot-bg-accent: #e8e4db;
+  --ot-surface: #fffcf7;
+  --ot-ink: #1c1917;
+  --ot-muted: #57534e;
+  --ot-line: #d6d3cd;
+  --ot-accent: #0f4c5c;
+  --ot-accent-hover: #0a3844;
+  --ot-accent-soft: #d7eef1;
+  --ot-ok: #166534;
+  --ot-ok-bg: #dcfce7;
+  --ot-danger: #9f1239;
+  --ot-danger-bg: #ffe4e6;
+  --ot-warn-bg: #f5efe3;
+  --ot-focus: #0f4c5c;
+  --ot-shadow: 0 1px 2px rgb(28 25 23 / 6%), 0 8px 24px rgb(28 25 23 / 6%);
+  --ot-radius: 0.75rem;
+  --ot-font: "Segoe UI", system-ui, -apple-system, "Noto Sans", "Noto Sans SC",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --ot-mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "Noto Sans Mono", monospace;
+  --ot-measure: 46rem;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme-resolved="light"]) {
+    --ot-bg: #161412;
+    --ot-bg-accent: #1f1c19;
+    --ot-surface: #201e1b;
+    --ot-ink: #f5f5f4;
+    --ot-muted: #a8a29e;
+    --ot-line: #3f3b37;
+    --ot-accent: #7ec8d1;
+    --ot-accent-hover: #b6e3e8;
+    --ot-accent-soft: #1b3338;
+    --ot-ok: #86efac;
+    --ot-ok-bg: #14532d;
+    --ot-danger: #fda4af;
+    --ot-danger-bg: #4c0519;
+    --ot-warn-bg: #2a2418;
+    --ot-focus: #7ec8d1;
+    --ot-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 28%);
+    color-scheme: dark;
+  }
+}
+
+html[data-theme-resolved="light"] {
+  --ot-bg: #f3f1ec;
+  --ot-bg-accent: #e8e4db;
+  --ot-surface: #fffcf7;
+  --ot-ink: #1c1917;
+  --ot-muted: #57534e;
+  --ot-line: #d6d3cd;
+  --ot-accent: #0f4c5c;
+  --ot-accent-hover: #0a3844;
+  --ot-accent-soft: #d7eef1;
+  --ot-ok: #166534;
+  --ot-ok-bg: #dcfce7;
+  --ot-danger: #9f1239;
+  --ot-danger-bg: #ffe4e6;
+  --ot-warn-bg: #f5efe3;
+  --ot-focus: #0f4c5c;
+  --ot-shadow: 0 1px 2px rgb(28 25 23 / 6%), 0 8px 24px rgb(28 25 23 / 6%);
+  color-scheme: light;
+}
+
+html[data-theme-resolved="dark"] {
+  --ot-bg: #161412;
+  --ot-bg-accent: #1f1c19;
+  --ot-surface: #201e1b;
+  --ot-ink: #f5f5f4;
+  --ot-muted: #a8a29e;
+  --ot-line: #3f3b37;
+  --ot-accent: #7ec8d1;
+  --ot-accent-hover: #b6e3e8;
+  --ot-accent-soft: #1b3338;
+  --ot-ok: #86efac;
+  --ot-ok-bg: #14532d;
+  --ot-danger: #fda4af;
+  --ot-danger-bg: #4c0519;
+  --ot-warn-bg: #2a2418;
+  --ot-focus: #7ec8d1;
+  --ot-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 28%);
+  color-scheme: dark;
+}
+
+html, body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  max-width: none;
+  padding: 0;
+  background: var(--ot-bg);
+  color: var(--ot-ink);
+  font-family: var(--ot-font);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+/* Author display rules must not reveal elements the pages toggle with [hidden]. */
+[hidden] {
+  display: none !important;
+}
+
+
+.skip-link {
+  position: absolute;
+  left: 0.75rem;
+  top: -3rem;
+  z-index: 20;
+  padding: 0.4rem 0.75rem;
+  background: var(--ot-accent);
+  color: var(--ot-surface);
+  border-radius: 0.4rem;
+}
+
+.skip-link:focus {
+  top: 0.75rem;
+}
+
+header, .app-header {
+  background: var(--ot-surface);
+  border-bottom: 1px solid var(--ot-line);
+  box-shadow: var(--ot-shadow);
+}
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+  padding: 0.9rem 1.25rem;
+}
+
+header > .brand,
+header > h1,
+header > nav,
+header > .note {
+  margin: 0;
+}
+
+header > .brand {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--ot-accent);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+header > .brand::before {
+  content: "";
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 0.2rem 0.7rem 0.2rem 0.7rem;
+  background: var(--ot-accent);
+  flex: none;
+}
+
+header > h1 {
+  font-size: 1.15rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  margin-right: auto;
+}
+
+header > .note {
+  flex: 1 1 100%;
+  max-width: var(--ot-measure);
+  margin: 0;
+  padding: 0.65rem 0.8rem;
+  background: var(--ot-warn-bg);
+  border: 1px solid var(--ot-line);
+  border-radius: 0.6rem;
+  color: var(--ot-muted);
+  font-size: 0.9rem;
+}
+
+header > nav,
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+header > nav a,
+nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0.2rem 0.7rem;
+  border-radius: 999px;
+  color: var(--ot-ink);
+  text-decoration: none;
+  font-size: 0.92rem;
+}
+
+header > nav a:hover,
+nav a:hover {
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+}
+
+header > nav a[aria-current="page"],
+nav a[aria-current="page"] {
+  background: var(--ot-accent);
+  color: var(--ot-surface);
+}
+
+#status {
+  margin: 0;
+}
+
+#status:empty {
+  display: none;
+}
+
+#status:not(:empty) {
+  max-width: var(--ot-measure);
+  margin: 0.85rem auto 0;
+  padding: 0.55rem 0.9rem;
+  border-radius: 0.55rem;
+  border: 1px solid var(--ot-line);
+  background: var(--ot-surface);
+}
+
+#status[data-kind="error"] {
+  color: var(--ot-danger);
+  background: var(--ot-danger-bg);
+  border-color: transparent;
+}
+
+#status[data-kind="ok"] {
+  color: var(--ot-ok);
+  background: var(--ot-ok-bg);
+  border-color: transparent;
+}
+
+#status[data-kind="loading"] {
+  color: var(--ot-muted);
+}
+
+#status[data-kind="loading"]::before {
+  content: "";
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  margin-right: 0.45rem;
+  border: 2px solid var(--ot-line);
+  border-top-color: var(--ot-accent);
+  border-radius: 50%;
+  vertical-align: -0.1rem;
+  animation: ot-spin 0.8s linear infinite;
+}
+
+@keyframes ot-spin {
+  to { transform: rotate(360deg); }
+}
+
+main,
+#main-panel,
+#settings-panel,
+#login-panel,
+#runtimes-panel {
+  max-width: var(--ot-measure);
+  margin-left: auto;
+  margin-right: auto;
+}
+
+main {
+  padding: 1.25rem 1.25rem 3rem;
+}
+
+#login-panel,
+#settings-panel,
+#main-panel,
+#runtimes-panel,
+#connect-panel,
+#list-panel,
+#chat-panel,
+#run-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+#login-panel[hidden],
+#settings-panel[hidden],
+#main-panel[hidden],
+#runtimes-panel[hidden],
+#connect-panel[hidden],
+#list-panel[hidden],
+#chat-panel[hidden],
+#run-panel[hidden] {
+  display: none;
+}
+
+#login-panel,
+#settings-panel:not([hidden]) {
+  padding-top: 0.25rem;
+}
+
+#login-panel {
+  margin: 2rem auto;
+  padding: 1.25rem 1.25rem 1.5rem;
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius);
+  box-shadow: var(--ot-shadow);
+  max-width: 24rem;
+}
+
+#whoami,
+#role-note {
+  margin: 0;
+  color: var(--ot-muted);
+  font-size: 0.92rem;
+}
+
+h1, h2, h3 {
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+
+h2, h3 {
+  margin: 0.25rem 0 0.4rem;
+  font-size: 1.05rem;
+}
+
+.note {
+  color: var(--ot-muted);
+  font-size: 0.92rem;
+}
+
+p.note:not(header > .note) {
+  margin: 0;
+}
+
+/* Empty states that are visible (not [hidden]) */
+#agents-empty:not([hidden]),
+#conversations-empty:not([hidden]),
+#keys-empty:not([hidden]),
+#connections-empty:not([hidden]),
+#run-empty:not([hidden]),
+[id$="-empty"]:not([hidden]) {
+  padding: 0.9rem 1rem;
+  border: 1px dashed var(--ot-line);
+  border-radius: 0.6rem;
+  background: var(--ot-bg-accent);
+  color: var(--ot-muted);
+}
+
+form, fieldset, .step {
+  display: grid;
+  gap: 0.7rem;
+}
+
+fieldset, .step {
+  margin: 0;
+  padding: 1rem 1rem 1.1rem;
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius);
+  background: var(--ot-surface);
+  box-shadow: 0 1px 0 rgb(28 25 23 / 3%);
+}
+
+legend {
+  padding: 0 0.3rem;
+  font-weight: 650;
+  font-size: 0.95rem;
+}
+
+label {
+  display: flex;
+  gap: 0.5rem 0.7rem;
+  align-items: center;
+  flex-wrap: wrap;
+  color: var(--ot-ink);
+}
+
+label.stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.3rem;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="date"],
+input[type="time"],
+input[type="number"],
+input[type="email"],
+select,
+textarea {
+  flex: 1;
+  min-width: 8rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.45rem;
+  background: var(--ot-bg);
+  color: var(--ot-ink);
+  font: inherit;
+}
+
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 7rem;
+  resize: vertical;
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+a:focus-visible,
+.skip-link:focus-visible {
+  outline: 2px solid var(--ot-focus);
+  outline-offset: 2px;
+}
+
+button {
+  width: max-content;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.45rem;
+  background: var(--ot-bg-accent);
+  color: var(--ot-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button[type="submit"],
+button.primary {
+  background: var(--ot-accent);
+  border-color: transparent;
+  color: var(--ot-surface);
+}
+
+button[type="submit"]:hover,
+button.primary:hover {
+  background: var(--ot-accent-hover);
+}
+
+button:hover {
+  filter: brightness(0.98);
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--ot-accent);
+  text-decoration: underline;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.actions, .tabs, #steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.tabs button[aria-selected="true"],
+#steps span[aria-current="step"] {
+  font-weight: 700;
+  color: var(--ot-accent);
+}
+
+#logout-form {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--ot-line);
+}
+
+#logout-form button {
+  background: transparent;
+  color: var(--ot-muted);
+  font-weight: 500;
+}
+
+#agent-list,
+#automation-list,
+#artifact-list,
+#member-list,
+#invite-list,
+#key-list,
+#connection-list,
+#conversation-list,
+#share-list,
+#run-list,
+#message-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+#agent-list li,
+#automation-list li,
+#artifact-list li,
+#member-list li,
+#invite-list li,
+#key-list li,
+#connection-list li,
+#conversation-list li,
+#share-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.9rem;
+  align-items: baseline;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--ot-line);
+}
+
+#run-list li,
+#message-list li {
+  padding: 0.8rem 0.9rem;
+  margin: 0 0 0.6rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.6rem;
+  background: var(--ot-surface);
+}
+
+pre, code {
+  font-family: var(--ot-mono);
+  font-size: 0.85rem;
+}
+
+pre {
+  overflow: auto;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.5rem;
+  background: var(--ot-bg-accent);
+}
+
+#oidc-providers {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+@media (max-width: 40rem) {
+  header {
+    padding: 0.8rem 0.9rem;
+  }
+
+  header > h1 {
+    width: 100%;
+    margin-right: 0;
+  }
+
+  main {
+    padding: 1rem 0.9rem 2.5rem;
+  }
+
+  input[type="text"],
+  input[type="password"],
+  select,
+  textarea {
+    min-width: 100%;
+  }
+}

@@ -5,15 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>智能体 · OpenTeamily</title>
+  <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/agents/app.css">
+  <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/agents/app.mjs"></script>
 </head>
 <body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
   <header>
     <p class="brand">OpenTeamily / FlyBot</p>
     <h1>智能体</h1>
     <p class="note">工作区成员可以维护智能体目录，并与自己的智能体进行持久对话。回复通过调用者已连接的运行时按 infer 任务排队，管理进程不会自己调用模型。没有公开主页，也没有 Auto / Instant / Agentic 模式。已完成的消息可以保存到作品库并保留出处。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
-    <nav>
+    <nav aria-label="管理导航">
       <a href="/settings">账号设置</a>
       <a href="/automations">自动化</a>
       <a href="/members">成员</a>
@@ -23,6 +26,7 @@
     </nav>
   </header>
   <p id="status" role="status"></p>
+  <main id="main">
   <section id="login-panel" hidden>
     <h2>登录</h2>
     <form id="login-form" method="post" action="/v1/auth/login">
@@ -94,5 +98,6 @@
       <button type="submit">退出登录</button>
     </form>
   </section>
+  </main>
 </body>
 </html>

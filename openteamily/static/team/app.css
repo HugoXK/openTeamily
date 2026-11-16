@@ -1,19 +1,2 @@
-:root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.45; }
-body { margin: 0 auto; max-width: 40rem; padding: 1.5rem; }
-.brand { margin: 0; letter-spacing: .04em; text-transform: uppercase; font-size: .75rem; opacity: .7; }
-h1, h2 { margin: .25rem 0 1rem; }
-.note, #status, #whoami { color: CanvasText; }
-.note { opacity: .8; }
-#status[data-kind="error"] { color: #b00020; }
-#status[data-kind="ok"] { color: #0b6a0b; }
-form, fieldset, .step { display: grid; gap: .6rem; }
-fieldset, .step { border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); margin: 0 0 1rem; padding: .8rem; }
-label { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
-input[type="text"], select { flex: 1; padding: .35rem .5rem; }
-button { width: max-content; padding: .4rem .8rem; }
-nav, .actions { display: flex; gap: .6rem; flex-wrap: wrap; }
 #steps { display: flex; gap: .8rem; margin: 0 0 1rem; }
 #steps span[aria-current="step"] { font-weight: 600; }
-#logout-form { margin-top: 1.5rem; }
-body[data-theme="light"] { color-scheme: light; }
-body[data-theme="dark"] { color-scheme: dark; }
