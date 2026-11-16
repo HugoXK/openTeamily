@@ -1,0 +1,258 @@
+/* Independent /chat workspace. Structure follows the 2026-11-17 Teamily
+   visit (rail + ~350px session column + main canvas + bottom composer).
+   Colors stay FlyBot tokens. Non-empty message bubbles are an original
+   supplement and were not compared this round. */
+.session-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--ot-bg-accent);
+  border-right: 1px solid var(--ot-line);
+  padding: 0.75rem 0.7rem 1rem;
+  overflow: auto;
+}
+
+.session-toolbar {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.session-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-search input { width: 100%; min-width: 0; }
+.workspace-pick, .session-pane #whoami {
+  margin: 0.55rem 0 0;
+  font-size: 0.85rem;
+  color: var(--ot-muted);
+}
+
+.session-group h2 {
+  margin: 0.9rem 0 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--ot-muted);
+  letter-spacing: 0.04em;
+}
+
+#conversation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+#conversation-list li { padding: 0; border: 0; }
+
+#conversation-list button.session-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 2.1rem minmax(0, 1fr) auto;
+  gap: 0.45rem 0.55rem;
+  align-items: center;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 0.65rem;
+  padding: 0.5rem 0.45rem;
+  font: inherit;
+  font-weight: 500;
+  color: var(--ot-ink);
+}
+
+#conversation-list button.session-row:hover {
+  background: var(--ot-surface);
+}
+
+#conversation-list button.session-row[aria-current="true"] {
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+}
+
+#conversation-list .avatar {
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ot-surface);
+  color: var(--ot-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+#conversation-list .copy { min-width: 0; }
+#conversation-list .title {
+  display: block;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#conversation-list .preview {
+  display: block;
+  color: var(--ot-muted);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#conversation-list .time {
+  color: var(--ot-muted);
+  font-size: 0.72rem;
+  align-self: start;
+}
+
+#main-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-width: none;
+  margin: 0;
+  height: 100%;
+}
+
+.chat-top {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 3.25rem;
+  padding: 0.45rem 1rem;
+  border-bottom: 1px solid var(--ot-line);
+  background: var(--ot-surface);
+  border-radius: 0 0 1rem 1rem;
+}
+
+.chat-top h1 {
+  margin: 0 auto 0 0;
+  font-size: 1rem;
+}
+
+.chat-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.chat-actions a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0.2rem 0.7rem;
+  border-radius: 999px;
+  text-decoration: none;
+  color: var(--ot-ink);
+  border: 1px solid var(--ot-line);
+}
+
+#message-scroller {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem 1.25rem 0.5rem;
+}
+
+#chat-empty:not([hidden]) { text-align: center; margin: 2.5rem auto; }
+
+#message-list {
+  list-style: none;
+  margin: 0 auto;
+  padding: 0;
+  max-width: 46rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+#message-list li {
+  max-width: min(36rem, 100%);
+  padding: 0.7rem 0.9rem;
+  border-radius: 0.85rem;
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+}
+
+#message-list li.user {
+  align-self: flex-end;
+  background: var(--ot-accent-soft);
+}
+
+#message-list .role { font-weight: 650; margin: 0 0 0.3rem; font-size: 0.85rem; }
+#message-list .pending { color: var(--ot-muted); }
+#message-list .failed { color: var(--ot-danger); }
+
+#chat-form {
+  display: block;
+  margin: 0;
+  padding: 0.55rem 0.9rem 0.85rem;
+  background: transparent;
+}
+
+.composer {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.55rem 0.7rem 0.6rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 1.1rem;
+  background: var(--ot-surface);
+}
+
+.composer-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+
+.composer-row textarea {
+  flex: 1;
+  min-height: 2.4rem;
+  max-height: 10rem;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  resize: vertical;
+}
+
+.composer-row textarea:focus-visible { outline: none; }
+.composer-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.composer-tools button,
+.composer button.icon {
+  background: transparent;
+  border: 0;
+  color: var(--ot-muted);
+  font-weight: 500;
+  padding: 0.15rem 0.4rem;
+}
+
+.gap-note { margin: 0.35rem 1rem 0; font-size: 0.85rem; color: var(--ot-muted); }
+
+#logout-form {
+  margin: 0;
+  padding: 0.4rem 1rem 0.7rem;
+  border: 0;
+}
+
+/* Original mobile supplement; not compared this round. */
+@media (max-width: 50rem) {
+  body.app-workspace.chat-open {
+    grid-template-columns: 4.375rem minmax(0, 1fr);
+  }
+  body.app-workspace.chat-open > .session-pane {
+    display: none;
+  }
+  body.app-workspace.chat-open.sessions-open > .session-pane {
+    display: flex;
+    grid-column: 2;
+    grid-row: 1 / -1;
+    z-index: 6;
+  }
+}

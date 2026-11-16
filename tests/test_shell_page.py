@@ -5,8 +5,8 @@ from tests import test_settings_page as settings_page_tests
 
 
 PAGES = (
-    '/settings', '/agents', '/automations', '/artifacts',
-    '/members', '/team', '/runtimes', '/memory',
+    '/settings', '/agents', '/chat', '/automations', '/artifacts',
+    '/members', '/team', '/runtimes', '/memory', '/discover',
 )
 
 CAPTURE_IDS = {
@@ -14,7 +14,11 @@ CAPTURE_IDS = {
                   'whoami', 'model-key-state', 'model-api-form'),
     '/agents': ('main-panel', 'agent-list', 'edit-form', 'chat-panel',
                 'conversation-list', 'message-list', 'chat-form',
-                'homepage-panel', 'publish-homepage', 'revoke-homepage'),
+                'homepage-panel', 'publish-homepage', 'revoke-homepage',
+                'manage-drawer', 'open-create'),
+    '/discover': ('main-panel', 'agent-list', 'edit-form', 'open-create'),
+    '/chat': ('main-panel', 'session-pane', 'conversation-list',
+              'chat-form', 'chat-body', 'message-list', 'chat-title'),
     '/automations': ('automation-list', 'editor-form', 'run-panel',
                      'run-list', 'run-empty'),
     '/artifacts': ('artifact-list', 'editor-form', 'media-image',
@@ -70,7 +74,8 @@ class ShellPageTests(unittest.TestCase):
             self.assertIn('href="#main"', html, path)
             self.assertIn('id="main"', html, path)
             self.assertIn('OpenTeamily / FlyBot', html, path)
-            self.assertIn('aria-label="管理导航"', html, path)
+            self.assertTrue(
+                'aria-label="管理导航"' in html or 'aria-label="应用导航"' in html, path)
             self.assertIn('<nav', html, path)
             self.assertIn('id="status"', html, path)
             self.assertNotIn('teamily.com', html.lower(), path)

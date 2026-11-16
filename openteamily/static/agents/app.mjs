@@ -157,23 +157,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const items = listed.body.items || [];
     const list = document.getElementById('agent-list');
     list.replaceChildren();
+    const query = ((document.getElementById('agent-search') || {}).value || '').trim().toLowerCase();
+    let shown = 0;
     for (const item of items) {
+      const hay = (item.name + ' ' + (item.summary || '')).toLowerCase();
+      if (query && !hay.includes(query)) continue;
+      shown += 1;
       const li = document.createElement('li');
+      li.className = 'agent-card';
+      const avatar = document.createElement('span');
+      avatar.className = 'avatar';
+      avatar.textContent = (item.name || '?').slice(0, 1);
+      const copy = document.createElement('div');
+      copy.className = 'copy';
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'link';
       button.dataset.id = item.id;
       button.textContent = item.name;
-      li.append(button);
-      if (item.summary) {
-        const note = document.createElement('span');
-        note.className = 'note';
-        note.textContent = ' — ' + item.summary;
-        li.append(note);
-      }
+      copy.append(button);
+      const note = document.createElement('p');
+      note.className = 'summary';
+      note.textContent = item.summary || '暂无简介';
+      copy.append(note);
+      const chat = document.createElement('a');
+      chat.className = 'chat-cta';
+      chat.href = '/chat#workspace=' + encodeURIComponent(id) + '&agent=' + encodeURIComponent(item.id);
+      chat.textContent = '聊天';
+      li.append(avatar, copy, chat);
       list.append(li);
     }
-    document.getElementById('agents-empty').hidden = items.length > 0;
+    document.getElementById('agents-empty').hidden = shown > 0;
     show('', '');
   }
 
@@ -193,6 +207,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editForm.querySelector('button[type="submit"]').hidden = !writable;
     document.getElementById('chat-title').textContent = '与 ' + agent.name + ' 的对话';
     chatPanel.hidden = false;
+    const drawer = document.getElementById('manage-drawer');
+    if (drawer) drawer.hidden = false;
+    const openChat = document.getElementById('open-in-chat');
+    if (openChat) {
+      openChat.href = '/chat#workspace=' + encodeURIComponent(workspaceId()) + '&agent=' + encodeURIComponent(agent.id);
+    }
     renderHomepage(agent, writable);
     if (runtimePanel) loadRuntime();
   }
@@ -537,6 +557,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('cancel-edit').addEventListener('click', () => {
     editForm.hidden = true;
     chatPanel.hidden = true;
+    const drawer = document.getElementById('manage-drawer');
+    if (drawer && createForm.hidden) drawer.hidden = true;
     const homepagePanel = document.getElementById('homepage-panel');
     if (homepagePanel) homepagePanel.hidden = true;
     if (runtimePanel) runtimePanel.hidden = true;
@@ -579,6 +601,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     await load();
   });
+
+  const openCreate = document.getElementById('open-create');
+  if (openCreate) openCreate.addEventListener('click', () => {
+    const drawer = document.getElementById('manage-drawer');
+    if (drawer) drawer.hidden = false;
+    if (canManage(actor)) createForm.hidden = false;
+  });
+  const search = document.getElementById('agent-search');
+  if (search) search.addEventListener('input', () => loadWorkspace());
+  const tabAgents = document.getElementById('tab-agents');
+  const tabTeams = document.getElementById('tab-teams');
+  if (tabAgents && tabTeams) {
+    tabAgents.addEventListener('click', () => {
+      tabAgents.setAttribute('aria-selected', 'true');
+      tabTeams.setAttribute('aria-selected', 'false');
+      document.getElementById('list-panel').hidden = false;
+      document.getElementById('teams-panel').hidden = true;
+    });
+    tabTeams.addEventListener('click', () => {
+      tabAgents.setAttribute('aria-selected', 'false');
+      tabTeams.setAttribute('aria-selected', 'true');
+      document.getElementById('list-panel').hidden = true;
+      document.getElementById('teams-panel').hidden = false;
+    });
+  }
 
   return load();
 }
