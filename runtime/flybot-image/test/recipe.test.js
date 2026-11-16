@@ -53,9 +53,10 @@ test('wrapper plugin boots upstream createRuntime and the social façade once', 
   assert.equal(manifest.license, 'MIT')
   assert.equal(manifest.dsh?.bundle?.patch, './cordis.patch.yml')
   const cordis = read('plugin/cordis.patch.yml')
-  assert.match(cordis, /id: bot/)
-  assert.match(cordis, /name: '@openteamily\/flybot-runtime'/)
-  assert.doesNotMatch(cordis, /name: ds-bot/)
+  const cordisBody = cordis.split('\n').filter((line) => !line.trim().startsWith('#')).join('\n')
+  assert.match(cordisBody, /id: bot/)
+  assert.match(cordisBody, /name: '@openteamily\/flybot-runtime'/)
+  assert.doesNotMatch(cordisBody, /name: ds-bot/)
 
 })
 
