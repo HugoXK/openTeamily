@@ -73,7 +73,9 @@ DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包
 
 `@anthropic-ai/claude-agent-sdk` **不是** `@deepseek-ai/dsh@0.2.2-rc.1` 的生产直接依赖。CLI 包的 `devDependencies` 含 `@deepseek-ai/dsh-hooks-claude-code@0.2.2-rc.1`（声明 MIT，其直接依赖只有 `schemastery`）。按通常的 `npm install -g` 行为，devDependencies 不会被安装，但这不是对完整闭包的证明。
 
-同一标签的 `THIRD_PARTY_NOTICES.md` 仍列出官方 `@anthropic-ai/claude-agent-sdk`（声明 “SEE LICENSE IN README.md”）及其 0.3.263 平台可选包（声明 “SEE LICENSE IN LICENSE.md”），并写明这套条款不被当作宽松许可。是否进入默认镜像，由 CI 对已构建镜像的扫描写入 `flybot-runtime-image-license-inventory`（`claude.present` 与若存在则附带的许可文件正文）。本文件不内嵌某次构建的结论。若 artifact 显示存在这些载荷，须阅读其中摘录的条款；收集到文本不等于已经完成法律解释，也不得把未读条款写成已核清。
+同一标签的 `THIRD_PARTY_NOTICES.md` 仍列出官方 `@anthropic-ai/claude-agent-sdk`（声明 “SEE LICENSE IN README.md”）及其 0.3.263 平台可选包（声明 “SEE LICENSE IN LICENSE.md”），并写明这套条款不被当作宽松许可。
+
+#56 构建成品扫描在已安装的 npm 树中**没有**找到 `claude-agent-sdk` 或官方 Claude Code 平台包。扫描到的是 `@anthropic-ai/sdk@0.129.0`，`package.json` 声明 MIT，镜像内 `LICENSE` 为标准 MIT 授权（Copyright 2023 Anthropic, PBC），sha256 `8bf96984ff8bcfae7e48cae76a529e8a25317ba9e02abf7fd3cc64fdf95657a6`（1056 字节）。该文本已放入 [`runtime/third_party/anthropic-sdk/`](../../runtime/third_party/anthropic-sdk/)，并由镜像配方拷到 `/opt/licenses/anthropic-sdk/`。这是该 SDK 的 MIT 文本，**不是**官方 Claude Code / agent-sdk 条款，二者不得混为一谈。扫描只覆盖当时镜像中的 npm 树，不能证明启动后不会再下载其它载荷。现场结论仍以对应构建的 CI artifact 为准。
 
 ### 3.4 构建成品现场清单（CI artifact）
 
@@ -81,12 +83,22 @@ DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包
 
 下载对应构建的 `flybot-runtime-image-license-inventory` 后，可以核对：全局 DSH、ds-bot 前缀和 web profile 的已安装 npm 闭包与声明许可、Debian 包版权文件哈希与 deb-src 指针、Claude/Anthropic 扫描结果、字体与 OFL/附属文本，以及 `/opt/licenses` 中的 NOTICE 与商标字样出现记录。这是合规收集任务，不是法律解释，也不是公开发行授权。
 
-### 3.5 仍待完成的审阅与解释（不因收集程序就关闭）
+### 3.5 依据 #56 artifact 已做的通知与源码收集（仍非法律结论）
 
-- KaTeX 与 Montserrat 等字体：以 artifact 中的实际路径和附属文本为准，再做逐条阅读；本文件不做法律结论。
-- Debian / `git` 等系统组件：artifact 会列出版权哈希与 `apt-get source` 指针。本仓仍不托管 Debian 源码；源码要约是否充分属于法律解释。
-- 上游 DS-Bot v0.3.6 NOTICE 的新增第三方声明尚未逐条法律重读（哈希已记录）。
-- 商标出现记录只说明 bundled notice 中含有该词，不是商标授权核实。
+- **KaTeX 字体：** #56 镜像在 `@deepseek-ai/dsh-web-frontend@0.2.2-rc.1` 的 `dist/assets/fonts/` 中有 19 个 `KaTeX_*.woff2`，当时旁边没有 KaTeX 许可文本（同目录已有 `Montserrat-OFL.txt`，sha256 `861d64229728…7065f`，与 DSH 标签钉扎一致）。这些 woff2 与 `katex@0.18.7`（以及抽查的 `katex@0.16.47`）包内字体字节相同。`katex@0.18.7` 与 git 标签 `v0.18.7` 只随附 MIT `LICENSE`，没有 `OFL.txt`。本仓把该 MIT 文本放在 [`runtime/third_party/font-notices/katex/`](../../runtime/third_party/font-notices/katex/)，镜像配方会把它拷到 `/opt/licenses/font-notices/katex/` 以及含有 `KaTeX_*.woff2` 的目录（`KaTeX-LICENSE.txt`）。本仓不内嵌字体二进制。是否另有 SIL OFL 适用于更早祖先字体，此处不作结论。
+- **sharp-libvips：** 镜像含 `@img/sharp-libvips-linux-x64@1.3.4`（声明 LGPL-3.0-or-later）。其 npm tarball **没有** LICENSE / THIRD-PARTY-NOTICES 文件。通知、LGPL-2.1 / LGPL-3 文本、版本表和 libvips 8.18.7 源码指针见 [`runtime/third_party/sharp-libvips/`](../../runtime/third_party/sharp-libvips/)。公式配方把它们拷到 `/opt/licenses/sharp-libvips/` 和该 npm 包目录。`.so` 不纳入本仓。同一二进制还列有 cairo 的 MPL-1.1 及其它 LGPL 组件；这些对应源码是否充分属于法律解释。`scripts/fetch-sharp-libvips-sources.py` 可离线核钉扎，或用 `--fetch` 把 libvips 源码包下到指定目录。
+- **Debian：** `scripts/debian-source-offer.py` 根据现场 `inventory.json` 生成带有确切 `source_package=source_version` 的 `debian-source-offer.md`，并由 CI 随 artifact 上传。本仓仍不托管 Debian 源码。#56 构建为 bookworm，116 个二进制包；`git` 为 `1:2.39.5-0+deb12u3`。要约是否充分属于法律解释。
+- **DS-Bot NOTICE：** 已对 v0.3.6 NOTICE 正文做归属审阅，见 [DS-BOT-NOTICE-REVIEW.md](DS-BOT-NOTICE-REVIEW.md)。这是对通知文件的阅读记录，不是对其中每个上游项目的许可结案。
+- **DSH tarball 与 git 已编译 JS：** 仍然明确为未核实。没有 `gitHead`，也没有在本轮重现字节级对应；不编造已经对齐的结论。
+
+### 3.6 仍待完成的审阅与解释
+
+- LibreOffice kit 的 MPL 3.2/3.3 解释，以及 0.1.5 首选形式的公开 git 对象，仍然开放。
+- sharp-libvips 中除 libvips 以外的 LGPL 组件，以及 cairo 的 MPL-1.1，对应源码要约是否充分，仍然开放。
+- Debian 源码要约是否充分，仍然开放。
+- KaTeX 字体是否另受 OFL 约束，仍然开放（上游包本身未附 OFL 文本）。
+- Playwright Codicon 字体尚未单独做字体许可审阅。
+- 商标授权待核。
 
 ## 4. 建议动作
 
@@ -95,7 +107,7 @@ DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包
 | 本仓新撰写材料、管理面、自写 stub | 可按根 MIT 再分发源码；保留根 LICENSE 与 NOTICE，并附带导入树的许可文本。 |
 | 已导入的 FlyBot / DS-Bot / Bot Social 树 | 保持原许可与 NOTICE / 版权，不得改标为本仓 MIT。 |
 | 自托管构建本镜像供自己运行 | 可以按配方构建；CI 已证明镜像能构建并启动。这不等于已取得公开发行授权。 |
-| 公开发布预构建运行时镜像或其它发行物 | **先不要做。** 至少需要：对 LibreOffice kit 的 MPL 源码要约是否满足再分发镜像义务作出法律解释（办公功能保留，不靠排除组件回避）；根据 CI artifact 审阅 Debian/`git` 版权与源码指针并判断要约是否充分；根据 artifact 审阅默认安装闭包、字体/OFL 与 Claude 扫描（若存在则阅读条款）；核实 npm tarball 与 git 标签中已编译 JS 的字节对应。收集清单是合规任务，审阅与解释仍未完成。 |
+| 公开发布预构建运行时镜像或其它发行物 | **先不要做。** 至少需要：对 LibreOffice kit 与 sharp-libvips（含 cairo MPL-1.1）的对应源码要约是否满足再分发镜像义务作出法律解释；判断 Debian 源码要约是否充分；按需完成 KaTeX 字体 OFL 问题与商标审阅。`@anthropic-ai/sdk` 的 MIT 文本已经按镜像所载记录，不得写成 Claude Code 条款已核清。DSH 已编译 JS 的 tarball 与 git 对应仍明确未核实。办公与图像处理功能保留，不靠排除组件回避。 |
 | Project / Timeline 插件 | 现在不复制；若复用须先修 #18 记录的静态风险。 |
 | Birfy/flybot-control-plane | 禁止导入。 |
 
@@ -103,11 +115,11 @@ DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包
 
 书面清单已经覆盖当前仓库交付的主要来源、版本、声明许可、已知限制和建议动作，并记录了 #18 的 Project / Timeline 风险。下列事项仍然未知或未解决，因此不能把 issue 3 写成已经完成，也不能把本仓镜像称为可再分发的公开发行物：
 
-1. MPL-2.0 LibreOffice kit 仍会随默认 DSH 安装进入镜像（办公功能保留）。本仓已提供 0.1.5 的源码与通知要约，但公开 git 没有找到 0.1.5 对应提交，且该要约是否满足再分发镜像的 MPL 义务尚未作出法律解释。这是法律解释项，不是再收集一次清单就能关闭的产品取舍。
-2. `@deepseek-ai/dsh@0.2.2-rc.1` 的 npm tarball 与 git 标签 `dsh-v0.2.2-rc.1` 的已编译 JS 尚未做字节对应。
-3. 默认镜像的完整传递依赖闭包、Debian 版权指针、Claude 扫描、字体通知和 `/opt/licenses` 归属文件由 CI artifact `flybot-runtime-image-license-inventory` 记录。收集程序已经就位，但本文件不内嵌某次构建的现场清单；仍须对照 artifact 审阅，这一合规审阅任务尚未完成。
-4. 本仓仍不托管 Debian 源码。artifact 中的 deb-src 指针是否构成充分的源码要约，属于法律解释。
-5. 若 artifact 显示存在 Claude/Anthropic 载荷，须阅读其中摘录的条款；未出现则只证明所扫描的 npm 树中没有匹配包名，不是对启动后可选下载的证明。收集到的文本不等于已经完成法律解释。
-6. KaTeX / OFL 字体与 v0.3.6 NOTICE 新增声明须依据 artifact 与已记录哈希做逐条阅读；商标待核。这些是审阅任务，不是新的产品决策。
+1. MPL-2.0 LibreOffice kit 仍会随默认 DSH 安装进入镜像（办公功能保留）。本仓已提供 0.1.5 的源码与通知要约，但公开 git 没有找到 0.1.5 对应提交，且该要约是否满足再分发镜像的 MPL 义务尚未作出法律解释。
+2. `@deepseek-ai/dsh@0.2.2-rc.1` 的 npm tarball 与 git 标签 `dsh-v0.2.2-rc.1` 的已编译 JS **仍然明确未核实**；本轮未重现字节级对应，也不宣称已经对齐。
+3. Debian 源码要约已按确切安装版本生成流程与 CI 输出，本仓仍不托管 Debian 源码。该要约是否充分属于法律解释。
+4. `@img/sharp-libvips-linux-x64@1.3.4` 的通知与 libvips 8.18.7 源码指针已放入本仓并拷入镜像；同一 `.so` 中其它 LGPL 组件以及 cairo 的 MPL-1.1 是否已有充分对应源码，属于法律解释。
+5. `#56` 扫描到的 `@anthropic-ai/sdk@0.129.0` MIT 文本已按镜像所载记录。官方 Claude Code / `claude-agent-sdk` 条款未在该扫描中出现，也不得用这份 MIT 文本替代。扫描不能覆盖启动后的可选下载。
+6. KaTeX 字体已附上与字节对应的上游 MIT LICENSE。是否另有 OFL 义务、Playwright Codicon 字体许可、以及商标授权，仍待审阅。DS-Bot v0.3.6 NOTICE 已做归属阅读记录，不是对其中每个上游的结案。
 
 校验：在仓库根目录运行 `python3 scripts/verify-reuse-audit-pins.py`（离线检查历史钉扎与本清单哈希）。`python3 -m unittest tests.test_shipped_licenses` 检查根 NOTICE / 导入树许可文件是否存在，且磁盘哈希与 `shipped-pins.json` 一致。

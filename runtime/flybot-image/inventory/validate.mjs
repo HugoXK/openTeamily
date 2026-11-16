@@ -41,6 +41,16 @@ if (expectImage) {
   need(files.some((p) => p.includes('/opt/licenses/flybot/') && /notice/i.test(p)), 'missing FlyBot NOTICE in /opt/licenses')
   need(files.some((p) => p.includes('/opt/licenses/ds-bot/')), 'missing ds-bot licenses in /opt/licenses')
   need(files.some((p) => p.includes('/opt/licenses/libreoffice-kit/')), 'missing libreoffice-kit offer in /opt/licenses')
+  need(files.some((p) => p.includes('/opt/licenses/font-notices/katex/') && /license/i.test(p)), 'missing KaTeX license under /opt/licenses/font-notices')
+  need(files.some((p) => p.includes('/opt/licenses/sharp-libvips/') && /third-party-notices/i.test(p)), 'missing sharp-libvips third-party notices')
+  need(files.some((p) => p.includes('/opt/licenses/sharp-libvips/') && /lgpl/i.test(p)), 'missing sharp-libvips LGPL text')
+  need(files.some((p) => p.includes('/opt/licenses/anthropic-sdk/') && /license/i.test(p)), 'missing Anthropic SDK license as shipped')
+  const katexFonts = (inv.fonts.files || []).filter((f) => /KaTeX_/i.test(f.path))
+  need(katexFonts.length > 0, 'image should contain KaTeX font payloads')
+  const katexNotices = (inv.fonts.notices || []).filter((f) => /KaTeX-LICENSE|font-notices\/katex|KaTeX-NOTICE/i.test(f.path))
+    .concat(files.filter((p) => /KaTeX-LICENSE|font-notices\/katex/i.test(p)))
+  need(katexNotices.length > 0, 'KaTeX font payloads must have a copied license/notice')
+
 }
 
 if (fail.length) {

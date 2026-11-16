@@ -53,9 +53,15 @@ COPY flybot/plugins/social /opt/openteamily/runtime/flybot/plugins/social
 COPY flybot/LICENSE /opt/licenses/flybot/LICENSE
 COPY flybot/NOTICE /opt/licenses/flybot/NOTICE
 COPY third_party/libreoffice-kit /opt/licenses/libreoffice-kit
+COPY third_party/font-notices /opt/licenses/font-notices
+COPY third_party/sharp-libvips /opt/licenses/sharp-libvips
+COPY third_party/anthropic-sdk /opt/licenses/anthropic-sdk
 COPY flybot-social-host /opt/openteamily/runtime/flybot-social-host
 COPY flybot-web-slots /opt/openteamily/runtime/flybot-web-slots
 COPY flybot-image /opt/openteamily/runtime/flybot-image
+# Place KaTeX and sharp-libvips notices beside the payloads they describe,
+# in addition to /opt/licenses. Related tracking remains open: issue 3.
+RUN node /opt/openteamily/runtime/flybot-image/install-redistribution-notices.mjs --root / --notices /opt/licenses
 
 # Materialize dsh native bindings under /usr/local (executable) so a noexec
 # tmpfs /tmp at runtime still works. This RUN is as root, with a writable /tmp.

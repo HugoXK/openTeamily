@@ -36,3 +36,10 @@ test -s "$OUT/inventory.json"
 test -s "$OUT/inventory.md"
 test -s "$OUT/summary.json"
 node "$SCRIPT_DIR/validate.mjs" --expect-image --inventory "$OUT/inventory.json"
+
+repo_root=$(cd "$SCRIPT_DIR/../../.." && pwd)
+if [[ -f "$repo_root/scripts/debian-source-offer.py" ]]; then
+  python3 "$repo_root/scripts/debian-source-offer.py" --inventory "$OUT/inventory.json" --out "$OUT"
+  test -s "$OUT/debian-source-offer.md"
+  test -s "$OUT/debian-packages.json"
+fi
