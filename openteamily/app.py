@@ -734,11 +734,37 @@ class App:
             fired = Scheduler(self.store, self.automation_backend, clock=self.clock,
                               max_runs=self.config.max_runs_per_automation).tick_workspace(db, workspace['id'], now)
             return 200, {'items': fired}, []
-        if target_id is None and method == 'GET' and not query:
+        if target_id is None and method == 'GET':
+            try:
+                args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=4) if query else {}
+                if any(len(values) != 1 for values in args.values()) or set(args) - {'q', 'category'}:
+                    raise ValueError()
+            except ValueError:
+                refuse(400, 'invalid', 'Invalid automation request')
+            needle = args.get('q', [''])[0].strip().casefold()
+            if len(needle) > 80:
+                refuse(400, 'invalid', 'Invalid automation request')
+            category = args.get('category', [''])[0]
+            if category and category not in ('work', 'life', 'custom', 'mine'):
+                refuse(400, 'invalid', 'Invalid automation request')
             rows = db.execute(
                 'SELECT * FROM automations WHERE workspace_id=? ORDER BY id', (workspace['id'],)
             ).fetchall()
-            return 200, {'items': [automations.view(row) for row in rows]}, []
+            items = []
+            for row in rows:
+                item = self.automation_view(db, row, session['user_id'])
+                title_hit = needle in item['title'].casefold() or needle in item['prompt'].casefold()
+                if needle and not title_hit:
+                    continue
+                template = automations.TEMPLATES.get(item['template_id'], automations.TEMPLATES['custom'])
+                if category == 'mine':
+                    names = {part['username'].casefold() for part in item['participants']}
+                    if session['username'].casefold() not in names:
+                        continue
+                elif category and template.get('category') != category:
+                    continue
+                items.append(item)
+            return 200, {'items': items}, []
         if target_id is None and method == 'POST' and not query:
             return self.create_automation(db, workspace, actor, now, env)
         if target_id is None:
@@ -764,7 +790,7 @@ class App:
             return 200, {'items': [automations.run_view(item) for item in rows[:limit]],
                          'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
         if method == 'GET' and action is None and not query:
-            return 200, {'automation': automations.view(row)}, []
+            return 200, {'automation': self.automation_view(db, row, session['user_id'])}, []
         if method != 'POST' or query:
             refuse(400, 'invalid', 'Invalid automation request')
         if action == 'remove':
@@ -772,7 +798,7 @@ class App:
                 refuse(403, 'forbidden', 'Not allowed to change automations')
             self.body(env, [])
             db.execute('DELETE FROM automations WHERE id=?', (row['id'],))
-            return 200, {'removed': automations.view(row)}, []
+            return 200, {'removed': self.automation_view(db, row, session['user_id'])}, []
         return self.update_automation(db, workspace, actor, row, now, self.body(env, ['revision', 'changes']))
 
     def invite_dispatch(self, db, session, method, query, now, env, workspace_id, invite_id, revoking):
@@ -880,24 +906,70 @@ class App:
             resolved.append({'user_id': user['id'], 'username': user['username']})
         return resolved
 
+    def automation_view(self, db, row, username=None):
+        item = automations.view(row)
+        editor = db.execute('SELECT * FROM automation_editors WHERE automation_id=?', (row['id'],)).fetchone()
+        if editor is None:
+            item.update({'intent': '', 'scope': 'once', 'agents': [], 'compiled': False})
+        else:
+            try:
+                agents = json.loads(editor['agents'])
+            except ValueError:
+                agents = []
+            if not isinstance(agents, list):
+                agents = []
+            item.update({'intent': editor['intent'], 'scope': editor['scope'],
+                         'agents': agents, 'compiled': bool(editor['compiled'])})
+        return item
+
+    def write_editor(self, db, automation_id, intent, scope, agents, compiled):
+        db.execute(
+            'INSERT INTO automation_editors VALUES(?,?,?,?,?) ON CONFLICT(automation_id) DO UPDATE SET '
+            'intent=excluded.intent, scope=excluded.scope, agents=excluded.agents, compiled=excluded.compiled',
+            (automation_id, intent, scope, json.dumps(agents, ensure_ascii=False, separators=(',', ':')),
+             1 if compiled else 0),
+        )
+
     def create_automation(self, db, workspace, actor, now, env):
         if actor not in ('owner', 'admin'):
             refuse(403, 'forbidden', 'Not allowed to change automations')
-        body = self.body(env, ['title', 'prompt', 'template_id', 'schedule', 'participants'])
+        body = self.body(env, ['title', 'prompt', 'template_id', 'schedule', 'participants', 'intent', 'scope', 'agents'])
         title, prompt, template_id = body.get('title'), body.get('prompt'), body.get('template_id')
         schedule, names = body.get('schedule'), body.get('participants')
-        if (not automations.valid_title(title) or not automations.valid_prompt(prompt)
+        intent = body.get('intent', '')
+        scope = body.get('scope', 'once')
+        agents = body.get('agents', [])
+        if intent == '':
+            intent_ok = True
+        else:
+            intent_ok = automations.valid_intent(intent)
+        if (not automations.valid_title(title)
                 or template_id not in automations.TEMPLATES or not automations.valid_schedule(schedule)
-                or not automations.valid_usernames(names)):
-            refuse(400, 'invalid', 'Provide a title, prompt, custom template, schedule and participants')
+                or not automations.valid_usernames(names) or not intent_ok
+                or not automations.valid_scope(scope) or not automations.valid_agents(agents)):
+            refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
         title = title.strip()
+        if intent:
+            intent = intent.strip()
         schedule = automations.normalize_schedule(schedule)
         participants = self.resolve_participants(db, workspace, names)
+        compiled_prompt = automations.compile_prompt(
+            template_id, intent, scope, schedule, [item['username'] for item in participants], agents)
+        if prompt is None or prompt == '':
+            prompt = compiled_prompt
+            compiled = True
+        elif automations.valid_prompt(prompt):
+            compiled = prompt == compiled_prompt
+        else:
+            refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
+        if not automations.valid_prompt(prompt):
+            refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         payload = json.dumps({'title': title, 'prompt': prompt, 'template_id': template_id,
-                              'schedule': schedule, 'participants': [item['username'] for item in participants]},
+                              'schedule': schedule, 'participants': [item['username'] for item in participants],
+                              'intent': intent, 'scope': scope, 'agents': agents},
                              sort_keys=True, separators=(',', ':'))
         key_hash, request_hash, title_hash = digest(key), digest(payload), digest(title.casefold())
         existing = db.execute(
@@ -906,7 +978,7 @@ class App:
         if existing:
             if existing['request_hash'] != request_hash:
                 refuse(409, 'conflict', 'Idempotency key was used for a different request')
-            return 200, {'automation': automations.view(existing)}, []
+            return 200, {'automation': self.automation_view(db, existing)}, []
         titled = db.execute(
             'SELECT id FROM automations WHERE workspace_id=? AND title_hash=?', (workspace['id'], title_hash)
         ).fetchone()
@@ -923,8 +995,9 @@ class App:
              json.dumps(participants, sort_keys=True, separators=(',', ':')),
              now, now, key_hash, request_hash),
         )
+        self.write_editor(db, aid, intent, scope, [name.strip() for name in agents], compiled)
         row = db.execute('SELECT * FROM automations WHERE id=?', (aid,)).fetchone()
-        return 201, {'automation': automations.view(row)}, []
+        return 201, {'automation': self.automation_view(db, row)}, []
 
     def update_automation(self, db, workspace, actor, row, now, body):
         if actor not in ('owner', 'admin'):
@@ -932,10 +1005,10 @@ class App:
         revision, changes = body.get('revision'), body.get('changes')
         if type(revision) is not int or not 1 <= revision <= 2 ** 31 or not isinstance(changes, dict) or not changes:
             refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
-        allowed = {'title', 'prompt', 'schedule', 'participants', 'enabled'}
+        allowed = {'title', 'prompt', 'schedule', 'participants', 'enabled', 'intent', 'scope', 'agents'}
         if set(changes) - allowed:
             refuse(400, 'invalid', 'Unknown automation field')
-        current = automations.view(row)
+        current = self.automation_view(db, row)
         if revision != current['revision']:
             raise RuntimeFault(409, 'conflict', 'Automation changed elsewhere; reload and retry', current)
         title = current['title']
@@ -943,6 +1016,7 @@ class App:
         schedule = current['schedule']
         participants = current['participants']
         enabled = current['enabled']
+        intent, scope, agents, compiled = current['intent'], current['scope'], list(current['agents']), current['compiled']
         if 'title' in changes:
             if not automations.valid_title(changes['title']):
                 refuse(400, 'invalid', 'Provide a title, prompt, custom template, schedule and participants')
@@ -959,14 +1033,38 @@ class App:
             if not automations.valid_usernames(changes['participants']):
                 refuse(400, 'invalid', 'Provide a title, prompt, custom template, schedule and participants')
             participants = self.resolve_participants(db, workspace, changes['participants'])
+        if 'intent' in changes:
+            if changes['intent'] == '':
+                intent = ''
+            elif not automations.valid_intent(changes['intent']):
+                refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
+            else:
+                intent = changes['intent'].strip()
+        if 'scope' in changes:
+            if not automations.valid_scope(changes['scope']):
+                refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
+            scope = changes['scope']
+        if 'agents' in changes:
+            if not automations.valid_agents(changes['agents']):
+                refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
+            agents = [name.strip() for name in changes['agents']]
         if 'enabled' in changes:
+
             if type(changes['enabled']) is not bool:
                 refuse(400, 'invalid', 'enabled must be a boolean')
             enabled = changes['enabled']
+        if compiled and 'prompt' not in changes and (
+                intent != current['intent'] or scope != current['scope'] or schedule != current['schedule']
+                or agents != current['agents'] or [p['username'] for p in participants] != [p['username'] for p in current['participants']]):
+            prompt = automations.compile_prompt(
+                row['template_id'], intent, scope, schedule, [item['username'] for item in participants], agents)
         unchanged = (title == current['title'] and prompt == current['prompt'] and schedule == current['schedule']
-                     and participants == current['participants'] and enabled == current['enabled'])
+                     and participants == current['participants'] and enabled == current['enabled']
+                     and intent == current['intent'] and scope == current['scope'] and agents == current['agents'])
         if unchanged:
             return 200, {'automation': current}, []
+        if 'prompt' in changes:
+            compiled = False
         title_hash = digest(title.casefold())
         if title_hash != row['title_hash']:
             clash = db.execute(
@@ -984,7 +1082,8 @@ class App:
              1 if enabled else 0, current['revision'] + 1, now, row['id']),
         )
         updated = db.execute('SELECT * FROM automations WHERE id=?', (row['id'],)).fetchone()
-        return 200, {'automation': automations.view(updated)}, []
+        self.write_editor(db, updated['id'], intent, scope, agents, compiled)
+        return 200, {'automation': self.automation_view(db, updated)}, []
 
     def save_model_api(self, db, user_id, now, workspace, body, scope=None):
         revision, changes = body.get('revision'), body.get('changes')
