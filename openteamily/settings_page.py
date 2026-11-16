@@ -20,8 +20,11 @@ class SettingsPage:
         '/team': ('team', 'index.html', 'text/html; charset=utf-8'),
         '/team/app.mjs': ('team', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/team/app.css': ('team', 'app.css', 'text/css; charset=utf-8'),
+        '/members': ('members', 'index.html', 'text/html; charset=utf-8'),
+        '/members/app.mjs': ('members', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/members/app.css': ('members', 'app.css', 'text/css; charset=utf-8'),
     }
-    PREFIXES = ('/settings', '/automations', '/team')
+    PREFIXES = ('/settings', '/automations', '/team', '/members')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'")
 
