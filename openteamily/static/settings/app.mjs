@@ -1,3 +1,5 @@
+import { resolveTheme } from '../shell/app.mjs';
+
 const KEYS = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end', 'language',
               'chat_language', 'auto_translate', 'send_shortcut', 'message_folding', 'document_cards',
               'link_previews', 'task_completion_reminders', 'likes_visible', 'favorites_visible'];
@@ -45,6 +47,21 @@ export function applyTheme(document, values) {
   }
 }
 
+export function describeAppearance(values) {
+  const theme = resolveTheme(values || { appearance: 'system' });
+  const look = theme === 'dark' ? '深色' : '浅色';
+  const appearance = values && values.appearance;
+  if (appearance === 'light') return '当前为浅色。';
+  if (appearance === 'dark') return '当前为深色。';
+  if (appearance === 'auto' && values.appearance_schedule === 'custom') {
+    return '当前为' + look + '。自定义时段的字段尚未与对照完整核对。';
+  }
+  if (appearance === 'auto') {
+    return '当前为' + look + '。「日落到日出」目前按系统浅色或深色偏好估算，没有使用实际日出日落时刻。';
+  }
+  return '当前为' + look + '（跟随系统）。';
+}
+
 export function readModelForm(form) {
   const data = new FormData(form);
   const provider = data.get('provider') || '';
@@ -67,10 +84,10 @@ export function fillModelForm(form, values) {
 }
 
 export function fillForm(form, values) {
-  for (const option of form.querySelectorAll('[name="appearance"], [name="send_shortcut"]')) {
+  for (const option of form.querySelectorAll('[name="appearance"], [name="appearance_schedule"], [name="send_shortcut"]')) {
     option.checked = option.value === values[option.name];
   }
-  for (const name of ['appearance_schedule', 'appearance_start', 'appearance_end', 'language',
+  for (const name of ['appearance_start', 'appearance_end', 'language',
                       'chat_language', 'message_folding']) {
     form.elements[name].value = values[name];
   }
@@ -138,6 +155,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     revision = settings.body.settings.revision;
     fillForm(form, current);
     applyTheme(document, current);
+    const appearanceStatus = document.getElementById('appearance-status');
+    if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
     await renderSkillSecrets();
     if (modelForm) {
       const model = await request('GET', '/v1/model-api');
@@ -191,6 +210,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
+  const appearanceBox = document.getElementById('appearance');
+  if (appearanceBox) {
+    appearanceBox.addEventListener('change', async () => {
+      if (!current) return;
+      const changes = diff(current, readForm(form));
+      const appearanceChanges = {};
+      for (const key of ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end']) {
+        if (Object.prototype.hasOwnProperty.call(changes, key)) appearanceChanges[key] = changes[key];
+      }
+      if (!Object.keys(appearanceChanges).length) return;
+      const result = await request('POST', '/v1/settings', {revision, changes: appearanceChanges});
+      if (result.status === 409) {
+        current = result.body.error.current.values;
+        revision = result.body.error.current.revision;
+        fillForm(form, current);
+        applyTheme(document, current);
+        const appearanceStatus = document.getElementById('appearance-status');
+        if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
+        show('error', '设置已在别处更新，已重新加载。');
+        return;
+      }
+      if (result.status !== 200) {
+        show('error', messageFor(result.body.error, '无法更新外观。'));
+        return;
+      }
+      current = result.body.settings.values;
+      revision = result.body.settings.revision;
+      fillForm(form, current);
+      applyTheme(document, current);
+      const appearanceStatus = document.getElementById('appearance-status');
+      if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
+      show('ok', '外观已更新。');
+    });
+  }
+
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const changes = diff(current, readForm(form));
@@ -204,6 +258,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       revision = result.body.error.current.revision;
       fillForm(form, current);
       applyTheme(document, current);
+      const appearanceStatus = document.getElementById('appearance-status');
+      if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
       show('error', '设置已在别处更新，已重新加载，请再保存一次。');
       return;
     }
@@ -215,6 +271,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     revision = result.body.settings.revision;
     fillForm(form, current);
     applyTheme(document, current);
+    const appearanceStatus = document.getElementById('appearance-status');
+    if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
     show('ok', '已保存。');
   });
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { csrfCookie, diff, readForm } from '../openteamily/static/settings/app.mjs';
+import { csrfCookie, describeAppearance, diff, readForm } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -43,4 +43,14 @@ test('readForm maps radios, select and checkboxes', () => {
   } finally {
     globalThis.FormData = original;
   }
+});
+
+test('describeAppearance states the resolved look without inventing sunrise times', () => {
+  assert.equal(describeAppearance({appearance: 'light'}), '当前为浅色。');
+  assert.equal(describeAppearance({appearance: 'dark'}), '当前为深色。');
+  assert.match(describeAppearance({appearance: 'auto', appearance_schedule: 'sunset_sunrise'}),
+               /按系统浅色或深色偏好估算/);
+  assert.doesNotMatch(describeAppearance({appearance: 'auto', appearance_schedule: 'sunset_sunrise'}),
+                      /直到|\d{1,2}:\d{2}/);
+  assert.match(describeAppearance({appearance: 'system'}), /跟随系统/);
 });
