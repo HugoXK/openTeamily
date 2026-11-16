@@ -27,4 +27,4 @@ Deployment must document storage/backup and credential handling; no privileged h
 
 ## Scope of this baseline
 
-This is a starting contract for collaborative design, not an implemented service or final orchestration specification. Full product capabilities remain owed even when their model, API or runtime support does not exist yet.
+This is a starting contract, not a completed runtime service or final orchestration specification. The first authentication/workspace API slice is documented in MANAGEMENT_API.md; lifecycle/jobs and real containers remain pending. Full product capabilities remain owed even when their model, API or runtime support does not exist yet.

@@ -6,7 +6,7 @@ OpenTeamily is a project name, not a claim of affiliation with or endorsement by
 
 ## Status
 
-**Documentation-only bootstrap.** No management API, authentication, Agent execution or browser workflow is implemented here yet. Older FlyBot tests, screenshots and PRs do not establish that functionality exists in this repository.
+**First implementation slice (under review):** a runnable Python/SQLite authentication and owner-scoped workspace API. Runtime lifecycle/jobs/containers and browser workflows are **not** implemented yet. Older FlyBot tests, screenshots and PRs do not establish functionality in this repository. See [implemented routes, startup/test commands, security configuration and gaps](docs/MANAGEMENT_API.md).
 
 ## Architecture
 
@@ -19,7 +19,7 @@ OpenTeamily is a project name, not a claim of affiliation with or endorsement by
 
 1. Review the architecture and full capability map.
 2. Create native issues/subissues in **this repository**, including dependencies and observable acceptance criteria.
-3. Deliver the management-server/runtime-contract vertical slice with tests, followed by actual runtime integration.
+3. Review the authentication/workspace foundation, then deliver durable runtime jobs and the fake backend; only then wire the separately audited manager/Compose adapter and real container acceptance.
 
 See [architecture](docs/ARCHITECTURE.md), [capability roadmap](docs/ROADMAP.md) and [reuse policy](docs/REUSE_POLICY.md).
 
