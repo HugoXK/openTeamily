@@ -6,7 +6,7 @@ Depends on authentication/workspace PR #16 (`afedfc1`). Related #2 and #1; neith
 
 ## Implemented
 
-- Private SQLite instance registration, independent IDs, owner/workspace ownership, server-selected immutable profile/image/volume references, bounded keyset listing and owner-only job polling.
+- Private SQLite instance registration, independent IDs, owner/workspace ownership, server-selected immutable profile/image/volume references, bounded keyset listing and membership-scoped job polling (list/inspect for any member; create/start/stop/restart for owner or admin).
 - Instance creation needs `Idempotency-Key` (16–64 alphanumeric/underscore/hyphen); body `{}` only. Replays retain the same instance, including concurrent requests and process reopen. Default limits8 instances/workspace,1000 global,10000 retained jobs; quotas are operator configuration, not a user decision on container granularity.
 - Each changed intent and its job commit in **one transaction**. New create starts at revision1, desired stopped. Repeated start/stop compare **desired**, including pending/failed intents, and reuse revision/operation/job. They do not silently retry failed or interrupted execution.
 - Restart is independent, never a stop+start API pair. New operation_id (or omitted/server-generated) creates a revision; the same key replays the original job, even after later intents. Response includes the **current** instance plus the requested historical job when replaying an older restart. New restart conflicts409 with queued/running work; current revision/operation are returned. Started/stopped desired changes conflict while a manager is running; a queued non-create intent may be superseded before claim.

@@ -380,6 +380,39 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.runtime.inspect(self.owner, iid)['revision'], 1)
 
 
+    def test_members_can_inspect_but_only_owner_or_admin_operate(self):
+        result = self.create(); iid, jid = result['instance']['id'], result['job']['id']
+        admin = Client(self.app, peer='127.0.0.2'); admin.register('bob')
+        member = Client(self.app, peer='127.0.0.3'); member.register('carol')
+        outsider = Client(self.app, peer='127.0.0.4'); outsider.register('dave')
+        self.assertEqual(self.client.call('POST', f'/v1/workspaces/{self.wid}/members',
+                                          {'username': 'bob', 'role': 'admin'})['status'], 201)
+        self.assertEqual(self.client.call('POST', f'/v1/workspaces/{self.wid}/members',
+                                          {'username': 'carol', 'role': 'member'})['status'], 201)
+        listed = admin.call('GET', f'/v1/workspaces/{self.wid}/instances')
+        self.assertEqual(listed['status'], 200)
+        self.assertEqual([row['id'] for row in listed['body']['items']], [iid])
+        self.assertEqual(member.call('GET', f'/v1/instances/{iid}')['status'], 200)
+        self.assertEqual(member.call('GET', f'/v1/jobs/{jid}')['status'], 200)
+        self.assertEqual(member.call('GET', f'/v1/instances/{iid}/logs')['status'], 200)
+        denied = member.call('POST', f'/v1/instances/{iid}/start', {})
+        self.assertEqual(denied['status'], 403)
+        self.assertEqual(member.call('POST', f'/v1/workspaces/{self.wid}/instances',
+                                     {}, {'HTTP_IDEMPOTENCY_KEY': 'member-create-0001'})['status'], 403)
+        created = admin.call('POST', f'/v1/workspaces/{self.wid}/instances',
+                             {}, {'HTTP_IDEMPOTENCY_KEY': 'admin-create-0001'})
+        self.assertEqual(created['status'], 201, created)
+        other = created['body']['instance']['id']
+        self.tick(other)
+        self.assertEqual(admin.call('POST', f'/v1/instances/{other}/start', {})['status'], 202)
+        # Workspace owner can still see and stop an instance an admin created.
+        self.assertEqual(self.client.call('GET', f'/v1/instances/{other}')['status'], 200)
+        self.assertEqual(self.action(other, 'stop')['status'] in (200, 202), True)
+        self.assertEqual(outsider.call('GET', f'/v1/instances/{iid}')['status'], 404)
+        self.assertEqual(outsider.call('POST', f'/v1/instances/{iid}/start', {})['status'], 404)
+        self.assertEqual(outsider.call('GET', f'/v1/jobs/{jid}')['status'], 404)
+
+
 class PlannerIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.iid = 'a' * 32
@@ -427,6 +460,7 @@ class PlannerIntegrationTests(unittest.TestCase):
             with self.assertRaises(PlanningFailure) as error:
                 self.planner.plan(self.registry, {'instance_id': self.iid, 'operation': 'start'})
             self.assertNotIn('PRIVATE-PATH-TEST', str(error.exception))
+
 
 
 if __name__ == '__main__':

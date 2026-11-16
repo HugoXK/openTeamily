@@ -35,4 +35,4 @@ An additive `workspace_members` table (`CREATE TABLE IF NOT EXISTS`) in the exis
 
 ## Not in this slice
 
-Runtime instance inspect/start/stop/create remain owner-only; members can see the workspace record but not operate instances yet. No members UI, no Teamily team wizard, no invite tokens, no owner transfer, no group multi-agent run. Browser acceptance is not claimed.
+Any workspace member can list, inspect, poll jobs and read control-plane event logs for instances in that workspace. Only the owner or an admin can create, start, stop or restart. Members who try to operate get `403`; non-members still get `404`. Manager grants are unchanged. No members UI, no Teamily team wizard, no owner transfer, no group multi-agent run. Browser acceptance is not claimed. These defaults are not yet Teamily-verified.
