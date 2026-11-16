@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import automations, bot_social, invites, members, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
+from . import artifacts, automations, bot_social, invites, members, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -38,6 +38,7 @@ class Config:
     max_members_per_workspace: int = 50
     max_invites_per_workspace: int = 20
     max_automations_per_workspace: int = 20
+    max_artifacts_per_workspace: int = 50
     max_runs_per_automation: int = 200
     auth_peer_limit: int = 20
     auth_name_limit: int = 10
@@ -677,6 +678,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel))?)?)?))?', path)
             if auto_path:
                 return self.automation_dispatch(db, session, method, query, now, env, *auto_path.groups())
+            artifact_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
+            if artifact_path:
+                return self.artifact_dispatch(db, session, method, query, now, env, *artifact_path.groups())
             if path == '/v1/invites/accept' and method == 'POST' and not query:
                 return self.accept_invite(db, session, now, self.body(env, ['token']))
             invite_path = re.fullmatch(
@@ -1137,6 +1142,117 @@ class App:
             db.execute('DELETE FROM automations WHERE id=?', (row['id'],))
             return 200, {'removed': self.automation_view(db, row, session['user_id'])}, []
         return self.update_automation(db, workspace, actor, row, now, self.body(env, ['revision', 'changes']))
+
+    def artifact_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if target_id is None and method == 'GET':
+            try:
+                limit, cursor, args = self.pagination(query, allowed=('q',))
+            except APIError:
+                raise
+            except Exception:
+                refuse(400, 'invalid', 'Invalid pagination parameters')
+            needle = args.get('q', [''])[0].strip().casefold()
+            if len(needle) > 80:
+                refuse(400, 'invalid', 'Invalid artifact request')
+            rows = artifacts.listing(db, workspace['id'], cursor, limit + 1, needle)
+            items = [artifacts.view(row, include_body=False) for row in rows[:limit]]
+            return 200, {'items': items,
+                         'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
+        if target_id is None and method == 'POST' and not query:
+            return self.create_artifact(db, workspace, session, actor, now, env)
+        if target_id is None:
+            refuse(400, 'invalid', 'Invalid artifact request')
+        row = artifacts.load(db, workspace['id'], target_id)
+        if row is None:
+            refuse(404, 'not_found', 'Artifact not found')
+        if removing:
+            if method != 'POST' or query:
+                refuse(400, 'invalid', 'Invalid artifact request')
+            if not artifacts.can_edit(actor, session['user_id'], row):
+                refuse(403, 'forbidden', 'Not allowed to change this document')
+            self.body(env, [])
+            db.execute('DELETE FROM artifacts WHERE id=?', (row['id'],))
+            return 200, {'removed': artifacts.view(row, include_body=False)}, []
+        if method == 'GET' and not query:
+            return 200, {'artifact': artifacts.view(row)}, []
+        if method != 'POST' or query:
+            refuse(400, 'invalid', 'Invalid artifact request')
+        return self.update_artifact(db, workspace, session, actor, row, now, self.body(env, ['revision', 'changes']))
+
+    def create_artifact(self, db, workspace, session, actor, now, env):
+        body = self.body(env, ['title', 'body', 'kind'])
+        title, content, kind = body.get('title'), body.get('body', ''), body.get('kind', 'document')
+        if kind != 'document' or not artifacts.valid_title(title) or not artifacts.valid_body(content):
+            refuse(400, 'invalid', 'Provide a document title and body')
+        title = title.strip()
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        payload = {'title': title, 'body': content, 'kind': 'document'}
+        key_hash, request_hash = digest('artifact:' + key), digest(
+            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+        )
+        prior = db.execute(
+            'SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?', (workspace['id'], key_hash)
+        ).fetchone()
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], prior['id']))}, []
+        title_digest = artifacts.title_hash(title)
+        if db.execute(
+            'SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=?', (workspace['id'], title_digest)
+        ).fetchone():
+            refuse(409, 'conflict', 'A document with this title already exists')
+        if (db.execute('SELECT COUNT(*) FROM artifacts WHERE workspace_id=?', (workspace['id'],)).fetchone()[0]
+                >= self.config.max_artifacts_per_workspace):
+            refuse(429, 'quota', 'Artifact capacity reached')
+        aid = uuid4().hex
+        db.execute(
+            'INSERT INTO artifacts VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?)',
+            (aid, workspace['id'], title, title_digest, 'document', content, now, now,
+             session['user_id'], session['user_id'], key_hash, request_hash),
+        )
+        return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], aid))}, []
+
+    def update_artifact(self, db, workspace, session, actor, row, now, body):
+        if not artifacts.can_edit(actor, session['user_id'], row):
+            refuse(403, 'forbidden', 'Not allowed to change this document')
+        revision, changes = body.get('revision'), body.get('changes')
+        if type(revision) is not int or not 0 <= revision <= 2 ** 31 or not isinstance(changes, dict) or not changes:
+            refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
+        if set(changes) - {'title', 'body'}:
+            refuse(400, 'invalid', 'Unknown artifact field')
+        if revision != row['revision']:
+            raise RuntimeFault(409, 'conflict', 'Document changed elsewhere; reload and retry',
+                               artifacts.view(row))
+        title = row['title']
+        content = row['body']
+        if 'title' in changes:
+            if not artifacts.valid_title(changes['title']):
+                refuse(400, 'invalid', 'Provide a document title and body')
+            title = changes['title'].strip()
+        if 'body' in changes:
+            if not artifacts.valid_body(changes['body']):
+                refuse(400, 'invalid', 'Provide a document title and body')
+            content = changes['body']
+        if title == row['title'] and content == row['body']:
+            return 200, {'artifact': artifacts.view(row)}, []
+        title_digest = artifacts.title_hash(title)
+        if title != row['title'] and db.execute(
+            'SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?',
+            (workspace['id'], title_digest, row['id']),
+        ).fetchone():
+            refuse(409, 'conflict', 'A document with this title already exists')
+        db.execute(
+            'UPDATE artifacts SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
+            (title, title_digest, content, row['revision'] + 1, now, session['user_id'], row['id']),
+        )
+        return 200, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], row['id']))}, []
 
     def invite_dispatch(self, db, session, method, query, now, env, workspace_id, invite_id, revoking):
         workspace = members.load(db, workspace_id, session['user_id'])
