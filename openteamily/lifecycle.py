@@ -6,7 +6,7 @@ import re
 import time
 from uuid import uuid4
 
-from . import members
+from . import members, model_api
 from .security import digest, opaque
 
 ID = re.compile(r'[0-9a-f]{32}')
@@ -313,6 +313,17 @@ class Lifecycle:
                 or not hmac.compare_digest(digest(lease), job['lease_hash'] or '')):
             fail(409, 'stale_observation', 'Stale or invalid manager lease/revision')
         return row, job
+
+    def runtime_secret(self, manager, iid, jid, revision, lease):
+        """Lease-gated resolved model API for container start. The key is not stored on the job."""
+        self.expire()
+        with self.store.transaction() as db:
+            row, job = self.leased(db, manager, iid, jid, revision, lease)
+            if job['operation_type'] not in ('create', 'start', 'restart'):
+                fail(409, 'secret_not_applicable', 'Model API secret is only issued for create, start or restart')
+            public, key, source = model_api.resolve(db, self.store, workspace_id=row['workspace_id'], user_id=row['owner_id'])
+            payload = model_api.container_payload(public, key, source)
+            return {'model_api_present': payload is not None, 'model_api': payload}
 
     def heartbeat(self, manager, iid, jid, revision, lease):
         self.expire()

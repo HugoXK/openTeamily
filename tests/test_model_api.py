@@ -143,5 +143,17 @@ class ModelAPITests(unittest.TestCase):
             self.assertIsNotNone(db.execute("SELECT name FROM sqlite_master WHERE name='model_api_configs'").fetchone())
 
 
+    def test_container_payload_maps_scopes_and_omits_missing_keys(self):
+        from openteamily import model_api
+        public = {'provider': 'openai', 'base_url': 'https://example.com/v1', 'model': 'gpt-4o-mini'}
+        self.assertIsNone(model_api.container_payload(public, None, 'platform'))
+        self.assertIsNone(model_api.container_payload(None, SECRET, 'platform'))
+        platform = model_api.container_payload(public, SECRET, 'platform')
+        self.assertEqual(platform, {**public, 'api_key': SECRET, 'source': 'platform'})
+        self.assertEqual(model_api.container_payload(public, OVERRIDE, 'account')['source'], 'user')
+        self.assertEqual(model_api.container_payload(public, OVERRIDE, 'workspace')['source'], 'user')
+        self.assertEqual(model_api.container_payload(public, OVERRIDE, 'workspace')['api_key'], OVERRIDE)
+
+
 if __name__ == '__main__':
     unittest.main()

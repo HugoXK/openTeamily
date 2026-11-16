@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, chmodSync, rmSync }
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
-import { applyModelApi, keyRefFor, loadModelApi, parseModelApi, readModelApiFile, redact, resolveModelApiPath, ModelApiError } from '../model-api.js'
+import { applyModelApi, contentsToModelApi, keyRefFor, loadModelApi, parseModelApi, readModelApiFile, redact, resolveModelApiPath, ModelApiError } from '../model-api.js'
 
 const sample = {
   provider: 'deepseek',
@@ -80,4 +80,11 @@ test('reads only allowlisted secret paths and skips a missing file', () => {
   assert.equal(resolveModelApiPath({}), undefined)
   assert.equal(loadModelApi({}), undefined)
   rmSync(root, { recursive: true, force: true })
+})
+
+test('treats an empty secret file as absent', () => {
+  assert.equal(contentsToModelApi(''), undefined)
+  assert.equal(contentsToModelApi('  \n'), undefined)
+  const config = contentsToModelApi(JSON.stringify(sample))
+  assert.equal(config.api_key, sample.api_key)
 })

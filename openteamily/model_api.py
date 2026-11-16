@@ -5,7 +5,9 @@ A self-host operator configures a platform default model API; accounts and
 workspaces may optionally override it. Resolution is override-if-set, else the
 platform default.
 The key is stored only as a wrapped blob in the private data directory, never
-returned by the API, and is passed to runtime hooks in-process only.
+returned by the API. Runtime hooks receive it in-process. The compose manager
+writes the already-resolved key to a private 0600 file and bind-mounts it into
+the container at start; the key is not placed in claim or observe JSON.
 
 Self-written; no upstream or Teamily source. Provider names and URL rules are
 OpenTeamily defaults and are not Teamily parity.
@@ -190,6 +192,28 @@ def effective_view(public, source):
     visible = {key: public[key] for key in ('provider', 'base_url', 'model', 'api_key_set', 'scope')}
     visible['source'] = source or 'none'
     return visible
+
+
+# Container secret file (runtime/flybot-image): user override wins; map
+# account/workspace scopes to source=user. The compose executor writes this
+# file and bind-mounts it; the key never belongs in a compose manifest or log.
+CONTAINER_SOURCE = {'platform': 'platform', 'account': 'user', 'workspace': 'user'}
+
+
+def container_payload(public, key, source):
+    """Return the JSON object the FlyBot image launcher expects, or None."""
+    if not key or not public or not public.get('provider') or not public.get('base_url') or not public.get('model'):
+        return None
+    mapped = CONTAINER_SOURCE.get(source)
+    if mapped is None:
+        return None
+    return {
+        'provider': public['provider'],
+        'base_url': public['base_url'],
+        'model': public['model'],
+        'api_key': key,
+        'source': mapped,
+    }
 
 
 def fingerprint(value):

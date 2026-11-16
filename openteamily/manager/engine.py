@@ -14,9 +14,16 @@ import subprocess
 import time
 
 from .client import check_id
-from .safety import LIMIT, ManagerError, require, trusted_path, read_private, write_new, json_loads
+from .safety import LIMIT, ManagerError, require, trusted_path, read_private, write_new, replace_private, json_loads
 
 IMAGE = re.compile(r'[a-z0-9][a-z0-9./:_-]{0,118}@sha256:[0-9a-f]{64}')
+SECRET_TARGET = '/run/secrets/openteamily-model-api.json'
+SECRET_BIND_SUFFIX = ':' + SECRET_TARGET + ':ro'
+
+
+def secret_relpath(iid):
+    check_id(iid)
+    return 'secrets/model-api-' + iid + '.json'
 
 
 def manifest(iid, entry):
@@ -32,7 +39,10 @@ def manifest(iid, entry):
     service = {'image': image, 'init': True, 'user': '1000:1000', 'read_only': True,
                'security_opt': ['no-new-privileges:true'], 'cap_drop': ['ALL'], 'pids_limit': 256,
                'mem_limit': '1g', 'cpus': 1, 'restart': 'no',
-               'volumes': [{'type': 'volume', 'source': 'data', 'target': '/data'}],
+               'volumes': [
+                   {'type': 'volume', 'source': 'data', 'target': '/data'},
+                   {'type': 'bind', 'source': secret_relpath(iid), 'target': SECRET_TARGET, 'read_only': True},
+               ],
                'tmpfs': ['/tmp:rw,noexec,nosuid,size=67108864'],
                'logging': {'driver': 'local', 'options': {'max-size': '10m', 'max-file': '3'}}}
     if port is not None:
@@ -64,6 +74,10 @@ class Registry:
             if entry['publish_port'] is not None:
                 ports.append(entry['publish_port'])
         require(len(set(ports)) == len(ports), 'duplicate_port')
+        secrets = self.root / 'secrets'
+        if not secrets.exists():
+            secrets.mkdir(mode=0o700)
+        trusted_path(str(secrets), directory=True, private=True)
 
     def entry(self, iid, snapshot=None):
         check_id(iid)
@@ -144,9 +158,26 @@ class ComposeEngine:
     def __init__(self, registry, runner):
         self.registry, self.runner = registry, runner
 
+    def secret_path(self, iid):
+        return self.registry.root / secret_relpath(iid)
+
+    def install_secret(self, iid, payload):
+        """Write the resolved model-API file (or empty). Never logs the key."""
+        self.registry.entry(iid)
+        path = self.secret_path(iid)
+        if payload is None:
+            raw = b''
+        else:
+            require(isinstance(payload, dict) and payload.get('api_key'), 'secret_payload')
+            raw = (json.dumps(payload, separators=(',', ':')) + '\n').encode()
+        replace_private(path, raw)
+        return path
+
     def compose(self, iid, operation, *, heartbeat=lambda: None, tail=100):
         _, path = self.registry.entry(iid)
         require(type(tail) is int and 1 <= tail <= 100, 'log_tail')
+        if operation in ('create', 'start', 'restart', 'up') and not self.secret_path(iid).exists():
+            self.install_secret(iid, None)
         # Exact argv grammar only; neither API nor registry can supply a verb/flags.
         commands = {
             'create': ['create', '--no-build', '--no-recreate', '--pull', 'never', 'flybot'],
@@ -197,11 +228,15 @@ class ComposeEngine:
         config, state, mounts = container.get('Config'), container.get('State'), container.get('Mounts')
         host = container.get('HostConfig')
         require(isinstance(config, dict) and isinstance(state, dict) and isinstance(mounts, list), 'inspect_shape')
+        binds = host.get('Binds') or []
         require(isinstance(host, dict) and host.get('Privileged') is False and host.get('ReadonlyRootfs') is True and
                 config.get('User') == '1000:1000' and host.get('CapDrop') == ['ALL'] and not host.get('CapAdd') and
-                not host.get('Devices') and not host.get('Binds') and not host.get('PidMode') and
+                not host.get('Devices') and not host.get('PidMode') and
                 host.get('IpcMode') in ('private', 'shareable') and host.get('NetworkMode') == 'ot-' + iid + '_default' and
                 isinstance(host.get('SecurityOpt'), list) and any(x in host['SecurityOpt'] for x in ('no-new-privileges', 'no-new-privileges:true')), 'unsafe_container')
+        require(isinstance(binds, list) and (binds == [] or (
+            len(binds) == 1 and isinstance(binds[0], str) and binds[0].endswith(SECRET_BIND_SUFFIX) and '..' not in binds[0]
+        )), 'unsafe_container')
         expected_ports = {'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': str(entry['publish_port'])}]} if entry['publish_port'] is not None else {}
         require((host.get('PortBindings') or {}) == expected_ports, 'unsafe_ports')
         labels = config.get('Labels')
@@ -211,7 +246,11 @@ class ComposeEngine:
         data_mounts = [m for m in mounts if isinstance(m, dict) and m.get('Destination') == '/data']
         require(len(data_mounts) == 1 and data_mounts[0].get('Type') == 'volume' and data_mounts[0].get('Name') == 'ot-' + iid and
                 data_mounts[0].get('RW') is True, 'volume_scope')
+        secret_mounts = [m for m in mounts if isinstance(m, dict) and m.get('Destination') == SECRET_TARGET]
+        require(len(secret_mounts) == 1 and secret_mounts[0].get('Type') == 'bind' and secret_mounts[0].get('RW') is False
+                and '..' not in str(secret_mounts[0].get('Source') or ''), 'secret_mount')
         require(all(isinstance(m, dict) and (m.get('Destination') == '/data' or
+                    m.get('Destination') == SECRET_TARGET or
                     (m.get('Type') == 'tmpfs' and m.get('Destination') == '/tmp')) for m in mounts), 'unexpected_mount')
         running = state.get('Running') is True and state.get('Status') == 'running' and not state.get('Paused') and not state.get('Restarting')
         started = state.get('StartedAt')
