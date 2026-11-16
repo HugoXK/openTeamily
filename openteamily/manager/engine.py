@@ -390,12 +390,17 @@ class ComposeEngine:
             require(len(matched) == 1, 'unsafe_container')
             return matched[0]
         require(isinstance(binds, list), 'unsafe_container')
-        present_suffixes = sorted(bind_suffix(bind) for bind in binds)
+        # Real Docker also lists the named data volume in Binds as ot-<id>:/data:rw.
+        # Secret-bind allowlisting applies to the remaining bind entries only.
+        volume_bind = 'ot-' + iid + ':/data:rw'
+        require(binds.count(volume_bind) <= 1, 'unsafe_container')
+        secret_binds = [bind for bind in binds if bind != volume_bind]
+        present_suffixes = sorted(bind_suffix(bind) for bind in secret_binds)
         allowed = sorted(ALLOWED_BIND_SUFFIXES)
         require(all(suffix in allowed for suffix in present_suffixes), 'unsafe_container')
         needs_recreate = present_suffixes != allowed
         if not needs_recreate:
-            require(len(binds) == len(ALLOWED_BIND_SUFFIXES), 'unsafe_container')
+            require(len(secret_binds) == len(ALLOWED_BIND_SUFFIXES), 'unsafe_container')
         expected_ports = {'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': str(entry['publish_port'])}]} if entry['publish_port'] is not None else {}
         require((host.get('PortBindings') or {}) == expected_ports, 'unsafe_ports')
         labels = config.get('Labels')

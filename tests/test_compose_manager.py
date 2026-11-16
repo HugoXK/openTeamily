@@ -522,6 +522,17 @@ class ComposeManagerTests(unittest.TestCase):
             self.engine.inspect(self.iid)
         self.assertIn(error.exception.code, ('unsafe_container', 'unexpected_mount', 'secret_mount', 'bot_social_mount'))
 
+    def test_inspect_accepts_named_volume_in_binds_and_rejects_a_substitute(self):
+        # Real Docker lists ot-<id>:/data:rw in HostConfig.Binds as well as Mounts.
+        self.engine.compose(self.iid, 'create')
+        state = self.engine.inspect(self.iid)
+        self.assertTrue(state['stopped'])
+        self.assertFalse(state['needs_recreate'])
+        self.controls(substitute_volume_bind=True)
+        with self.assertRaises(ManagerError) as error:
+            self.engine.inspect(self.iid)
+        self.assertEqual(error.exception.code, 'unsafe_container')
+
     def put_bot_social(self, scope, server, display_name=None, workspace_id=None):
         from uuid import uuid4
         with self.store.transaction() as db:
