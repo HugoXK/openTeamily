@@ -72,6 +72,42 @@ def require(ok, message, secrets=()):
         raise RuntimeError(redact(message, secrets))
 
 
+def describe_error(error, secrets):
+    parts = [type(error).__name__, str(error)]
+    for attr in ('returncode', 'stdout', 'stderr'):
+        value = getattr(error, attr, None)
+        if value not in (None, ''):
+            parts.append('%s=%s' % (attr, value))
+    return redact(' '.join(parts), secrets)
+
+
+def trace_engine(engine, secrets, iid):
+    def current_secrets():
+        extra = list(secrets)
+        try:
+            token = json.loads(engine.runtime_key_path(iid).read_text()).get('token')
+            if token:
+                extra.append(token)
+        except Exception:
+            pass
+        return extra
+
+    def wrap(method):
+        def wrapped(*args, **kwargs):
+            try:
+                return method(*args, **kwargs)
+            except Exception as error:
+                print('compose engine %s: %s' % (method.__name__, describe_error(error, current_secrets())), file=sys.stderr)
+                raise
+        return wrapped
+
+    engine.inspect = wrap(engine.inspect)
+    engine.compose = wrap(engine.compose)
+    engine.wait = wrap(engine.wait)
+    engine.install_runtime_key = wrap(engine.install_runtime_key)
+    return engine
+
+
 def docker(args, *, allow_failure=False, timeout=180, secrets=()):
     result = subprocess.run(['docker', *args], capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0 and not allow_failure:
@@ -224,7 +260,10 @@ def main(argv):
     iid = None
     volume = None
     network = None
-    temp = tempfile.TemporaryDirectory(prefix='ot-compose-chat-')
+    # Runner.trusted_path rejects group/world-writable ancestors. GitHub Actions
+    # sets TMPDIR to a 0775 workspace path, so the operator root must live under
+    # sticky, root-owned /tmp rather than the default TemporaryDirectory location.
+    temp = tempfile.TemporaryDirectory(prefix='ot-compose-chat-', dir='/tmp')
     try:
         os.chmod(temp.name, 0o700)
         root = Path(temp.name) / 'operator'
@@ -318,7 +357,7 @@ def main(argv):
             'instances': {iid: {'image': image_ref, 'healthcheck': HEALTHCHECK, 'publish_port': None}},
         })
         registry = Registry(str(root / 'manager.json'))
-        engine = ComposeEngine(registry, Runner(registry, enabled=True))
+        engine = trace_engine(ComposeEngine(registry, Runner(registry, enabled=True)), secrets, iid)
         client = ManagerClient(loopback_origin, 'manager-a', manager_token, enabled=True, timeout=5)
         worker = ManagerWorker(client, registry, engine)
 
