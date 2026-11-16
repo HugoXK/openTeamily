@@ -23,7 +23,9 @@ jobs:
       - run: node --test manager/compose-planner/compose-command-planner.test.js
       - name: Python tests with explicit trusted runner Node
         run: |
-          export OPENTEAMILY_PLANNER_NODE="$(command -v node)"
+          install -d -m 0700 "$RUNNER_TEMP/openteamily-planner-bin"
+          install -m 0500 "$(command -v node)" "$RUNNER_TEMP/openteamily-planner-bin/node"
+          export OPENTEAMILY_PLANNER_NODE="$RUNNER_TEMP/openteamily-planner-bin/node"
           python -m unittest discover -s tests -v
       - run: python -m compileall -q openteamily tests
       - run: python -m openteamily.server --help

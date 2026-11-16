@@ -399,8 +399,7 @@ class PlannerIntegrationTests(unittest.TestCase):
             self.assertFalse(result['ok']); self.assertNotIn('plan', result)
 
     def test_operator_absolute_node_supports_toolcache_without_path_search(self):
-        import shutil
-        absolute = shutil.which('node')
+        absolute = self.planner.node
         with patch('openteamily.compose_planning.shutil.which', return_value=None):
             planner = NodeComposePlanner(node_executable=absolute)
             result = planner.plan(self.registry, {'instance_id': self.iid, 'operation': 'inspect'})

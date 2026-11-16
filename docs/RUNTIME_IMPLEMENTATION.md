@@ -43,7 +43,7 @@ Manager headers: `Authorization: Bearer <manager-id>.<43-character-opaque-token>
 
 ## Running and configuration
 
-Python3.11+; **Node18+ is additionally needed for planner integration/tests** (local verification used Node24.22.1). No pip/npm dependency install required. The manager-side adapter defaults to the system executable search path only. For an operator-installed/CI tool-cache Node outside that path, explicitly set `OPENTEAMILY_PLANNER_NODE` to its absolute executable path (or inject the constructor argument); relative paths, non-Node filenames and group/world-writable executables are refused. This is operator process configuration, never an HTTP/JSON selector. CI exports its trusted runner `command -v node` result before Python tests. The Web/API remains Python stdlib only.
+Python3.11+; **Node18+ is additionally needed for planner integration/tests** (local verification used Node24.22.1). No pip/npm dependency install required. The manager-side adapter defaults to the system executable search path only. For an operator-installed/CI tool-cache Node outside that path, explicitly set `OPENTEAMILY_PLANNER_NODE` to its absolute executable path (or inject the constructor argument); relative paths, non-Node filenames and group/world-writable executables are refused. This is operator process configuration, never an HTTP/JSON selector. CI stages its preinstalled runner Node into a private0700 job directory with an0500 executable, then exports that absolute path before Python tests. The application permission check is not relaxed for writable hosted-tool-cache binaries. The Web/API remains Python stdlib only.
 
 ```sh
 python3 -m unittest discover -s tests -v
