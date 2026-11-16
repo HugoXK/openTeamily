@@ -1,6 +1,6 @@
 // Live Bot Social onboarding against an in-process fake server (ot-fake- tokens only).
 import assert from 'node:assert/strict'
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -94,7 +94,7 @@ test('a configured server onboards once, writes mode 0600 credentials, and does 
   assert.equal(fake.stats.onboard, 1)
   const status = await first.flybot.api.call('social/server')
   assert.equal(status.server, fake.url)
-  assert.equal(status.state, 'connected')
+  assert.equal(status.state, 'connected', status.error || JSON.stringify(status))
   await first.close()
 
   const second = startHost(t, { home: first.home, social: { server: fake.url, displayName: 'FlyBot' }, cleanupHome: true })
@@ -105,7 +105,7 @@ test('a configured server onboards once, writes mode 0600 credentials, and does 
   const leakedAgain = second.logs.some(([, line]) => line.includes(fake.token))
   assert.equal(leakedAgain, false)
   const status2 = await second.flybot.api.call('social/server')
-  assert.equal(status2.state, 'connected')
+  assert.equal(status2.state, 'connected', status2.error || JSON.stringify(status2))
 })
 
 test('a torn credentials file is refused and does not trigger another onboard', async (t) => {
@@ -115,6 +115,7 @@ test('a torn credentials file is refused and does not trigger another onboard', 
   t.after(() => rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }))
   writeFileSync(join(home, 'state.json'), JSON.stringify(seed))
   const path = credentialsPath(home)
+  mkdirSync(join(home, 'bot'), { recursive: true })
   writeFileSync(path, '{', { mode: 0o600 })
   const { ready, flybot } = startHost(t, { home, social: { server: fake.url }, cleanupHome: false })
   // controller.ready() swallows start failures so Settings can still show the error.
