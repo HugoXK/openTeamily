@@ -150,6 +150,24 @@ def check_shipped() -> int:
         errors += 1
     else:
         print("OK Dockerfile does not use closing-keyword phrasing")
+    workflow = (ROOT / ".github/workflows/flybot-runtime-image.yml").read_text()
+    if "close issue" in workflow.lower() or "closes issue" in workflow.lower() or "closes #" in workflow.lower():
+        print("FAIL: runtime image workflow uses GitHub closing-keyword phrasing")
+        errors += 1
+    else:
+        print("OK runtime image workflow does not use closing-keyword phrasing")
+    pin = "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
+    if pin not in workflow or "flybot-runtime-image-license-inventory" not in workflow:
+        print("FAIL: runtime image workflow must upload a pinned image license inventory artifact")
+        errors += 1
+    else:
+        print("OK runtime image workflow uploads pinned inventory artifact")
+    collector = ROOT / "runtime/flybot-image/inventory/collect.mjs"
+    if not collector.is_file():
+        print("FAIL: missing image inventory collector")
+        errors += 1
+    else:
+        print("OK image inventory collector present")
     return errors
 
 
