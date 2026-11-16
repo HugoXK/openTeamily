@@ -35,6 +35,7 @@ All responses are JSON and no-store. There is no CORS support. Errors are `{erro
 | GET/POST | `/v1/auth/oidc/*` | OAuth/OIDC start, callback and account linking; see [OIDC.md](OIDC.md) |
 | GET | `/v1/auth/session` | Current user and expiry only; no session/CSRF secret in JSON |
 | POST | `/v1/auth/logout` | `{}`; valid Origin and CSRF required; revokes the server-side session and clears cookies |
+| POST | `/v1/teams` | Create a team as a new workspace or convert a current one; see [TEAMS.md](TEAMS.md) |
 | POST | `/v1/workspaces` | `{name}`; owner is server-derived, never caller-selected; requires `Idempotency-Key` |
 | GET | `/v1/workspaces` | Owner-only bounded page: `limit=1..100` (default20), optional UUID-hex `cursor` |
 | GET | `/v1/workspaces/{id}` | Owner-only read; other owners and nonexistent records both get404 |
