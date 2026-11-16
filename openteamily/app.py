@@ -42,6 +42,7 @@ class Config:
     max_artifacts_per_workspace: int = 50
     max_shares_per_artifact: int = 10
     max_memory_pages_per_workspace: int = 100
+    max_memory_actions_per_workspace: int = 200
     max_agents_per_workspace: int = 50
     max_conversations_per_user: int = 50
     max_messages_per_conversation: int = 200
@@ -701,6 +702,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|preview|file|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
             if artifact_path:
                 return self.artifact_dispatch(db, session, method, query, now, env, *artifact_path.groups())
+            memory_action_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/memory/actions(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
+            if memory_action_path:
+                return self.memory_action_dispatch(db, session, method, query, now, env, *memory_action_path.groups())
             memory_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/memory(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if memory_path:
@@ -1733,6 +1738,135 @@ class App:
         return 200, {'page': memory.view(memory.load(db, workspace['id'], row['id']))}, []
 
 
+
+    def memory_action_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if target_id is None and method == 'GET':
+            try:
+                limit, cursor, args = self.pagination(query, allowed=('q', 'status'))
+            except APIError:
+                raise
+            except Exception:
+                refuse(400, 'invalid', 'Invalid pagination parameters')
+            needle = args.get('q', [''])[0].strip().casefold()
+            status = args.get('status', [''])[0]
+            if len(needle) > 80 or (status and not memory.valid_status(status)):
+                refuse(400, 'invalid', 'Invalid memory action request')
+            rows = memory.action_listing(db, workspace['id'], cursor, limit + 1, needle, status)
+            items = [memory.action_view(row, include_notes=False) for row in rows[:limit]]
+            return 200, {'items': items,
+                         'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
+        if target_id is None and method == 'POST' and not query:
+            return self.create_memory_action(db, workspace, session, now, env)
+        if target_id is None:
+            refuse(400, 'invalid', 'Invalid memory action request')
+        row = memory.load_action(db, workspace['id'], target_id)
+        if row is None:
+            refuse(404, 'not_found', 'Memory action not found')
+        if removing:
+            if method != 'POST' or query:
+                refuse(400, 'invalid', 'Invalid memory action request')
+            if not memory.can_edit(actor, session['user_id'], row):
+                refuse(403, 'forbidden', 'Not allowed to change this memory action')
+            self.body(env, [])
+            db.execute('DELETE FROM memory_actions WHERE id=?', (row['id'],))
+            return 200, {'removed': memory.action_view(row, include_notes=False)}, []
+        if method == 'GET' and not query and not removing:
+            return 200, {'action': memory.action_view(row)}, []
+        if method != 'POST' or query or removing:
+            refuse(400, 'invalid', 'Invalid memory action request')
+        return self.update_memory_action(db, workspace, session, actor, row, now,
+                                         self.body(env, ['revision', 'changes']))
+
+    def _resolved_memory_page(self, db, workspace_id, page_id):
+        if page_id is None:
+            return None
+        if not memory.valid_page_ref(page_id):
+            refuse(400, 'invalid', 'Provide a valid linked memory page')
+        page = memory.load(db, workspace_id, page_id)
+        if page is None:
+            refuse(400, 'invalid', 'Linked memory page not found in this workspace')
+        return page['id']
+
+    def create_memory_action(self, db, workspace, session, now, env):
+        body = self.body(env, ['title', 'notes', 'due_at', 'memory_page_id'])
+        title, notes = body.get('title'), body.get('notes', '')
+        due_at = body['due_at'] if 'due_at' in body else None
+        page_id = body['memory_page_id'] if 'memory_page_id' in body else None
+        if not memory.valid_title(title) or not memory.valid_notes(notes) or not memory.valid_due_at(due_at) or not memory.valid_page_ref(page_id):
+            refuse(400, 'invalid', 'Provide a memory action title')
+        title = title.strip()
+        page_id = self._resolved_memory_page(db, workspace['id'], page_id)
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        payload = {'title': title, 'notes': notes, 'due_at': due_at, 'memory_page_id': page_id}
+        key_hash, request_hash = digest('memory-action:' + key), digest(
+            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+        )
+        prior = db.execute(
+            'SELECT * FROM memory_actions WHERE workspace_id=? AND key_hash=?', (workspace['id'], key_hash)
+        ).fetchone()
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'action': memory.action_view(memory.load_action(db, workspace['id'], prior['id']))}, []
+        if (db.execute('SELECT COUNT(*) FROM memory_actions WHERE workspace_id=?', (workspace['id'],)).fetchone()[0]
+                >= self.config.max_memory_actions_per_workspace):
+            refuse(429, 'quota', 'Memory action capacity reached')
+        action_id = uuid4().hex
+        db.execute(
+            'INSERT INTO memory_actions VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,?)',
+            (action_id, workspace['id'], title, notes, 'open', due_at, page_id, now, now,
+             session['user_id'], session['user_id'], key_hash, request_hash),
+        )
+        return 201, {'action': memory.action_view(memory.load_action(db, workspace['id'], action_id))}, []
+
+    def update_memory_action(self, db, workspace, session, actor, row, now, body):
+        if not memory.can_edit(actor, session['user_id'], row):
+            refuse(403, 'forbidden', 'Not allowed to change this memory action')
+        revision, changes = body.get('revision'), body.get('changes')
+        if type(revision) is not int or not 0 <= revision <= 2 ** 31 or not isinstance(changes, dict) or not changes:
+            refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
+        if set(changes) - {'title', 'notes', 'status', 'due_at', 'memory_page_id'}:
+            refuse(400, 'invalid', 'Unknown memory action field')
+        if revision != row['revision']:
+            raise RuntimeFault(409, 'conflict', 'Memory action changed elsewhere; reload and retry',
+                               memory.action_view(row))
+        title, notes, status, due_at, page_id = row['title'], row['notes'], row['status'], row['due_at'], row['memory_page_id']
+        if 'title' in changes:
+            if not memory.valid_title(changes['title']):
+                refuse(400, 'invalid', 'Provide a memory action title')
+            title = changes['title'].strip()
+        if 'notes' in changes:
+            if not memory.valid_notes(changes['notes']):
+                refuse(400, 'invalid', 'Provide valid memory action notes')
+            notes = changes['notes']
+        if 'status' in changes:
+            if not memory.valid_status(changes['status']):
+                refuse(400, 'invalid', 'Status must be open or done')
+            status = changes['status']
+        if 'due_at' in changes:
+            if not memory.valid_due_at(changes['due_at']):
+                refuse(400, 'invalid', 'Provide a valid due date')
+            due_at = changes['due_at']
+        if 'memory_page_id' in changes:
+            if not memory.valid_page_ref(changes['memory_page_id']):
+                refuse(400, 'invalid', 'Provide a valid linked memory page')
+            page_id = self._resolved_memory_page(db, workspace['id'], changes['memory_page_id'])
+        if (title, notes, status, due_at, page_id) == (row['title'], row['notes'], row['status'], row['due_at'], row['memory_page_id']):
+            return 200, {'action': memory.action_view(row)}, []
+        db.execute(
+            'UPDATE memory_actions SET title=?, notes=?, status=?, due_at=?, memory_page_id=?, '
+            'revision=?, updated=?, updated_by=? WHERE id=?',
+            (title, notes, status, due_at, page_id, row['revision'] + 1, now, session['user_id'], row['id']),
+        )
+        return 200, {'action': memory.action_view(memory.load_action(db, workspace['id'], row['id']))}, []
+
+
     def workspace_agent_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, archiving):
         workspace = members.load(db, workspace_id, session['user_id'])
         if workspace is None:
@@ -2718,7 +2852,8 @@ class App:
     def pagination(query, allowed=()):
 
         try:
-            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=3) if query else {}
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True,
+                                max_num_fields=2 + len(allowed)) if query else {}
             if set(args) - {'limit', 'cursor', *allowed} or any(len(v) != 1 for v in args.values()):
                 raise ValueError()
             limit, cursor = args.get('limit', ['20'])[0], args.get('cursor', [''])[0]

@@ -15,7 +15,7 @@
   <header>
     <p class="brand">OpenTeamily / FlyBot</p>
     <h1>记忆</h1>
-    <p class="note">本切片提供工作区记忆页的创建、浏览、编辑和删除。新建会立即落盘，作者或所有者/管理员可以改或删。图谱、画像、下一步行动、分享和导出尚未实现。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
+    <p class="note">本切片提供工作区记忆页和下一步行动的创建、浏览、编辑和删除。新建会立即落盘，作者或所有者/管理员可以改或删。图谱、画像、分享和导出尚未实现。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
     <nav aria-label="管理导航">
       <a href="/settings">账号设置</a>
       <a href="/automations">自动化</a>
@@ -51,6 +51,29 @@
         <label>标题 <input id="new-title" name="title" type="text" maxlength="80" required autocomplete="off"></label>
         <button type="submit" id="new-page">新建记忆页</button>
       </form>
+      <section id="actions-panel">
+        <h2>下一步行动</h2>
+        <label>筛选
+          <select id="action-filter">
+            <option value="open" selected>未完成</option>
+            <option value="done">已完成</option>
+            <option value="">全部</option>
+          </select>
+        </label>
+        <ul id="action-list"></ul>
+        <p id="action-empty" class="note" hidden>这个工作区还没有符合筛选的下一步行动。</p>
+        <form id="new-action-form">
+          <label>标题 <input id="new-action-title" name="title" type="text" maxlength="80" required autocomplete="off"></label>
+          <label>备注 <input id="new-action-notes" name="notes" type="text" maxlength="2000" autocomplete="off"></label>
+          <label>截止日期 <input id="new-action-due" name="due" type="date"></label>
+          <label>关联记忆页
+            <select id="new-action-page">
+              <option value="">不关联</option>
+            </select>
+          </label>
+          <button type="submit" id="new-action">新建行动</button>
+        </form>
+      </section>
     </section>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
@@ -62,6 +85,28 @@
         <button type="submit" id="save-page">保存</button>
         <button type="button" id="delete-page">删除</button>
         <button type="button" id="close-editor">返回列表</button>
+      </div>
+    </form>
+    <form id="action-editor-form" method="post" action="/v1/workspaces" hidden>
+      <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
+      <label>备注 <textarea name="notes" maxlength="2000" rows="4"></textarea></label>
+      <label>状态
+        <select name="status">
+          <option value="open">未完成</option>
+          <option value="done">已完成</option>
+        </select>
+      </label>
+      <label>截止日期 <input type="date" name="due"></label>
+      <label>关联记忆页
+        <select name="memory_page_id">
+          <option value="">不关联</option>
+        </select>
+      </label>
+      <p id="action-editor-meta" class="note"></p>
+      <div class="actions">
+        <button type="submit" id="save-action">保存</button>
+        <button type="button" id="delete-action">删除</button>
+        <button type="button" id="close-action-editor">返回列表</button>
       </div>
     </form>
     <form id="logout-form" method="post" action="/v1/auth/logout">
