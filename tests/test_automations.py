@@ -29,16 +29,21 @@ class AutomationTests(unittest.TestCase):
         self.alice.call('POST', f'/v1/workspaces/{self.wid}/members', {'username': 'bob', 'role': 'admin'})
 
     def create(self, client, title='Morning briefing', key='automation-create-0001', wid=None, **kw):
-        fields = {name: kw.pop(name) for name in list(kw) if name in ('prompt', 'template_id', 'schedule', 'participants')}
+        fields = {name: kw.pop(name) for name in list(kw) if name in ('prompt', 'template_id', 'schedule', 'participants', 'intent', 'scope', 'agents')}
         body = {'title': title, 'prompt': 'Summarize overnight activity.', 'template_id': 'custom',
                 'schedule': SCHEDULE, 'participants': ['alice'], **fields}
         return client.call('POST', f'/v1/workspaces/{wid or self.wid}/automations', body,
                            {'HTTP_IDEMPOTENCY_KEY': key}, **kw)
 
-    def test_template_catalog_is_custom_only(self):
+    def test_template_catalog_lists_work_templates(self):
         response = self.alice.call('GET', '/v1/automation-templates')
         self.assertEqual(response['status'], 200)
-        self.assertEqual(response['body']['items'], [{'id': 'custom', 'title': 'Custom', 'prompt': ''}])
+        items = response['body']['items']
+        self.assertEqual(items[0]['id'], 'custom')
+        work = [item for item in items if item['category'] == 'work']
+        self.assertEqual(len(work), 12)
+        self.assertTrue(all(item['prompt'] and item['title'] for item in work))
+        self.assertIn('daily_brief', [item['id'] for item in work])
         self.assertEqual(Client(self.app).call('GET', '/v1/automation-templates')['status'], 401)
 
     def test_create_list_get_persist_and_do_not_enable(self):
@@ -129,6 +134,45 @@ class AutomationTests(unittest.TestCase):
         with sqlite3.connect(self.path / 'management.sqlite3') as db:
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 1)
             self.assertIsNotNone(db.execute("SELECT name FROM sqlite_master WHERE name='automations'").fetchone())
+
+    def test_new_schedule_kinds_and_compiled_prompt(self):
+        created = self.create(self.alice, title='Weekday brief', key='automation-create-0010',
+                              template_id='daily_brief', prompt='',
+                              schedule={'kind': 'weekdays', 'time': '09:00', 'time_zone': 'UTC'},
+                              intent='给团队的晨报', scope='ongoing', agents=['brief-bot'])
+        self.assertEqual(created['status'], 201, created)
+        item = created['body']['automation']
+        self.assertEqual(item['template_id'], 'daily_brief')
+        self.assertEqual(item['scope'], 'ongoing')
+        self.assertEqual(item['agents'], ['brief-bot'])
+        self.assertTrue(item['compiled'])
+        self.assertIn('汇总当天要处理的事项', item['prompt'])
+        self.assertIn('工作日', item['prompt'])
+        self.assertIn('brief-bot', item['prompt'])
+        later = self.create(self.alice, title='Later once', key='automation-create-0011',
+                            schedule={'kind': 'later', 'date': '2026-11-20', 'time': '08:00', 'time_zone': 'UTC'})
+        self.assertEqual(later['status'], 201, later)
+        self.assertEqual(later['body']['automation']['schedule']['kind'], 'once')
+        monthly = self.create(self.alice, title='Monthly report', key='automation-create-0012',
+                              schedule={'kind': 'monthly', 'day': 16, 'time': '10:00', 'time_zone': 'UTC'})
+        self.assertEqual(monthly['status'], 201, monthly)
+        immediate = self.create(self.alice, title='Run now', key='automation-create-0013',
+                                schedule={'kind': 'now', 'time_zone': 'UTC'})
+        self.assertEqual(immediate['status'], 201, immediate)
+        self.assertEqual(immediate['body']['automation']['schedule'], {'kind': 'now', 'time_zone': 'UTC'})
+        listed = self.alice.call('GET', f'/v1/workspaces/{self.wid}/automations?category=work&q=brief')
+        self.assertEqual(listed['status'], 200, listed)
+        self.assertEqual([row['title'] for row in listed['body']['items']], ['Weekday brief'])
+
+    def test_existing_v1_database_gains_editor_table_without_version_bump(self):
+        import sqlite3
+        from openteamily.store import Store
+        with sqlite3.connect(self.path / 'management.sqlite3') as db:
+            db.execute('DROP TABLE automation_editors')
+        Store(self.path)
+        with sqlite3.connect(self.path / 'management.sqlite3') as db:
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 1)
+            self.assertIsNotNone(db.execute("SELECT name FROM sqlite_master WHERE name='automation_editors'").fetchone())
 
 
 if __name__ == '__main__':
