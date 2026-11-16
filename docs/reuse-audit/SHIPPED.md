@@ -67,7 +67,7 @@ Bot Social 是可选适配，不是架构必选第三服务。
 
 `@deepseek-ai/dsh-skill-office@0.2.2-rc.1`（MIT）是上述 90 个生产直接依赖之一，并依赖 `@deepseek-ai/libreoffice-kit@^0.1.5`。`^0.1.5` 的候选版本 `0.1.5` 声明 **MPL-2.0**，integrity `sha512-H12xtUsAyl70zFeQ5pk5GGRc3N1+6zn+DVAcqwlguI6EvqopBGP3xkUmePU7g5f6ydYlDZLWedHT9lTSL7zLxA==`。其直接依赖为 `koffi@3.1.1`、`saxes@6.0.0`、`fflate@0.8.2`、`fontkit@2.0.4`（`fontkit` 声明 MIT）。注册表上另有 `0.2.3`（亦为 MPL-2.0），但不在 `^0.1.5` 范围内。
 
-DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包声明 MPL-2.0，且「Recipients must have access to those corresponding sources and notices。」默认执行配方中的 `npm install -g @deepseek-ai/dsh@0.2.2-rc.1` 就会经由 office 技能带入该组件，除非构建时明确排除。在履行对应源码提供义务，或从默认镜像中排除 office 技能 / kit 之前，这是**公开发行镜像的法律阻塞项**。本仓库目前**不**提供该 kit 的对应源码要约。
+DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包声明 MPL-2.0，且「Recipients must have access to those corresponding sources and notices。」默认执行配方中的 `npm install -g @deepseek-ai/dsh@0.2.2-rc.1` 就会经由 office 技能带入该组件。本仓库**保留**该办公转换能力，不借排除组件来回避义务。已在 [`runtime/third_party/libreoffice-kit/`](../../runtime/third_party/libreoffice-kit/) 放入 0.1.5 入口包的完整 npm 内容（含经验证的 MPL-2.0 `LICENSE` 与 `NOTICE` 文本），以及 Linux 可选引擎 `@deepseek-ai/libreoffice-kit-wasm@0.1.5` 包内自带的 `licenses/` 与 `sources/`（含 LibreOffice/core 修订 `bce0998afefdbc355585ca324285661a2170ba77` 的声明）。未把 `soffice.wasm` 等引擎二进制纳入本仓。公开 git 默认分支目前是 0.1.3，**未找到** 0.1.5 的公开标签或提交，因此该确切修订的 TypeScript 首选形式尚未钉到公开 git 对象。本要约是否满足 MPL 对再分发镜像的要求，属于**尚未作出的法律解释**。在该点以及清单中其余未知项解决之前，仍不得把运行时镜像称为可再分发的公开发行物。
 
 ### 3.3 Claude / Anthropic 载荷（未证明是否进入默认镜像）
 
@@ -97,7 +97,7 @@ DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包
 
 书面清单已经覆盖当前仓库交付的主要来源、版本、声明许可、已知限制和建议动作，并记录了 #18 的 Project / Timeline 风险。下列事项仍然未知或未解决，因此不能把 issue 3 写成已经完成，也不能把本仓镜像称为可再分发的公开发行物：
 
-1. MPL-2.0 LibreOffice kit 会随默认 DSH 安装进入镜像，对应源码要约尚未提供，也尚未从配方中排除。
+1. MPL-2.0 LibreOffice kit 仍会随默认 DSH 安装进入镜像（办公功能保留）。本仓已提供 0.1.5 的源码与通知要约，但公开 git 没有找到 0.1.5 对应提交，且该要约是否满足再分发镜像的 MPL 义务尚未作出法律解释。
 2. `@deepseek-ai/dsh@0.2.2-rc.1` 的 npm tarball 与 git 标签 `dsh-v0.2.2-rc.1` 尚未做字节对应。
 3. 默认镜像的完整传递依赖闭包（含全局 DSH、ds-bot 额外包、profile `pnpm install`）尚未展开。
 4. 基础镜像与 Debian/`git` 的版权清单与源码提供方式尚未枚举。

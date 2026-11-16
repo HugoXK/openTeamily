@@ -19,6 +19,8 @@
 
 #18 / #23 记录的是导入前与导入后勘误，并不等于「当前仓库和镜像配方里到底有什么」。对**恰好已经交付**的来源、版本与声明许可，见 [SHIPPED.md](SHIPPED.md) 与 [shipped-pins.json](shipped-pins.json)；根目录新增 [NOTICE](../../NOTICE) 指向导入树与镜像义务。该清单核实了 DSH **0.2.2-rc.1** 的 npm integrity、git 标签 `dsh-v0.2.2-rc.1`（`66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db`）上的 LICENSE / THIRD_PARTY_NOTICES，以及 90 个生产直接依赖的声明许可；并记录默认安装会经由 `@deepseek-ai/dsh-skill-office` 带入 MPL-2.0 的 `@deepseek-ai/libreoffice-kit`。在对应源码义务或排除该组件、以及清单中其余未知项解决之前，不得把运行时镜像称为可再分发的公开发行物。相关跟踪仍保持开放：issue 3。
 
+随后已在 [`runtime/third_party/libreoffice-kit/`](../../runtime/third_party/libreoffice-kit/) 放入 0.1.5 的对应源码与通知要约（办公功能保留；未排除 office 技能）。公开 git 仍未找到 0.1.5 对应提交，要约是否满足再分发镜像的 MPL 义务尚未作出法律解释，因此不得把镜像称为可再分发的公开发行物。相关跟踪仍保持开放：issue 3。
+
 
 ## 方法
 

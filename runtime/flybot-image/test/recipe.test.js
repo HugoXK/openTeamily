@@ -70,6 +70,8 @@ test('recipe does not edit the vendored upstream tree', () => {
   assert.match(docker, /COPY ds-bot-upstream\/LICENSE \/opt\/licenses\/ds-bot\/LICENSE/)
   assert.match(docker, /COPY ds-bot-upstream\/NOTICE \/opt\/licenses\/ds-bot\/NOTICE/)
   assert.match(docker, /COPY flybot\/LICENSE \/opt\/licenses\/flybot\/LICENSE/)
+  assert.match(docker, /COPY third_party\/libreoffice-kit \/opt\/licenses\/libreoffice-kit/)
+  assert.doesNotMatch(docker, /soffice\.wasm/)
   assert.match(docker, /warm-native-bindings\.cjs/)
   assert.doesNotMatch(docker, /sk-[A-Za-z0-9]/)
   assert.doesNotMatch(docker, /api_key\s*=/)

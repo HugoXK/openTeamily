@@ -99,7 +99,9 @@
         "fflate": "0.8.2",
         "fontkit": "2.0.4"
       },
-      "redistribution": "blocker unless corresponding source is offered or the office skill / kit is excluded from the default image"
+      "redistribution": "public-image clearance remains a blocker until MPL 3.2/3.3 interpretation is resolved; a corresponding-source and notices offer now lives at runtime/third_party/libreoffice-kit (engine binaries not vendored; no public git object was found for entry 0.1.5)",
+      "source_offer": "runtime/third_party/libreoffice-kit",
+      "office_functionality": "retained"
     },
     "claude_payloads": {
       "in_dsh_cli_production_direct_dependencies": false,
