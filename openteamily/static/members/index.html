@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>成员 · OpenTeamily</title>
+  <link rel="stylesheet" href="/members/app.css">
+  <script type="module" src="/members/app.mjs"></script>
+</head>
+<body>
+  <header>
+    <p class="brand">OpenTeamily / FlyBot</p>
+    <h1>成员</h1>
+    <p class="note">按已注册用户名添加成员，或生成邀请链接让已登录账号加入。角色和邀请还没有和 Teamily 对照过，不能写成已经功能对等。没有对照过的默认值：邀请默认单次使用、7 天过期，不会发邮件。</p>
+    <nav>
+      <a href="/settings">账号设置</a>
+      <a href="/automations">自动化</a>
+      <a href="/team">创建团队</a>
+    </nav>
+  </header>
+  <p id="status" role="status"></p>
+  <section id="login-panel" hidden>
+    <h2>登录</h2>
+    <form id="login-form" method="post" action="/v1/auth/login">
+      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
+      <button type="submit">登录</button>
+    </form>
+    <div id="oidc-providers"></div>
+  </section>
+  <section id="main-panel" hidden>
+    <p id="whoami"></p>
+    <label>工作区
+      <select id="workspace"></select>
+    </label>
+    <p id="role-note" class="note"></p>
+    <section id="members-panel">
+      <h2>成员列表</h2>
+      <ul id="member-list"></ul>
+      <p id="members-empty" class="note" hidden>这个工作区还没有可显示的成员。</p>
+    </section>
+    <form id="add-form" method="post" action="/v1/workspaces" hidden>
+      <fieldset>
+        <legend>添加已注册用户</legend>
+        <label>用户名 <input type="text" name="username" required maxlength="64" autocomplete="off"></label>
+        <label>角色
+          <select name="role">
+            <option value="member">成员</option>
+            <option value="admin">管理员</option>
+          </select>
+        </label>
+        <button type="submit">添加</button>
+      </fieldset>
+    </form>
+    <form id="invite-form" method="post" action="/v1/workspaces" hidden>
+      <fieldset>
+        <legend>生成邀请链接</legend>
+        <label>角色
+          <select name="role">
+            <option value="member">成员</option>
+            <option value="admin">管理员</option>
+          </select>
+        </label>
+        <label>有效天数 <input type="number" name="expires_days" min="1" max="30" value="7"></label>
+        <label>最多使用次数 <input type="number" name="max_uses" min="1" max="50" value="1"></label>
+        <button type="submit">生成</button>
+        <p id="issued-token" class="note" hidden></p>
+      </fieldset>
+    </form>
+    <section id="invites-panel" hidden>
+      <h2>已发出的邀请</h2>
+      <ul id="invite-list"></ul>
+      <p id="invites-empty" class="note" hidden>还没有有效或已记录的邀请。</p>
+    </section>
+    <form id="accept-form" method="post" action="/v1/invites/accept">
+      <fieldset>
+        <legend>接受邀请</legend>
+        <label>邀请令牌 <input type="text" name="token" required minlength="32" maxlength="128" autocomplete="off" spellcheck="false"></label>
+        <button type="submit">加入</button>
+      </fieldset>
+    </form>
+    <form id="logout-form" method="post" action="/v1/auth/logout">
+      <button type="submit">退出登录</button>
+    </form>
+  </section>
+</body>
+</html>

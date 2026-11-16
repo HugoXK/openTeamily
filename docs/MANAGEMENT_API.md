@@ -44,7 +44,7 @@ All responses are JSON and no-store. There is no CORS support. Errors are `{erro
 | GET/POST | `/v1/workspaces/{id}/model-api` | Optional workspace override; see [MODEL_API.md](MODEL_API.md) |
 | GET/POST | `/v1/skill-secrets` | Write-only skill secrets for the signed-in account; see [SETTINGS.md](SETTINGS.md) |
 | GET/POST | `/v1/settings` | Per-account interface preferences with revision check; added after PR16, see [SETTINGS.md](SETTINGS.md) |
-| GET/POST | `/v1/workspaces/{id}/members` | Membership and roles; added after PR16, see [MEMBERS.md](MEMBERS.md). List/get workspaces include membership, not only ownership |
+| GET/POST | `/v1/workspaces/{id}/members` | Membership and roles; added after PR16, see [MEMBERS.md](MEMBERS.md). List/get workspaces include membership, not only ownership. A same-origin page is at `/members` |
 | GET/POST | `/v1/workspaces/{id}/invites` | Invite links; added after PR16, see [INVITES.md](INVITES.md) |
 | POST | `/v1/invites/accept` | `{token}`; signed-in caller joins the workspace |
 | GET/POST | `/v1/workspaces/{id}/automations` | Configuration, explicit tick and run records; hook is not container execution. See [AUTOMATIONS.md](AUTOMATIONS.md) |

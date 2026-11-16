@@ -25,4 +25,4 @@ Default cap is 20 active (unrevoked, unexpired) invites per workspace.
 
 ## Not in this slice
 
-No share-to-chat flow, no approval/freeze semantics, no mailer, no credits/referral codes, no members UI. Browser acceptance is not claimed.
+A same-origin page at `/members` can mint, list, revoke and accept these links. The raw token is shown once in the page and is never listed afterwards. No share-to-chat flow, no approval/freeze semantics, no mailer, no credits/referral codes. Browser acceptance is not claimed.
