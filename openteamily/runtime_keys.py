@@ -73,7 +73,9 @@ def device_id(db, user_id, now):
 
 def listing(db, user_id):
     rows = db.execute(
-        'SELECT * FROM runtime_keys WHERE user_id=? ORDER BY created DESC, id',
+        'SELECT k.* FROM runtime_keys k '
+        'WHERE k.user_id=? AND k.id NOT IN (SELECT key_id FROM instance_runtime_keys) '
+        'ORDER BY k.created DESC, k.id',
         (user_id,),
     ).fetchall()
     return [view(row) for row in rows]
@@ -81,8 +83,9 @@ def listing(db, user_id):
 
 def create(db, user_id, now, name, expires_in=None):
     active = db.execute(
-        'SELECT COUNT(*) FROM runtime_keys WHERE user_id=? AND revoked=0 '
-        'AND (expires IS NULL OR expires>?)',
+        'SELECT COUNT(*) FROM runtime_keys k WHERE k.user_id=? AND k.revoked=0 '
+        'AND (k.expires IS NULL OR k.expires>?) '
+        'AND k.id NOT IN (SELECT key_id FROM instance_runtime_keys)',
         (user_id, now),
     ).fetchone()[0]
     if active >= MAX_KEYS:
@@ -104,3 +107,18 @@ def load(db, user_id, key_id):
         'SELECT * FROM runtime_keys WHERE id=? AND user_id=?',
         (key_id, user_id),
     ).fetchone()
+
+
+def revoke(db, key_id):
+    db.execute('UPDATE runtime_keys SET revoked=1 WHERE id=?', (key_id,))
+
+
+def issue_instance(db, owner_id, now, instance_id):
+    token = opaque()
+    from uuid import uuid4
+    key_id = uuid4().hex
+    db.execute(
+        'INSERT INTO runtime_keys VALUES(?,?,?,?,?,?,?,0)',
+        (key_id, owner_id, 'instance', digest(token), token[:PREFIX_LEN], now, None),
+    )
+    return key_id, token

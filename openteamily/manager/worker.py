@@ -43,6 +43,7 @@ class ManagerWorker:
                 if action in ('create', 'start', 'restart'):
                     self.engine.install_secret(iid, self.client.runtime_secret(iid, claim))
                     self.engine.install_bot_social(iid, self.client.runtime_bot_social(iid, claim))
+                    self.engine.install_runtime_key(iid, self.client.runtime_agent_key(iid, claim))
                 before = self.engine.inspect(iid, guard)
                 if action == 'restart':
                     require(before['present'] and (before['stopped'] or before['process_ref'] is not None), 'restart_requires_container')

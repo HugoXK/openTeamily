@@ -6,7 +6,7 @@ import re
 import time
 from uuid import uuid4
 
-from . import bot_social, members, model_api
+from . import agent_runtime, bot_social, members, model_api, runtime_keys
 from .security import digest, opaque
 
 ID = re.compile(r'[0-9a-f]{32}')
@@ -123,12 +123,15 @@ class Lifecycle:
     def expire(self):
         # A timed-out external operation might still be running: DO NOT auto-retry or
         # release this instance for another execution. Recovery needs operator review.
-        now = int(self.clock())
         with self.store.transaction() as db:
-            ids = [r[0] for r in db.execute("SELECT instance_id FROM runtime_jobs WHERE status='running' AND lease_until<=?", (now,))]
-            for iid in ids:
-                db.execute("UPDATE runtime_jobs SET status='interrupted',error_code='interrupted',finished=?,lease_hash=NULL WHERE instance_id=? AND status='running'", (now, iid))
-                db.execute("UPDATE instances SET blocked=1,observed='unknown',health='unknown',error_code='interrupted' WHERE id=?", (iid,))
+            self.expire_with(db)
+
+    def expire_with(self, db):
+        now = int(self.clock())
+        ids = [r[0] for r in db.execute("SELECT instance_id FROM runtime_jobs WHERE status='running' AND lease_until<=?", (now,))]
+        for iid in ids:
+            db.execute("UPDATE runtime_jobs SET status='interrupted',error_code='interrupted',finished=?,lease_hash=NULL WHERE instance_id=? AND status='running'", (now, iid))
+            db.execute("UPDATE instances SET blocked=1,observed='unknown',health='unknown',error_code='interrupted' WHERE id=?", (iid,))
 
     @staticmethod
     def workspace(db, user, wid, write=False):
@@ -335,6 +338,39 @@ class Lifecycle:
             public, source = bot_social.resolve(db, workspace_id=row['workspace_id'])
             payload = bot_social.container_payload(public, source)
             return {'bot_social_present': payload is not None, 'bot_social': payload}
+
+    def runtime_agent_key(self, manager, iid, jid, revision, lease, origin):
+        """Lease-gated instance runtime key for the container task loop. Token is not stored on the job."""
+        self.expire()
+        if not isinstance(origin, str) or not origin.startswith('http') or any(ord(ch) < 32 for ch in origin) or len(origin) > 512:
+            fail(409, 'runtime_key_unavailable', 'Management origin is not configured')
+        with self.store.transaction() as db:
+            row, job = self.leased(db, manager, iid, jid, revision, lease)
+            if job['operation_type'] not in ('create', 'start', 'restart'):
+                fail(409, 'runtime_key_not_applicable', 'Instance runtime key is only issued for create, start or restart')
+            existing = agent_runtime.load_instance_key(db, iid)
+            wrap_key = agent_runtime.wrapping_key(self.store)
+            if existing and existing['issued_job_id'] == job['id']:
+                token = agent_runtime.unwrap(wrap_key, existing['token_blob'])
+                return {'runtime_key_present': True, 'runtime_key': {
+                    'origin': origin, 'token': token, 'hostname': agent_runtime.hostname_for(iid)}}
+            if existing:
+                runtime_keys.revoke(db, existing['key_id'])
+            now = int(self.clock())
+            key_id, token = runtime_keys.issue_instance(db, row['owner_id'], now, iid)
+            blob = agent_runtime.wrap(wrap_key, token)
+            if existing:
+                db.execute(
+                    'UPDATE instance_runtime_keys SET key_id=?, token_blob=?, issued_job_id=?, updated=? WHERE instance_id=?',
+                    (key_id, blob, job['id'], now, iid),
+                )
+            else:
+                db.execute(
+                    'INSERT INTO instance_runtime_keys VALUES(?,?,?,?,?,?,?)',
+                    (iid, row['workspace_id'], key_id, blob, job['id'], now, now),
+                )
+            return {'runtime_key_present': True, 'runtime_key': {
+                'origin': origin, 'token': token, 'hostname': agent_runtime.hostname_for(iid)}}
 
     def heartbeat(self, manager, iid, jid, revision, lease):
         self.expire()
