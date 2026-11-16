@@ -6,20 +6,20 @@ OpenTeamily is a project name, not a claim of affiliation with or endorsement by
 
 ## Status
 
-**First implementation slice (under review):** a runnable Python/SQLite authentication and owner-scoped workspace API. A stacked follow-up adds durable instance/jobs and explicit simulation; real runtime containers and browser workflows are **not** implemented yet. See [lifecycle scope and remaining gates](docs/RUNTIME_IMPLEMENTATION.md). Older FlyBot tests, screenshots and PRs do not establish functionality in this repository. See [implemented routes, startup/test commands, security configuration and gaps](docs/MANAGEMENT_API.md).
+**First implementation slice (under review):** a runnable Python/SQLite authentication and owner-scoped workspace API. Stacked follow-ups add durable instance/jobs, explicit simulation and an **opt-in operator Compose execution CLI** (default disabled). The manager path has actual HTTP/subprocess-stub tests, but live Docker/FlyBot/real-volume acceptance and browser workflows remain **unverified or missing**. See [operator setup, recovery, evidence limits and next tasks](docs/COMPOSE_MANAGER.md). See [lifecycle scope and remaining gates](docs/RUNTIME_IMPLEMENTATION.md). Older FlyBot tests, screenshots and PRs do not establish functionality in this repository. See [implemented routes, startup/test commands, security configuration and gaps](docs/MANAGEMENT_API.md).
 
 ## Architecture
 
 - **Management server:** accounts, authentication, workspaces, permissions and container lifecycle.
 - **FlyBot runtime containers:** execute Agents and expose an authenticated runtime adapter contract.
-- Both layers must be open-source and self-hostable. Container allocation granularity and orchestration technology are not decided.
+- Both layers must be open-source and self-hostable. The first optional runtime adapter uses local Compose with independent instance IDs; final user/workspace allocation granularity is not decided.
 - FlyBot is a candidate runtime component, not a requirement to continue changing its original repository. Source/image reuse requires a license, provenance and dependency audit first.
 
 ## Next steps
 
 1. Review the architecture and full capability map.
 2. Create native issues/subissues in **this repository**, including dependencies and observable acceptance criteria.
-3. Review the authentication/workspace foundation, then deliver durable runtime jobs and the fake backend; only then wire the separately audited manager/Compose adapter and real container acceptance.
+3. Review the authentication/workspace foundation, then deliver durable runtime jobs and the fake backend; review the opt-in manager/Compose adapter, then perform separately approved real container and Teamily comparison acceptance.
 
 See [architecture](docs/ARCHITECTURE.md), [capability roadmap](docs/ROADMAP.md) and [reuse policy](docs/REUSE_POLICY.md).
 

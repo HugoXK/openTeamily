@@ -1,3 +1,5 @@
+> Follow-up: the new explicit executable Compose profile/CLI and recovery route are documented in [COMPOSE_MANAGER.md](COMPOSE_MANAGER.md). The original PR17 simulation/planning scope below is historical; live Docker and Teamily acceptance remain pending.
+
 # Lifecycle slice — durable intents and simulation, not real containers
 
 Depends on authentication/workspace PR #16 (`afedfc1`). Related #2 and #1; neither is completed or closed. PR16 stays unchanged; this work lives on its own stacked branch.
