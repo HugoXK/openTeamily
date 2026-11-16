@@ -6,6 +6,7 @@ from .app import App, Config
 from .store import Store
 from .lifecycle import Lifecycle, RuntimePolicy
 from .operator_config import load_manager_auth
+from .settings_page import SettingsPage
 
 
 class QuietHandler(WSGIRequestHandler):
@@ -44,6 +45,7 @@ def main():
                                 allow_registration=args.open_registration), lifecycle=lifecycle, manager_auth=manager_auth)
     except (OSError, ValueError, TypeError):
         parser.error('Cannot initialize private storage or origin configuration')
+    app = SettingsPage(app)
     # Never changes firewall/proxy rules or binds the development service to all interfaces.
     with make_server('127.0.0.1', args.port, app, handler_class=QuietHandler) as server:
         server.serve_forever()
