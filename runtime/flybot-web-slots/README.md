@@ -13,9 +13,17 @@ This package:
   profile accepts it, `sidebar.footer.action`)
 
 The official ds-bot client bundle is **not** loaded as a second profile plugin:
-the runtime wrapper already runs `createRuntime()` once. Composer `@` mentions
-and the Bot details drawer therefore stay in the FlyBot registry only until a
-later slice.
+the runtime wrapper already runs `createRuntime()` once.
+
+Composer `@` rows from `flybot.composer.mention` are registered on the official
+DSH `inputTriggers.registerSource` seam (the same contract unmodified ds-bot
+v0.3.6 uses in `src/client/at-menu.js`). Tests use an in-process fake
+`registerSource` only; they are not a live dsh-web or Teamily comparison.
+
+The official ds-bot v0.3.6 details drawer (`src/client/details-drawer.js`)
+has no slot for `flybot.bot.details`, so Bot Social details stay in the
+FlyBot registry only. This adapter does not invent a drawer slot or edit
+the vendored ds-bot tree.
 
 `@openteamily/flybot-social-web` is a client-only DSH bundle that loads
 `@flybot/social/client.js` after this host. Its server `apply()` is a no-op.

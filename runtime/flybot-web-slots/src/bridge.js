@@ -2,10 +2,11 @@
 // official ds-bot client bundle (that bundle is not a profile plugin here,
 // because createRuntime already runs once through the wrapper).
 //
-// Names that have no honest dsh equivalent stay in the FlyBot registry only
-// (composer mentions need DSH inputTriggers; bot details need the ds-bot
-// drawer). A missing or rejecting dsh slot is ignored, the way social already
-// treats an older host.
+// Composer @ rows are wired separately through DSH inputTriggers.registerSource
+// (see mentions.js). The official ds-bot v0.3.6 details drawer has no slot
+// for flybot.bot.details, so that entry stays in the FlyBot registry only.
+// A missing or rejecting dsh slot is ignored, the way social already treats
+// an older host.
 
 export const BRIDGE = {
   'flybot.settings.page': 'settings.section',
