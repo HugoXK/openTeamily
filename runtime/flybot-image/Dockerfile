@@ -55,6 +55,10 @@ COPY flybot/NOTICE /opt/licenses/flybot/NOTICE
 COPY flybot-social-host /opt/openteamily/runtime/flybot-social-host
 COPY flybot-image /opt/openteamily/runtime/flybot-image
 
+# Materialize dsh native bindings under /usr/local (executable) so a noexec
+# tmpfs /tmp at runtime still works. This RUN is as root, with a writable /tmp.
+RUN node /opt/openteamily/runtime/flybot-image/warm-native-bindings.cjs
+
 # The wrapper and façade import the vendored trees by relative path. Node then
 # resolves their package imports from that real path, not from the web profile,
 # so ds-bot's dependencies and DSH peer packages must sit next to that tree.

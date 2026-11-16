@@ -48,6 +48,41 @@ CI (`.github/workflows/flybot-runtime-image.yml`) builds this image and runs
 - The management server still needs an operator-supplied **digest-pinned**
   reference (`image@sha256:…`) after you load this image into the engine.
 
+## Model API config (operator-supplied, not baked in)
+
+OpenTeamily does not ship a credits/billing proxy. The operator (via the
+management server; lane 2 owns the config API) must supply a model provider,
+optional base URL and model, and an API key when the instance starts.
+
+The container reads a JSON secret file at start — never from the image layers:
+
+1. `$OPENTEAMILY_MODEL_API_FILE` if set (must resolve under `/run/secrets/` or
+   `/data/secrets/`)
+2. otherwise `/run/secrets/openteamily-model-api.json`
+3. otherwise `/data/secrets/model-api.json`
+
+Example file (do not commit real keys):
+
+```json
+{
+  "provider": "deepseek",
+  "base_url": "https://api.deepseek.com",
+  "model": "deepseek-chat",
+  "api_key": "sk-..."
+}
+```
+
+The launcher exports `{PROVIDER}_API_KEY` (for DeepSeek, `DEEPSEEK_API_KEY`)
+into the process environment for DSH, and records the non-secret fields as
+`OPENTEAMILY_MODEL_PROVIDER`, `OPENTEAMILY_MODEL_BASE_URL`, and
+`OPENTEAMILY_MODEL_NAME`. The key is never written to logs or stdout. Starting
+without a file is allowed so CI smoke can boot; that instance cannot call a
+model until a secret is mounted.
+
+The compose executor does not yet inject this file (next management-plane
+slice). Do not put keys in the Dockerfile, in git, or in a world-readable
+volume.
+
 ## Compose manager contract
 
 See `openteamily/manager/engine.py` `manifest()`: service `flybot`, user

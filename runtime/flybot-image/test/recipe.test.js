@@ -28,6 +28,8 @@ test('entrypoint is non-root and keeps the workspace on /data', () => {
   assert.doesNotMatch(body, /\b(gosu|groupmod|usermod|chown)\b/)
   assert.match(entry, /DSH_LISTEN_PORT:-8080/)
   assert.match(entry, /mkdir -p \/data\/workspace/)
+  assert.match(entry, /TMPDIR=\/data\/tmp/)
+  assert.match(entry, /launch\.mjs/)
   assert.match(entry, /cd \/data\/workspace/)
   const patch = read('docker.patch.yml')
   assert.match(patch, /workspace: \/data\/workspace/)
@@ -59,4 +61,16 @@ test('recipe does not edit the vendored upstream tree', () => {
   assert.match(docker, /COPY ds-bot-upstream\/LICENSE \/opt\/licenses\/ds-bot\/LICENSE/)
   assert.match(docker, /COPY ds-bot-upstream\/NOTICE \/opt\/licenses\/ds-bot\/NOTICE/)
   assert.match(docker, /COPY flybot\/LICENSE \/opt\/licenses\/flybot\/LICENSE/)
+  assert.match(docker, /warm-native-bindings\.cjs/)
+  assert.doesNotMatch(docker, /sk-[A-Za-z0-9]/)
+  assert.doesNotMatch(docker, /api_key\s*=/)
+})
+
+test('image recipe does not bake a model API key', () => {
+  const files = ['Dockerfile', 'entrypoint.sh', 'launch.mjs', 'docker.patch.yml', 'plugin/index.js']
+  for (const rel of files) {
+    const text = read(rel)
+    assert.doesNotMatch(text, /sk-[A-Za-z0-9]{8,}/, rel)
+    assert.doesNotMatch(text, /["']api_key["']\s*:\s*["'][^"']+["']/, rel)
+  }
 })

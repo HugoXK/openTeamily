@@ -1,14 +1,15 @@
 #!/bin/sh
 # Non-root entrypoint. The compose manager starts this image as UID/GID 1000
 # with a read-only rootfs, so this script must not call groupmod, usermod,
-# chown, or gosu, and must not write outside /data and /tmp.
+# chown, or gosu, and must not write outside /data and the tmpfs /tmp.
+# Prefer /data/tmp for TMPDIR: the manager's /tmp is mounted noexec.
 set -eu
 
 if [ ! -d /data/profiles/web ]; then
   mkdir -p /data
   cp -a /opt/dsh-template/. /data/
 fi
-mkdir -p /data/workspace /data/home
+mkdir -p /data/workspace /data/home /data/tmp /data/cache
 
 HOST=${DSH_HOST:-0.0.0.0}
 LISTEN_PORT=${DSH_LISTEN_PORT:-8080}
@@ -24,11 +25,13 @@ esac
 
 export DSH_HOME=/data
 export HOME="${HOME:-/data/home}"
+export TMPDIR=/data/tmp
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/data/cache}"
 export DSH_PERMISSION_MODE="${DSH_PERMISSION_MODE:-danger-full-access}"
 export DSH_TELEMETRY_DISABLED="${DSH_TELEMETRY_DISABLED:-1}"
 
 cd /data/workspace
-exec dsh --profile web \
+exec node /opt/openteamily/runtime/flybot-image/launch.mjs --profile web \
   --patch /opt/openteamily/runtime/flybot-image/docker.patch.yml \
   --no-open \
   --host "$HOST" --port "$LISTEN_PORT" \
