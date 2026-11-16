@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import automations, members, settings
+from . import automations, invites, members, settings
 
 
 class APIError(Exception):
@@ -35,6 +35,7 @@ class Config:
     max_workspaces_per_user: int = 20
     max_workspaces: int = 10000
     max_members_per_workspace: int = 50
+    max_invites_per_workspace: int = 20
     max_automations_per_workspace: int = 20
     auth_peer_limit: int = 20
     auth_name_limit: int = 10
@@ -366,6 +367,12 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/automations(?:/([0-9a-f]{32})(/remove)?)?', path)
             if auto_path:
                 return self.automation_dispatch(db, session, method, query, now, env, *auto_path.groups())
+            if path == '/v1/invites/accept' and method == 'POST' and not query:
+                return self.accept_invite(db, session, now, self.body(env, ['token']))
+            invite_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/invites(?:/([0-9a-f]{32})(/revoke)?)?', path)
+            if invite_path:
+                return self.invite_dispatch(db, session, method, query, now, env, *invite_path.groups())
             member_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/members(?:/([0-9a-f]{32})(/remove)?)?', path)
             if member_path:
@@ -421,7 +428,7 @@ class App:
         username = username.lower()
         user = db.execute('SELECT id, username FROM users WHERE username=?', (username,)).fetchone()
         if user is None:
-            refuse(404, 'not_found', 'User not found')
+            refuse(404, 'not_found', 'Member could not be added')
         if user['id'] == workspace['owner_id']:
             refuse(409, 'conflict', 'The workspace owner is already a member')
         existing = db.execute(
@@ -511,6 +518,98 @@ class App:
             db.execute('DELETE FROM automations WHERE id=?', (row['id'],))
             return 200, {'removed': automations.view(row)}, []
         return self.update_automation(db, workspace, actor, row, now, self.body(env, ['revision', 'changes']))
+
+    def invite_dispatch(self, db, session, method, query, now, env, workspace_id, invite_id, revoking):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if actor not in ('owner', 'admin'):
+            refuse(404, 'not_found', 'Workspace not found')
+        if invite_id is None and method == 'GET' and not query:
+            rows = db.execute(
+                'SELECT * FROM workspace_invites WHERE workspace_id=? ORDER BY id', (workspace['id'],)
+            ).fetchall()
+            return 200, {'items': [invites.view(row) for row in rows]}, []
+        if invite_id is None and method == 'POST' and not query:
+            return self.create_invite(db, workspace, actor, session['user_id'], now, self.body(env, ['role', 'expires_in', 'max_uses']))
+        if invite_id is None or method != 'POST' or query or not revoking:
+            refuse(400, 'invalid', 'Invalid invite request')
+        self.body(env, [])
+        row = db.execute(
+            'SELECT * FROM workspace_invites WHERE id=? AND workspace_id=?',
+            (invite_id, workspace['id']),
+        ).fetchone()
+        if row is None:
+            refuse(404, 'not_found', 'Invite not found')
+        db.execute('UPDATE workspace_invites SET revoked=1 WHERE id=?', (row['id'],))
+        row = dict(row)
+        row['revoked'] = 1
+        return 200, {'invite': invites.view(row)}, []
+
+    def create_invite(self, db, workspace, actor, actor_id, now, body):
+        role = body.get('role')
+        expires_in = body.get('expires_in', 604800)
+        max_uses = body.get('max_uses', 1)
+        if role not in members.ASSIGNABLE:
+            refuse(400, 'invalid', 'Provide a role of admin or member')
+        if type(expires_in) is not int or not 60 <= expires_in <= 2592000:
+            refuse(400, 'invalid', 'expires_in must be between 60 and 2592000 seconds')
+        if type(max_uses) is not int or not 1 <= max_uses <= 50:
+            refuse(400, 'invalid', 'max_uses must be between 1 and 50')
+        if actor == 'admin' and role != 'member':
+            refuse(403, 'forbidden', 'Admins can only invite members')
+        if (db.execute('SELECT COUNT(*) FROM workspace_invites WHERE workspace_id=? AND revoked=0 AND expires>?',
+                       (workspace['id'], now)).fetchone()[0] >= self.config.max_invites_per_workspace):
+            refuse(429, 'quota', 'Invite capacity reached')
+        token, invite_id = opaque(), uuid4().hex
+        db.execute(
+            'INSERT INTO workspace_invites VALUES(?,?,?,?,?,?,?,?,0,0)',
+            (invite_id, workspace['id'], digest(token), role, now, now + expires_in, actor_id, max_uses),
+        )
+        row = db.execute('SELECT * FROM workspace_invites WHERE id=?', (invite_id,)).fetchone()
+        return 201, {'invite': invites.view(row), 'token': token}, []
+
+    def accept_invite(self, db, session, now, body):
+        token = body.get('token')
+        if not isinstance(token, str) or not invites.TOKEN.fullmatch(token):
+            refuse(400, 'invalid', 'Provide an invite token')
+        row = db.execute('SELECT * FROM workspace_invites WHERE token_hash=?', (digest(token),)).fetchone()
+        if row is None or row['revoked'] == 1 or row['expires'] <= now:
+            refuse(404, 'not_found', 'Invite not found')
+        workspace = db.execute('SELECT * FROM workspaces WHERE id=?', (row['workspace_id'],)).fetchone()
+        if workspace is None:
+            refuse(404, 'not_found', 'Invite not found')
+        user_id = session['user_id']
+        if user_id == workspace['owner_id']:
+            refuse(409, 'conflict', 'The workspace owner is already a member')
+        existing = db.execute(
+            'SELECT u.id AS user_id, u.username, m.role AS role, m.created AS created '
+            'FROM workspace_members m JOIN users u ON u.id=m.user_id '
+            'WHERE m.workspace_id=? AND m.user_id=?',
+            (workspace['id'], user_id),
+        ).fetchone()
+        if existing:
+            if existing['role'] != row['role']:
+                refuse(409, 'conflict', 'Member already exists with a different role')
+            return 200, {'workspace': self.workspace(workspace), 'member': members.view(existing)}, []
+        if row['use_count'] >= row['max_uses']:
+            refuse(404, 'not_found', 'Invite not found')
+        occupied = 1 + db.execute(
+            'SELECT COUNT(*) FROM workspace_members WHERE workspace_id=?', (workspace['id'],)
+        ).fetchone()[0]
+        if occupied >= self.config.max_members_per_workspace:
+            refuse(429, 'quota', 'Workspace member capacity reached')
+        username = db.execute('SELECT username FROM users WHERE id=?', (user_id,)).fetchone()['username']
+        db.execute(
+            'INSERT INTO workspace_members VALUES(?,?,?,?,?)',
+            (workspace['id'], user_id, row['role'], now, row['created_by']),
+        )
+        db.execute(
+            'UPDATE workspace_invites SET use_count=use_count+1 WHERE id=?', (row['id'],)
+        )
+        member = {'user_id': user_id, 'username': username, 'role': row['role'], 'created': now}
+        return 201, {'workspace': self.workspace(workspace), 'member': members.view(member)}, []
 
     def resolve_participants(self, db, workspace, names):
         allowed = {workspace['owner_id']}
