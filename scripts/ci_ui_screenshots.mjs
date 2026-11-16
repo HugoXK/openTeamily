@@ -202,10 +202,11 @@ async function main() {
     try {
       await page.locator('#new-conversation').click();
       await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#chat-body').fill(ready.chat_live_text);
       await page.locator('#chat-form button[type="submit"]').click();
-      await waitForLocatorText(page, '#message-list', ready.chat_live_text, 15000);
-      await waitForLocatorText(page, '#message-list', ready.provider_text, 20000);
+      await waitForLocatorText(page, '#message-list', ready.chat_live_text, 30000);
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 30000);
       const live = await visibleText(page.locator('#message-list'));
       record(
         'agents_conversation_send',

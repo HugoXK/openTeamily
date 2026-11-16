@@ -3,6 +3,7 @@
 Throwaway data only. Never log or return passwords, session cookies, invite
 tokens, or runtime keys. Not a Teamily or production dataset.
 """
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import secrets
@@ -43,8 +44,8 @@ MEMORY_EDITED_TITLE = '[CI FIXTURE] Memory page after edit'
 MEMORY_EDITED_BODY = 'Synthetic body after the CI screenshot script edited this page.'
 ACTION_TITLE = '[CI FIXTURE] Next action'
 ACTION_NOTES = 'Synthetic CI fixture follow-up notes, not production data.'
-ACTION_DUE_AT = 1767139200  # 2026-12-31 00:00:00 UTC
-ACTION_DUE = '2026-12-31'
+ACTION_DUE_AT = int(datetime(2026, 12, 31, tzinfo=timezone.utc).timestamp())
+ACTION_DUE = datetime.fromtimestamp(ACTION_DUE_AT, timezone.utc).strftime('%Y-%m-%d')
 ACTION_CREATE_TITLE = '[CI FIXTURE] Next action created in UI'
 ACTION_CREATE_NOTES = 'Synthetic notes entered in the CI screenshot script.'
 ACTION_CREATE_DUE = '2026-12-15'
