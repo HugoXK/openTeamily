@@ -39,8 +39,10 @@ class ManagerWorker:
                 self.registry.entry(iid, claim['instance'])
                 guard = LeaseGuard(self.client, iid, claim)
                 guard(force=True)
-                before = self.engine.inspect(iid, guard)
                 action = claim['job']['operation_type']
+                if action in ('create', 'start', 'restart'):
+                    self.engine.install_secret(iid, self.client.runtime_secret(iid, claim))
+                before = self.engine.inspect(iid, guard)
                 if action == 'restart':
                     require(before['present'] and (before['stopped'] or before['process_ref'] is not None), 'restart_requires_container')
                 if action == 'create':

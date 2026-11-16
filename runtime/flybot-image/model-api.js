@@ -104,9 +104,14 @@ export function parseModelApi(raw) {
   return { provider, api_key: apiKey, base_url: baseUrl, model, source, api_key_env: keyRefFor(provider) }
 }
 
+export function contentsToModelApi(raw) {
+  const text = String(raw).trim()
+  if (text === '') return undefined
+  return parseModelApi(text)
+}
+
 export function readModelApiFile(path) {
-  const resolved = assertAllowedPath(path)
-  return parseModelApi(readFileSync(resolved, 'utf8'))
+  return contentsToModelApi(readFileSync(assertAllowedPath(path), 'utf8'))
 }
 
 export function resolveModelApiPath(env = process.env) {

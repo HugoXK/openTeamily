@@ -1244,6 +1244,12 @@ class App:
             if set(body) != {'expected_revision', 'operation_id', 'confirmation'}:
                 refuse(400, 'invalid', 'Recovery confirmation, revision and operation key required')
             return 200, runtime.recover(manager, recovery[1], **body), []
+        secret = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/runtime-secret', path)
+        if secret and method == 'POST' and not query:
+            body = self.body(env, ['job_id', 'observed_revision', 'lease'])
+            if set(body) != {'job_id', 'observed_revision', 'lease'} or not isinstance(body['job_id'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['job_id']):
+                refuse(400, 'invalid', 'Incomplete or invalid manager observation')
+            return 200, runtime.runtime_secret(manager, secret[1], body['job_id'], body['observed_revision'], body['lease']), []
         match = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/(observe|heartbeat)', path)
         if match and method == 'POST':
             allowed = ['job_id', 'observed_revision', 'lease']

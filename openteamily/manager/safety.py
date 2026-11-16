@@ -69,6 +69,31 @@ def read_private(path):
     return json_loads(raw)
 
 
+def replace_private(path, data):
+    """Atomically replace a private regular file (mode 0600). data is bytes."""
+    require(isinstance(data, (bytes, bytearray)) and len(data) <= LIMIT, 'file_limit')
+    p = Path(path)
+    trusted_path(str(p.parent), directory=True, private=True)
+    tmp = p.with_name(p.name + '.tmp')
+    if tmp.exists() or tmp.is_symlink():
+        info = tmp.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and not info.st_mode & 0o077, 'not_private')
+        tmp.unlink()
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    except Exception:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def write_new(path, data):
     """No overwrite; callers explicitly choose a new private state directory."""
     p = Path(path)

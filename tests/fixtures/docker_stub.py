@@ -40,14 +40,25 @@ elif args[0] == 'inspect':
     iid = state['project'][3:]
     manifest = json.loads((root / ('compose-' + iid + '.json')).read_text())
     running = state['running']
+    mounts = [{'Type': 'volume', 'Name': state['project'], 'Destination': '/data', 'RW': True}]
+    binds = []
+    for volume in manifest['services']['flybot'].get('volumes', []):
+        if isinstance(volume, dict) and volume.get('type') == 'bind' and volume.get('target') == '/run/secrets/openteamily-model-api.json':
+            source = str((root / volume['source']).resolve()) if not Path(volume['source']).is_absolute() else volume['source']
+            mounts.append({'Type': 'bind', 'Source': source, 'Destination': volume['target'], 'RW': not volume.get('read_only', False)})
+            binds.append(source + ':' + volume['target'] + (':ro' if volume.get('read_only') else ''))
+    if ctrl.get('extra_bind'):
+        mounts.append({'Type': 'bind', 'Source': '/etc/passwd', 'Destination': '/evil', 'RW': False})
+        binds.append('/etc/passwd:/evil:ro')
     emit([{'Id': args[-1], 'Config': {'Image': manifest['services']['flybot']['image'], 'User': '1000:1000',
            'Labels': {'com.docker.compose.project': 'wrong' if ctrl.get('wrong_project') else state['project'], 'com.docker.compose.service': 'flybot'}},
            'HostConfig': {'Privileged': bool(ctrl.get('privileged')), 'ReadonlyRootfs': True, 'CapDrop': ['ALL'],
-                          'SecurityOpt': ['no-new-privileges:true'], 'IpcMode': 'private', 'NetworkMode': state['project'] + '_default', 'PortBindings': {}},
+                          'SecurityOpt': ['no-new-privileges:true'], 'IpcMode': 'private', 'NetworkMode': state['project'] + '_default', 'PortBindings': {},
+                          'Binds': binds},
            'State': {'Status': 'running' if running else 'exited', 'Running': running, 'Paused': False, 'Restarting': False,
                      'StartedAt': '2026-11-16T00:00:00.' + str(state.get('generation', 0)).zfill(9) + 'Z',
                      'Health': {'Status': 'starting' if ctrl.get('not_ready') else 'healthy'}},
-           'Mounts': [{'Type': 'volume', 'Name': state['project'], 'Destination': '/data', 'RW': True}]}])
+           'Mounts': mounts}])
 elif args[0] == 'compose':
     project = args[args.index('-p') + 1]
     verb = args[args.index('-p') + 2]
