@@ -37,12 +37,13 @@ All responses are JSON and no-store. There is no CORS support. Errors are `{erro
 | GET | `/v1/workspaces` | Owner-only bounded page: `limit=1..100` (default20), optional UUID-hex `cursor` |
 | GET | `/v1/workspaces/{id}` | Owner-only read; other owners and nonexistent records both get404 |
 | GET/POST | `/v1/settings` | Per-account interface preferences with revision check; added after PR16, see [SETTINGS.md](SETTINGS.md) |
+| GET/POST | `/v1/workspaces/{id}/members` | Membership and roles; added after PR16, see [MEMBERS.md](MEMBERS.md). List/get workspaces include membership, not only ownership |
 
 Register/login require exact `Origin` and reject cross-site Fetch Metadata even before any session exists. All authenticated POSTs require exact Origin, a readable CSRF cookie and the matching `X-CSRF-Token` header, both bound to the current session's stored digest. The session token is not accepted as CSRF or a bearer token. Old sessions are revoked on logout/expiry and the oldest are evicted when exceeding a per-user session cap.
 
 Usernames: 3–64 ASCII letters/digits/underscore/dot/hyphen, first character alphanumeric, normalized lowercase. Passwords: 12–256 characters and at most256 UTF-8 bytes; never normalized or truncated. Scrypt-v1 uses N32768/r8/p3, independent random 16-byte salt, 64-byte output and 64MiB OpenSSL allocation ceiling. Password verification parameters cannot be chosen from the API or a corrupted hash record. Missing users still run one dummy KDF. This is implemented protection, not an independent security review.
 
-Workspace names: 1–80 Unicode characters after trimming, no control characters. IDs are independent UUID hex strings. Responses contain `id,owner_id,name,created`; no memberships or team roles beyond owner-only authorization are implemented. Creation requires a 16–64 character alphanumeric/underscore/hyphen `Idempotency-Key`. Same owner+key+normalized name returns the original workspace (200 vs initial201), including after restart. Different payload with the same key returns409. Another owner using the same key gets an independent record. Pagination is bounded keyset order by UUID, not chronological order or a frozen multi-page snapshot.
+Workspace names: 1–80 Unicode characters after trimming, no control characters. IDs are independent UUID hex strings. Responses contain `id,owner_id,name,created`. Memberships and roles were added after PR16; see [MEMBERS.md](MEMBERS.md). Creation requires a 16–64 character alphanumeric/underscore/hyphen `Idempotency-Key`. Same owner+key+normalized name returns the original workspace (200 vs initial201), including after restart. Different payload with the same key returns409. Another owner using the same key gets an independent record. Pagination is bounded keyset order by UUID, not chronological order or a frozen multi-page snapshot.
 
 ## Bounds and state
 

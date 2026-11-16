@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import settings
+from . import members, settings
 
 
 class APIError(Exception):
@@ -34,6 +34,7 @@ class Config:
     max_sessions: int = 8192
     max_workspaces_per_user: int = 20
     max_workspaces: int = 10000
+    max_members_per_workspace: int = 50
     auth_peer_limit: int = 20
     auth_name_limit: int = 10
     auth_global_limit: int = 100
@@ -355,14 +356,16 @@ class App:
                         raise ValueError()
                 except ValueError:
                     refuse(400, 'invalid', 'Invalid pagination parameters')
-                rows = db.execute('SELECT * FROM workspaces WHERE owner_id=? AND id>? ORDER BY id LIMIT ?',
-                                  (session['user_id'], cursor, int(limit) + 1)).fetchall()
+                rows = members.visible(db, session['user_id'], cursor, int(limit) + 1)
                 return 200, {'items': [self.workspace(row) for row in rows[:int(limit)]],
                              'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
+            member_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/members(?:/([0-9a-f]{32})(/remove)?)?', path)
+            if member_path:
+                return self.member_dispatch(db, session, method, query, now, env, *member_path.groups())
             match = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})(/instances)?', path)
             if match:
-                row = db.execute('SELECT * FROM workspaces WHERE id=? AND owner_id=?',
-                                 (match[1], session['user_id'])).fetchone()
+                row = members.load(db, match[1], session['user_id'])
                 if row is None:
                     refuse(404, 'not_found', 'Workspace not found')
                 if match[2]:
@@ -376,6 +379,100 @@ class App:
     @staticmethod
     def workspace(row):
         return {key: row[key] for key in ('id', 'owner_id', 'name', 'created')}
+
+    def member_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if target_id is None and method == 'GET' and not query:
+            return 200, {'items': members.listing(db, workspace)}, []
+        if method != 'POST' or query:
+            refuse(400, 'invalid', 'Invalid membership request')
+        if target_id is None:
+            return self.add_member(db, workspace, actor, session['user_id'], now, self.body(env, ['username', 'role']))
+        target = db.execute(
+            'SELECT u.id AS user_id, u.username, m.role AS role, m.created AS created '
+            'FROM workspace_members m JOIN users u ON u.id=m.user_id '
+            'WHERE m.workspace_id=? AND m.user_id=?',
+            (workspace['id'], target_id),
+        ).fetchone()
+        if target is None:
+            refuse(404, 'not_found', 'Member not found')
+        if removing:
+            self.body(env, [])
+            return self.remove_member(db, workspace, actor, session['user_id'], target)
+        return self.change_member_role(db, workspace, actor, target, self.body(env, ['role']))
+
+    def add_member(self, db, workspace, actor, actor_id, now, body):
+        if actor not in ('owner', 'admin'):
+            refuse(403, 'forbidden', 'Not allowed to add members')
+        username, role = body.get('username'), body.get('role')
+        if (not isinstance(username, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{2,63}', username)
+                or role not in members.ASSIGNABLE):
+            refuse(400, 'invalid', 'Provide an existing username and a role of admin or member')
+        username = username.lower()
+        user = db.execute('SELECT id, username FROM users WHERE username=?', (username,)).fetchone()
+        if user is None:
+            refuse(404, 'not_found', 'User not found')
+        if user['id'] == workspace['owner_id']:
+            refuse(409, 'conflict', 'The workspace owner is already a member')
+        existing = db.execute(
+            'SELECT u.id AS user_id, u.username, m.role AS role, m.created AS created '
+            'FROM workspace_members m JOIN users u ON u.id=m.user_id '
+            'WHERE m.workspace_id=? AND m.user_id=?',
+            (workspace['id'], user['id']),
+        ).fetchone()
+        if existing:
+            if existing['role'] != role:
+                refuse(409, 'conflict', 'Member already exists with a different role')
+            return 200, {'member': members.view(existing)}, []
+        occupied = 1 + db.execute(
+            'SELECT COUNT(*) FROM workspace_members WHERE workspace_id=?', (workspace['id'],)
+        ).fetchone()[0]
+        if occupied >= self.config.max_members_per_workspace:
+            refuse(429, 'quota', 'Workspace member capacity reached')
+        if actor == 'admin' and role != 'member':
+            refuse(403, 'forbidden', 'Admins can only add members')
+        db.execute(
+            'INSERT INTO workspace_members VALUES(?,?,?,?,?)',
+            (workspace['id'], user['id'], role, now, actor_id),
+        )
+        row = db.execute(
+            'SELECT u.id AS user_id, u.username, m.role AS role, m.created AS created '
+            'FROM workspace_members m JOIN users u ON u.id=m.user_id '
+            'WHERE m.workspace_id=? AND m.user_id=?',
+            (workspace['id'], user['id']),
+        ).fetchone()
+        return 201, {'member': members.view(row)}, []
+
+    def change_member_role(self, db, workspace, actor, target, body):
+        if actor != 'owner':
+            refuse(403, 'forbidden', 'Only the owner can change roles')
+        role = body.get('role')
+        if role not in members.ASSIGNABLE:
+            refuse(400, 'invalid', 'Provide a role of admin or member')
+        if target['role'] == role:
+            return 200, {'member': members.view(target)}, []
+        db.execute(
+            'UPDATE workspace_members SET role=? WHERE workspace_id=? AND user_id=?',
+            (role, workspace['id'], target['user_id']),
+        )
+        changed = {'user_id': target['user_id'], 'username': target['username'],
+                   'role': role, 'created': target['created']}
+        return 200, {'member': members.view(changed)}, []
+
+    def remove_member(self, db, workspace, actor, actor_id, target):
+        leaving = target['user_id'] == actor_id
+        if leaving and actor == 'owner':
+            refuse(409, 'conflict', 'The workspace owner cannot leave')
+        if not leaving and not (actor == 'owner' or (actor == 'admin' and target['role'] == 'member')):
+            refuse(403, 'forbidden', 'Not allowed to remove this member')
+        db.execute(
+            'DELETE FROM workspace_members WHERE workspace_id=? AND user_id=?',
+            (workspace['id'], target['user_id']),
+        )
+        return 200, {'removed': members.view(target)}, []
 
     @staticmethod
     def pagination(query, allowed=()):
