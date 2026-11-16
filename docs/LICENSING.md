@@ -20,3 +20,13 @@ If you redistribute this repository, include the Apache-2.0 text and NOTICE
 with the FlyBot snapshot and with the unmodified `runtime/ds-bot-upstream/`
 copy, include the Bot Social MIT copyright notice, and do not describe the
 combined work as “all MIT” or “all original to OpenTeamily.”
+
+A root [`NOTICE`](../NOTICE) points redistributors at the trees above. An
+inventory of exactly what this revision ships — in-tree licenses, vendored
+npm lockfiles, and the runtime image recipe, with versions and declared
+licenses — lives in [`docs/reuse-audit/SHIPPED.md`](reuse-audit/SHIPPED.md)
+and [`docs/reuse-audit/shipped-pins.json`](reuse-audit/shipped-pins.json).
+The inventory records remaining legal blockers for a public image
+(including MPL-2.0 LibreOffice kit obligations and an unenumerated Debian
+base-image source offer). It is not a legal opinion, and it is not a public
+release of a redistributable image. Related tracking remains open: issue 3.
