@@ -139,7 +139,8 @@ try {
 
   const onboard = docker(['exec', server, 'node', '--input-type=module', '-e', `
     import assert from 'node:assert/strict'
-    import { lstatSync, readFileSync } from 'node:fs'
+    import { createHash } from 'node:crypto'
+    import { lstatSync, readdirSync, readFileSync } from 'node:fs'
     const login = await fetch(process.argv[1], { redirect: 'manual' })
     const cookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
     assert.ok(cookie, 'login must return a cookie')
@@ -161,7 +162,13 @@ try {
     assert.ok(set.ok && body.ok, 'social/server-set must onboard: ' + set.status + ' ' + JSON.stringify(body.error || body.value))
     assert.equal(body.value.state, 'connected')
     assert.equal(body.value.server, 'http://127.0.0.1:8787')
-    const credPath = '/data/bot/flybot-social.json'
+    // A server chosen in Settings is not the profile default, so credentials
+    // land at flybot-social.json.<sha256-8> beside the default path.
+    const tag = createHash('sha256').update('http://127.0.0.1:8787').digest('hex').slice(0, 8)
+    const names = readdirSync('/data/bot').filter((name) => name.startsWith('flybot-social.json'))
+    const credPath = names.includes(`flybot-social.json.${tag}`)
+      ? `/data/bot/flybot-social.json.${tag}`
+      : names[0] ? `/data/bot/${names[0]}` : '/data/bot/flybot-social.json'
     const info = lstatSync(credPath)
     assert.equal(info.mode & 0o777, 0o600)
     const saved = JSON.parse(readFileSync(credPath, 'utf8'))

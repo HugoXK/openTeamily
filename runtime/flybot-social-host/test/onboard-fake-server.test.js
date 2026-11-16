@@ -57,7 +57,9 @@ function startHost(t, { social = {}, state = seed, home, cleanupHome = true } = 
     closed = true
     restoreLogs()
     await ctx.dispose()
-    if (created || cleanupHome) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+    // Honor cleanupHome even when this helper created the directory, so a second
+    // start can reuse the first start's credentials.
+    if (cleanupHome) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
   }
   t.after(close)
   return { rt, ctx, flybot: attached.flybot, ready: attached.social, home: dir, logs, restoreLogs, close }
