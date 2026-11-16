@@ -161,7 +161,13 @@ async function main() {
 
     await page.goto(`${origin}/agents`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
-    const agentsList = await visibleText(page.locator('#agent-list'));
+    let agentsList = '';
+    try {
+      await waitForLocatorText(page, '#agent-list', ready.agent_name);
+      agentsList = await visibleText(page.locator('#agent-list'));
+    } catch (error) {
+      agentsList = String(error);
+    }
     record('agents_list', agentsList.includes(ready.agent_name), agentsList || 'agent list empty');
     screenshots.push(path.basename(await shot(page, outDir, '03-agents-list.png')));
     try {
@@ -214,7 +220,13 @@ async function main() {
 
     await page.goto(`${origin}/automations`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
-    const autoList = await visibleText(page.locator('#automation-list'));
+    let autoList = '';
+    try {
+      await waitForLocatorText(page, '#automation-list', ready.automation_title);
+      autoList = await visibleText(page.locator('#automation-list'));
+    } catch (error) {
+      autoList = String(error);
+    }
     record('automations_list', autoList.includes(ready.automation_title), autoList || 'automation list empty');
     screenshots.push(path.basename(await shot(page, outDir, '05-automations-list.png')));
     try {
@@ -237,10 +249,19 @@ async function main() {
 
     await page.goto(`${origin}/artifacts`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
-    const artifacts = await visibleText(page.locator('#artifact-list'));
+    const artifactTitles = [ready.document_title, ready.media_title, ready.board_title, ready.website_title];
+    let artifacts = '';
+    try {
+      for (const title of artifactTitles) {
+        await waitForLocatorText(page, '#artifact-list', title);
+      }
+      artifacts = await visibleText(page.locator('#artifact-list'));
+    } catch (error) {
+      artifacts = String(error);
+    }
     record(
       'artifacts_list',
-      [ready.document_title, ready.media_title, ready.board_title, ready.website_title].every((title) => artifacts.includes(title)),
+      artifactTitles.every((title) => artifacts.includes(title)),
       artifacts || 'artifact list empty',
     );
     screenshots.push(path.basename(await shot(page, outDir, '07-artifacts-list.png')));
@@ -283,8 +304,16 @@ async function main() {
 
     await page.goto(`${origin}/members`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
-    const members = await visibleText(page.locator('#member-list'));
-    const invites = await visibleText(page.locator('#invite-list'));
+    let members = '';
+    let invites = '';
+    try {
+      await waitForLocatorText(page, '#member-list', ready.username);
+      await waitForLocatorText(page, '#member-list', ready.member_username);
+      members = await visibleText(page.locator('#member-list'));
+      invites = await visibleText(page.locator('#invite-list'));
+    } catch (error) {
+      members = members || String(error);
+    }
     record(
       'members',
       members.includes(ready.username) && members.includes(ready.member_username),
