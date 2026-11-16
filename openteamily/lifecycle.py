@@ -60,8 +60,10 @@ class RuntimePolicy:
     def __post_init__(self):
         if (not re.fullmatch(r'[a-z0-9./:_@-]{1,200}', self.image_ref)
                 or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}', self.profile)
-                or self.backend_mode not in ('simulation', 'compose-planning')):
+                or self.backend_mode not in ('simulation', 'compose-planning', 'compose')):
             raise ValueError('Invalid trusted runtime profile')
+        if self.backend_mode == 'compose' and ('..' in self.image_ref or not re.fullmatch(r'[a-z0-9][a-z0-9./:_-]{0,118}@sha256:[0-9a-f]{64}', self.image_ref)):
+            raise ValueError('Compose execution requires a pinned image digest')
         for name in ('max_instances_per_workspace', 'max_instances', 'max_jobs', 'lease_seconds'):
             value = getattr(self, name)
             if type(value) is not int or not 1 <= value <= (120 if name == 'lease_seconds' else 100000):
@@ -80,7 +82,7 @@ class ManagerIdentity:
                 or not re.fullmatch(r'[0-9a-f]{64}', self.credential_hash)
                 or not isinstance(self.instance_ids, frozenset) or len(self.instance_ids) > 1000
                 or any(not isinstance(i, str) or not ID.fullmatch(i) for i in self.instance_ids)
-                or self.backend_mode not in ('simulation', 'compose-planning')):
+                or self.backend_mode not in ('simulation', 'compose-planning', 'compose')):
             raise ValueError('Invalid manager grant')
 
 
@@ -225,7 +227,7 @@ class Lifecycle:
             if row['blocked']:
                 fail(409, 'interrupted', ERRORS['interrupted'])
             active = db.execute("SELECT * FROM runtime_jobs WHERE instance_id=? AND status IN ('queued','running')", (iid,)).fetchone()
-            if active and (active['status'] == 'running' or active['operation_type'] == 'create' or action == 'restart'):
+            if active and (active['status'] == 'running' or active['operation_type'] in ('create', 'recover') or action == 'restart'):
                 raise RuntimeFault(409, 'conflict', 'Operation in progress; fetch current instance', self.current_intent(row))
             self.capacity(db)
             if active:
@@ -270,8 +272,8 @@ class Lifecycle:
         self.expire()
         with self.store.transaction() as db:
             row = self.managed(db, manager, iid)
-            if row['backend_mode'] != 'simulation':
-                fail(501, 'unsupported', 'Compose execution is not implemented; plans are not runtime observations')
+            if row['backend_mode'] not in ('simulation', 'compose'):
+                fail(501, 'unsupported', 'Planning-only profile cannot execute; choose the explicit Compose execution profile')
             if row['blocked']:
                 return None
             active = db.execute("SELECT id FROM runtime_jobs WHERE instance_id=? AND status='running'", (iid,)).fetchone()
@@ -282,7 +284,8 @@ class Lifecycle:
                 return None
             lease = opaque()
             db.execute("UPDATE runtime_jobs SET status='running',manager_id=?,lease_hash=?,lease_until=? WHERE id=?", (manager.id, digest(lease), int(self.clock()) + self.policy.lease_seconds, job['id']))
-            return {**self.result(db, iid), 'lease': lease, 'lease_until': int(self.clock()) + self.policy.lease_seconds}
+            return {**self.result(db, iid), 'lease': lease, 'lease_until': int(self.clock()) + self.policy.lease_seconds,
+                    **({'previous_process_ref': row['process_ref']} if row['backend_mode'] == 'compose' else {})}
 
     def leased(self, db, manager, iid, jid, revision, lease):
         row = self.managed(db, manager, iid)
@@ -320,6 +323,39 @@ class Lifecycle:
             db.execute('UPDATE instances SET observed=?,observed_revision=?,health=?,process_ref=?,error_code=? WHERE id=?',
                        (observed, revision, 'healthy' if observed == 'running' else 'unknown', process_ref if observed != 'failed' else row['process_ref'], error_code, iid))
             db.execute('UPDATE runtime_jobs SET status=?,error_code=?,finished=?,lease_hash=NULL WHERE id=?', (status, error_code, int(self.clock()), jid))
+            return self.result(db, iid)
+
+    def recover(self, manager, iid, expected_revision, operation_id, confirmation):
+        """Explicit operator attestation that prior executors/actions are quiescent; never resume uncertain work.
+
+        Creates a new fenced STOP intent. No DB-side requeue of an interrupted action,
+        no automatic start, and no successful observation until the manager verifies stop.
+        """
+        if (type(expected_revision) is not int or expected_revision < 1 or not valid_key(operation_id)
+                or confirmation != 'quiesced-executors'):
+            fail(400, 'invalid', 'Explicit executor quiescence confirmation and revision/key required')
+        self.expire()
+        with self.store.transaction() as db:
+            row = self.managed(db, manager, iid)
+            if row['backend_mode'] != 'compose':
+                fail(409, 'conflict', 'Recovery is defined only for the explicit Compose execution profile')
+            existing = db.execute('SELECT * FROM runtime_jobs WHERE instance_id=? AND operation_id=?', (iid, operation_id)).fetchone()
+            if existing:
+                if existing['operation_type'] != 'recover':
+                    fail(409, 'conflict', 'Operation key already used')
+                return self.result(db, iid, operation_id)
+            if row['revision'] != expected_revision:
+                fail(409, 'conflict', 'Recovery revision changed; inspect again')
+            if not row['blocked'] and row['error_code'] != 'runtime_failure':
+                fail(409, 'conflict', 'Only interrupted or failed instances require recovery')
+            if db.execute("SELECT id FROM runtime_jobs WHERE instance_id=? AND status IN ('running','queued')", (iid,)).fetchone():
+                fail(409, 'conflict', 'Active job prevents recovery')
+            self.capacity(db)
+            revision, jid = row['revision'] + 1, uuid4().hex
+            db.execute("UPDATE instances SET blocked=0,desired='stopped',revision=?,operation_id=?,operation_type='recover',observed='unknown',health='unknown',error_code=NULL WHERE id=?",
+                       (revision, operation_id, iid))
+            db.execute("INSERT INTO runtime_jobs(id,instance_id,revision,operation_id,operation_type,status,created) VALUES(?,?,?,?,'recover','queued',?)",
+                       (jid, iid, revision, operation_id, int(self.clock())))
             return self.result(db, iid)
 
     def logs(self, owner, iid, tail=100):

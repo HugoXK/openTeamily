@@ -1,0 +1,481 @@
+"""Real loopback HTTP + actual bounded subprocess STUB tests; NO DOCKER ENGINE."""
+from contextlib import redirect_stdout
+from copy import deepcopy
+from dataclasses import replace
+import io
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import threading
+import time
+import unittest
+from unittest.mock import patch
+from wsgiref.simple_server import make_server
+
+import test_runtime as fixtures
+from openteamily.lifecycle import RuntimeFault, RuntimePolicy, ManagerIdentity
+from openteamily.manager.client import ManagerClient
+from openteamily.manager.engine import Registry, Runner, ComposeEngine, manifest
+from openteamily.manager.safety import ManagerError, write_new, instance_lock, redact
+from openteamily.manager.worker import ManagerWorker
+from openteamily.manager.__main__ import main
+from openteamily.server import QuietHandler
+from openteamily.operator_config import load_manager_auth
+from openteamily.security import digest
+
+IMAGE = 'operator/runtime@sha256:' + 'a' * 64
+
+
+class ComposeManagerTests(unittest.TestCase):
+    create = fixtures.RuntimeTests.create
+    manager = fixtures.RuntimeTests.manager
+    action = fixtures.RuntimeTests.action
+    manager_call = fixtures.RuntimeTests.manager_call
+
+    def setUp(self):
+        fixtures.RuntimeTests.setUp(self)
+        self.runtime.policy = RuntimePolicy(image_ref=IMAGE, profile='local-compose', backend_mode='compose')
+        self.iid = self.create()['instance']['id']
+        self.identity = self.manager(self.iid, mode='compose')
+        self.root = Path(self.temp.name) / 'operator'
+        self.root.mkdir(mode=0o700)
+        self.docker = self.root / 'docker-stub'
+        code = (Path(__file__).parent / 'fixtures/docker_stub.py').read_text()
+        self.docker.write_text('#!' + sys.executable + '\n' + code.split('\n', 1)[1])
+        self.docker.chmod(0o700)
+        self.sock = self.root / 'engine.sock'
+        s = socket.socket(socket.AF_UNIX); s.bind(str(self.sock)); s.close()
+        self.cfgpath = self.root / 'manager.json'
+        self.cfg = {'version': 1, 'execution_enabled': True, 'base_url': 'http://127.0.0.1:8080', 'server_host': 'management.test', 'manager_id': 'manager-a',
+                    'token': self.token, 'docker': str(self.docker), 'socket': str(self.sock),
+                    'instances': {self.iid: {'image': IMAGE, 'healthcheck': None, 'publish_port': None}}}
+        write_new(self.cfgpath, self.cfg)
+        self.registry = Registry(str(self.cfgpath))
+        self.engine = ComposeEngine(self.registry, Runner(self.registry, enabled=True))
+
+    def controls(self, **data):
+        (self.root / 'stub-controls.json').write_text(json.dumps(data))
+
+    def start_http(self):
+        self.runtime.clock = time.time
+        server = make_server('127.0.0.1', 0, self.app, handler_class=QuietHandler)
+        thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': .01}, daemon=True)
+        thread.start()
+        def close():
+            server.shutdown(); thread.join(3); server.server_close()
+        self.addCleanup(close)
+        self.cfg['base_url'] = 'http://127.0.0.1:' + str(server.server_port)
+        self.cfgpath.write_text(json.dumps(self.cfg))
+        self.registry = Registry(str(self.cfgpath))
+        self.engine = ComposeEngine(self.registry, Runner(self.registry, enabled=True))
+        return ManagerClient(self.cfg['base_url'], 'manager-a', self.token, enabled=True, host_header='management.test')
+
+    def test_explicit_execution_mode_claim_and_digest_required(self):
+        claim = self.runtime.claim(self.identity, self.iid)
+        self.assertEqual(claim['job']['status'], 'running')
+        self.assertEqual(claim['instance']['backend_mode'], 'compose')
+        self.assertIn('previous_process_ref', claim)
+        with self.assertRaises(ValueError):
+            RuntimePolicy(image_ref='mutable:latest', backend_mode='compose')
+
+    def test_planning_only_mode_still_cannot_execute(self):
+        self.runtime.policy = replace(self.runtime.policy, backend_mode='compose-planning')
+        iid = self.create('new-planning-instance-key')['instance']['id']
+        identity = self.manager(iid, mode='compose-planning')
+        with self.assertRaises(RuntimeFault) as error:
+            self.runtime.claim(identity, iid)
+        self.assertEqual(error.exception.status, 501)
+
+    def test_grant_mode_scope_and_remote_denials_include_recovery(self):
+        wrong = ManagerIdentity('other', digest(self.token), frozenset(), 'compose')
+        with self.assertRaises(RuntimeFault):
+            self.runtime.claim(wrong, self.iid)
+        with self.assertRaises(RuntimeFault) as error:
+            self.runtime.recover(wrong, self.iid, 1, 'scope-recovery-key-0001', 'quiesced-executors')
+        self.assertEqual(error.exception.status, 404)
+        body = {'expected_revision': 1, 'operation_id': 'recovery-operation-0001', 'confirmation': 'quiesced-executors'}
+        for peer, headers in [('198.51.100.20', {}), ('127.0.0.1', {'HTTP_ORIGIN': 'https://invalid.example'}),
+                              ('127.0.0.1', {'HTTP_COOKIE': 'something'})]:
+            response = self.manager_call('POST', f'/v1/internal/instances/{self.iid}/recover', body, peer=peer, **headers)
+            self.assertIn(response['status'], (401, 403))
+
+    def test_recovery_is_fenced_idempotent_stop_and_old_lease_stays_invalid(self):
+        claim = self.runtime.claim(self.identity, self.iid)
+        self.now += self.runtime.policy.lease_seconds + 1
+        self.runtime.expire()
+        with self.assertRaises(RuntimeFault):
+            self.runtime.recover(self.identity, self.iid, 99, 'operator-recovery-0001', 'quiesced-executors')
+        with self.assertRaises(RuntimeFault):
+            self.runtime.recover(self.identity, self.iid, 1, 'operator-recovery-0001', 'yes')
+        result = self.runtime.recover(self.identity, self.iid, 1, 'operator-recovery-0001', 'quiesced-executors')
+        self.assertEqual(result['instance']['desired'], 'stopped')
+        self.assertEqual(result['instance']['revision'], 2)
+        self.assertEqual(result['job']['operation_type'], 'recover')
+        self.assertFalse(result['instance']['converged'])
+        self.assertEqual(self.runtime.recover(self.identity, self.iid, 1, 'operator-recovery-0001', 'quiesced-executors'), result)
+        self.assertEqual(self.action(self.iid, 'start')['status'], 409)
+        with self.assertRaises(RuntimeFault):
+            self.runtime.observe(self.identity, self.iid, claim['job']['id'], 1, claim['lease'], 'stopped')
+        new = self.runtime.claim(self.identity, self.iid)
+        done = self.runtime.observe(self.identity, self.iid, new['job']['id'], 2, new['lease'], 'stopped')
+        self.assertTrue(done['instance']['converged'])
+        self.assertEqual(self.action(self.iid, 'start')['status'], 202)
+
+    def test_real_http_subprocess_stub_create_start_restart_stop_and_retention(self):
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        self.assertFalse(json.loads((self.root / 'stub-engine.json').read_text())['running'])
+        self.assertEqual(self.action(self.iid, 'start')['status'], 202)
+        started = worker.run_once(self.iid)
+        self.assertEqual(started['observed'], 'running')
+        before = json.loads((self.root / 'stub-engine.json').read_text())
+        self.action(self.iid, 'restart', {'operation_id': 'restart-stub-proof-0001'})
+        restarted = worker.run_once(self.iid)
+        after = json.loads((self.root / 'stub-engine.json').read_text())
+        self.assertEqual(before['id'], after['id'])  # Docker restart keeps the container ID
+        self.assertNotEqual(started['process_ref'], restarted['process_ref'])
+        self.action(self.iid, 'stop')
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        stopped = json.loads((self.root / 'stub-engine.json').read_text())
+        self.assertEqual(stopped['sentinel'], before['sentinel'])
+        self.assertTrue(stopped['volume'])
+        self.assertEqual(worker.run_once(self.iid)['status'], 'no_claim')
+        # Restarting a stopped, existing container is supported too.
+        self.action(self.iid, 'restart', {'operation_id': 'restart-stopped-0001'})
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'running')
+
+    def test_lease_is_renewed_during_slow_actual_subprocess_not_after_it(self):
+        client = self.start_http()
+        self.runtime.policy = replace(self.runtime.policy, lease_seconds=2)
+        worker = ManagerWorker(client, self.registry, self.engine)
+        self.assertEqual(worker.run_once(self.iid)['status'], 'observed')
+        self.action(self.iid, 'start')
+        self.controls(start_delay=3)
+        count = []
+        original = self.runtime.heartbeat
+        def heartbeat(*args, **kwargs):
+            count.append(time.monotonic())
+            return original(*args, **kwargs)
+        with patch.object(self.runtime, 'heartbeat', side_effect=heartbeat):
+            result = worker.run_once(self.iid)
+        self.assertEqual(result['status'], 'observed', result)
+        self.assertGreaterEqual(len(count), 4)
+
+    def test_lost_lease_aborts_subprocess_and_never_sends_observe(self):
+        client = self.start_http()
+        self.runtime.policy = replace(self.runtime.policy, lease_seconds=2)
+        worker = ManagerWorker(client, self.registry, self.engine)
+        worker.run_once(self.iid); self.action(self.iid, 'start')
+        self.controls(start_delay=3)
+        original = client.leased_call
+        calls = []
+        def leased(iid, claim, action, **fields):
+            calls.append(action)
+            if calls.count('heartbeat') >= 2:
+                raise ManagerError('stale_observation')
+            return original(iid, claim, action, **fields)
+        with patch.object(client, 'leased_call', side_effect=leased):
+            start = time.monotonic(); result = worker.run_once(self.iid)
+        self.assertEqual(result['status'], 'uncertain')
+        self.assertLess(time.monotonic() - start, 2)
+        self.assertNotIn('observe', calls)
+
+    def test_actual_http_cli_inspect_logs_and_explicit_recovery(self):
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        worker.run_once(self.iid)
+        common = ['--config', str(self.cfgpath), '--execute']
+        def command(*args):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                code = main(common + list(args) + ['--instance-id', self.iid])
+            return code, json.loads(out.getvalue())
+        self.assertEqual(command('inspect')[0], 0)
+        process = subprocess.run([sys.executable, '-m', 'openteamily.manager', *common, 'inspect', '--instance-id', self.iid],
+                                 cwd=Path(__file__).parent.parent, capture_output=True, text=True, timeout=10)
+        self.assertEqual(process.returncode, 0, process.stdout)
+        self.assertTrue(json.loads(process.stdout)['engine']['stopped'])
+        self.assertNotIn(self.token, process.stdout + process.stderr)
+        code, logs = command('logs', '--tail', '10')
+        self.assertEqual(code, 0)
+        self.assertNotIn('synthetic-password', logs['text'])
+        self.assertNotIn('synthetic-token', logs['text'])
+        self.assertNotIn('synthetic-bearer', logs['text'])
+        self.action(self.iid, 'start')
+        claim = client.claim(self.iid)  # simulate a crashed manager before command
+        with self.store.transaction() as db:
+            db.execute('UPDATE runtime_jobs SET lease_until=0 WHERE id=?', (claim['job']['id'],))
+        code, preview = command('recover')
+        self.assertEqual(code, 0); self.assertFalse(preview['applied'])
+        self.assertTrue(client.snapshot(self.iid)['blocked'])
+        self.assertEqual(command('recover', '--apply', '--expected-revision', '2', '--operation-id', 'operator-recover-0001')[0], 2)
+        code, result = command('recover', '--apply', '--confirm-no-active-executors', '--expected-revision', '2', '--operation-id', 'operator-recover-0001')
+        self.assertEqual(code, 0); self.assertTrue(result['applied'])
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+
+    def test_registry_rejects_bind_mounts_commands_mutable_image_and_manifest_tamper(self):
+        original = self.cfg['instances'][self.iid]
+        for extra in ('command', 'mounts', 'env', 'privileged', 'compose_file'):
+            with self.assertRaises(ManagerError):
+                manifest(self.iid, {**original, extra: 'untrusted'})
+        with self.assertRaises(ManagerError):
+            manifest(self.iid, {**original, 'image': 'runtime:latest'})
+        self.registry.entry(self.iid)
+        path = self.root / ('compose-' + self.iid + '.json')
+        data = json.loads(path.read_text()); data['services']['flybot']['privileged'] = True
+        path.write_text(json.dumps(data))
+        with self.assertRaises(ManagerError):
+            self.engine.compose(self.iid, 'start')
+
+    def test_registry_symlinks_permissions_and_unregistered_ids_are_rejected(self):
+        self.cfgpath.chmod(0o644)
+        with self.assertRaises(ManagerError):
+            Registry(str(self.cfgpath))
+        self.cfgpath.chmod(0o600)
+        alias = self.root / 'link.json'; alias.symlink_to(self.cfgpath)
+        with self.assertRaises(ManagerError):
+            Registry(str(alias))
+        with self.assertRaises(ManagerError):
+            self.registry.entry('b' * 32)
+        self.registry.entry(self.iid)
+        path = self.root / ('compose-' + self.iid + '.json')
+        path.unlink(); path.symlink_to(self.cfgpath)
+        with self.assertRaises(ManagerError):
+            self.registry.entry(self.iid)
+
+    def test_operator_ownership_executable_symlink_and_writable_binary_are_rejected(self):
+        with patch('openteamily.manager.safety.os.getuid', return_value=os.getuid() + 1):
+            with self.assertRaises(ManagerError):
+                Registry(str(self.cfgpath))
+        alias = self.root / 'docker-link'; alias.symlink_to(self.docker)
+        self.cfg['docker'] = str(alias); self.cfgpath.write_text(json.dumps(self.cfg))
+        registry = Registry(str(self.cfgpath))
+        with self.assertRaises(ManagerError):
+            ComposeEngine(registry, Runner(registry, enabled=True)).compose(self.iid, 'create')
+        self.cfg['docker'] = str(self.docker); self.cfgpath.write_text(json.dumps(self.cfg))
+        self.docker.chmod(0o722)
+        registry = Registry(str(self.cfgpath))
+        with self.assertRaises(ManagerError):
+            ComposeEngine(registry, Runner(registry, enabled=True)).compose(self.iid, 'create')
+
+    def test_default_off_and_exact_command_allowlist(self):
+        with self.assertRaises(ManagerError):
+            ComposeEngine(self.registry, Runner(self.registry)).compose(self.iid, 'create')
+        for verb in ('pull', 'down', 'rm', 'exec', 'run', 'start --privileged'):
+            with self.assertRaises(ManagerError):
+                self.engine.compose(self.iid, verb)
+        for tail in (0, 101, True, '10'):
+            with self.assertRaises(ManagerError):
+                self.engine.compose(self.iid, 'logs', tail=tail)
+        for base in ('http://localhost:8080', 'https://127.0.0.1:8080', 'http://example.com:8080', 'http://127.0.0.1:8080/path', 'http://u:p@127.0.0.1:8080'):
+            with self.assertRaises(ManagerError):
+                ManagerClient(base, 'manager-a', self.token)
+
+    def test_project_volume_identity_and_output_limits_fail_closed(self):
+        self.engine.compose(self.iid, 'create')
+        for ctrl in ({'wrong_volume': True}, {'wrong_project': True}, {'privileged': True}, {'volume_driver_options': True}):
+            self.controls(**ctrl)
+            with self.assertRaises(ManagerError):
+                self.engine.inspect(self.iid)
+        self.controls(log_bytes=65537)
+        with self.assertRaises(ManagerError) as error:
+            self.engine.compose(self.iid, 'logs')
+        self.assertEqual(error.exception.code, 'output_limit')
+
+    def test_exact_volume_inspect_rejects_existing_untrusted_volume_under_substring_filter_model(self):
+        self.engine.compose(self.iid, 'create')
+        name = 'ot-' + self.iid
+        # Regression fixture: anchored filter misses the existing name. Not a real-daemon claim.
+        raw, _ = self.engine.runner.run(['volume', 'ls', '--filter', 'name=^' + name + '$', '--format', '{{.Name}}'])
+        self.assertEqual(raw, '')
+        self.controls(wrong_volume=True)
+        with patch.object(self.engine.runner, 'run', wraps=self.engine.runner.run) as run:
+            with self.assertRaises(ManagerError) as error:
+                self.engine.volume_check(self.iid)
+            self.assertEqual(error.exception.code, 'volume_owner')
+            self.assertEqual([c.args[0] for c in run.call_args_list], [['volume', 'inspect', name]])
+
+    def test_exact_volume_missing_is_distinguished_from_all_other_nonzero_errors(self):
+        name = 'ot-' + self.iid
+        self.engine.volume_check(self.iid)  # exact missing response from actual subprocess stub
+        self.controls(volume_inspect_error='Error: No such volume: ' + name)
+        self.engine.volume_check(self.iid)
+        for ctrl in (
+                {'volume_inspect_error': 'permission denied'},
+                {'volume_inspect_error': 'Cannot connect to the Docker daemon'},
+                {'volume_inspect_error': 'Error response from daemon: get ot-wrong: no such volume'},
+                {'volume_inspect_error': 'Error: No such volume: ' + name + '\npermission denied'},
+                {'volume_error_code': 2}, {'volume_error_stdout': ''},
+                {'volume_error_stdout': '[{}]'}, {'volume_error_stdout': 'garbled'}):
+            with self.subTest(ctrl=ctrl):
+                self.controls(**ctrl)
+                with self.assertRaises(ManagerError) as error:
+                    self.engine.volume_check(self.iid)
+                self.assertEqual(error.exception.code, 'engine_failure')
+
+    def test_volume_inspect_success_is_not_absence_and_invalid_metadata_fails_closed(self):
+        self.engine.compose(self.iid, 'create')
+        self.engine.volume_check(self.iid)
+        for ctrl in ({'volume_inspect_raw': '[]'}, {'volume_inspect_raw': '{}'},
+                     {'volume_inspect_raw': 'invalid'}, {'volume_inspect_warning': True},
+                     {'volume_inspect_raw': '[{"Name":"wrong"}]'}, {'volume_driver': 'remote'},
+                     {'volume_scope': 'global'}, {'volume_driver_options': True}, {'wrong_volume': True}):
+            with self.subTest(ctrl=ctrl):
+                self.controls(**ctrl)
+                with self.assertRaises(ManagerError):
+                    self.engine.volume_check(self.iid)
+
+    def test_volume_failure_diagnostics_never_become_public_exception_text(self):
+        secret = 'synthetic-secret-never-log-this'
+        self.controls(volume_inspect_error='permission denied password=' + secret)
+        with self.assertRaises(ManagerError) as error:
+            self.engine.volume_check(self.iid)
+        self.assertEqual(str(error.exception), 'engine_failure')
+        self.assertNotIn(secret, repr(error.exception))
+
+    def test_claim_validation_binds_requested_target_revision_and_operation(self):
+        claim = self.runtime.claim(self.identity, self.iid)
+        client = ManagerClient('http://127.0.0.1:8080', 'manager-a', self.token, enabled=True)
+        modifications = [('instance', 'id', 'b' * 32), ('job', 'revision', True), ('job', 'status', 'queued'),
+                         ('job', 'operation_type', 'restart'), ('instance', 'desired', 'running')]
+        for section, field, value in modifications:
+            bad = deepcopy(claim); bad[section][field] = value
+            with patch.object(client, 'call', return_value={'claim': bad}), self.assertRaises(ManagerError):
+                client.claim(self.iid)
+
+    def test_start_requires_health_and_restart_requires_new_started_at(self):
+        self.engine.compose(self.iid, 'create')
+        self.engine.compose(self.iid, 'start')
+        self.controls(not_ready=True)
+        self.assertFalse(self.engine.inspect(self.iid)['healthy'])
+        with self.assertRaises(ManagerError) as error:
+            self.engine.wait(self.iid, 'start', timeout=.01)
+        self.assertEqual(error.exception.code, 'readiness_timeout')
+        self.controls(unchanged_identity=True)
+        previous = self.engine.inspect(self.iid)['process_ref']
+        self.engine.compose(self.iid, 'restart')
+        self.assertEqual(self.engine.inspect(self.iid)['process_ref'], previous)
+        with self.assertRaises(ManagerError):
+            self.engine.wait(self.iid, 'restart', previous, timeout=.01)
+
+    def test_subprocess_total_timeout_and_clean_environment(self):
+        with patch.dict(os.environ, {'DOCKER_HOST': 'tcp://invalid:2375', 'COMPOSE_FILE': '/untrusted', 'HTTP_PROXY': 'http://invalid:1234'}):
+            self.engine.compose(self.iid, 'create')
+        keys = json.loads((self.root / 'stub-engine.json').read_text())['env_keys']
+        for key in ('DOCKER_HOST', 'COMPOSE_FILE', 'HTTP_PROXY', 'PYTHONPATH', 'LD_PRELOAD'):
+            self.assertNotIn(key, keys)
+        self.controls(log_delay=3)
+        _, path = self.registry.entry(self.iid)
+        args = ['compose', '--env-file', '/dev/null', '-f', str(path), '--project-directory', str(self.root), '-p', 'ot-' + self.iid, 'logs', '--no-color', '--no-log-prefix', '--tail', '1', 'flybot']
+        before = time.monotonic()
+        with self.assertRaises(ManagerError) as error:
+            self.engine.runner.run(args, timeout=.15)
+        self.assertEqual(error.exception.code, 'command_timeout')
+        self.assertLess(time.monotonic() - before, 1)
+
+    def test_recovery_of_running_engine_queues_only_fenced_stop_without_resuming_restart(self):
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        worker.run_once(self.iid); self.action(self.iid, 'start'); worker.run_once(self.iid)
+        self.action(self.iid, 'restart', {'operation_id': 'crashed-restart-0001'})
+        claim = client.claim(self.iid)
+        with self.store.transaction() as db:
+            db.execute('UPDATE runtime_jobs SET lease_until=0 WHERE id=?', (claim['job']['id'],))
+        common = ['--config', str(self.cfgpath), '--execute']
+        def command(*args):
+            with redirect_stdout(io.StringIO()):
+                return main(common + list(args) + ['--instance-id', self.iid])
+        self.assertEqual(command('recover', '--apply', '--expected-revision', '3', '--operation-id', 'safe-stop-recover-0001'), 2)
+        self.assertTrue(self.engine.inspect(self.iid)['healthy'])
+        self.assertEqual(command('recover', '--apply', '--confirm-no-active-executors', '--expected-revision', '3', '--operation-id', 'safe-stop-recover-0001'), 0)
+        # Recovery itself performs NO unleased stop and records NO success observation.
+        self.assertTrue(self.engine.inspect(self.iid)['healthy'])
+        snapshot = client.snapshot(self.iid)
+        self.assertEqual(snapshot['desired'], 'stopped'); self.assertFalse(snapshot['converged'])
+        self.assertEqual(self.action(self.iid, 'start')['status'], 409)
+        with self.assertRaises(ManagerError):
+            client.leased_call(self.iid, claim, 'observe', observed='running', process_ref='b' * 32)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        self.assertTrue(self.engine.inspect(self.iid)['stopped'])
+
+    def test_operator_lock_redaction_and_init_disabled_no_overwrite(self):
+        with instance_lock(self.root, self.iid), self.assertRaises(ManagerError):
+            with instance_lock(self.root, self.iid):
+                self.fail('second lock unexpectedly acquired')
+        text = '{"password":"small", "api_key":"short"} token=other Bearer abc.def.ghi ' + self.token
+        out = redact(text, (self.token,))
+        for secret in ('small', 'short', 'other', 'abc.def.ghi', self.token):
+            self.assertNotIn(secret, out)
+        state = Path(self.temp.name) / 'new-manager'
+        args = ['init', '--state-dir', str(state), '--instance-id', self.iid, '--image', IMAGE]
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(main(args), 0)
+            self.assertEqual(main(args), 2)
+        config = json.loads((state / 'manager.json').read_text())
+        self.assertEqual(load_manager_auth(state / 'grants.json').identities['local-compose'].backend_mode, 'compose')
+        self.assertFalse(config['execution_enabled'])
+        self.assertEqual((state / 'manager.json').stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(config['token'], (state / 'grants.json').read_text())
+
+
+class ManagerHttpTransportTests(unittest.TestCase):
+    def serve(self, status=200, raw=b'{}', slow=False):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        calls = []
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                calls.append(dict(self.headers))
+                try:
+                    if slow:
+                        self.connection.sendall(b'HTTP/1.1 200 OK\r\nX-Slow: ')
+                        for _ in range(200):
+                            time.sleep(.02); self.connection.sendall(b'x')
+                    else:
+                        self.send_response(status)
+                        self.send_header('Content-Length', str(len(raw)))
+                        self.send_header('Location', 'http://198.51.100.20:9/must-not-follow')
+                        self.end_headers(); self.wfile.write(raw)
+                except OSError:
+                    pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': .01}, daemon=True); thread.start()
+        def close():
+            server.shutdown(); thread.join(3); server.server_close()
+        self.addCleanup(close)
+        client = ManagerClient('http://127.0.0.1:' + str(server.server_port), 'local-test', 'a' * 43,
+                               host_header='management.test', enabled=True, timeout=.2 if slow else 2)
+        return client, calls
+
+    def test_no_redirect_proxy_cookie_origin_and_nested_safe_error(self):
+        client, calls = self.serve(status=302)
+        with patch.dict(os.environ, {'HTTP_PROXY': 'http://198.51.100.30:9', 'http_proxy': 'http://198.51.100.30:9'}):
+            with self.assertRaises(ManagerError):
+                client.call('GET', '/v1/internal/test')
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]['Host'], 'management.test')
+        self.assertNotIn('Origin', calls[0]); self.assertNotIn('Cookie', calls[0])
+        client, _ = self.serve(status=409, raw=b'{"error":{"code":"stale_observation","message":"Bearer must-not-appear"}}')
+        with self.assertRaises(ManagerError) as error:
+            client.call('GET', '/v1/internal/test')
+        self.assertEqual(error.exception.code, 'stale_observation')
+        self.assertNotIn('must-not-appear', str(error.exception))
+
+    def test_response_limit_and_duplicate_keys(self):
+        for raw, expected in [(b'x' * 131073, 'response_limit'), (b'{"claim":null,"claim":{}}', 'duplicate_json_key')]:
+            client, _ = self.serve(raw=raw)
+            with self.assertRaises(ManagerError) as error:
+                client.call('GET', '/v1/internal/test')
+            self.assertEqual(error.exception.code, expected)
+
+    def test_total_deadline_includes_dribbling_headers(self):
+        client, _ = self.serve(slow=True)
+        start = time.monotonic()
+        with self.assertRaises(ManagerError):
+            client.call('GET', '/v1/internal/test')
+        self.assertLess(time.monotonic() - start, 1)
