@@ -4,7 +4,7 @@ Related: [#9](https://github.com/openTeamily/openTeamily/issues/9), [#1](https:/
 
 This slice stores workspace-scoped **documents**, **static websites**, **media files**, and **whiteboards**. Automation or agent results can be saved as documents with provenance. Read-only share links are created only when someone asks, and they can be revoked. It is self-written and is **not** Teamily works-library parity.
 
-The management server has no message or chat store, so **message-to-library is not implemented**. There is no empty "save from message" entry point. Scripted web apps are not enabled on the management origin.
+Completed messages in an authorized user/agent conversation can be saved as documents with provenance (`source.kind=agent_message`) and are idempotent per message. Scripted web apps are not enabled on the management origin.
 
 ## Supported operations
 
@@ -43,4 +43,4 @@ Documents are escaped text. Websites and whiteboards are sanitized and served wi
 
 ## Not claimed
 
-No message-to-library, no public homepage, no scripted web apps, no Teamily comparison, no browser E2E. This issue stays open until those are done and compared.
+No public homepage, no scripted web apps, no Teamily comparison, no browser E2E. This issue stays open until those are done and compared.

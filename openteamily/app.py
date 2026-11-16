@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agents, artifacts, automations, bot_social, invites, members, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
+from . import agents, artifacts, automations, bot_social, conversations, invites, members, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -42,6 +42,8 @@ class Config:
     max_artifacts_per_workspace: int = 50
     max_shares_per_artifact: int = 10
     max_agents_per_workspace: int = 50
+    max_conversations_per_user: int = 50
+    max_messages_per_conversation: int = 200
     max_runs_per_automation: int = 200
     auth_peer_limit: int = 20
     auth_name_limit: int = 10
@@ -708,6 +710,11 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/members(?:/([0-9a-f]{32})(/remove)?)?', path)
             if member_path:
                 return self.member_dispatch(db, session, method, query, now, env, *member_path.groups())
+            conversation_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/conversations'
+                r'(?:/([0-9a-f]{32})(?:/(messages(?:/([0-9a-f]{32})(?:/(artifact))?)?))?)?', path)
+            if conversation_path:
+                return self.conversation_dispatch(db, session, method, query, now, env, *conversation_path.groups())
             agent_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/agents(?:/([0-9a-f]{32})(?:/(archive))?)?', path)
             if agent_path:
@@ -1732,6 +1739,277 @@ class App:
         if updated is None or updated['archived'] != 1:
             refuse(409, 'conflict', 'Agent was updated; reload and retry')
         return 200, {'agent': agents.view(updated)}, []
+
+    def conversation_dispatch(self, db, session, method, query, now, env, workspace_id, agent_id,
+                              conversation_id, rest, message_id, saving):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        agent = agents.load(db, workspace['id'], agent_id)
+        if agent is None:
+            refuse(404, 'not_found', 'Agent not found')
+        if conversation_id is None and method == 'GET':
+            return self.list_conversations(db, workspace, session, actor, agent, query)
+        if conversation_id is None and method == 'POST' and not query:
+            if agent['archived'] == 1:
+                refuse(409, 'conflict', 'Archived agents cannot start conversations')
+            return self.create_conversation(db, workspace, session, agent, now, env)
+        if conversation_id is None:
+            refuse(400, 'invalid', 'Invalid conversation request')
+        row = conversations.load_conversation(db, workspace['id'], conversation_id)
+        if row is None or row['agent_id'] != agent_id or not conversations.can_read(row, session['user_id']):
+            refuse(404, 'not_found', 'Conversation not found')
+        if rest is None and method == 'GET' and not query:
+            self.reconcile_conversation(db, row, now)
+            row = conversations.load_conversation(db, workspace['id'], conversation_id)
+            items = conversations.messages(db, row['id'], '', 201) or []
+            return 200, {'conversation': conversations.conversation_view(row),
+                         'agent': agents.view(agent),
+                         'items': [conversations.message_view(item) for item in items[:200]],
+                         'cursor': items[199]['id'] if len(items) > 200 else None}, []
+        if rest == 'messages' and message_id is None and method == 'GET':
+            return self.list_conversation_messages(db, row, query, now)
+        if rest == 'messages' and message_id is None and method == 'POST' and not query:
+            if not conversations.can_send(row, session['user_id']):
+                refuse(403, 'forbidden', 'Only the conversation owner can send messages')
+            if agent is None or agent['archived'] == 1:
+                refuse(409, 'conflict', 'Archived agents cannot accept messages')
+            return self.send_conversation_message(db, workspace, session, agent, row, now, env)
+        if message_id and saving == 'artifact' and method == 'POST' and not query:
+            return self.save_conversation_message(db, workspace, session, actor, row, message_id, now, env)
+        refuse(400, 'invalid', 'Invalid conversation request')
+
+    def list_conversations(self, db, workspace, session, actor, agent, query):
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=2) if query else {}
+            if set(args) - {'limit', 'cursor'} or any(len(v) != 1 for v in args.values()):
+                raise ValueError()
+            limit, cursor = args.get('limit', ['20'])[0], args.get('cursor', [''])[0]
+            if not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 100:
+                raise ValueError()
+            if cursor and not re.fullmatch(r'[0-9a-f]{32}', cursor):
+                raise ValueError()
+        except ValueError:
+            refuse(400, 'invalid', 'Invalid pagination parameters')
+        rows = conversations.listing(
+            db, workspace['id'], session['user_id'], agent['id'], cursor, int(limit) + 1)
+        return 200, {'items': [conversations.conversation_view(row) for row in rows[:int(limit)]],
+                     'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
+
+    def create_conversation(self, db, workspace, session, agent, now, env):
+        body = self.body(env, ['title'])
+        title = body.get('title', '新对话')
+        if not conversations.valid_title(title):
+            refuse(400, 'invalid', 'Provide a conversation title')
+        title = title.strip()
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        payload = {'title': title, 'agent_id': agent['id']}
+        key_hash, request_hash = digest('conversation:' + key), digest(
+            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+        )
+        prior = db.execute(
+            'SELECT * FROM agent_conversations WHERE workspace_id=? AND key_hash=?',
+            (workspace['id'], key_hash),
+        ).fetchone()
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'conversation': conversations.conversation_view(prior)}, []
+        if (db.execute(
+                'SELECT COUNT(*) FROM agent_conversations WHERE workspace_id=? AND user_id=?',
+                (workspace['id'], session['user_id'])).fetchone()[0]
+                >= self.config.max_conversations_per_user):
+            refuse(429, 'quota', 'Conversation capacity reached')
+        conversation_id = uuid4().hex
+        db.execute(
+            'INSERT INTO agent_conversations VALUES(?,?,?,?,?,?,?,?,?)',
+            (conversation_id, workspace['id'], agent['id'], session['user_id'], title,
+             now, now, key_hash, request_hash),
+        )
+        row = conversations.load_conversation(db, workspace['id'], conversation_id)
+        return 201, {'conversation': conversations.conversation_view(row)}, []
+
+    def list_conversation_messages(self, db, row, query, now):
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=2) if query else {}
+            if set(args) - {'limit', 'cursor'} or any(len(v) != 1 for v in args.values()):
+                raise ValueError()
+            limit, cursor = args.get('limit', ['50'])[0], args.get('cursor', [''])[0]
+            if not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 200:
+                raise ValueError()
+            if cursor and not re.fullmatch(r'[0-9a-f]{32}', cursor):
+                raise ValueError()
+        except ValueError:
+            refuse(400, 'invalid', 'Invalid pagination parameters')
+        self.reconcile_conversation(db, row, now)
+        rows = conversations.messages(db, row['id'], cursor, int(limit) + 1)
+        if rows is None:
+            refuse(400, 'invalid', 'Invalid pagination parameters')
+        return 200, {'items': [conversations.message_view(item) for item in rows[:int(limit)]],
+                     'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
+
+    def send_conversation_message(self, db, workspace, session, agent, row, now, env):
+        body = self.body(env, ['body'])
+        text = body.get('body')
+        if not conversations.valid_message(text):
+            refuse(400, 'invalid', 'Provide a message')
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        payload = {'body': text}
+        key_hash, request_hash = digest('message:' + key), digest(
+            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+        )
+        prior = db.execute(
+            'SELECT * FROM agent_messages WHERE conversation_id=? AND key_hash=?',
+            (row['id'], key_hash),
+        ).fetchone()
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            self.reconcile_conversation(db, row, now)
+            user_row = conversations.load_message(db, row['id'], prior['id'])
+            assistant = db.execute(
+                'SELECT * FROM agent_messages WHERE conversation_id=? AND seq>? AND role=? ORDER BY seq LIMIT 1',
+                (row['id'], prior['seq'], 'assistant'),
+            ).fetchone()
+            if assistant:
+                assistant = conversations.load_message(db, row['id'], assistant['id'])
+            return 200, {'message': conversations.message_view(user_row),
+                         'reply': conversations.message_view(assistant) if assistant else None}, []
+        pending = db.execute(
+            'SELECT COUNT(*) FROM agent_messages WHERE conversation_id=? AND role=? AND status IN (?,?)',
+            (row['id'], 'assistant', 'queued', 'running'),
+        ).fetchone()[0]
+        if pending:
+            refuse(409, 'conflict', 'A reply is already in progress')
+        if (db.execute('SELECT COUNT(*) FROM agent_messages WHERE conversation_id=?',
+                       (row['id'],)).fetchone()[0] + 2
+                > self.config.max_messages_per_conversation):
+            refuse(429, 'quota', 'Conversation message capacity reached')
+        history = conversations.history_for_prompt(db, row['id'])
+        prompt = conversations.compose_prompt(agent, history, text)
+        if not runtime_connect.valid_prompt(prompt):
+            refuse(400, 'invalid', 'Provide a message')
+        user_id = uuid4().hex
+        assistant_id = uuid4().hex
+        next_seq = db.execute(
+            'SELECT COALESCE(MAX(seq), 0) FROM agent_messages WHERE conversation_id=?',
+            (row['id'],),
+        ).fetchone()[0]
+        db.execute(
+            'INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (user_id, row['id'], workspace['id'], agent['id'], session['user_id'], 'user',
+             text, 'succeeded', None, None, agent['revision'], now, now, key_hash, request_hash,
+             next_seq + 1),
+        )
+        task_id, error_code = self.queue_infer_task(db, session['user_id'], now, prompt, workspace['id'])
+        db.execute(
+            'INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (assistant_id, row['id'], workspace['id'], agent['id'], session['user_id'], 'assistant',
+             '', 'queued', task_id, error_code, agent['revision'], now, now, None, None,
+             next_seq + 2),
+        )
+        title = row['title']
+        if title == '新对话':
+            title = conversations.default_title(text)
+            db.execute('UPDATE agent_conversations SET title=?, updated=? WHERE id=?',
+                       (title, now, row['id']))
+        else:
+            db.execute('UPDATE agent_conversations SET updated=? WHERE id=?', (now, row['id']))
+        return 201, {
+            'message': conversations.message_view(conversations.load_message(db, row['id'], user_id)),
+            'reply': conversations.message_view(conversations.load_message(db, row['id'], assistant_id)),
+        }, []
+
+    def queue_infer_task(self, db, user_id, now, prompt, workspace_id):
+        stale = self.config.runtime_heartbeat_seconds
+        target = runtime_connect.online_connection(db, user_id, now, stale, None)
+        if target is False or target is None:
+            return None, 'no_agent'
+        try:
+            row = runtime_connect.create_task(
+                db, user_id, target['id'], now, 'infer', prompt,
+                self.config.runtime_task_timeout_seconds, workspace_id)
+        except ValueError:
+            return None, 'quota'
+        return row['id'], None
+
+    def reconcile_conversation(self, db, row, now):
+        pending = db.execute(
+            'SELECT * FROM agent_messages WHERE conversation_id=? AND role=? AND status IN (?,?)',
+            (row['id'], 'assistant', 'queued', 'running'),
+        ).fetchall()
+        for message in pending:
+            if message['task_id']:
+                task = runtime_connect.load_task(db, message['task_id'], user_id=row['user_id'])
+                if task is not None:
+                    task = runtime_connect.expire_task(db, task, now)
+                conversations.apply_task(db, message, task, now)
+                continue
+            if message['error_code'] in (None, 'no_agent'):
+                agent = agents.load(db, row['workspace_id'], row['agent_id'])
+                if agent is None or agent['archived'] == 1:
+                    continue
+                user = db.execute(
+                    'SELECT * FROM agent_messages WHERE conversation_id=? AND seq<? AND role=? ORDER BY seq DESC LIMIT 1',
+                    (row['id'], message['seq'], 'user'),
+                ).fetchone()
+                if user is None:
+                    continue
+                history = conversations.history_for_prompt(db, row['id'], user['seq'])
+                prompt = conversations.compose_prompt(agent, history, user['body'])
+                if not runtime_connect.valid_prompt(prompt):
+                    continue
+                task_id, error_code = self.queue_infer_task(db, row['user_id'], now, prompt, row['workspace_id'])
+                db.execute(
+                    'UPDATE agent_messages SET task_id=?, error_code=?, updated=? WHERE id=?',
+                    (task_id, error_code, now, message['id']),
+                )
+
+    def save_conversation_message(self, db, workspace, session, actor, row, message_id, now, env):
+        if not conversations.can_read(row, session['user_id']):
+            refuse(404, 'not_found', 'Conversation not found')
+        self.reconcile_conversation(db, row, now)
+        message = conversations.load_message(db, row['id'], message_id)
+        if message is None:
+            refuse(404, 'not_found', 'Message not found')
+        if message['status'] != 'succeeded' or not conversations.valid_message(message['body']):
+            refuse(409, 'conflict', 'Only completed messages can be saved')
+        body = self.body(env, ['title'])
+        title = body.get('title') or conversations.default_title(message['body'])
+        if not artifacts.valid_title(title):
+            refuse(400, 'invalid', 'Provide a document title and body')
+        title = title.strip()
+        existing = artifacts.load_chat_artifact(db, workspace['id'], message['id'])
+        if existing is not None:
+            return 200, {'artifact': artifacts.view(existing)}, []
+        content = message['body'][:artifacts.BODY_MAX]
+        if not artifacts.valid_body(content):
+            refuse(409, 'conflict', 'Only completed messages can be saved')
+        title = artifacts.unique_title(db, workspace['id'], title, message['id'])
+        if not artifacts.valid_title(title):
+            refuse(400, 'invalid', 'Provide a document title and body')
+        if (db.execute('SELECT COUNT(*) FROM artifacts WHERE workspace_id=?',
+                       (workspace['id'],)).fetchone()[0]
+                >= self.config.max_artifacts_per_workspace):
+            refuse(429, 'quota', 'Artifact capacity reached')
+        artifact_id = uuid4().hex
+        title_digest = artifacts.title_hash(title)
+        key_hash = digest('artifact-source:agent_message:' + message['id'])
+        request_hash = digest(json.dumps(
+            {'source': 'agent_message', 'id': message['id']}, sort_keys=True, separators=(',', ':')))
+        db.execute(
+            'INSERT INTO artifacts VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?)',
+            (artifact_id, workspace['id'], title, title_digest, 'document', content, now, now,
+             session['user_id'], session['user_id'], key_hash, request_hash),
+        )
+        artifacts.attach_chat_source(
+            db, artifact_id, workspace['id'], now, row['id'], message['id'], row['agent_id'])
+        return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], artifact_id))}, []
 
     def invite_dispatch(self, db, session, method, query, now, env, workspace_id, invite_id, revoking):
         workspace = members.load(db, workspace_id, session['user_id'])
