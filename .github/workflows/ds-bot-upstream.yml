@@ -1,0 +1,89 @@
+name: Upstream DS Bot runtime
+# Proves the tracked upstream DS Bot (runtime/ds-bot-upstream, pinned in
+# runtime/ds-bot-upstream.pin.json) is unmodified, passes upstream's own suite on the DSH
+# version it pins, and starts as a container whose Bot API answers. No secrets: upstream's
+# suite uses its own fake model, and the startup test runs with --network none.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ds-bot-upstream-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  pin:
+    name: Pin and vendor tree
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - run: node scripts/ds-bot-upstream.mjs check
+      - run: node --test scripts/ds-bot-upstream.test.mjs
+
+  upstream-suite:
+    name: Upstream suite · Node ${{ matrix.node }} · DSH from pin
+    needs: pin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['24', '22']
+    defaults:
+      run:
+        shell: bash
+        working-directory: runtime/ds-bot-upstream/ds-bot
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: DSH version from the pin
+        id: pin
+        working-directory: .
+        run: |
+          dsh=$(node -p "require('./runtime/ds-bot-upstream.pin.json').dsh")
+          test -n "$dsh" && test "$dsh" != null
+          echo "dsh=$dsh" >> "$GITHUB_OUTPUT"
+          echo "DSH $dsh"
+      - run: npm ci --no-fund --no-audit
+      - name: Install the phone link's packages (imported by upstream tests)
+        run: npm ci --no-fund --no-audit --prefix ../link
+      - name: Install DSH ${{ steps.pin.outputs.dsh }} test harness
+        # As upstream's CI does: the testkit pins the DSH packages it was built with.
+        run: npm run harness -- --no-save "@deepseek-ai/dsh@${{ steps.pin.outputs.dsh }}" "@deepseek-ai/dsh-agent-loop-testkit@${{ steps.pin.outputs.dsh }}"
+      - run: npm test
+      - run: node scripts/build-client.mjs --check
+      - run: npm run lint
+
+  container-smoke:
+    name: Container startup smoke
+    needs: pin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+        working-directory: runtime/ds-bot-upstream
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - name: Build the upstream image (DSH version from the pin)
+        run: |
+          dsh=$(node -p "require('../ds-bot-upstream.pin.json').dsh")
+          docker build -f docker/Dockerfile --build-arg "DSH_VERSION=$dsh" -t openteamily-ds-bot:test .
+      - name: Upstream startup test (dsh web answers, DS Bot API state loads)
+        run: node docker/test.mjs openteamily-ds-bot:test

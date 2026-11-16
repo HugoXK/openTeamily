@@ -8,6 +8,8 @@ OpenTeamily is a project name, not a claim of affiliation with or endorsement by
 
 **First implementation slice (under review):** a runnable Python/SQLite authentication and owner-scoped workspace API. Stacked follow-ups add durable instance/jobs, explicit simulation and an **opt-in operator Compose execution CLI** (default disabled). The manager path has actual HTTP/subprocess-stub tests, but live Docker/FlyBot/real-volume acceptance and browser workflows remain **unverified or missing**. See [operator setup, recovery, evidence limits and next tasks](docs/COMPOSE_MANAGER.md). See [lifecycle scope and remaining gates](docs/RUNTIME_IMPLEMENTATION.md). Older FlyBot tests, screenshots and PRs do not establish functionality in this repository. See [implemented routes, startup/test commands, security configuration and gaps](docs/MANAGEMENT_API.md).
 
+**Agent runtime baseline:** the runtime tracks upstream DS Bot's latest release, currently v0.3.6, pinned in `runtime/ds-bot-upstream.pin.json`. CI checks that the vendored tree is unmodified, runs upstream's own suite on the DSH version the pin names, and runs upstream's container startup test. A daily workflow opens a pull request when a newer upstream release exists. See [runtime/ds-bot-upstream/UPSTREAM.md](runtime/ds-bot-upstream/UPSTREAM.md).
+
 ## Architecture
 
 - **Management server:** accounts, authentication, workspaces, permissions and container lifecycle.
@@ -25,4 +27,6 @@ See [architecture](docs/ARCHITECTURE.md), [capability roadmap](docs/ROADMAP.md) 
 
 ## License
 
-New material authored in this repository is licensed under MIT; see [LICENSE](LICENSE). This does not relicense any FlyBot, Bot Social, runtime or third-party material. None of their source or histories has been imported in this bootstrap.
+New material authored in this repository is licensed under MIT; see [LICENSE](LICENSE). This does not relicense any FlyBot, Bot Social, runtime or third-party material.
+
+`runtime/ds-bot-upstream/` is an unmodified, pinned copy of upstream [DS Bot](https://github.com/Fei2411/DS-Bot) under the **Apache License 2.0** (its `LICENSE` and `NOTICE` are kept there). No upstream git history is imported. See [runtime/ds-bot-upstream/UPSTREAM.md](runtime/ds-bot-upstream/UPSTREAM.md).
