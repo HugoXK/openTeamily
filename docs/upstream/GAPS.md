@@ -13,9 +13,10 @@ system.”
   (façade over unmodified v0.3.6 `createRuntime()`, group rooms on the 0.3.5+
   write-ahead ledger). An OpenTeamily-authored image recipe lives in
   `runtime/flybot-image/` (CI builds and smokes it under the compose manager
-  contract). Live Bot Social onboarding, management-plane create/start/stop of
-  that image, `dsh web` UI slots, and a license-complete public image release
-  are still open.
+  contract). The dsh web `__flybot__` slot host lives in
+  `runtime/flybot-web-slots/`. Live Bot Social onboarding, composer `@`
+  mentions / Bot details in the official ds-bot drawer, and a
+  license-complete public image release are still open.
 - Host-integration tests that imported FlyBot `core/` were removed, not ported.
   The new adapter tests cover façade + ledger + `apply()` on the v0.3.6 host.
 
