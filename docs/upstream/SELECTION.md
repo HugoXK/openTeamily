@@ -4,13 +4,18 @@ Date: 2026-11-16 (Asia/Shanghai).
 
 Pins: ThinkFlowLab/FlyBot `@e26895e737b1218875aafa1f74ab1d3464f287d2`,
 Birfy/bot-social `@8706824f53f6cce8212470bc6b442f7271cccd3e`.
-OpenTeamily base at first import: `main` `@2cbd0c1c0845338ded1d9c9455a6c9c2c40a4d52`.
-This branch later merged `main` `@ccad9c17` (PR #19).
+OpenTeamily base: `main` `@402b5c907963389d020bf6dc064ee3f69b69f0d9`
+(main after [PR #21](https://github.com/openTeamily/openTeamily/pull/21), which this import merged onto).
+The first-import draft started from `main` `@2cbd0c1c0845338ded1d9c9455a6c9c2c40a4d52`.
 
 **Runtime baseline:** OpenTeamily tracks upstream DS-Bot **v0.3.6** as the
 runtime, in [PR #21](https://github.com/openTeamily/openTeamily/pull/21) (now on `main`)
 (`runtime/ds-bot-upstream/`). This FlyBot import does **not** vendor
-`runtime/flybot/core/` (the old v0.1.5 fork) or `ds-bot.pin.json`. FlyBot
+`runtime/flybot/core/` (the old v0.1.5 fork) or `ds-bot.pin.json`. The
+historical FlyBot core pin `2b10c70b614e969117b68ddc6fd14e68968272f2` equals
+upstream `0f130e7d134bf63e8988b2d53fd6846138ac3d73` (ds-bot tree
+`5834c00d9c21b972e4b32ad90489443da2a10324`); see
+[ds-bot-pin-equivalence.json](ds-bot-pin-equivalence.json). FlyBot
 material kept here is the customization layer that will sit on that baseline.
 
 Selection rule: take only source, protocols, tests, and docs required for

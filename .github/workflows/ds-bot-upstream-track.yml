@@ -58,16 +58,21 @@ jobs:
           { echo "ref=$ref"; echo "branch=$branch"; echo "skip=$skip"; echo "pinned=$pinned"; } >> "$GITHUB_OUTPUT"
       - name: Sync
         if: steps.target.outputs.skip == 'false'
+        env:
+          TRACK_BRANCH: ${{ steps.target.outputs.branch }}
+          TRACK_REF: ${{ steps.target.outputs.ref }}
         run: |
           set -euo pipefail
+          case "$TRACK_REF" in *[!A-Za-z0-9._-]*) echo "bad ref: $TRACK_REF"; exit 1 ;; esac
+          case "$TRACK_BRANCH" in *[!A-Za-z0-9._/-]*) echo "bad branch: $TRACK_BRANCH"; exit 1 ;; esac
           git config user.name 'openteamily-upstream-bot'
           git config user.email 'openteamily-upstream-bot@users.noreply.github.com'
-          git switch -c "${{ steps.target.outputs.branch }}"
-          node scripts/ds-bot-upstream.mjs sync "${{ steps.target.outputs.ref }}"
+          git switch -c "$TRACK_BRANCH"
+          node scripts/ds-bot-upstream.mjs sync "$TRACK_REF"
           node scripts/ds-bot-upstream.mjs check
           sed -i -E "s/\*\*v[0-9]+\.[0-9]+\.[0-9]+\*\*, commit \`[0-9a-f]{40}\`, ds-bot package \`[^\`]+\`/**$(node -p "require('./runtime/ds-bot-upstream.pin.json').tag")**, commit \`$(node -p "require('./runtime/ds-bot-upstream.pin.json').commit")\`, ds-bot package \`$(node -p "require('./runtime/ds-bot-upstream.pin.json').version")\`/; s/expect DeepSeek Harness \(DSH\) \`[^\`]+\`/expect DeepSeek Harness (DSH) \`$(node -p "require('./runtime/ds-bot-upstream.pin.json').dsh")\`/" runtime/ds-bot-upstream/UPSTREAM.md
           git add runtime/ds-bot-upstream/UPSTREAM.md
-          git commit -q -m "runtime: track upstream DS Bot ${{ steps.target.outputs.ref }}"
+          git commit -q -m "runtime: track upstream DS Bot $TRACK_REF"
       - name: Upstream suite on the new version
         id: suite
         if: steps.target.outputs.skip == 'false'
@@ -76,6 +81,10 @@ jobs:
         run: |
           set -euo pipefail
           dsh=$(node -p "require('../../ds-bot-upstream.pin.json').dsh")
+          if [[ ! "$dsh" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "invalid DSH version in pin: $dsh"
+            exit 1
+          fi
           npm ci --no-fund --no-audit
           npm ci --no-fund --no-audit --prefix ../link
           npm run harness -- --no-save "@deepseek-ai/dsh@$dsh" "@deepseek-ai/dsh-agent-loop-testkit@$dsh"
@@ -90,6 +99,10 @@ jobs:
         run: |
           set -euo pipefail
           dsh=$(node -p "require('../ds-bot-upstream.pin.json').dsh")
+          if [[ ! "$dsh" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "invalid DSH version in pin: $dsh"
+            exit 1
+          fi
           docker build -f docker/Dockerfile --build-arg "DSH_VERSION=$dsh" -t openteamily-ds-bot:track .
           node docker/test.mjs openteamily-ds-bot:track 2>&1 | tee "$RUNNER_TEMP/smoke.log"
       - name: Push and open the pull request
@@ -98,18 +111,22 @@ jobs:
           SUITE: ${{ steps.suite.outcome }}
           SMOKE: ${{ steps.smoke.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRACK_REF: ${{ steps.target.outputs.ref }}
+          TRACK_BRANCH: ${{ steps.target.outputs.branch }}
+          TRACK_PINNED: ${{ steps.target.outputs.pinned }}
         run: |
           set -euo pipefail
-          ref="${{ steps.target.outputs.ref }}"
-          branch="${{ steps.target.outputs.branch }}"
-          git push origin "$branch"
+          case "$TRACK_REF" in *[!A-Za-z0-9._-]*) echo "bad ref: $TRACK_REF"; exit 1 ;; esac
+          case "$TRACK_BRANCH" in *[!A-Za-z0-9._/-]*) echo "bad branch: $TRACK_BRANCH"; exit 1 ;; esac
+          case "$TRACK_PINNED" in *[!A-Za-z0-9._-]*) echo "bad pinned: $TRACK_PINNED"; exit 1 ;; esac
+          git push origin "$TRACK_BRANCH"
           pin=runtime/ds-bot-upstream.pin.json
           summary=$(grep -E '^ℹ (tests|pass|fail|skipped)' "$RUNNER_TEMP/suite.log" 2>/dev/null | tr '\n' ' ' || true)
           body=$(cat <<BODY
-          Automated upstream tracking: **Fei2411/DS-Bot $ref** (was ${{ steps.target.outputs.pinned }}).
+          Automated upstream tracking: **Fei2411/DS-Bot $TRACK_REF** (was $TRACK_PINNED).
 
           - Commit: \`$(node -p "require('./$pin').commit")\`, ds-bot \`$(node -p "require('./$pin').version")\`, DSH \`$(node -p "require('./$pin').dsh")\`
-          - Upstream changes: https://github.com/Fei2411/DS-Bot/compare/${{ steps.target.outputs.pinned }}...$ref
+          - Upstream changes: https://github.com/Fei2411/DS-Bot/compare/$TRACK_PINNED...$TRACK_REF
           - Vendor tree check: passed (\`node scripts/ds-bot-upstream.mjs check\`)
           - Upstream suite (Node 24, DSH from pin): **$SUITE** $summary
           - Container startup smoke (\`docker/test.mjs\`): **$SMOKE**
@@ -120,7 +137,7 @@ jobs:
           )
           draft=()
           if [ "$SUITE" != success ] || [ "$SMOKE" != success ]; then draft=(--draft); fi
-          if ! gh pr create --base main --head "$branch" --title "runtime: track upstream DS Bot $ref" --body "$body" "${draft[@]}"; then
-            echo "::error::Could not open the pull request. Allow GitHub Actions to create pull requests in the repository settings, or set the DS_BOT_TRACK_TOKEN secret. The branch $branch is pushed."
+          if ! gh pr create --base main --head "$TRACK_BRANCH" --title "runtime: track upstream DS Bot $TRACK_REF" --body "$body" "${draft[@]}"; then
+            echo "::error::Could not open the pull request. Allow GitHub Actions to create pull requests in the repository settings, or set the DS_BOT_TRACK_TOKEN secret. The branch $TRACK_BRANCH is pushed."
             exit 1
           fi

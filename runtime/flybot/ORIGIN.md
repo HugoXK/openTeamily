@@ -11,7 +11,7 @@ This directory is a **minimal, file-selected snapshot** of public
 - **This tree is not MIT-licensed** because it lives in openTeamily/openTeamily. The root MIT license covers only new OpenTeamily-authored material.
 - **Provenance:** every *unmodified* imported upstream file has `sha256` and git blob SHA in [`docs/upstream/flybot-files.json`](../../docs/upstream/flybot-files.json). Documented modifications (and their original hashes) are in [`docs/upstream/migration-manifest.json`](../../docs/upstream/migration-manifest.json) under `modified_files`. Selection and exclusions: [`docs/upstream/SELECTION.md`](../../docs/upstream/SELECTION.md).
 - **OpenTeamily overlays:** this file and [`OPENTEAMILY.md`](OPENTEAMILY.md).
-- **Runtime baseline:** OpenTeamily tracks upstream DS-Bot **v0.3.6** in [PR #21](https://github.com/openTeamily/openTeamily/pull/21) (now on `main`). This snapshot does **not** contain `core/` or `ds-bot.pin.json` (the old v0.1.5 fork).
+- **Runtime baseline:** OpenTeamily tracks upstream DS-Bot **v0.3.6** in [PR #21](https://github.com/openTeamily/openTeamily/pull/21) (now on `main`). This snapshot does **not** contain `core/` or `ds-bot.pin.json` (the old v0.1.5 fork). The historical FlyBot core pin `2b10c70b614e969117b68ddc6fd14e68968272f2` equals upstream `0f130e7d134bf63e8988b2d53fd6846138ac3d73` (ds-bot tree `5834c00d9c21b972e4b32ad90489443da2a10324`); see [`docs/upstream/ds-bot-pin-equivalence.json`](../../docs/upstream/ds-bot-pin-equivalence.json).
 
 ## Imported paths
 

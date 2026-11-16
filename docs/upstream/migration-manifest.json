@@ -3,7 +3,9 @@
   "openTeamily_base": {
     "repo": "https://github.com/openTeamily/openTeamily",
     "ref": "main",
-    "commit": "2cbd0c1c0845338ded1d9c9455a6c9c2c40a4d52"
+    "commit": "402b5c907963389d020bf6dc064ee3f69b69f0d9",
+    "note": "main after PR #21 (upstream DS-Bot v0.3.6), which this import merged onto. Merged as PR #20 (5659f2bb27831da1c8a16e689ee8af46541d67cd).",
+    "original_first_import_draft": "2cbd0c1c0845338ded1d9c9455a6c9c2c40a4d52"
   },
   "components": {
     "flybot": {
@@ -1749,12 +1751,16 @@
   "selection": "minimal-needed-set",
   "selection_doc": "docs/upstream/SELECTION.md",
   "ds_bot_pin": {
-    "source_file": "runtime/flybot/ds-bot.pin.json",
+    "status": "not_imported",
+    "source_file_removed": "runtime/flybot/ds-bot.pin.json",
     "equivalence_record": "docs/upstream/ds-bot-pin-equivalence.json",
-    "pinned_commit": "2b10c70b614e969117b68ddc6fd14e68968272f2",
-    "ds_bot_tree": "5834c00d9c21b972e4b32ad90489443da2a10324",
-    "equivalent_commit_after_rewrite": "0f130e7d134bf63e8988b2d53fd6846138ac3d73",
-    "do_not_retarget_to": "upstream DS-Bot main / v0.3.6"
+    "historical_flybot_core_pin": {
+      "pinned_commit": "2b10c70b614e969117b68ddc6fd14e68968272f2",
+      "ds_bot_tree": "5834c00d9c21b972e4b32ad90489443da2a10324",
+      "equivalent_commit_after_rewrite": "0f130e7d134bf63e8988b2d53fd6846138ac3d73",
+      "note": "The FlyBot v0.1.5 core fork that recorded this pin was dropped from runtime/flybot/. OpenTeamily tracks upstream DS-Bot v0.3.6 in runtime/ds-bot-upstream/."
+    },
+    "runtime_baseline": "runtime/ds-bot-upstream (Fei2411/DS-Bot v0.3.6 a66cc737cfb6c3d8a2597e748cded6cab1206dd3, PR #21)"
   },
   "modified_files": {
     "runtime/flybot/plugins/social/test/look.test.js": {
