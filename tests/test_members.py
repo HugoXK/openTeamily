@@ -99,7 +99,9 @@ class MemberTests(unittest.TestCase):
     def test_cannot_add_owner_unknown_user_or_change_owner(self):
         owner_id = self.alice.call('GET', '/v1/auth/session')['body']['user']['id']
         self.assertEqual(self.add(self.alice, 'alice')['status'], 409)
-        self.assertEqual(self.add(self.alice, 'missing-user')['status'], 404)
+        missing = self.add(self.alice, 'missing-user')
+        self.assertEqual(missing['status'], 404)
+        self.assertEqual(missing['body']['error']['message'], 'Member could not be added')
         self.assertEqual(self.change(self.alice, owner_id, 'admin')['status'], 404)
         self.assertEqual(self.remove(self.alice, owner_id)['status'], 404)
         self.assertEqual(self.members(self.alice)['body']['items'][0]['role'], 'owner')
