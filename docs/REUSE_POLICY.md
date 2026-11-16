@@ -1,6 +1,6 @@
 # Reuse and provenance policy
 
-This bootstrap contains only newly authored documentation and repository metadata. No original FlyBot/Bot Social code, compiled bundle, dependencies, screenshots, credentials, account state or git history is included.
+This repository contains independently authored management code, documentation and repository metadata. No original FlyBot/Bot Social code, compiled bundle, dependencies, screenshots, credentials, account state or git history is included.
 
 Before reusing any source, image or dependency:
 
@@ -13,4 +13,4 @@ Before reusing any source, image or dependency:
 
 Runtime-container reuse is an architectural option pending this review, not an import authorization. Assess project/timeline by evidence rather than blanket inclusion or removal. Keep secrets, logs, user content, caches and generated mock screenshots out of git.
 
-No dependency or upstream license audit has been completed by this documentation-only initialization.
+No upstream runtime/image import has passed a complete dependency/license audit. The management slice uses the Python standard library and adds no third-party application package.
