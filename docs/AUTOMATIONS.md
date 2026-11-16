@@ -10,9 +10,9 @@ Teamily's automation UI was opened historically (template, prompt, time, partici
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/v1/automation-templates` | Session required. `custom` plus twelve work templates (rephrased titles; no life tab yet) |
+| GET | `/v1/automation-templates` | Session required. `custom` plus twelve work and twelve life templates (rephrased titles) |
 | GET | `/v1/workspaces/{id}/automations` | Visible to workspace owner and members. Optional `q` (title/prompt search) and `category` (`work`, `life`, `custom`, `mine`) |
-| POST | `/v1/workspaces/{id}/automations` | `{title,prompt,template_id,schedule,participants}` plus optional tag fields `intent`, `scope` (`once` default / `ongoing`), `agents`. An omitted/empty prompt is compiled from the tags and template. Owner or admin. Requires `Idempotency-Key`, exact Origin and CSRF. Created records are **disabled** |
+| POST | `/v1/workspaces/{id}/automations` | `{title,prompt,template_id,schedule,participants}` plus optional tag fields `intent` (`research`,`monitor`,`create`,`analyze`,`plan`,`collaborate`), `scope` (`once` / `ongoing`), `agents`. An omitted/empty prompt is compiled from the tags and template. Owner or admin. Requires `Idempotency-Key`, exact Origin and CSRF. Created records are **disabled** |
 | GET | `/v1/workspaces/{id}/automations/{id}` | Visible to workspace owner and members |
 | POST | `/v1/workspaces/{id}/automations/{id}` | `{revision,changes}` partial update. Stale `revision` → `409` with `error.current` |
 | POST | `/v1/workspaces/{id}/automations/{id}/remove` | `{}`. Owner or admin |
@@ -33,7 +33,7 @@ Teamily's automation UI was opened historically (template, prompt, time, partici
 | `monthly` | `time`, `time_zone`, `day` (`1`–`31`; skipped in months that do not have that day) |
 | `weekdays` | `time`, `time_zone`; Monday–Friday |
 
-Tag fields compile into an editable prompt: template text, intent, scope, schedule, participating agents and members. Editing the prompt marks `compiled` false. Life templates were not captured in the first contrast pass and are not invented here. The twelve work titles are rephrased, not copied marketing text.
+Tag fields compile into an editable prompt: template text, intent, scope, schedule, participating agents and members. Editing the prompt marks `compiled` false. Twelve life templates were added from the 2026-11-16 round-2 recapture, with rephrased titles and prompts. Intent is one of six verbs recaptured in that pass. The monthly day-of-month input was **not seen**; `day` 1–31 is an unverified default.
 
 ## Storage and roles
 
@@ -52,6 +52,6 @@ Run rows are an additive `automation_runs` table on schema `user_version` 1. Def
 
 ## Not in this slice
 
-No background daemon, no real container execution, no public unauthenticated page, no agent-mode switch. A same-origin page at `/automations` lists automations with search and 我的/工作/生活 tabs, and edits the tag fields, schedule kinds and compiled prompt through the existing API. Life templates remain absent. Enabling a record still does not start a background timer; the page can request an explicit tick. This is still not Teamily automation parity.
+No background daemon, no real container execution, no public unauthenticated page, no agent-mode switch. A same-origin page at `/automations` lists automations with search and 我的/工作/生活 tabs, and edits the tag fields, schedule kinds and compiled prompt through the existing API. Enabling a record still does not start a background timer; the page can request an explicit tick. This is still not Teamily automation parity.
 
 Dispatch hooks receive the workspace-or-platform model API (redacted in run records). See [MODEL_API.md](MODEL_API.md). This is not container execution and not Teamily parity.
