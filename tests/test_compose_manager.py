@@ -18,8 +18,8 @@ from wsgiref.simple_server import make_server
 import test_runtime as fixtures
 from openteamily.lifecycle import RuntimeFault, RuntimePolicy, ManagerIdentity
 from openteamily.manager.client import ManagerClient
-from openteamily.manager.engine import Registry, Runner, ComposeEngine, manifest
-from openteamily.manager.safety import ManagerError, write_new, instance_lock, redact
+from openteamily.manager.engine import Registry, Runner, ComposeEngine, manifest, added_secret_binds, BOT_SOCIAL_TARGET, compose_bytes
+from openteamily.manager.safety import ManagerError, write_new, replace_private, instance_lock, redact
 from openteamily.manager.worker import ManagerWorker
 from openteamily.manager.__main__ import main
 from openteamily.server import QuietHandler
@@ -576,6 +576,124 @@ class ComposeManagerTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 'bot_social_not_applicable')
         observed = client.leased_call(self.iid, stop, 'observe', observed='stopped')
         self.assertEqual(observed['job']['status'], 'succeeded')
+
+
+
+    def old_compose_document(self):
+        document = manifest(self.iid, self.cfg['instances'][self.iid])
+        volumes = [item for item in document['services']['flybot']['volumes'] if item.get('target') != BOT_SOCIAL_TARGET]
+        document['services']['flybot']['volumes'] = volumes
+        return document
+
+    def write_old_compose(self):
+        path = self.root / ('compose-' + self.iid + '.json')
+        document = self.old_compose_document()
+        if path.exists():
+            replace_private(path, compose_bytes(document))
+        else:
+            write_new(path, document)
+        return path
+
+    def test_compatible_secret_bind_upgrade_is_detected_and_unrelated_drift_is_not(self):
+        expected = manifest(self.iid, self.cfg['instances'][self.iid])
+        older = self.old_compose_document()
+        added = added_secret_binds(older, expected)
+        self.assertEqual([item['target'] for item in added], [BOT_SOCIAL_TARGET])
+        drifted = dict(older)
+        drifted['services'] = {'flybot': dict(older['services']['flybot'], image='evil@sha256:' + 'b' * 64)}
+        self.assertIsNone(added_secret_binds(drifted, expected))
+
+    def test_migrate_manifest_rewrites_compose_and_never_deletes_the_volume(self):
+        path = self.write_old_compose()
+        registry = Registry(str(self.cfgpath))
+        preview = registry.preview_manifest(self.iid)
+        self.assertEqual(preview['status'], 'upgradeable')
+        self.assertEqual(preview['volume'], 'ot-' + self.iid)
+        self.assertEqual(path.read_bytes(), compose_bytes(self.old_compose_document()))
+        applied = registry.apply_manifest_upgrade(self.iid)
+        self.assertEqual(applied['status'], 'upgraded')
+        self.assertEqual(applied['volume_deleted'] if 'volume_deleted' in applied else False, False)
+        self.assertIn(BOT_SOCIAL_TARGET, applied['added'])
+        current = registry.preview_manifest(self.iid)
+        self.assertEqual(current['status'], 'current')
+        # CLI dry-run of a already-current file, and a fresh older file via CLI --apply.
+        self.write_old_compose()
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = main(['--config', str(self.cfgpath), 'migrate-manifest', '--instance-id', self.iid])
+        self.assertEqual(code, 0)
+        dry = json.loads(out.getvalue())
+        self.assertEqual(dry['status'], 'upgradeable')
+        self.assertFalse(dry['volume_deleted'])
+        self.assertFalse(dry['executed'])
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = main(['--config', str(self.cfgpath), 'migrate-manifest', '--apply', '--instance-id', self.iid])
+        self.assertEqual(code, 0)
+        done = json.loads(out.getvalue())
+        self.assertEqual(done['status'], 'upgraded')
+        self.assertFalse(done['volume_deleted'])
+        self.assertTrue(self.engine.bot_social_path(self.iid).exists())
+        self.assertEqual(self.engine.bot_social_path(self.iid).read_text(), '')
+
+    def test_start_after_bind_upgrade_recreates_container_without_deleting_volume_data(self):
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        # Snapshot the pre-upgrade container (model-api bind only) and keep the volume sentinel.
+        self.write_old_compose()
+        # Reset the stub's recorded binds to the older file and keep the sentinel.
+        state_path = self.root / 'stub-engine.json'
+        state = json.loads(state_path.read_text())
+        self.assertEqual(state.get('sentinel'), 'persistent-test-content')
+        # Re-read binds from the older compose by dropping the snapshot, then create from it.
+        state.pop('binds', None)
+        state_path.write_text(json.dumps(state))
+        self.engine.compose(self.iid, 'create')  # entry() will upgrade the file first...
+        # The create above used the upgraded file if entry migrated. Force the stub back to old binds.
+        self.engine.compose(self.iid, 'create')
+        state = json.loads(state_path.read_text())
+        # After entry auto-upgrade, stub snapshots current (new) binds on create without force.
+        # Simulate a leftover container by writing old binds back, keeping the sentinel and id.
+        document = self.old_compose_document()
+        old_binds = []
+        for volume in document['services']['flybot']['volumes']:
+            if volume.get('type') == 'bind':
+                source = str((self.root / volume['source']).resolve())
+                old_binds.append({'Type': 'bind', 'Source': source, 'Destination': volume['target'], 'RW': False,
+                                  'bind': source + ':' + volume['target'] + ':ro'})
+        state['binds'] = old_binds
+        state['sentinel'] = 'persistent-test-content'
+        state['running'] = False
+        state_path.write_text(json.dumps(state))
+        inspected = self.engine.inspect(self.iid)
+        self.assertTrue(inspected['needs_recreate'])
+        self.assertEqual(inspected['volume'], 'ot-' + self.iid)
+        self.assertEqual(self.action(self.iid, 'start')['status'], 202)
+        started = worker.run_once(self.iid)
+        self.assertEqual(started['observed'], 'running')
+        state = json.loads(state_path.read_text())
+        self.assertEqual(state['sentinel'], 'persistent-test-content')
+        argv = ' '.join(state.get('last_argv') or [])
+        self.assertIn('--force-recreate', argv)
+        self.assertNotIn(' -v', ' ' + argv)
+        self.assertNotIn('down', argv.split())
+        self.assertNotIn('volume', argv.split()[:2] if False else argv)
+        self.assertNotIn('rm', argv.split())
+        self.assertFalse(self.engine.inspect(self.iid).get('needs_recreate'))
+
+    def test_incompatible_compose_drift_still_fails_closed_without_touching_the_volume(self):
+        path = self.write_old_compose()
+        raw = json.loads(path.read_text())
+        raw['services']['flybot']['command'] = ['sh']
+        replace_private(path, compose_bytes(raw))
+        sentinel = self.root / 'volume-sentinel'
+        sentinel.write_text('keep-me')
+        with self.assertRaises(ManagerError) as error:
+            Registry(str(self.cfgpath)).entry(self.iid)
+        self.assertEqual(error.exception.code, 'manifest_changed')
+        self.assertEqual(sentinel.read_text(), 'keep-me')
+        self.assertIn('sh', path.read_text())
 
 
 class ManagerHttpTransportTests(unittest.TestCase):
