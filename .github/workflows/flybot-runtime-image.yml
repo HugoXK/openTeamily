@@ -62,6 +62,9 @@ jobs:
       - name: Smoke the image as the compose manager would start it
         run: node runtime/flybot-image/test/smoke.mjs openteamily-flybot:test
 
+      - name: Prove an agent conversation through a running container
+        run: python3 runtime/flybot-image/test/container-agent-chat.py openteamily-flybot:test
+
       - name: Inventory licenses in the built image
         run: |
           out="${RUNNER_TEMP}/image-inventory"
