@@ -8,9 +8,9 @@
 # (it calls createRuntime + the social façade). Matches the compose manager contract:
 # USER 1000:1000, EXPOSE 8080, HEALTHCHECK, writable /data, no root entrypoint.
 #
-# This is a self-host build recipe. CI proves the image builds and starts. It does
-# not close issue #3 (DSH transitive / base-image redistribution) and is not a
-# public release of a fully audited redistributable artifact.
+# This is a self-host build recipe. CI proves the image builds and starts.
+# It is not a public release of a fully audited redistributable artifact.
+# DSH transitive and base-image redistribution work is tracked as issue 3.
 
 ARG NODE_IMAGE=node:24-bookworm-slim
 FROM ${NODE_IMAGE} AS build

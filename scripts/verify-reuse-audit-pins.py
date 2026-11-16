@@ -76,6 +76,80 @@ def check_offline(pins: dict) -> int:
     return errors
 
 
+SHIPPED_PATH = ROOT / "docs" / "reuse-audit" / "shipped-pins.json"
+NOTICE_PATH = ROOT / "NOTICE"
+DSH_INTEGRITY = "sha512-ijR9UEVYkG15Q/Q79JzvzLBzQOQfc63VLr9n6flpwHPhr5IKn2UxthnSoto/P9l7qGd7pPvI1Ra6TW7LH3oKpg=="
+DSH_TAG_COMMIT = "66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db"
+LIBREOFFICE_LICENSE = "MPL-2.0"
+ON_DISK = {
+    "LICENSE": "096841e8f7eceada5cbb435b01e60cedc2b458717c2065131ad64e1d7bebad6a",
+    "runtime/flybot/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "runtime/flybot/NOTICE": "94f05bc42e635dee7082583c010dc13fb084b1ed9cdcfed6b9e5246c763027ca",
+    "runtime/ds-bot-upstream/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "runtime/ds-bot-upstream/NOTICE": "4c7d3e4e7607f02ed9e4fb940442be7d0d107b57beb54660e1526a7be07c2aad",
+    "runtime/ds-bot-upstream/ds-bot/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "services/bot-social/LICENSE": "6f5b168b7397507ec7854d3787079ae4185826ea0a9ade831a269fabe3e737c3",
+}
+
+
+def check_shipped() -> int:
+    errors = 0
+    if not NOTICE_PATH.is_file():
+        print("FAIL: missing root NOTICE")
+        return 1
+    notice = NOTICE_PATH.read_text()
+    for phrase in ("does not relicense", "runtime/flybot/", "runtime/ds-bot-upstream/", "services/bot-social/", "libreoffice-kit", "MPL-2.0"):
+        if phrase not in notice:
+            print(f"FAIL: root NOTICE missing {phrase!r}")
+            errors += 1
+    if not SHIPPED_PATH.is_file():
+        print(f"FAIL: missing {SHIPPED_PATH}")
+        return errors + 1
+    shipped = json.loads(SHIPPED_PATH.read_text())
+    if shipped.get("public_redistributable_image") is not False:
+        print("FAIL: shipped inventory must not claim a public redistributable image")
+        errors += 1
+    files = shipped.get("in_repo_license_files") or {}
+    for rel, expected in ON_DISK.items():
+        path = ROOT / rel
+        if not path.is_file():
+            print(f"FAIL: missing {rel}")
+            errors += 1
+            continue
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        recorded = (files.get(rel) or {}).get("sha256")
+        if digest != expected or recorded != expected:
+            print(f"FAIL: {rel} sha256 disk={digest} recorded={recorded} expected={expected}")
+            errors += 1
+        else:
+            print(f"OK on-disk {rel}")
+    npm = ((shipped.get("dsh_0_2_2_rc_1") or {}).get("npm") or {})
+    git = ((shipped.get("dsh_0_2_2_rc_1") or {}).get("git") or {})
+    kit = ((shipped.get("dsh_0_2_2_rc_1") or {}).get("libreoffice_kit") or {})
+    if npm.get("integrity") != DSH_INTEGRITY:
+        print("FAIL: DSH 0.2.2-rc.1 integrity pin drifted")
+        errors += 1
+    else:
+        print("OK DSH npm integrity")
+    if git.get("commit") != DSH_TAG_COMMIT or git.get("npm_tarball_correspondence", "").startswith("unverified") is False:
+        print("FAIL: DSH git tag pin or correspondence honesty drifted", git)
+        errors += 1
+    else:
+        print("OK DSH git tag", DSH_TAG_COMMIT, "correspondence still unverified")
+    if kit.get("license") != LIBREOFFICE_LICENSE or "blocker" not in (kit.get("redistribution") or ""):
+        print("FAIL: libreoffice-kit MPL blocker not recorded")
+        errors += 1
+    else:
+        print("OK libreoffice-kit recorded as MPL-2.0 blocker")
+    dockerfile = (ROOT / "runtime/flybot-image/Dockerfile").read_text()
+    if "does not close issue" in dockerfile.lower() or "closes issue" in dockerfile.lower():
+        print("FAIL: Dockerfile uses GitHub closing-keyword phrasing")
+        errors += 1
+    else:
+        print("OK Dockerfile does not use closing-keyword phrasing")
+    return errors
+
+
 def raw_url(blob_url: str) -> str:
     # https://github.com/owner/repo/blob/sha/path -> raw.githubusercontent.com/owner/repo/sha/path
     prefix = "https://github.com/"
@@ -123,6 +197,7 @@ def main() -> None:
     args = parser.parse_args()
     pins = load_pins()
     errors = check_offline(pins)
+    errors += check_shipped()
     if args.fetch:
         errors += check_fetch(pins)
     if errors:

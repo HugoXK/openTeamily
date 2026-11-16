@@ -20,8 +20,11 @@ system.”
   server URL into that file at instance start (tokens stay off management).
   Composer `@` mention *candidates* can be registered on DSH
   `inputTriggers.registerSource` (in-process fake trigger tests only; not a
-  live dsh-web composer). The official ds-bot v0.3.6 details drawer has no
-  slot for `flybot.bot.details`, so that panel is still FlyBot-registry only.
+  live dsh-web composer). The official ds-bot v0.3.6 details drawer still has
+  no `flybot.bot.details` hook; OpenTeamily renders those entries on its own
+  FlyBot-branded surface in the session header, composer dock, and settings
+  section (in-process fake dsh-slot mount plus the real social client; not a
+  live dsh-web or Teamily comparison).
   A license-complete public image release remains open. The social façade
   now posts group/DM lines, seats room-link claims behind
   ticketPeers/serveInvites/seatOpenClaims (in-process fake invite server
@@ -38,7 +41,7 @@ system.”
 - `runtime/flybot-image/` is the OpenTeamily recipe: USER 1000, port 8080,
   HEALTHCHECK, `/data` workspace, wrapper plugin on unmodified v0.3.6 plus
   the social host. CI (`.github/workflows/flybot-runtime-image.yml`) builds
-  and smokes it. That does not close issue #3 and is not a public release.
+  and smokes it. That is not a public redistributable image release; related tracking remains open: issue 3.
 - Open audit items that still block redistributing a published image: npm ↔ git
   correspondence for DSH 0.2.2-rc.1, MPL LibreOffice kit, OFL fonts, possible
   Claude payloads, and base-image copyright/source offer.
@@ -61,5 +64,7 @@ system.”
 
 ## License audit completeness
 
-Issue #3 stays open. Importing these pins does not finish the DSH closure,
-trademark, or image-redistribution work, and must not be used to close #1 or #3.
+Related tracking remains open: issue 1, issue 3. Importing these pins does not
+finish the DSH closure, trademark, or image-redistribution work. The written
+inventory of what this revision ships, and the remaining legal blockers, live
+under `docs/reuse-audit/`.
