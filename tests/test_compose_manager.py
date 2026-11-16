@@ -18,7 +18,7 @@ from wsgiref.simple_server import make_server
 import test_runtime as fixtures
 from openteamily.lifecycle import RuntimeFault, RuntimePolicy, ManagerIdentity
 from openteamily.manager.client import ManagerClient
-from openteamily.manager.engine import Registry, Runner, ComposeEngine, manifest, added_secret_binds, BOT_SOCIAL_TARGET, compose_bytes
+from openteamily.manager.engine import Registry, Runner, ComposeEngine, manifest, added_secret_binds, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET, compose_bytes
 from openteamily.manager.safety import ManagerError, write_new, replace_private, instance_lock, redact
 from openteamily.manager.worker import ManagerWorker
 from openteamily.manager.__main__ import main
@@ -445,6 +445,11 @@ class ComposeManagerTests(unittest.TestCase):
         self.assertEqual(collaboration[0]['type'], 'bind')
         self.assertEqual(collaboration[0]['source'], 'secrets/bot-social-' + self.iid + '.json')
         self.assertTrue(collaboration[0]['read_only'])
+        runtime_key = [item for item in volumes if item.get('target') == RUNTIME_KEY_TARGET]
+        self.assertEqual(len(runtime_key), 1)
+        self.assertEqual(runtime_key[0]['type'], 'bind')
+        self.assertEqual(runtime_key[0]['source'], 'secrets/runtime-key-' + self.iid + '.json')
+        self.assertTrue(runtime_key[0]['read_only'])
         self.assertNotIn('api_key', json.dumps(document))
         self.assertNotIn('token', json.dumps(document))
         dumped = (self.root / ('compose-' + self.iid + '.json'))
@@ -579,9 +584,60 @@ class ComposeManagerTests(unittest.TestCase):
 
 
 
+    def test_worker_writes_instance_runtime_key_and_redacts_the_token(self):
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        path = self.engine.runtime_key_path(self.iid)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        document = json.loads(path.read_text())
+        self.assertEqual(set(document), {'origin', 'token', 'hostname'})
+        self.assertEqual(document['origin'], 'https://management.test')
+        self.assertTrue(document['token'])
+        self.assertEqual(document['hostname'], 'flybot-' + self.iid[:12])
+        token = document['token']
+        dumped = (self.root / ('compose-' + self.iid + '.json')).read_text()
+        self.assertIn('openteamily-runtime-key.json', dumped)
+        self.assertNotIn(token, dumped)
+        listed = self.client.call('GET', '/v1/runtime-keys')
+        self.assertNotIn(token, json.dumps(listed))
+        self.assertEqual(self.action(self.iid, 'start')['status'], 202)
+        started = worker.run_once(self.iid)
+        self.assertEqual(started['observed'], 'running')
+        rotated = json.loads(path.read_text())
+        self.assertNotEqual(rotated['token'], token)
+        self.assertNotIn(token, json.dumps(started))
+        self.assertNotIn(rotated['token'], json.dumps(started))
+        instance = self.client.call('GET', f'/v1/instances/{self.iid}')
+        self.assertNotIn(token, json.dumps(instance))
+        self.assertNotIn(rotated['token'], json.dumps(instance))
+
+    def test_runtime_agent_key_requires_a_lease_and_rejects_stop_jobs(self):
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        self.action(self.iid, 'start')
+        started = worker.run_once(self.iid)
+        self.assertEqual(started['observed'], 'running')
+        bad = self.manager_call('POST', f'/v1/internal/instances/{self.iid}/runtime-agent-key', {
+            'job_id': 'a' * 32, 'observed_revision': 1, 'lease': 'A' * 43,
+        })
+        self.assertIn(bad['status'], (400, 401, 403, 409))
+        self.assertNotIn('token', json.dumps(bad.get('body') if isinstance(bad.get('body'), dict) else bad))
+        # The error payload must not include a runtime token even if the word appears in docs.
+        self.assertNotIn('"token":', json.dumps(bad))
+        self.action(self.iid, 'stop')
+        stop = client.claim(self.iid)
+        with self.assertRaises(ManagerError) as error:
+            client.runtime_agent_key(self.iid, stop)
+        self.assertEqual(error.exception.code, 'runtime_key_not_applicable')
+        observed = client.leased_call(self.iid, stop, 'observe', observed='stopped')
+        self.assertEqual(observed['job']['status'], 'succeeded')
+
     def old_compose_document(self):
         document = manifest(self.iid, self.cfg['instances'][self.iid])
-        volumes = [item for item in document['services']['flybot']['volumes'] if item.get('target') != BOT_SOCIAL_TARGET]
+        skip = {BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET}
+        volumes = [item for item in document['services']['flybot']['volumes'] if item.get('target') not in skip]
         document['services']['flybot']['volumes'] = volumes
         return document
 
@@ -598,7 +654,7 @@ class ComposeManagerTests(unittest.TestCase):
         expected = manifest(self.iid, self.cfg['instances'][self.iid])
         older = self.old_compose_document()
         added = added_secret_binds(older, expected)
-        self.assertEqual([item['target'] for item in added], [BOT_SOCIAL_TARGET])
+        self.assertEqual([item['target'] for item in added], [BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET])
         drifted = dict(older)
         drifted['services'] = {'flybot': dict(older['services']['flybot'], image='evil@sha256:' + 'b' * 64)}
         self.assertIsNone(added_secret_binds(drifted, expected))
@@ -614,6 +670,7 @@ class ComposeManagerTests(unittest.TestCase):
         self.assertEqual(applied['status'], 'upgraded')
         self.assertEqual(applied['volume_deleted'] if 'volume_deleted' in applied else False, False)
         self.assertIn(BOT_SOCIAL_TARGET, applied['added'])
+        self.assertIn(RUNTIME_KEY_TARGET, applied['added'])
         current = registry.preview_manifest(self.iid)
         self.assertEqual(current['status'], 'current')
         # CLI dry-run of a already-current file, and a fresh older file via CLI --apply.
@@ -635,6 +692,8 @@ class ComposeManagerTests(unittest.TestCase):
         self.assertFalse(done['volume_deleted'])
         self.assertTrue(self.engine.bot_social_path(self.iid).exists())
         self.assertEqual(self.engine.bot_social_path(self.iid).read_text(), '')
+        self.assertTrue(self.engine.runtime_key_path(self.iid).exists())
+        self.assertEqual(self.engine.runtime_key_path(self.iid).read_text(), '')
 
     def test_start_after_bind_upgrade_recreates_container_without_deleting_volume_data(self):
         client = self.start_http()

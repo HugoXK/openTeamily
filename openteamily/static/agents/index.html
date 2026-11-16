@@ -66,6 +66,18 @@
         </div>
       </fieldset>
     </form>
+    <section id="runtime-panel" hidden>
+      <h2>运行时绑定</h2>
+      <p id="runtime-note" class="note">可以把这个智能体绑定到工作区里的 FlyBot 容器。对话会优先发到该容器；没有可用容器时，才会用你自己已连接的机器。</p>
+      <p id="runtime-status" class="note"></p>
+      <label>实例
+        <select id="runtime-instance"></select>
+      </label>
+      <div class="actions">
+        <button type="button" id="bind-runtime">绑定</button>
+        <button type="button" id="unbind-runtime">解除绑定</button>
+      </div>
+    </section>
     <section id="chat-panel" hidden>
       <h2 id="chat-title">对话</h2>
       <p id="chat-note" class="note">选择一个智能体后，可以开始或继续你自己的对话。</p>

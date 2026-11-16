@@ -161,7 +161,7 @@ def list_connections(db, user_id):
     ).fetchall()
 
 
-def online_connection(db, user_id, now, stale, connection_id=None):
+def online_connection(db, user_id, now, stale, connection_id=None, personal=False):
     if connection_id is not None:
         row = db.execute(
             'SELECT * FROM runtime_connections WHERE id=? AND user_id=?',
@@ -169,13 +169,30 @@ def online_connection(db, user_id, now, stale, connection_id=None):
         ).fetchone()
         if row is None:
             return None
+        if personal and instance_key_owned(db, row['key_id']):
+            return None
         return row if row['last_seen'] + stale > now else False
+    if personal:
+        row = db.execute(
+            'SELECT c.* FROM runtime_connections c '
+            'WHERE c.user_id=? AND c.last_seen>? '
+            'AND c.key_id NOT IN (SELECT key_id FROM instance_runtime_keys) '
+            'ORDER BY c.last_seen DESC, c.id LIMIT 1',
+            (user_id, now - stale),
+        ).fetchone()
+        return row
     row = db.execute(
         'SELECT * FROM runtime_connections WHERE user_id=? AND last_seen>? '
         'ORDER BY last_seen DESC, id LIMIT 1',
         (user_id, now - stale),
     ).fetchone()
     return row
+
+
+def instance_key_owned(db, key_id):
+    return db.execute(
+        'SELECT instance_id FROM instance_runtime_keys WHERE key_id=?', (key_id,)
+    ).fetchone() is not None
 
 
 def queued_for(db, connection_id):

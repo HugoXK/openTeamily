@@ -75,6 +75,8 @@ def main(argv=None):
                         engine.install_secret(iid, None)
                     if not engine.bot_social_path(iid).exists():
                         engine.install_bot_social(iid, None)
+                    if not engine.runtime_key_path(iid).exists():
+                        engine.install_runtime_key(iid, None)
                     preview['secret_files'] = 'created_if_missing'
                 preview['executed'] = False
                 preview['volume_deleted'] = False

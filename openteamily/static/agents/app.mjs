@@ -44,6 +44,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const createForm = document.getElementById('create-form');
   const editForm = document.getElementById('edit-form');
   const chatPanel = document.getElementById('chat-panel');
+  const runtimePanel = document.getElementById('runtime-panel');
   let currentUser = null;
   let actor = null;
   let workspaces = [];
@@ -116,6 +117,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       createForm.hidden = true;
       editForm.hidden = true;
       chatPanel.hidden = true;
+    if (runtimePanel) runtimePanel.hidden = true;
       show('', '');
       return;
     }
@@ -129,6 +131,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentConversation = null;
     stopPolling();
     chatPanel.hidden = true;
+    if (runtimePanel) runtimePanel.hidden = true;
     const detail = await request('GET', `/v1/workspaces/${id}`);
     if (detail.status !== 200) {
       show('error', messageFor(detail.body.error, '无法打开工作区。'));
@@ -190,7 +193,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editForm.querySelector('button[type="submit"]').hidden = !writable;
     document.getElementById('chat-title').textContent = '与 ' + agent.name + ' 的对话';
     chatPanel.hidden = false;
+    if (runtimePanel) loadRuntime();
   }
+
+  async function loadRuntime() {
+    if (!currentAgent || !runtimePanel) return;
+    const result = await request('GET', `${agentBase()}/runtime`);
+    if (result.status === 501) {
+      runtimePanel.hidden = true;
+      return;
+    }
+    runtimePanel.hidden = false;
+    const bindable = canManage(actor);
+    document.getElementById('bind-runtime').hidden = !bindable;
+    document.getElementById('unbind-runtime').hidden = !bindable;
+    document.getElementById('runtime-instance').disabled = !bindable;
+    const listed = bindable ? await request('GET', `/v1/workspaces/${workspaceId()}/instances?limit=100`) : {status: 200, body: {items: []}};
+    const items = listed.status === 200 ? (listed.body.items || []) : [];
+    const select = document.getElementById('runtime-instance');
+    const current = result.body.runtime;
+    select.replaceChildren();
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = '选择一个容器实例';
+    select.append(empty);
+    for (const item of items) {
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = (item.id || '').slice(0, 8) + (item.desired ? ' · ' + item.desired : '');
+      select.append(option);
+    }
+    if (current && current.instance_id) select.value = current.instance_id;
+    document.getElementById('runtime-status').textContent = current
+      ? ('已绑定实例 ' + current.instance_id.slice(0, 8) + '（' + (current.status || '未知') + '）')
+      : '尚未绑定容器。成员对话仍可回退到自己的已连接机器。';
+  }
+
 
   function renderMessages(items) {
     const list = document.getElementById('message-list');
@@ -304,6 +342,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const button = event.target.closest('button[data-conversation]');
     if (!button) return;
     await openConversation(button.dataset.conversation);
+  });
+
+  const bindButton = document.getElementById('bind-runtime');
+  if (bindButton) bindButton.addEventListener('click', async () => {
+    const instanceId = document.getElementById('runtime-instance').value;
+    if (!instanceId || !currentAgent) {
+      show('error', '请选择一个实例。');
+      return;
+    }
+    const current = await request('GET', `${agentBase()}/runtime`);
+    const body = {instance_id: instanceId};
+    if (current.status === 200 && current.body.runtime) body.revision = current.body.runtime.revision;
+    const result = await request('POST', `${agentBase()}/runtime`, body);
+    if (result.status !== 200 && result.status !== 201) {
+      show('error', messageFor(result.body.error, '无法绑定。'));
+      return;
+    }
+    show('ok', '已绑定到工作区容器。');
+    await loadRuntime();
+  });
+  const unbindButton = document.getElementById('unbind-runtime');
+  if (unbindButton) unbindButton.addEventListener('click', async () => {
+    const current = await request('GET', `${agentBase()}/runtime`);
+    if (current.status !== 200 || !current.body.runtime) return;
+    const result = await request('POST', `${agentBase()}/runtime/unbind`, {revision: current.body.runtime.revision});
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法解除绑定。'));
+      return;
+    }
+    show('ok', '已解除绑定。');
+    await loadRuntime();
   });
 
   document.getElementById('new-conversation').addEventListener('click', async () => {
@@ -438,6 +507,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('cancel-edit').addEventListener('click', () => {
     editForm.hidden = true;
     chatPanel.hidden = true;
+    if (runtimePanel) runtimePanel.hidden = true;
     currentAgent = null;
     currentConversation = null;
     stopPolling();
