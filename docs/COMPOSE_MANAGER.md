@@ -26,14 +26,17 @@ implied. Do not close the overall lifecycle or product tracking issue.
   DNS. The operator's `server_host` supplies the server's exact configured origin
   netloc as Host, **without changing the numeric-loopback connection target**. Public ingress must deny `/v1/internal/` entirely: a local reverse proxy's
   loopback peer is not proof that its original caller was local.
-- A **locally preloaded, operator-supplied digest-pinned image**; no bundled upstream
-  assets, image downloads, builds or image license-completeness claim. Image contract:
-  UID/GID1000, `/data` writable by that UID (image directory ownership is copied to
-  a new named volume), read-only rootfs except `/data` and tmpfs `/tmp`, TCP8080 if
-  optionally published, and a functioning Docker HEALTHCHECK. This contract has not
-  been demonstrated against an upstream FlyBot image. Add a checked CMD healthcheck
-  argv in operator config only if the image lacks one; absent/unhealthy checks **do
-  not become ready**.
+- A **locally preloaded, operator-supplied digest-pinned image**; the server still
+  does not pull or build images itself and does not claim license-completeness.
+  Image contract: UID/GID1000, `/data` writable by that UID (image directory
+  ownership is copied to a new named volume), read-only rootfs except `/data`
+  and tmpfs `/tmp`, TCP8080 if optionally published, and a functioning Docker
+  HEALTHCHECK. Operators can build that image from `runtime/flybot-image/` and
+  pass the resulting `name@sha256:…` to `--compose-image`. CI smokes the
+  recipe under this contract; that is not a live management-server acceptance
+  on this machine, and issue #3 still blocks a public redistributable release.
+  Add a checked CMD healthcheck argv in operator config only if the image
+  lacks one; absent/unhealthy checks **do not become ready**.
 - One registered instance is one Compose project/container/volume in this first
   adapter. This does not decide the final user/workspace allocation policy.
 - One active operator executor/state directory per instance/engine. `flock` prevents

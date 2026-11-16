@@ -19,6 +19,6 @@ Before importing **additional** source, an image, or a dependency:
 5. Choose an adapter or clean independent implementation when reuse is not justified. Do not relicense upstream work under this repository's MIT license.
 6. Import only the agreed capability in an independently reviewed PR, with tests and an origin record.
 
-DeepSeek Harness, container base images, and trademarked logos have not passed a complete redistribution audit and are not vendored here. Project/Timeline remain an optional later path, not a deletion of Teamily requirements. Keep secrets, logs, user content, caches and generated mock screenshots out of git.
+DeepSeek Harness, container base images, and trademarked logos have not passed a complete redistribution audit and are not vendored here. `runtime/flybot-image/` is an OpenTeamily-authored build recipe whose CI job does not close that audit. Project/Timeline remain an optional later path, not a deletion of Teamily requirements. Keep secrets, logs, user content, caches and generated mock screenshots out of git.
 
 The management slice uses the Python standard library and adds no third-party application package. Optional Bot Social tests install dependencies from that snapshot's lockfile in CI only; those packages are not committed.

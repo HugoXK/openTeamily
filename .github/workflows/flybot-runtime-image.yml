@@ -1,0 +1,57 @@
+name: FlyBot runtime image
+# Builds the OpenTeamily-authored runtime/flybot-image recipe and smokes it under
+# the compose manager contract (UID 1000, read-only, /data, port 8080). Does not
+# close issue #3 or authorize a public redistributable release.
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  recipe-contract:
+    name: Image recipe contract tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24'
+      - name: Run recipe unit tests (no npm install)
+        working-directory: runtime/flybot-image
+        run: npm test
+
+  image-build-smoke:
+    name: Build and smoke under the manager contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: DSH version from the pin
+        id: pin
+        run: |
+          dsh=$(node -p "require('./runtime/ds-bot-upstream.pin.json').dsh")
+          if [[ ! "$dsh" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "invalid DSH version in pin: $dsh"
+            exit 1
+          fi
+          echo "dsh=$dsh" >> "$GITHUB_OUTPUT"
+          echo "DSH $dsh"
+      - name: Build the OpenTeamily FlyBot runtime image
+        env:
+          DSH_VERSION: ${{ steps.pin.outputs.dsh }}
+        run: |
+          if [[ ! "$DSH_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "invalid DSH version: $DSH_VERSION"
+            exit 1
+          fi
+          docker build -f runtime/flybot-image/Dockerfile \
+            --build-arg "DSH_VERSION=${DSH_VERSION}" \
+            -t openteamily-flybot:test \
+            runtime
+      - name: Smoke the image as the compose manager would start it
+        run: node runtime/flybot-image/test/smoke.mjs openteamily-flybot:test

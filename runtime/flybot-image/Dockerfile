@@ -1,0 +1,81 @@
+# syntax=docker/dockerfile:1
+#
+# OpenTeamily FlyBot runtime image. Build context is the repository's runtime/ directory:
+#   docker build -f runtime/flybot-image/Dockerfile -t openteamily-flybot:local runtime
+#
+# Layers the unmodified vendored DS-Bot v0.3.6 tree and the FlyBot social plugin onto
+# DeepSeek Harness, with @openteamily/flybot-runtime as the single DSH plugin entry
+# (it calls createRuntime + the social façade). Matches the compose manager contract:
+# USER 1000:1000, EXPOSE 8080, HEALTHCHECK, writable /data, no root entrypoint.
+#
+# This is a self-host build recipe. CI proves the image builds and starts. It does
+# not close issue #3 (DSH transitive / base-image redistribution) and is not a
+# public release of a fully audited redistributable artifact.
+
+ARG NODE_IMAGE=node:24-bookworm-slim
+FROM ${NODE_IMAGE} AS build
+
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ARG DSH_VERSION=0.2.2-rc.1
+
+RUN corepack enable \
+    && npm config set registry "$NPM_REGISTRY" --global \
+    && COREPACK_NPM_REGISTRY="$NPM_REGISTRY" pnpm config set registry "$NPM_REGISTRY" --global \
+    && npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" \
+        --allow-scripts=@deepseek-ai/dsh-subprocess-local,node-pty,koffi,@google/genai,protobufjs
+
+FROM ${NODE_IMAGE}
+
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ARG DSH_VERSION=0.2.2-rc.1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates git curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable \
+    && npm config set registry "$NPM_REGISTRY" --global \
+    && COREPACK_NPM_REGISTRY="$NPM_REGISTRY" pnpm config set registry "$NPM_REGISTRY" --global
+
+COPY --from=build /usr/local/ /usr/local/
+
+# Preserve the repository layout so relative imports in the wrapper and
+# flybot-social-host keep working. The profile uses link: to these paths.
+COPY ds-bot-upstream/ds-bot /opt/openteamily/runtime/ds-bot-upstream/ds-bot
+COPY ds-bot-upstream/LICENSE /opt/licenses/ds-bot/LICENSE
+COPY ds-bot-upstream/NOTICE /opt/licenses/ds-bot/NOTICE
+COPY flybot/plugins/social /opt/openteamily/runtime/flybot/plugins/social
+COPY flybot/LICENSE /opt/licenses/flybot/LICENSE
+COPY flybot/NOTICE /opt/licenses/flybot/NOTICE
+COPY flybot-social-host /opt/openteamily/runtime/flybot-social-host
+COPY flybot-image /opt/openteamily/runtime/flybot-image
+
+# Init an official DSH web profile, then pin our plugins as link: paths and
+# drop a second ds-bot bundle so createRuntime runs once.
+ENV DSH_HOME=/opt/dsh-template
+RUN mkdir -p /opt/dsh-template \
+    && dsh plugin --profile web add /opt/openteamily/runtime/flybot-image/plugin \
+    && node /opt/openteamily/runtime/flybot-image/prepare-template.mjs \
+    && pnpm --dir /opt/dsh-template/profiles/web install --prefer-offline --no-frozen-lockfile \
+    && mkdir -p /data /data/workspace /data/home \
+    && chown -R 1000:1000 /opt/dsh-template /opt/openteamily /opt/licenses /data /home/node
+
+COPY --chmod=0755 flybot-image/entrypoint.sh /usr/local/bin/entrypoint.sh
+
+ENV DSH_HOME=/data \
+    DSH_PERMISSION_MODE=danger-full-access \
+    DSH_TELEMETRY_DISABLED=1 \
+    DSH_LISTEN_PORT=8080 \
+    HOME=/data/home
+
+USER 1000:1000
+WORKDIR /data/workspace
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
+    CMD ["node", "/opt/openteamily/runtime/flybot-image/healthcheck.mjs"]
+
+LABEL org.opencontainers.image.title="OpenTeamily FlyBot runtime" \
+      org.opencontainers.image.description="Self-host FlyBot runtime: unmodified DS-Bot v0.3.6 plus the social host adapter, served by dsh web on 8080." \
+      org.opencontainers.image.source="https://github.com/openTeamily/openTeamily" \
+      org.opencontainers.image.licenses="MIT AND Apache-2.0"
