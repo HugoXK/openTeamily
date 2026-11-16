@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import automations, invites, members, model_api, oidc, runtime_keys, settings, skill_secrets, teams
+from . import automations, invites, members, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
 
 
 class APIError(Exception):
@@ -43,6 +43,7 @@ class Config:
     auth_global_limit: int = 100
     auth_window: int = 600
     max_rate_buckets: int = 4096
+    runtime_heartbeat_seconds: int = 45
 
     def __post_init__(self):
         parsed = urlsplit(self.origin)
@@ -463,6 +464,8 @@ class App:
                 with self.store.transaction() as db:
                     return self.save_model_api(db, None, now, None, self.body(env, ['revision', 'changes']), scope='platform')
             refuse(404, 'not_found', 'Route not found')
+        if path.startswith('/v1/agent/'):
+            return self.agent_dispatch(env, method, path, query, now)
         runtime_path = re.fullmatch(r'/v1/workspaces/[0-9a-f]{32}/instances|/v1/instances/[0-9a-f]{32}(?:/[a-z]+)?|/v1/jobs/[0-9a-f]{32}', path)
         if self.lifecycle is not None and (runtime_path or path.startswith('/v1/internal/')):
             if path.startswith('/v1/internal/'):
@@ -542,9 +545,27 @@ class App:
                 if row is None:
                     refuse(404, 'not_found', 'Runtime key not found')
                 db.execute('UPDATE runtime_keys SET revoked=1 WHERE id=?', (row['id'],))
+                runtime_connect.offline_for_key(db, row['id'], now)
                 row = dict(row)
                 row['revoked'] = 1
                 return 200, {'key': runtime_keys.view(row)}, []
+            if path == '/v1/runtime/connections' and method == 'GET' and not query:
+                stale = self.config.runtime_heartbeat_seconds
+                items = [runtime_connect.connection_view(row, now, stale)
+                         for row in runtime_connect.list_connections(db, session['user_id'])]
+                return 200, {'items': items}, []
+            if path == '/v1/runtime/tasks' and method == 'GET' and not query:
+                items = [runtime_connect.task_view(row)
+                         for row in runtime_connect.user_tasks(db, session['user_id'])]
+                return 200, {'items': items}, []
+            if path == '/v1/runtime/tasks' and method == 'POST' and not query:
+                return self.dispatch_runtime_task(db, session['user_id'], now, self.body(env, ['kind', 'prompt', 'connection_id']))
+            task_get = re.fullmatch(r'/v1/runtime/tasks/([0-9a-f]{32})', path)
+            if task_get and method == 'GET' and not query:
+                row = runtime_connect.load_task(db, task_get[1], user_id=session['user_id'])
+                if row is None:
+                    refuse(404, 'not_found', 'Runtime task not found')
+                return 200, {'task': runtime_connect.task_view(row)}, []
             if path == '/v1/model-api' and method == 'GET' and not query:
                 override = model_api.public_view(model_api.load_account(db, session['user_id']), 'account')
                 effective, _secret, source = model_api.resolve(db, self.store, user_id=session['user_id'])
@@ -645,6 +666,91 @@ class App:
     def workspace(row):
         return {key: row[key] for key in ('id', 'owner_id', 'name', 'created')}
 
+
+
+    def _runtime_key_from_env(self, db, env, now):
+        if env.get('HTTP_COOKIE') or env.get('HTTP_ORIGIN'):
+            refuse(401, 'unauthorized', runtime_connect.KEY_AUTH)
+        match = re.fullmatch(r'Bearer ([A-Za-z0-9_-]{32,128})', env.get('HTTP_AUTHORIZATION', ''))
+        token = match[1] if match else ''
+        key = runtime_connect.lookup_key(db, token, now)
+        if key is None:
+            refuse(401, 'unauthorized', runtime_connect.KEY_AUTH)
+        return key
+
+    def agent_dispatch(self, env, method, path, query, now):
+        stale = self.config.runtime_heartbeat_seconds
+        with self.store.transaction() as db:
+            key = self._runtime_key_from_env(db, env, now)
+            if path == '/v1/agent/connect' and method == 'POST' and not query:
+                body = self.body(env, ['hostname'])
+                hostname = body.get('hostname', 'flybot')
+                if not runtime_connect.valid_hostname(hostname):
+                    refuse(400, 'invalid', 'Provide a hostname')
+                row, created = runtime_connect.connect(db, key, now, hostname)
+                return (201 if created else 200), {
+                    'connection': runtime_connect.connection_view(row, now, stale),
+                }, []
+            connection = runtime_connect.load_connection(db, key['id'])
+            if connection is None:
+                refuse(404, 'not_found', 'Runtime connection not found')
+            if path == '/v1/agent/heartbeat' and method == 'POST' and not query:
+                self.body(env, [])
+                row = runtime_connect.heartbeat(db, connection, now)
+                return 200, {'connection': runtime_connect.connection_view(row, now, stale)}, []
+            if path == '/v1/agent/tasks' and method == 'GET' and not query:
+                items = [runtime_connect.task_view(row) for row in runtime_connect.queued_for(db, connection['id'])]
+                return 200, {'items': items}, []
+            claim = re.fullmatch(r'/v1/agent/tasks/([0-9a-f]{32})/claim', path)
+            if claim and method == 'POST' and not query:
+                self.body(env, [])
+                task = runtime_connect.load_task(db, claim[1], connection_id=connection['id'])
+                if task is None:
+                    refuse(404, 'not_found', 'Runtime task not found')
+                claimed = runtime_connect.claim_task(db, task, now)
+                if claimed is None:
+                    refuse(409, 'conflict', 'Task is no longer claimable')
+                runtime_connect.heartbeat(db, connection, now)
+                return 200, {'task': runtime_connect.task_view(claimed)}, []
+            result_path = re.fullmatch(r'/v1/agent/tasks/([0-9a-f]{32})/result', path)
+            if result_path and method == 'POST' and not query:
+                body = self.body(env, ['status', 'result'])
+                status, result = body.get('status'), body.get('result')
+                if status not in ('succeeded', 'failed') or not isinstance(result, dict):
+                    refuse(400, 'invalid', 'Provide a result status and object')
+                task = runtime_connect.load_task(db, result_path[1], connection_id=connection['id'])
+                if task is None:
+                    refuse(404, 'not_found', 'Runtime task not found')
+                try:
+                    completed = runtime_connect.complete_task(db, task, now, status, result)
+                except ValueError:
+                    refuse(413, 'invalid', 'Result is too large')
+                if completed is None:
+                    refuse(409, 'conflict', 'Task is no longer writable')
+                runtime_connect.heartbeat(db, connection, now)
+                return 200, {'task': runtime_connect.task_view(completed)}, []
+            refuse(404, 'not_found', 'Route not found')
+
+    def dispatch_runtime_task(self, db, user_id, now, body):
+        kind = body.get('kind', 'echo')
+        prompt = body.get('prompt')
+        connection_id = body.get('connection_id')
+        if kind not in runtime_connect.KINDS or not runtime_connect.valid_prompt(prompt):
+            refuse(400, 'invalid', 'Provide a supported kind and prompt')
+        if connection_id is not None and (not isinstance(connection_id, str)
+                                          or not re.fullmatch(r'[0-9a-f]{32}', connection_id)):
+            refuse(400, 'invalid', 'Provide a connection id')
+        stale = self.config.runtime_heartbeat_seconds
+        target = runtime_connect.online_connection(db, user_id, now, stale, connection_id)
+        if target is False:
+            refuse(409, 'conflict', 'Runtime connection is offline')
+        if target is None:
+            refuse(409, 'conflict', 'No online runtime connection')
+        try:
+            row = runtime_connect.create_task(db, user_id, target['id'], now, kind, prompt)
+        except ValueError:
+            refuse(429, 'quota', 'Runtime task capacity reached')
+        return 201, {'task': runtime_connect.task_view(row)}, []
 
     def create_runtime_key(self, db, user_id, now, body):
         name = body.get('name')
