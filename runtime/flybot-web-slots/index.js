@@ -1,0 +1,5 @@
+export { createSlotRegistry } from './src/slots.js'
+export { callFlybot, ROUTE as CLIENT_ROUTE } from './src/call.js'
+export { installFlybotHost, uninstallFlybotHost, canRetry, defaultNames } from './src/host.js'
+export { attachBridge, BRIDGE } from './src/bridge.js'
+export { registerFlybotRoute, dispatch, PATH as SERVER_PATH } from './src/route.js'

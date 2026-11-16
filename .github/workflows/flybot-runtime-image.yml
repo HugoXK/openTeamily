@@ -22,6 +22,9 @@ jobs:
       - name: Run recipe unit tests (no npm install)
         working-directory: runtime/flybot-image
         run: npm test
+      - name: Run web-slot host unit tests (no npm install)
+        working-directory: runtime/flybot-web-slots
+        run: npm test
 
   image-build-smoke:
     name: Build and smoke under the manager contract

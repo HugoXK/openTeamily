@@ -1,0 +1,20 @@
+{
+  "name": "@openteamily/flybot-social-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Client-only DSH bundle that loads @flybot/social's browser half after the __flybot__ host is installed. Server apply is a no-op; the social server plugin is already attached by @openteamily/flybot-runtime.",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "../../../flybot/plugins/social/client.js",
+    "./package.json": "./package.json"
+  },
+  "keywords": ["dsh-plugin", "flybot", "openteamily"],
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  }
+}
