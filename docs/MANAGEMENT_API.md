@@ -36,6 +36,7 @@ All responses are JSON and no-store. There is no CORS support. Errors are `{erro
 | POST | `/v1/workspaces` | `{name}`; owner is server-derived, never caller-selected; requires `Idempotency-Key` |
 | GET | `/v1/workspaces` | Owner-only bounded page: `limit=1..100` (default20), optional UUID-hex `cursor` |
 | GET | `/v1/workspaces/{id}` | Owner-only read; other owners and nonexistent records both get404 |
+| GET/POST | `/v1/settings` | Per-account interface preferences with revision check; added after PR16, see [SETTINGS.md](SETTINGS.md) |
 
 Register/login require exact `Origin` and reject cross-site Fetch Metadata even before any session exists. All authenticated POSTs require exact Origin, a readable CSRF cookie and the matching `X-CSRF-Token` header, both bound to the current session's stored digest. The session token is not accepted as CSRF or a bearer token. Old sessions are revoked on logout/expiry and the oldest are evicted when exceeding a per-user session cap.
 
