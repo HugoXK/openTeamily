@@ -2,8 +2,9 @@
 
 This is a **minimal needed set**, not a full FlyBot checkout, and not the
 runtime baseline. Upstream layout is kept for the imported social plugin and
-docker helpers. It is not wired to the management server, and it is not a
-redistributable container image.
+docker helpers. It is not wired to the management server. The container recipe
+is OpenTeamily-authored and lives in [`runtime/flybot-image/`](../flybot-image/);
+issue #3 still blocks a license-complete public image release.
 
 The OpenTeamily runtime baseline is upstream DS-Bot **v0.3.6**, tracked in
 [PR #21](https://github.com/openTeamily/openTeamily/pull/21) (now on `main`). This tree is the
@@ -40,8 +41,10 @@ outside this snapshot and outside the vendored upstream tree.
 - `@flybot/social` plugin-only tests run with `npm test` in `plugins/social/`
   (no dependencies, no DSH, no `core/`). They do not replace a host-integration
   suite against v0.3.6.
-- Docker build / `dsh web` / real container acceptance are out of scope here.
-  PR #21 proves the upstream baseline's own suite and container smoke.
+- Docker build / `dsh web` for this snapshot's official FlyBot image stay out
+  of scope. The OpenTeamily recipe in `runtime/flybot-image/` is built and
+  smoked in CI. PR #21 still proves the upstream baseline's own suite and
+  official-image smoke.
 
 See [`docs/upstream/INTEGRATION.md`](../../docs/upstream/INTEGRATION.md) and
 [`docs/upstream/GAPS.md`](../../docs/upstream/GAPS.md).
