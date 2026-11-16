@@ -56,10 +56,10 @@ jobs:
           if [ -f "$RUNNER_TEMP/ot-ui-serve.log" ]; then cat "$RUNNER_TEMP/ot-ui-serve.log" >&2; fi
           exit 1
       - name: Capture real management pages
-        env:
-          NODE_PATH: ${{ runner.temp }}/ot-playwright/node_modules
         run: |
           set -eu
+          # ESM walks from the script path, not NODE_PATH, so expose the runner install here.
+          ln -sfn "$RUNNER_TEMP/ot-playwright/node_modules" "$GITHUB_WORKSPACE/node_modules"
           mkdir -p "$GITHUB_WORKSPACE/ui-screenshots"
           node scripts/ci_ui_screenshots.mjs --meta "$RUNNER_TEMP/ot-ui-meta" --out "$GITHUB_WORKSPACE/ui-screenshots"
       - name: Stop the throwaway app
