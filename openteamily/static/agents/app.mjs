@@ -193,7 +193,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editForm.querySelector('button[type="submit"]').hidden = !writable;
     document.getElementById('chat-title').textContent = '与 ' + agent.name + ' 的对话';
     chatPanel.hidden = false;
+    renderHomepage(agent, writable);
     if (runtimePanel) loadRuntime();
+  }
+
+  function renderHomepage(agent, writable, tokenPath) {
+    const panel = document.getElementById('homepage-panel');
+    const status = document.getElementById('homepage-status');
+    const wrap = document.getElementById('homepage-link-wrap');
+    const link = document.getElementById('homepage-link');
+    if (!panel) return;
+    panel.hidden = false;
+    const home = agent.homepage || {visibility: 'restricted'};
+    const publicHome = home.visibility === 'public';
+    document.getElementById('publish-homepage').hidden = !writable;
+    document.getElementById('revoke-homepage').hidden = !writable || !publicHome;
+    document.getElementById('publish-homepage').textContent = publicHome ? '更换链接' : '发布链接';
+    if (tokenPath) {
+      status.textContent = '链接只显示这一次，请立即复制。撤回后旧链接会失效。';
+      wrap.hidden = false;
+      link.textContent = tokenPath;
+    } else if (publicHome) {
+      status.textContent = '已发布公开主页。完整链接只在发布时显示一次，这里只保留前缀 ' + (home.prefix || '') + '。';
+      wrap.hidden = true;
+      link.textContent = '';
+    } else {
+      status.textContent = '当前仅工作区成员可见。';
+      wrap.hidden = true;
+      link.textContent = '';
+    }
   }
 
   async function loadRuntime() {
@@ -500,17 +528,46 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '无法归档。'));
       return;
     }
-    show('ok', '已归档，默认目录里不再显示。');
+    show('ok', '已归档，默认目录里不再显示，公开主页链接也已失效。');
+    const homepagePanel = document.getElementById('homepage-panel');
+    if (homepagePanel) homepagePanel.hidden = true;
     await loadWorkspace();
   });
 
   document.getElementById('cancel-edit').addEventListener('click', () => {
     editForm.hidden = true;
     chatPanel.hidden = true;
+    const homepagePanel = document.getElementById('homepage-panel');
+    if (homepagePanel) homepagePanel.hidden = true;
     if (runtimePanel) runtimePanel.hidden = true;
     currentAgent = null;
     currentConversation = null;
     stopPolling();
+  });
+
+  document.getElementById('publish-homepage').addEventListener('click', async () => {
+    if (!canManage(actor) || !currentAgent) return;
+    const result = await request('POST', `${agentBase()}/homepage`, {});
+    if (result.status !== 201) {
+      show('error', messageFor(result.body.error, '无法发布公开主页。'));
+      return;
+    }
+    currentAgent = result.body.agent;
+    fillEdit(currentAgent);
+    renderHomepage(currentAgent, true, result.body.agent.homepage.path);
+    show('ok', '已发布公开主页链接。');
+  });
+
+  document.getElementById('revoke-homepage').addEventListener('click', async () => {
+    if (!canManage(actor) || !currentAgent) return;
+    const result = await request('POST', `${agentBase()}/homepage/revoke`, {});
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法撤回公开主页。'));
+      return;
+    }
+    currentAgent = result.body.agent;
+    fillEdit(currentAgent);
+    show('ok', '已撤回公开主页，旧链接失效。');
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {

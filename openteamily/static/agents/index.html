@@ -15,7 +15,7 @@
   <header>
     <p class="brand">OpenTeamily / FlyBot</p>
     <h1>智能体</h1>
-    <p class="note">工作区成员可以维护智能体目录，并与自己的智能体进行持久对话。回复通过调用者已连接的运行时按 infer 任务排队，管理进程不会自己调用模型。没有公开主页，也没有 Auto / Instant / Agentic 模式。已完成的消息可以保存到作品库并保留出处。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
+    <p class="note">工作区成员可以维护智能体目录，并与自己的智能体进行持久对话。回复通过调用者已连接的运行时按 infer 任务排队，管理进程不会自己调用模型。所有者或管理员可以发布可撤销的公开主页链接（只展示名称和简介，不含说明）。没有嵌入对话，也没有 Auto / Instant / Agentic 模式。已完成的消息可以保存到作品库并保留出处。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
     <nav aria-label="管理导航">
       <a href="/settings">账号设置</a>
       <a href="/automations">自动化</a>
@@ -71,6 +71,16 @@
         </div>
       </fieldset>
     </form>
+    <section id="homepage-panel" hidden>
+      <h2>公开主页</h2>
+      <p id="homepage-note" class="note">默认仅工作区成员可见。发布后，拿到链接的人可以看到名称和简介，看不到说明，也不能在此页面对话。</p>
+      <p id="homepage-status" class="note"></p>
+      <p id="homepage-link-wrap" hidden>链接：<code id="homepage-link"></code></p>
+      <div class="actions">
+        <button type="button" id="publish-homepage">发布链接</button>
+        <button type="button" id="revoke-homepage">撤回链接</button>
+      </div>
+    </section>
     <section id="runtime-panel" hidden>
       <h2>运行时绑定</h2>
       <p id="runtime-note" class="note">可以把这个智能体绑定到工作区里的 FlyBot 容器。对话会优先发到该容器；没有可用容器时，才会用你自己已连接的机器。</p>

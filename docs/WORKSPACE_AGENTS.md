@@ -2,7 +2,7 @@
 
 This is the first OpenTeamily slice of [issue #6](https://github.com/openTeamily/openTeamily/issues/6): a workspace-scoped directory of FlyBot agents. It is self-written. It does not copy Teamily, FlyBot Project, Bot Social, or DS-Bot source.
 
-`/v1/workspaces/{workspace_id}/agents` is a management-directory API. It is not the runtime-key transport under `/v1/agent/*`. The management process does not run these agents. Mode switching (Auto / Instant / Agentic), public homepages, embed routes, and container execution are out of this slice because Teamily's create flow and mode differences have not been fully observed. Defaults below are OpenTeamily choices, not compared behavior.
+`/v1/workspaces/{workspace_id}/agents` is a management-directory API. It is not the runtime-key transport under `/v1/agent/*`. The management process does not run these agents. Mode switching (Auto / Instant / Agentic), embed routes, and inventing Teamily create-flow details are out of this slice because those differences have not been fully observed. Unlisted public homepages are documented in [AGENT_HOMEPAGES.md](AGENT_HOMEPAGES.md). Defaults below are OpenTeamily choices, not compared behavior.
 
 ## Routes
 
@@ -20,7 +20,7 @@ A same-origin page is served at `/agents`.
 
 ## Record shape and bounds
 
-Responses use `id`, `workspace_id`, `name`, `summary`, `instructions`, `revision`, `created`, `updated`, `created_by`, and `archived` (`0` or `1`). They never include tokens or secrets.
+Responses use `id`, `workspace_id`, `name`, `summary`, `instructions`, `revision`, `created`, `updated`, `created_by`, `archived` (`0` or `1`), and `homepage`. They never include tokens or secrets except the one-time homepage token documented in [AGENT_HOMEPAGES.md](AGENT_HOMEPAGES.md).
 
 - `name`: 1–80 Unicode characters after trim, no control characters. Names are unique per workspace after casefold, including archived records.
 - `summary`: at most 500 characters, no control characters.
@@ -38,7 +38,7 @@ The same owner workspace + idempotency key + payload returns the original record
 
 ## Explicitly not in this slice
 
-- Public or unlisted homepages, share links, and embeddable conversations.
+- Embeddable conversations. Public homepages and revocable share links are in [AGENT_HOMEPAGES.md](AGENT_HOMEPAGES.md).
 - Auto / Instant / Agentic or any other invented mode field.
 - Binding an agent record to a running container, model adapter switch, or automation run. Authorized user/agent conversations now live in [AGENT_CONVERSATIONS.md](AGENT_CONVERSATIONS.md) and reuse runtime infer tasks.
 - Teamily comparison or browser end-to-end acceptance. Issue #6 stays open.
