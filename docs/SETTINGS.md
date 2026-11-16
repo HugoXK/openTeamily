@@ -29,6 +29,12 @@ The capability areas (appearance, language basics, shortcuts, message folding an
 
 An additive `user_settings` table (`CREATE TABLE IF NOT EXISTS`) in the existing private management database. Schema `user_version` stays 1; existing v1 databases gain the table on next start. Stored documents are re-validated on read: unknown or invalid stored keys fall back to defaults rather than being returned.
 
+## Settings page (slice 2)
+
+The development server now also serves a same-origin page at `/settings` (assets `/settings/app.css` and `/settings/app.mjs`). It logs in through the existing auth API and reads/writes `/v1/settings` with CSRF and revision checks. Only the keys in the table above are shown; Teamily-only options such as appearance schedules, a separate chat language or automatic translation are not invented here.
+
+The page is not browser E2E evidence. Acceptance against Teamily's real settings pages remains [#14](https://github.com/openTeamily/openTeamily/issues/14).
+
 ## Not in this slice
 
-No web UI yet (no clickable shell is shipped), no keyboard handling, no translation catalogue, no runtime/instance propagation. Browser acceptance is not claimed.
+No chat shell, no keyboard handling in the chat input, no translation catalogue, no runtime/instance propagation. Browser acceptance is not claimed.
