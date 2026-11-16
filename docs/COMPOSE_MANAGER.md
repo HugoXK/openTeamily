@@ -124,10 +124,15 @@ clients cannot choose those paths. Request-selected mounts stay rejected.
 The files are written or refreshed before create, start or restart; when no
 key or server is configured the corresponding file is empty. The model API
 key and any Bot Social connector token are never placed in Compose
-environment, the image, or user or manager claim/observe JSON. Existing
-frozen `compose-*.json` files written before the Bot Social bind was added
-will fail the exact-content check (`manifest_changed`) until the operator
-recreates the instance so a new compose file is written. It enforces nonroot UID, no new
+environment, the image, or user or manager claim/observe JSON. A frozen `compose-*.json` file that differs from the current manifest only
+by missing the later, allowlisted Bot Social bind is upgraded in place: the
+manager rewrites that file and, on the next create/start, recreates the
+container with `--force-recreate` so the new bind attaches. The named volume
+`ot-<instance-id>` and existing secret files are never deleted; `down`,
+`volume rm`, and `-v` stay off the allowlist. Operators can preview or apply
+this with `python3 -m openteamily.manager --config … migrate-manifest --instance-id …`
+(add `--apply` to write). Any other compose drift still fails closed as
+`manifest_changed` and still does not touch the volume. It enforces nonroot UID, no new
 privileges, dropped capabilities, read-only rootfs, resource caps and bounded local
 logging. Existing container project/service/image, mount, privilege, user, namespace,
 network and published-port metadata are checked; existing volume Compose ownership
