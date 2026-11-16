@@ -19,6 +19,8 @@ Pins, hashes, and counts are in [migration-manifest.json](migration-manifest.jso
 
 OpenTeamily base: `main` `2cbd0c1c0845338ded1d9c9455a6c9c2c40a4d52`.
 
+FlyBot's bundled `ds-bot.pin.json` still pins DS-Bot `@2b10c70` / tree `5834c00d`. That SHA is no longer on upstream `main` after a history rewrite; `0f130e7` is the equivalent commit (same `ds-bot` tree). Verification fetches `2b10c70` by SHA or compares the tree, and does not adopt `v0.3.6`. See [ds-bot-pin-equivalence.json](ds-bot-pin-equivalence.json).
+
 ## Layout
 
 ```

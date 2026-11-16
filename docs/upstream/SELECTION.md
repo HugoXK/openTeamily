@@ -6,6 +6,8 @@ Pins: ThinkFlowLab/FlyBot `@e26895e737b1218875aafa1f74ab1d3464f287d2`,
 Birfy/bot-social `@8706824f53f6cce8212470bc6b442f7271cccd3e`.
 OpenTeamily base: `main` `@2cbd0c1c0845338ded1d9c9455a6c9c2c40a4d52`.
 
+`ds-bot.pin.json` still names Fei2411/DeepSeek-Bot `@2b10c70b614e969117b68ddc6fd14e68968272f2` with `ds-bot` tree `5834c00d9c21b972e4b32ad90489443da2a10324`. That commit is no longer on upstream DS-Bot `main` after a history rewrite; the equivalent commit is `0f130e7d134bf63e8988b2d53fd6846138ac3d73` (same tree). This import does **not** move the pin to upstream `v0.3.6` or import the `ds-bot/` tree. See [ds-bot-pin-equivalence.json](ds-bot-pin-equivalence.json).
+
 Selection rule: take only source, protocols, tests, and docs required for
 (1) a future FlyBot **runtime container** (`core/` + instance docker helpers)
 and (2) Bot Social **collaboration protocols** (`plugins/social` + the service).
@@ -24,7 +26,7 @@ Per-file hashes: [flybot-files.json](flybot-files.json),
 | `LICENSE`, `NOTICE` | Apache-2.0 obligations |
 | `README.md`, `README.zh.md` | Runtime overview |
 | `.gitignore`, `.dockerignore` | Package-tree ignore rules |
-| `ds-bot.pin.json` | Pin record for how `core/` was produced (the `ds-bot/` tree is not imported) |
+| `ds-bot.pin.json` | Pin record for how `core/` was produced: DS-Bot `2b10c70` / tree `5834c00d`. After upstream history rewrite, `2b10c70` is not on `main`; equivalent commit `0f130e7` has the same `ds-bot` tree. The `ds-bot/` tree is not imported, and this pin is not retargeted to `v0.3.6`. See [ds-bot-pin-equivalence.json](ds-bot-pin-equivalence.json). |
 | `core/` package sources, types, manifests, `client.js`, tests except `install-doctor.test.js` | The actual FlyBot runtime |
 | `core/scripts/build-client.mjs`, `lint.mjs` | Rebuild and lint the imported package |
 | `core/dev/harness/package.json` | Records the DSH version tests would need (DSH itself not imported) |

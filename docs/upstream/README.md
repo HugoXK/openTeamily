@@ -9,6 +9,7 @@ This is a **needed-set** import, not a whole-repository copy.
 - [OPTIONAL-PLUGINS.md](OPTIONAL-PLUGINS.md) — Project, Timeline, Tree, Workflow path
 - [INTEGRATION.md](INTEGRATION.md) — management-server wiring, not done yet
 - [GAPS.md](GAPS.md) — Docker, DSH, and product gaps
+- [ds-bot-pin-equivalence.json](ds-bot-pin-equivalence.json) — FlyBot's DS-Bot `@2b10c70` pin, tree `5834c00d`, and equivalent post-rewrite commit `0f130e7` (not `v0.3.6`)
 - [migration-manifest.json](migration-manifest.json) — counts, pins, exclusion lists
 - [flybot-files.json](flybot-files.json) / [bot-social-files.json](bot-social-files.json) — per-file sha256 and git blob
 

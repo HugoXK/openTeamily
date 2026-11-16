@@ -94,6 +94,31 @@ class UpstreamMigrationTests(unittest.TestCase):
             self.verify.check_clean_tree(base, clean_errors)
             self.assertTrue(any(".env" in item for item in clean_errors), clean_errors)
 
+    def test_ds_bot_pin_equivalence_is_recorded(self):
+        pin = (ROOT / "runtime/flybot/ds-bot.pin.json")
+        equiv_path = (ROOT / "docs/upstream/ds-bot-pin-equivalence.json")
+        self.assertTrue(pin.is_file())
+        self.assertTrue(equiv_path.is_file())
+        import json
+        recorded = json.loads(pin.read_text(encoding="utf-8"))
+        equiv = json.loads(equiv_path.read_text(encoding="utf-8"))
+        self.assertEqual(recorded["commit"], self.verify.DS_BOT_PINNED_COMMIT)
+        self.assertEqual(recorded["tree"], self.verify.DS_BOT_TREE)
+        self.assertEqual(equiv["pinned_commit"], self.verify.DS_BOT_PINNED_COMMIT)
+        self.assertEqual(equiv["ds_bot_tree"], self.verify.DS_BOT_TREE)
+        self.assertEqual(
+            equiv["equivalent_commit_after_rewrite"]["sha"],
+            self.verify.DS_BOT_EQUIVALENT_COMMIT,
+        )
+        self.assertNotIn(recorded["commit"], self.verify.DS_BOT_FORBIDDEN_TARGETS)
+        self.assertNotEqual(recorded["commit"], "a66cc737cfb6c3d8a2597e748cded6cab1206dd3")
+        errors = []
+        self.verify.check_ds_bot_pin(ROOT, errors)
+        self.assertEqual(errors, [])
+        origin = (ROOT / "runtime/flybot/ORIGIN.md").read_text(encoding="utf-8")
+        self.assertIn(self.verify.DS_BOT_EQUIVALENT_COMMIT, origin)
+        self.assertIn("v0.3.6", origin)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1157,5 +1157,13 @@
     "trademark_assets": "FlyBot docs/images/* and wechat QR; Bot Social docs/assets/*."
   },
   "selection": "minimal-needed-set",
-  "selection_doc": "docs/upstream/SELECTION.md"
+  "selection_doc": "docs/upstream/SELECTION.md",
+  "ds_bot_pin": {
+    "source_file": "runtime/flybot/ds-bot.pin.json",
+    "equivalence_record": "docs/upstream/ds-bot-pin-equivalence.json",
+    "pinned_commit": "2b10c70b614e969117b68ddc6fd14e68968272f2",
+    "ds_bot_tree": "5834c00d9c21b972e4b32ad90489443da2a10324",
+    "equivalent_commit_after_rewrite": "0f130e7d134bf63e8988b2d53fd6846138ac3d73",
+    "do_not_retarget_to": "upstream DS-Bot main / v0.3.6"
+  }
 }

@@ -1,0 +1,21 @@
+{
+  "flybot_commit": "e26895e737b1218875aafa1f74ab1d3464f287d2",
+  "recorded_in": "runtime/flybot/ds-bot.pin.json",
+  "upstream_repo": "https://github.com/Fei2411/DS-Bot",
+  "also_referenced_as": "Fei2411/DeepSeek-Bot (GitHub resolves to Fei2411/DS-Bot)",
+  "pinned_commit": "2b10c70b614e969117b68ddc6fd14e68968272f2",
+  "pinned_commit_date_utc": "2026-10-14T05:36:14Z",
+  "ds_bot_tree": "5834c00d9c21b972e4b32ad90489443da2a10324",
+  "note": "The commit recorded in FlyBot's ds-bot.pin.json (2b10c70) is no longer on upstream DS-Bot main after a history rewrite. It remains fetchable by SHA. The equivalent post-rewrite commit is 0f130e7; both have the same ds-bot git tree 5834c00d. Do not retarget this pin to upstream main or v0.3.6. The ds-bot/ tree itself is not imported in this snapshot.",
+  "equivalent_commit_after_rewrite": {
+    "sha": "0f130e7d134bf63e8988b2d53fd6846138ac3d73",
+    "date_utc": "2026-10-14T05:36:14Z",
+    "ds_bot_tree": "5834c00d9c21b972e4b32ad90489443da2a10324",
+    "subject": "Merge pull request #162 from Fei2411/fix/dsh-version-badge"
+  },
+  "not_the_pin": {
+    "description": "Upstream default-branch releases such as v0.3.6 must not replace this pin.",
+    "example_main_commit_at_recording": "a66cc737cfb6c3d8a2597e748cded6cab1206dd3",
+    "example_tag": "v0.3.6"
+  }
+}

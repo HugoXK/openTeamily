@@ -14,11 +14,14 @@ Checks, all offline unless --fetch is passed:
   hash to the upstream pins)
 
 --fetch (optional) downloads the public GitHub tarballs for the pinned
-commits and re-checks included file hashes. It is not required for CI.
+FlyBot and Bot Social commits and re-checks included file hashes. It also
+fetches DS-Bot commit 2b10c70 by SHA (falling back to equivalent commit
+0f130e7) and compares the `ds-bot` tree 5834c00d. It is not required for CI.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import hashlib
 import json
@@ -34,6 +37,20 @@ AUDIT_PINS = {
     "runtime/flybot/NOTICE": "94f05bc42e635dee7082583c010dc13fb084b1ed9cdcfed6b9e5246c763027ca",
     "services/bot-social/LICENSE": "6f5b168b7397507ec7854d3787079ae4185826ea0a9ade831a269fabe3e737c3",
 }
+
+# FlyBot's ds-bot.pin.json still names 2b10c70. After a DS-Bot history rewrite
+# that commit is not on upstream main; 0f130e7 is the equivalent commit and
+# both have ds-bot tree 5834c00d. Do not retarget to v0.3.6.
+DS_BOT_EQUIVALENCE_PATH = "docs/upstream/ds-bot-pin-equivalence.json"
+DS_BOT_PIN_PATH = "runtime/flybot/ds-bot.pin.json"
+DS_BOT_PINNED_COMMIT = "2b10c70b614e969117b68ddc6fd14e68968272f2"
+DS_BOT_TREE = "5834c00d9c21b972e4b32ad90489443da2a10324"
+DS_BOT_EQUIVALENT_COMMIT = "0f130e7d134bf63e8988b2d53fd6846138ac3d73"
+DS_BOT_REPO = "Fei2411/DS-Bot"
+DS_BOT_FORBIDDEN_TARGETS = frozenset({
+    "a66cc737cfb6c3d8a2597e748cded6cab1206dd3",  # upstream main / v0.3.6 at recording
+    "v0.3.6",
+})
 
 FORBIDDEN_PATH_SUBSTRINGS = (
     "plugins/project/",
@@ -235,6 +252,97 @@ def check_clean_tree(root: Path, errors: list[str]) -> None:
                 break
 
 
+
+def _github_json(url: str):
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "openTeamily-upstream-migration-verifier",
+    }
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _ds_bot_tree_sha_from_commit(commit: str) -> str:
+    url = f"https://api.github.com/repos/{DS_BOT_REPO}/git/trees/{commit}"
+    payload = _github_json(url)
+    for entry in payload.get("tree", []):
+        if entry.get("path") == "ds-bot" and entry.get("type") == "tree":
+            return entry["sha"]
+    raise KeyError(f"no ds-bot tree entry at {DS_BOT_REPO}@{commit}")
+
+
+def check_ds_bot_pin(root: Path, errors: list[str]) -> dict | None:
+    pin_path = root / DS_BOT_PIN_PATH
+    equiv_path = root / DS_BOT_EQUIVALENCE_PATH
+    if not pin_path.is_file():
+        errors.append(f"missing {DS_BOT_PIN_PATH}")
+        return None
+    if not equiv_path.is_file():
+        errors.append(f"missing {DS_BOT_EQUIVALENCE_PATH}")
+        return None
+    pin = load_json(pin_path)
+    equiv = load_json(equiv_path)
+    if pin.get("commit") != DS_BOT_PINNED_COMMIT:
+        errors.append(
+            f"{DS_BOT_PIN_PATH} commit {pin.get('commit')} != pinned {DS_BOT_PINNED_COMMIT} "
+            "(do not retarget to upstream main or v0.3.6)"
+        )
+    if pin.get("tree") != DS_BOT_TREE:
+        errors.append(f"{DS_BOT_PIN_PATH} tree {pin.get('tree')} != {DS_BOT_TREE}")
+    if equiv.get("pinned_commit") != DS_BOT_PINNED_COMMIT:
+        errors.append(f"{DS_BOT_EQUIVALENCE_PATH} pinned_commit mismatch")
+    if equiv.get("ds_bot_tree") != DS_BOT_TREE:
+        errors.append(f"{DS_BOT_EQUIVALENCE_PATH} ds_bot_tree mismatch")
+    equivalent = (equiv.get("equivalent_commit_after_rewrite") or {}).get("sha")
+    if equivalent != DS_BOT_EQUIVALENT_COMMIT:
+        errors.append(
+            f"{DS_BOT_EQUIVALENCE_PATH} equivalent commit {equivalent} != {DS_BOT_EQUIVALENT_COMMIT}"
+        )
+    if equivalent and equivalent in DS_BOT_FORBIDDEN_TARGETS:
+        errors.append("equivalent commit must not be upstream v0.3.6 / main")
+    if pin.get("commit") in DS_BOT_FORBIDDEN_TARGETS:
+        errors.append(f"{DS_BOT_PIN_PATH} must not be retargeted to v0.3.6")
+    return equiv
+
+
+def fetch_ds_bot_equivalence(errors: list[str]) -> None:
+    """Fetch 2b10c70 by SHA, or compare the equivalent 0f130e7 tree."""
+    pinned_tree = None
+    equivalent_tree = None
+    try:
+        pinned_tree = _ds_bot_tree_sha_from_commit(DS_BOT_PINNED_COMMIT)
+    except Exception as exc:  # noqa: BLE001 — report and fall back to tree compare
+        errors.append(
+            f"direct SHA fetch of {DS_BOT_REPO}@{DS_BOT_PINNED_COMMIT} failed: {exc}; "
+            f"falling back to equivalent commit {DS_BOT_EQUIVALENT_COMMIT}"
+        )
+    try:
+        equivalent_tree = _ds_bot_tree_sha_from_commit(DS_BOT_EQUIVALENT_COMMIT)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(
+            f"fetch of equivalent {DS_BOT_REPO}@{DS_BOT_EQUIVALENT_COMMIT} failed: {exc}"
+        )
+        return
+    if equivalent_tree != DS_BOT_TREE:
+        errors.append(
+            f"equivalent commit {DS_BOT_EQUIVALENT_COMMIT} ds-bot tree "
+            f"{equivalent_tree} != {DS_BOT_TREE}"
+        )
+    if pinned_tree is not None and pinned_tree != DS_BOT_TREE:
+        errors.append(
+            f"pinned commit {DS_BOT_PINNED_COMMIT} ds-bot tree "
+            f"{pinned_tree} != {DS_BOT_TREE}"
+        )
+    if pinned_tree is not None and equivalent_tree is not None and pinned_tree != equivalent_tree:
+        errors.append(
+            f"2b10c70 tree {pinned_tree} != equivalent 0f130e7 tree {equivalent_tree}"
+        )
+
+
 def check_origin_files(root: Path, errors: list[str]) -> None:
     for path, needle in (
         (root / "runtime/flybot/ORIGIN.md", "e26895e737b1218875aafa1f74ab1d3464f287d2"),
@@ -242,6 +350,9 @@ def check_origin_files(root: Path, errors: list[str]) -> None:
         (root / "services/bot-social/ORIGIN.md", "8706824f53f6cce8212470bc6b442f7271cccd3e"),
         (root / "services/bot-social/OPENTEAMILY.md", "optional"),
         (root / "docs/LICENSING.md", "Apache License 2.0"),
+        (root / "runtime/flybot/ORIGIN.md", "0f130e7d134bf63e8988b2d53fd6846138ac3d73"),
+        (root / "runtime/flybot/ORIGIN.md", "5834c00d9c21b972e4b32ad90489443da2a10324"),
+        (root / "docs/upstream/SELECTION.md", "0f130e7d134bf63e8988b2d53fd6846138ac3d73"),
     ):
         if not path.is_file():
             errors.append(f"missing {path.relative_to(root).as_posix()}")
@@ -309,12 +420,14 @@ def verify(root: Path, fetch: bool = False) -> list[str]:
     check_exclusions(root, manifest, errors)
     check_clean_tree(root, errors)
     check_origin_files(root, errors)
+    check_ds_bot_pin(root, errors)
     if fetch:
         fetch_and_compare(
             manifest,
             {"runtime/flybot": flybot_files, "services/bot-social": social_files},
             errors,
         )
+        fetch_ds_bot_equivalence(errors)
     return errors
 
 
@@ -329,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--fetch",
         action="store_true",
-        help="re-download public GitHub tarballs and compare included hashes",
+        help="re-download public GitHub tarballs and fetch DS-Bot 2b10c70 (or equivalent 0f130e7) by SHA/tree",
     )
     args = parser.parse_args(argv)
     root = args.root.resolve() if args.root else repo_root()
