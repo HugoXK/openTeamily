@@ -19,6 +19,6 @@
     "client": {
       "platform": "web"
     },
-    "bundle": {}
+    "bundle": { "patch": "./cordis.patch.yml" }
   }
 }

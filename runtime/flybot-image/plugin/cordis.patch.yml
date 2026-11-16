@@ -1,0 +1,3 @@
+# The wrapper's apply() already boots createRuntime and the social façade.
+# This file exists because dsh.bundle.patch must be a path; it adds no services.
+[]

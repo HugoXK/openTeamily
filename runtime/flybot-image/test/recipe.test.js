@@ -46,6 +46,7 @@ test('wrapper plugin boots upstream createRuntime and the social façade once', 
   const manifest = JSON.parse(read('plugin/package.json'))
   assert.equal(manifest.name, '@openteamily/flybot-runtime')
   assert.equal(manifest.license, 'MIT')
+  assert.equal(manifest.dsh?.bundle?.patch, './cordis.patch.yml')
 })
 
 test('recipe does not edit the vendored upstream tree', () => {
