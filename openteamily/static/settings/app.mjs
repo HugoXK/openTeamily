@@ -76,6 +76,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       loginPanel.hidden = false;
       settingsPanel.hidden = true;
       show('', '');
+      await renderProviders();
       return;
     }
     if (session.status !== 200) {
@@ -94,6 +95,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     revision = settings.body.settings.revision;
     fillForm(form, current);
     applyTheme(document, current);
+  }
+
+  async function renderProviders() {
+    const box = document.getElementById('oidc-providers');
+    if (!box) return;
+    box.textContent = '';
+    const listed = await request('GET', '/v1/auth/providers');
+    if (listed.status !== 200 || !listed.body.items || !listed.body.items.length) return;
+    for (const item of listed.body.items) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = '使用 ' + item.label + ' 登录';
+      button.dataset.provider = item.id;
+      button.addEventListener('click', async () => {
+        const started = await request('POST', '/v1/auth/oidc/start', {provider: item.id});
+        if (started.status !== 200 || !started.body.authorization_url) {
+          show('error', messageFor(started.body.error, '无法开始第三方登录。'));
+          return;
+        }
+        globalThis.location.assign(started.body.authorization_url);
+      });
+      box.appendChild(button);
+    }
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {

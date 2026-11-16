@@ -6,6 +6,7 @@ from .app import App, Config
 from .store import Store
 from .lifecycle import Lifecycle, RuntimePolicy
 from .operator_config import load_manager_auth
+from .oidc import load_oidc_providers
 from .settings_page import SettingsPage
 
 
@@ -29,6 +30,7 @@ def main():
     parser.add_argument('--simulation', action='store_true', help='Enable explicitly labelled simulation lifecycle APIs; never runs Docker')
     parser.add_argument('--compose-image', help='Explicit Compose execution profile; operator-supplied image@sha256 digest, never pulled by Web')
     parser.add_argument('--manager-grants', help='Operator-owned private JSON file containing manager credential digests and explicit instance grants')
+    parser.add_argument('--oidc-providers', help='Operator-owned private JSON file of OIDC/OAuth client credentials; secrets are never logged')
     args = parser.parse_args()
     if args.simulation and args.compose_image:
         parser.error('Choose simulation OR explicit Compose execution')
@@ -41,8 +43,9 @@ def main():
         policy = RuntimePolicy(image_ref=args.compose_image, profile='local-compose', backend_mode='compose') if args.compose_image else RuntimePolicy()
         lifecycle = Lifecycle(store, policy) if args.simulation or args.compose_image else None
         manager_auth = load_manager_auth(args.manager_grants) if args.manager_grants else None
+        oidc_registry = load_oidc_providers(args.oidc_providers) if args.oidc_providers else None
         app = App(store, Config(origin=args.origin, insecure_local=args.insecure_local,
-                                allow_registration=args.open_registration), lifecycle=lifecycle, manager_auth=manager_auth)
+                                allow_registration=args.open_registration), lifecycle=lifecycle, manager_auth=manager_auth, oidc_registry=oidc_registry)
     except (OSError, ValueError, TypeError):
         parser.error('Cannot initialize private storage or origin configuration')
     app = SettingsPage(app)

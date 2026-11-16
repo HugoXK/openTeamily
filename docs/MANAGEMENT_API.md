@@ -31,6 +31,8 @@ All responses are JSON and no-store. There is no CORS support. Errors are `{erro
 |---|---|---|
 | POST | `/v1/auth/register` | `{username,password}`; creates a salted password hash and a new session, if registration is enabled |
 | POST | `/v1/auth/login` | Same fields; new session, generic refusal for nonexistent/wrong credentials |
+| GET | `/v1/auth/providers` | Enabled third-party login providers (no secrets); see [OIDC.md](OIDC.md) |
+| GET/POST | `/v1/auth/oidc/*` | OAuth/OIDC start, callback and account linking; see [OIDC.md](OIDC.md) |
 | GET | `/v1/auth/session` | Current user and expiry only; no session/CSRF secret in JSON |
 | POST | `/v1/auth/logout` | `{}`; valid Origin and CSRF required; revokes the server-side session and clears cookies |
 | POST | `/v1/workspaces` | `{name}`; owner is server-derived, never caller-selected; requires `Idempotency-Key` |
