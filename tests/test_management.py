@@ -319,6 +319,14 @@ class ManagementTests(unittest.TestCase):
             Config('http://127.0.0.1:8080')
         config = Config('http://127.0.0.1:8080', insecure_local=True)
         self.assertTrue(config.cookie_names[0].startswith('ot_dev_'))
+        with self.assertRaises(ValueError):
+            Config('http://172.18.0.1:8080')
+        with self.assertRaises(ValueError):
+            Config('http://8.8.8.8:8080', insecure_local=True)
+        with self.assertRaises(ValueError):
+            Config('http://0.0.0.0:8080', insecure_local=True)
+        private = Config('http://172.18.0.1:8080', insecure_local=True)
+        self.assertTrue(private.cookie_names[0].startswith('ot_dev_'))
 
     def test_storage_rejects_symlinks_public_permissions_and_unknown_schema(self):
         root = Path(self.temp.name)

@@ -62,10 +62,10 @@ class Config:
                 or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment
                 or parsed.netloc != parsed.netloc.lower()):
             raise ValueError('Use an exact lowercase HTTP(S) origin without path or credentials')
-        if parsed.scheme != 'https' and not (self.insecure_local and parsed.hostname in ('127.0.0.1', 'localhost', '::1')):
-            raise ValueError('HTTP is allowed only for explicit insecure loopback development')
-        if self.insecure_local and (parsed.scheme != 'http' or parsed.hostname not in ('127.0.0.1', 'localhost', '::1')):
-            raise ValueError('Insecure cookies are restricted to HTTP loopback development')
+        if parsed.scheme != 'https' and not (self.insecure_local and model_api.insecure_http_allowed(parsed.hostname)):
+            raise ValueError('HTTP is allowed only for explicit insecure loopback or private-address development')
+        if self.insecure_local and (parsed.scheme != 'http' or not model_api.insecure_http_allowed(parsed.hostname)):
+            raise ValueError('Insecure cookies are restricted to HTTP loopback or private-address development')
         for name in self.__dataclass_fields__:
             if name not in ('origin', 'insecure_local', 'allow_registration'):
                 value = getattr(self, name)

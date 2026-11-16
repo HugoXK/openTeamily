@@ -130,9 +130,11 @@ class ModelAPITests(unittest.TestCase):
     def test_requires_session_csrf_and_rejects_bad_urls(self):
         self.assertEqual(Client(self.app).call('GET', '/v1/model-api')['status'], 401)
         self.assertEqual(self.save(self.alice, 0, FIELDS, csrf=False)['status'], 403)
-        for url in ('http://example.com/v1', 'https://user:pass@example.com/v1', 'file:///etc/passwd', 'javascript:alert(1)'):
+        for url in ('http://example.com/v1', 'http://8.8.8.8/v1', 'https://user:pass@example.com/v1', 'file:///etc/passwd', 'javascript:alert(1)'):
             bad = dict(FIELDS, base_url=url)
             self.assertEqual(self.save(self.alice, 0, bad)['status'], 400, url)
+        private = self.save(self.alice, 0, dict(FIELDS, base_url='http://172.18.0.1:8080/v1'))
+        self.assertEqual(private['status'], 200, private)
 
     def test_existing_v1_database_gains_table_without_version_bump(self):
         with sqlite3.connect(self.path / 'management.sqlite3') as db:
