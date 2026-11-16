@@ -231,6 +231,40 @@ def compose_container_id(iid, secrets):
     return ids[0]
 
 
+def diagnose_container(cid, iid, image_ref, secrets):
+    raw = docker(['inspect', cid], allow_failure=True, secrets=secrets)
+    if raw.returncode != 0:
+        print(redact('compose inspect diagnosis failed: %s %s' % (raw.stdout, raw.stderr), secrets), file=sys.stderr)
+        return
+    data = json.loads(raw.stdout)[0]
+    host, config, mounts, state = data.get('HostConfig') or {}, data.get('Config') or {}, data.get('Mounts') or [], data.get('State') or {}
+    summary = {
+        'Privileged': host.get('Privileged'),
+        'ReadonlyRootfs': host.get('ReadonlyRootfs'),
+        'User': config.get('User'),
+        'CapDrop': host.get('CapDrop'),
+        'CapAdd': host.get('CapAdd'),
+        'Devices': host.get('Devices'),
+        'PidMode': host.get('PidMode'),
+        'IpcMode': host.get('IpcMode'),
+        'NetworkMode': host.get('NetworkMode'),
+        'expectedNetwork': 'ot-%s_default' % iid,
+        'SecurityOpt': host.get('SecurityOpt'),
+        'PortBindings': host.get('PortBindings'),
+        'Binds': host.get('Binds'),
+        'Image': config.get('Image'),
+        'expectedImage': image_ref,
+        'Status': state.get('Status'),
+        'Restarting': state.get('Restarting'),
+        'Mounts': [
+            {'Type': item.get('Type'), 'Destination': item.get('Destination'), 'RW': item.get('RW'),
+             'Name': item.get('Name'), 'Propagation': item.get('Propagation')}
+            for item in mounts
+        ],
+    }
+    print('compose inspect diagnosis: ' + redact(json.dumps(summary, default=str), secrets), file=sys.stderr)
+
+
 def main(argv):
     if len(argv) != 2:
         print('usage: python3 runtime/flybot-image/test/container-compose-chat.py <image>', file=sys.stderr)
@@ -362,8 +396,12 @@ def main(argv):
         worker = ManagerWorker(client, registry, engine)
 
         created = worker.run_once(iid)
-        require(created.get('status') == 'observed' and created.get('observed') == 'stopped',
-                'compose create failed: %r' % created)
+        if created.get('status') != 'observed' or created.get('observed') != 'stopped':
+            try:
+                diagnose_container(compose_container_id(iid, secrets), iid, image_ref, secrets)
+            except Exception as error:
+                print(redact('compose inspect diagnosis unavailable: %s' % error, secrets), file=sys.stderr)
+            raise RuntimeError(redact('compose create failed: %r' % created, secrets))
         gateway, network = network_gateway(iid, secrets)
         container_origin = 'http://%s:%s' % (gateway, mgmt_port)
         gateway_httpd = make_server(gateway, mgmt_port, app, handler_class=QuietHandler, server_class=ThreadedWSGIServer)
