@@ -8,7 +8,8 @@
   "main": "index.js",
   "exports": {
     ".": "./index.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./client": "../../flybot-web-slots/client.js"
   },
   "keywords": [
     "dsh-plugin",
@@ -19,6 +20,8 @@
     "client": {
       "platform": "web"
     },
-    "bundle": { "patch": "./cordis.patch.yml" }
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }
