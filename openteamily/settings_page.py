@@ -32,10 +32,13 @@ class SettingsPage:
         '/agents': ('agents', 'index.html', 'text/html; charset=utf-8'),
         '/agents/app.mjs': ('agents', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/agents/app.css': ('agents', 'app.css', 'text/css; charset=utf-8'),
+        '/memory': ('memory', 'index.html', 'text/html; charset=utf-8'),
+        '/memory/app.mjs': ('memory', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/memory/app.css': ('memory', 'app.css', 'text/css; charset=utf-8'),
         '/install/flybot.sh': ('install', 'flybot.sh', 'text/plain; charset=utf-8'),
         '/install/flybot.ps1': ('install', 'flybot.ps1', 'text/plain; charset=utf-8'),
     }
-    PREFIXES = ('/settings', '/automations', '/team', '/members', '/runtimes', '/artifacts', '/agents', '/install')
+    PREFIXES = ('/settings', '/automations', '/team', '/members', '/runtimes', '/artifacts', '/agents', '/memory', '/install')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")
