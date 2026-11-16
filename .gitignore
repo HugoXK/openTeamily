@@ -6,3 +6,13 @@ node_modules/
 .DS_Store
 dist/
 coverage/
+
+__pycache__/
+*.py[cod]
+.state/
+*.sqlite3
+*.sqlite3-*
+.credentials
+*.tgz
+.pnpm-store/
+.npm/
