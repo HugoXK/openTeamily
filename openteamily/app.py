@@ -1873,8 +1873,8 @@ class App:
             self.reconcile_conversation(db, row, now)
             user_row = conversations.load_message(db, row['id'], prior['id'])
             assistant = db.execute(
-                'SELECT * FROM agent_messages WHERE conversation_id=? AND id>? AND role=? ORDER BY id LIMIT 1',
-                (row['id'], prior['id'], 'assistant'),
+                'SELECT * FROM agent_messages WHERE conversation_id=? AND seq>? AND role=? ORDER BY seq LIMIT 1',
+                (row['id'], prior['seq'], 'assistant'),
             ).fetchone()
             if assistant:
                 assistant = conversations.load_message(db, row['id'], assistant['id'])
