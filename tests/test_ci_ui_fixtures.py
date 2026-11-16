@@ -5,9 +5,10 @@ import unittest
 
 from openteamily.app import App, Config
 from openteamily.ci_ui_fixtures import (
-    AGENT_NAME, AUTOMATION_TITLE, BOARD_TITLE, CHAT_TITLE, CHAT_USER_TEXT, DOCUMENT_TITLE,
-    MEDIA_TITLE, MEMBER_USERNAME, RUNTIME_KEY_NAME, TEAM_NAME, TEAM_SLUG, USERNAME,
-    WEBSITE_TITLE, seed_fixtures, solid_png,
+    ACTION_DUE_AT, ACTION_NOTES, ACTION_TITLE, AGENT_NAME, AUTOMATION_TITLE, BOARD_TITLE,
+    CHAT_TITLE, CHAT_USER_TEXT, DOCUMENT_TITLE, MEDIA_TITLE, MEMBER_USERNAME, MEMORY_BODY,
+    MEMORY_TITLE, RUNTIME_KEY_NAME, TEAM_NAME, TEAM_SLUG, USERNAME, WEBSITE_TITLE,
+    seed_fixtures, solid_png,
 )
 from openteamily.store import Store
 from tests.test_management import Client, ORIGIN
@@ -62,6 +63,24 @@ class CiUiFixtureTests(unittest.TestCase):
         artifacts = client.call('GET', f'/v1/workspaces/{wid}/artifacts')
         titles = {row['title'] for row in artifacts['body']['items']}
         self.assertEqual(titles, {DOCUMENT_TITLE, WEBSITE_TITLE, MEDIA_TITLE, BOARD_TITLE})
+        pages = client.call('GET', f'/v1/workspaces/{wid}/memory')
+        self.assertEqual(pages['status'], 200, pages)
+        self.assertEqual([row['title'] for row in pages['body']['items']], [MEMORY_TITLE])
+        self.assertEqual(seed['memory_id'], pages['body']['items'][0]['id'])
+        seen_page = client.call('GET', f'/v1/workspaces/{wid}/memory/{seed["memory_id"]}')
+        self.assertEqual(seen_page['status'], 200, seen_page)
+        self.assertEqual(seen_page['body']['page']['body'], MEMORY_BODY)
+        actions = client.call('GET', f'/v1/workspaces/{wid}/memory/actions')
+        self.assertEqual(actions['status'], 200, actions)
+        self.assertEqual([row['title'] for row in actions['body']['items']], [ACTION_TITLE])
+        self.assertEqual(seed['action_id'], actions['body']['items'][0]['id'])
+        self.assertEqual(actions['body']['items'][0]['memory_page_title'], MEMORY_TITLE)
+        seen_action = client.call('GET', f'/v1/workspaces/{wid}/memory/actions/{seed["action_id"]}')
+        self.assertEqual(seen_action['status'], 200, seen_action)
+        self.assertEqual(seen_action['body']['action']['notes'], ACTION_NOTES)
+        self.assertEqual(seen_action['body']['action']['status'], 'open')
+        self.assertEqual(seen_action['body']['action']['due_at'], ACTION_DUE_AT)
+        self.assertEqual(seen_action['body']['action']['memory_page_id'], seed['memory_id'])
         keys = client.call('GET', '/v1/runtime-keys')
         self.assertEqual(keys['status'], 200)
         self.assertEqual(keys['body']['items'][0]['name'], RUNTIME_KEY_NAME)

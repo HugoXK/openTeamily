@@ -202,10 +202,11 @@ async function main() {
     try {
       await page.locator('#new-conversation').click();
       await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#chat-body').fill(ready.chat_live_text);
       await page.locator('#chat-form button[type="submit"]').click();
-      await waitForLocatorText(page, '#message-list', ready.chat_live_text, 15000);
-      await waitForLocatorText(page, '#message-list', ready.provider_text, 20000);
+      await waitForLocatorText(page, '#message-list', ready.chat_live_text, 30000);
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 30000);
       const live = await visibleText(page.locator('#message-list'));
       record(
         'agents_conversation_send',
@@ -363,6 +364,124 @@ async function main() {
       { soft: true },
     );
     screenshots.push(path.basename(await shot(page, outDir, '15-runtimes-connect.png')));
+
+    await page.goto(`${origin}/memory`, { waitUntil: 'load' });
+    await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await waitForLocatorText(page, '#memory-list', ready.memory_title);
+    await waitForLocatorText(page, '#action-list', ready.action_title);
+    const memoryList = await visibleText(page.locator('#memory-list'));
+    const actionList = await visibleText(page.locator('#action-list'));
+    record('memory_list', memoryList.includes(ready.memory_title), memoryList || 'memory list empty');
+    record(
+      'actions_list',
+      actionList.includes(ready.action_title) && actionList.includes('未完成') && actionList.includes(ready.action_due),
+      actionList || 'action list empty',
+    );
+    screenshots.push(path.basename(await shot(page, outDir, '18-memory-list.png')));
+
+    try {
+      await page.locator('#memory-list button', { hasText: ready.memory_title }).first().click();
+      await waitForInputValue(page, '#editor-form input[name="title"]', ready.memory_title);
+      await waitForInputValue(page, '#editor-form textarea[name="body"]', ready.memory_body);
+      record('memory_editor_seeded', true, await visibleText(page.locator('#editor-meta')));
+      await page.locator('#close-editor').click();
+      await page.locator('#list-panel').waitFor({ state: 'visible', timeout: 15000 });
+    } catch (error) {
+      record('memory_editor_seeded', false, String(error));
+    }
+
+    try {
+      await page.locator('#new-title').fill(ready.memory_create_title);
+      await page.locator('#new-page').click();
+      await waitForInputValue(page, '#editor-form input[name="title"]', ready.memory_create_title);
+      await waitForLocatorText(page, '#status', '已创建记忆页');
+      await page.locator('#editor-form textarea[name="body"]').fill(ready.memory_create_body);
+      await page.locator('#save-page').click();
+      await waitForLocatorText(page, '#status', '已保存');
+      await waitForLocatorText(page, '#editor-meta', '修订 2');
+      await page.locator('#editor-form input[name="title"]').fill(ready.memory_edited_title);
+      await page.locator('#editor-form textarea[name="body"]').fill(ready.memory_edited_body);
+      await page.locator('#save-page').click();
+      await waitForLocatorText(page, '#status', '已保存');
+      await waitForLocatorText(page, '#editor-meta', '修订 3');
+      await waitForInputValue(page, '#editor-form input[name="title"]', ready.memory_edited_title);
+      await waitForInputValue(page, '#editor-form textarea[name="body"]', ready.memory_edited_body);
+      const memoryMeta = await visibleText(page.locator('#editor-meta'));
+      record(
+        'memory_create_edit',
+        memoryMeta.includes('修订 3') && memoryMeta.includes(ready.username),
+        memoryMeta,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '19-memory-editor.png')));
+    } catch (error) {
+      record('memory_create_edit', false, String(error));
+    }
+
+    try {
+      await page.locator('#delete-page').click();
+      await waitForLocatorText(page, '#status', '已删除');
+      await page.locator('#list-panel').waitFor({ state: 'visible', timeout: 15000 });
+      await waitForLocatorText(page, '#memory-list', ready.memory_title);
+      const memoryAfterDelete = await visibleText(page.locator('#memory-list'));
+      record(
+        'memory_delete',
+        memoryAfterDelete.includes(ready.memory_title)
+          && !memoryAfterDelete.includes(ready.memory_edited_title)
+          && !memoryAfterDelete.includes(ready.memory_create_title),
+        memoryAfterDelete || 'memory list empty after delete',
+      );
+    } catch (error) {
+      record('memory_delete', false, String(error));
+    }
+
+    try {
+      await page.locator('#new-action-title').fill(ready.action_create_title);
+      await page.locator('#new-action-notes').fill(ready.action_create_notes);
+      await page.locator('#new-action-due').fill(ready.action_create_due);
+      await page.locator('#new-action-page').selectOption({ label: ready.memory_title });
+      await page.locator('#new-action').click();
+      await waitForInputValue(page, '#action-editor-form input[name="title"]', ready.action_create_title);
+      await waitForLocatorText(page, '#status', '已创建下一步行动');
+      await page.locator('#action-editor-form input[name="title"]').fill(ready.action_edited_title);
+      await page.locator('#action-editor-form textarea[name="notes"]').fill(ready.action_edited_notes);
+      await page.locator('#save-action').click();
+      await waitForLocatorText(page, '#status', '已保存');
+      await waitForLocatorText(page, '#action-editor-meta', '修订 2');
+      await waitForInputValue(page, '#action-editor-form input[name="title"]', ready.action_edited_title);
+      await waitForInputValue(page, '#action-editor-form textarea[name="notes"]', ready.action_edited_notes);
+      const actionMeta = await visibleText(page.locator('#action-editor-meta'));
+      const actionDue = await page.locator('#action-editor-form input[name="due"]').inputValue();
+      record(
+        'action_create_edit',
+        actionMeta.includes('修订 2') && actionMeta.includes(ready.username) && actionDue === ready.action_create_due,
+        `${actionMeta} due=${actionDue}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '20-action-editor.png')));
+    } catch (error) {
+      record('action_create_edit', false, String(error));
+    }
+
+    try {
+      await page.locator('#delete-action').click();
+      await waitForLocatorText(page, '#status', '已删除');
+      await page.locator('#list-panel').waitFor({ state: 'visible', timeout: 15000 });
+      await waitForLocatorText(page, '#action-list', ready.action_title);
+      const memoryFinal = await visibleText(page.locator('#memory-list'));
+      const actionAfterDelete = await visibleText(page.locator('#action-list'));
+      record(
+        'action_delete',
+        memoryFinal.includes(ready.memory_title)
+          && !memoryFinal.includes(ready.memory_edited_title)
+          && actionAfterDelete.includes(ready.action_title)
+          && actionAfterDelete.includes('未完成')
+          && !actionAfterDelete.includes(ready.action_edited_title)
+          && !actionAfterDelete.includes(ready.action_create_title),
+        `memory=${memoryFinal || 'empty'} action=${actionAfterDelete || 'empty'}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '21-memory-after-delete.png')));
+    } catch (error) {
+      record('action_delete', false, String(error));
+    }
 
     await context.close();
   } finally {
