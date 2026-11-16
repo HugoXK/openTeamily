@@ -19,7 +19,14 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m unittest discover -s tests -v
+      - run: node --version
+      - run: node --test manager/compose-planner/compose-command-planner.test.js
+      - name: Python tests with explicit trusted runner Node
+        run: |
+          install -d -m 0700 "$RUNNER_TEMP/openteamily-planner-bin"
+          install -m 0500 "$(command -v node)" "$RUNNER_TEMP/openteamily-planner-bin/node"
+          export OPENTEAMILY_PLANNER_NODE="$RUNNER_TEMP/openteamily-planner-bin/node"
+          python -m unittest discover -s tests -v
       - run: python -m compileall -q openteamily tests
       - run: python -m openteamily.server --help
       - run: git diff --check

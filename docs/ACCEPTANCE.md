@@ -27,7 +27,9 @@ Preserve these fields even when empty, using `pending-verification` rather than 
 
 Do not place secrets, cookie values, personal data or access-bearing URLs into public evidence. A guide-only or unavailable gray rollout stays `pending-verification`; it is not evidence of absence or a parity pass. Independently verify negative/permission/error paths where possible and record differences instead of erasing them.
 
-## Current slice
+## PR16 foundation snapshot (not the later runtime follow-up)
+
+Current lifecycle implementation/gaps are separately recorded in [RUNTIME_IMPLEMENTATION.md](RUNTIME_IMPLEMENTATION.md). PR16 retains24 tests; the expanded branch adds simulation/manager/planner coverage, never real container or product parity acceptance.
 
 | Check | OpenTeamily evidence/status | Teamily evidence/status | Overall status |
 |---|---|---|---|

@@ -1,4 +1,6 @@
-# Management API — first implementation slice
+# Management API — PR16 foundation snapshot
+
+This document describes the frozen PR16 slice. The separate stacked lifecycle follow-up is documented in [RUNTIME_IMPLEMENTATION.md](RUNTIME_IMPLEMENTATION.md); statements below about absent lifecycle APIs refer to PR16, not that follow-up. Planner integration tests in the follow-up additionally require Node18+.
 
 Related: #2 (lifecycle MVP, **not completed**) and #1 (full parity). This PR is a real authentication/workspace API, not a schema-only mock, but it does **not** run or manage containers yet.
 

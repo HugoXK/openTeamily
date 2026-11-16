@@ -6,7 +6,7 @@ OpenTeamily is a project name, not a claim of affiliation with or endorsement by
 
 ## Status
 
-**First implementation slice (under review):** a runnable Python/SQLite authentication and owner-scoped workspace API. Runtime lifecycle/jobs/containers and browser workflows are **not** implemented yet. Older FlyBot tests, screenshots and PRs do not establish functionality in this repository. See [implemented routes, startup/test commands, security configuration and gaps](docs/MANAGEMENT_API.md).
+**First implementation slice (under review):** a runnable Python/SQLite authentication and owner-scoped workspace API. A stacked follow-up adds durable instance/jobs and explicit simulation; real runtime containers and browser workflows are **not** implemented yet. See [lifecycle scope and remaining gates](docs/RUNTIME_IMPLEMENTATION.md). Older FlyBot tests, screenshots and PRs do not establish functionality in this repository. See [implemented routes, startup/test commands, security configuration and gaps](docs/MANAGEMENT_API.md).
 
 ## Architecture
 
