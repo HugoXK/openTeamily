@@ -18,8 +18,8 @@ test('readKeyForm omits expiry when never is selected', () => {
 
 test('install commands use the current origin and FlyBot names', () => {
   const commands = installCommands('https://management.test/');
-  assert.match(commands.unix, /git clone https:\/\/github.com\/openTeamily\/openTeamily/);
-  assert.equal(commands.daemon, 'python3 -m openteamily.flybot daemon start --origin https://management.test --key-file ./runtime-key');
+  assert.match(commands.unix, /install\/flybot\.pyz/);
+  assert.equal(commands.daemon, 'python3 flybot.pyz daemon start --origin https://management.test --key-file ./runtime-key');
   assert.equal(commands.unix.includes('teamily.com'), false);
   assert.equal(commands.unix.includes('curl -fsSL'), false);
   assert.equal(listItemHasSecret({name: 'x', prefix: 'abcd1234'}), false);

@@ -1,12 +1,16 @@
 """FlyBot connection daemon for a self-hosted OpenTeamily server.
 
 Authenticate with a runtime key, register, heartbeat, and run allowlisted
-tasks (currently `echo` only). Payloads are never passed to a shell.
-Do not pipe install scripts into a shell; start this module explicitly:
+tasks: `echo` or `infer`. Infer uses a one-time model-access grant from the
+management server and an OpenAI-compatible provider URL. Payloads are never
+passed to a shell, and credentials are never logged.
+
+Start from a checkout, or from the downloaded zipapp:
 
   python3 -m openteamily.flybot daemon start --origin <origin> --key-file <path>
+  python3 flybot.pyz daemon start --origin <origin> --key-file <path>
 
-The key is never written to logs or traces. HTTP origins other than loopback
+Do not pipe install scripts into a shell. HTTP origins other than loopback
 are rejected; HTTPS is required for non-loopback hosts.
 """
 import argparse
@@ -20,8 +24,6 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
-
-from .runtime_connect import echo_result
 
 USER_AGENT = 'FlyBot-OpenTeamily-agent/1'
 
@@ -39,6 +41,18 @@ def valid_origin(value):
     parsed = urlsplit(value)
     if (parsed.scheme not in ('http', 'https') or not parsed.hostname
             or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment):
+        return False
+    if parsed.scheme == 'https':
+        return True
+    try:
+        return ipaddress.ip_address(parsed.hostname).is_loopback
+    except ValueError:
+        return parsed.hostname in ('localhost',)
+
+
+def valid_provider_url(value):
+    parsed = urlsplit(value)
+    if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
         return False
     if parsed.scheme == 'https':
         return True
@@ -89,16 +103,92 @@ def request(origin, method, path, token, body=None, timeout=10):
     return status, parsed if isinstance(parsed, dict) else {}
 
 
-def handle_task(task):
-    if not isinstance(task, dict) or task.get('kind') != 'echo':
+def completions_url(base):
+    base = (base or '').rstrip('/')
+    if base.endswith('/chat/completions'):
+        return base
+    return base + '/chat/completions'
+
+
+def infer_chat(model_api, prompt, timeout=30, opener=urlopen):
+    if not isinstance(model_api, dict):
+        raise AgentError(0, {'error': {'message': 'Model access was empty'}})
+    provider = model_api.get('provider')
+    base = model_api.get('base_url')
+    model = model_api.get('model')
+    key = model_api.get('api_key')
+    if provider not in ('openai', 'custom') or not valid_provider_url(base) or not model or not key:
+        raise AgentError(0, {'error': {'message': 'Model access is incomplete or not allowed'}})
+    payload = json.dumps({
+        'model': model,
+        'messages': [{'role': 'user', 'content': prompt}],
+        'max_tokens': 512,
+    }).encode()
+    headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + key,
+        'User-Agent': USER_AGENT,
+    }
+    req = Request(completions_url(base), data=payload, headers=headers, method='POST')
+    context = ssl.create_default_context() if urlsplit(base).scheme == 'https' else None
+    try:
+        with opener(req, timeout=timeout, context=context) as response:
+            raw = response.read(16384)
+    except TypeError:
+        # Test openers may not accept context=
+        with opener(req, timeout=timeout) as response:
+            raw = response.read(16384)
+    except HTTPError as error:
+        error.read()
+        raise AgentError(error.code, {'error': {'message': 'Model provider rejected the request'}}) from None
+    except URLError:
+        raise AgentError(0, {'error': {'message': 'Cannot reach the model provider'}}) from None
+    try:
+        parsed = json.loads(raw.decode('utf-8'))
+        text = parsed['choices'][0]['message']['content']
+        if not isinstance(text, str):
+            raise ValueError()
+    except (KeyError, IndexError, TypeError, ValueError, UnicodeError):
+        raise AgentError(0, {'error': {'message': 'Model provider returned an unexpected body'}}) from None
+    return text
+
+
+def echo_result(prompt):
+    return {'echo': prompt}
+
+
+def handle_task(task, origin=None, token=None, requester=request, inferer=infer_chat, infer_timeout=30):
+    if not isinstance(task, dict):
         return 'failed', {'error': 'unsupported task kind'}
+    kind = task.get('kind')
     prompt = task.get('prompt')
     if not isinstance(prompt, str):
         return 'failed', {'error': 'invalid prompt'}
-    return 'succeeded', echo_result(prompt)
+    if kind == 'echo':
+        return 'succeeded', echo_result(prompt)
+    if kind == 'infer':
+        if not origin or not token:
+            return 'failed', {'error': 'missing agent credentials'}
+        model_api = None
+        try:
+            access = requester(origin, 'POST', '/v1/agent/tasks/' + task['id'] + '/model-access', token, {})[1]
+            model_api = access.get('model_api') if isinstance(access, dict) else None
+            text = inferer(model_api, prompt, timeout=infer_timeout)
+            return 'succeeded', {
+                'text': text,
+                'model': model_api.get('model') if isinstance(model_api, dict) else None,
+                'source': model_api.get('source') if isinstance(model_api, dict) else None,
+            }
+        except AgentError as error:
+            return 'failed', {'error': str(error)}
+        finally:
+            if isinstance(model_api, dict):
+                model_api.pop('api_key', None)
+    return 'failed', {'error': 'unsupported task kind'}
 
 
-def run_cycle(origin, token, hostname, once=False, poll=1.0, sleeper=time.sleep, requester=request):
+def run_cycle(origin, token, hostname, once=False, poll=1.0, sleeper=time.sleep, requester=request, inferer=infer_chat, infer_timeout=30):
     status, connected = requester(origin, 'POST', '/v1/agent/connect', token, {'hostname': hostname})
     if status not in (200, 201):
         raise AgentError(status, connected)
@@ -109,10 +199,13 @@ def run_cycle(origin, token, hostname, once=False, poll=1.0, sleeper=time.sleep,
         items = listed.get('items') or []
         for task in items:
             claimed = requester(origin, 'POST', '/v1/agent/tasks/' + task['id'] + '/claim', token, {})[1]
-            outcome, result = handle_task(claimed.get('task') or task)
-            requester(origin, 'POST', '/v1/agent/tasks/' + task['id'] + '/result', token,
+            payload = claimed.get('task') or task
+            outcome, result = handle_task(
+                payload, origin=origin, token=token, requester=requester,
+                inferer=inferer, infer_timeout=infer_timeout)
+            requester(origin, 'POST', '/v1/agent/tasks/' + payload['id'] + '/result', token,
                       {'status': outcome, 'result': result})
-            processed.append(task['id'])
+            processed.append(payload['id'])
         if once:
             return connected.get('connection'), processed
         sleeper(poll)
@@ -133,22 +226,25 @@ def main(argv=None, stdout=None, stderr=None):
     start.add_argument('--hostname', default='flybot')
     start.add_argument('--once', action='store_true', help='Connect, drain queued tasks, and exit')
     start.add_argument('--poll', type=float, default=1.0)
+    start.add_argument('--infer-timeout', type=float, default=30)
     args = parser.parse_args(argv)
     if args.group == 'daemon' and args.action == 'start':
         if not valid_origin(args.origin):
             parser.error('Origin must be https, or http on a loopback address, without a path')
         if not 0.1 <= args.poll <= 60:
             parser.error('--poll must be between 0.1 and 60 seconds')
+        if not 1 <= args.infer_timeout <= 120:
+            parser.error('--infer-timeout must be between 1 and 120 seconds')
         try:
             token = read_key_file(args.key_file) if args.key_file else args.key
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError):
             print('Cannot read the runtime key', file=stderr)
             return 2
         try:
             connection, processed = run_cycle(
-                args.origin.rstrip('/'), token, args.hostname, once=True if args.once else False, poll=args.poll)
+                args.origin.rstrip('/'), token, args.hostname, once=bool(args.once),
+                poll=args.poll, infer_timeout=args.infer_timeout)
         except AgentError as error:
-            # Never print the key or Authorization header.
             print('FlyBot daemon: ' + str(error), file=stderr)
             return 1
         if args.once:

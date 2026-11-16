@@ -31,11 +31,16 @@ CREATE TABLE IF NOT EXISTS runtime_tasks (
  updated INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS runtime_task_connection ON runtime_tasks(connection_id, status, created, id);
 CREATE INDEX IF NOT EXISTS runtime_task_user ON runtime_tasks(user_id, created, id);
+CREATE TABLE IF NOT EXISTS runtime_task_meta (
+ task_id TEXT PRIMARY KEY REFERENCES runtime_tasks(id) ON DELETE CASCADE,
+ workspace_id TEXT,
+ deadline INTEGER NOT NULL,
+ access_issued INTEGER NOT NULL CHECK(access_issued IN (0,1)));
 '''
 
 HOST = re.compile(r'[A-Za-z0-9._-]{1,80}')
 PROMPT = re.compile(r'[^\x00]{1,4000}')
-KINDS = ('echo',)
+KINDS = ('echo', 'infer')
 STATUSES = ('queued', 'claimed', 'succeeded', 'failed')
 MAX_TASKS = 20
 KEY_AUTH = 'Runtime key not accepted'
@@ -62,14 +67,33 @@ def connection_view(row, now, stale):
     }
 
 
-def task_view(row):
+def _result(row):
+    if not row['result']:
+        return None
+    import json
+    try:
+        value = json.loads(row['result'])
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def load_meta(db, task_id):
+    return db.execute('SELECT * FROM runtime_task_meta WHERE task_id=?', (task_id,)).fetchone()
+
+
+def task_view(row, meta=None):
     data = {key: row[key] for key in (
         'id', 'connection_id', 'kind', 'prompt', 'status', 'created', 'updated')}
-    if row['result']:
-        import json
-        data['result'] = json.loads(row['result'])
-    else:
-        data['result'] = None
+    result = _result(row)
+    data['result'] = result
+    if result and result.get('cancelled'):
+        data['status'] = 'cancelled'
+    elif result and result.get('error') == 'timeout':
+        data['status'] = 'timeout'
+    if meta is not None:
+        data['workspace_id'] = meta['workspace_id']
+        data['deadline'] = meta['deadline']
     return data
 
 
@@ -168,7 +192,7 @@ def user_tasks(db, user_id, limit=50):
     ).fetchall()
 
 
-def create_task(db, user_id, connection_id, now, kind, prompt):
+def create_task(db, user_id, connection_id, now, kind, prompt, timeout, workspace_id=None):
     from uuid import uuid4
     count = db.execute(
         'SELECT COUNT(*) FROM runtime_tasks WHERE user_id=? AND status IN (?,?)',
@@ -180,6 +204,10 @@ def create_task(db, user_id, connection_id, now, kind, prompt):
     db.execute(
         'INSERT INTO runtime_tasks VALUES(?,?,?,?,?,?,NULL,?,?)',
         (task_id, user_id, connection_id, kind, prompt, 'queued', now, now),
+    )
+    db.execute(
+        'INSERT INTO runtime_task_meta VALUES(?,?,?,0)',
+        (task_id, workspace_id, now + timeout),
     )
     return db.execute('SELECT * FROM runtime_tasks WHERE id=?', (task_id,)).fetchone()
 
@@ -210,6 +238,9 @@ def claim_task(db, task, now):
 
 def complete_task(db, task, now, status, result):
     import json
+    current = _result(task)
+    if current and (current.get('cancelled') or current.get('error') == 'timeout'):
+        return None
     if task['status'] not in ('queued', 'claimed'):
         return None
     document = json.dumps(result, sort_keys=True, separators=(',', ':'))
@@ -224,3 +255,38 @@ def complete_task(db, task, now, status, result):
 
 def echo_result(prompt):
     return {'echo': prompt}
+
+
+def view_with_meta(db, row):
+    return task_view(row, load_meta(db, row['id']))
+
+
+def expire_task(db, task, now):
+    meta = load_meta(db, task['id'])
+    if meta is None or meta['deadline'] > now:
+        return task
+    if task['status'] not in ('queued', 'claimed'):
+        return task
+    current = _result(task)
+    if current and (current.get('cancelled') or current.get('error') == 'timeout'):
+        return task
+    return complete_task(db, task, now, 'failed', {'error': 'timeout'}) or task
+
+
+def cancel_task(db, task, now):
+    task = expire_task(db, task, now)
+    if task['status'] not in ('queued', 'claimed'):
+        return None
+    current = _result(task)
+    if current and (current.get('cancelled') or current.get('error') == 'timeout'):
+        return None
+    return complete_task(db, task, now, 'failed', {'cancelled': True})
+
+
+def mark_access_issued(db, task_id):
+    db.execute('UPDATE runtime_task_meta SET access_issued=1 WHERE task_id=?', (task_id,))
+
+
+def access_issued(db, task_id):
+    meta = load_meta(db, task_id)
+    return bool(meta and meta['access_issued'])

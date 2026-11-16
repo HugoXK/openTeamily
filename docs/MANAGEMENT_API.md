@@ -50,8 +50,8 @@ All responses are JSON and no-store. There is no CORS support. Errors are `{erro
 | GET/POST | `/v1/workspaces/{id}/invites` | Invite links; added after PR16, see [INVITES.md](INVITES.md) |
 | POST | `/v1/invites/accept` | `{token}`; signed-in caller joins the workspace |
 | GET/POST | `/v1/runtime-keys` | FlyBot connection keys and device ID; token shown once, lists are prefix-only, see [RUNTIME_KEYS.md](RUNTIME_KEYS.md) |
-| GET/POST | `/v1/runtime/connections`, `/v1/runtime/tasks` | Own-machine connection status and echo-task dispatch; see [RUNTIME_KEYS.md](RUNTIME_KEYS.md) |
-| GET/POST | `/v1/agent/*` | Runtime-key agent connect, heartbeat and task transport; Bearer only, cookies rejected |
+| GET/POST | `/v1/runtime/connections`, `/v1/runtime/tasks` | Own-machine connection status, echo/infer dispatch, cancel; see [RUNTIME_KEYS.md](RUNTIME_KEYS.md) |
+| GET/POST | `/v1/agent/*` | Runtime-key agent connect, heartbeat, task transport and one-time model-access; Bearer only, cookies rejected |
 | GET/POST | `/v1/workspaces/{id}/automations` | Configuration, explicit tick and run records; hook is not container execution. See [AUTOMATIONS.md](AUTOMATIONS.md) |
 
 Register/login require exact `Origin` and reject cross-site Fetch Metadata even before any session exists. All authenticated POSTs require exact Origin, a readable CSRF cookie and the matching `X-CSRF-Token` header, both bound to the current session's stored digest. The session token is not accepted as CSRF or a bearer token. Old sessions are revoked on logout/expiry and the oldest are evicted when exceeding a per-user session cap.
