@@ -82,14 +82,21 @@ records the non-secret fields as `OPENTEAMILY_MODEL_PROVIDER`,
 `OPENTEAMILY_MODEL_BASE_URL`, `OPENTEAMILY_MODEL_NAME`, and
 `OPENTEAMILY_MODEL_SOURCE`. The key is never written to logs or stdout. Starting
 without a file is allowed so CI smoke can boot; that instance cannot call a
-model until a secret is mounted.
+model until a secret is mounted. An empty or whitespace-only file is treated
+the same as a missing file (the compose manager always bind-mounts a stable
+path, and writes an empty file when no key is configured).
 
-The compose executor does not yet inject this file (next management-plane
-slice). Do not put keys in the Dockerfile, in git, or in a world-readable
-volume.
+The compose manager writes the resolved file to a private path under its
+state directory (`secrets/model-api-<instance-id>.json`, mode 0600) and
+bind-mounts it read-only at `/run/secrets/openteamily-model-api.json`. The
+bind path is frozen in the compose file; only the file contents are updated
+before create, start or restart. The key is not placed in compose environment
+variables, image layers, user HTTP APIs, claim receipts or operator logs.
+Do not put keys in the Dockerfile, in git, or in a world-readable volume.
 
 ## Compose manager contract
 
 See `openteamily/manager/engine.py` `manifest()`: service `flybot`, user
-`1000:1000`, read-only, volume `/data`, tmpfs `/tmp`, published
-`127.0.0.1:<port>->8080/tcp`, optional HEALTHCHECK.
+`1000:1000`, read-only, volume `/data`, tmpfs `/tmp`, a single read-only bind
+of the model API secret at `/run/secrets/openteamily-model-api.json`,
+published `127.0.0.1:<port>->8080/tcp`, optional HEALTHCHECK.

@@ -110,10 +110,17 @@ healthcheck(CMD argv or null), publish_port(integer1024..65535 or null). Repeate
 host ports, unknown keys, mutable images and caller-selected Compose files fail.
 
 The manager generates canonical JSON Compose in its private state directory and
-checks its exact content again before use. There is no include/build/bind mount,
-custom service command/entrypoint/env_file, host/PID namespace, privileged mode,
+checks its exact content again before use. There is no include/build, custom
+service command/entrypoint/env_file, host/PID namespace, privileged mode,
 Docker socket mount or arbitrary argv. The only data mount is named volume
-`ot-<instance-id>` at `/data`, retained on stop. It enforces nonroot UID, no new
+`ot-<instance-id>` at `/data`, retained on stop. The only bind mount is the
+manager-generated, read-only model API secret file
+(`secrets/model-api-<instance-id>.json` under the private state directory,
+mode 0600) at `/run/secrets/openteamily-model-api.json`. Operators and API
+clients cannot choose that path. Request-selected mounts stay rejected.
+The file is written or refreshed before create, start or restart; when no
+key is configured the file is empty. The key is never placed in Compose
+environment, the image, or user or manager claim/observe JSON. It enforces nonroot UID, no new
 privileges, dropped capabilities, read-only rootfs, resource caps and bounded local
 logging. Existing container project/service/image, mount, privilege, user, namespace,
 network and published-port metadata are checked; existing volume Compose ownership

@@ -422,6 +422,96 @@ class ComposeManagerTests(unittest.TestCase):
         self.assertNotIn(config['token'], (state / 'grants.json').read_text())
 
 
+    def put_model_api(self, scope, key, provider='openai', base_url='https://example.com/v1', model='gpt-4o-mini', account_id=None, workspace_id=None):
+        from uuid import uuid4
+        from openteamily import model_api
+        blob = model_api.wrap(model_api.wrapping_key(self.store), key)
+        with self.store.transaction() as db:
+            db.execute(
+                'INSERT INTO model_api_configs(id,scope,account_id,workspace_id,provider,base_url,model,key_blob,revision,updated) VALUES(?,?,?,?,?,?,?,?,1,?)',
+                (uuid4().hex, scope, account_id, workspace_id, provider, base_url, model, blob, self.now),
+            )
+
+    def test_manifest_pins_readonly_model_api_bind_without_the_key(self):
+        document = manifest(self.iid, self.cfg['instances'][self.iid])
+        volumes = document['services']['flybot']['volumes']
+        secret = [item for item in volumes if item.get('target') == '/run/secrets/openteamily-model-api.json']
+        self.assertEqual(len(secret), 1)
+        self.assertEqual(secret[0]['type'], 'bind')
+        self.assertEqual(secret[0]['source'], 'secrets/model-api-' + self.iid + '.json')
+        self.assertTrue(secret[0]['read_only'])
+        self.assertNotIn('api_key', json.dumps(document))
+        dumped = (self.root / ('compose-' + self.iid + '.json'))
+        self.registry.entry(self.iid)
+        self.assertNotIn('sk-', dumped.read_text())
+
+    def test_worker_injects_resolved_secret_workspace_override_wins_and_key_is_redacted(self):
+        platform_key = 'sk-platform-inject-test-key-aaaa'
+        workspace_key = 'sk-workspace-inject-test-key-bbbb'
+        self.put_model_api('platform', platform_key)
+        self.put_model_api('workspace', workspace_key, provider='anthropic', base_url='https://api.anthropic.com', model='claude-sonnet', workspace_id=self.wid)
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        path = self.engine.secret_path(self.iid)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        document = json.loads(path.read_text())
+        self.assertEqual(document['api_key'], workspace_key)
+        self.assertEqual(document['source'], 'user')
+        self.assertEqual(document['provider'], 'anthropic')
+        self.assertEqual(document['model'], 'claude-sonnet')
+        self.assertNotIn(workspace_key, (self.root / ('compose-' + self.iid + '.json')).read_text())
+        self.assertEqual(self.action(self.iid, 'start')['status'], 202)
+        started = worker.run_once(self.iid)
+        self.assertEqual(started['observed'], 'running')
+        self.assertNotIn(workspace_key, json.dumps(started))
+        self.assertNotIn(platform_key, json.dumps(started))
+        instance = self.client.call('GET', f'/v1/instances/{self.iid}')
+        body = json.dumps(instance)
+        self.assertNotIn(workspace_key, body)
+        self.assertNotIn(platform_key, body)
+        stdout, stderr = self.engine.compose(self.iid, 'logs', tail=20)
+        redacted = redact(stdout + '\n' + stderr, (workspace_key, platform_key, self.token))
+        self.assertNotIn(workspace_key, redacted)
+        self.assertNotIn(platform_key, redacted)
+
+    def test_missing_model_api_writes_empty_secret_file(self):
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        path = self.engine.secret_path(self.iid)
+        self.assertEqual(path.read_text(), '')
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_runtime_secret_requires_a_lease_and_rejects_stop_jobs(self):
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        self.action(self.iid, 'start')
+        started = worker.run_once(self.iid)
+        self.assertEqual(started['observed'], 'running')
+        bad = self.manager_call('POST', f'/v1/internal/instances/{self.iid}/runtime-secret', {
+            'job_id': 'a' * 32, 'observed_revision': 1, 'lease': 'A' * 43,
+        })
+        self.assertIn(bad['status'], (400, 401, 403, 409))
+        self.assertNotIn('sk-', json.dumps(bad))
+        self.action(self.iid, 'stop')
+        stop = client.claim(self.iid)
+        with self.assertRaises(ManagerError) as error:
+            client.runtime_secret(self.iid, stop)
+        self.assertEqual(error.exception.code, 'secret_not_applicable')
+        observed = client.leased_call(self.iid, stop, 'observe', observed='stopped')
+        self.assertEqual(observed['job']['status'], 'succeeded')
+
+    def test_inspect_rejects_an_extra_bind_mount(self):
+        self.engine.compose(self.iid, 'create')
+        self.engine.compose(self.iid, 'start')
+        self.controls(extra_bind=True)
+        with self.assertRaises(ManagerError) as error:
+            self.engine.inspect(self.iid)
+        self.assertIn(error.exception.code, ('unsafe_container', 'unexpected_mount', 'secret_mount'))
+
+
 class ManagerHttpTransportTests(unittest.TestCase):
     def serve(self, status=200, raw=b'{}', slow=False):
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

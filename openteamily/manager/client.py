@@ -130,6 +130,24 @@ class ManagerClient:
         return self.call('POST', f'/v1/internal/instances/{iid}/{action}', {
             'job_id': job['id'], 'observed_revision': job['revision'], 'lease': claim['lease'], **fields})
 
+    def runtime_secret(self, iid, claim):
+        """Lease-gated one-shot fetch. The key is written to a file and not logged."""
+        check_id(iid)
+        job = claim['job']
+        data = self.call('POST', f'/v1/internal/instances/{iid}/runtime-secret', {
+            'job_id': job['id'], 'observed_revision': job['revision'], 'lease': claim['lease']})
+        require(isinstance(data, dict) and set(data) == {'model_api_present', 'model_api'}, 'secret_shape')
+        require(data['model_api_present'] in (True, False), 'secret_shape')
+        if data['model_api_present'] is False:
+            require(data['model_api'] is None, 'secret_shape')
+            return None
+        doc = data['model_api']
+        require(isinstance(doc, dict) and set(doc) == {'provider', 'base_url', 'model', 'api_key', 'source'}, 'secret_shape')
+        for key in ('provider', 'base_url', 'model', 'api_key', 'source'):
+            require(isinstance(doc[key], str) and doc[key], 'secret_shape')
+        require(doc['source'] in ('platform', 'user'), 'secret_shape')
+        return doc
+
     def recover(self, iid, revision, operation_id):
         check_id(iid)
         require(type(revision) is int and revision > 0 and isinstance(operation_id, str) and KEY.fullmatch(operation_id), 'recovery_fields')
