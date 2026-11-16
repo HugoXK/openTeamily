@@ -398,6 +398,29 @@ class PlannerIntegrationTests(unittest.TestCase):
             result = self.planner.plan(self.registry, request)
             self.assertFalse(result['ok']); self.assertNotIn('plan', result)
 
+    def test_operator_absolute_node_supports_toolcache_without_path_search(self):
+        import shutil
+        absolute = shutil.which('node')
+        with patch('openteamily.compose_planning.shutil.which', return_value=None):
+            planner = NodeComposePlanner(node_executable=absolute)
+            result = planner.plan(self.registry, {'instance_id': self.iid, 'operation': 'inspect'})
+        self.assertTrue(result['ok'])
+        with patch.dict(os.environ, {'OPENTEAMILY_PLANNER_NODE': absolute}):
+            self.assertEqual(NodeComposePlanner().node, str(Path(absolute).resolve()))
+        with patch.dict(os.environ, {'PATH': '/untrusted/request/path'}):
+            os.environ.pop('OPENTEAMILY_PLANNER_NODE', None)
+            with patch('openteamily.compose_planning.shutil.which', return_value=None) as which:
+                planner = NodeComposePlanner()
+                which.assert_called_once_with('node', path=os.defpath)
+                self.assertIsNone(planner.node)
+        for invalid in ('node', './node', '/not-present/node', '/bin/sh'):
+            with self.assertRaises(PlanningFailure):
+                NodeComposePlanner(node_executable=invalid)
+        with tempfile.TemporaryDirectory() as directory:
+            node = Path(directory) / 'node'; node.write_text('not executable'); node.chmod(0o777)
+            with self.assertRaises(PlanningFailure):
+                NodeComposePlanner(node_executable=str(node))
+
     def test_python_adapter_bounds_input_and_sanitizes_process_failure(self):
         with self.assertRaises(PlanningFailure):
             self.planner.plan({'oversize': 'x' * 131073}, {})

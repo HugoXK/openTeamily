@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -17,8 +18,24 @@ class PlanningFailure(Exception):
 
 
 class NodeComposePlanner:
-    def __init__(self):
+    def __init__(self, node_executable=None):
+        # Operator-only absolute override supports hosted tool caches without ever
+        # searching an untrusted request-supplied/current-directory PATH.
+        configured = node_executable if node_executable is not None else os.environ.get('OPENTEAMILY_PLANNER_NODE')
         self.node = shutil.which('node', path=os.defpath)
+        if configured is not None:
+            try:
+                candidate = Path(configured)
+                if not candidate.is_absolute() or candidate.name != 'node':
+                    raise ValueError()
+                candidate = candidate.resolve(strict=True)
+                info = candidate.stat()
+                if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022 or not os.access(candidate, os.X_OK):
+                    raise ValueError()
+            except (OSError, TypeError, ValueError):
+                raise PlanningFailure('Configure a trusted absolute, non-group/world-writable Node executable') from None
+            self.node = str(candidate)
+
         self.bridge = Path(__file__).resolve().parent.parent / 'manager' / 'compose-planner' / 'plan-stdio.mjs'
 
     def plan(self, registry, request):

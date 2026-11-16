@@ -43,7 +43,7 @@ Manager headers: `Authorization: Bearer <manager-id>.<43-character-opaque-token>
 
 ## Running and configuration
 
-Python3.11+; **Node18+ is additionally needed for planner integration/tests** (local verification used Node24.22.1). No pip/npm dependency install required. The Web/API remains Python stdlib only.
+Python3.11+; **Node18+ is additionally needed for planner integration/tests** (local verification used Node24.22.1). No pip/npm dependency install required. The manager-side adapter defaults to the system executable search path only. For an operator-installed/CI tool-cache Node outside that path, explicitly set `OPENTEAMILY_PLANNER_NODE` to its absolute executable path (or inject the constructor argument); relative paths, non-Node filenames and group/world-writable executables are refused. This is operator process configuration, never an HTTP/JSON selector. CI exports its trusted runner `command -v node` result before Python tests. The Web/API remains Python stdlib only.
 
 ```sh
 python3 -m unittest discover -s tests -v
@@ -72,3 +72,9 @@ Schema: base authentication schema remains v1; lifecycle adds its own version1 t
 | Product UI and13 domains | No browser/frontend acceptance | Same real page/role/input/result evidence still required; guides/gray rollouts pending-verification | Not accepted |
 
 Still owed for #2: operational manager daemon/client, reviewed registry/realpath boundary, real Compose executor/inspection/readiness, bounded **raw runtime** log filtering, interrupted-operation recovery, real container restart/retention/failure acceptance and deploy/TLS/resource policy. Planning alone never returns running. backup/restore/upgrade/reclaim/purge remain explicit501. Full Teamily functionality, UI parity and independent reviewer29-case release acceptance are not completed by these unit tests. Preserve both sides' evidence/status fields from ACCEPTANCE.md, and never turn N/A/not-executed into pass.
+
+## Quality follow-up evidence
+
+PR16's fixed `afedfc1` passed both Python3.11/3.13 matrices (push and PR checks). PR17's initial `8c95089` failed its two Python planner integration tests on the hosted runners: Node was installed in the hosted tool cache, not `os.defpath`. The fix keeps the restricted default search and explicitly configures the trusted absolute runner executable; it does not fall back to untrusted request/current-directory PATH or skip tests.
+
+The expanded local suite passes62 Python tests plus27 unchanged planner tests. New coverage includes parallel additive runtime initialization preserving auth/session/workspace rows, **four separate Python processes** racing the same SQLite instance key, competing desired-state transactions, cross-manager grant and cross-owner denial, rejection of an older completed job's observe/heartbeat while a newer revision is leased, and strict public control-event log fields excluding synthetic private runtime content. These are real process/SQLite/protocol tests with synthetic temporary data, not a real container or Teamily parity pass. The initial CI evidence is linked by runs [PR16](https://github.com/openTeamily/openTeamily/actions/runs/43826354933) and [PR17 failure before fix](https://github.com/openTeamily/openTeamily/actions/runs/43827235697); follow-up CI status must be read from the fixed commit's checks.
