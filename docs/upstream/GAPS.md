@@ -16,9 +16,12 @@ system.”
   contract). The dsh web `__flybot__` slot host lives in
   `runtime/flybot-web-slots/`. Live Bot Social onboarding is enabled when a
   server URL is configured (CI uses a fake server and `ot-fake-` tokens only).
-  Management-plane injection of that URL, composer `@` mentions / Bot details
-  in the official ds-bot drawer, and a license-complete public image release
-  are still open. The social façade now posts group/DM lines and hosts
+  The management server can now inject a validated platform or workspace
+  server URL into that file at instance start (tokens stay off management).
+  Composer `@` mentions / Bot details in the official ds-bot drawer, full
+  room-link behavior behind ticketPeers/serveInvites/seatOpenClaims, and a
+  license-complete public image release are still open. The social façade
+  now posts group/DM lines and hosts
   face-to-face rooms on the v0.3.6 ledger; Teamily comparison of those
   flows is not done.
 - Host-integration tests that imported FlyBot `core/` were removed, not ported.
@@ -47,7 +50,7 @@ system.”
 
 - No `RuntimeBackend` adapter points at this snapshot or at PR #21's tree.
 - No real Docker start/stop/retain-volume acceptance.
-- Bot Social is not configured or authorized by the management server.
+- Bot Social server URLs can be configured on the management server and injected at instance start; connector tokens and live third-party onboarding are still not a management concern, and there is no settings UI in this slice.
 - Tree, workflow, project, and timeline **source** is not present. Teamily
   requirements for those areas remain open on the parent issues.
 - No Teamily side-by-side browser acceptance is claimed.

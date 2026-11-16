@@ -40,8 +40,9 @@ truth.
 
 ## Not in this slice
 
-- Wiring the Bot Social server URL through the management server, or a
-  redistributable public image (issue #3).
+- A redistributable public image (issue #3). The management server can
+  inject a validated Bot Social URL at instance start; see
+  `docs/BOT_SOCIAL.md`.
 - Composer `@` mentions and the Bot details drawer in the official
   ds-bot / dsh web client.
 - Full Teamily-parity group/DM comparison (the façade now posts group

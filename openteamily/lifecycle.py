@@ -6,7 +6,7 @@ import re
 import time
 from uuid import uuid4
 
-from . import members, model_api
+from . import bot_social, members, model_api
 from .security import digest, opaque
 
 ID = re.compile(r'[0-9a-f]{32}')
@@ -324,6 +324,17 @@ class Lifecycle:
             public, key, source = model_api.resolve(db, self.store, workspace_id=row['workspace_id'], user_id=row['owner_id'])
             payload = model_api.container_payload(public, key, source)
             return {'model_api_present': payload is not None, 'model_api': payload}
+
+    def runtime_bot_social(self, manager, iid, jid, revision, lease):
+        """Lease-gated resolved Bot Social server URL for container start. No token."""
+        self.expire()
+        with self.store.transaction() as db:
+            row, job = self.leased(db, manager, iid, jid, revision, lease)
+            if job['operation_type'] not in ('create', 'start', 'restart'):
+                fail(409, 'bot_social_not_applicable', 'Bot Social config is only issued for create, start or restart')
+            public, source = bot_social.resolve(db, workspace_id=row['workspace_id'])
+            payload = bot_social.container_payload(public, source)
+            return {'bot_social_present': payload is not None, 'bot_social': payload}
 
     def heartbeat(self, manager, iid, jid, revision, lease):
         self.expire()

@@ -440,7 +440,13 @@ class ComposeManagerTests(unittest.TestCase):
         self.assertEqual(secret[0]['type'], 'bind')
         self.assertEqual(secret[0]['source'], 'secrets/model-api-' + self.iid + '.json')
         self.assertTrue(secret[0]['read_only'])
+        collaboration = [item for item in volumes if item.get('target') == '/run/secrets/openteamily-bot-social.json']
+        self.assertEqual(len(collaboration), 1)
+        self.assertEqual(collaboration[0]['type'], 'bind')
+        self.assertEqual(collaboration[0]['source'], 'secrets/bot-social-' + self.iid + '.json')
+        self.assertTrue(collaboration[0]['read_only'])
         self.assertNotIn('api_key', json.dumps(document))
+        self.assertNotIn('token', json.dumps(document))
         dumped = (self.root / ('compose-' + self.iid + '.json'))
         self.registry.entry(self.iid)
         self.assertNotIn('sk-', dumped.read_text())
@@ -509,7 +515,67 @@ class ComposeManagerTests(unittest.TestCase):
         self.controls(extra_bind=True)
         with self.assertRaises(ManagerError) as error:
             self.engine.inspect(self.iid)
-        self.assertIn(error.exception.code, ('unsafe_container', 'unexpected_mount', 'secret_mount'))
+        self.assertIn(error.exception.code, ('unsafe_container', 'unexpected_mount', 'secret_mount', 'bot_social_mount'))
+
+    def put_bot_social(self, scope, server, display_name=None, workspace_id=None):
+        from uuid import uuid4
+        with self.store.transaction() as db:
+            db.execute(
+                'INSERT INTO bot_social_configs(id,scope,workspace_id,server,display_name,revision,updated) VALUES(?,?,?,?,?,1,?)',
+                (uuid4().hex, scope, workspace_id, server, display_name, self.now),
+            )
+
+    def test_worker_injects_workspace_bot_social_url_without_a_token(self):
+        self.put_bot_social('platform', 'https://platform.social.example', 'Platform')
+        self.put_bot_social('workspace', 'https://team.social.example', 'Team', workspace_id=self.wid)
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        path = self.engine.bot_social_path(self.iid)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        document = json.loads(path.read_text())
+        self.assertEqual(document['server'], 'https://team.social.example')
+        self.assertEqual(document['displayName'], 'Team')
+        self.assertEqual(document['source'], 'workspace')
+        self.assertNotIn('token', document)
+        self.assertNotIn('api_key', document)
+        dumped = (self.root / ('compose-' + self.iid + '.json')).read_text()
+        self.assertIn('openteamily-bot-social.json', dumped)
+        self.assertNotIn('token', dumped)
+        self.assertEqual(self.action(self.iid, 'start')['status'], 202)
+        started = worker.run_once(self.iid)
+        self.assertEqual(started['observed'], 'running')
+        body = json.dumps(started)
+        # The server URL may appear in operator docs, but a token must not.
+        self.assertNotIn('token', body)
+
+    def test_missing_bot_social_writes_empty_config_file(self):
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        path = self.engine.bot_social_path(self.iid)
+        self.assertEqual(path.read_text(), '')
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_runtime_bot_social_requires_a_lease_and_rejects_stop_jobs(self):
+        client = self.start_http()
+        worker = ManagerWorker(client, self.registry, self.engine)
+        self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
+        self.action(self.iid, 'start')
+        started = worker.run_once(self.iid)
+        self.assertEqual(started['observed'], 'running')
+        bad = self.manager_call('POST', f'/v1/internal/instances/{self.iid}/runtime-bot-social', {
+            'job_id': 'a' * 32, 'observed_revision': 1, 'lease': 'A' * 43,
+        })
+        self.assertIn(bad['status'], (400, 401, 403, 409))
+        self.assertNotIn('token', json.dumps(bad))
+        self.action(self.iid, 'stop')
+        stop = client.claim(self.iid)
+        with self.assertRaises(ManagerError) as error:
+            client.runtime_bot_social(self.iid, stop)
+        self.assertEqual(error.exception.code, 'bot_social_not_applicable')
+        observed = client.leased_call(self.iid, stop, 'observe', observed='stopped')
+        self.assertEqual(observed['job']['status'], 'succeeded')
 
 
 class ManagerHttpTransportTests(unittest.TestCase):

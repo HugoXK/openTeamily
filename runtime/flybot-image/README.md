@@ -45,8 +45,9 @@ CI (`.github/workflows/flybot-runtime-image.yml`) builds this image and runs
 - It does **not** close [issue #3](https://github.com/openTeamily/openTeamily/issues/3).
   DeepSeek Harness `0.2.2-rc.1`, the Node/Debian base image, and third-party
   notices still need a redistribution audit before a public image release.
-- Management-plane injection of a Bot Social server URL is not wired yet;
-  operators can set a file or env (see below) or use Settings → Bot Social.
+- Management can inject a validated Bot Social server URL at instance start
+  (`docs/BOT_SOCIAL.md`); operators can also set a file or env (see below)
+  or use Settings → Bot Social. This is not live third-party proof.
 - The official ds-bot web client is not a second profile bundle (createRuntime
   already runs once). Composer `@` mentions and the Bot details drawer stay
   in the FlyBot registry until a later slice.
@@ -130,9 +131,17 @@ Example file (a URL only; do not put a connector token here):
 }
 ```
 
-CI smokes this path against an in-container fake Bot Social that issues only
-`ot-fake-` tokens. That is not a live third-party Bot Social and is not a
-management-plane integration.
+The compose manager writes the resolved URL file to
+`secrets/bot-social-<instance-id>.json` (mode 0600) and bind-mounts it
+read-only at `/run/secrets/openteamily-bot-social.json`. An empty file is
+written when no server is configured. Adding this second bind is a compose
+contract change: existing frozen `compose-*.json` files will not match the
+new manifest until the instance is recreated. A connector token must not
+appear in that file.
+
+CI smokes the onboarding path against an in-container fake Bot Social that
+issues only `ot-fake-` tokens. That is not a live third-party Bot Social
+and is not by itself management-plane proof.
 
 ## Compose manager contract
 

@@ -43,7 +43,7 @@ elif args[0] == 'inspect':
     mounts = [{'Type': 'volume', 'Name': state['project'], 'Destination': '/data', 'RW': True}]
     binds = []
     for volume in manifest['services']['flybot'].get('volumes', []):
-        if isinstance(volume, dict) and volume.get('type') == 'bind' and volume.get('target') == '/run/secrets/openteamily-model-api.json':
+        if isinstance(volume, dict) and volume.get('type') == 'bind' and volume.get('target') in ('/run/secrets/openteamily-model-api.json', '/run/secrets/openteamily-bot-social.json'):
             source = str((root / volume['source']).resolve()) if not Path(volume['source']).is_absolute() else volume['source']
             mounts.append({'Type': 'bind', 'Source': source, 'Destination': volume['target'], 'RW': not volume.get('read_only', False)})
             binds.append(source + ':' + volume['target'] + (':ro' if volume.get('read_only') else ''))
