@@ -5,6 +5,7 @@
 // layout; the image profile uses a link: dependency to this directory.
 import { createRuntime } from '../../ds-bot-upstream/ds-bot/index.js'
 import { applyOnRuntime } from '../../flybot-social-host/index.js'
+import { registerFlybotRoute } from '../../flybot-web-slots/index.js'
 
 // Same inject list as runtime/ds-bot-upstream/ds-bot/index.js — this plugin
 // stands in for ds-bot in the web profile so createRuntime runs once.
@@ -13,13 +14,15 @@ export const inject = ['llm', 'tools', 'systemPrompt', 'sessionController', 'ses
 
 export function apply(ctx, config = {}) {
   const rt = createRuntime(ctx, config)
-  return applyOnRuntime(rt, ctx, {
+  const attached = applyOnRuntime(rt, ctx, {
     inboxPollMs: 15_000,
     facePollMs: 4_000,
     presence: true,
     onboard: false,
     ...(config.social ?? {}),
   })
+  registerFlybotRoute(ctx, attached.flybot)
+  return attached
 }
 
 export { createRuntime }

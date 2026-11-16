@@ -80,6 +80,7 @@ try {
   const manifest = JSON.parse(profileJson)
   assert.equal(manifest.dependencies['@openteamily/flybot-runtime']?.startsWith('link:'), true, 'wrapper must be linked from the image path')
   assert.ok(manifest.dsh?.profile?.bundles?.includes('@openteamily/flybot-runtime'), 'wrapper must be a profile bundle')
+  assert.ok(manifest.dsh?.profile?.bundles?.includes('@openteamily/flybot-social-web'), 'social web client must be a profile bundle')
   assert.ok(!manifest.dsh?.profile?.bundles?.includes('ds-bot'), 'upstream ds-bot must not also be a bundle')
 
   const loginUrl = combined.match(/http:\/\/127\.0\.0\.1:8080\/\?token=[^\s]+/)?.[0]
@@ -100,13 +101,22 @@ try {
     const result = await response.json()
     assert.ok(result.ok, result.error?.message)
     assert.ok(Array.isArray(result.value.bots), 'the DS Bot runtime must load')
+    const flybot = await fetch('http://${address}:8080/api/flybot', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ endpoint: 'social/server', payload: {} }),
+    })
+    assert.ok(flybot.ok, 'the FlyBot social API must answer: ' + flybot.status)
+    const social = await flybot.json()
+    assert.ok(social.ok, social.error?.message)
+    assert.notEqual(social.value, undefined)
   `, tokenUrl], { allowFailure: true })
   if (api.status !== 0) {
     const later = docker(['logs', server], { allowFailure: true })
     throw new Error(`Bot API probe failed (${api.status}):\n${api.stderr}\ncontainer logs:\n${later.stdout}\n${later.stderr}`)
   }
 
-  console.log('PASS: image user 1000, port 8080, read-only start, profile wrapper, Bot API')
+  console.log('PASS: image user 1000, port 8080, read-only start, profile wrapper, Bot API, FlyBot social API')
 } finally {
   for (const container of containers) docker(['rm', '--force', container], { allowFailure: true })
   for (const volume of volumes) docker(['volume', 'rm', volume], { allowFailure: true })

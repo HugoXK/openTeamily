@@ -20,6 +20,11 @@ service:
   and then `applyOnRuntime()` from `runtime/flybot-social-host/` so
   `@flybot/social` injects a `flybot` service. The vendor tree is not edited.
 
+The web UI is official `dsh web`. `@openteamily/flybot-web-slots` installs
+`globalThis.__flybot__` so `@flybot/social`'s client can register, posts
+social calls to `POST /api/flybot`, and bridges settings, session docks and
+sidebar entries onto dsh-web-app slots. See `runtime/flybot-web-slots/README.md`.
+
 ## Build
 
 From the repository root (context is `runtime/`):
@@ -41,8 +46,9 @@ CI (`.github/workflows/flybot-runtime-image.yml`) builds this image and runs
   DeepSeek Harness `0.2.2-rc.1`, the Node/Debian base image, and third-party
   notices still need a redistribution audit before a public image release.
 - Live Bot Social onboarding is off (`onboard: false`); that is a later slice.
-- The `@flybot/social` **web client** (slot registry) is not wired: upstream
-  DS-Bot v0.3.6 has no `__flybot__` slot host. A later slice adds that adapter.
+- The official ds-bot web client is not a second profile bundle (createRuntime
+  already runs once). Composer `@` mentions and the Bot details drawer stay
+  in the FlyBot registry until a later slice.
 - Office / computer tool stacks from the official DS-Bot image (Python, ffmpeg,
   build-essential) are not installed in this first recipe.
 - The management server still needs an operator-supplied **digest-pinned**

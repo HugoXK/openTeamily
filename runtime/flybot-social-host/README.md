@@ -32,7 +32,7 @@ truth.
 
 - A complete Bot Social onboarding / live server.
 - Wiring into the management server or a redistributable image.
-- Client UI slots against `dsh web`.
+- Richer group/DM Teamily-parity flows (the first web slot host is in `runtime/flybot-web-slots/`).
 - Remote-member semantics beyond passing `updateRoom({ remove })` for
   local Bots, and recording remote participant removals on the façade.
 
