@@ -5,7 +5,7 @@ from pathlib import Path
 import sqlite3
 import stat
 
-from . import members, settings
+from . import automations, members, settings
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS users (
@@ -51,7 +51,7 @@ class Store:
             if version == 0 and db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone():
                 raise ValueError('Unrecognized non-empty database; refusing initialization')
             db.execute('PRAGMA journal_mode=WAL')
-            db.executescript('BEGIN IMMEDIATE;\n' + SCHEMA + settings.SCHEMA + members.SCHEMA + '\nPRAGMA user_version=1;\nCOMMIT;')
+            db.executescript('BEGIN IMMEDIATE;\n' + SCHEMA + settings.SCHEMA + members.SCHEMA + automations.SCHEMA + '\nPRAGMA user_version=1;\nCOMMIT;')
 
     @contextmanager
     def connect(self):
