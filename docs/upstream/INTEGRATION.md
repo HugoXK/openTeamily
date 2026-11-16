@@ -13,7 +13,7 @@ separate product.
 | Management auth, workspaces, instance jobs, fake/simulated runtime | Yes (already on `main`) | n/a |
 | FlyBot customization source | `runtime/flybot/plugins/social`, `docker/` helpers | **No.** The runtime baseline is upstream DS-Bot v0.3.6 (PR #21), not a vendored FlyBot `core/` fork. Lifecycle jobs do not build or start this tree. |
 | Bot Social source | `services/bot-social` | **No.** No management routes or secrets handling were added. |
-| `@flybot/social` | `runtime/flybot/plugins/social` | **No.** Still uses upstream server-config / onboard APIs. |
+| `@flybot/social` | `runtime/flybot/plugins/social` | **First slice:** `runtime/flybot-social-host/` attaches a `flybot` façade to the unmodified v0.3.6 `createRuntime()` host (group rooms use the 0.3.5+ write-ahead ledger). Not wired to the management server; no live Bot Social onboarding. |
 
 Keeping the snapshots as **optional modules** is intentional.
 

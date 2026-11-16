@@ -6,7 +6,7 @@ relicense imported upstream trees.
 
 | Tree | License | Binding files | Copyright / notice |
 | --- | --- | --- | --- |
-| New OpenTeamily code and docs (`openteamily/`, `manager/`, `tests/`, `docs/` except copied upstream docs, `scripts/` authored here) | MIT | [`LICENSE`](../LICENSE) | OpenTeamily contributors |
+| New OpenTeamily code and docs (`openteamily/`, `manager/`, `tests/`, `docs/` except copied upstream docs, `scripts/` authored here, `runtime/flybot-social-host/`) | MIT | [`LICENSE`](../LICENSE) | OpenTeamily contributors |
 | `runtime/flybot/` (except `ORIGIN.md` and `OPENTEAMILY.md`) | Apache License 2.0 | [`runtime/flybot/LICENSE`](../runtime/flybot/LICENSE), [`runtime/flybot/NOTICE`](../runtime/flybot/NOTICE) | NOTICE: DS Bot, Copyright 2026 Fei2411 and the DS Bot contributors |
 | `services/bot-social/` (except `ORIGIN.md` and `OPENTEAMILY.md`) | MIT | [`services/bot-social/LICENSE`](../services/bot-social/LICENSE) | Copyright (c) 2026 Birfy |
 

@@ -30,6 +30,9 @@ copy of `core/`.
 That peer is historical; the target runtime is upstream v0.3.6. Do not treat
 the peer range as a claim that the old fork is present.
 
+The first-slice host adapter lives in [`runtime/flybot-social-host/`](../flybot-social-host/),
+outside this snapshot and outside the vendored upstream tree.
+
 ## Runnable today vs. blocked
 
 - License and file hashes can be verified offline.
