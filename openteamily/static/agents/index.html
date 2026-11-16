@@ -10,22 +10,22 @@
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/agents/app.mjs"></script>
 </head>
-<body>
+<body class="app-workspace">
   <a class="skip-link" href="#main">跳到主要内容</a>
-  <header>
-    <p class="brand">OpenTeamily / FlyBot</p>
-    <h1>智能体</h1>
-    <p class="note">工作区成员可以维护智能体目录，并与自己的智能体进行持久对话。回复通过调用者已连接的运行时按 infer 任务排队，管理进程不会自己调用模型。所有者或管理员可以发布可撤销的公开主页链接（只展示名称和简介，不含说明）。没有嵌入对话，也没有 Auto / Instant / Agentic 模式。已完成的消息可以保存到作品库并保留出处。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
-    <nav aria-label="管理导航">
-      <a href="/settings">账号设置</a>
-      <a href="/automations">自动化</a>
-      <a href="/members">成员</a>
-      <a href="/memory">记忆</a>
-      <a href="/artifacts">作品库</a>
-      <a href="/runtimes">运行时</a>
-      <a href="/team">创建团队</a>
-    </nav>
-  </header>
+  <nav class="app-rail" aria-label="应用导航">
+    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
+    <a href="/chat" title="聊天">聊天</a>
+    <a href="/agents" title="智能体">智能体</a>
+    <a href="/automations" title="自动化">自动化</a>
+    <a href="/memory" title="记忆">记忆</a>
+    <a href="/artifacts" title="作品">作品</a>
+    <button type="button" class="rail-link" disabled title="未实现：发现动态">发现</button>
+    <span class="rail-spacer"></span>
+    <a href="/members" title="成员">成员</a>
+    <a href="/runtimes" title="运行时">运行时</a>
+    <a href="/team" title="创建团队">团队</a>
+    <a href="/settings" title="设置">设置</a>
+  </nav>
   <p id="status" role="status"></p>
   <main id="main">
   <section id="login-panel" hidden>
@@ -37,77 +37,105 @@
     </form>
   </section>
   <section id="main-panel" hidden>
-    <p id="whoami"></p>
-    <label>工作区
-      <select id="workspace"></select>
-    </label>
+    <header class="directory-top">
+      <div class="directory-tabs" role="tablist" aria-label="目录">
+        <button type="button" role="tab" id="tab-agents" aria-selected="true" aria-controls="list-panel">智能体</button>
+        <button type="button" role="tab" id="tab-teams" aria-selected="false" aria-controls="teams-panel">AI 团队</button>
+      </div>
+      <label class="directory-search">搜索智能体 <input type="search" id="agent-search" placeholder="搜索智能体" maxlength="80"></label>
+      <button type="button" id="open-create" class="primary">创建我的智能体</button>
+      <p id="whoami"></p>
+      <label>工作区
+        <select id="workspace"></select>
+      </label>
+    </header>
     <p id="role-note" class="note"></p>
+    <details class="gap-note">
+      <summary>对照说明</summary>
+      <p class="note">工作区成员可以维护智能体目录，并从卡片进入独立的聊天页。所有者或管理员可以发布可撤销的公开主页链接（只展示名称和简介，不含说明）。没有嵌入对话，也没有 Auto / Instant / Agentic 模式。分类和创建者筛选、AI 团队模板尚未实现，对应入口已禁用。还不能写成已经功能对等。</p>
+    </details>
+    <div class="filter-row" aria-label="筛选">
+      <button type="button" class="pill" disabled title="未实现：分类筛选（智能体记录没有分类字段）">全部</button>
+      <button type="button" class="pill" disabled title="未实现：分类筛选">Content Creation</button>
+      <button type="button" class="pill" disabled title="未实现：分类筛选">Customer Support</button>
+      <button type="button" class="pill" disabled title="未实现：分类筛选">Engineering</button>
+      <label>创建者
+        <select id="creator-filter" disabled title="未实现：创建者筛选">
+          <option>全部</option>
+        </select>
+      </label>
+    </div>
     <section id="list-panel">
-      <h2>目录</h2>
-      <ul id="agent-list"></ul>
+      <ul id="agent-list" class="card-grid"></ul>
       <p id="agents-empty" class="note" hidden>这个工作区还没有智能体。</p>
     </section>
-    <form id="create-form" method="post" action="/v1/workspaces" hidden>
-      <fieldset>
-        <legend>新建智能体</legend>
-        <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
-        <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
-        <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
-        <button type="submit">创建</button>
-      </fieldset>
-    </form>
-    <form id="edit-form" method="post" action="/v1/workspaces" hidden>
-      <fieldset>
-        <legend>编辑智能体</legend>
-        <input type="hidden" name="id">
-        <input type="hidden" name="revision">
-        <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
-        <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
-        <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
-        <div class="actions">
-          <button type="submit">保存</button>
-          <button type="button" id="archive-button">归档</button>
-          <button type="button" id="cancel-edit">取消</button>
-        </div>
-      </fieldset>
-    </form>
-    <section id="homepage-panel" hidden>
-      <h2>公开主页</h2>
-      <p id="homepage-note" class="note">默认仅工作区成员可见。发布后，拿到链接的人可以看到名称和简介，看不到说明，也不能在此页面对话。</p>
-      <p id="homepage-status" class="note"></p>
-      <p id="homepage-link-wrap" hidden>链接：<code id="homepage-link"></code></p>
-      <div class="actions">
-        <button type="button" id="publish-homepage">发布链接</button>
-        <button type="button" id="revoke-homepage">撤回链接</button>
-      </div>
+    <section id="teams-panel" hidden>
+      <p class="note">AI 团队目录还没有在 OpenTeamily 实现，不会列出模板，也不能从这里创建。</p>
     </section>
-    <section id="runtime-panel" hidden>
-      <h2>运行时绑定</h2>
-      <p id="runtime-note" class="note">可以把这个智能体绑定到工作区里的 FlyBot 容器。对话会优先发到该容器；没有可用容器时，才会用你自己已连接的机器。</p>
-      <p id="runtime-status" class="note"></p>
-      <label>实例
-        <select id="runtime-instance"></select>
-      </label>
-      <div class="actions">
-        <button type="button" id="bind-runtime">绑定</button>
-        <button type="button" id="unbind-runtime">解除绑定</button>
-      </div>
-    </section>
-    <section id="chat-panel" hidden>
-      <h2 id="chat-title">对话</h2>
-      <p id="chat-note" class="note">选择一个智能体后，可以开始或继续你自己的对话。</p>
-      <ul id="conversation-list"></ul>
-      <p id="conversations-empty" class="note" hidden>还没有对话。</p>
-      <button type="button" id="new-conversation">新对话</button>
-      <ol id="message-list"></ol>
-      <form id="chat-form" method="post" action="/v1/workspaces">
-        <label class="stack">消息 <textarea id="chat-body" name="body" maxlength="4000" required></textarea></label>
-        <button type="submit">发送</button>
+    <aside id="manage-drawer" hidden>
+      <form id="create-form" method="post" action="/v1/workspaces" hidden>
+        <fieldset>
+          <legend>新建智能体</legend>
+          <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
+          <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
+          <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+          <button type="submit">创建</button>
+        </fieldset>
       </form>
-    </section>
-    <form id="logout-form" method="post" action="/v1/auth/logout">
-      <button type="submit">退出登录</button>
-    </form>
+      <form id="edit-form" method="post" action="/v1/workspaces" hidden>
+        <fieldset>
+          <legend>编辑智能体</legend>
+          <input type="hidden" name="id">
+          <input type="hidden" name="revision">
+          <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
+          <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
+          <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+          <div class="actions">
+            <button type="submit">保存</button>
+            <button type="button" id="archive-button">归档</button>
+            <button type="button" id="cancel-edit">取消</button>
+          </div>
+        </fieldset>
+      </form>
+      <section id="homepage-panel" hidden>
+        <h2>公开主页</h2>
+        <p id="homepage-note" class="note">默认仅工作区成员可见。发布后，拿到链接的人可以看到名称和简介，看不到说明，也不能在此页面对话。</p>
+        <p id="homepage-status" class="note"></p>
+        <p id="homepage-link-wrap" hidden>链接：<code id="homepage-link"></code></p>
+        <div class="actions">
+          <button type="button" id="publish-homepage">发布链接</button>
+          <button type="button" id="revoke-homepage">撤回链接</button>
+        </div>
+      </section>
+      <section id="runtime-panel" hidden>
+        <h2>运行时绑定</h2>
+        <p id="runtime-note" class="note">可以把这个智能体绑定到工作区里的 FlyBot 容器。对话会优先发到该容器；没有可用容器时，才会用你自己已连接的机器。</p>
+        <p id="runtime-status" class="note"></p>
+        <label>实例
+          <select id="runtime-instance"></select>
+        </label>
+        <div class="actions">
+          <button type="button" id="bind-runtime">绑定</button>
+          <button type="button" id="unbind-runtime">解除绑定</button>
+        </div>
+      </section>
+      <section id="chat-panel" hidden>
+        <h2 id="chat-title">对话</h2>
+        <p id="chat-note" class="note">对话已移到独立的聊天页，避免和目录堆在一起。</p>
+        <p><a id="open-in-chat" href="/chat">在聊天中打开</a></p>
+        <ul id="conversation-list" hidden></ul>
+        <p id="conversations-empty" class="note" hidden>还没有对话。</p>
+        <button type="button" id="new-conversation">新对话</button>
+        <ol id="message-list" hidden></ol>
+        <form id="chat-form" method="post" action="/v1/workspaces" hidden>
+          <label class="stack">消息 <textarea id="chat-body" name="body" maxlength="4000" required></textarea></label>
+          <button type="submit">发送</button>
+        </form>
+      </section>
+      <form id="logout-form" method="post" action="/v1/auth/logout">
+        <button type="submit">退出登录</button>
+      </form>
+    </aside>
   </section>
   </main>
 </body>

@@ -181,11 +181,14 @@ async function main() {
       record('agents_editor', false, String(error));
     }
 
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const chatUrl = `${origin}/chat#workspace=${ready.workspace_id}&agent=${ready.agent_id}&conversation=${ready.conversation_id}`;
     try {
-      await page.locator('#chat-panel').waitFor({ state: 'visible', timeout: 15000 });
+      await page.goto(chatUrl, { waitUntil: 'load' });
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
       await waitForLocatorText(page, '#chat-title', ready.agent_name);
-      await openListItem(page, ready.conversation_title, '#conversation-list');
-      await waitForLocatorText(page, '#message-list', ready.chat_user_text);
+      await waitForLocatorText(page, '#conversation-list', ready.agent_name);
+      await waitForLocatorText(page, '#message-list', ready.chat_user_text, 20000);
       await waitForLocatorText(page, '#message-list', ready.provider_text, 20000);
       const history = await visibleText(page.locator('#message-list'));
       record(
@@ -195,13 +198,13 @@ async function main() {
         { soft: ready.chat_status !== 'succeeded' },
       );
       screenshots.push(path.basename(await shot(page, outDir, '16-agents-conversation.png')));
+      screenshots.push(path.basename(await shot(page, outDir, '22-chat-desktop.png')));
     } catch (error) {
       record('agents_conversation_history', false, String(error), { soft: ready.chat_status !== 'succeeded' });
     }
 
     try {
       await page.locator('#new-conversation').click();
-      await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#chat-body').fill(ready.chat_live_text);
       await page.locator('#chat-form button[type="submit"]').click();
@@ -218,6 +221,7 @@ async function main() {
     } catch (error) {
       record('agents_conversation_send', false, String(error), { soft: ready.connection_status !== 'online' });
     }
+    await page.setViewportSize({ width: 1280, height: 900 });
 
     await page.goto(`${origin}/automations`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
