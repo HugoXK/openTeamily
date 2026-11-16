@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {actionQuery, csrfCookie, dueAtFromDate, dueDateValue, listQuery} from '../openteamily/static/memory/app.mjs';
+import {actionQuery, csrfCookie, dueAtFromDate, dueDateValue, formatTopics, graphLayout, listQuery, parseTopics} from '../openteamily/static/memory/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -22,4 +22,22 @@ test('due date helpers convert UTC calendar days', () => {
   assert.equal(dueDateValue(Date.UTC(2027, 0, 15) / 1000), '2027-01-15');
   assert.equal(dueDateValue(null), '');
   assert.equal(dueDateValue('bad'), '');
+});
+
+test('parseTopics splits unique names and formatTopics joins them', () => {
+  assert.deepEqual(parseTopics('Getting Started, wiki，Getting started'), ['Getting Started', 'wiki']);
+  assert.equal(formatTopics(['Getting Started', 'wiki']), 'Getting Started，wiki');
+  assert.equal(formatTopics([]), '');
+});
+
+test('graphLayout places a single node at the center and sorts a circle by id', () => {
+  assert.deepEqual(graphLayout([]), []);
+  assert.deepEqual(graphLayout([{id: 'b'}], 200, 100), [{id: 'b', x: 100, y: 50}]);
+  const placed = graphLayout([{id: 'm2'}, {id: 'm1'}], 200, 200, 50);
+  assert.equal(placed[0].id, 'm1');
+  assert.equal(placed[1].id, 'm2');
+  assert.equal(placed[0].x, 100);
+  assert.equal(placed[0].y, 50);
+  assert.equal(placed[1].x, 100);
+  assert.equal(placed[1].y, 150);
 });

@@ -28,3 +28,14 @@ textarea { width: 100%; min-height: 16rem; padding: .5rem; box-sizing: border-bo
 #actions-panel { margin-top: 1.5rem; }
 #action-editor-form textarea { min-height: 6rem; }
 #action-editor-form .actions { margin-top: .4rem; }
+
+body { max-width: 52rem; }
+#overview-panel { margin: 0 0 1.5rem; }
+#graph-canvas { display: block; width: 100%; height: auto; min-height: 16rem; border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); background: Canvas; }
+#graph-canvas .graph-edge { stroke: color-mix(in srgb, CanvasText 45%, Canvas); stroke-width: 1.5; }
+#graph-canvas .graph-node { fill: Canvas; stroke: CanvasText; stroke-width: 1.5; cursor: pointer; }
+#graph-canvas .graph-label { fill: CanvasText; font-size: 12px; }
+#topic-list { list-style: none; padding: 0; margin: 0 0 1rem; }
+#topic-list button { width: auto; }
+#page-links { display: grid; gap: .4rem; margin: .4rem 0; }
+#page-links button { width: auto; }
