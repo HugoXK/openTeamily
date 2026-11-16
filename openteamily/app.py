@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import automations, invites, members, model_api, oidc, settings, skill_secrets
+from . import automations, invites, members, model_api, oidc, settings, skill_secrets, teams
 
 
 class APIError(Exception):
@@ -549,7 +549,10 @@ class App:
                         refuse(403, 'forbidden', 'Not allowed to change model API settings')
                     return self.save_model_api(db, session['user_id'], now, workspace, self.body(env, ['revision', 'changes']))
                 refuse(400, 'invalid', 'Invalid model API request')
+            if path == '/v1/teams' and method == 'POST' and not query:
+                return self.create_team(db, session, now, env)
             if path == '/v1/workspaces' and method == 'POST':
+
                 body = self.body(env, ['name'])
                 name = body.get('name')
                 if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80 or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in name):
@@ -568,7 +571,7 @@ class App:
                 if existing:
                     if existing['request_hash'] != request_hash:
                         refuse(409, 'conflict', 'Idempotency key was used for a different request')
-                    return 200, {'workspace': self.workspace(existing)}, []
+                    return 200, {'workspace': teams.attach(db, existing)}, []
                 if (db.execute('SELECT COUNT(*) FROM workspaces WHERE owner_id=?', (session['user_id'],)).fetchone()[0] >= self.config.max_workspaces_per_user
                         or db.execute('SELECT COUNT(*) FROM workspaces').fetchone()[0] >= self.config.max_workspaces):
                     refuse(429, 'quota', 'Workspace capacity reached')
@@ -576,7 +579,7 @@ class App:
                 db.execute('INSERT INTO workspaces VALUES(?,?,?,?,?,?)',
                            (workspace_id, session['user_id'], name, now, key_hash, request_hash))
                 row = db.execute('SELECT * FROM workspaces WHERE id=?', (workspace_id,)).fetchone()
-                return 201, {'workspace': self.workspace(row)}, []
+                return 201, {'workspace': teams.attach(db, row)}, []
             if path == '/v1/workspaces' and method == 'GET':
                 try:
                     args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=2) if query else {}
@@ -590,7 +593,7 @@ class App:
                 except ValueError:
                     refuse(400, 'invalid', 'Invalid pagination parameters')
                 rows = members.visible(db, session['user_id'], cursor, int(limit) + 1)
-                return 200, {'items': [self.workspace(row) for row in rows[:int(limit)]],
+                return 200, {'items': [teams.attach(db, row) for row in rows[:int(limit)]],
                              'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
             if path == '/v1/automation-templates' and method == 'GET' and not query:
                 return 200, {'items': automations.templates()}, []
@@ -616,7 +619,7 @@ class App:
                 if match[2]:
                     refuse(501, 'unsupported', 'Runtime lifecycle is not implemented in this slice')
                 if method == 'GET' and not query:
-                    return 200, {'workspace': self.workspace(row)}, []
+                    return 200, {'workspace': teams.attach(db, row)}, []
             if path.startswith(('/v1/instances/', '/v1/internal/')):
                 refuse(501, 'unsupported', 'Runtime lifecycle and manager authentication are not implemented in this slice')
         refuse(404, 'not_found', 'Route not found')
@@ -624,6 +627,59 @@ class App:
     @staticmethod
     def workspace(row):
         return {key: row[key] for key in ('id', 'owner_id', 'name', 'created')}
+
+    def create_team(self, db, session, now, env):
+        body = self.body(env, ['name', 'slug', 'mode', 'workspace_id'])
+        name, slug, mode = body.get('name'), body.get('slug'), body.get('mode')
+        if not teams.valid_name(name) or not teams.valid_slug(slug) or mode not in ('new', 'convert'):
+            refuse(400, 'invalid', 'Provide a team name, a valid Team ID, and new or convert')
+        name = name.strip()
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        payload = json.dumps({'name': name, 'slug': slug, 'mode': mode,
+                              'workspace_id': body.get('workspace_id')},
+                             sort_keys=True, separators=(',', ':'))
+        key_hash, request_hash = digest('team:' + key), digest(payload)
+        prior = db.execute('SELECT * FROM team_requests WHERE key_hash=?', (key_hash,)).fetchone()
+        if prior:
+            if prior['request_hash'] != request_hash or prior['owner_id'] != session['user_id']:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            row = db.execute('SELECT * FROM workspaces WHERE id=?', (prior['workspace_id'],)).fetchone()
+            return 200, {'workspace': teams.attach(db, row)}, []
+        taken = teams.by_slug(db, slug)
+        if taken:
+            refuse(409, 'conflict', 'This Team ID is already in use')
+        if mode == 'new':
+            if (db.execute('SELECT COUNT(*) FROM workspaces WHERE owner_id=?', (session['user_id'],)).fetchone()[0]
+                    >= self.config.max_workspaces_per_user
+                    or db.execute('SELECT COUNT(*) FROM workspaces').fetchone()[0] >= self.config.max_workspaces):
+                refuse(429, 'quota', 'Workspace capacity reached')
+            workspace_id = uuid4().hex
+            db.execute('INSERT INTO workspaces VALUES(?,?,?,?,?,?)',
+                       (workspace_id, session['user_id'], name, now, key_hash, request_hash))
+            converted = 0
+        else:
+            workspace_id = body.get('workspace_id')
+            if not isinstance(workspace_id, str) or not re.fullmatch(r'[0-9a-f]{32}', workspace_id):
+                refuse(400, 'invalid', 'Provide the workspace to convert')
+            workspace = db.execute(
+                'SELECT * FROM workspaces WHERE id=? AND owner_id=?',
+                (workspace_id, session['user_id']),
+            ).fetchone()
+            if workspace is None:
+                refuse(404, 'not_found', 'Workspace not found')
+            if teams.load(db, workspace['id']):
+                refuse(409, 'conflict', 'This workspace is already a team')
+            if workspace['name'] != name:
+                db.execute('UPDATE workspaces SET name=? WHERE id=?', (name, workspace['id']))
+            converted = 1
+        db.execute('INSERT INTO workspace_teams VALUES(?,?,?,?,?)',
+                   (workspace_id, slug, name, converted, now))
+        db.execute('INSERT INTO team_requests VALUES(?,?,?,?)',
+                   (key_hash, request_hash, workspace_id, session['user_id']))
+        row = db.execute('SELECT * FROM workspaces WHERE id=?', (workspace_id,)).fetchone()
+        return 201, {'workspace': teams.attach(db, row)}, []
 
     def member_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
         workspace = members.load(db, workspace_id, session['user_id'])
@@ -874,7 +930,7 @@ class App:
         if existing:
             if existing['role'] != row['role']:
                 refuse(409, 'conflict', 'Member already exists with a different role')
-            return 200, {'workspace': self.workspace(workspace), 'member': members.view(existing)}, []
+            return 200, {'workspace': teams.attach(db, workspace), 'member': members.view(existing)}, []
         if row['use_count'] >= row['max_uses']:
             refuse(404, 'not_found', 'Invite not found')
         occupied = 1 + db.execute(
@@ -891,7 +947,7 @@ class App:
             'UPDATE workspace_invites SET use_count=use_count+1 WHERE id=?', (row['id'],)
         )
         member = {'user_id': user_id, 'username': username, 'role': row['role'], 'created': now}
-        return 201, {'workspace': self.workspace(workspace), 'member': members.view(member)}, []
+        return 201, {'workspace': teams.attach(db, workspace), 'member': members.view(member)}, []
 
     def resolve_participants(self, db, workspace, names):
         allowed = {workspace['owner_id']}
