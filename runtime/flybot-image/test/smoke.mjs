@@ -36,7 +36,7 @@ try {
   const server = `${name}-web`
   containers.add(server)
   docker([
-    'run', '--detach', '--rm', '--name', server, '--network', 'none',
+    'run', '--detach', '--name', server, '--network', 'none',
     '--user', '1000:1000',
     '--read-only',
     '--tmpfs', '/tmp:rw,noexec,nosuid,size=67108864',
@@ -45,6 +45,12 @@ try {
     '-e', 'DSH_LISTEN_PORT=8080',
     image,
   ])
+  await setTimeout(1500)
+  const running = docker(['inspect', '-f', '{{.State.Running}} {{.State.ExitCode}} {{.State.Error}}', server], { allowFailure: true })
+  if (running.stdout.trim().split(/\s+/)[0] !== 'true') {
+    const logs = docker(['logs', server], { allowFailure: true })
+    throw new Error(`container exited before it became ready: ${running.stdout.trim()}\nstdout:\n${logs.stdout}\nstderr:\n${logs.stderr}`)
+  }
 
   const address = docker(['exec', server, 'sh', '-c', 'hostname -i 2>/dev/null || echo 127.0.0.1']).stdout.trim().split(/\s+/)[0]
   assert.ok(address, 'container must have a bind address')

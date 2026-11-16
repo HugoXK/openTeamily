@@ -18,6 +18,7 @@
   "dsh": {
     "client": {
       "platform": "web"
-    }
+    },
+    "bundle": {}
   }
 }

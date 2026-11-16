@@ -50,6 +50,18 @@ COPY flybot/NOTICE /opt/licenses/flybot/NOTICE
 COPY flybot-social-host /opt/openteamily/runtime/flybot-social-host
 COPY flybot-image /opt/openteamily/runtime/flybot-image
 
+# The wrapper and façade import the vendored trees by relative path. Node then
+# resolves their package imports from that real path, not from the web profile,
+# so ds-bot's dependencies and DSH peer packages must sit next to that tree.
+RUN node -e "const v=process.env.DSH_VERSION||process.argv[1]; if(!/^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$/.test(v)) { console.error('invalid DSH version', v); process.exit(1) }" "$DSH_VERSION" \
+    && npm ci --omit=dev --no-fund --no-audit --legacy-peer-deps --prefix /opt/openteamily/runtime/ds-bot-upstream/ds-bot \
+    && npm install --omit=dev --no-save --no-fund --no-audit --legacy-peer-deps --prefix /opt/openteamily/runtime/ds-bot-upstream/ds-bot \
+        "@deepseek-ai/cordis@${DSH_VERSION}" \
+        "@deepseek-ai/dsh-llm@${DSH_VERSION}" \
+        "@deepseek-ai/dsh-scope@${DSH_VERSION}" \
+        "@deepseek-ai/dsh-tools@${DSH_VERSION}" \
+        "@deepseek-ai/dsh-web@${DSH_VERSION}"
+
 # Init an official DSH web profile, then pin our plugins as link: paths and
 # drop a second ds-bot bundle so createRuntime runs once.
 ENV DSH_HOME=/opt/dsh-template

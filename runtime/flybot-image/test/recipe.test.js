@@ -51,6 +51,7 @@ test('wrapper plugin boots upstream createRuntime and the social façade once', 
 test('recipe does not edit the vendored upstream tree', () => {
   const docker = read('Dockerfile')
   assert.match(docker, /COPY ds-bot-upstream\/ds-bot /)
+  assert.match(docker, /npm ci --omit=dev/)
   assert.match(docker, /COPY ds-bot-upstream\/LICENSE \/opt\/licenses\/ds-bot\/LICENSE/)
   assert.match(docker, /COPY ds-bot-upstream\/NOTICE \/opt\/licenses\/ds-bot\/NOTICE/)
   assert.match(docker, /COPY flybot\/LICENSE \/opt\/licenses\/flybot\/LICENSE/)
