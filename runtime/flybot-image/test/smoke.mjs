@@ -86,7 +86,7 @@ try {
     ?? combined.match(/http:\/\/[0-9.]+:8080\/\?token=[^\s]+/)?.[0]
   assert.ok(loginUrl, `web server must print a login URL on 8080\n${combined}`)
   const tokenUrl = loginUrl.replace(/http:\/\/127\.0\.0\.1:8080/, `http://${address}:8080`)
-  docker(['exec', server, 'node', '--input-type=module', '-e', `
+  const api = docker(['exec', server, 'node', '--input-type=module', '-e', `
     import assert from 'node:assert/strict'
     const login = await fetch(process.argv[1], { redirect: 'manual' })
     const cookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
@@ -100,7 +100,11 @@ try {
     const result = await response.json()
     assert.ok(result.ok, result.error?.message)
     assert.ok(Array.isArray(result.value.bots), 'the DS Bot runtime must load')
-  `, tokenUrl])
+  `, tokenUrl], { allowFailure: true })
+  if (api.status !== 0) {
+    const later = docker(['logs', server], { allowFailure: true })
+    throw new Error(`Bot API probe failed (${api.status}):\n${api.stderr}\ncontainer logs:\n${later.stdout}\n${later.stderr}`)
+  }
 
   console.log('PASS: image user 1000, port 8080, read-only start, profile wrapper, Bot API')
 } finally {

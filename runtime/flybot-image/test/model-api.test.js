@@ -20,6 +20,11 @@ test('parses a valid secret and names the DSH env var', () => {
   assert.equal(config.api_key, sample.api_key)
   assert.equal(config.api_key_env, 'DEEPSEEK_API_KEY')
   assert.equal(keyRefFor('open-ai'), 'OPEN_AI_API_KEY')
+  assert.equal(config.source, undefined)
+  const fromUser = parseModelApi(JSON.stringify({ ...sample, source: 'user' }))
+  assert.equal(fromUser.source, 'user')
+  const fromPlatform = parseModelApi(JSON.stringify({ ...sample, source: 'platform' }))
+  assert.equal(fromPlatform.source, 'platform')
 })
 
 test('rejects unsafe or incomplete documents', () => {
@@ -32,6 +37,7 @@ test('rejects unsafe or incomplete documents', () => {
   reject({ provider: 'deepseek', api_key: 'k', base_url: 'javascript:alert(1)' })
   reject({ provider: 'deepseek', api_key: 'k', base_url: 'https://user:secret@api.example' })
   reject({ provider: 'deepseek', api_key: 'k', model: '$(reboot)' })
+  reject({ provider: 'deepseek', api_key: 'k', source: 'credits' })
   assert.throws(() => parseModelApi('not-json'), ModelApiError)
 })
 
@@ -46,6 +52,11 @@ test('apply sets the key env var and never includes it in the log line', () => {
   assert.equal(lines.length, 1)
   assert.match(lines[0], /provider=deepseek/)
   assert.match(lines[0], /key_env=DEEPSEEK_API_KEY/)
+  assert.match(lines[0], /source=resolved/)
+  assert.equal(env.OPENTEAMILY_MODEL_SOURCE, undefined)
+  const lines2 = []
+  applyModelApi(parseModelApi(JSON.stringify({ ...sample, source: 'user' })), {}, { info: (msg) => lines2.push(msg) })
+  assert.match(lines2[0], /source=user/)
   assert.doesNotMatch(lines[0], /sk-test/)
   assert.doesNotMatch(lines[0], /not-a-real-key/)
   assert.equal(redact(sample).api_key, '***')

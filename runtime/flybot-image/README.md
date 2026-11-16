@@ -50,11 +50,13 @@ CI (`.github/workflows/flybot-runtime-image.yml`) builds this image and runs
 
 ## Model API config (operator-supplied, not baked in)
 
-OpenTeamily does not ship a credits/billing proxy. The operator (via the
-management server; lane 2 owns the config API) must supply a model provider,
-optional base URL and model, and an API key when the instance starts.
+OpenTeamily does not ship a credits/billing proxy and does not enforce usage
+limits. A self-host admin sets a platform-default model API; a user may
+optionally override it. The management server (lane 2 owns the config API)
+resolves those two layers — **user override wins** — and injects one already-
+resolved secret when the instance starts. The container does not merge.
 
-The container reads a JSON secret file at start — never from the image layers:
+The container reads that JSON secret file at start — never from the image layers:
 
 1. `$OPENTEAMILY_MODEL_API_FILE` if set (must resolve under `/run/secrets/` or
    `/data/secrets/`)
@@ -68,14 +70,17 @@ Example file (do not commit real keys):
   "provider": "deepseek",
   "base_url": "https://api.deepseek.com",
   "model": "deepseek-chat",
-  "api_key": "sk-..."
+  "api_key": "sk-...",
+  "source": "user"
 }
 ```
 
-The launcher exports `{PROVIDER}_API_KEY` (for DeepSeek, `DEEPSEEK_API_KEY`)
-into the process environment for DSH, and records the non-secret fields as
-`OPENTEAMILY_MODEL_PROVIDER`, `OPENTEAMILY_MODEL_BASE_URL`, and
-`OPENTEAMILY_MODEL_NAME`. The key is never written to logs or stdout. Starting
+`source` is optional metadata (`platform` or `user`) saying which layer won;
+it is not used to choose a key. The launcher exports `{PROVIDER}_API_KEY`
+(for DeepSeek, `DEEPSEEK_API_KEY`) into the process environment for DSH, and
+records the non-secret fields as `OPENTEAMILY_MODEL_PROVIDER`,
+`OPENTEAMILY_MODEL_BASE_URL`, `OPENTEAMILY_MODEL_NAME`, and
+`OPENTEAMILY_MODEL_SOURCE`. The key is never written to logs or stdout. Starting
 without a file is allowed so CI smoke can boot; that instance cannot call a
 model until a secret is mounted.
 

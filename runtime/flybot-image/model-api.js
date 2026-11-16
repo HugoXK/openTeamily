@@ -1,6 +1,8 @@
 // Load the operator-supplied model API config at container start.
-// The management server (lane 2 owns the config API) injects a secret file or
-// env pointer; this image never bakes a key and never logs one.
+// The management server (lane 2 owns the config API) resolves the platform
+// default plus optional user override (override wins) and injects one secret
+// file or env pointer. This image never bakes a key, never logs one, and does
+// not enforce credits or usage limits.
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 
 export const DEFAULT_FILES = [
@@ -89,7 +91,17 @@ export function parseModelApi(raw) {
     }
   }
   if (model !== undefined && !MODEL.test(model)) throw new ModelApiError('model API model is invalid')
-  return { provider, api_key: apiKey, base_url: baseUrl, model, api_key_env: keyRefFor(provider) }
+  // The management server resolves platform default vs optional user override
+  // (override wins) and writes one file. The container does not merge, and it
+  // does not enforce credits or usage limits.
+  let source
+  if (data.source != null && String(data.source).trim() !== '') {
+    source = String(data.source).trim().toLowerCase()
+    if (source !== 'platform' && source !== 'user') {
+      throw new ModelApiError('model API source must be platform or user')
+    }
+  }
+  return { provider, api_key: apiKey, base_url: baseUrl, model, source, api_key_env: keyRefFor(provider) }
 }
 
 export function readModelApiFile(path) {
@@ -122,10 +134,12 @@ export function applyModelApi(config, env = process.env, log = console) {
   env.OPENTEAMILY_MODEL_PROVIDER = config.provider
   if (config.base_url) env.OPENTEAMILY_MODEL_BASE_URL = config.base_url
   if (config.model) env.OPENTEAMILY_MODEL_NAME = config.model
+  if (config.source) env.OPENTEAMILY_MODEL_SOURCE = config.source
   log.info?.(
     `model API ready: provider=${config.provider}`
     + (config.model ? ` model=${config.model}` : '')
     + (config.base_url ? ` base_url=${config.base_url}` : '')
+    + (config.source ? ` source=${config.source}` : ' source=resolved')
     + ` key_env=${config.api_key_env}`,
   )
   return env
