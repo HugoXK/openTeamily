@@ -42,6 +42,8 @@ export function createFlybotFacade(rt, { fields } = {}) {
   const sendHooks = []
   const transportMap = new Map()
   const toolList = []
+  const chatLog = []
+  const chatSendListeners = []
 
   const botSend = async (msg) => {
     if (flybot.readOnly()) return undefined
@@ -224,7 +226,26 @@ export function createFlybotFacade(rt, { fields } = {}) {
     },
     remote: {
       publish() { return undefined },
-      chats: { list() { return [] } },
+      chats: {
+        list() {
+          return [...chatLog]
+        },
+        onSend(fn) {
+          if (typeof fn !== 'function') return () => {}
+          chatSendListeners.push(fn)
+          return () => {
+            const at = chatSendListeners.indexOf(fn)
+            if (at !== -1) chatSendListeners.splice(at, 1)
+          }
+        },
+        async deliver(msg) {
+          if (flybot.readOnly()) return undefined
+          const entry = { ...(msg && typeof msg === 'object' ? msg : { text: String(msg ?? '') }) }
+          chatLog.push(entry)
+          flybot.emit?.('remote.chat', entry)
+          return entry
+        },
+      },
     },
     transports: {
       add(name, impl) {

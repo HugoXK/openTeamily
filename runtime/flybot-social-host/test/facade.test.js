@@ -157,4 +157,10 @@ test('bot.send.use, transports.add and tools.register are present so social can 
   await flybot.grants.set('a', [{ grantee: '@bob.home' }])
   assert.equal(flybot.grants.has('a', '@bob.home'), true)
   assert.equal(flybot.bot.hasAnyGrant(), true)
+
+  const offChat = flybot.remote.chats.onSend(async () => {})
+  assert.equal(typeof offChat, 'function')
+  await flybot.remote.chats.deliver({ handle: '@bob.home', text: 'hi' })
+  assert.equal(flybot.remote.chats.list().at(-1).text, 'hi')
+  offChat()
 })
