@@ -42,7 +42,7 @@ jobs:
           pid="$(cat "$RUNNER_TEMP/ot-ui-serve.pid")"
           for _ in $(seq 1 90); do
             if [ -f "$RUNNER_TEMP/ot-ui-meta/ready.json" ]; then
-              python -c 'import json,pathlib,sys; data=json.loads(pathlib.Path(sys.argv[1]).read_text()); print("origin=%s run=%s connection=%s" % (data["origin"], data["run_status"], data["connection_status"]))' "$RUNNER_TEMP/ot-ui-meta/ready.json"
+              python -c 'import json,pathlib,sys; data=json.loads(pathlib.Path(sys.argv[1]).read_text()); print("origin=%s run=%s connection=%s chat=%s" % (data["origin"], data["run_status"], data["connection_status"], data.get("chat_status")))' "$RUNNER_TEMP/ot-ui-meta/ready.json"
               exit 0
             fi
             if ! kill -0 "$pid" 2>/dev/null; then

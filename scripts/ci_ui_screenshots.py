@@ -80,7 +80,7 @@ def _wait_http(origin, path, timeout=20):
     raise RuntimeError('Loopback app did not become ready: %s' % last)
 
 
-def _public_ready(seed, origin, login_file, run_status, connection_status, git_sha):
+def _public_ready(seed, origin, login_file, run_status, connection_status, chat_status, git_sha):
     return {
         'origin': origin,
         'username': USERNAME,
@@ -89,10 +89,16 @@ def _public_ready(seed, origin, login_file, run_status, connection_status, git_s
         'workspace_id': seed['workspace_id'],
         'team_slug': seed['team_slug'],
         'member_username': seed['member_username'],
+        'agent_id': seed['agent_id'],
         'agent_name': seed['agent_name'],
+        'conversation_id': seed['conversation_id'],
+        'conversation_title': seed['conversation_title'],
+        'chat_user_text': seed['chat_user_text'],
+        'chat_live_text': seed['chat_live_text'],
         'automation_id': seed['automation_id'],
         'automation_title': seed['automation_title'],
         'document_title': seed['document_title'],
+        'document_body': seed['document_body'],
         'website_title': seed['website_title'],
         'media_title': seed['media_title'],
         'board_title': seed['board_title'],
@@ -101,6 +107,7 @@ def _public_ready(seed, origin, login_file, run_status, connection_status, git_s
         'provider_text': seed['provider_text'],
         'run_status': run_status,
         'connection_status': connection_status,
+        'chat_status': chat_status,
         'git_sha': git_sha,
         'note': (
             'Synthetic throwaway CI data on a GitHub Actions runner. '
@@ -110,12 +117,24 @@ def _public_ready(seed, origin, login_file, run_status, connection_status, git_s
     }
 
 
+def _assistant_status(payload):
+    items = (payload or {}).get('items') or []
+    replies = [item for item in items if item.get('role') == 'assistant']
+    if not replies:
+        return 'missing'
+    return replies[-1].get('status') or 'unknown'
+
+
 def _poll_run_and_connection(origin, seed, timeout=45):
     cookies = seed['cookies']
     wid, aid = seed['workspace_id'], seed['automation_id']
+    chat_path = '/v1/workspaces/%s/agents/%s/conversations/%s/messages' % (
+        wid, seed['agent_id'], seed['conversation_id'],
+    )
     deadline = time.time() + timeout
     run_status = 'missing'
     connection_status = 'missing'
+    chat_status = 'missing'
     while time.time() < deadline:
         run_code, runs = _json_get(origin, '/v1/workspaces/%s/automations/%s/runs?limit=20' % (wid, aid), cookies)
         if run_code == 200 and runs and runs.get('items'):
@@ -123,10 +142,13 @@ def _poll_run_and_connection(origin, seed, timeout=45):
         conn_code, connections = _json_get(origin, '/v1/runtime/connections', cookies)
         if conn_code == 200 and connections and connections.get('items'):
             connection_status = connections['items'][0].get('status') or 'unknown'
-        if run_status == 'succeeded' and connection_status == 'online':
+        chat_code, messages = _json_get(origin, chat_path, cookies)
+        if chat_code == 200:
+            chat_status = _assistant_status(messages)
+        if run_status == 'succeeded' and connection_status == 'online' and chat_status == 'succeeded':
             break
         time.sleep(0.5)
-    return run_status, connection_status
+    return run_status, connection_status, chat_status
 
 
 def main(argv=None):
@@ -185,12 +207,12 @@ def main(argv=None):
         _wait_http(origin, '/settings')
         if server.poll() is not None:
             raise RuntimeError('Management server exited during startup')
-        run_status, connection_status = _poll_run_and_connection(origin, seed)
+        run_status, connection_status, chat_status = _poll_run_and_connection(origin, seed)
         git_sha = os.environ.get('GITHUB_SHA') or ''
-        ready = _public_ready(seed, origin, login_file, run_status, connection_status, git_sha)
+        ready = _public_ready(seed, origin, login_file, run_status, connection_status, chat_status, git_sha)
         (out_dir / 'ready.json').write_text(json.dumps(ready, indent=2, sort_keys=True) + '\n')
-        print('CI UI fixture listening at %s; ready.json in %s; run=%s connection=%s'
-              % (origin, out_dir, run_status, connection_status), flush=True)
+        print('CI UI fixture listening at %s; ready.json in %s; run=%s connection=%s chat=%s'
+              % (origin, out_dir, run_status, connection_status, chat_status), flush=True)
         if not args.serve:
             return
         signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(0)))

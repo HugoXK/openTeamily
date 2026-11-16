@@ -5,8 +5,9 @@ import unittest
 
 from openteamily.app import App, Config
 from openteamily.ci_ui_fixtures import (
-    AGENT_NAME, AUTOMATION_TITLE, BOARD_TITLE, DOCUMENT_TITLE, MEDIA_TITLE, MEMBER_USERNAME,
-    RUNTIME_KEY_NAME, TEAM_NAME, TEAM_SLUG, USERNAME, WEBSITE_TITLE, seed_fixtures, solid_png,
+    AGENT_NAME, AUTOMATION_TITLE, BOARD_TITLE, CHAT_TITLE, CHAT_USER_TEXT, DOCUMENT_TITLE,
+    MEDIA_TITLE, MEMBER_USERNAME, RUNTIME_KEY_NAME, TEAM_NAME, TEAM_SLUG, USERNAME,
+    WEBSITE_TITLE, seed_fixtures, solid_png,
 )
 from openteamily.store import Store
 from tests.test_management import Client, ORIGIN
@@ -46,6 +47,16 @@ class CiUiFixtureTests(unittest.TestCase):
         self.assertEqual({row['username'] for row in members['body']['items']}, {USERNAME, MEMBER_USERNAME})
         agents = client.call('GET', f'/v1/workspaces/{wid}/agents')
         self.assertEqual([row['name'] for row in agents['body']['items']], [AGENT_NAME])
+        agent_id = agents['body']['items'][0]['id']
+        self.assertEqual(seed['agent_id'], agent_id)
+        convs = client.call('GET', f'/v1/workspaces/{wid}/agents/{agent_id}/conversations')
+        self.assertEqual(convs['status'], 200, convs)
+        self.assertEqual([row['title'] for row in convs['body']['items']], [CHAT_TITLE])
+        messages = client.call(
+            'GET', f'/v1/workspaces/{wid}/agents/{agent_id}/conversations/{seed["conversation_id"]}/messages')
+        self.assertEqual(messages['status'], 200, messages)
+        self.assertTrue(any(row.get('role') == 'user' and row.get('body') == CHAT_USER_TEXT
+                            for row in messages['body']['items']), messages)
         autos = client.call('GET', f'/v1/workspaces/{wid}/automations?category=mine')
         self.assertEqual([row['title'] for row in autos['body']['items']], [AUTOMATION_TITLE])
         artifacts = client.call('GET', f'/v1/workspaces/{wid}/artifacts')

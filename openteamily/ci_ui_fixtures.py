@@ -22,6 +22,9 @@ WORKSPACE_NAME = 'CI Fixture Workspace'
 TEAM_NAME = 'CI Fixture Team'
 TEAM_SLUG = 'ci-fixture'
 AGENT_NAME = '[CI FIXTURE] Directory assistant'
+CHAT_TITLE = '[CI FIXTURE] Conversation'
+CHAT_USER_TEXT = '[CI FIXTURE] Please reply with one labeled sentence.'
+CHAT_LIVE_TEXT = '[CI FIXTURE] Live UI send from the screenshot script.'
 AUTOMATION_TITLE = '[CI FIXTURE] Sample briefing'
 AUTOMATION_PROMPT = 'Write one sentence of clearly labeled CI fixture text.'
 DOCUMENT_TITLE = '[CI FIXTURE] Document'
@@ -102,10 +105,22 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
     invite = _require(owner.call('POST', '/v1/workspaces/%s/invites' % wid, {'role': 'member'}),
                       (201,), 'create a fixture invite')
     invite_id = invite['body']['invite']['id']
-    _require(owner.call('POST', '/v1/workspaces/%s/agents' % wid, {
+    agent = _require(owner.call('POST', '/v1/workspaces/%s/agents' % wid, {
         'name': AGENT_NAME, 'summary': 'Synthetic CI directory entry.',
         'instructions': 'Keep replies short. This agent is fixture data only.',
     }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-agent-0001'}), (201,), 'create the fixture agent')
+    agent_id = agent['body']['agent']['id']
+    conversation = _require(owner.call(
+        'POST', '/v1/workspaces/%s/agents/%s/conversations' % (wid, agent_id),
+        {'title': CHAT_TITLE},
+        {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-chat-0001'},
+    ), (201,), 'create the fixture conversation')
+    conversation_id = conversation['body']['conversation']['id']
+    _require(owner.call(
+        'POST', '/v1/workspaces/%s/agents/%s/conversations/%s/messages' % (wid, agent_id, conversation_id),
+        {'body': CHAT_USER_TEXT},
+        {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-msg-0001'},
+    ), (201,), 'send the fixture conversation message')
     automation = _require(owner.call('POST', '/v1/workspaces/%s/automations' % wid, {
         'title': AUTOMATION_TITLE,
         'prompt': AUTOMATION_PROMPT,
@@ -154,7 +169,13 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         'workspace_id': wid,
         'workspace_name': TEAM_NAME,
         'team_slug': TEAM_SLUG,
+        'agent_id': agent_id,
         'agent_name': AGENT_NAME,
+        'conversation_id': conversation_id,
+        'conversation_title': CHAT_TITLE,
+        'chat_user_text': CHAT_USER_TEXT,
+        'chat_live_text': CHAT_LIVE_TEXT,
+        'document_body': DOCUMENT_BODY,
         'automation_id': aid,
         'automation_title': AUTOMATION_TITLE,
         'document_title': DOCUMENT_TITLE,

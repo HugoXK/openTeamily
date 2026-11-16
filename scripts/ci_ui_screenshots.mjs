@@ -62,10 +62,28 @@ async function shot(page, outDir, name) {
   return file;
 }
 
-async function openListItem(page, title) {
-  const button = page.locator('#main-panel button.link', { hasText: title }).first();
+async function openListItem(page, title, listSelector = '#main-panel') {
+  const button = page.locator(`${listSelector} button.link`, { hasText: title }).first();
   await button.waitFor({ state: 'visible', timeout: 15000 });
   await button.click();
+}
+
+async function waitForInputValue(page, selector, expected, timeout = 15000) {
+  await page.locator(selector).waitFor({ state: 'visible', timeout });
+  await page.waitForFunction(
+    ({ selector, expected }) => document.querySelector(selector)?.value === expected,
+    { selector, expected },
+    { timeout },
+  );
+}
+
+async function waitForLocatorText(page, selector, expected, timeout = 15000) {
+  await page.locator(selector).waitFor({ state: 'visible', timeout });
+  await page.waitForFunction(
+    ({ selector, expected }) => (document.querySelector(selector)?.innerText || '').includes(expected),
+    { selector, expected },
+    { timeout },
+  );
 }
 
 async function main() {
@@ -144,13 +162,51 @@ async function main() {
     record('agents_list', agentsList.includes(ready.agent_name), agentsList || 'agent list empty');
     screenshots.push(path.basename(await shot(page, outDir, '03-agents-list.png')));
     try {
-      await openListItem(page, ready.agent_name);
+      await openListItem(page, ready.agent_name, '#agent-list');
       await page.locator('#edit-form').waitFor({ state: 'visible', timeout: 15000 });
+      await waitForInputValue(page, '#edit-form input[name="name"]', ready.agent_name);
       const nameValue = await page.locator('#edit-form input[name="name"]').inputValue();
-      record('agents_editor', nameValue === ready.agent_name, `editor name=${nameValue}`, { soft: true });
+      record('agents_editor', nameValue === ready.agent_name, `editor name=${nameValue}`);
       screenshots.push(path.basename(await shot(page, outDir, '04-agents-editor.png')));
     } catch (error) {
-      record('agents_editor', false, String(error), { soft: true });
+      record('agents_editor', false, String(error));
+    }
+
+    try {
+      await page.locator('#chat-panel').waitFor({ state: 'visible', timeout: 15000 });
+      await waitForLocatorText(page, '#chat-title', ready.agent_name);
+      await openListItem(page, ready.conversation_title, '#conversation-list');
+      await waitForLocatorText(page, '#message-list', ready.chat_user_text);
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 20000);
+      const history = await visibleText(page.locator('#message-list'));
+      record(
+        'agents_conversation_history',
+        history.includes(ready.chat_user_text) && history.includes(ready.provider_text),
+        history.slice(0, 240) || 'conversation history empty',
+        { soft: ready.chat_status !== 'succeeded' },
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '16-agents-conversation.png')));
+    } catch (error) {
+      record('agents_conversation_history', false, String(error), { soft: ready.chat_status !== 'succeeded' });
+    }
+
+    try {
+      await page.locator('#new-conversation').click();
+      await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#chat-body').fill(ready.chat_live_text);
+      await page.locator('#chat-form button[type="submit"]').click();
+      await waitForLocatorText(page, '#message-list', ready.chat_live_text, 15000);
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 20000);
+      const live = await visibleText(page.locator('#message-list'));
+      record(
+        'agents_conversation_send',
+        live.includes(ready.chat_live_text) && live.includes(ready.provider_text),
+        live.slice(0, 240) || 'live conversation empty',
+        { soft: ready.connection_status !== 'online' },
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '17-agents-conversation-send.png')));
+    } catch (error) {
+      record('agents_conversation_send', false, String(error), { soft: ready.connection_status !== 'online' });
     }
 
     await page.goto(`${origin}/automations`, { waitUntil: 'networkidle' });
@@ -186,23 +242,26 @@ async function main() {
     );
     screenshots.push(path.basename(await shot(page, outDir, '07-artifacts-list.png')));
 
-    const openArtifact = async (title, file, checkName, extra) => {
+    const openArtifact = async (title, file, checkName, extra, { soft = true } = {}) => {
       try {
         await page.goto(`${origin}/artifacts`, { waitUntil: 'networkidle' });
         await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
-        await openListItem(page, title);
+        await page.locator('#artifact-list').waitFor({ state: 'visible', timeout: 15000 });
+        await openListItem(page, title, '#artifact-list');
         await page.locator('#editor-form').waitFor({ state: 'visible', timeout: 15000 });
+        await waitForInputValue(page, '#editor-form input[name="title"]', title);
         const ok = await extra();
-        record(checkName, ok, title, { soft: true });
+        record(checkName, ok, title, { soft });
         screenshots.push(path.basename(await shot(page, outDir, file)));
       } catch (error) {
-        record(checkName, false, String(error), { soft: true });
+        record(checkName, false, String(error), { soft });
       }
     };
     await openArtifact(ready.document_title, '08-artifacts-document.png', 'artifacts_document', async () => {
+      await waitForInputValue(page, '#editor-form textarea[name="body"]', ready.document_body);
       const body = await page.locator('#editor-form textarea[name="body"]').inputValue();
-      return body.includes('synthetic CI screenshot fixture text');
-    });
+      return body === ready.document_body;
+    }, { soft: false });
     await openArtifact(ready.media_title, '09-artifacts-media.png', 'artifacts_media', async () => {
       const image = page.locator('#media-image');
       await image.waitFor({ state: 'visible', timeout: 15000 });
@@ -292,6 +351,7 @@ async function main() {
       team_slug: ready.team_slug,
       run_status: ready.run_status,
       connection_status: ready.connection_status,
+      chat_status: ready.chat_status,
       note: ready.note,
     },
     screenshots,
