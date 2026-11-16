@@ -5,6 +5,16 @@
 
 对照政策：[docs/REUSE_POLICY.md](../REUSE_POLICY.md)。先前部署草稿与规划笔记只作线索，结论以本目录对公开仓库固定修订的核对为准。钉扎与哈希见 [pins.json](pins.json)，组件表见 [INVENTORY.md](INVENTORY.md)。
 
+## 导入后勘误（2026-11-16，[PR #20](https://github.com/openTeamily/openTeamily/pull/20) / [PR #21](https://github.com/openTeamily/openTeamily/pull/21) 合入后）
+
+下面「当前结论」仍是 #18 当时的审计记录，不追溯改写。随后发生的导入如下，**不得**把本仓根 MIT 覆盖到这些树上：
+
+- **#20** 已按需把 FlyBot 定制层写入 `runtime/flybot/`（社交插件、docker 辅助脚本与选定文档，保留 Apache-2.0 `LICENSE` / `NOTICE`），把 Bot Social 必要集写入 `services/bot-social/`（保留 MIT 与 Birfy 版权）。未导入 `runtime/flybot/core/`、旧的 `ds-bot.pin.json`、Project / Timeline / tree / workflow 插件，以及未核商标的品牌/演示图。
+- **#21** 已把上游 [Fei2411/DS-Bot](https://github.com/Fei2411/DS-Bot) **v0.3.6**（`a66cc737cfb6c3d8a2597e748cded6cab1206dd3`）作为未修改钉扎副本放入 `runtime/ds-bot-upstream/`。`LICENSE` 与 #18 记录的 Apache-2.0 文本相同（sha256 `c71d239d...`）。**`NOTICE` 已变**：v0.3.6 为 sha256 `4c7d3e4e7607f02ed9e4fb940442be7d0d107b57beb54660e1526a7be07c2aad`（15557 字节），不同于 FlyBot / 历史钉扎 `2b10c70` 的 `94f05bc4...`（3835 字节）；新增对更多 DSH 派生文件以及 Simple Icons（CC0）、Context7（MIT）、Playwright（Apache-2.0）等声明。此处只记录哈希与差异，**不是**对新增声明的完整法律重读。
+- 当前运行时钉扎的 DSH 为 **`0.2.2-rc.1`**（见 `runtime/ds-bot-upstream.pin.json`）。#18 只审计了 `dsh-v0.2.1-rc.2`。0.2.2-rc.1 的传递依赖、npm 与 git 标签对应、MPL / 镜像再分发义务仍为 **待核**，#3 不得关闭。
+
+#18 写的「在审计剩余项关闭前不要把源码拷入本仓」已被后续按需导入取代；禁止改标为 MIT、禁止导入无许可证控制面、禁止导入 Teamily 专有资产，这几条仍然有效。
+
 ## 方法
 
 - 只读公开 GitHub 仓库与 npm 注册表原文；以默认分支或版本标签的**固定 commit / 版本**为准，而不是本机工作树。
@@ -26,7 +36,8 @@
    已核对其 `LICENSE` 为 Apache License 2.0 标准文本（与 GitHub `licenses/apache-2.0` 正文在规范化换行后一致），`NOTICE` 载明 “DS Bot，Copyright 2026 Fei2411 and the DS Bot contributors”。GitHub 仓级 SPDX 为 Apache-2.0。`LICENSE` / `NOTICE` 的 git blob 与上游 [Fei2411/DS-Bot](https://github.com/Fei2411/DS-Bot) `@2b10c70b614e969117b68ddc6fd14e68968272f2`（`ds-bot.pin.json` 所钉；`Fei2411/DeepSeek-Bot` 会解析到同一仓库）相同。  
    再分发或修改须保留 Apache 2.0 文本、`NOTICE`、版权与归属，提供对修改文件的说明，并遵守 NOTICE 中对 DeepSeek Harness 的 MIT 声明。  
    **允许的形态：** 独立仓库或自构建镜像，由管理面编排。  
-   **不允许：** 把该源码合并进本仓后当作本仓 MIT 作品；在审计剩余项关闭前把源码或镜像拷入本仓。
+   **不允许：** 把该源码合并进本仓后当作本仓 MIT 作品。
+   **随后导入：** 见上文「导入后勘误」——#20 已按需导入定制层到 `runtime/flybot/`，保留原许可，并未导入 core 旧分叉。
 
 2. **FlyBot 插件**（`plugins/project`、`timeline`、`social`、`tree`、`workflow`）  
    各 `package.json` 的 `license` 字段为 `Apache-2.0`。插件目录**没有**独立 `LICENSE` 文件。它们位于同一公开仓库、受根 `LICENSE` + `NOTICE` 约束，此点已记录。  
@@ -36,6 +47,7 @@
    已核对 `LICENSE` 为 MIT，Copyright (c) 2026 Birfy；`package.json` 与 README 声明一致。GitHub 仓级 SPDX 为 MIT。依赖锁文件中先前缺 `license` 字段的包，已按**钉扎版本**向 npm 查询，结果为 MIT / Apache-2.0 / ISC / BSD-2/3-Clause 等宽松许可，未见 GPL / AGPL / 专有声明。  
    **允许的形态：** 可选的独立服务或协议适配，保留版权与 MIT 声明。  
    **不是**架构必选第三服务。不得改标为本仓原创 MIT。
+   **随后导入：** #20 已按需导入到 `services/bot-social/`，保留 MIT 与版权声明。
 
 ### 局部阻塞（不阻止项目其余部分）
 
@@ -64,5 +76,8 @@
 - 基础容器镜像与 Debian/GPL 组件的再分发清单待核。
 - KaTeX 字体附件与 Bot Social / FlyBot 图像标识的商标待核。
 - 拟实际导入或发布的**精确构建**若不同于上述钉扎，必须对那一修订重做本审计。
+- 运行时现已钉扎 `@deepseek-ai/dsh@0.2.2-rc.1`（PR #21）。对该版本尚未做与 #18 同级的传递依赖与再分发审计。
+- 上游 DS-Bot v0.3.6 的 `NOTICE` 已比历史钉扎更长，新增第三方声明尚未逐条法律重读。
+
 
 校验记录的钉扎与哈希：在仓库根目录运行 `python3 scripts/verify-reuse-audit-pins.py`（默认同记录的哈希；加 `--fetch` 时会再次向 GitHub 拉取公开文件并比较）。

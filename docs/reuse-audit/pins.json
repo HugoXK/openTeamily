@@ -47,7 +47,20 @@
         "NOTICE",
         "ds-bot/LICENSE",
         "ds-bot/package.json"
-      ]
+      ],
+      "historical_flybot_core_pin": {
+        "commit": "2b10c70b614e969117b68ddc6fd14e68968272f2",
+        "commit_date_utc": "2026-10-14T05:36:14Z",
+        "pin_in_flybot": "ds-bot.pin.json commit 2b10c70b614e969117b68ddc6fd14e68968272f2",
+        "note": "Referenced by the #18 audit. The v0.1.5 FlyBot core fork that carried ds-bot.pin.json was not imported (#20)."
+      },
+      "current_runtime_baseline": {
+        "tag": "v0.3.6",
+        "commit": "a66cc737cfb6c3d8a2597e748cded6cab1206dd3",
+        "tree": "runtime/ds-bot-upstream/",
+        "via": "PR #21",
+        "unmodified_pinned_copy": true
+      }
     },
     "Birfy/bot-social": {
       "url": "https://github.com/Birfy/bot-social",
@@ -103,6 +116,55 @@
       "github_license_api": null,
       "license_file_in_default_tree": false,
       "import_allowed": false
+    }
+  },
+  "original_audit": "PR #18 recorded the pins below on 2026-11-16, before the #20 / #21 imports.",
+  "post_import_update": {
+    "date_asia_shanghai": "2026-11-16",
+    "after_pull_requests": [
+      "#20",
+      "#21"
+    ],
+    "note": "This object records where imported trees now live and the current upstream DS-Bot / DSH pins. It is not a new full redistribution audit. #18 hashes and the 0.2.1-rc.2 DSH evidence below are unchanged. Transitive DSH obligations remain open on #3.",
+    "imported_trees": {
+      "runtime/flybot": {
+        "source": "ThinkFlowLab/FlyBot",
+        "commit": "e26895e737b1218875aafa1f74ab1d3464f287d2",
+        "via": "PR #20",
+        "license": "Apache-2.0 + NOTICE",
+        "scope": "needed set only (social plugin, docker helpers, selected docs, LICENSE/NOTICE); core/ and ds-bot.pin.json not imported"
+      },
+      "services/bot-social": {
+        "source": "Birfy/bot-social",
+        "commit": "8706824f53f6cce8212470bc6b442f7271cccd3e",
+        "via": "PR #20",
+        "license": "MIT, Copyright (c) 2026 Birfy",
+        "scope": "needed set only"
+      },
+      "runtime/ds-bot-upstream": {
+        "source": "Fei2411/DS-Bot",
+        "tag": "v0.3.6",
+        "commit": "a66cc737cfb6c3d8a2597e748cded6cab1206dd3",
+        "via": "PR #21",
+        "license": "Apache-2.0",
+        "unmodified_pinned_copy": true,
+        "LICENSE": {
+          "git_blob_sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+          "note": "Same LICENSE blob as the #18 FlyBot / historical DS-Bot pin"
+        },
+        "NOTICE": {
+          "git_blob_sha": "6d23575eee898d1fc836d0afcc57c07a7f69c6e4",
+          "sha256": "4c7d3e4e7607f02ed9e4fb940442be7d0d107b57beb54660e1526a7be07c2aad",
+          "bytes": 15557,
+          "note": "Different from the FlyBot / DS-Bot@2b10c70 NOTICE (94f05bc4..., 3835 bytes). v0.3.6 adds further DSH-derived file attributions plus Simple Icons (CC0), Context7 (MIT) and Playwright (Apache-2.0) notices. Recorded by sha256; not a complete legal re-read of every new attribution."
+        },
+        "dsh_pin_in_runtime": {
+          "version": "0.2.2-rc.1",
+          "source": "runtime/ds-bot-upstream.pin.json",
+          "redistribution_audit": "not done; #18 covered dsh-v0.2.1-rc.2 only"
+        }
+      }
     }
   }
 }

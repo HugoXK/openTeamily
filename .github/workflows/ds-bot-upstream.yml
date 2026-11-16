@@ -52,15 +52,27 @@ jobs:
         working-directory: .
         run: |
           dsh=$(node -p "require('./runtime/ds-bot-upstream.pin.json').dsh")
-          test -n "$dsh" && test "$dsh" != null
+          # Strict version only (e.g. 0.2.2-rc.1). Pass the pin through an
+          # env var; do not paste it into the shell script via a workflow expression.
+          if [[ ! "$dsh" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "invalid DSH version in pin: $dsh"
+            exit 1
+          fi
           echo "dsh=$dsh" >> "$GITHUB_OUTPUT"
           echo "DSH $dsh"
       - run: npm ci --no-fund --no-audit
       - name: Install the phone link's packages (imported by upstream tests)
         run: npm ci --no-fund --no-audit --prefix ../link
-      - name: Install DSH ${{ steps.pin.outputs.dsh }} test harness
+      - name: Install DSH test harness (version from pin)
         # As upstream's CI does: the testkit pins the DSH packages it was built with.
-        run: npm run harness -- --no-save "@deepseek-ai/dsh@${{ steps.pin.outputs.dsh }}" "@deepseek-ai/dsh-agent-loop-testkit@${{ steps.pin.outputs.dsh }}"
+        env:
+          DSH_VERSION: ${{ steps.pin.outputs.dsh }}
+        run: |
+          if [[ ! "$DSH_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "invalid DSH version: $DSH_VERSION"
+            exit 1
+          fi
+          npm run harness -- --no-save "@deepseek-ai/dsh@${DSH_VERSION}" "@deepseek-ai/dsh-agent-loop-testkit@${DSH_VERSION}"
       - run: npm test
       - run: node scripts/build-client.mjs --check
       - run: npm run lint
@@ -84,6 +96,10 @@ jobs:
       - name: Build the upstream image (DSH version from the pin)
         run: |
           dsh=$(node -p "require('../ds-bot-upstream.pin.json').dsh")
+          if [[ ! "$dsh" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "invalid DSH version in pin: $dsh"
+            exit 1
+          fi
           docker build -f docker/Dockerfile --build-arg "DSH_VERSION=$dsh" -t openteamily-ds-bot:test .
       - name: Upstream startup test (dsh web answers, DS Bot API state loads)
         run: node docker/test.mjs openteamily-ds-bot:test
