@@ -36,7 +36,7 @@ if (expectImage) {
   need(inv.os.packages?.some((p) => p.name === 'git'), 'git package not listed')
   need(inv.npm.trees.global_dsh.present && inv.npm.trees.global_dsh.package_count > 0, 'global DSH tree empty')
   need(inv.npm.trees.dsbot.present && inv.npm.trees.dsbot.package_count > 0, 'ds-bot tree empty')
-  need(inv.npm.trees.profile_web.present && inv.npm.trees.profile_web.package_count > 0, 'profile web tree empty')
+  need(inv.npm.trees.profile_web.present && inv.npm.trees.profile_web.package_count >= 7, 'profile web tree missing linked packages (follow symlinks)')
   const files = (inv.bundled_notices.files || []).map((f) => f.path)
   need(files.some((p) => p.includes('/opt/licenses/flybot/') && /notice/i.test(p)), 'missing FlyBot NOTICE in /opt/licenses')
   need(files.some((p) => p.includes('/opt/licenses/ds-bot/')), 'missing ds-bot licenses in /opt/licenses')

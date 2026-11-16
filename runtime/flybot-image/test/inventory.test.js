@@ -53,6 +53,7 @@ test('fixture inventory records OS, npm closures, fonts, and bundled notices', (
     assert.equal(kit.license_field, 'MPL-2.0')
     assert.ok(inventory.npm.trees.dsbot.packages.some((p) => p.name === 'ws'))
     assert.ok(inventory.npm.trees.profile_web.packages.some((p) => p.name === 'katex'))
+    assert.ok(inventory.npm.trees.profile_web.packages.some((p) => p.name === 'linked-fixture-pkg'))
 
     assert.equal(inventory.claude.present, false)
     assert.equal(inventory.fonts.file_count, 1)
@@ -66,8 +67,15 @@ test('fixture inventory records OS, npm closures, fonts, and bundled notices', (
     assert.match(markdown, /not.*legal opinion/i)
     assert.equal(summary.claude_present, false)
 
-    const checked = runValidate(join(out, 'inventory.json'), ['--expect-image'])
+    const checked = runValidate(join(out, 'inventory.json'))
     assert.equal(checked.status, 0, checked.stderr || checked.stdout)
+    const imageLike = structuredClone(inventory)
+    imageLike.npm.trees.profile_web.package_count = 1
+    const weak = join(out, 'weak-profile.json')
+    writeFileSync(weak, JSON.stringify(imageLike))
+    const expectImage = runValidate(weak, ['--expect-image'])
+    assert.notEqual(expectImage.status, 0)
+    assert.match(expectImage.stderr, /linked packages/)
   } finally {
     rmSync(out, { recursive: true, force: true })
   }

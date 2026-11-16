@@ -31,3 +31,5 @@ The artifact from that job is the live inventory for that build; files in
 Related tracking remains open: issue 1, issue 3, issue 5.
 
 The fixture trees contain tiny `node_modules` stubs. They are tracked via a root `.gitignore` exception; they are not installed packages.
+
+The collector follows directory symlinks (with a realpath cycle guard) so pnpm/`link:` profile packages are included. Fixture trees are excluded from a built-image walk and are omitted from the Docker build context via `runtime/.dockerignore`.

@@ -4,7 +4,7 @@
 // image, does not contact the network, and is not a legal opinion or a
 // public-redistribution clearance.
 import { createHash } from 'node:crypto'
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync, existsSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 
 const args = process.argv.slice(2)
@@ -22,6 +22,15 @@ const licenseNames = new Set([
   'montserrat-ofl.txt', 'unlicense',
 ])
 const fontSuffixes = new Set(['.woff', '.woff2', '.ttf', '.otf', '.eot'])
+
+function isAttributionFile(name) {
+  const lower = String(name || '').toLowerCase()
+  if (licenseNames.has(lower)) return true
+  if (/^(readme|notice|license|licence|copying|copyright)(\.|$)/i.test(name)) return true
+  if (lower === 'pins.json') return true
+  return lower.endsWith('.txt') && /license|licence|notice|ofl|mit|mpl|apache|copyright/i.test(lower)
+}
+
 const maxLicenseBytes = 200_000
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex')
@@ -39,17 +48,39 @@ const rel = (path) => {
   return text.startsWith('..') ? path : '/' + text.replaceAll('\\', '/')
 }
 
-function walk(dir, visit, depth = 0) {
-  if (depth > 24) return
+function isInventoryFixture(path) {
+  // Only skip fixture trees when they appear *inside* the inventory root
+  // (as they would in a badly copied image). When the root itself is the
+  // fixture, the relative path will not contain this segment.
+  const text = rel(path)
+  return text.includes('/inventory/testdata/') || text.endsWith('/inventory/testdata')
+}
+
+function walk(dir, visit, depth = 0, seen = new Set()) {
+  if (depth > 32) return
+  if (isInventoryFixture(dir)) return
+  let real
+  try { real = realpathSync(dir) } catch { return }
+  if (seen.has(real)) return
+  seen.add(real)
   let entries
   try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
   for (const entry of entries) {
     if (entry.name === '.' || entry.name === '..') continue
-    if (entry.isDirectory() && skipDirNames.has(entry.name)) continue
     const path = join(dir, entry.name)
-    if (entry.isSymbolicLink()) continue
-    visit(path, entry)
-    if (entry.isDirectory()) walk(path, visit, depth + 1)
+    if (isInventoryFixture(path)) continue
+    let isDir = entry.isDirectory()
+    let isFile = entry.isFile()
+    if (entry.isSymbolicLink()) {
+      try {
+        const st = statSync(path)
+        isDir = st.isDirectory()
+        isFile = st.isFile()
+      } catch { continue }
+    }
+    if (isDir && skipDirNames.has(entry.name)) continue
+    visit(path, { name: entry.name, isFile: () => isFile, isDirectory: () => isDir })
+    if (isDir) walk(path, visit, depth + 1, seen)
   }
 }
 
@@ -255,15 +286,16 @@ function collectNotices() {
   if (existsSync(dir)) {
     walk(dir, (path, entry) => {
       if (!entry.isFile()) return
+      if (!isAttributionFile(entry.name)) return
       const file = safeRead(path, 400_000)
       if (!file) return
-      const text = file.text || ''
+      const body = file.text || ''
       files.push({
         path: rel(path),
         bytes: file.bytes,
         sha256: file.sha256,
         truncated: file.truncated,
-        mentions_trademark: /\btrademarks?\b/i.test(text),
+        mentions_trademark: /\btrademarks?\b/i.test(body),
       })
     })
   }
@@ -274,6 +306,14 @@ function collectNotices() {
     files,
     trademark_note: 'mentions_trademark records the word occurring in a bundled notice file. That is attribution inventory, not trademark clearance.',
   }
+}
+
+function uniquePackages(packages) {
+  const byPath = new Map()
+  for (const pkg of packages) {
+    if (!byPath.has(pkg.path)) byPath.set(pkg.path, pkg)
+  }
+  return [...byPath.values()]
 }
 
 function licenseHistogram(packages) {
@@ -293,7 +333,7 @@ function unusualLicenses(packages) {
 }
 
 function markdown(inv) {
-  const npmAll = Object.values(inv.npm.trees).flatMap((t) => t.packages || [])
+  const npmAll = uniquePackages(Object.values(inv.npm.trees).flatMap((t) => t.packages || []))
   const unusual = unusualLicenses(npmAll)
   const lines = [
     '# FlyBot runtime image license inventory',
@@ -374,7 +414,7 @@ writeFileSync(join(OUT, 'summary.json'), JSON.stringify({
   os: inventory.os.os_release.PRETTY_NAME || inventory.os.os_release.ID,
   os_packages: inventory.os.package_count,
   npm_package_counts: Object.fromEntries(Object.entries(npmTrees).map(([k, v]) => [k, v.package_count])),
-  unusual_npm_license_fields: unusualLicenses(Object.values(npmTrees).flatMap((t) => t.packages || [])),
+  unusual_npm_license_fields: unusualLicenses(uniquePackages(Object.values(npmTrees).flatMap((t) => t.packages || []))),
   claude_present: inventory.claude.present,
   claude_packages: inventory.claude.packages_found.map((p) => `${p.name}@${p.version}`),
   font_files: inventory.fonts.file_count,
