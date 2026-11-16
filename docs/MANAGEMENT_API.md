@@ -36,6 +36,8 @@ All responses are JSON and no-store. There is no CORS support. Errors are `{erro
 | POST | `/v1/workspaces` | `{name}`; owner is server-derived, never caller-selected; requires `Idempotency-Key` |
 | GET | `/v1/workspaces` | Owner-only bounded page: `limit=1..100` (default20), optional UUID-hex `cursor` |
 | GET | `/v1/workspaces/{id}` | Owner-only read; other owners and nonexistent records both get404 |
+| GET/POST | `/v1/admin/model-api` | Platform default model API (operator bearer); see [MODEL_API.md](MODEL_API.md) |
+| GET/POST | `/v1/model-api` | Account model API override and effective config; see [MODEL_API.md](MODEL_API.md) |
 | GET/POST | `/v1/settings` | Per-account interface preferences with revision check; added after PR16, see [SETTINGS.md](SETTINGS.md) |
 | GET/POST | `/v1/workspaces/{id}/members` | Membership and roles; added after PR16, see [MEMBERS.md](MEMBERS.md). List/get workspaces include membership, not only ownership |
 | GET/POST | `/v1/workspaces/{id}/automations` | Configuration, explicit tick and run records; hook is not container execution. See [AUTOMATIONS.md](AUTOMATIONS.md) |

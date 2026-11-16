@@ -8,17 +8,17 @@ execution is left to a later Compose wiring slice. Not Teamily parity.
 import json
 from uuid import uuid4
 
-from . import automations
+from . import automations, model_api
 
 
 class NullAutomationBackend:
-    def dispatch_automation(self, payload, db=None):
+    def dispatch_automation(self, payload, db=None, model_api_key=None):
         return {'status': 'skipped', 'error_code': 'no_backend', 'instance_ids': []}
 
 
-def payload(row, run_id, due):
+def payload(row, run_id, due, model=None):
     view = automations.view(row)
-    return {
+    body = {
         'automation_id': view['id'],
         'workspace_id': view['workspace_id'],
         'run_id': run_id,
@@ -28,6 +28,9 @@ def payload(row, run_id, due):
         'prompt': view['prompt'],
         'participants': view['participants'],
     }
+    if model:
+        body['model_api'] = {key: model[key] for key in ('provider', 'base_url', 'model', 'api_key_set', 'scope', 'source') if key in model}
+    return body
 
 
 def sanitize_dispatch(result):
@@ -94,8 +97,10 @@ class Scheduler:
             )
         else:
             run_id = existing['id']
+        public, secret, source = model_api.resolve(db, self.store, workspace_id=row['workspace_id'])
+        hook = payload(row, run_id, due, model_api.effective_view(public, source))
         try:
-            result = self.backend.dispatch_automation(payload(row, run_id, due), db=db)
+            result = self.backend.dispatch_automation(hook, db=db, model_api_key=secret)
         except Exception:
             result = {'status': 'failed', 'error_code': 'runtime_failure', 'instance_ids': []}
         status, error, dispatch = sanitize_dispatch(result)

@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import automations, members, settings
+from . import automations, members, model_api, settings
 
 
 class APIError(Exception):
@@ -77,10 +77,11 @@ def object_only(pairs):
 
 
 class App:
-    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None):
+    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None):
         self.store, self.config, self.clock = store, config, clock
         self.lifecycle, self.manager_auth = lifecycle, manager_auth
         self.automation_backend = automation_backend
+        self.operator_admin = operator_admin
 
     def __call__(self, env, start_response):
         headers = [('Content-Type', 'application/json; charset=utf-8'), ('Cache-Control', 'no-store'),
@@ -273,6 +274,17 @@ class App:
             with self.store.transaction() as db:
                 headers = self.new_session(db, user['id'], now)
             return 200, {'user': {'id': user['id'], 'username': user['username']}}, headers
+        if path.startswith('/v1/admin/'):
+            if self.operator_admin is None:
+                refuse(401, 'operator_auth', 'Separate loopback operator credentials required')
+            self.operator_admin.authenticate(env)
+            if path == '/v1/admin/model-api' and method == 'GET' and not query:
+                with self.store.connect() as db:
+                    return 200, {'model_api': model_api.public_view(model_api.load_platform(db), 'platform')}, []
+            if path == '/v1/admin/model-api' and method == 'POST' and not query:
+                with self.store.transaction() as db:
+                    return self.save_model_api(db, None, now, None, self.body(env, ['revision', 'changes']), scope='platform')
+            refuse(404, 'not_found', 'Route not found')
         runtime_path = re.fullmatch(r'/v1/workspaces/[0-9a-f]{32}/instances|/v1/instances/[0-9a-f]{32}(?:/[a-z]+)?|/v1/jobs/[0-9a-f]{32}', path)
         if self.lifecycle is not None and (runtime_path or path.startswith('/v1/internal/')):
             if path.startswith('/v1/internal/'):
@@ -319,6 +331,27 @@ class App:
                            'document=excluded.document, revision=excluded.revision, updated=excluded.updated',
                            (session['user_id'], document, current['revision'] + 1, now))
                 return 200, {'settings': {'values': values, 'revision': current['revision'] + 1}}, []
+            if path == '/v1/model-api' and method == 'GET' and not query:
+                override = model_api.public_view(model_api.load_account(db, session['user_id']), 'account')
+                effective, _secret, source = model_api.resolve(db, self.store, user_id=session['user_id'])
+                return 200, {'model_api': override, 'effective': model_api.effective_view(effective, source)}, []
+            if path == '/v1/model-api' and method == 'POST':
+                return self.save_model_api(db, session['user_id'], now, None, self.body(env, ['revision', 'changes']))
+            model_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/model-api', path)
+            if model_path:
+                workspace = members.load(db, model_path[1], session['user_id'])
+                if workspace is None:
+                    refuse(404, 'not_found', 'Workspace not found')
+                if method == 'GET' and not query:
+                    override = model_api.public_view(model_api.load_workspace(db, workspace['id']), 'workspace')
+                    effective, _secret, source = model_api.resolve(db, self.store, workspace_id=workspace['id'])
+                    return 200, {'model_api': override, 'effective': model_api.effective_view(effective, source)}, []
+                if method == 'POST' and not query:
+                    role = members.role_of(db, workspace, session['user_id'])
+                    if role not in ('owner', 'admin'):
+                        refuse(403, 'forbidden', 'Not allowed to change model API settings')
+                    return self.save_model_api(db, session['user_id'], now, workspace, self.body(env, ['revision', 'changes']))
+                refuse(400, 'invalid', 'Invalid model API request')
             if path == '/v1/workspaces' and method == 'POST':
                 body = self.body(env, ['name'])
                 name = body.get('name')
@@ -658,8 +691,94 @@ class App:
         updated = db.execute('SELECT * FROM automations WHERE id=?', (row['id'],)).fetchone()
         return 200, {'automation': automations.view(updated)}, []
 
+    def save_model_api(self, db, user_id, now, workspace, body, scope=None):
+        revision, changes = body.get('revision'), body.get('changes')
+        if type(revision) is not int or not 0 <= revision <= 2 ** 31 or not isinstance(changes, dict) or not changes:
+            refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
+        allowed = {'provider', 'base_url', 'model', 'api_key'}
+        if set(changes) - allowed:
+            refuse(400, 'invalid', 'Unknown model API field')
+        scope = scope or ('workspace' if workspace else 'account')
+        if scope == 'platform':
+            row = model_api.load_platform(db)
+        elif scope == 'workspace':
+            row = model_api.load_workspace(db, workspace['id'])
+        else:
+            row = model_api.load_account(db, user_id)
+        current = model_api.public_view(row, scope)
+        if revision != current['revision']:
+            raise RuntimeFault(409, 'conflict', 'Model API settings changed elsewhere; reload and retry', current)
+        provider = changes['provider'] if 'provider' in changes else current['provider']
+        base_url = changes['base_url'] if 'base_url' in changes else current['base_url']
+        model_name = changes['model'] if 'model' in changes else current['model']
+        clearing = 'api_key' in changes and changes['api_key'] is None
+        replacing = 'api_key' in changes and changes['api_key'] is not None
+        if replacing and not model_api.valid_api_key(changes['api_key']):
+            refuse(400, 'invalid', 'API key must be 8–4096 characters')
+        if not clearing or row is not None:
+            if not model_api.valid_provider(provider) or not model_api.valid_base_url(base_url) or not model_api.valid_model(model_name):
+                refuse(400, 'invalid', 'Provide a supported provider, https base URL and model name')
+        if not replacing and not clearing:
+            if (provider, base_url, model_name) == (current['provider'], current['base_url'], current['model']) and row is not None:
+                return 200, {'model_api': current}, []
+        if row is None and clearing and not replacing and provider is None:
+            return 200, {'model_api': current}, []
+        key_blob = None if clearing else (row['key_blob'] if row and not replacing else None)
+        if replacing:
+            key_blob = model_api.wrap(model_api.wrapping_key(self.store), changes['api_key'])
+        if key_blob is None and not clearing and row is not None:
+            key_blob = row['key_blob']
+        identity = row['id'] if row else uuid4().hex
+        if row is None:
+            if scope == 'platform':
+                db.execute(
+                    'INSERT INTO model_api_configs VALUES(?,?,NULL,NULL,?,?,?,?,?,?)',
+                    (identity, scope, provider, base_url, model_name, key_blob, 1, now),
+                )
+            elif scope == 'workspace':
+                db.execute(
+                    'INSERT INTO model_api_configs VALUES(?,?,NULL,?,?,?,?,?,?,?)',
+                    (identity, scope, workspace['id'], provider, base_url, model_name, key_blob, 1, now),
+                )
+            else:
+                db.execute(
+                    'INSERT INTO model_api_configs VALUES(?,?,?,NULL,?,?,?,?,?,?)',
+                    (identity, scope, user_id, provider, base_url, model_name, key_blob, 1, now),
+                )
+        else:
+            db.execute(
+                'UPDATE model_api_configs SET provider=?, base_url=?, model=?, key_blob=?, revision=?, updated=? WHERE id=?',
+                (provider, base_url, model_name, key_blob, current['revision'] + 1, now, row['id']),
+            )
+        if scope == 'platform':
+            stored = model_api.load_platform(db)
+        elif scope == 'workspace':
+            stored = model_api.load_workspace(db, workspace['id'])
+        else:
+            stored = model_api.load_account(db, user_id)
+        return 200, {'model_api': model_api.public_view(stored, scope)}, []
+
+    def with_model_api(self, workspace_id, payload):
+        with self.store.connect() as db:
+            public, _secret, source = model_api.resolve(db, self.store, workspace_id=workspace_id)
+        public = model_api.effective_view(public, source)
+        if isinstance(payload, dict) and 'id' in payload and 'workspace_id' in payload:
+            return {**payload, 'model_api': public}
+        if not isinstance(payload, dict):
+            return payload
+        result = dict(payload)
+        if 'instance' in result and isinstance(result['instance'], dict):
+            result['instance'] = {**result['instance'], 'model_api': public}
+        if 'items' in result and isinstance(result['items'], list):
+            result['items'] = [
+                {**item, 'model_api': public} if isinstance(item, dict) and 'id' in item else item
+                for item in result['items']
+            ]
+        return result
+
     @staticmethod
     def pagination(query, allowed=()):
+
         try:
             args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=3) if query else {}
             if set(args) - {'limit', 'cursor', *allowed} or any(len(v) != 1 for v in args.values()):
@@ -678,9 +797,9 @@ class App:
             if method == 'POST':
                 self.body(env, [])
                 created, result = runtime.create(owner, match[1], env.get('HTTP_IDEMPOTENCY_KEY', ''))
-                return 201 if created else 200, result, []
+                return 201 if created else 200, self.with_model_api(match[1], result), []
             limit, cursor, _ = self.pagination(query)
-            return 200, runtime.listing(owner, match[1], limit, cursor), []
+            return 200, self.with_model_api(match[1], runtime.listing(owner, match[1], limit, cursor)), []
         match = re.fullmatch(r'/v1/jobs/([0-9a-f]{32})', path)
         if match and method == 'GET' and not query:
             return 200, {'job': runtime.get_job(owner, match[1])}, []
@@ -690,14 +809,14 @@ class App:
             # Authorization precedes even unsupported operation disclosure.
             instance = runtime.inspect(owner, iid)
             if method == 'GET' and action is None and not query:
-                return 200, {'instance': instance}, []
+                return 200, {'instance': self.with_model_api(instance['workspace_id'], instance)}, []
             if method == 'POST' and action in UNSUPPORTED:
                 self.body(env, [])
                 refuse(501, 'unsupported', 'This runtime operation is not implemented')
             if method == 'POST' and action in ('start', 'stop', 'restart'):
                 body = self.body(env, ['expected_revision', 'operation_id'] if action == 'restart' else ['expected_revision'])
                 changed, result = getattr(runtime, action)(owner, iid, **body)
-                return 202 if changed else 200, result, []
+                return 202 if changed else 200, self.with_model_api(instance['workspace_id'], result), []
             if method == 'GET' and action == 'logs':
                 try:
                     args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=1) if query else {}

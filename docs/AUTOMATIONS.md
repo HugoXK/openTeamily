@@ -48,3 +48,5 @@ Run rows are an additive `automation_runs` table on schema `user_version` 1. Def
 ## Not in this slice
 
 No background daemon, no real container execution, no public page, no agent-mode switch, no UI. Multi-target delivery beyond a list of workspace members, and any comparison with Teamily templates, remain later work.
+
+Dispatch hooks receive the workspace-or-platform model API (redacted in run records). See [MODEL_API.md](MODEL_API.md). This is not container execution and not Teamily parity.
