@@ -39,6 +39,7 @@ class Config:
     max_invites_per_workspace: int = 20
     max_automations_per_workspace: int = 20
     max_artifacts_per_workspace: int = 50
+    max_shares_per_artifact: int = 10
     max_runs_per_automation: int = 200
     auth_peer_limit: int = 20
     auth_name_limit: int = 10
@@ -93,7 +94,7 @@ class App:
         self._automation_worker = None
 
     def __call__(self, env, start_response):
-        headers = [('Content-Type', 'application/json; charset=utf-8'), ('Cache-Control', 'no-store'),
+        headers = [('Cache-Control', 'no-store'),
                    ('X-Content-Type-Options', 'nosniff'), ('Referrer-Policy', 'no-referrer'),
                    ('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'")]
         try:
@@ -109,7 +110,13 @@ class App:
             status, body = 503, {'error': {'code': 'unavailable', 'message': 'Storage is temporarily unavailable'}}
         except Exception:
             status, body = 500, {'error': {'code': 'internal', 'message': 'Internal service error'}}
-        data = json.dumps(body, ensure_ascii=True, separators=(',', ':')).encode('utf-8')
+        if isinstance(body, (bytes, bytearray)):
+            data = bytes(body)
+            if not any(key.lower() == 'content-type' for key, _value in headers):
+                headers.insert(0, ('Content-Type', 'text/plain; charset=utf-8'))
+        else:
+            headers.insert(0, ('Content-Type', 'application/json; charset=utf-8'))
+            data = json.dumps(body, ensure_ascii=True, separators=(',', ':')).encode('utf-8')
         headers.append(('Content-Length', str(len(data))))
         reasons = {200: 'OK', 201: 'Created', 202: 'Accepted', 302: 'Found', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
                    404: 'Not Found', 405: 'Method Not Allowed', 409: 'Conflict', 411: 'Length Required',
@@ -422,6 +429,11 @@ class App:
         if method == 'POST' and query:
             refuse(400, 'invalid', 'Query parameters are not accepted for writes')
         now = int(self.clock())
+        share_path = re.fullmatch(r'/share/([A-Za-z0-9_-]{43})', path)
+        if share_path:
+            if method != 'GET' or query:
+                refuse(400, 'invalid', 'Invalid share request')
+            return self.render_share(share_path[1], now)
         if path in ('/v1/auth/register', '/v1/auth/login') and method == 'POST':
             self.origin_check(env)  # Login/registration CSRF protection before a session exists.
             body = self.body(env, ['username', 'password'])
@@ -576,18 +588,20 @@ class App:
                 return 200, {'items': items}, []
             if path == '/v1/runtime/tasks' and method == 'POST' and not query:
                 return self.dispatch_runtime_task(db, session['user_id'], now, self.body(env, ['kind', 'prompt', 'connection_id', 'workspace_id']))
-            task_path = re.fullmatch(r'/v1/runtime/tasks/([0-9a-f]{32})(/cancel)?', path)
+            task_path = re.fullmatch(r'/v1/runtime/tasks/([0-9a-f]{32})(/(cancel|artifact))?', path)
             if task_path:
                 row = runtime_connect.load_task(db, task_path[1], user_id=session['user_id'])
                 if row is None:
                     refuse(404, 'not_found', 'Runtime task not found')
-                if task_path[2] and method == 'POST' and not query:
+                if task_path[3] == 'cancel' and method == 'POST' and not query:
                     self.body(env, [])
                     cancelled = runtime_connect.cancel_task(db, row, now)
                     if cancelled is None:
                         refuse(409, 'conflict', 'Task is no longer cancellable')
                     return 200, {'task': runtime_connect.view_with_meta(db, cancelled)}, []
-                if not task_path[2] and method == 'GET' and not query:
+                if task_path[3] == 'artifact' and method == 'POST' and not query:
+                    return self.save_task_artifact(db, session, row, now, self.body(env, ['title', 'workspace_id']))
+                if not task_path[3] and method == 'GET' and not query:
                     row = runtime_connect.expire_task(db, row, now)
                     return 200, {'task': runtime_connect.view_with_meta(db, row)}, []
             if path == '/v1/model-api' and method == 'GET' and not query:
@@ -675,11 +689,11 @@ class App:
             if path == '/v1/automation-templates' and method == 'GET' and not query:
                 return 200, {'items': automations.templates()}, []
             auto_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel))?)?)?))?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel|artifact))?)?)?))?', path)
             if auto_path:
                 return self.automation_dispatch(db, session, method, query, now, env, *auto_path.groups())
             artifact_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|preview|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
             if artifact_path:
                 return self.artifact_dispatch(db, session, method, query, now, env, *artifact_path.groups())
             if path == '/v1/invites/accept' and method == 'POST' and not query:
@@ -1087,7 +1101,7 @@ class App:
         if row is None:
             refuse(404, 'not_found', 'Automation not found')
         if runs:
-            if run_id and cancelling:
+            if run_id and cancelling == 'cancel':
                 if method != 'POST' or query:
                     refuse(400, 'invalid', 'Invalid automation request')
                 if actor not in ('owner', 'admin'):
@@ -1103,6 +1117,18 @@ class App:
                 if cancelled is None:
                     refuse(409, 'conflict', 'Automation run cannot be cancelled')
                 return 200, {'run': cancelled}, []
+            if run_id and cancelling == 'artifact':
+                if method != 'POST' or query:
+                    refuse(400, 'invalid', 'Invalid automation request')
+                item = db.execute(
+                    'SELECT * FROM automation_runs WHERE id=? AND automation_id=? AND workspace_id=?',
+                    (run_id, row['id'], workspace['id']),
+                ).fetchone()
+                if item is None:
+                    refuse(404, 'not_found', 'Automation run not found')
+                return self.save_run_artifact(db, workspace, session, row, item, now, self.body(env, ['title']))
+            if run_id and cancelling:
+                refuse(400, 'invalid', 'Invalid automation request')
             if run_id:
                 if method != 'GET' or query:
                     refuse(400, 'invalid', 'Invalid automation request')
@@ -1143,7 +1169,7 @@ class App:
             return 200, {'removed': self.automation_view(db, row, session['user_id'])}, []
         return self.update_automation(db, workspace, actor, row, now, self.body(env, ['revision', 'changes']))
 
-    def artifact_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
+    def artifact_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, action, share_id, share_revoking):
         workspace = members.load(db, workspace_id, session['user_id'])
         if workspace is None:
             refuse(404, 'not_found', 'Workspace not found')
@@ -1169,7 +1195,7 @@ class App:
         row = artifacts.load(db, workspace['id'], target_id)
         if row is None:
             refuse(404, 'not_found', 'Artifact not found')
-        if removing:
+        if action == 'remove':
             if method != 'POST' or query:
                 refuse(400, 'invalid', 'Invalid artifact request')
             if not artifacts.can_edit(actor, session['user_id'], row):
@@ -1177,6 +1203,14 @@ class App:
             self.body(env, [])
             db.execute('DELETE FROM artifacts WHERE id=?', (row['id'],))
             return 200, {'removed': artifacts.view(row, include_body=False)}, []
+        if action == 'preview':
+            if method != 'GET' or query:
+                refuse(400, 'invalid', 'Invalid artifact request')
+            return 200, artifacts.render_page(row).encode('utf-8'), artifacts.share_headers()
+        if action and action.startswith('shares'):
+            return self.artifact_share_dispatch(db, session, method, query, now, env, actor, row, share_id, share_revoking)
+        if action:
+            refuse(400, 'invalid', 'Invalid artifact request')
         if method == 'GET' and not query:
             return 200, {'artifact': artifacts.view(row)}, []
         if method != 'POST' or query:
@@ -1186,13 +1220,13 @@ class App:
     def create_artifact(self, db, workspace, session, actor, now, env):
         body = self.body(env, ['title', 'body', 'kind'])
         title, content, kind = body.get('title'), body.get('body', ''), body.get('kind', 'document')
-        if kind != 'document' or not artifacts.valid_title(title) or not artifacts.valid_body(content):
-            refuse(400, 'invalid', 'Provide a document title and body')
+        if kind not in artifacts.KINDS or not artifacts.valid_title(title) or not artifacts.valid_body(content):
+            refuse(400, 'invalid', 'Provide a document or website title and body')
         title = title.strip()
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
-        payload = {'title': title, 'body': content, 'kind': 'document'}
+        payload = {'title': title, 'body': content, 'kind': kind}
         key_hash, request_hash = digest('artifact:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         )
@@ -1217,6 +1251,7 @@ class App:
             (aid, workspace['id'], title, title_digest, 'document', content, now, now,
              session['user_id'], session['user_id'], key_hash, request_hash),
         )
+        artifacts.set_render(db, aid, kind)
         return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], aid))}, []
 
     def update_artifact(self, db, workspace, session, actor, row, now, body):
@@ -1253,6 +1288,145 @@ class App:
             (title, title_digest, content, row['revision'] + 1, now, session['user_id'], row['id']),
         )
         return 200, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], row['id']))}, []
+
+
+    def artifact_share_dispatch(self, db, session, method, query, now, env, actor, row, share_id, share_revoking):
+        if share_id is None and method == 'GET' and not query:
+            items = [artifacts.share_view(item) for item in artifacts.list_shares(db, row['id'])]
+            return 200, {'items': items}, []
+        if share_id is None and method == 'POST' and not query:
+            if not artifacts.can_edit(actor, session['user_id'], row):
+                refuse(403, 'forbidden', 'Not allowed to share this document')
+            body = self.body(env, ['expires_in'])
+            expires_in = body.get('expires_in')
+            expires = None
+            if expires_in is not None:
+                if type(expires_in) is not int or not 1 <= expires_in <= 2592000:
+                    refuse(400, 'invalid', 'expires_in must be 1..2592000 seconds')
+                expires = now + expires_in
+            if artifacts.active_share_count(db, row['id'], now) >= self.config.max_shares_per_artifact:
+                refuse(429, 'quota', 'Share capacity reached')
+            token, share_id = opaque(), uuid4().hex
+            db.execute(
+                'INSERT INTO artifact_shares VALUES(?,?,?,?,?,?,?,?,0,NULL)',
+                (share_id, row['id'], row['workspace_id'], digest('share:' + token),
+                 token[:artifacts.PREFIX_LEN], now, session['user_id'], expires),
+            )
+            item = artifacts.load_share(db, share_id, row['id'])
+            return 201, {'share': artifacts.share_view(item, include_token=True, token=token)}, []
+        if share_id and share_revoking:
+            if method != 'POST' or query:
+                refuse(400, 'invalid', 'Invalid artifact request')
+            if not artifacts.can_edit(actor, session['user_id'], row):
+                refuse(403, 'forbidden', 'Not allowed to share this document')
+            self.body(env, [])
+            item = artifacts.load_share(db, share_id, row['id'])
+            if item is None:
+                refuse(404, 'not_found', 'Share not found')
+            db.execute(
+                'UPDATE artifact_shares SET revoked=1, revoked_at=? WHERE id=? AND revoked=0',
+                (now, item['id']),
+            )
+            item = artifacts.load_share(db, share_id, row['id'])
+            return 200, {'share': artifacts.share_view(item)}, []
+        refuse(400, 'invalid', 'Invalid artifact request')
+
+    def render_share(self, token, now):
+        with self.store.connect() as db:
+            row = artifacts.load_share_by_token(db, token, now)
+        if row is None:
+            refuse(404, 'not_found', 'Share not found')
+        return 200, artifacts.render_page(row).encode('utf-8'), artifacts.share_headers()
+
+    def save_run_artifact(self, db, workspace, session, automation, run, now, body):
+        title = body.get('title')
+        if title is not None and not artifacts.valid_title(title):
+            refuse(400, 'invalid', 'Provide a document title')
+        view = automations.run_view(run)
+        text = (view.get('result') or {}).get('text') if view.get('status') == 'succeeded' else None
+        if not isinstance(text, str) or not text:
+            refuse(409, 'conflict', 'Only a succeeded run with a text result can be saved')
+        existing = artifacts.load_source_artifact(db, workspace['id'], 'automation_run', run['id'])
+        if existing is not None:
+            return 200, {'artifact': artifacts.view(existing)}, []
+        content = text[:artifacts.BODY_MAX]
+        if not artifacts.valid_body(content):
+            refuse(400, 'invalid', 'The run result cannot be stored as a document')
+        auto_title = automation['title'] if isinstance(automation['title'], str) else '运行结果'
+        if title is None:
+            suffix = ' · 运行结果'
+            base = auto_title.strip()
+            if len(base) + len(suffix) > artifacts.TITLE_MAX:
+                base = base[: artifacts.TITLE_MAX - len(suffix)]
+            title = (base + suffix) if base else '运行结果'
+        title = artifacts.unique_title(db, workspace['id'], title.strip(), run['id'])
+        if not artifacts.valid_title(title):
+            refuse(400, 'invalid', 'Provide a document title')
+        if (db.execute('SELECT COUNT(*) FROM artifacts WHERE workspace_id=?', (workspace['id'],)).fetchone()[0]
+                >= self.config.max_artifacts_per_workspace):
+            refuse(429, 'quota', 'Artifact capacity reached')
+        aid = uuid4().hex
+        title_digest = artifacts.title_hash(title)
+        key_hash = digest('artifact-source:automation_run:' + run['id'])
+        request_hash = digest(json.dumps({'source': 'automation_run', 'id': run['id']}, sort_keys=True, separators=(',', ':')))
+        db.execute(
+            'INSERT INTO artifacts VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?)',
+            (aid, workspace['id'], title, title_digest, 'document', content, now, now,
+             session['user_id'], session['user_id'], key_hash, request_hash),
+        )
+        artifacts.attach_source(
+            db, aid, workspace['id'], now, 'automation_run', run['id'],
+            automation_id=automation['id'], automation_title=auto_title,
+        )
+        return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], aid))}, []
+
+    def save_task_artifact(self, db, session, task, now, body):
+        title = body.get('title')
+        if title is not None and not artifacts.valid_title(title):
+            refuse(400, 'invalid', 'Provide a document title')
+        row = runtime_connect.expire_task(db, task, now)
+        viewed = runtime_connect.view_with_meta(db, row)
+        workspace_id = body.get('workspace_id') or viewed.get('workspace_id')
+        if not isinstance(workspace_id, str) or not re.fullmatch(r'[0-9a-f]{32}', workspace_id):
+            refuse(400, 'invalid', 'Provide a workspace to store the document')
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        payload = viewed.get('result') or {}
+        text = payload.get('text') if isinstance(payload.get('text'), str) else payload.get('echo')
+        if viewed.get('status') != 'succeeded' or not isinstance(text, str) or not text:
+            refuse(409, 'conflict', 'Only a succeeded task with a text result can be saved')
+        existing = artifacts.load_source_artifact(db, workspace['id'], 'agent_task', row['id'])
+        if existing is not None:
+            return 200, {'artifact': artifacts.view(existing)}, []
+        content = text[:artifacts.BODY_MAX]
+        if not artifacts.valid_body(content):
+            refuse(400, 'invalid', 'The task result cannot be stored as a document')
+        if title is None:
+            suffix = ' · 任务结果'
+            base = (row['prompt'] or '任务').strip()[: artifacts.TITLE_MAX]
+            if len(base) + len(suffix) > artifacts.TITLE_MAX:
+                base = base[: artifacts.TITLE_MAX - len(suffix)]
+            title = (base + suffix) if base else '任务结果'
+        title = artifacts.unique_title(db, workspace['id'], title.strip(), row['id'])
+        if not artifacts.valid_title(title):
+            refuse(400, 'invalid', 'Provide a document title')
+        if (db.execute('SELECT COUNT(*) FROM artifacts WHERE workspace_id=?', (workspace['id'],)).fetchone()[0]
+                >= self.config.max_artifacts_per_workspace):
+            refuse(429, 'quota', 'Artifact capacity reached')
+        aid = uuid4().hex
+        title_digest = artifacts.title_hash(title)
+        key_hash = digest('artifact-source:agent_task:' + row['id'])
+        request_hash = digest(json.dumps({'source': 'agent_task', 'id': row['id']}, sort_keys=True, separators=(',', ':')))
+        db.execute(
+            'INSERT INTO artifacts VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?)',
+            (aid, workspace['id'], title, title_digest, 'document', content, now, now,
+             session['user_id'], session['user_id'], key_hash, request_hash),
+        )
+        artifacts.attach_source(
+            db, aid, workspace['id'], now, 'agent_task', row['id'], task_kind=row['kind'],
+        )
+        return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], aid))}, []
 
     def invite_dispatch(self, db, session, method, query, now, env, workspace_id, invite_id, revoking):
         workspace = members.load(db, workspace_id, session['user_id'])

@@ -22,7 +22,7 @@ class Client:
     def __init__(self, app, peer='127.0.0.1'):
         self.app, self.peer, self.cookies = app, peer, {}
 
-    def call(self, method, path, body=None, headers=None, raw=None, csrf=True, origin=ORIGIN):
+    def call(self, method, path, body=None, headers=None, raw=None, csrf=True, origin=ORIGIN, parse='json'):
         path, _, query = path.partition('?')
         payload = raw if raw is not None else json.dumps(body if body is not None else {}).encode()
         env = {'REQUEST_METHOD': method, 'PATH_INFO': path, 'QUERY_STRING': query,
@@ -37,7 +37,8 @@ class Client:
         result = {}
         def start(status, values):
             result['status'], result['headers'] = int(status.split()[0]), values
-        result['body'] = json.loads(b''.join(self.app(env, start)))
+        raw_body = b''.join(self.app(env, start))
+        result['body'] = raw_body if parse == 'raw' else json.loads(raw_body)
         for key, value in result['headers']:
             if key.lower() == 'set-cookie':
                 cookie = SimpleCookie(); cookie.load(value)

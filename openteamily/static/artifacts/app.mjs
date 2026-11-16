@@ -36,6 +36,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentUser = null;
   let workspaces = [];
   let current = null;
+  let draftKind = 'document';
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -81,14 +82,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  function kindLabel(kind) {
+    return kind === 'website' ? '网站' : '文档';
+  }
+
   function fillEditor(item) {
     form.elements.title.value = item && item.title ? item.title : '';
     form.elements.body.value = item && typeof item.body === 'string' ? item.body : '';
+    const kind = (item && item.kind) || draftKind;
     const meta = document.getElementById('editor-meta');
     if (item && item.id) {
-      meta.textContent = `文档 · 修订 ${item.revision} · 作者 ${item.created_by || ''}`;
+      meta.textContent = `${kindLabel(kind)} · 修订 ${item.revision} · 作者 ${item.created_by || ''}`;
     } else {
-      meta.textContent = '新文档';
+      meta.textContent = kind === 'website' ? '新网站' : '新文档';
+    }
+    const source = document.getElementById('editor-source');
+    if (item && item.source) {
+      source.hidden = false;
+      const from = item.source.kind === 'agent_task' ? '代理任务' : '自动化运行';
+      const name = item.source.automation_title || item.source.task_kind || '';
+      source.textContent = `出处：${from}${name ? ' · ' + name : ''} · ${item.source.id}`;
+    } else {
+      source.hidden = true;
+      source.textContent = '';
+    }
+    const preview = document.getElementById('website-preview');
+    if (kind === 'website' && item && item.id && workspaceId()) {
+      preview.hidden = false;
+      preview.setAttribute('sandbox', '');
+      preview.removeAttribute('srcdoc');
+      preview.src = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/preview`;
+    } else {
+      preview.hidden = true;
+      preview.removeAttribute('src');
+      preview.removeAttribute('srcdoc');
     }
   }
 
@@ -106,7 +133,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       open.addEventListener('click', () => onOpen(item));
       const meta = document.createElement('span');
       meta.className = 'note';
-      meta.textContent = item.kind === 'document' ? `文档 · ${item.created_by || ''}` : '';
+      meta.textContent = `${kindLabel(item.kind)} · ${item.created_by || ''}`;
       row.appendChild(open);
       row.appendChild(meta);
       list.appendChild(row);
@@ -127,6 +154,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     fillEditor(current);
     document.getElementById('remove-artifact').hidden = !current || !current.id;
+    const sharePanel = document.getElementById('share-panel');
+    sharePanel.hidden = !current || !current.id;
+    document.getElementById('share-once').hidden = true;
+    document.getElementById('share-once').textContent = '';
+    if (current && current.id) await loadShares();
+    else {
+      document.getElementById('share-list').textContent = '';
+    }
+  }
+
+  async function loadShares() {
+    const list = document.getElementById('share-list');
+    const empty = document.getElementById('share-empty');
+    list.textContent = '';
+    if (!current || !current.id || !workspaceId()) return;
+    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/shares`);
+    if (listed.status !== 200) {
+      show('error', messageFor(listed.body.error, '无法读取分享链接。'));
+      return;
+    }
+    const items = listed.body.items || [];
+    empty.hidden = items.length > 0;
+    for (const item of items) {
+      const row = document.createElement('li');
+      const meta = document.createElement('span');
+      meta.className = 'note';
+      meta.textContent = item.revoked ? `已撤销 · ${item.prefix}…` : `有效 · ${item.prefix}…`;
+      row.appendChild(meta);
+      if (!item.revoked) {
+        const revoke = document.createElement('button');
+        revoke.type = 'button';
+        revoke.textContent = '撤销';
+        revoke.addEventListener('click', async () => {
+          const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/shares/${item.id}/revoke`, {});
+          if (result.status !== 200) {
+            show('error', messageFor(result.body.error, '撤销失败。'));
+            return;
+          }
+          document.getElementById('share-once').hidden = true;
+          document.getElementById('share-once').textContent = '';
+          show('ok', '分享链接已撤销。');
+          await loadShares();
+        });
+        row.appendChild(revoke);
+      }
+      list.appendChild(row);
+    }
   }
 
   async function loadList() {
@@ -204,7 +278,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   search.addEventListener('input', () => loadList());
 
   document.getElementById('new-artifact').addEventListener('click', () => {
-    openEditor(null);
+    draftKind = 'document';
+    openEditor({kind: 'document'});
+  });
+
+  document.getElementById('new-website').addEventListener('click', () => {
+    draftKind = 'website';
+    openEditor({kind: 'website'});
   });
 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
@@ -232,7 +312,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
                              {revision: current.revision, changes: {title, body}});
     } else {
       result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts`,
-                             {title, body, kind: 'document'},
+                             {title, body, kind: (current && current.kind) || draftKind},
                              {'Idempotency-Key': idempotencyKey()});
     }
     if (result.status === 409) {
@@ -244,9 +324,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     current = result.body.artifact;
+    draftKind = current.kind || draftKind;
     fillEditor(current);
     document.getElementById('remove-artifact').hidden = false;
+    document.getElementById('share-panel').hidden = false;
     show('ok', '已保存。');
+    await loadShares();
   });
 
   document.getElementById('remove-artifact').addEventListener('click', async () => {
@@ -261,6 +344,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     listPanel.hidden = false;
     show('ok', '已删除。');
     await loadList();
+  });
+
+  document.getElementById('create-share').addEventListener('click', async () => {
+    if (!current || !current.id || !workspaceId()) {
+      show('error', '请先保存作品，再创建分享链接。');
+      return;
+    }
+    const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/shares`, {});
+    if (result.status !== 201) {
+      show('error', messageFor(result.body.error, '无法创建分享链接。'));
+      return;
+    }
+    const share = result.body.share || {};
+    const once = document.getElementById('share-once');
+    once.hidden = false;
+    once.textContent = share.path ? ('链接只显示一次：' + share.path) : '链接已创建，请立即复制。';
+    show('ok', '已创建只读分享链接，完整地址只显示这一次。');
+    await loadShares();
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
