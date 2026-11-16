@@ -52,6 +52,10 @@ elif args[0] == 'inspect':
                 source = str((root / volume['source']).resolve()) if not Path(volume['source']).is_absolute() else volume['source']
                 mounts.append({'Type': 'bind', 'Source': source, 'Destination': volume['target'], 'RW': not volume.get('read_only', False)})
                 binds.append(source + ':' + volume['target'] + (':ro' if volume.get('read_only') else ''))
+    volume_name = 'other-volume' if ctrl.get('substitute_volume_bind') else state['project']
+    volume_bind = volume_name + ':/data:rw'
+    if volume_bind not in binds:
+        binds.insert(0, volume_bind)
     if ctrl.get('extra_bind'):
         mounts.append({'Type': 'bind', 'Source': '/etc/passwd', 'Destination': '/evil', 'RW': False})
         binds.append('/etc/passwd:/evil:ro')

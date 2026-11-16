@@ -37,6 +37,8 @@ test('parseBotSocialConfig ignores a token left in the file', () => {
   assert.equal(parsed.token, undefined)
   const empty = parseBotSocialConfig('{}')
   assert.deepEqual(empty, {})
+  assert.deepEqual(parseBotSocialConfig(''), {})
+  assert.deepEqual(parseBotSocialConfig('   \n'), {})
   assert.throws(() => parseBotSocialConfig('not-json'), BotSocialConfigError)
 })
 

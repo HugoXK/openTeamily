@@ -28,6 +28,16 @@ from openteamily.security import digest
 
 IMAGE = 'operator/runtime@sha256:' + 'a' * 64
 
+def assert_container_readable_secret(test, path):
+    info = path.stat()
+    mode = info.st_mode & 0o777
+    if info.st_uid == 1000:
+        test.assertEqual(mode, 0o600)
+    else:
+        test.assertEqual(mode, 0o644)
+        test.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+
+
 
 class ComposeManagerTests(unittest.TestCase):
     create = fixtures.RuntimeTests.create
@@ -465,7 +475,7 @@ class ComposeManagerTests(unittest.TestCase):
         worker = ManagerWorker(client, self.registry, self.engine)
         self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
         path = self.engine.secret_path(self.iid)
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        assert_container_readable_secret(self, path)
         document = json.loads(path.read_text())
         self.assertEqual(document['api_key'], workspace_key)
         self.assertEqual(document['source'], 'user')
@@ -492,7 +502,7 @@ class ComposeManagerTests(unittest.TestCase):
         self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
         path = self.engine.secret_path(self.iid)
         self.assertEqual(path.read_text(), '')
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        assert_container_readable_secret(self, path)
 
     def test_runtime_secret_requires_a_lease_and_rejects_stop_jobs(self):
         client = self.start_http()
@@ -522,6 +532,17 @@ class ComposeManagerTests(unittest.TestCase):
             self.engine.inspect(self.iid)
         self.assertIn(error.exception.code, ('unsafe_container', 'unexpected_mount', 'secret_mount', 'bot_social_mount'))
 
+    def test_inspect_accepts_named_volume_in_binds_and_rejects_a_substitute(self):
+        # Real Docker lists ot-<id>:/data:rw in HostConfig.Binds as well as Mounts.
+        self.engine.compose(self.iid, 'create')
+        state = self.engine.inspect(self.iid)
+        self.assertTrue(state['stopped'])
+        self.assertFalse(state['needs_recreate'])
+        self.controls(substitute_volume_bind=True)
+        with self.assertRaises(ManagerError) as error:
+            self.engine.inspect(self.iid)
+        self.assertEqual(error.exception.code, 'unsafe_container')
+
     def put_bot_social(self, scope, server, display_name=None, workspace_id=None):
         from uuid import uuid4
         with self.store.transaction() as db:
@@ -537,7 +558,7 @@ class ComposeManagerTests(unittest.TestCase):
         worker = ManagerWorker(client, self.registry, self.engine)
         self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
         path = self.engine.bot_social_path(self.iid)
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        assert_container_readable_secret(self, path)
         document = json.loads(path.read_text())
         self.assertEqual(document['server'], 'https://team.social.example')
         self.assertEqual(document['displayName'], 'Team')
@@ -559,8 +580,8 @@ class ComposeManagerTests(unittest.TestCase):
         worker = ManagerWorker(client, self.registry, self.engine)
         self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
         path = self.engine.bot_social_path(self.iid)
-        self.assertEqual(path.read_text(), '')
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(path.read_text()), {})
+        assert_container_readable_secret(self, path)
 
     def test_runtime_bot_social_requires_a_lease_and_rejects_stop_jobs(self):
         client = self.start_http()
@@ -589,7 +610,7 @@ class ComposeManagerTests(unittest.TestCase):
         worker = ManagerWorker(client, self.registry, self.engine)
         self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
         path = self.engine.runtime_key_path(self.iid)
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        assert_container_readable_secret(self, path)
         document = json.loads(path.read_text())
         self.assertEqual(set(document), {'origin', 'token', 'hostname'})
         self.assertEqual(document['origin'], 'https://management.test')
@@ -691,7 +712,7 @@ class ComposeManagerTests(unittest.TestCase):
         self.assertEqual(done['status'], 'upgraded')
         self.assertFalse(done['volume_deleted'])
         self.assertTrue(self.engine.bot_social_path(self.iid).exists())
-        self.assertEqual(self.engine.bot_social_path(self.iid).read_text(), '')
+        self.assertEqual(json.loads(self.engine.bot_social_path(self.iid).read_text()), {})
         self.assertTrue(self.engine.runtime_key_path(self.iid).exists())
         self.assertEqual(self.engine.runtime_key_path(self.iid).read_text(), '')
 

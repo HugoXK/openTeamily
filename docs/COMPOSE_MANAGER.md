@@ -116,9 +116,9 @@ Docker socket mount or arbitrary argv. The only data mount is named volume
 `ot-<instance-id>` at `/data`, retained on stop. The only bind mounts are the
 manager-generated, read-only model API secret file
 (`secrets/model-api-<instance-id>.json` under the private state directory,
-mode 0600) at `/run/secrets/openteamily-model-api.json`, and the
+readable by container user 1000) at `/run/secrets/openteamily-model-api.json`, and the
 manager-generated, read-only Bot Social URL file
-(`secrets/bot-social-<instance-id>.json`, mode 0600) at
+(`secrets/bot-social-<instance-id>.json`, readable by container user 1000) at
 `/run/secrets/openteamily-bot-social.json`. Operators and API
 clients cannot choose those paths. Request-selected mounts stay rejected.
 The files are written or refreshed before create, start or restart; when no

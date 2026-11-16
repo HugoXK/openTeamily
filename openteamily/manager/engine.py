@@ -121,6 +121,30 @@ def manifest(iid, entry):
     return {'services': {'flybot': service}, 'volumes': {'data': {'name': 'ot-' + iid}}}
 
 
+def publish_container_secret(path):
+    """Make a bind-mounted secret readable by container user 1000:1000.
+
+    Prefer chown 1000:1000 with mode 0600. If the operator cannot chown,
+    use 0644 so the container can read the file; the secrets directory
+    stays 0700 so other host users cannot reach it.
+    """
+    fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        try:
+            os.fchown(fd, 1000, 1000)
+            os.fchmod(fd, 0o600)
+        except PermissionError:
+            os.fchmod(fd, 0o644)
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode), 'secret_mode')
+        if info.st_uid == 1000:
+            require((info.st_mode & 0o777) == 0o600, 'secret_mode')
+        else:
+            require((info.st_mode & 0o777) == 0o644, 'secret_mode')
+    finally:
+        os.close(fd)
+
+
 class EngineFailure(ManagerError):
     """Bounded child diagnostics for internal classification, never error text/log output."""
     def __init__(self, returncode, stdout, stderr):
@@ -285,14 +309,15 @@ class ComposeEngine:
             require(isinstance(payload, dict) and payload.get('api_key'), 'secret_payload')
             raw = (json.dumps(payload, separators=(',', ':')) + '\n').encode()
         replace_private(path, raw)
+        publish_container_secret(path)
         return path
 
     def install_bot_social(self, iid, payload):
-        """Write the resolved Bot Social URL file (or empty). Never accepts a token."""
+        """Write the resolved Bot Social URL file (or {}). Never accepts a token."""
         self.registry.entry(iid)
         path = self.bot_social_path(iid)
         if payload is None:
-            raw = b''
+            raw = (json.dumps({}) + chr(10)).encode()
         else:
             require(isinstance(payload, dict), 'bot_social_payload')
             require('token' not in payload and 'api_key' not in payload, 'bot_social_payload')
@@ -300,6 +325,7 @@ class ComposeEngine:
             allowed = {key: payload[key] for key in ('server', 'displayName', 'source') if key in payload}
             raw = (json.dumps(allowed, separators=(',', ':')) + '\n').encode()
         replace_private(path, raw)
+        publish_container_secret(path)
         return path
 
     def install_runtime_key(self, iid, payload):
@@ -313,6 +339,7 @@ class ComposeEngine:
             allowed = {key: payload[key] for key in ('origin', 'token', 'hostname')}
             raw = (json.dumps(allowed, separators=(',', ':')) + '\n').encode()
         replace_private(path, raw)
+        publish_container_secret(path)
         return path
 
     def compose(self, iid, operation, *, heartbeat=lambda: None, tail=100):
@@ -390,12 +417,17 @@ class ComposeEngine:
             require(len(matched) == 1, 'unsafe_container')
             return matched[0]
         require(isinstance(binds, list), 'unsafe_container')
-        present_suffixes = sorted(bind_suffix(bind) for bind in binds)
+        # Real Docker also lists the named data volume in Binds as ot-<id>:/data:rw.
+        # Secret-bind allowlisting applies to the remaining bind entries only.
+        volume_bind = 'ot-' + iid + ':/data:rw'
+        require(binds.count(volume_bind) <= 1, 'unsafe_container')
+        secret_binds = [bind for bind in binds if bind != volume_bind]
+        present_suffixes = sorted(bind_suffix(bind) for bind in secret_binds)
         allowed = sorted(ALLOWED_BIND_SUFFIXES)
         require(all(suffix in allowed for suffix in present_suffixes), 'unsafe_container')
         needs_recreate = present_suffixes != allowed
         if not needs_recreate:
-            require(len(binds) == len(ALLOWED_BIND_SUFFIXES), 'unsafe_container')
+            require(len(secret_binds) == len(ALLOWED_BIND_SUFFIXES), 'unsafe_container')
         expected_ports = {'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': str(entry['publish_port'])}]} if entry['publish_port'] is not None else {}
         require((host.get('PortBindings') or {}) == expected_ports, 'unsafe_ports')
         labels = config.get('Labels')

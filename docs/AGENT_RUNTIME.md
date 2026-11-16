@@ -2,7 +2,7 @@
 
 This slice binds a workspace agent directory record to a workspace FlyBot *container instance*, then dispatches authorized conversations through the existing `/v1/agent` infer task contract. It is self-written for OpenTeamily.
 
-The management process does not call a model provider and does not add a second chat engine. A lease-gated manager endpoint issues an instance runtime key; the compose manager writes that key to a private 0600 file and bind-mounts it at `/run/secrets/openteamily-runtime-key.json`. The container's `agent-loop.mjs` authenticates with `/v1/agent/connect` and runs the same claim / model-access / result loop as the optional own-machine daemon. Tests that finish a reply with a fake OpenAI-compatible server are labeled as such; they are not a real vendor. The CI container job also uses that labeled fake provider: it proves the live container path, not a real-vendor model.
+The management process does not call a model provider and does not add a second chat engine. A lease-gated manager endpoint issues an instance runtime key; the compose manager writes that key to a file readable by container user 1000 (0600 after chown, or 0644 under a 0700 secrets directory) and bind-mounts it at `/run/secrets/openteamily-runtime-key.json`. The container's `agent-loop.mjs` authenticates with `/v1/agent/connect` and runs the same claim / model-access / result loop as the optional own-machine daemon. Tests that finish a reply with a fake OpenAI-compatible server are labeled as such; they are not a real vendor. The CI container job also uses that labeled fake provider: it proves the live container path, not a real-vendor model.
 
 ## Routes
 
@@ -29,7 +29,7 @@ The conversation itself remains private to the user who created it. Assistant me
 
 `runtime/flybot-image/launch.mjs` starts `agent-loop.mjs` next to `dsh`. If the key file is missing or empty, the loop exits quietly and the web runtime still starts. Existing containers need a no-delete recreate so the new bind is attached (the same upgrade path used for earlier secret binds).
 
-The FlyBot runtime image workflow builds the image, smokes it, then runs `runtime/flybot-image/test/container-agent-chat.py` on the CI Docker runner: a loopback management server issues a lease-gated instance runtime key, a real container is started with that key bind, an authorized conversation is dispatched over `/v1/agent`, and the assistant reply is written back to history. The model used in that job is a labeled local fake OpenAI-compatible server. That is a container-path proof, not a real vendor inference acceptance, and not a Teamily comparison.
+The FlyBot runtime image workflow builds the image, smokes it, then runs two CI Docker proofs. `container-agent-chat.py` is a loopback management plus direct `docker run` path. `container-compose-chat.py` uses the real compose manager against a digest-pinned copy of the just-built image, obtained via a temporary loopback registry and not published. The manager creates and starts the instance, injects a lease-gated runtime key, dispatches an authorized conversation over `/v1/agent`, and checks that the data volume survives a no-delete container recreate. Both jobs use a labeled local fake OpenAI-compatible server. That is a container-path proof, not a real vendor inference acceptance, and not a Teamily comparison.
 
 ## Explicitly not in this slice
 

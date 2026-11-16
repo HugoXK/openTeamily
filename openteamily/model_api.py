@@ -14,6 +14,7 @@ OpenTeamily defaults and are not Teamily parity.
 """
 import hmac
 import hashlib
+import ipaddress
 import os
 import re
 import secrets
@@ -110,6 +111,19 @@ def valid_model(value):
     return isinstance(value, str) and MODEL.fullmatch(value) is not None
 
 
+def insecure_http_allowed(hostname):
+    """Loopback or private-address HTTP hosts. Public hostnames are rejected."""
+    if not hostname:
+        return False
+    if hostname in ('127.0.0.1', 'localhost', '::1'):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return bool(address.is_private and not address.is_unspecified)
+
+
 def valid_base_url(value):
     if not isinstance(value, str) or not 8 <= len(value) <= 512 or any(ord(c) < 32 for c in value):
         return False
@@ -121,7 +135,7 @@ def valid_base_url(value):
         return False
     if not parts.hostname or parts.query or parts.fragment:
         return False
-    if parts.scheme == 'http' and parts.hostname not in ('127.0.0.1', 'localhost', '::1'):
+    if parts.scheme == 'http' and not insecure_http_allowed(parts.hostname):
         return False
     return True
 
