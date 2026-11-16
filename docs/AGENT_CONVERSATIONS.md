@@ -47,7 +47,7 @@ Each conversation stores `agent_id`. Each send records the current `workspace_ag
 
 ## Explicitly not in this slice
 
-- Public or unlisted homepages, share links, and embeddable conversations.
+- Embeddable conversations. Public homepages and revocable share links are in [AGENT_HOMEPAGES.md](AGENT_HOMEPAGES.md).
 - Auto / Instant / Agentic or any other invented mode field.
 - A second chat engine inside the management process.
 - Messaging a third-party vendor from these tests.

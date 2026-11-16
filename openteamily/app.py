@@ -441,6 +441,11 @@ class App:
             if method != 'GET' or query:
                 refuse(400, 'invalid', 'Invalid share request')
             return self.render_share(share_path[1], now)
+        homepage_path = re.fullmatch(r'/a/([A-Za-z0-9_-]{43})', path)
+        if homepage_path:
+            if method != 'GET' or query:
+                refuse(400, 'invalid', 'Invalid homepage request')
+            return self.render_agent_homepage(homepage_path[1])
         if path in ('/v1/auth/register', '/v1/auth/login') and method == 'POST':
             self.origin_check(env)  # Login/registration CSRF protection before a session exists.
             body = self.body(env, ['username', 'password'])
@@ -737,6 +742,10 @@ class App:
                 r'(?:/([0-9a-f]{32})(?:/(messages(?:/([0-9a-f]{32})(?:/(artifact))?)?))?)?', path)
             if conversation_path:
                 return self.conversation_dispatch(db, session, method, query, now, env, *conversation_path.groups())
+            homepage_api = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/homepage(?:/(revoke))?', path)
+            if homepage_api:
+                return self.agent_homepage_dispatch(db, session, method, query, now, env, *homepage_api.groups())
             agent_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/agents(?:/([0-9a-f]{32})(?:/(archive))?)?', path)
             if agent_path:
@@ -1955,7 +1964,51 @@ class App:
         return 200, {'action': memory.action_view(memory.load_action(db, workspace['id'], row['id']))}, []
 
 
+    def render_agent_homepage(self, token):
+        with self.store.connect() as db:
+            row = agents.load_homepage_by_token(db, token)
+        if row is None:
+            refuse(404, 'not_found', 'Homepage not found')
+        return 200, agents.render_homepage(row).encode('utf-8'), agents.homepage_headers()
+
+    def agent_homepage_dispatch(self, db, session, method, query, now, env, workspace_id, agent_id, revoking):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        row = agents.load(db, workspace['id'], agent_id)
+        if row is None or (row['archived'] == 1 and not agents.can_manage(actor)):
+            refuse(404, 'not_found', 'Agent not found')
+        if revoking:
+            if method != 'POST' or query:
+                refuse(400, 'invalid', 'Invalid homepage request')
+            if not agents.can_manage(actor):
+                refuse(403, 'forbidden', 'Only owners and admins can change the public homepage')
+            self.body(env, [])
+            if row['archived'] == 1:
+                refuse(409, 'conflict', 'Archived agents cannot have a public homepage')
+            agents.revoke_active_homepages(db, row['id'], now)
+            return 200, {'agent': agents.snapshot(db, row)}, []
+        if method == 'GET' and not query:
+            return 200, {'agent': agents.snapshot(db, row)}, []
+        if method != 'POST' or query:
+            refuse(400, 'invalid', 'Invalid homepage request')
+        if not agents.can_manage(actor):
+            refuse(403, 'forbidden', 'Only owners and admins can change the public homepage')
+        self.body(env, [])
+        if row['archived'] == 1:
+            refuse(409, 'conflict', 'Archived agents cannot have a public homepage')
+        agents.revoke_active_homepages(db, row['id'], now)
+        token, home_id = opaque(), uuid4().hex
+        db.execute(
+            'INSERT INTO workspace_agent_homepages VALUES(?,?,?,?,?,?,?,0,NULL)',
+            (home_id, row['workspace_id'], row['id'], digest('agent-home:' + token),
+             token[:agents.PREFIX_LEN], now, session['user_id']),
+        )
+        return 201, {'agent': agents.snapshot(db, row, include_token=True, token=token)}, []
+
     def workspace_agent_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, archiving):
+
         workspace = members.load(db, workspace_id, session['user_id'])
         if workspace is None:
             refuse(404, 'not_found', 'Workspace not found')
@@ -1978,7 +2031,7 @@ class App:
                 refuse(403, 'forbidden', 'Only owners and admins can archive agents')
             return self.archive_workspace_agent(db, row, now, self.body(env, ['revision']))
         if method == 'GET' and not query:
-            return 200, {'agent': agents.view(row)}, []
+            return 200, {'agent': agents.snapshot(db, row)}, []
         if method != 'POST' or query:
             refuse(400, 'invalid', 'Invalid agent request')
         if not agents.can_manage(actor):
@@ -2002,7 +2055,7 @@ class App:
         if include_archived and not agents.can_manage(actor):
             refuse(403, 'forbidden', 'Only owners and admins can list archived agents')
         rows = agents.listing(db, workspace['id'], cursor, int(limit) + 1, include_archived)
-        return 200, {'items': [agents.view(row) for row in rows[:int(limit)]],
+        return 200, {'items': [agents.snapshot(db, row) for row in rows[:int(limit)]],
                      'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
 
     def create_workspace_agent(self, db, workspace, session, now, env):
@@ -2025,7 +2078,7 @@ class App:
         if prior:
             if prior['request_hash'] != request_hash:
                 refuse(409, 'conflict', 'Idempotency key was used for a different request')
-            return 200, {'agent': agents.view(prior)}, []
+            return 200, {'agent': agents.snapshot(db, prior)}, []
         if db.execute(
             'SELECT id FROM workspace_agents WHERE workspace_id=? AND name_hash=?',
             (workspace['id'], agents.name_hash(name)),
@@ -2040,7 +2093,7 @@ class App:
             (agent_id, workspace['id'], name, agents.name_hash(name), summary, instructions,
              now, now, session['user_id'], key_hash, request_hash),
         )
-        return 201, {'agent': agents.view(agents.load(db, workspace['id'], agent_id))}, []
+        return 201, {'agent': agents.snapshot(db, agents.load(db, workspace['id'], agent_id))}, []
 
     def update_workspace_agent(self, db, workspace, row, now, body):
         if body.get('revision') != row['revision']:
@@ -2068,21 +2121,22 @@ class App:
         updated = agents.load(db, workspace['id'], row['id'])
         if updated is None or updated['revision'] != row['revision'] + 1:
             refuse(409, 'conflict', 'Agent was updated; reload and retry')
-        return 200, {'agent': agents.view(updated)}, []
+        return 200, {'agent': agents.snapshot(db, updated)}, []
 
     def archive_workspace_agent(self, db, row, now, body):
         if body.get('revision') != row['revision']:
             refuse(409, 'conflict', 'Agent was updated; reload and retry')
         if row['archived'] == 1:
-            return 200, {'agent': agents.view(row)}, []
+            return 200, {'agent': agents.snapshot(db, row)}, []
         db.execute(
             'UPDATE workspace_agents SET archived=1, revision=?, updated=? WHERE id=? AND revision=?',
             (row['revision'] + 1, now, row['id'], row['revision']),
         )
+        agents.revoke_active_homepages(db, row['id'], now)
         updated = agents.load(db, row['workspace_id'], row['id'])
         if updated is None or updated['archived'] != 1:
             refuse(409, 'conflict', 'Agent was updated; reload and retry')
-        return 200, {'agent': agents.view(updated)}, []
+        return 200, {'agent': agents.snapshot(db, updated)}, []
 
     def public_message(self, db, row):
         data = conversations.message_view(row)
@@ -2203,7 +2257,7 @@ class App:
             row = conversations.load_conversation(db, workspace['id'], conversation_id)
             items = conversations.messages(db, row['id'], '', 201) or []
             return 200, {'conversation': conversations.conversation_view(row),
-                         'agent': agents.view(agent),
+                         'agent': agents.snapshot(db, agent),
                          'items': [self.public_message(db, item) for item in items[:200]],
                          'cursor': items[199]['id'] if len(items) > 200 else None}, []
         if rest == 'messages' and message_id is None and method == 'GET':
