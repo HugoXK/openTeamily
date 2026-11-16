@@ -6,6 +6,7 @@
 import { attachBridge } from './src/bridge.js'
 import { installFlybotHost } from './src/host.js'
 import { watchMentionTriggers } from './src/mentions.js'
+import { attachBotDetails } from './src/details.js'
 
 installFlybotHost()
 
@@ -14,6 +15,8 @@ const attach = (ctx, host) => {
   if (ctx?.slots) {
     const off = attachBridge(ctx.slots, host.slots)
     if (typeof off === 'function') offs.push(off)
+    const details = attachBotDetails(ctx.slots, host.slots)
+    if (typeof details === 'function') offs.push(details)
   }
   const mentions = watchMentionTriggers(ctx, host.slots)
   if (typeof mentions === 'function') offs.push(mentions)

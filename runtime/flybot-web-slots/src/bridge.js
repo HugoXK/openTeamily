@@ -3,8 +3,8 @@
 // because createRuntime already runs once through the wrapper).
 //
 // Composer @ rows are wired separately through DSH inputTriggers.registerSource
-// (see mentions.js). The official ds-bot v0.3.6 details drawer has no slot
-// for flybot.bot.details, so that entry stays in the FlyBot registry only.
+// (see mentions.js). flybot.bot.details is rendered by the FlyBot-branded
+// surface in details.js, not by inventing a hook in the official drawer.
 // A missing or rejecting dsh slot is ignored, the way social already treats
 // an older host.
 

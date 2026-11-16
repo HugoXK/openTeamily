@@ -21,9 +21,14 @@ v0.3.6 uses in `src/client/at-menu.js`). Tests use an in-process fake
 `registerSource` only; they are not a live dsh-web or Teamily comparison.
 
 The official ds-bot v0.3.6 details drawer (`src/client/details-drawer.js`)
-has no slot for `flybot.bot.details`, so Bot Social details stay in the
-FlyBot registry only. This adapter does not invent a drawer slot or edit
-the vendored ds-bot tree.
+has no slot for `flybot.bot.details`. This adapter does not invent a drawer
+slot or edit the vendored ds-bot tree. Instead it installs its own
+FlyBot-branded details surface on the already-bridged dsh-web-app regions
+`conversation.session.header`, `conversation.composer.dock` (reachable when
+the host hides a blank session header), and `settings.section`. Opening that
+surface renders components registered on `flybot.bot.details` (Bot Social
+registers `BotSocialDetails`). Tests mount a fake dsh slot host and drive
+the real social client; they are not a live dsh-web or Teamily comparison.
 
 `@openteamily/flybot-social-web` is a client-only DSH bundle that loads
 `@flybot/social/client.js` after this host. Its server `apply()` is a no-op.
