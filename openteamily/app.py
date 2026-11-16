@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import automations, invites, members, model_api, oidc, settings, skill_secrets, teams
+from . import automations, invites, members, model_api, oidc, runtime_keys, settings, skill_secrets, teams
 
 
 class APIError(Exception):
@@ -528,6 +528,23 @@ class App:
                 except ValueError:
                     refuse(429, 'quota', 'Skill secret limit reached')
                 return 200, skill_secrets.list_secrets(db, session['user_id']), []
+            if path == '/v1/runtime-keys' and method == 'GET' and not query:
+                return 200, {
+                    'items': runtime_keys.listing(db, session['user_id']),
+                    'device_id': runtime_keys.device_id(db, session['user_id'], now),
+                }, []
+            if path == '/v1/runtime-keys' and method == 'POST' and not query:
+                return self.create_runtime_key(db, session['user_id'], now, self.body(env, ['name', 'expires_in']))
+            revoke = re.fullmatch(r'/v1/runtime-keys/([0-9a-f]{32})/revoke', path)
+            if revoke and method == 'POST' and not query:
+                self.body(env, [])
+                row = runtime_keys.load(db, session['user_id'], revoke[1])
+                if row is None:
+                    refuse(404, 'not_found', 'Runtime key not found')
+                db.execute('UPDATE runtime_keys SET revoked=1 WHERE id=?', (row['id'],))
+                row = dict(row)
+                row['revoked'] = 1
+                return 200, {'key': runtime_keys.view(row)}, []
             if path == '/v1/model-api' and method == 'GET' and not query:
                 override = model_api.public_view(model_api.load_account(db, session['user_id']), 'account')
                 effective, _secret, source = model_api.resolve(db, self.store, user_id=session['user_id'])
@@ -627,6 +644,23 @@ class App:
     @staticmethod
     def workspace(row):
         return {key: row[key] for key in ('id', 'owner_id', 'name', 'created')}
+
+
+    def create_runtime_key(self, db, user_id, now, body):
+        name = body.get('name')
+        if isinstance(name, str):
+            name = name.strip()
+        if not runtime_keys.valid_name(name):
+            refuse(400, 'invalid', 'Provide a key name')
+        expires_in = body.get('expires_in')
+        if expires_in is not None and (type(expires_in) is not int
+                                       or not runtime_keys.MIN_EXPIRES <= expires_in <= runtime_keys.MAX_EXPIRES):
+            refuse(400, 'invalid', 'expires_in must be between 60 and 31536000 seconds, or omitted')
+        try:
+            key, token = runtime_keys.create(db, user_id, now, name, expires_in)
+        except ValueError:
+            refuse(429, 'quota', 'Runtime key capacity reached')
+        return 201, {'key': key, 'token': token}, []
 
     def create_team(self, db, session, now, env):
         body = self.body(env, ['name', 'slug', 'mode', 'workspace_id'])
