@@ -12,7 +12,7 @@
   <header>
     <p class="brand">OpenTeamily / FlyBot</p>
     <h1>作品库</h1>
-    <p class="note">这是作品库的第一刀，只支持工作区内的文档：可以创建、打开和编辑。未实现的类型不会出现在这个页面上。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
+    <p class="note">作品库目前支持工作区内的文档和静态网站：可以创建、打开、编辑，并把自动化或代理的结果保存为带出处的文档。只读分享链接需要明确创建，可以撤销，不会在保存时自动发布。网站用隔离沙箱和 CSP 渲染，管理页本身不执行作品里的脚本。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
     <nav>
       <a href="/settings">账号设置</a>
       <a href="/automations">自动化</a>
@@ -39,8 +39,9 @@
     <section id="list-panel">
       <label>搜索 <input id="search" type="text" maxlength="80" autocomplete="off"></label>
       <ul id="artifact-list"></ul>
-      <p id="list-empty" class="note" hidden>这个工作区还没有文档。</p>
+      <p id="list-empty" class="note" hidden>这个工作区还没有作品。</p>
       <button type="button" id="new-artifact">新建文档</button>
+      <button type="button" id="new-website">新建网站</button>
     </section>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
@@ -48,6 +49,16 @@
         <textarea name="body" maxlength="8000" rows="16"></textarea>
       </label>
       <p id="editor-meta" class="note"></p>
+      <p id="editor-source" class="note" hidden></p>
+      <iframe id="website-preview" title="网站预览" sandbox hidden></iframe>
+      <section id="share-panel" hidden>
+        <h2>只读分享</h2>
+        <p class="note">链接需要点下面的按钮才会生成，撤销后立即失效。不会自动发布。</p>
+        <ul id="share-list"></ul>
+        <p id="share-empty" class="note" hidden>还没有分享链接。</p>
+        <button type="button" id="create-share">创建只读分享链接</button>
+        <p id="share-once" class="note" hidden></p>
+      </section>
       <button type="submit" id="save-artifact">保存</button>
       <button type="button" id="cancel-editor">返回列表</button>
       <button type="button" id="remove-artifact">删除</button>

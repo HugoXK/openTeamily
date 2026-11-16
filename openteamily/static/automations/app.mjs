@@ -219,6 +219,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const pre = document.createElement('pre');
         pre.textContent = text;
         row.appendChild(pre);
+        if (item.status === 'succeeded' && current && current.id) {
+          const save = document.createElement('button');
+          save.type = 'button';
+          save.textContent = '保存到作品库';
+          save.addEventListener('click', async () => {
+            const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs/${item.id}/artifact`, {});
+            if (result.status !== 200 && result.status !== 201) {
+              show('error', messageFor(result.body.error, '保存到作品库失败。'));
+              return;
+            }
+            show('ok', '已保存到作品库。');
+          });
+          row.appendChild(save);
+        }
       }
       list.appendChild(row);
     }

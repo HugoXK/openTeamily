@@ -34,7 +34,8 @@ class SettingsPage:
     }
     PREFIXES = ('/settings', '/automations', '/team', '/members', '/runtimes', '/artifacts', '/install')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
-           "img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'")
+           "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
+           "frame-ancestors 'none'; object-src 'none'")
 
     def __init__(self, api):
         self.api = api
