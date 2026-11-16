@@ -1,4 +1,6 @@
-const KEYS = ['appearance', 'language', 'send_shortcut', 'fold_long_messages', 'document_cards'];
+const KEYS = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end', 'language',
+              'chat_language', 'auto_translate', 'send_shortcut', 'message_folding', 'document_cards',
+              'link_previews', 'task_completion_reminders', 'likes_visibility', 'favorites_visibility'];
 
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -9,10 +11,19 @@ export function readForm(form) {
   const data = new FormData(form);
   return {
     appearance: data.get('appearance'),
+    appearance_schedule: data.get('appearance_schedule'),
+    appearance_start: data.get('appearance_start'),
+    appearance_end: data.get('appearance_end'),
     language: data.get('language'),
+    chat_language: data.get('chat_language'),
+    auto_translate: data.has('auto_translate'),
     send_shortcut: data.get('send_shortcut'),
-    fold_long_messages: data.has('fold_long_messages'),
+    message_folding: data.get('message_folding'),
     document_cards: data.has('document_cards'),
+    link_previews: data.has('link_previews'),
+    task_completion_reminders: data.has('task_completion_reminders'),
+    likes_visibility: data.get('likes_visibility'),
+    favorites_visibility: data.get('favorites_visibility'),
   };
 }
 
@@ -25,8 +36,13 @@ export function diff(current, next) {
 }
 
 export function applyTheme(document, values) {
-  document.documentElement.lang = values.language === 'en' ? 'en' : 'zh-CN';
+  document.documentElement.lang = values.language || 'zh-CN';
   document.body.dataset.theme = values.appearance === 'system' ? '' : values.appearance;
+  if (values.appearance === 'auto') {
+    document.body.dataset.schedule = values.appearance_schedule || 'sunset_sunrise';
+  } else {
+    delete document.body.dataset.schedule;
+  }
 }
 
 export function readModelForm(form) {
@@ -54,9 +70,13 @@ export function fillForm(form, values) {
   for (const option of form.querySelectorAll('[name="appearance"], [name="send_shortcut"]')) {
     option.checked = option.value === values[option.name];
   }
-  form.elements.language.value = values.language;
-  form.elements.fold_long_messages.checked = values.fold_long_messages;
-  form.elements.document_cards.checked = values.document_cards;
+  for (const name of ['appearance_schedule', 'appearance_start', 'appearance_end', 'language',
+                      'chat_language', 'message_folding', 'likes_visibility', 'favorites_visibility']) {
+    form.elements[name].value = values[name];
+  }
+  for (const name of ['auto_translate', 'document_cards', 'link_previews', 'task_completion_reminders']) {
+    form.elements[name].checked = values[name];
+  }
 }
 
 function messageFor(error, fallback) {
@@ -118,6 +138,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     revision = settings.body.settings.revision;
     fillForm(form, current);
     applyTheme(document, current);
+    await renderSkillSecrets();
     if (modelForm) {
       const model = await request('GET', '/v1/model-api');
       if (model.status === 200) {
@@ -196,6 +217,49 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     applyTheme(document, current);
     show('ok', '已保存。');
   });
+
+  async function renderSkillSecrets() {
+    const list = document.getElementById('skill-secret-list');
+    const skillForm = document.getElementById('skill-secrets-form');
+    if (!list || !skillForm) return;
+    list.textContent = '';
+    const listed = await request('GET', '/v1/skill-secrets');
+    if (listed.status !== 200) return;
+    for (const item of listed.body.items) {
+      const row = document.createElement('li');
+      row.textContent = item.name + ' ';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '删除';
+      remove.addEventListener('click', async () => {
+        const result = await request('POST', '/v1/skill-secrets', {name: item.name, action: 'delete'});
+        if (result.status !== 200) {
+          show('error', messageFor(result.body.error, '无法删除技能密钥。'));
+          return;
+        }
+        await renderSkillSecrets();
+      });
+      row.appendChild(remove);
+      list.appendChild(row);
+    }
+  }
+
+  const skillForm = document.getElementById('skill-secrets-form');
+  if (skillForm) {
+    skillForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const name = skillForm.elements.name.value.trim();
+      const value = skillForm.elements.value.value;
+      const result = await request('POST', '/v1/skill-secrets', {name, action: 'set', value});
+      skillForm.elements.value.value = '';
+      if (result.status !== 200) {
+        show('error', messageFor(result.body.error, '保存技能密钥失败。'));
+        return;
+      }
+      show('ok', '技能密钥已保存。');
+      await renderSkillSecrets();
+    });
+  }
 
   if (modelForm) {
     modelForm.addEventListener('submit', async event => {

@@ -41,6 +41,7 @@ All responses are JSON and no-store. There is no CORS support. Errors are `{erro
 | GET/POST | `/v1/admin/model-api` | Platform default model API (operator bearer); see [MODEL_API.md](MODEL_API.md) |
 | GET/POST | `/v1/model-api` | Account model API override and effective config; see [MODEL_API.md](MODEL_API.md) |
 | GET/POST | `/v1/workspaces/{id}/model-api` | Optional workspace override; see [MODEL_API.md](MODEL_API.md) |
+| GET/POST | `/v1/skill-secrets` | Write-only skill secrets for the signed-in account; see [SETTINGS.md](SETTINGS.md) |
 | GET/POST | `/v1/settings` | Per-account interface preferences with revision check; added after PR16, see [SETTINGS.md](SETTINGS.md) |
 | GET/POST | `/v1/workspaces/{id}/members` | Membership and roles; added after PR16, see [MEMBERS.md](MEMBERS.md). List/get workspaces include membership, not only ownership |
 | GET/POST | `/v1/workspaces/{id}/invites` | Invite links; added after PR16, see [INVITES.md](INVITES.md) |

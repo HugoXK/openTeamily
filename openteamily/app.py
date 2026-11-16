@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import automations, invites, members, model_api, oidc, settings
+from . import automations, invites, members, model_api, oidc, settings, skill_secrets
 
 
 class APIError(Exception):
@@ -494,9 +494,9 @@ class App:
                 revision, changes = body.get('revision'), body.get('changes')
                 if type(revision) is not int or not 0 <= revision <= 2 ** 31 or not isinstance(changes, dict) or not changes:
                     refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
-                for name, value in changes.items():
-                    if name not in settings.FIELDS or not settings.valid_value(name, value):
-                        refuse(400, 'invalid', 'Unknown setting or unsupported value')
+                changes = settings.normalize_changes(changes)
+                if changes is None:
+                    refuse(400, 'invalid', 'Unknown setting or unsupported value')
                 row = db.execute('SELECT * FROM user_settings WHERE user_id=?', (session['user_id'],)).fetchone()
                 current = settings.view(row)
                 if revision != current['revision']:
@@ -509,6 +509,25 @@ class App:
                            'document=excluded.document, revision=excluded.revision, updated=excluded.updated',
                            (session['user_id'], document, current['revision'] + 1, now))
                 return 200, {'settings': {'values': values, 'revision': current['revision'] + 1}}, []
+            if path == '/v1/skill-secrets' and method == 'GET' and not query:
+                return 200, skill_secrets.list_secrets(db, session['user_id']), []
+            if path == '/v1/skill-secrets' and method == 'POST' and not query:
+                body = self.body(env, ['name', 'action', 'value'])
+                name, action = body.get('name'), body.get('action')
+                if not skill_secrets.valid_name(name) or action not in ('set', 'delete'):
+                    refuse(400, 'invalid', 'Provide a valid skill secret name and action')
+                if action == 'delete':
+                    if skill_secrets.delete_secret(db, session['user_id'], name) == 0:
+                        refuse(404, 'not_found', 'Skill secret not found')
+                    return 200, skill_secrets.list_secrets(db, session['user_id']), []
+                value = body.get('value')
+                if not skill_secrets.valid_value(value):
+                    refuse(400, 'invalid', 'Provide a skill secret value')
+                try:
+                    skill_secrets.put_secret(db, self.store, session['user_id'], name, value, now)
+                except ValueError:
+                    refuse(429, 'quota', 'Skill secret limit reached')
+                return 200, skill_secrets.list_secrets(db, session['user_id']), []
             if path == '/v1/model-api' and method == 'GET' and not query:
                 override = model_api.public_view(model_api.load_account(db, session['user_id']), 'account')
                 effective, _secret, source = model_api.resolve(db, self.store, user_id=session['user_id'])
