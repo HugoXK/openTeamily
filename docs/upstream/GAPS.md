@@ -18,8 +18,11 @@ system.”
   server URL is configured (CI uses a fake server and `ot-fake-` tokens only).
   The management server can now inject a validated platform or workspace
   server URL into that file at instance start (tokens stay off management).
-  Composer `@` mentions / Bot details in the official ds-bot drawer, and a
-  license-complete public image release are still open. The social façade
+  Composer `@` mention *candidates* can be registered on DSH
+  `inputTriggers.registerSource` (in-process fake trigger tests only; not a
+  live dsh-web composer). The official ds-bot v0.3.6 details drawer has no
+  slot for `flybot.bot.details`, so that panel is still FlyBot-registry only.
+  A license-complete public image release remains open. The social façade
   now posts group/DM lines, seats room-link claims behind
   ticketPeers/serveInvites/seatOpenClaims (in-process fake invite server
   tests only; not a live Bot Social or Teamily comparison), and hosts
