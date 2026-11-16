@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -46,6 +45,8 @@ class UpstreamMigrationTests(unittest.TestCase):
 
     def test_default_core_exclusions_are_absent(self):
         flybot = ROOT / "runtime/flybot"
+        self.assertFalse((flybot / "core").exists())
+        self.assertFalse((flybot / "ds-bot.pin.json").exists())
         self.assertFalse((flybot / "plugins/project").exists())
         self.assertFalse((flybot / "plugins/timeline").exists())
         self.assertFalse((flybot / "plugins/tree").exists())
@@ -59,8 +60,8 @@ class UpstreamMigrationTests(unittest.TestCase):
         self.assertFalse((ROOT / "services/bot-social/docs/assets").exists())
         self.assertFalse((ROOT / "services/bot-social/docs/index.html").exists())
         self.assertFalse((ROOT / "services/bot-social/scripts/install.sh").exists())
+        self.assertFalse((ROOT / "services/bot-social/scripts/demo.ts").exists())
         self.assertTrue((flybot / "plugins/social/index.js").is_file())
-        self.assertTrue((flybot / "core/index.js").is_file())
         self.assertTrue((flybot / "docker/entrypoint.mjs").is_file())
         self.assertTrue((ROOT / "services/bot-social/src/server.ts").is_file())
         self.assertTrue((ROOT / "services/bot-social/public/index.html").is_file())
@@ -94,30 +95,42 @@ class UpstreamMigrationTests(unittest.TestCase):
             self.verify.check_clean_tree(base, clean_errors)
             self.assertTrue(any(".env" in item for item in clean_errors), clean_errors)
 
-    def test_ds_bot_pin_equivalence_is_recorded(self):
-        pin = (ROOT / "runtime/flybot/ds-bot.pin.json")
-        equiv_path = (ROOT / "docs/upstream/ds-bot-pin-equivalence.json")
-        self.assertTrue(pin.is_file())
-        self.assertTrue(equiv_path.is_file())
-        import json
-        recorded = json.loads(pin.read_text(encoding="utf-8"))
-        equiv = json.loads(equiv_path.read_text(encoding="utf-8"))
-        self.assertEqual(recorded["commit"], self.verify.DS_BOT_PINNED_COMMIT)
-        self.assertEqual(recorded["tree"], self.verify.DS_BOT_TREE)
-        self.assertEqual(equiv["pinned_commit"], self.verify.DS_BOT_PINNED_COMMIT)
-        self.assertEqual(equiv["ds_bot_tree"], self.verify.DS_BOT_TREE)
-        self.assertEqual(
-            equiv["equivalent_commit_after_rewrite"]["sha"],
-            self.verify.DS_BOT_EQUIVALENT_COMMIT,
-        )
-        self.assertNotIn(recorded["commit"], self.verify.DS_BOT_FORBIDDEN_TARGETS)
-        self.assertNotEqual(recorded["commit"], "a66cc737cfb6c3d8a2597e748cded6cab1206dd3")
+    def test_core_fork_is_recorded_as_absent(self):
         errors = []
-        self.verify.check_ds_bot_pin(ROOT, errors)
+        self.verify.check_core_fork_absent(ROOT, errors)
         self.assertEqual(errors, [])
         origin = (ROOT / "runtime/flybot/ORIGIN.md").read_text(encoding="utf-8")
-        self.assertIn(self.verify.DS_BOT_EQUIVALENT_COMMIT, origin)
+        self.assertIn("does **not** contain `core/`", origin)
         self.assertIn("v0.3.6", origin)
+        selection = (ROOT / "docs/upstream/SELECTION.md").read_text(encoding="utf-8")
+        self.assertIn("runtime/flybot/core/", selection)
+        self.assertIn("v0.3.6", selection)
+        equiv = json.loads((ROOT / "docs/upstream/ds-bot-pin-equivalence.json").read_text(encoding="utf-8"))
+        self.assertEqual(equiv["status"], "not_imported")
+
+    def test_modified_files_are_recorded_and_differ_from_the_pin(self):
+        manifest = json.loads((ROOT / "docs/upstream/migration-manifest.json").read_text(encoding="utf-8"))
+        modified = manifest["modified_files"]
+        self.assertIn("services/bot-social/package.json", modified)
+        self.assertIn("runtime/flybot/README.md", modified)
+        pkg = json.loads((ROOT / "services/bot-social/package.json").read_text(encoding="utf-8"))
+        self.assertNotIn("demo", pkg.get("scripts") or {})
+        errors = []
+        self.verify.check_modified_files(
+            ROOT,
+            manifest,
+            {
+                "runtime/flybot": json.loads((ROOT / "docs/upstream/flybot-files.json").read_text()),
+                "services/bot-social": json.loads((ROOT / "docs/upstream/bot-social-files.json").read_text()),
+            },
+            errors,
+        )
+        self.assertEqual(errors, [])
+
+    def test_bot_social_test_script_still_present(self):
+        pkg = json.loads((ROOT / "services/bot-social/package.json").read_text(encoding="utf-8"))
+        self.assertIn("test", pkg.get("scripts") or {})
+        self.assertIn("tsx", pkg["scripts"]["test"])
 
 
 if __name__ == "__main__":

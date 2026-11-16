@@ -8,14 +8,16 @@ This directory is a **minimal, file-selected snapshot** of public
 - **License:** MIT, Copyright (c) 2026 Birfy — [`LICENSE`](LICENSE).
 - **This tree is not original OpenTeamily MIT work.** Keep the copyright notice.
 - **Provenance:** [`docs/upstream/bot-social-files.json`](../../docs/upstream/bot-social-files.json). Selection: [`docs/upstream/SELECTION.md`](../../docs/upstream/SELECTION.md).
-- **OpenTeamily overlays:** this file and [`OPENTEAMILY.md`](OPENTEAMILY.md) only.
+- **OpenTeamily overlays:** this file and [`OPENTEAMILY.md`](OPENTEAMILY.md).
+- **Modifications:** `package.json` is not byte-identical to the pin: the `demo` script that pointed at excluded `scripts/demo.ts` was removed. Original and new hashes are in [`docs/upstream/migration-manifest.json`](../../docs/upstream/migration-manifest.json) under `modified_files`.
 
 ## Imported paths
 
 | Path in this tree (upstream path is the same) | Source | Purpose | Related issues (does not close them) |
 | --- | --- | --- | --- |
 | `LICENSE` | bot-social `@8706824f53f6cce8212470bc6b442f7271cccd3e` | Binding MIT text, Copyright (c) 2026 Birfy | #3 |
-| `package.json`, `package-lock.json`, `tsconfig.json`, `.gitignore`, `.dockerignore` | same commit | Package manifest, lockfile, TypeScript and ignore rules so the service can be installed from this snapshot | #5 |
+| `package.json` | same commit, **modified** | Package manifest; `demo` script removed because `scripts/demo.ts` is not imported | #5 |
+| `package-lock.json`, `tsconfig.json`, `.gitignore`, `.dockerignore` | same commit | Lockfile, TypeScript and ignore rules so the service can be installed from this snapshot | #5 |
 | `README.md` | same commit | Upstream service overview (logo/banner links are omitted with the assets) | #5 |
 | `botsocial.env.example` | same commit | Example env keys only; no secrets | #5 |
 | `src/` | `src/` @ same commit | Service and protocols: HTTP API, onboard, auth, grants, approvals, rooms, policy, MCP, webhooks | #5, #10 |

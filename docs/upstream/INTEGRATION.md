@@ -11,7 +11,7 @@ separate product.
 | Layer | In tree | Integrated with `openteamily/` / `manager/`? |
 | --- | --- | --- |
 | Management auth, workspaces, instance jobs, fake/simulated runtime | Yes (already on `main`) | n/a |
-| FlyBot runtime source | `runtime/flybot/core`, `docker/` helpers | **No.** No official Dockerfile/compose was imported. Lifecycle jobs do not build or start this tree. |
+| FlyBot customization source | `runtime/flybot/plugins/social`, `docker/` helpers | **No.** The runtime baseline is upstream DS-Bot v0.3.6 (PR #21), not a vendored FlyBot `core/` fork. Lifecycle jobs do not build or start this tree. |
 | Bot Social source | `services/bot-social` | **No.** No management routes or secrets handling were added. |
 | `@flybot/social` | `runtime/flybot/plugins/social` | **No.** Still uses upstream server-config / onboard APIs. |
 

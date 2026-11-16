@@ -29,12 +29,6 @@
     "mode": "100644",
     "bytes": 72533
   },
-  "package.json": {
-    "sha256": "d2021a1bc497d2ec6a2714291dfca14268ca4e5345dadcfc2054caadd248037a",
-    "git_blob_sha": "67dbb7451b82d04bdb32f533ef9abf4dba7c37e8",
-    "mode": "100644",
-    "bytes": 939
-  },
   "docker-compose.yml": {
     "sha256": "6471fdf353b06b7b5123f5e56580bfbe79eef3c5b1eb5f8ec25b9f2803d7bf87",
     "git_blob_sha": "d3830db6cd89f718c61aeecfde86ca7a474b383e",

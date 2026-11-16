@@ -1,35 +1,44 @@
-# OpenTeamily notes for the FlyBot runtime snapshot
+# OpenTeamily notes for the FlyBot customization snapshot
 
-This is a **minimal needed set**, not a full FlyBot checkout. Upstream layout is
-kept for the imported packages so `core/` and `plugins/social` stay internally
-consistent. It is not wired to the management server, and it is not a
+This is a **minimal needed set**, not a full FlyBot checkout, and not the
+runtime baseline. Upstream layout is kept for the imported social plugin and
+docker helpers. It is not wired to the management server, and it is not a
 redistributable container image.
+
+The OpenTeamily runtime baseline is upstream DS-Bot **v0.3.6**, tracked in
+[PR #21](https://github.com/openTeamily/openTeamily/pull/21). This tree is the
+FlyBot customization layer that should later be loaded as a DSH plugin (and
+small patches, if needed) on top of that baseline. It does not vendor a second
+copy of `core/`.
 
 ## Present
 
-- `core/` — runtime package (host + client sources + tests)
-- `plugins/social/` — Bot Social plugin
+- `plugins/social/` — Bot Social plugin (production sources do not import `core/`)
 - `docker/` — instance entrypoint / health / profile helpers
-- Selected runtime docs listed in `ORIGIN.md`
+- Selected docker and social docs listed in `ORIGIN.md`
 
 ## Absent on purpose
 
+- `core/`, `ds-bot.pin.json`, `ds-bot/`, and `patches/` (old v0.1.5 fork)
 - `plugins/project`, `plugins/timeline`, `plugins/tree`, `plugins/workflow`
-- `ds-bot/` and `patches/` (runtime is `core/`; we are not reproducing the patch pipeline)
-- Official `Dockerfile` and `compose.yaml` (they pack excluded plugins and require DSH)
+- Official `Dockerfile` and `compose.yaml`
 - ThinkFlowLab automation, benches, evals, interop, live-e2e, reports, logos, QR
-- `core/scripts/install-doctor.mjs` (it requires the unimported plugins)
+- Host-integration tests that imported the deleted `core/` (`social.test.js`,
+  `social-readonly.test.js`, `web-entry.test.js`, `zh-*.test.js`)
 
-`core/src/host/plugins.js` still *names* those plugins. Naming is not an import.
-Settings that would load `@flybot/tree` / `workflow` / `project` / `timeline`
-from this snapshot have nothing to load. Do not document them as installed.
+`plugins/social/package.json` still declares a peer on `ds-bot>=0.1.5-flybot.1`.
+That peer is historical; the target runtime is upstream v0.3.6. Do not treat
+the peer range as a claim that the old fork is present.
 
 ## Runnable today vs. blocked
 
 - License and file hashes can be verified offline.
-- `core` and social tests need DeepSeek Harness (`core/dev/harness`); it is not
-  imported and must not be installed to claim a pass in this change.
-- Docker build / `dsh web` / real container acceptance are out of scope.
+- Bot Social `npm test` (the service) runs in CI after `npm ci`, with no real tokens.
+- `@flybot/social` plugin-only tests run with `npm test` in `plugins/social/`
+  (no dependencies, no DSH, no `core/`). They do not replace a host-integration
+  suite against v0.3.6.
+- Docker build / `dsh web` / real container acceptance are out of scope here.
+  PR #21 proves the upstream baseline's own suite and container smoke.
 
 See [`docs/upstream/INTEGRATION.md`](../../docs/upstream/INTEGRATION.md) and
 [`docs/upstream/GAPS.md`](../../docs/upstream/GAPS.md).

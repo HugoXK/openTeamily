@@ -14,14 +14,13 @@ Checks, all offline unless --fetch is passed:
   hash to the upstream pins)
 
 --fetch (optional) downloads the public GitHub tarballs for the pinned
-FlyBot and Bot Social commits and re-checks included file hashes. It also
-fetches DS-Bot commit 2b10c70 by SHA (falling back to equivalent commit
-0f130e7) and compares the `ds-bot` tree 5834c00d. It is not required for CI.
+FlyBot and Bot Social commits and re-checks *unmodified* included file hashes.
+Modified files are checked against recorded original and new sha256 values.
+It is not required for CI.
 """
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import hashlib
 import json
@@ -38,19 +37,11 @@ AUDIT_PINS = {
     "services/bot-social/LICENSE": "6f5b168b7397507ec7854d3787079ae4185826ea0a9ade831a269fabe3e737c3",
 }
 
-# FlyBot's ds-bot.pin.json still names 2b10c70. After a DS-Bot history rewrite
-# that commit is not on upstream main; 0f130e7 is the equivalent commit and
-# both have ds-bot tree 5834c00d. Do not retarget to v0.3.6.
+# The old FlyBot core/ fork and ds-bot.pin.json must stay absent. The runtime
+# baseline is upstream DS-Bot v0.3.6 in PR #21, not this snapshot.
 DS_BOT_EQUIVALENCE_PATH = "docs/upstream/ds-bot-pin-equivalence.json"
-DS_BOT_PIN_PATH = "runtime/flybot/ds-bot.pin.json"
-DS_BOT_PINNED_COMMIT = "2b10c70b614e969117b68ddc6fd14e68968272f2"
-DS_BOT_TREE = "5834c00d9c21b972e4b32ad90489443da2a10324"
-DS_BOT_EQUIVALENT_COMMIT = "0f130e7d134bf63e8988b2d53fd6846138ac3d73"
-DS_BOT_REPO = "Fei2411/DS-Bot"
-DS_BOT_FORBIDDEN_TARGETS = frozenset({
-    "a66cc737cfb6c3d8a2597e748cded6cab1206dd3",  # upstream main / v0.3.6 at recording
-    "v0.3.6",
-})
+FLYBOT_CORE_DIR = "runtime/flybot/core"
+FLYBOT_PIN_PATH = "runtime/flybot/ds-bot.pin.json"
 
 FORBIDDEN_PATH_SUBSTRINGS = (
     "plugins/project/",
@@ -67,10 +58,12 @@ FORBIDDEN_PATH_SUBSTRINGS = (
 FORBIDDEN_EXACT_RELATIVE = {
     "runtime/flybot/Dockerfile",
     "runtime/flybot/compose.yaml",
+    "runtime/flybot/ds-bot.pin.json",
     "runtime/flybot/core/scripts/install-doctor.mjs",
     "runtime/flybot/core/test/install-doctor.test.js",
     "services/bot-social/docs/index.html",
     "services/bot-social/scripts/install.sh",
+    "services/bot-social/scripts/demo.ts",
 }
 
 FORBIDDEN_DIR_NAMES = {
@@ -143,9 +136,10 @@ def check_pins(root: Path, errors: list[str]) -> None:
             errors.append(f"{rel} sha256 {actual} != audit pin {expected}")
 
 
-def check_manifest_files(root: Path, dest: str, files: dict, errors: list[str]) -> None:
+def check_manifest_files(root: Path, dest: str, files: dict, errors: list[str], allowed_extra: set[str] | None = None) -> None:
     base = root / dest
     overlay = {"ORIGIN.md", "OPENTEAMILY.md"}
+    allowed_extra = set(allowed_extra or ())
     for rel, meta in files.items():
         path = base / rel
         if not path.is_file():
@@ -166,7 +160,7 @@ def check_manifest_files(root: Path, dest: str, files: dict, errors: list[str]) 
     extra = []
     for path in iter_files(base):
         rel = path.relative_to(base).as_posix()
-        if rel in overlay:
+        if rel in overlay or rel in allowed_extra:
             continue
         if rel not in files:
             extra.append(rel)
@@ -195,6 +189,7 @@ def check_exclusions(root: Path, manifest: dict, errors: list[str]) -> None:
                 errors.append(f"forbidden path present: {rel}")
                 continue
             if path.is_dir() and rel in {
+                "runtime/flybot/core",
                 "runtime/flybot/ds-bot",
                 "runtime/flybot/patches",
                 "runtime/flybot/plugins/project",
@@ -253,106 +248,127 @@ def check_clean_tree(root: Path, errors: list[str]) -> None:
 
 
 
-def _github_json(url: str):
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "openTeamily-upstream-migration-verifier",
-    }
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=60) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+def check_core_fork_absent(root: Path, errors: list[str]) -> None:
+    """The v0.1.5 FlyBot core fork must not be reintroduced in this snapshot."""
+    core = root / FLYBOT_CORE_DIR
+    if core.exists():
+        errors.append(f"{FLYBOT_CORE_DIR} must be absent (runtime baseline is DS-Bot v0.3.6 in PR #21)")
+    pin = root / FLYBOT_PIN_PATH
+    if pin.exists():
+        errors.append(f"{FLYBOT_PIN_PATH} must be absent (old v0.1.5 pin)")
+    equiv = root / DS_BOT_EQUIVALENCE_PATH
+    if equiv.is_file():
+        payload = load_json(equiv)
+        if payload.get("status") != "not_imported":
+            errors.append(f"{DS_BOT_EQUIVALENCE_PATH} must record status=not_imported")
 
 
-def _ds_bot_tree_sha_from_commit(commit: str) -> str:
-    url = f"https://api.github.com/repos/{DS_BOT_REPO}/git/trees/{commit}"
-    payload = _github_json(url)
-    for entry in payload.get("tree", []):
-        if entry.get("path") == "ds-bot" and entry.get("type") == "tree":
-            return entry["sha"]
-    raise KeyError(f"no ds-bot tree entry at {DS_BOT_REPO}@{commit}")
+def check_modified_files(root: Path, manifest: dict, identical: dict[str, dict], errors: list[str]) -> None:
+    modified = manifest.get("modified_files") or {}
+    for key, meta in modified.items():
+        dest = meta.get("destination")
+        rel = meta.get("path")
+        if not dest or not rel:
+            errors.append(f"modified_files {key} missing destination or path")
+            continue
+        if dest in identical and rel in identical[dest]:
+            errors.append(f"modified file still listed as identical: {dest}/{rel}")
+        path = root / dest / rel
+        if not path.is_file():
+            errors.append(f"missing modified file: {dest}/{rel}")
+            continue
+        actual = sha256_file(path)
+        expected = meta.get("new_sha256")
+        if expected and actual != expected:
+            errors.append(f"modified hash mismatch {dest}/{rel}: {actual} != {expected}")
+        original = meta.get("original_sha256")
+        if original and actual == original:
+            errors.append(f"modified file {dest}/{rel} still matches original sha256")
 
 
-def check_ds_bot_pin(root: Path, errors: list[str]) -> dict | None:
-    pin_path = root / DS_BOT_PIN_PATH
-    equiv_path = root / DS_BOT_EQUIVALENCE_PATH
-    if not pin_path.is_file():
-        errors.append(f"missing {DS_BOT_PIN_PATH}")
-        return None
-    if not equiv_path.is_file():
-        errors.append(f"missing {DS_BOT_EQUIVALENCE_PATH}")
-        return None
-    pin = load_json(pin_path)
-    equiv = load_json(equiv_path)
-    if pin.get("commit") != DS_BOT_PINNED_COMMIT:
-        errors.append(
-            f"{DS_BOT_PIN_PATH} commit {pin.get('commit')} != pinned {DS_BOT_PINNED_COMMIT} "
-            "(do not retarget to upstream main or v0.3.6)"
-        )
-    if pin.get("tree") != DS_BOT_TREE:
-        errors.append(f"{DS_BOT_PIN_PATH} tree {pin.get('tree')} != {DS_BOT_TREE}")
-    if equiv.get("pinned_commit") != DS_BOT_PINNED_COMMIT:
-        errors.append(f"{DS_BOT_EQUIVALENCE_PATH} pinned_commit mismatch")
-    if equiv.get("ds_bot_tree") != DS_BOT_TREE:
-        errors.append(f"{DS_BOT_EQUIVALENCE_PATH} ds_bot_tree mismatch")
-    equivalent = (equiv.get("equivalent_commit_after_rewrite") or {}).get("sha")
-    if equivalent != DS_BOT_EQUIVALENT_COMMIT:
-        errors.append(
-            f"{DS_BOT_EQUIVALENCE_PATH} equivalent commit {equivalent} != {DS_BOT_EQUIVALENT_COMMIT}"
-        )
-    if equivalent and equivalent in DS_BOT_FORBIDDEN_TARGETS:
-        errors.append("equivalent commit must not be upstream v0.3.6 / main")
-    if pin.get("commit") in DS_BOT_FORBIDDEN_TARGETS:
-        errors.append(f"{DS_BOT_PIN_PATH} must not be retargeted to v0.3.6")
-    return equiv
+def _resolve_import_target(src: Path, spec: str) -> Path:
+    dest = (src.parent / spec)
+    if dest.exists():
+        return dest
+    for ext in (".js", ".mjs", ".cjs", ".ts", ".json"):
+        cand = Path(str(dest) + ext) if dest.suffix == "" else dest
+        if cand.exists():
+            return cand
+        # TypeScript tests import ./helpers.js but the source is helpers.ts
+        if spec.endswith(".js"):
+            ts = src.parent / (spec[:-3] + ".ts")
+            if ts.exists():
+                return ts
+    if dest.is_dir():
+        for name in ("index.js", "index.mjs", "index.ts"):
+            if (dest / name).exists():
+                return dest / name
+    return dest
 
 
-def fetch_ds_bot_equivalence(errors: list[str]) -> None:
-    """Fetch 2b10c70 by SHA, or compare the equivalent 0f130e7 tree."""
-    pinned_tree = None
-    equivalent_tree = None
-    try:
-        pinned_tree = _ds_bot_tree_sha_from_commit(DS_BOT_PINNED_COMMIT)
-    except Exception as exc:  # noqa: BLE001 — report and fall back to tree compare
-        errors.append(
-            f"direct SHA fetch of {DS_BOT_REPO}@{DS_BOT_PINNED_COMMIT} failed: {exc}; "
-            f"falling back to equivalent commit {DS_BOT_EQUIVALENT_COMMIT}"
-        )
-    try:
-        equivalent_tree = _ds_bot_tree_sha_from_commit(DS_BOT_EQUIVALENT_COMMIT)
-    except Exception as exc:  # noqa: BLE001
-        errors.append(
-            f"fetch of equivalent {DS_BOT_REPO}@{DS_BOT_EQUIVALENT_COMMIT} failed: {exc}"
-        )
-        return
-    if equivalent_tree != DS_BOT_TREE:
-        errors.append(
-            f"equivalent commit {DS_BOT_EQUIVALENT_COMMIT} ds-bot tree "
-            f"{equivalent_tree} != {DS_BOT_TREE}"
-        )
-    if pinned_tree is not None and pinned_tree != DS_BOT_TREE:
-        errors.append(
-            f"pinned commit {DS_BOT_PINNED_COMMIT} ds-bot tree "
-            f"{pinned_tree} != {DS_BOT_TREE}"
-        )
-    if pinned_tree is not None and equivalent_tree is not None and pinned_tree != equivalent_tree:
-        errors.append(
-            f"2b10c70 tree {pinned_tree} != equivalent 0f130e7 tree {equivalent_tree}"
-        )
+def check_dangling_refs(root: Path, errors: list[str]) -> None:
+    """Retained snapshot files must not hard-import or link to missing paths."""
+    import_re = re.compile(
+        r"""(?:from|import)\s+['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)|require\(\s*['"]([^'"]+)['"]\s*\)"""
+    )
+    link_re = re.compile(r"(!?\[[^\]]*\])\(([^)]+)\)")
+    script_re = re.compile(r"(?:(?:\.?\.?/)[\w./-]+(?:\.(?:mjs|js|cjs|ts|sh|py))|scripts/[\w./-]+|src/[\w./-]+)")
+    for dest in ("runtime/flybot", "services/bot-social"):
+        base = root / dest
+        if not base.exists():
+            continue
+        for path in base.rglob("*"):
+            if not path.is_file() or "node_modules" in path.parts:
+                continue
+            rel = path.relative_to(root).as_posix()
+            if path.suffix in {".js", ".mjs", ".cjs", ".ts"}:
+                text = path.read_text(encoding="utf-8", errors="replace")
+                # Ignore import() / path strings inside quoted literals (spawned child argv, etc.).
+                stripped = re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
+                stripped = re.sub(r"'(?:\\.|[^'\\])*'", "''", stripped)
+                stripped = re.sub(r"`(?:\\.|[^`\\])*`", "``", stripped)
+                for a, b, c in import_re.findall(stripped):
+                    spec = a or b or c
+                    if not (spec.startswith("./") or spec.startswith("../")):
+                        continue
+                    target = _resolve_import_target(path, spec)
+                    if not target.exists():
+                        errors.append(f"dangling import in {rel}: {spec}")
+            if path.suffix == ".md":
+                text = path.read_text(encoding="utf-8", errors="replace")
+                for _label, raw in link_re.findall(text):
+                    url = raw.strip().split()[0].strip("<>")
+                    if "://" in url or url.startswith(("#", "mailto:")):
+                        continue
+                    url = url.split("#")[0]
+                    if not url:
+                        continue
+                    if not (path.parent / url).exists():
+                        errors.append(f"dangling markdown link in {rel}: {url}")
+            if path.name == "package.json":
+                try:
+                    pkg = json.loads(path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError as exc:
+                    errors.append(f"invalid package.json {rel}: {exc}")
+                    continue
+                for name, cmd in (pkg.get("scripts") or {}).items():
+                    for tok in script_re.findall(cmd):
+                        candidate = path.parent / tok
+                        if not candidate.exists():
+                            errors.append(f"package.json script {name!r} in {rel} points at missing {tok}")
 
 
 def check_origin_files(root: Path, errors: list[str]) -> None:
     for path, needle in (
         (root / "runtime/flybot/ORIGIN.md", "e26895e737b1218875aafa1f74ab1d3464f287d2"),
-        (root / "runtime/flybot/OPENTEAMILY.md", "not"),
+        (root / "runtime/flybot/ORIGIN.md", "does **not** contain `core/`"),
+        (root / "runtime/flybot/OPENTEAMILY.md", "v0.3.6"),
         (root / "services/bot-social/ORIGIN.md", "8706824f53f6cce8212470bc6b442f7271cccd3e"),
+        (root / "services/bot-social/ORIGIN.md", "demo"),
         (root / "services/bot-social/OPENTEAMILY.md", "optional"),
         (root / "docs/LICENSING.md", "Apache License 2.0"),
-        (root / "runtime/flybot/ORIGIN.md", "0f130e7d134bf63e8988b2d53fd6846138ac3d73"),
-        (root / "runtime/flybot/ORIGIN.md", "5834c00d9c21b972e4b32ad90489443da2a10324"),
-        (root / "docs/upstream/SELECTION.md", "0f130e7d134bf63e8988b2d53fd6846138ac3d73"),
+        (root / "docs/upstream/SELECTION.md", "v0.3.6"),
+        (root / "docs/upstream/SELECTION.md", "core/"),
     ):
         if not path.is_file():
             errors.append(f"missing {path.relative_to(root).as_posix()}")
@@ -415,19 +431,28 @@ def verify(root: Path, fetch: bool = False) -> list[str]:
     if manifest["components"]["bot-social"]["file_count"] != len(social_files):
         errors.append("bot-social file_count does not match bot-social-files.json")
     check_pins(root, errors)
-    check_manifest_files(root, "runtime/flybot", flybot_files, errors)
-    check_manifest_files(root, "services/bot-social", social_files, errors)
+    modified = manifest.get("modified_files") or {}
+    flybot_modified = {m["path"] for m in modified.values() if m.get("destination") == "runtime/flybot"}
+    social_modified = {m["path"] for m in modified.values() if m.get("destination") == "services/bot-social"}
+    check_manifest_files(root, "runtime/flybot", flybot_files, errors, allowed_extra=flybot_modified)
+    check_manifest_files(root, "services/bot-social", social_files, errors, allowed_extra=social_modified)
+    check_modified_files(
+        root,
+        manifest,
+        {"runtime/flybot": flybot_files, "services/bot-social": social_files},
+        errors,
+    )
     check_exclusions(root, manifest, errors)
     check_clean_tree(root, errors)
     check_origin_files(root, errors)
-    check_ds_bot_pin(root, errors)
+    check_core_fork_absent(root, errors)
+    check_dangling_refs(root, errors)
     if fetch:
         fetch_and_compare(
             manifest,
             {"runtime/flybot": flybot_files, "services/bot-social": social_files},
             errors,
         )
-        fetch_ds_bot_equivalence(errors)
     return errors
 
 
@@ -442,7 +467,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--fetch",
         action="store_true",
-        help="re-download public GitHub tarballs and fetch DS-Bot 2b10c70 (or equivalent 0f130e7) by SHA/tree",
+        help="re-download public GitHub tarballs and re-check unmodified included file hashes",
     )
     args = parser.parse_args(argv)
     root = args.root.resolve() if args.root else repo_root()

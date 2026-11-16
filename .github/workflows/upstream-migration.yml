@@ -39,3 +39,18 @@ jobs:
         run: npm test
         env:
           CI: true
+  flybot-social-plugin-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: Run @flybot/social plugin-only tests (no DSH, no core, no npm ci)
+        working-directory: runtime/flybot/plugins/social
+        run: npm test
+        env:
+          CI: true

@@ -30,7 +30,7 @@ working tree or a private fork.
 
 None of these plugins import one another or `@flybot/social`. All declare a
 `ds-bot` peer and use `ctx.flybot`, so they would depend on
-`runtime/flybot/core/` and, to actually run, on DeepSeek Harness (still not
+the upstream DS-Bot v0.3.6 baseline (PR #21) plus this customization layer and, to actually run, on DeepSeek Harness (still not
 imported).
 
 Additional Project seams in core (store, board UI, workflow/task hooks) already

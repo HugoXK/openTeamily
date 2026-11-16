@@ -1,3 +1,5 @@
+> **OpenTeamily snapshot:** FlyBot `core/` 与未导入的插件不在本树中。见 [OPENTEAMILY.md](../OPENTEAMILY.md) 和 [docs/upstream/SELECTION.md](../../../docs/upstream/SELECTION.md)。
+
 # 用 Docker 运行 FlyBot
 
 [English](docker.md)
@@ -29,7 +31,7 @@ docker compose logs flybot | grep token=
 
 打开打印出的 `http://127.0.0.1:3080/?token=…`。每次启动链接都会变；第一次打开后浏览器会保持登录。如果用 `FLYBOT_PORT` 换了主机端口，把链接里的端口一起改掉。
 
-**DeepSeek Key。** 可以在应用里填写（保存在数据卷上，见 [Set a DeepSeek API key](deepseek-api-key.md)，英文），也可以在 `compose.yaml` 旁边建一个 `.env` 文件写上 `DEEPSEEK_API_KEY=sk-…`（不要提交到仓库），然后再运行一次 `docker compose up -d`。环境变量里的 Key 优先，并且不能在应用里修改。
+**DeepSeek Key。** 可以在应用里填写（保存在数据卷上，见 Set a DeepSeek API key (`deepseek-api-key.md` is not in this snapshot)，英文），也可以在 `compose.yaml` 旁边建一个 `.env` 文件写上 `DEEPSEEK_API_KEY=sk-…`（不要提交到仓库），然后再运行一次 `docker compose up -d`。环境变量里的 Key 优先，并且不能在应用里修改。
 
 **Bot Social。** 按 README 的方式在 `/data/profiles/web/cordis.patch.yml` 里设置服务器：
 

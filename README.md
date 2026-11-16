@@ -13,7 +13,7 @@ OpenTeamily is a project name, not a claim of affiliation with or endorsement by
 - **Management server:** accounts, authentication, workspaces, permissions and container lifecycle.
 - **FlyBot runtime containers:** execute Agents and expose an authenticated runtime adapter contract.
 - Both layers must be open-source and self-hostable. The first optional runtime adapter uses local Compose with independent instance IDs; final user/workspace allocation granularity is not decided.
-- FlyBot is the candidate runtime. A minimal needed set of related public source from FlyBot and Bot Social is imported as isolated snapshots under [`runtime/flybot`](runtime/flybot/ORIGIN.md) and [`services/bot-social`](services/bot-social/ORIGIN.md); they keep their original licenses and are not relicensed as OpenTeamily MIT. The management server is not yet wired to those trees, and a complete FlyBot image is not claimed (DeepSeek Harness and base-image closures are not vendored). See [migration notes](docs/upstream/MIGRATION.md), [gaps](docs/upstream/GAPS.md) and [licensing](docs/LICENSING.md).
+- FlyBot customization (the social plugin and instance docker helpers) and Bot Social protocol source are imported as isolated snapshots under [`runtime/flybot`](runtime/flybot/ORIGIN.md) and [`services/bot-social`](services/bot-social/ORIGIN.md); they keep their original licenses and are not relicensed as OpenTeamily MIT. This tree does not vendor the old FlyBot `core/` fork. The runtime baseline is upstream DS-Bot v0.3.6 ([PR #21](https://github.com/openTeamily/openTeamily/pull/21)). The management server is not yet wired to those trees. See [migration notes](docs/upstream/MIGRATION.md), [gaps](docs/upstream/GAPS.md) and [licensing](docs/LICENSING.md).
 
 ## Next steps
 

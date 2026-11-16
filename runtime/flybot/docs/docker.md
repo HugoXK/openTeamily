@@ -1,3 +1,5 @@
+> **OpenTeamily snapshot:** FlyBot `core/` and the excluded plugins are not in this tree. See [OPENTEAMILY.md](../OPENTEAMILY.md) and [docs/upstream/SELECTION.md](../../../docs/upstream/SELECTION.md).
+
 # Run FlyBot in Docker
 
 [中文](docker.zh.md)
@@ -29,7 +31,7 @@ docker compose logs flybot | grep token=
 
 Open the printed `http://127.0.0.1:3080/?token=…` link. The link changes on every start; the browser stays signed in after the first visit. With another host port (`FLYBOT_PORT`), change the port in the link.
 
-**DeepSeek key.** Either enter it in the app (it is saved on the data volume; see [Set a DeepSeek API key](deepseek-api-key.md)), or put `DEEPSEEK_API_KEY=sk-…` in a `.env` file next to `compose.yaml` (never commit it) and run `docker compose up -d` again. A key from the environment wins and cannot be changed in the app.
+**DeepSeek key.** Either enter it in the app (it is saved on the data volume; see Set a DeepSeek API key (`deepseek-api-key.md` is not in this snapshot)), or put `DEEPSEEK_API_KEY=sk-…` in a `.env` file next to `compose.yaml` (never commit it) and run `docker compose up -d` again. A key from the environment wins and cannot be changed in the app.
 
 **Bot Social.** Set the server as in the README, in `/data/profiles/web/cordis.patch.yml`:
 
