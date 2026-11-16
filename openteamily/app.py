@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
+from . import settings
 
 
 class APIError(Exception):
@@ -291,6 +292,29 @@ class App:
                 self.body(env, [])
                 db.execute('DELETE FROM sessions WHERE token_hash=?', (session['token_hash'],))
                 return 200, {'logged_out': True}, self.session_headers('', '', expires=True)
+            if path == '/v1/settings' and method == 'GET' and not query:
+                row = db.execute('SELECT * FROM user_settings WHERE user_id=?', (session['user_id'],)).fetchone()
+                return 200, {'settings': settings.view(row)}, []
+            if path == '/v1/settings' and method == 'POST':
+                body = self.body(env, ['revision', 'changes'])
+                revision, changes = body.get('revision'), body.get('changes')
+                if type(revision) is not int or not 0 <= revision <= 2 ** 31 or not isinstance(changes, dict) or not changes:
+                    refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
+                for name, value in changes.items():
+                    if name not in settings.FIELDS or not settings.valid_value(name, value):
+                        refuse(400, 'invalid', 'Unknown setting or unsupported value')
+                row = db.execute('SELECT * FROM user_settings WHERE user_id=?', (session['user_id'],)).fetchone()
+                current = settings.view(row)
+                if revision != current['revision']:
+                    raise RuntimeFault(409, 'conflict', 'Settings changed elsewhere; reload and retry', current)
+                values = dict(current['values'], **changes)
+                if values == current['values'] and row is not None:
+                    return 200, {'settings': current}, []
+                document = json.dumps(values, sort_keys=True, separators=(',', ':'))
+                db.execute('INSERT INTO user_settings VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET '
+                           'document=excluded.document, revision=excluded.revision, updated=excluded.updated',
+                           (session['user_id'], document, current['revision'] + 1, now))
+                return 200, {'settings': {'values': values, 'revision': current['revision'] + 1}}, []
             if path == '/v1/workspaces' and method == 'POST':
                 body = self.body(env, ['name'])
                 name = body.get('name')
