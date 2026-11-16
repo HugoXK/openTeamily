@@ -1,14 +1,19 @@
 """Workspace artifacts (issue 9, second slice).
 
 Self-written for OpenTeamily; no upstream or Teamily source, fonts or
-marketing copy. This slice adds document provenance from automation and
-agent results, explicit revocable read-only share links, and static
-website pages rendered under a CSP sandbox. It is not a works-library
-parity claim and not browser E2E acceptance.
+marketing copy. This slice adds media uploads and structured whiteboards
+with real persistence, in addition to documents, websites, provenance and
+explicit revocable shares. It is not a works-library parity claim and not
+browser E2E acceptance. Management has no message store, so message-to-library
+is not implemented here.
 """
+import hashlib
+import json
+import os
 import re
 from html import escape, unescape
 from html.parser import HTMLParser
+from pathlib import Path
 
 from .security import digest
 
@@ -55,13 +60,39 @@ CREATE TABLE IF NOT EXISTS artifact_shares (
  revoked INTEGER NOT NULL CHECK(revoked IN (0,1)),
  revoked_at INTEGER);
 CREATE INDEX IF NOT EXISTS artifact_share_item ON artifact_shares(artifact_id, id);
+CREATE TABLE IF NOT EXISTS artifact_media (
+ artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+ mime TEXT NOT NULL,
+ byte_count INTEGER NOT NULL CHECK(byte_count >= 1),
+ sha256 TEXT NOT NULL,
+ filename TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS artifact_boards (
+ artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+ board TEXT NOT NULL);
 '''
 
-KINDS = ('document', 'website')
+KINDS = ('document', 'website', 'whiteboard', 'media')
 TITLE_MAX = 80
 BODY_MAX = 8000
 TOKEN = re.compile(r'[A-Za-z0-9_-]{43}')
 PREFIX_LEN = 8
+MAX_MEDIA_BYTES = 2 * 1024 * 1024
+BOARD_JSON_MAX = 65536
+MAX_STROKES = 200
+MAX_POINTS = 400
+BOARD_MIN, BOARD_MAX = 100, 2000
+HEX32 = re.compile(r'[0-9a-f]{32}')
+SHA256 = re.compile(r'[0-9a-f]{64}')
+SAFE_FILENAME = re.compile(r'[A-Za-z0-9._-]{1,80}')
+STROKE_ID = re.compile(r'[A-Za-z0-9_-]{8,32}')
+COLOR = re.compile(r'#[0-9A-Fa-f]{6}')
+MEDIA_MIMES = {
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+    'audio/mpeg', 'audio/ogg', 'audio/wav',
+    'video/mp4', 'video/webm',
+}
+IMAGE_MIMES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
+EMPTY_BOARD = {'schema': 'openteamily.whiteboard.v1', 'width': 800, 'height': 600, 'strokes': []}
 SHARE_CSP = (
     "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox; "
     "base-uri 'none'; form-action 'none'; frame-ancestors 'self'; object-src 'none'"
@@ -87,13 +118,15 @@ ROW_SELECT = (
     'SELECT a.*, cu.username AS created_by_username, uu.username AS updated_by_username, '
     'm.render AS render, s.source_kind AS source_kind, s.source_id AS source_id, '
     's.automation_id AS automation_id, s.automation_title AS automation_title, '
-    's.task_kind AS task_kind, su.username AS source_share_unused '
+    's.task_kind AS task_kind, md.mime AS media_mime, md.byte_count AS media_bytes, '
+    'md.sha256 AS media_sha256, md.filename AS media_filename, b.board AS board_json '
     'FROM artifacts a '
     'JOIN users cu ON cu.id=a.created_by '
     'JOIN users uu ON uu.id=a.updated_by '
     'LEFT JOIN artifact_meta m ON m.artifact_id=a.id '
     'LEFT JOIN artifact_sources s ON s.artifact_id=a.id '
-    'LEFT JOIN users su ON su.id=a.created_by AND su.id=a.updated_by AND 0 '
+    'LEFT JOIN artifact_media md ON md.artifact_id=a.id '
+    'LEFT JOIN artifact_boards b ON b.artifact_id=a.id '
 )
 
 
@@ -110,6 +143,10 @@ def title_hash(title):
 
 
 def public_kind(row):
+    if row['media_mime']:
+        return 'media'
+    if row['board_json']:
+        return 'whiteboard'
     return 'website' if row['render'] == 'website' else 'document'
 
 
@@ -141,7 +178,17 @@ def view(row, include_body=True):
     source = source_view(row)
     if source:
         data['source'] = source
-    if include_body:
+    kind = data['kind']
+    if kind == 'media':
+        data['media'] = {
+            'mime': row['media_mime'],
+            'bytes': row['media_bytes'],
+            'filename': row['media_filename'],
+        }
+    elif kind == 'whiteboard':
+        if include_body:
+            data['board'] = decode_board(row['board_json']) or dict(EMPTY_BOARD)
+    elif include_body:
         data['body'] = row['body']
     return data
 
@@ -256,17 +303,13 @@ def active_share_count(db, artifact_id, now):
 def load_share_by_token(db, token, now):
     if not isinstance(token, str) or not TOKEN.fullmatch(token):
         return None
-    row = db.execute(
-        'SELECT s.*, a.title AS title, a.body AS body, m.render AS render '
-        'FROM artifact_shares s '
-        'JOIN artifacts a ON a.id=s.artifact_id '
-        'LEFT JOIN artifact_meta m ON m.artifact_id=a.id '
-        'WHERE s.token_hash=?',
+    share = db.execute(
+        'SELECT * FROM artifact_shares WHERE token_hash=?',
         (digest('share:' + token),),
     ).fetchone()
-    if row is None or row['revoked'] == 1 or (row['expires'] is not None and row['expires'] <= now):
+    if share is None or share['revoked'] == 1 or (share['expires'] is not None and share['expires'] <= now):
         return None
-    return row
+    return load(db, share['workspace_id'], share['artifact_id'])
 
 
 def safe_href(value):
@@ -413,10 +456,14 @@ def render_website_page(title, body):
 
 
 def render_page(row):
-    title, body = row['title'], row['body']
-    if row['render'] == 'website':
-        return render_website_page(title, body)
-    return render_document_page(title, body)
+    kind = public_kind(row)
+    if kind == 'website':
+        return render_website_page(row['title'], row['body'])
+    if kind == 'whiteboard':
+        return render_whiteboard_page(row['title'], decode_board(row['board_json']) or EMPTY_BOARD)
+    if kind == 'media':
+        return render_media_page(row)
+    return render_document_page(row['title'], row['body'])
 
 
 def share_headers():
@@ -427,3 +474,369 @@ def share_headers():
         ('Permissions-Policy', 'camera=(), microphone=(), geolocation=()'),
         ('X-Frame-Options', 'SAMEORIGIN'),
     ]
+
+
+def decode_board(raw):
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return None
+    return normalize_board(value)
+
+
+def finite_number(value, lo, hi):
+    if type(value) is bool or not isinstance(value, (int, float)):
+        return None
+    if value != value or value in (float('inf'), float('-inf')):
+        return None
+    if not lo <= value <= hi:
+        return None
+    return float(value) if isinstance(value, float) else int(value)
+
+
+def normalize_stroke(item):
+    if not isinstance(item, dict):
+        return None
+    stroke_id, kind = item.get('id'), item.get('type')
+    color = item.get('color', '#111111')
+    if not isinstance(stroke_id, str) or not STROKE_ID.fullmatch(stroke_id):
+        return None
+    if kind not in ('path', 'rect', 'ellipse', 'text') or not isinstance(color, str) or not COLOR.fullmatch(color):
+        return None
+    if kind == 'path':
+        points = item.get('points')
+        width = finite_number(item.get('width', 2), 1, 40)
+        if not isinstance(points, list) or not 2 <= len(points) <= MAX_POINTS or width is None:
+            return None
+        cleaned = []
+        for point in points:
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                return None
+            x, y = finite_number(point[0], 0, BOARD_MAX), finite_number(point[1], 0, BOARD_MAX)
+            if x is None or y is None:
+                return None
+            cleaned.append([x, y])
+        return {'id': stroke_id, 'type': 'path', 'color': color, 'width': width, 'points': cleaned}
+    if kind in ('rect', 'ellipse'):
+        x, y = finite_number(item.get('x'), 0, BOARD_MAX), finite_number(item.get('y'), 0, BOARD_MAX)
+        w, h = finite_number(item.get('width'), 1, BOARD_MAX), finite_number(item.get('height'), 1, BOARD_MAX)
+        if None in (x, y, w, h):
+            return None
+        return {'id': stroke_id, 'type': kind, 'color': color, 'x': x, 'y': y, 'width': w, 'height': h}
+    text = item.get('text', '')
+    x, y = finite_number(item.get('x'), 0, BOARD_MAX), finite_number(item.get('y'), 0, BOARD_MAX)
+    size = finite_number(item.get('size', 16), 8, 96)
+    if not isinstance(text, str) or not 1 <= len(text) <= 200 or '\x00' in text or x is None or y is None or size is None:
+        return None
+    if any(ord(ch) < 32 and ch not in '\t' for ch in text):
+        return None
+    return {'id': stroke_id, 'type': 'text', 'color': color, 'x': x, 'y': y, 'size': size, 'text': text}
+
+
+def normalize_board(value):
+    if not isinstance(value, dict):
+        return None
+    width = finite_number(value.get('width', 800), BOARD_MIN, BOARD_MAX)
+    height = finite_number(value.get('height', 600), BOARD_MIN, BOARD_MAX)
+    strokes = value.get('strokes', [])
+    if width is None or height is None or not isinstance(strokes, list) or len(strokes) > MAX_STROKES:
+        return None
+    cleaned, seen = [], set()
+    for item in strokes:
+        stroke = normalize_stroke(item)
+        if stroke is None or stroke['id'] in seen:
+            return None
+        seen.add(stroke['id'])
+        cleaned.append(stroke)
+    return {
+        'schema': 'openteamily.whiteboard.v1',
+        'width': int(width),
+        'height': int(height),
+        'strokes': cleaned,
+    }
+
+
+def apply_board_operations(board, operations):
+    current = normalize_board(board)
+    if current is None or not isinstance(operations, list) or not 1 <= len(operations) <= MAX_STROKES:
+        return None
+    strokes = {item['id']: item for item in current['strokes']}
+    order = [item['id'] for item in current['strokes']]
+    for item in operations:
+        if not isinstance(item, dict) or set(item) - {'op', 'stroke', 'id', 'board'}:
+            return None
+        op = item.get('op')
+        if op == 'replace':
+            current = normalize_board(item.get('board'))
+            if current is None:
+                return None
+            strokes = {part['id']: part for part in current['strokes']}
+            order = [part['id'] for part in current['strokes']]
+            continue
+        if op == 'add':
+            stroke = normalize_stroke(item.get('stroke'))
+            if stroke is None or stroke['id'] in strokes or len(order) >= MAX_STROKES:
+                return None
+            strokes[stroke['id']] = stroke
+            order.append(stroke['id'])
+            continue
+        if op == 'remove':
+            stroke_id = item.get('id')
+            if not isinstance(stroke_id, str) or stroke_id not in strokes:
+                return None
+            del strokes[stroke_id]
+            order = [key for key in order if key != stroke_id]
+            continue
+        return None
+    current['strokes'] = [strokes[key] for key in order]
+    return current
+
+
+def board_json(board):
+    text = json.dumps(board, ensure_ascii=True, separators=(',', ':'))
+    if len(text) > BOARD_JSON_MAX:
+        return None
+    return text
+
+
+def render_board_svg(board):
+    width, height = int(board['width']), int(board['height'])
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" role="img">'
+    ]
+    for stroke in board['strokes']:
+        color = stroke['color']
+        if stroke['type'] == 'path':
+            d = ' '.join(
+                ('M' if index == 0 else 'L') + f'{point[0]} {point[1]}'
+                for index, point in enumerate(stroke['points'])
+            )
+            parts.append(
+                f'<path d="{d}" fill="none" stroke="{color}" stroke-width="{stroke["width"]}" '
+                'stroke-linecap="round" stroke-linejoin="round" />'
+            )
+        elif stroke['type'] == 'rect':
+            parts.append(
+                f'<rect x="{stroke["x"]}" y="{stroke["y"]}" width="{stroke["width"]}" '
+                f'height="{stroke["height"]}" fill="none" stroke="{color}" stroke-width="2" />'
+            )
+        elif stroke['type'] == 'ellipse':
+            cx = stroke['x'] + stroke['width'] / 2
+            cy = stroke['y'] + stroke['height'] / 2
+            parts.append(
+                f'<ellipse cx="{cx}" cy="{cy}" rx="{stroke["width"] / 2}" ry="{stroke["height"] / 2}" '
+                f'fill="none" stroke="{color}" stroke-width="2" />'
+            )
+        else:
+            parts.append(
+                f'<text x="{stroke["x"]}" y="{stroke["y"]}" fill="{color}" font-size="{stroke["size"]}" '
+                f'font-family="system-ui,sans-serif">{escape(stroke["text"], quote=True)}</text>'
+            )
+    parts.append('</svg>')
+    return ''.join(parts)
+
+
+def render_whiteboard_page(title, board):
+    heading = escape(title or '白板')
+    svg = render_board_svg(board)
+    return (
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="referrer" content="no-referrer"><title>' + heading + '</title>'
+        '<style>body{font-family:system-ui,sans-serif;max-width:52rem;margin:2rem auto;line-height:1.5}'
+        'svg{max-width:100%;height:auto;border:1px solid #ccc;background:#fff}</style>'
+        '</head><body><article><h1>' + heading + '</h1>' + svg + '</article></body></html>'
+    )
+
+
+def render_media_page(row):
+    heading = escape(row['title'] or '媒体')
+    name = escape(row['media_filename'] or 'file')
+    mime = escape(row['media_mime'] or '')
+    return (
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="referrer" content="no-referrer"><title>' + heading + '</title>'
+        '<style>body{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;line-height:1.5}</style>'
+        '</head><body><article><h1>' + heading + '</h1><p>' + name + ' · ' + mime + '</p>'
+        '</article></body></html>'
+    )
+
+
+def sniff_mime(data):
+    if not data or len(data) < 12:
+        return None
+    if data.startswith(b'\x89PNG\r\n\x1a\n'):
+        return 'image/png'
+    if data.startswith(b'\xff\xd8\xff'):
+        return 'image/jpeg'
+    if data.startswith(b'GIF87a') or data.startswith(b'GIF89a'):
+        return 'image/gif'
+    if data.startswith(b'RIFF') and data[8:12] == b'WEBP':
+        return 'image/webp'
+    if data.startswith(b'ID3') or data.startswith(b'\xff\xfb') or data.startswith(b'\xff\xf3'):
+        return 'audio/mpeg'
+    if data.startswith(b'OggS'):
+        return 'audio/ogg'
+    if data.startswith(b'RIFF') and data[8:12] == b'WAVE':
+        return 'audio/wav'
+    if data[4:8] == b'ftyp' and data[8:12] in {b'isom', b'iso2', b'mp41', b'mp42', b'M4A ', b'avc1'}:
+        return 'video/mp4'
+    if data.startswith(b'\x1a\x45\xdf\xa3'):
+        return 'video/webm'
+    return None
+
+
+def clean_filename(name):
+    if not isinstance(name, str):
+        return 'file'
+    if '/' in name or chr(92) in name or '..' in name or name.startswith('.'):
+        return 'file'
+    if SAFE_FILENAME.fullmatch(name) and name not in {'.', '..'}:
+        return name
+    return 'file'
+
+
+def media_root(data_dir):
+    return Path(data_dir) / 'artifact-objects'
+
+
+def media_path(data_dir, workspace_id, digest_hex):
+    if not HEX32.fullmatch(workspace_id) or not SHA256.fullmatch(digest_hex):
+        raise ValueError('invalid object path')
+    return media_root(data_dir) / workspace_id / digest_hex
+
+
+def _private_dir(path):
+    if path.exists() and (path.is_symlink() or not path.is_dir()):
+        raise OSError('invalid media directory')
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = path.stat()
+    if path.is_symlink() or not path.is_dir():
+        raise OSError('invalid media directory')
+    if info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise OSError('media directory must be private')
+
+
+def write_media(data_dir, workspace_id, payload):
+    digest_hex = hashlib.sha256(payload).hexdigest()
+    folder = media_root(data_dir) / workspace_id
+    _private_dir(media_root(data_dir))
+    _private_dir(folder)
+    path = media_path(data_dir, workspace_id, digest_hex)
+    if path.exists() and not path.is_symlink() and path.is_file():
+        return digest_hex
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    try:
+        written = 0
+        view = memoryview(payload)
+        while written < len(payload):
+            written += os.write(fd, view[written:])
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return digest_hex
+
+
+def read_media_bytes(data_dir, workspace_id, digest_hex, expected=None):
+    path = media_path(data_dir, workspace_id, digest_hex)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if not (info.st_mode & 0o170000 == 0o100000) or info.st_size > MAX_MEDIA_BYTES:
+            raise OSError('invalid media object')
+        if expected is not None and info.st_size != expected:
+            raise OSError('media size mismatch')
+        data = os.read(fd, info.st_size)
+        if len(data) != info.st_size:
+            raise OSError('short media read')
+        return data
+    finally:
+        os.close(fd)
+
+
+def unlink_media(data_dir, workspace_id, digest_hex, db):
+    count = db.execute(
+        'SELECT COUNT(*) FROM artifact_media md JOIN artifacts a ON a.id=md.artifact_id '
+        'WHERE a.workspace_id=? AND md.sha256=?',
+        (workspace_id, digest_hex),
+    ).fetchone()[0]
+    if count:
+        return
+    path = media_path(data_dir, workspace_id, digest_hex)
+    try:
+        os.unlink(path)
+    except OSError:
+        return
+
+
+def attach_media(db, artifact_id, mime, byte_count, digest_hex, filename):
+    db.execute('DELETE FROM artifact_media WHERE artifact_id=?', (artifact_id,))
+    db.execute(
+        'INSERT INTO artifact_media VALUES(?,?,?,?,?)',
+        (artifact_id, mime, byte_count, digest_hex, filename),
+    )
+
+
+def attach_board(db, artifact_id, board):
+    payload = board_json(board)
+    if payload is None:
+        return False
+    db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (artifact_id,))
+    db.execute('INSERT INTO artifact_boards VALUES(?,?)', (artifact_id, payload))
+    return True
+
+
+def media_headers(row, payload=False):
+    name = clean_filename(row['media_filename'] if 'media_filename' in row.keys() else 'file')
+    headers = [
+        ('Content-Type', row['media_mime']),
+        ('Content-Security-Policy', "default-src 'none'; sandbox; frame-ancestors 'self'; object-src 'none'"),
+        ('Cross-Origin-Resource-Policy', 'same-origin'),
+        ('X-Content-Type-Options', 'nosniff'),
+        ('Content-Disposition', 'inline; filename="' + name + '"'),
+        ('Permissions-Policy', 'camera=(), microphone=(), geolocation=()'),
+    ]
+    return headers
+
+
+def parse_multipart(content_type, raw):
+    from email import policy
+    from email.parser import BytesParser
+    if not isinstance(content_type, str) or not isinstance(raw, (bytes, bytearray)) or len(content_type) > 200:
+        return None
+    if content_type.split(';', 1)[0].strip().lower() != 'multipart/form-data' or 'boundary=' not in content_type.lower():
+        return None
+    try:
+        header = b'Content-Type: ' + content_type.encode('ascii') + b'\r\n\r\n'
+    except UnicodeEncodeError:
+        return None
+    message = BytesParser(policy=policy.default).parsebytes(header + raw)
+    if not message.is_multipart():
+        return None
+    fields, uploads = {}, {}
+    for part in message.iter_parts():
+        disposition = part.get('Content-Disposition', '')
+        name = part.get_param('name', header='content-disposition')
+        filename = part.get_param('filename', header='content-disposition')
+        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,40}', name):
+            return None
+        payload = part.get_content()
+        if filename is not None:
+            if name in uploads or not isinstance(payload, (bytes, bytearray, str)):
+                return None
+            data = payload.encode('utf-8') if isinstance(payload, str) else bytes(payload)
+            declared = (part.get_content_type() or 'application/octet-stream').lower()
+            uploads[name] = {'filename': filename, 'content_type': declared, 'data': data}
+        else:
+            if name in fields or not isinstance(payload, str) or len(payload) > TITLE_MAX + 32:
+                if isinstance(payload, (bytes, bytearray)) and len(payload) <= TITLE_MAX + 32:
+                    try:
+                        payload = payload.decode('utf-8')
+                    except UnicodeDecodeError:
+                        return None
+                else:
+                    return None
+            fields[name] = payload
+    return {'fields': fields, 'files': uploads}

@@ -138,7 +138,7 @@ class ArtifactTests(unittest.TestCase):
         self.assertIsNone(found['body']['cursor'])
 
     def test_rejects_unknown_kinds_csrf_and_keeps_schema_v1(self):
-        self.assertEqual(self.create(kind='whiteboard')['status'], 400)
+        self.assertEqual(self.create(kind='slideshow')['status'], 400)
         self.assertEqual(self.create(csrf=False)['status'], 403)
         self.assertEqual(self.create(origin='https://evil.test', key='artifact-create-0002')['status'], 403)
         self.app.config = replace(self.app.config, max_artifacts_per_workspace=1)

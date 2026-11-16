@@ -83,7 +83,60 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function kindLabel(kind) {
-    return kind === 'website' ? '网站' : '文档';
+    if (kind === 'website') return '网站';
+    if (kind === 'media') return '媒体';
+    if (kind === 'whiteboard') return '白板';
+    return '文档';
+  }
+
+  function strokeId() {
+    const bytes = new Uint8Array(12);
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('').slice(0, 16);
+  }
+
+  let boardState = {schema: 'openteamily.whiteboard.v1', width: 800, height: 600, strokes: []};
+  let boardTool = 'path';
+  let drawing = null;
+
+  function drawBoard() {
+    const canvas = document.getElementById('board-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    for (const stroke of boardState.strokes) {
+      ctx.strokeStyle = stroke.color;
+      ctx.fillStyle = stroke.color;
+      if (stroke.type === 'path' && stroke.points && stroke.points.length) {
+        ctx.lineWidth = stroke.width || 2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(stroke.points[0][0], stroke.points[0][1]);
+        for (let i = 1; i < stroke.points.length; i += 1) ctx.lineTo(stroke.points[i][0], stroke.points[i][1]);
+        ctx.stroke();
+      } else if (stroke.type === 'rect') {
+        ctx.lineWidth = 2;
+        ctx.strokeRect(stroke.x, stroke.y, stroke.width, stroke.height);
+      } else if (stroke.type === 'ellipse') {
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.ellipse(stroke.x + stroke.width / 2, stroke.y + stroke.height / 2, Math.abs(stroke.width / 2), Math.abs(stroke.height / 2), 0, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (stroke.type === 'text') {
+        ctx.font = (stroke.size || 16) + 'px system-ui,sans-serif';
+        ctx.fillText(stroke.text, stroke.x, stroke.y);
+      }
+    }
+  }
+
+  function canvasPoint(event) {
+    const canvas = document.getElementById('board-canvas');
+    const box = canvas.getBoundingClientRect();
+    const x = (event.clientX - box.left) * (canvas.width / box.width);
+    const y = (event.clientY - box.top) * (canvas.height / box.height);
+    return [Math.max(0, Math.min(800, x)), Math.max(0, Math.min(600, y))];
   }
 
   function fillEditor(item) {
@@ -91,10 +144,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     form.elements.body.value = item && typeof item.body === 'string' ? item.body : '';
     const kind = (item && item.kind) || draftKind;
     const meta = document.getElementById('editor-meta');
+    const labels = {website: '新网站', media: '新媒体', whiteboard: '新白板', document: '新文档'};
     if (item && item.id) {
       meta.textContent = `${kindLabel(kind)} · 修订 ${item.revision} · 作者 ${item.created_by || ''}`;
     } else {
-      meta.textContent = kind === 'website' ? '新网站' : '新文档';
+      meta.textContent = labels[kind] || '新文档';
+    }
+    document.getElementById('body-label').hidden = kind === 'media' || kind === 'whiteboard';
+    document.getElementById('media-editor').hidden = kind !== 'media';
+    document.getElementById('board-editor').hidden = kind !== 'whiteboard';
+    const image = document.getElementById('media-image');
+    const audio = document.getElementById('media-audio');
+    const video = document.getElementById('media-video');
+    const mediaMeta = document.getElementById('media-meta');
+    image.hidden = true; audio.hidden = true; video.hidden = true;
+    image.removeAttribute('src'); audio.removeAttribute('src'); video.removeAttribute('src');
+    if (kind === 'media') {
+      if (item && item.id && item.media) {
+        mediaMeta.textContent = `${item.media.filename || ''} · ${item.media.mime || ''} · ${item.media.bytes || 0} 字节`;
+        const src = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/file`;
+        if ((item.media.mime || '').startsWith('image/')) { image.hidden = false; image.src = src; }
+        else if ((item.media.mime || '').startsWith('audio/')) { audio.hidden = false; audio.src = src; }
+        else if ((item.media.mime || '').startsWith('video/')) { video.hidden = false; video.src = src; }
+      } else {
+        mediaMeta.textContent = '选择一张图片或一段音视频，大小不超过 2 MB。';
+      }
+    }
+    if (kind === 'whiteboard') {
+      boardState = item && item.board ? item.board : {schema: 'openteamily.whiteboard.v1', width: 800, height: 600, strokes: []};
+      drawBoard();
     }
     const source = document.getElementById('editor-source');
     if (item && item.source) {
@@ -287,12 +365,52 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     openEditor({kind: 'website'});
   });
 
+  document.getElementById('new-media').addEventListener('click', () => {
+    draftKind = 'media';
+    document.getElementById('media-file').value = '';
+    openEditor({kind: 'media'});
+  });
+
+  document.getElementById('new-board').addEventListener('click', () => {
+    draftKind = 'whiteboard';
+    boardState = {schema: 'openteamily.whiteboard.v1', width: 800, height: 600, strokes: []};
+    openEditor({kind: 'whiteboard'});
+  });
+
   document.getElementById('cancel-editor').addEventListener('click', async () => {
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
     await loadList();
   });
+
+  async function uploadMedia(path, extraFields) {
+    const file = document.getElementById('media-file').files[0];
+    const title = form.elements.title.value.trim();
+    if (!title) {
+      show('error', '请填写标题。');
+      return null;
+    }
+    if (!file && !(current && current.id)) {
+      show('error', '请选择一个媒体文件。');
+      return null;
+    }
+    if (!file && current && current.id) {
+      return request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,
+                     {revision: current.revision, changes: {title}});
+    }
+    const body = new FormData();
+    body.append('title', title);
+    body.append('kind', 'media');
+    body.append('file', file);
+    if (extraFields) Object.entries(extraFields).forEach(([key, value]) => body.append(key, value));
+    const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
+    if (!(current && current.id)) headers['Idempotency-Key'] = idempotencyKey();
+    const response = await fetcher(path, {method: 'POST', headers, credentials: 'same-origin', body});
+    let parsed = {};
+    try { parsed = await response.json(); } catch { parsed = {}; }
+    return {status: response.status, body: parsed};
+  }
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -302,17 +420,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const title = form.elements.title.value.trim();
     const body = form.elements.body.value;
+    const kind = (current && current.kind) || draftKind;
     if (!title) {
       show('error', '请填写标题。');
       return;
     }
     let result;
-    if (current && current.id) {
+    if (kind === 'media') {
+      result = await uploadMedia(
+        current && current.id
+          ? `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/file`
+          : `/v1/workspaces/${workspaceId()}/artifacts`,
+        current && current.id ? {revision: String(current.revision)} : null,
+      );
+      if (!result) return;
+    } else if (kind === 'whiteboard') {
+      if (current && current.id) {
+        result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,
+                               {revision: current.revision, changes: {title, board: boardState}});
+      } else {
+        result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts`,
+                               {title, kind: 'whiteboard', board: boardState},
+                               {'Idempotency-Key': idempotencyKey()});
+      }
+    } else if (current && current.id) {
       result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,
                              {revision: current.revision, changes: {title, body}});
     } else {
       result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts`,
-                             {title, body, kind: (current && current.kind) || draftKind},
+                             {title, body, kind},
                              {'Idempotency-Key': idempotencyKey()});
     }
     if (result.status === 409) {
@@ -344,6 +480,60 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     listPanel.hidden = false;
     show('ok', '已删除。');
     await loadList();
+  });
+
+  const canvas = document.getElementById('board-canvas');
+  canvas.addEventListener('pointerdown', event => {
+    if (document.getElementById('board-editor').hidden) return;
+    event.preventDefault();
+    const point = canvasPoint(event);
+    const color = document.getElementById('board-color').value || '#111111';
+    if (boardTool === 'text') {
+      const text = globalThis.prompt('文字', '');
+      if (text) {
+        boardState.strokes = boardState.strokes.concat([{id: strokeId(), type: 'text', color, x: point[0], y: point[1], size: 16, text: text.slice(0, 200)}]);
+        drawBoard();
+      }
+      return;
+    }
+    drawing = {id: strokeId(), type: boardTool, color, width: 2, x: point[0], y: point[1], points: [point]};
+    canvas.setPointerCapture(event.pointerId);
+  });
+  canvas.addEventListener('pointermove', event => {
+    if (!drawing) return;
+    const point = canvasPoint(event);
+    if (drawing.type === 'path') drawing.points.push(point);
+    else {
+      drawing.width = Math.max(1, point[0] - drawing.x);
+      drawing.height = Math.max(1, point[1] - drawing.y);
+    }
+    const live = boardState.strokes.concat([drawing]);
+    const saved = boardState.strokes;
+    boardState.strokes = live;
+    drawBoard();
+    boardState.strokes = saved;
+  });
+  canvas.addEventListener('pointerup', event => {
+    if (!drawing) return;
+    const point = canvasPoint(event);
+    let stroke = drawing;
+    if (drawing.type === 'path') {
+      drawing.points.push(point);
+      if (drawing.points.length >= 2) stroke = {id: drawing.id, type: 'path', color: drawing.color, width: 2, points: drawing.points};
+      else stroke = null;
+    } else {
+      stroke = {id: drawing.id, type: 'rect', color: drawing.color, x: drawing.x, y: drawing.y, width: Math.max(1, point[0] - drawing.x), height: Math.max(1, point[1] - drawing.y)};
+    }
+    drawing = null;
+    if (stroke) boardState.strokes = boardState.strokes.concat([stroke]);
+    drawBoard();
+  });
+  document.getElementById('board-draw').addEventListener('click', () => { boardTool = 'path'; });
+  document.getElementById('board-rect').addEventListener('click', () => { boardTool = 'rect'; });
+  document.getElementById('board-text').addEventListener('click', () => { boardTool = 'text'; });
+  document.getElementById('board-clear').addEventListener('click', () => {
+    boardState.strokes = [];
+    drawBoard();
   });
 
   document.getElementById('create-share').addEventListener('click', async () => {
