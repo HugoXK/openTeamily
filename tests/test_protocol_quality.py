@@ -24,6 +24,38 @@ class ProtocolQualityTests(unittest.TestCase):
     action = fixtures.RuntimeTests.action
     manager_call = fixtures.RuntimeTests.manager_call
 
+    def test_workspace_listing_alone_latches_expired_manager_lease(self):
+        iid = self.create()['instance']['id']; identity = self.manager(iid)
+        claim = self.runtime.claim(identity, iid)
+        before = self.client.call('GET', f'/v1/workspaces/{self.wid}/instances')['body']['items'][0]
+        self.assertFalse(before['blocked']); self.assertIsNone(before['error'])
+        self.now += self.runtime.policy.lease_seconds + 1
+        # No inspect/job/logs/manager-list call may accidentally expire it first.
+        response = self.client.call('GET', f'/v1/workspaces/{self.wid}/instances')
+        self.assertEqual(response['status'], 200)
+        listed = response['body']['items'][0]
+        self.assertTrue(listed['blocked'])
+        self.assertEqual(listed['observed'], 'unknown')
+        self.assertEqual(listed['error']['code'], 'interrupted')
+        self.assertFalse(listed['converged'])
+        with self.store.connect() as db:
+            job = db.execute('SELECT status,lease_hash FROM runtime_jobs WHERE id=?', (claim['job']['id'],)).fetchone()
+            blocked = db.execute('SELECT blocked FROM instances WHERE id=?', (iid,)).fetchone()[0]
+        self.assertEqual(job['status'], 'interrupted'); self.assertIsNone(job['lease_hash'])
+        self.assertEqual(blocked, 1)
+        again = self.client.call('GET', f'/v1/workspaces/{self.wid}/instances')['body']['items'][0]
+        self.assertEqual(again, listed)
+
+    def test_http_control_log_read_still_latches_expiry_without_exposing_lease(self):
+        iid = self.create()['instance']['id']; identity = self.manager(iid)
+        claim = self.runtime.claim(identity, iid)
+        self.now += self.runtime.policy.lease_seconds + 1
+        response = self.client.call('GET', f'/v1/instances/{iid}/logs')
+        self.assertEqual(response['status'], 200)
+        self.assertEqual(response['body']['items'][0]['status'], 'interrupted')
+        self.assertNotIn(claim['lease'], json.dumps(response))
+        self.assertFalse(response['body']['runtime_logs_supported'])
+
     def test_parallel_additive_runtime_initialization_preserves_auth_sessions_and_workspaces(self):
         with self.store.connect() as db:
             before = {table: [tuple(r) for r in db.execute('SELECT * FROM ' + table)]

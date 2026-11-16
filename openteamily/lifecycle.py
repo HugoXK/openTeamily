@@ -197,6 +197,7 @@ class Lifecycle:
             return self.snapshot(self.owned(db, owner, iid))
 
     def listing(self, owner, wid, limit=20, cursor=''):
+        self.expire()
         with self.store.connect() as db:
             self.workspace(db, owner, wid)
             rows = db.execute('SELECT * FROM instances WHERE owner_id=? AND workspace_id=? AND id>? ORDER BY id LIMIT ?', (owner, wid, cursor, limit + 1)).fetchall()
