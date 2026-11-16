@@ -1,4 +1,8 @@
 node_modules/
+
+# Tiny license-inventory fixtures (not installed trees).
+!runtime/flybot-image/inventory/testdata/**/node_modules/
+!runtime/flybot-image/inventory/testdata/**/node_modules/**
 .env
 .env.*
 !.env.example
