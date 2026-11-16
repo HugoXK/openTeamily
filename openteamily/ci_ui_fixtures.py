@@ -1,0 +1,170 @@
+"""Synthetic, clearly labeled fixtures for CI screenshots of the management UI.
+
+Throwaway data only. Never log or return passwords, session cookies, invite
+tokens, or runtime keys. Not a Teamily or production dataset.
+"""
+import os
+from pathlib import Path
+import secrets
+import struct
+import time
+import zlib
+
+from .app import App, Config
+from .store import Store
+from tests.test_artifact_media import multipart
+from tests.test_management import Client
+
+
+USERNAME = 'cifixture'
+MEMBER_USERNAME = 'cifixture2'
+WORKSPACE_NAME = 'CI Fixture Workspace'
+TEAM_NAME = 'CI Fixture Team'
+TEAM_SLUG = 'ci-fixture'
+AGENT_NAME = '[CI FIXTURE] Directory assistant'
+AUTOMATION_TITLE = '[CI FIXTURE] Sample briefing'
+AUTOMATION_PROMPT = 'Write one sentence of clearly labeled CI fixture text.'
+DOCUMENT_TITLE = '[CI FIXTURE] Document'
+DOCUMENT_BODY = 'This is synthetic CI screenshot fixture text, not production data.'
+WEBSITE_TITLE = '[CI FIXTURE] Website'
+WEBSITE_BODY = '<h1>CI Fixture Site</h1><p>Synthetic static HTML for screenshots.</p>'
+MEDIA_TITLE = '[CI FIXTURE] Media'
+BOARD_TITLE = '[CI FIXTURE] Whiteboard'
+BOARD_TEXT = 'CI FIXTURE'
+RUNTIME_KEY_NAME = 'ci-fixture-desk'
+PROVIDER_TEXT = '[CI FIXTURE] Fake provider briefing. Not a real vendor response.'
+
+
+def solid_png(width=96, height=64, rgb=(0x1A, 0x5F, 0xB0)):
+    """Return a visible solid-color PNG without third-party image libraries."""
+    def chunk(tag, data):
+        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    raw = b''.join(b'\x00' + (bytes(rgb) * width) for _ in range(height))
+    ihdr = struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b'')
+
+
+def _require(response, allowed, action):
+    status = response['status']
+    if status not in allowed:
+        raise RuntimeError('Cannot %s (%s)' % (action, status))
+    return response
+
+
+def _bind(client, origin):
+    host = origin.split('://', 1)[1]
+    original = client.call
+
+    def call(method, path, body=None, headers=None, **kw):
+        extra = {'HTTP_HOST': host}
+        extra.update(headers or {})
+        return original(method, path, body, extra, **kw, origin=origin)
+
+    client.call = call
+    return client
+
+
+def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, insecure_local=False):
+    """Create labeled fixture records. Returns public metadata plus in-memory secrets."""
+    data_dir = Path(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    store = Store(data_dir / 'state')
+    app = App(store, Config(origin, insecure_local=insecure_local, allow_registration=True), clock=time.time)
+    owner = _bind(Client(app), origin)
+    member = _bind(Client(app, peer='127.0.0.2'), origin)
+    member_password = secrets.token_urlsafe(18)
+    _require(owner.call('POST', '/v1/auth/register', {'username': USERNAME, 'password': password}),
+             (200, 201), 'create the fixture user')
+    _require(owner.call('POST', '/v1/auth/login', {'username': USERNAME, 'password': password}),
+             (200,), 'sign in the fixture user')
+    _require(member.call('POST', '/v1/auth/register', {'username': MEMBER_USERNAME, 'password': member_password}),
+             (200, 201), 'create the fixture member')
+    _require(owner.call('POST', '/v1/settings', {'revision': 0, 'changes': {
+        'appearance': 'light', 'send_shortcut': 'mod_enter', 'language': 'zh-CN',
+    }}), (200,), 'save fixture settings')
+    _require(owner.call('POST', '/v1/model-api', {
+        'revision': 0,
+        'changes': {'provider': 'openai', 'base_url': provider_base, 'model': 'fake-model', 'api_key': model_api_key},
+    }), (200,), 'configure the loopback model API')
+    space = _require(owner.call('POST', '/v1/workspaces', {'name': WORKSPACE_NAME},
+                                {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-space-0001'}),
+                     (200, 201), 'create the fixture workspace')
+    wid = space['body']['workspace']['id']
+    _require(owner.call('POST', '/v1/workspaces/%s/members' % wid,
+                        {'username': MEMBER_USERNAME, 'role': 'member'}),
+             (200, 201), 'add the fixture member')
+    team = _require(owner.call('POST', '/v1/teams', {
+        'name': TEAM_NAME, 'slug': TEAM_SLUG, 'mode': 'convert', 'workspace_id': wid,
+    }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-team-0001'}), (200, 201), 'convert the fixture team')
+    wid = team['body']['workspace']['id']
+    # Create an invite so the members page lists one. Discard the one-time token.
+    invite = _require(owner.call('POST', '/v1/workspaces/%s/invites' % wid, {'role': 'member'}),
+                      (201,), 'create a fixture invite')
+    invite_id = invite['body']['invite']['id']
+    _require(owner.call('POST', '/v1/workspaces/%s/agents' % wid, {
+        'name': AGENT_NAME, 'summary': 'Synthetic CI directory entry.',
+        'instructions': 'Keep replies short. This agent is fixture data only.',
+    }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-agent-0001'}), (201,), 'create the fixture agent')
+    automation = _require(owner.call('POST', '/v1/workspaces/%s/automations' % wid, {
+        'title': AUTOMATION_TITLE,
+        'prompt': AUTOMATION_PROMPT,
+        'template_id': 'custom',
+        'schedule': {'kind': 'now', 'time_zone': 'Asia/Shanghai'},
+        'participants': [USERNAME],
+    }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-auto-0001'}), (201,), 'create the fixture automation')
+    aid = automation['body']['automation']['id']
+    revision = automation['body']['automation']['revision']
+    _require(owner.call('POST', '/v1/workspaces/%s/automations/%s' % (wid, aid),
+                        {'revision': revision, 'changes': {'enabled': True}}),
+             (200,), 'enable the fixture automation')
+    _require(owner.call('POST', '/v1/workspaces/%s/artifacts' % wid, {
+        'title': DOCUMENT_TITLE, 'body': DOCUMENT_BODY, 'kind': 'document',
+    }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-doc-0001'}), (201,), 'create the fixture document')
+    _require(owner.call('POST', '/v1/workspaces/%s/artifacts' % wid, {
+        'title': WEBSITE_TITLE, 'body': WEBSITE_BODY, 'kind': 'website',
+    }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-site-0001'}), (201,), 'create the fixture website')
+    raw, content_type = multipart(
+        [('title', MEDIA_TITLE), ('kind', 'media')],
+        [('file', 'ci-fixture.png', 'image/png', solid_png())],
+    )
+    _require(owner.call('POST', '/v1/workspaces/%s/artifacts' % wid, raw=raw, headers={
+        'CONTENT_TYPE': content_type, 'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-media-0001',
+    }), (201,), 'upload the fixture media')
+    _require(owner.call('POST', '/v1/workspaces/%s/artifacts' % wid, {
+        'title': BOARD_TITLE, 'kind': 'whiteboard', 'board': {
+            'width': 800, 'height': 600,
+            'strokes': [
+                {'id': 'stroke001', 'type': 'path', 'color': '#1A5FB0', 'width': 6,
+                 'points': [[40, 40], [200, 80], [360, 200], [520, 120]]},
+                {'id': 'stroke002', 'type': 'text', 'color': '#111111', 'x': 48, 'y': 260, 'size': 28, 'text': BOARD_TEXT},
+            ],
+        },
+    }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-board-0001'}), (201,), 'create the fixture whiteboard')
+    issued = _require(owner.call('POST', '/v1/runtime-keys', {'name': RUNTIME_KEY_NAME}),
+                      (200, 201), 'issue a fixture runtime key')
+    runtime_token = issued['body']['token']
+    key_path = data_dir / 'runtime-key'
+    key_path.write_text(runtime_token + '\n')
+    os.chmod(key_path, 0o600)
+    return {
+        'origin': origin,
+        'username': USERNAME,
+        'member_username': MEMBER_USERNAME,
+        'workspace_id': wid,
+        'workspace_name': TEAM_NAME,
+        'team_slug': TEAM_SLUG,
+        'agent_name': AGENT_NAME,
+        'automation_id': aid,
+        'automation_title': AUTOMATION_TITLE,
+        'document_title': DOCUMENT_TITLE,
+        'website_title': WEBSITE_TITLE,
+        'media_title': MEDIA_TITLE,
+        'board_title': BOARD_TITLE,
+        'board_text': BOARD_TEXT,
+        'runtime_key_name': RUNTIME_KEY_NAME,
+        'provider_text': PROVIDER_TEXT,
+        'invite_id': invite_id,
+        'runtime_key_file': str(key_path),
+        'cookies': dict(owner.cookies),
+    }
