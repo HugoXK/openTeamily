@@ -98,6 +98,13 @@ class NoticeOfferTests(unittest.TestCase):
             self.assertEqual(payload["binary_package_count"], 2)
             self.assertEqual(payload["source_package_count"], 2)
 
+    def test_inventory_runner_restores_host_ownership_before_debian_offer(self):
+        script = (ROOT / "runtime" / "flybot-image" / "inventory" / "run-in-image.sh").read_text()
+        offer = script.index('python3 "$repo_root/scripts/debian-source-offer.py"')
+        restore = script.index('chown -R "$(id -u):$(id -g)" "$OUT"')
+        self.assertLess(restore, offer)
+        self.assertIn("uid 1000", script)
+
 
 if __name__ == "__main__":
     unittest.main()
