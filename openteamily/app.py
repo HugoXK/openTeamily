@@ -37,6 +37,7 @@ class Config:
     max_members_per_workspace: int = 50
     max_invites_per_workspace: int = 20
     max_automations_per_workspace: int = 20
+    max_runs_per_automation: int = 200
     auth_peer_limit: int = 20
     auth_name_limit: int = 10
     auth_global_limit: int = 100
@@ -77,9 +78,10 @@ def object_only(pairs):
 
 
 class App:
-    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None):
+    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None):
         self.store, self.config, self.clock = store, config, clock
         self.lifecycle, self.manager_auth = lifecycle, manager_auth
+        self.automation_backend = automation_backend
 
     def __call__(self, env, start_response):
         headers = [('Content-Type', 'application/json; charset=utf-8'), ('Cache-Control', 'no-store'),
@@ -364,7 +366,7 @@ class App:
             if path == '/v1/automation-templates' and method == 'GET' and not query:
                 return 200, {'items': automations.templates()}, []
             auto_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/([0-9a-f]{32})(/remove)?)?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove|runs))?))?', path)
             if auto_path:
                 return self.automation_dispatch(db, session, method, query, now, env, *auto_path.groups())
             if path == '/v1/invites/accept' and method == 'POST' and not query:
@@ -488,11 +490,21 @@ class App:
         )
         return 200, {'removed': members.view(target)}, []
 
-    def automation_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
+    def automation_dispatch(self, db, session, method, query, now, env, workspace_id, ticking, target_id, action):
         workspace = members.load(db, workspace_id, session['user_id'])
         if workspace is None:
             refuse(404, 'not_found', 'Workspace not found')
         actor = members.role_of(db, workspace, session['user_id'])
+        if ticking:
+            if method != 'POST' or query:
+                refuse(400, 'invalid', 'Invalid automation request')
+            if actor not in ('owner', 'admin'):
+                refuse(403, 'forbidden', 'Not allowed to change automations')
+            self.body(env, [])
+            from .scheduler import Scheduler
+            fired = Scheduler(self.store, self.automation_backend, clock=self.clock,
+                              max_runs=self.config.max_runs_per_automation).tick_workspace(db, workspace['id'], now)
+            return 200, {'items': fired}, []
         if target_id is None and method == 'GET' and not query:
             rows = db.execute(
                 'SELECT * FROM automations WHERE workspace_id=? ORDER BY id', (workspace['id'],)
@@ -507,11 +519,26 @@ class App:
         ).fetchone()
         if row is None:
             refuse(404, 'not_found', 'Automation not found')
-        if method == 'GET' and not removing and not query:
+        if action == 'runs':
+            if method != 'GET':
+                refuse(400, 'invalid', 'Invalid automation request')
+            try:
+                limit, cursor, _ = self.pagination(query)
+            except APIError:
+                raise
+            except Exception:
+                refuse(400, 'invalid', 'Invalid pagination parameters')
+            rows = db.execute(
+                'SELECT * FROM automation_runs WHERE automation_id=? AND id>? ORDER BY id LIMIT ?',
+                (row['id'], cursor, limit + 1),
+            ).fetchall()
+            return 200, {'items': [automations.run_view(item) for item in rows[:limit]],
+                         'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
+        if method == 'GET' and action is None and not query:
             return 200, {'automation': automations.view(row)}, []
         if method != 'POST' or query:
             refuse(400, 'invalid', 'Invalid automation request')
-        if removing:
+        if action == 'remove':
             if actor not in ('owner', 'admin'):
                 refuse(403, 'forbidden', 'Not allowed to change automations')
             self.body(env, [])

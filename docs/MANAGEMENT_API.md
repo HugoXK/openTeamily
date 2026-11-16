@@ -40,7 +40,7 @@ All responses are JSON and no-store. There is no CORS support. Errors are `{erro
 | GET/POST | `/v1/workspaces/{id}/members` | Membership and roles; added after PR16, see [MEMBERS.md](MEMBERS.md). List/get workspaces include membership, not only ownership |
 | GET/POST | `/v1/workspaces/{id}/invites` | Invite links; added after PR16, see [INVITES.md](INVITES.md) |
 | POST | `/v1/invites/accept` | `{token}`; signed-in caller joins the workspace |
-| GET/POST | `/v1/workspaces/{id}/automations` | Automation configuration only (no execution); added after PR16, see [AUTOMATIONS.md](AUTOMATIONS.md) |
+| GET/POST | `/v1/workspaces/{id}/automations` | Configuration, explicit tick and run records; hook is not container execution. See [AUTOMATIONS.md](AUTOMATIONS.md) |
 
 Register/login require exact `Origin` and reject cross-site Fetch Metadata even before any session exists. All authenticated POSTs require exact Origin, a readable CSRF cookie and the matching `X-CSRF-Token` header, both bound to the current session's stored digest. The session token is not accepted as CSRF or a bearer token. Old sessions are revoked on logout/expiry and the oldest are evicted when exceeding a per-user session cap.
 

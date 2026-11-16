@@ -4,12 +4,12 @@ Self-written for OpenTeamily; no FlyBot Project plugin, Bot Social, DS-Bot or
 Teamily source. Observed Teamily automation config included a template, a
 prompt, a time and participating members, but no automation was created or
 run. Schedule shapes, the custom template and role defaults below are
-OpenTeamily assumptions and are not Teamily parity. This module does not
-execute or schedule work.
+OpenTeamily assumptions and are not Teamily parity. Scheduling and run
+records live in scheduler.py; this module still does not execute containers.
 """
 import json
 import re
-from datetime import date
+from datetime import date, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 SCHEMA = '''
@@ -128,4 +128,71 @@ def view(row):
         'revision': row['revision'],
         'created': row['created'],
         'updated': row['updated'],
+    }
+
+
+RUN_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS automation_runs (
+ id TEXT PRIMARY KEY,
+ automation_id TEXT NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ due_at INTEGER NOT NULL,
+ started INTEGER NOT NULL,
+ finished INTEGER,
+ status TEXT NOT NULL CHECK(status IN ('queued','succeeded','failed','skipped')),
+ error_code TEXT,
+ dispatch TEXT NOT NULL,
+ UNIQUE(automation_id, due_at));
+CREATE INDEX IF NOT EXISTS automation_run_list ON automation_runs(automation_id, id);
+'''
+
+SCHEMA = SCHEMA + RUN_SCHEMA
+
+
+def due_at(schedule, now_ts):
+    """Return the current slot's unix time if it is due, otherwise None.
+
+    Only the latest slot is considered; missed earlier days are not backfilled.
+    """
+    try:
+        zone = ZoneInfo(schedule['time_zone'])
+        hour, minute = (int(part) for part in schedule['time'].split(':'))
+        now = datetime.fromtimestamp(int(now_ts), zone)
+    except (KeyError, TypeError, ValueError, ZoneInfoNotFoundError, OSError):
+        return None
+    kind = schedule.get('kind')
+    if kind == 'once':
+        try:
+            year, month, day = (int(part) for part in schedule['date'].split('-'))
+            moment = datetime(year, month, day, hour, minute, tzinfo=zone)
+        except (KeyError, TypeError, ValueError, OSError):
+            return None
+        ts = int(moment.timestamp())
+        return ts if int(now_ts) >= ts else None
+    if kind == 'weekly' and now.isoweekday() != schedule.get('weekday'):
+        return None
+    if kind not in ('daily', 'weekly'):
+        return None
+    moment = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    ts = int(moment.timestamp())
+    return ts if int(now_ts) >= ts else None
+
+
+def run_view(row):
+    try:
+        dispatch = json.loads(row['dispatch'])
+    except ValueError:
+        dispatch = {}
+    if not isinstance(dispatch, dict):
+        dispatch = {}
+    return {
+        'id': row['id'],
+        'automation_id': row['automation_id'],
+        'workspace_id': row['workspace_id'],
+        'due_at': row['due_at'],
+        'started': row['started'],
+        'finished': row['finished'],
+        'status': row['status'],
+        'error_code': row['error_code'],
+        'dispatch': {key: dispatch[key] for key in ('instance_ids', 'backend') if key in dispatch},
     }

@@ -24,6 +24,7 @@ class FakeRuntimeBackend:
         self.lock = threading.RLock()
         self.state, self.receipts = {}, {}
         self.fail_next = False
+        self.dispatches = []
         if store:
             with store.connect() as db:
                 db.executescript('''BEGIN IMMEDIATE;
@@ -110,6 +111,54 @@ COMMIT;''')
             state['marker'] = value
             self.write(db, iid, state)
 
+
+    def dispatch_automation(self, payload, db=None):
+        """Record an automation hook. Never starts Docker or a Compose process."""
+        if (not isinstance(payload, dict) or not isinstance(payload.get('automation_id'), str)
+                or not isinstance(payload.get('run_id'), str) or not isinstance(payload.get('workspace_id'), str)):
+            raise RuntimeFailure('Invalid automation dispatch')
+        if self.fail_next:
+            self.fail_next = False
+            raise RuntimeFailure('Injected simulation failure')
+        def instance_ids(conn):
+            if conn is None or conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='instances'"
+            ).fetchone() is None:
+                return []
+            return [row[0] for row in conn.execute(
+                'SELECT id FROM instances WHERE workspace_id=? ORDER BY id', (payload['workspace_id'],))]
+        def record(conn, ids):
+            self.dispatches.append({
+                'automation_id': payload['automation_id'],
+                'workspace_id': payload['workspace_id'],
+                'run_id': payload['run_id'],
+                'due_at': payload.get('due_at'),
+                'title': payload.get('title'),
+                'instance_ids': list(ids),
+            })
+            if conn is not None and self.store:
+                conn.execute('CREATE TABLE IF NOT EXISTS fake_automation_dispatches ('
+                          'run_id TEXT PRIMARY KEY, value TEXT NOT NULL)')
+                conn.execute(
+                    'INSERT INTO fake_automation_dispatches VALUES(?,?) ON CONFLICT(run_id) DO UPDATE SET value=excluded.value',
+                    (payload['run_id'], json.dumps({
+                        'automation_id': payload['automation_id'],
+                        'run_id': payload['run_id'],
+                        'due_at': payload.get('due_at'),
+                        'title': payload.get('title'),
+                        'instance_ids': ids,
+                    }, sort_keys=True, separators=(',', ':'))),
+                )
+        if db is not None:
+            ids = instance_ids(db)
+            record(db, ids)
+        else:
+            with self.transaction() as conn:
+                ids = instance_ids(conn)
+                record(conn, ids)
+        if ids:
+            return {'status': 'succeeded', 'instance_ids': ids}
+        return {'status': 'skipped', 'error_code': 'no_instance', 'instance_ids': []}
 
 class FakeManagerWorker:
     """Single explicit synchronous tick. Never installed/launched by the Web app."""
