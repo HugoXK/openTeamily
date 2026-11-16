@@ -19,3 +19,11 @@ nav, .actions { display: flex; gap: .6rem; flex-wrap: wrap; }
 #logout-form { margin-top: 1.5rem; }
 body[data-theme="light"] { color-scheme: light; }
 body[data-theme="dark"] { color-scheme: dark; }
+
+#conversation-list { list-style: none; padding: 0; margin: 0 0 0.75rem; }
+#message-list { list-style: none; padding: 0; margin: 1rem 0; display: flex; flex-direction: column; gap: 0.75rem; }
+#message-list li { border: 1px solid #d6d3d1; border-radius: 8px; padding: 0.75rem 1rem; }
+#message-list .role { font-weight: 600; margin: 0 0 0.35rem; }
+#message-list .pending { color: #57534e; }
+#message-list .failed { color: #9f1239; }
+#chat-form textarea { min-height: 5rem; }
