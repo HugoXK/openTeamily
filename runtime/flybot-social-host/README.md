@@ -34,14 +34,18 @@ truth.
   only `ot-fake-` tokens: first start writes mode 0600 credentials, the token
   does not appear in logs, a second start does not onboard again, and a torn
   credentials file is refused rather than replaced.
+- Richer group/DM façade flows on the v0.3.6 ledger: notices, human and
+  remote lines, face-to-face upsert/apply/drop, inbound DM deliver, and
+  approval/invite hooks.
 
 ## Not in this slice
 
 - Wiring the Bot Social server URL through the management server, or a
   redistributable public image (issue #3).
-- Richer group/DM Teamily-parity flows (the first web slot host is in
-  `runtime/flybot-web-slots/`).
-- Remote-member semantics beyond passing `updateRoom({ remove })` for
-  local Bots, and recording remote participant removals on the façade.
+- Composer `@` mentions and the Bot details drawer in the official
+  ds-bot / dsh web client.
+- Full Teamily-parity group/DM comparison (the façade now posts group
+  lines to the write-ahead ledger, hosts face-to-face rooms, and lists
+  inbound DMs; that is not a Teamily comparison).
 
 See `docs/upstream/GAPS.md` and `docs/upstream/INTEGRATION.md`.
