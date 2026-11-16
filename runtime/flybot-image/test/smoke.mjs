@@ -166,9 +166,9 @@ try {
     // land at flybot-social.json.<sha256-8> beside the default path.
     const tag = createHash('sha256').update('http://127.0.0.1:8787').digest('hex').slice(0, 8)
     const names = readdirSync('/data/bot').filter((name) => name.startsWith('flybot-social.json'))
-    const credPath = names.includes(`flybot-social.json.${tag}`)
-      ? `/data/bot/flybot-social.json.${tag}`
-      : names[0] ? `/data/bot/${names[0]}` : '/data/bot/flybot-social.json'
+    const credPath = names.includes('flybot-social.json.' + tag)
+      ? '/data/bot/flybot-social.json.' + tag
+      : names[0] ? '/data/bot/' + names[0] : '/data/bot/flybot-social.json'
     const info = lstatSync(credPath)
     assert.equal(info.mode & 0o777, 0o600)
     const saved = JSON.parse(readFileSync(credPath, 'utf8'))
