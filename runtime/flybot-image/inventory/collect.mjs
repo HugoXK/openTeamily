@@ -28,7 +28,8 @@ function isAttributionFile(name) {
   if (licenseNames.has(lower)) return true
   if (/^(readme|notice|license|licence|copying|copyright)(\.|$)/i.test(name)) return true
   if (lower === 'pins.json') return true
-  return lower.endsWith('.txt') && /license|licence|notice|ofl|mit|mpl|apache|copyright/i.test(lower)
+  if (/license|licence|copying|copyright|notice|ofl|lgpl|gpl/i.test(lower)) return true
+  return lower.endsWith('.txt') && /mit|mpl|apache/i.test(lower)
 }
 
 const maxLicenseBytes = 200_000

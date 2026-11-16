@@ -36,3 +36,21 @@ test -s "$OUT/inventory.json"
 test -s "$OUT/inventory.md"
 test -s "$OUT/summary.json"
 node "$SCRIPT_DIR/validate.mjs" --expect-image --inventory "$OUT/inventory.json"
+
+# The container wrote as uid 1000. Give the host runner the directory back
+# so debian-source-offer.py can add files beside the inventory.
+if [[ "$(id -u)" -eq 0 ]]; then
+  chown -R "$(id -u):$(id -g)" "$OUT"
+elif command -v sudo >/dev/null 2>&1; then
+  sudo chown -R "$(id -u):$(id -g)" "$OUT"
+else
+  echo "need to chown $OUT back to $(id -u):$(id -g) to write the Debian offer" >&2
+  exit 1
+fi
+
+repo_root=$(cd "$SCRIPT_DIR/../../.." && pwd)
+if [[ -f "$repo_root/scripts/debian-source-offer.py" ]]; then
+  python3 "$repo_root/scripts/debian-source-offer.py" --inventory "$OUT/inventory.json" --out "$OUT"
+  test -s "$OUT/debian-source-offer.md"
+  test -s "$OUT/debian-packages.json"
+fi

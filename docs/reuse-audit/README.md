@@ -23,6 +23,9 @@
 
 构建成品的现场文件/软件包/许可清单由 CI 在已有的 FlyBot runtime image 作业中收集，并作为 `flybot-runtime-image-license-inventory` artifact 上传（不发布镜像）。收集程序和夹具测试见 [`runtime/flybot-image/inventory/`](../../runtime/flybot-image/inventory/)。该 artifact 记录全局 DSH、额外包与 profile 的已安装闭包、Debian 版权哈希与 deb-src 指针、Claude 载荷是否出现及找到的条款文本、字体/OFL 通知，以及 `/opt/licenses` 中的 NOTICE 与商标字样。这是合规收集，不是法律意见，也不是公开发行授权。对照 artifact 的审阅、MPL 3.2/3.3 解释、tarball 与 git 已编译 JS 的对应、Debian 源码要约是否充分等事项仍然开放。相关跟踪仍保持开放：issue 3。
 
+随后已依据 #56 的现场清单，把与镜像中 KaTeX 字体字节对应的上游 MIT LICENSE、`@img/sharp-libvips-linux-x64@1.3.4` 的通知与 libvips 8.18.7 源码指针、以及 `@anthropic-ai/sdk@0.129.0` 在镜像中的 MIT 文本放入 `runtime/third_party/`，并由镜像配方拷到 `/opt/licenses` 及相应载荷旁边。CI 还会按确切安装版本生成 Debian 源码要约清单。对 v0.3.6 NOTICE 的归属审阅见 [DS-BOT-NOTICE-REVIEW.md](DS-BOT-NOTICE-REVIEW.md)。这些是合规收集与阅读记录，不是法律结案，也不是公开发行授权。DSH 已编译 JS 的 tarball 对应仍明确未核实。相关跟踪仍保持开放：issue 3。
+
+
 
 
 ## 方法
