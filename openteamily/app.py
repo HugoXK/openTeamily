@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import automations, invites, members, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
+from . import automations, bot_social, invites, members, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
 
 
 class APIError(Exception):
@@ -463,6 +463,14 @@ class App:
             if path == '/v1/admin/model-api' and method == 'POST' and not query:
                 with self.store.transaction() as db:
                     return self.save_model_api(db, None, now, None, self.body(env, ['revision', 'changes']), scope='platform')
+            if path == '/v1/admin/bot-social' and method == 'GET' and not query:
+                with self.store.connect() as db:
+                    public, source = bot_social.resolve(db)
+                    return 200, {'bot_social': bot_social.public_view(bot_social.load_platform(db), 'platform'),
+                                 'effective': bot_social.effective_view(public, source)}, []
+            if path == '/v1/admin/bot-social' and method == 'POST' and not query:
+                with self.store.transaction() as db:
+                    return self.save_bot_social(db, now, None, self.body(env, ['revision', 'changes']), scope='platform')
             refuse(404, 'not_found', 'Route not found')
         if path.startswith('/v1/agent/'):
             return self.agent_dispatch(env, method, path, query, now)
@@ -587,6 +595,21 @@ class App:
                         refuse(403, 'forbidden', 'Not allowed to change model API settings')
                     return self.save_model_api(db, session['user_id'], now, workspace, self.body(env, ['revision', 'changes']))
                 refuse(400, 'invalid', 'Invalid model API request')
+            bot_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/bot-social', path)
+            if bot_path:
+                workspace = members.load(db, bot_path[1], session['user_id'])
+                if workspace is None:
+                    refuse(404, 'not_found', 'Workspace not found')
+                if method == 'GET' and not query:
+                    override = bot_social.public_view(bot_social.load_workspace(db, workspace['id']), 'workspace')
+                    effective, source = bot_social.resolve(db, workspace_id=workspace['id'])
+                    return 200, {'bot_social': override, 'effective': bot_social.effective_view(effective, source)}, []
+                if method == 'POST' and not query:
+                    role = members.role_of(db, workspace, session['user_id'])
+                    if role not in ('owner', 'admin'):
+                        refuse(403, 'forbidden', 'Not allowed to change Bot Social settings')
+                    return self.save_bot_social(db, now, workspace, self.body(env, ['revision', 'changes']))
+                refuse(400, 'invalid', 'Invalid Bot Social request')
             if path == '/v1/teams' and method == 'POST' and not query:
                 return self.create_team(db, session, now, env)
             if path == '/v1/workspaces' and method == 'POST':
@@ -1348,6 +1371,59 @@ class App:
             stored = model_api.load_account(db, user_id)
         return 200, {'model_api': model_api.public_view(stored, scope)}, []
 
+    def save_bot_social(self, db, now, workspace, body, scope=None):
+        revision, changes = body.get('revision'), body.get('changes')
+        if type(revision) is not int or not 0 <= revision <= 2 ** 31 or not isinstance(changes, dict) or not changes:
+            refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
+        if 'token' in changes or 'api_key' in changes or 'connector' in changes:
+            refuse(400, 'invalid', 'Connector tokens are not stored in management')
+        if set(changes) - {'server', 'displayName'}:
+            refuse(400, 'invalid', 'Unknown Bot Social field')
+        scope = scope or 'workspace'
+        if scope == 'platform':
+            row = bot_social.load_platform(db)
+        else:
+            row = bot_social.load_workspace(db, workspace['id'])
+        current = bot_social.public_view(row, scope)
+        if revision != current['revision']:
+            raise RuntimeFault(409, 'conflict', 'Bot Social settings changed elsewhere; reload and retry', current)
+        clearing = 'server' in changes and changes['server'] in (None, '')
+        try:
+            server = bot_social.parse_server_url(current['server'] if 'server' not in changes else changes['server'])
+            display = current['displayName'] if 'displayName' not in changes else bot_social.flatten_name(changes['displayName'])
+        except bot_social.BotSocialConfigError as error:
+            refuse(400, 'invalid', str(error))
+        if clearing:
+            server = None
+            if row is None:
+                return 200, {'bot_social': current}, []
+            db.execute('DELETE FROM bot_social_configs WHERE id=?', (row['id'],))
+            stored = bot_social.load_platform(db) if scope == 'platform' else bot_social.load_workspace(db, workspace['id'])
+            return 200, {'bot_social': bot_social.public_view(stored, scope)}, []
+        if server is None:
+            refuse(400, 'invalid', 'Provide a Bot Social server address')
+        if server == current['server'] and display == current['displayName'] and row is not None:
+            return 200, {'bot_social': current}, []
+        identity = row['id'] if row else uuid4().hex
+        if row is None:
+            if scope == 'platform':
+                db.execute(
+                    'INSERT INTO bot_social_configs(id,scope,workspace_id,server,display_name,revision,updated) VALUES(?,?,NULL,?,?,1,?)',
+                    (identity, scope, server, display, now),
+                )
+            else:
+                db.execute(
+                    'INSERT INTO bot_social_configs(id,scope,workspace_id,server,display_name,revision,updated) VALUES(?,?,?,?,?,1,?)',
+                    (identity, scope, workspace['id'], server, display, now),
+                )
+        else:
+            db.execute(
+                'UPDATE bot_social_configs SET server=?, display_name=?, revision=?, updated=? WHERE id=?',
+                (server, display, current['revision'] + 1, now, row['id']),
+            )
+        stored = bot_social.load_platform(db) if scope == 'platform' else bot_social.load_workspace(db, workspace['id'])
+        return 200, {'bot_social': bot_social.public_view(stored, scope)}, []
+
     def with_model_api(self, workspace_id, payload):
         with self.store.connect() as db:
             public, _secret, source = model_api.resolve(db, self.store, workspace_id=workspace_id)
@@ -1446,6 +1522,12 @@ class App:
             if set(body) != {'job_id', 'observed_revision', 'lease'} or not isinstance(body['job_id'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['job_id']):
                 refuse(400, 'invalid', 'Incomplete or invalid manager observation')
             return 200, runtime.runtime_secret(manager, secret[1], body['job_id'], body['observed_revision'], body['lease']), []
+        collaboration = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/runtime-bot-social', path)
+        if collaboration and method == 'POST' and not query:
+            body = self.body(env, ['job_id', 'observed_revision', 'lease'])
+            if set(body) != {'job_id', 'observed_revision', 'lease'} or not isinstance(body['job_id'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['job_id']):
+                refuse(400, 'invalid', 'Incomplete or invalid manager observation')
+            return 200, runtime.runtime_bot_social(manager, collaboration[1], body['job_id'], body['observed_revision'], body['lease']), []
         match = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/(observe|heartbeat)', path)
         if match and method == 'POST':
             allowed = ['job_id', 'observed_revision', 'lease']

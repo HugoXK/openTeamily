@@ -113,14 +113,21 @@ The manager generates canonical JSON Compose in its private state directory and
 checks its exact content again before use. There is no include/build, custom
 service command/entrypoint/env_file, host/PID namespace, privileged mode,
 Docker socket mount or arbitrary argv. The only data mount is named volume
-`ot-<instance-id>` at `/data`, retained on stop. The only bind mount is the
+`ot-<instance-id>` at `/data`, retained on stop. The only bind mounts are the
 manager-generated, read-only model API secret file
 (`secrets/model-api-<instance-id>.json` under the private state directory,
-mode 0600) at `/run/secrets/openteamily-model-api.json`. Operators and API
-clients cannot choose that path. Request-selected mounts stay rejected.
-The file is written or refreshed before create, start or restart; when no
-key is configured the file is empty. The key is never placed in Compose
-environment, the image, or user or manager claim/observe JSON. It enforces nonroot UID, no new
+mode 0600) at `/run/secrets/openteamily-model-api.json`, and the
+manager-generated, read-only Bot Social URL file
+(`secrets/bot-social-<instance-id>.json`, mode 0600) at
+`/run/secrets/openteamily-bot-social.json`. Operators and API
+clients cannot choose those paths. Request-selected mounts stay rejected.
+The files are written or refreshed before create, start or restart; when no
+key or server is configured the corresponding file is empty. The model API
+key and any Bot Social connector token are never placed in Compose
+environment, the image, or user or manager claim/observe JSON. Existing
+frozen `compose-*.json` files written before the Bot Social bind was added
+will fail the exact-content check (`manifest_changed`) until the operator
+recreates the instance so a new compose file is written. It enforces nonroot UID, no new
 privileges, dropped capabilities, read-only rootfs, resource caps and bounded local
 logging. Existing container project/service/image, mount, privilege, user, namespace,
 network and published-port metadata are checked; existing volume Compose ownership

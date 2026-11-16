@@ -148,6 +148,26 @@ class ManagerClient:
         require(doc['source'] in ('platform', 'user'), 'secret_shape')
         return doc
 
+    def runtime_bot_social(self, iid, claim):
+        """Lease-gated one-shot fetch of the collaboration server URL. No token."""
+        check_id(iid)
+        job = claim['job']
+        data = self.call('POST', f'/v1/internal/instances/{iid}/runtime-bot-social', {
+            'job_id': job['id'], 'observed_revision': job['revision'], 'lease': claim['lease']})
+        require(isinstance(data, dict) and set(data) == {'bot_social_present', 'bot_social'}, 'bot_social_shape')
+        require(data['bot_social_present'] in (True, False), 'bot_social_shape')
+        if data['bot_social_present'] is False:
+            require(data['bot_social'] is None, 'bot_social_shape')
+            return None
+        doc = data['bot_social']
+        require(isinstance(doc, dict) and 'server' in doc and set(doc) <= {'server', 'displayName', 'source'}, 'bot_social_shape')
+        require(isinstance(doc['server'], str) and doc['server'], 'bot_social_shape')
+        require('token' not in doc and 'api_key' not in doc, 'bot_social_shape')
+        if 'displayName' in doc:
+            require(isinstance(doc['displayName'], str) and doc['displayName'], 'bot_social_shape')
+        require(doc.get('source') in ('platform', 'workspace'), 'bot_social_shape')
+        return doc
+
     def recover(self, iid, revision, operation_id):
         check_id(iid)
         require(type(revision) is int and revision > 0 and isinstance(operation_id, str) and KEY.fullmatch(operation_id), 'recovery_fields')
