@@ -11,7 +11,7 @@ This directory is a **minimal, file-selected snapshot** of public
 - **This tree is not MIT-licensed** because it lives in openTeamily/openTeamily. The root MIT license covers only new OpenTeamily-authored material.
 - **Provenance:** every *unmodified* imported upstream file has `sha256` and git blob SHA in [`docs/upstream/flybot-files.json`](../../docs/upstream/flybot-files.json). Documented modifications (and their original hashes) are in [`docs/upstream/migration-manifest.json`](../../docs/upstream/migration-manifest.json) under `modified_files`. Selection and exclusions: [`docs/upstream/SELECTION.md`](../../docs/upstream/SELECTION.md).
 - **OpenTeamily overlays:** this file and [`OPENTEAMILY.md`](OPENTEAMILY.md).
-- **Runtime baseline:** OpenTeamily tracks upstream DS-Bot **v0.3.6** in [PR #21](https://github.com/openTeamily/openTeamily/pull/21). This snapshot does **not** contain `core/` or `ds-bot.pin.json` (the old v0.1.5 fork).
+- **Runtime baseline:** OpenTeamily tracks upstream DS-Bot **v0.3.6** in [PR #21](https://github.com/openTeamily/openTeamily/pull/21) (now on `main`). This snapshot does **not** contain `core/` or `ds-bot.pin.json` (the old v0.1.5 fork).
 
 ## Imported paths
 

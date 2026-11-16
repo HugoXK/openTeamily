@@ -6,7 +6,7 @@ docker helpers. It is not wired to the management server, and it is not a
 redistributable container image.
 
 The OpenTeamily runtime baseline is upstream DS-Bot **v0.3.6**, tracked in
-[PR #21](https://github.com/openTeamily/openTeamily/pull/21). This tree is the
+[PR #21](https://github.com/openTeamily/openTeamily/pull/21) (now on `main`). This tree is the
 FlyBot customization layer that should later be loaded as a DSH plugin (and
 small patches, if needed) on top of that baseline. It does not vendor a second
 copy of `core/`.

@@ -8,7 +8,7 @@ OpenTeamily base at first import: `main` `@2cbd0c1c0845338ded1d9c9455a6c9c2c40a4
 This branch later merged `main` `@ccad9c17` (PR #19).
 
 **Runtime baseline:** OpenTeamily tracks upstream DS-Bot **v0.3.6** as the
-runtime, in [PR #21](https://github.com/openTeamily/openTeamily/pull/21)
+runtime, in [PR #21](https://github.com/openTeamily/openTeamily/pull/21) (now on `main`)
 (`runtime/ds-bot-upstream/`). This FlyBot import does **not** vendor
 `runtime/flybot/core/` (the old v0.1.5 fork) or `ds-bot.pin.json`. FlyBot
 material kept here is the customization layer that will sit on that baseline.

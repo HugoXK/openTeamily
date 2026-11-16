@@ -7,7 +7,7 @@ system.”
 ## Runtime baseline vs. this snapshot
 
 - OpenTeamily tracks upstream DS-Bot **v0.3.6** as the runtime baseline
-  ([PR #21](https://github.com/openTeamily/openTeamily/pull/21)). This snapshot
+  ([PR #21](https://github.com/openTeamily/openTeamily/pull/21) (now on `main`)). This snapshot
   does not vendor that tree and does not vendor the old FlyBot `core/` fork.
 - `@flybot/social` still needs to be adapted onto the v0.3.6 plugin/profile
   model (including group-chat / ledger differences). That work is not in this

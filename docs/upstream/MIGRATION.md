@@ -7,7 +7,7 @@ from FlyBot and Bot Social into isolated trees. It is not a whole-repository
 vendor dump, not feature-complete Teamily parity, not a container release, and
 not a close of the parent roadmap.
 
-After [PR #21](https://github.com/openTeamily/openTeamily/pull/21) established
+After [PR #21](https://github.com/openTeamily/openTeamily/pull/21) (now on `main`) established
 upstream DS-Bot **v0.3.6** as the runtime baseline, this import **dropped**
 `runtime/flybot/core/` (the old v0.1.5 fork) and kept only the FlyBot
 customization layer plus Bot Social.
