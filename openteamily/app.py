@@ -88,7 +88,7 @@ class App:
             status, body = error.status, {'error': {'code': error.code, 'message': error.message}}
             if isinstance(error, RuntimeFault) and error.current is not None:
                 body['error']['current'] = error.current
-            if status == 429:
+            if status == 429 and error.code == 'rate_limited':
                 headers.append(('Retry-After', str(self.config.auth_window)))
         except (sqlite3.Error, OSError):
             status, body = 503, {'error': {'code': 'unavailable', 'message': 'Storage is temporarily unavailable'}}

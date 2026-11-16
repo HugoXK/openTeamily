@@ -286,6 +286,30 @@ class ManagementTests(unittest.TestCase):
         # A user session has no functioning manager/control authority.
         self.assertEqual(self.client.call('GET', '/v1/workspaces')['status'], 200)
 
+    def test_retry_after_only_describes_auth_rate_limits_not_persistent_quotas(self):
+        self.app.config = replace(self.config, max_workspaces_per_user=1)
+        self.client.register()
+        self.client.workspace()
+        quota = self.client.workspace('Second', 'quota-request-key-0002')
+        self.assertEqual(quota['status'], 429)
+        self.assertEqual(quota['body']['error']['code'], 'quota')
+        self.assertNotIn('Retry-After', dict(quota['headers']))
+        self.app.config = replace(self.app.config, max_users=1)
+        account_quota = Client(self.app).register('another-user')
+        self.assertEqual(account_quota['status'], 429)
+        self.assertEqual(account_quota['body']['error']['code'], 'quota')
+        self.assertNotIn('Retry-After', dict(account_quota['headers']))
+        self.app.config = replace(self.app.config, max_sessions=1)
+        session_quota = self.client.call('POST', '/v1/auth/login', {'username': 'alice', 'password': PASSWORD})
+        self.assertEqual(session_quota['status'], 429)
+        self.assertEqual(session_quota['body']['error']['code'], 'quota')
+        self.assertNotIn('Retry-After', dict(session_quota['headers']))
+        self.app.config = replace(self.app.config, auth_peer_limit=1)
+        limited = self.client.call('POST', '/v1/auth/login', {'username': 'alice', 'password': PASSWORD})
+        self.assertEqual(limited['status'], 429)
+        self.assertEqual(limited['body']['error']['code'], 'rate_limited')
+        self.assertEqual(dict(limited['headers'])['Retry-After'], str(self.config.auth_window))
+
     def test_origin_configuration_requires_explicit_loopback_cookie_downgrade(self):
         for origin in ['http://example.test', 'https://user:pass@example.test', 'https://example.test/path', 'https://example.test?x=y']:
             with self.assertRaises(ValueError):
