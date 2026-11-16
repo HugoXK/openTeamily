@@ -17,7 +17,7 @@ Teamily team creation (wizard steps 2/3), paid Team plan packaging, invite links
 | POST | `/v1/workspaces/{id}/members/{user_id}` | `{role}` — owner only, `admin` or `member` |
 | POST | `/v1/workspaces/{id}/members/{user_id}/remove` | `{}`. Owner may remove admin/member; admin may remove member; a member or admin may leave. The owner cannot leave or be removed in this slice |
 
-Unknown users, missing members and workspaces the caller cannot access all return `404`. The workspace `owner_id` stays the creator; owner transfer is not in this slice. There is no email invite, approval queue or registration-by-invitation (see #5).
+Unknown usernames, missing members and workspaces the caller cannot access all return `404`. Unknown usernames use the generic message `Member could not be added` (no distinct “user not found”). The workspace `owner_id` stays the creator; owner transfer is not in this slice. Invite links are in [INVITES.md](INVITES.md); there is still no email delivery, approval queue or registration-by-invitation.
 
 ## Roles (OpenTeamily defaults — not yet Teamily-verified)
 
@@ -35,4 +35,4 @@ An additive `workspace_members` table (`CREATE TABLE IF NOT EXISTS`) in the exis
 
 ## Not in this slice
 
-Runtime instance inspect/start/stop/create remain owner-only; members can see the workspace record but not operate instances yet. No members UI, no Teamily team wizard, no invite tokens, no owner transfer, no group multi-agent run. Browser acceptance is not claimed.
+Runtime instance inspect/start/stop/create remain owner-only; members can see the workspace record but not operate instances yet. No members UI, no Teamily team wizard, no owner transfer, no group multi-agent run. Browser acceptance is not claimed.
