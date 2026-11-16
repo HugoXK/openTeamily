@@ -596,6 +596,8 @@ body.app-workspace > .skip-link { grid-column: 1 / -1; }
 body.app-workspace > .app-rail {
   grid-row: 1 / -1;
   grid-column: 1;
+  position: relative;
+  overflow: visible;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -622,8 +624,9 @@ body.app-workspace > .app-rail .brand-mark {
   text-transform: none;
 }
 
-body.app-workspace > .app-rail a,
-body.app-workspace > .app-rail .rail-link {
+body.app-workspace > .app-rail > a,
+body.app-workspace > .app-rail > .rail-link,
+body.app-workspace > .app-rail .account-trigger {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -638,11 +641,12 @@ body.app-workspace > .app-rail .rail-link {
   padding: 0.15rem;
 }
 
-body.app-workspace > .app-rail a:hover {
+body.app-workspace > .app-rail > a:hover,
+body.app-workspace > .app-rail .account-trigger:hover {
   background: rgb(255 255 255 / 10%);
 }
 
-body.app-workspace > .app-rail a[aria-current="page"] {
+body.app-workspace > .app-rail > a[aria-current="page"] {
   background: var(--ot-accent);
   color: var(--ot-surface);
 }
@@ -698,4 +702,118 @@ body.app-workspace.chat-open > .session-pane {
 body.app-workspace.chat-open > #status,
 body.app-workspace.chat-open > #main {
   grid-column: 3;
+}
+
+
+body.app-workspace > .app-rail .account-slot {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  margin: 0 0 0.65rem;
+}
+
+body.app-workspace > .app-rail .account-slot[hidden] {
+  display: none !important;
+}
+
+body.app-workspace > .app-rail .account-trigger {
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 999px;
+  border: 0;
+  background: rgb(255 255 255 / 12%);
+  color: var(--ot-surface);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  padding: 0;
+}
+
+body.app-workspace > .app-rail .account-trigger[aria-expanded="true"] {
+  background: var(--ot-accent);
+}
+
+body.app-workspace .account-menu {
+  position: absolute;
+  left: calc(100% + 0.55rem);
+  bottom: 0;
+  z-index: 30;
+  width: 16.5rem;
+  padding: 0.55rem 0 0.35rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius);
+  box-shadow: var(--ot-shadow);
+}
+
+body.app-workspace .account-menu .account-identity {
+  margin: 0 0 0.35rem;
+  padding: 0.15rem 0.9rem 0.45rem;
+  border-bottom: 1px solid var(--ot-line);
+  color: var(--ot-muted);
+  font-size: 0.85rem;
+}
+
+body.app-workspace .account-menu a,
+body.app-workspace .account-menu button {
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0.55rem 0.9rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ot-ink);
+  text-align: left;
+  text-decoration: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+body.app-workspace .account-menu a:hover,
+body.app-workspace .account-menu button:hover {
+  background: var(--ot-bg-accent);
+}
+
+body.app-workspace .account-menu #logout-form {
+  margin: 0.25rem 0 0;
+  padding: 0.25rem 0 0;
+  border-top: 1px solid var(--ot-line);
+}
+
+body.app-workspace .account-menu #logout-form button {
+  color: var(--ot-danger);
+  font-weight: 600;
+}
+
+body.app-workspace .page-top {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0 0 1rem;
+}
+
+body.app-workspace .page-top h1 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+body.app-workspace .workspace-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0 0 1rem;
+}
+
+body.app-workspace:not(.chat-open) > main > #main-panel,
+body.app-workspace > main > #settings-panel {
+  max-width: 52rem;
+  margin: 0;
+  padding: 1.25rem 1.5rem 3rem;
+  box-sizing: border-box;
 }

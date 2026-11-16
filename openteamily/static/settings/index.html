@@ -10,13 +10,29 @@
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/settings/app.mjs"></script>
 </head>
-<body>
+<body class="app-workspace">
   <a class="skip-link" href="#main">跳到主要内容</a>
-  <header>
-    <p class="brand">OpenTeamily / FlyBot</p>
-    <h1>账号设置</h1>
-    <p class="note">这里只编辑本仓已经提供的界面偏好。选项和默认值还没有和 Teamily 真实设置页逐项对比，不能当成功能对等。</p>
-  </header>
+  <nav class="app-rail" aria-label="应用导航">
+    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
+    <a href="/chat" title="聊天">聊天</a>
+    <a href="/agents" title="智能体">智能体</a>
+    <a href="/automations" title="自动化">自动化</a>
+    <a href="/memory" title="记忆">记忆</a>
+    <a href="/artifacts" title="作品">作品</a>
+    <button type="button" class="rail-link" disabled title="未实现：发现动态">发现</button>
+    <span class="rail-spacer"></span>
+    <div class="account-slot" hidden>
+      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <div id="account-menu" class="account-menu" role="menu" hidden>
+        <p id="account-identity" class="account-identity"></p>
+        <a href="/team" role="menuitem">创建团队</a>
+        <a href="/settings" role="menuitem">所有设置</a>
+        <form id="logout-form" method="post" action="/v1/auth/logout">
+          <button type="submit">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </nav>
   <p id="status" role="status"></p>
   <main id="main">
   <section id="login-panel" hidden>
@@ -29,15 +45,13 @@
     <div id="oidc-providers"></div>
   </section>
   <section id="settings-panel" hidden>
-    <nav aria-label="管理导航">
-      <a href="/settings">账号设置</a>
-      <a href="/automations">自动化</a>
-      <a href="/agents">智能体</a>
-      <a href="/memory">记忆</a>
+    <header class="page-top">
+      <h1>账号设置</h1>
+      <p class="note">这里只编辑本仓已经提供的界面偏好。选项和默认值还没有和 Teamily 真实设置页逐项对比，不能当成功能对等。</p>
+    </header>
+    <nav class="workspace-links" aria-label="工作区">
       <a href="/members">成员</a>
-      <a href="/artifacts">作品库</a>
       <a href="/runtimes">运行时</a>
-      <a href="/team">创建团队</a>
     </nav>
     <p id="whoami"></p>
     <form id="settings-form" method="post" action="/v1/settings">
@@ -161,9 +175,6 @@
         <label>值 <input name="value" type="password" maxlength="4096" autocomplete="new-password"></label>
         <button type="submit" id="save-skill-secret">保存技能密钥</button>
       </fieldset>
-    </form>
-    <form id="logout-form" method="post" action="/v1/auth/logout">
-      <button type="submit">退出登录</button>
     </form>
   </section>
   </main>
