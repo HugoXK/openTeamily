@@ -218,10 +218,12 @@ def load_task(db, task_id, connection_id=None, user_id=None):
             'SELECT * FROM runtime_tasks WHERE id=? AND connection_id=?',
             (task_id, connection_id),
         ).fetchone()
-    return db.execute(
-        'SELECT * FROM runtime_tasks WHERE id=? AND user_id=?',
-        (task_id, user_id),
-    ).fetchone()
+    if user_id is not None:
+        return db.execute(
+            'SELECT * FROM runtime_tasks WHERE id=? AND user_id=?',
+            (task_id, user_id),
+        ).fetchone()
+    return db.execute('SELECT * FROM runtime_tasks WHERE id=?', (task_id,)).fetchone()
 
 
 def claim_task(db, task, now):

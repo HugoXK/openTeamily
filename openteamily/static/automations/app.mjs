@@ -48,6 +48,23 @@ export function tabCategory(value) {
   return value === 'work' || value === 'life' || value === 'mine' ? value : 'mine';
 }
 
+export function runStatusLabel(run) {
+  if (!run) return '';
+  if (run.status === 'succeeded') return '已完成';
+  if (run.status === 'queued' && run.error_code === 'no_agent') return '等待已连接的代理';
+  if (run.status === 'queued') return '运行中';
+  if (run.status === 'cancelled') return '已取消';
+  if (run.status === 'timeout') return '已超时';
+  if (run.status === 'skipped') return '已跳过';
+  if (run.status === 'failed') return '失败';
+  return run.status || '';
+}
+
+export function runResultText(run) {
+  if (run && run.result && typeof run.result.text === 'string') return run.result.text;
+  return '';
+}
+
 export function listQuery(category, search) {
   const params = new URLSearchParams();
   const tab = tabCategory(category);
@@ -131,6 +148,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let templates = [];
   let current = null;
   let category = 'mine';
+  let runTimer = 0;
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -152,6 +170,80 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function workspaceId() {
     return workspaceSelect.value;
+  }
+
+  function stopRunPoll() {
+    if (runTimer) {
+      globalThis.clearInterval(runTimer);
+      runTimer = 0;
+    }
+  }
+
+  function renderRuns(items) {
+    const list = document.getElementById('run-list');
+    const empty = document.getElementById('run-empty');
+    const panel = document.getElementById('run-panel');
+    if (!list || !panel) return;
+    panel.hidden = false;
+    list.textContent = '';
+    empty.hidden = items.length > 0;
+    for (const item of items) {
+      const row = document.createElement('li');
+      const head = document.createElement('div');
+      head.className = 'run-head';
+      const status = document.createElement('strong');
+      status.textContent = runStatusLabel(item);
+      const meta = document.createElement('span');
+      meta.className = 'note';
+      meta.textContent = item.error_code ? item.error_code : '';
+      head.appendChild(status);
+      head.appendChild(meta);
+      if (item.status === 'queued' && current && current.id) {
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.textContent = '取消这次运行';
+        cancel.addEventListener('click', async () => {
+          const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs/${item.id}/cancel`, {});
+          if (result.status !== 200) {
+            show('error', messageFor(result.body.error, '取消失败。'));
+            return;
+          }
+          show('ok', '已取消。');
+          await loadRuns();
+        });
+        head.appendChild(cancel);
+      }
+      row.appendChild(head);
+      const text = runResultText(item);
+      if (text) {
+        const pre = document.createElement('pre');
+        pre.textContent = text;
+        row.appendChild(pre);
+      }
+      list.appendChild(row);
+    }
+  }
+
+  async function loadRuns() {
+    const panel = document.getElementById('run-panel');
+    if (!panel) return;
+    if (!current || !current.id || !workspaceId()) {
+      panel.hidden = true;
+      stopRunPoll();
+      return;
+    }
+    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs?limit=20`);
+    if (listed.status !== 200) {
+      show('error', messageFor(listed.body.error, '无法读取运行记录。'));
+      return;
+    }
+    const items = listed.body.items || [];
+    renderRuns(items);
+    const pending = items.some(item => item.status === 'queued');
+    if (pending && !runTimer) {
+      runTimer = globalThis.setInterval(() => { loadRuns(); }, 3000);
+    }
+    if (!pending) stopRunPoll();
   }
 
   async function renderProviders() {
@@ -195,6 +287,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('remove-automation').hidden = !item || !item.id;
     document.getElementById('tick-automation').hidden = !item || !item.id;
     document.getElementById('life-note').hidden = category !== 'life';
+    loadRuns();
   }
 
   async function loadList() {
@@ -284,6 +377,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       form.hidden = true;
       listPanel.hidden = false;
+      const runPanel = document.getElementById('run-panel');
+      if (runPanel) runPanel.hidden = true;
+      stopRunPoll();
       await loadList();
     });
   }
@@ -305,6 +401,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
+    const runPanel = document.getElementById('run-panel');
+    if (runPanel) runPanel.hidden = true;
+    stopRunPoll();
     await loadList();
   });
 
@@ -353,7 +452,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillEditor(form, current, templates, currentUser && currentUser.username);
     document.getElementById('remove-automation').hidden = false;
     document.getElementById('tick-automation').hidden = false;
-    show('ok', '已保存。');
+    show('ok', '已保存。若已启用，后台会在到期时运行。');
+    await loadRuns();
   });
 
   document.getElementById('tick-automation').addEventListener('click', async () => {
@@ -363,7 +463,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '触发失败。'));
       return;
     }
-    show('ok', '已请求触发一次。这不会在网页进程里启动后台计时，也不等于容器里已经跑完。');
+    show('ok', '已请求触发一次。若已有在线代理，结果会出现在下方运行记录里。假提供方的输出不能当成真实模型已经验证。');
+    await loadRuns();
   });
 
   document.getElementById('remove-automation').addEventListener('click', async () => {
@@ -376,6 +477,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
+    const runPanel = document.getElementById('run-panel');
+    if (runPanel) runPanel.hidden = true;
+    stopRunPoll();
     show('ok', '已删除。');
     await loadList();
   });
@@ -388,6 +492,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     current = null;
+    stopRunPoll();
     await load();
   });
 
