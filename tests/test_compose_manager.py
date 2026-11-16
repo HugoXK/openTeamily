@@ -28,6 +28,16 @@ from openteamily.security import digest
 
 IMAGE = 'operator/runtime@sha256:' + 'a' * 64
 
+def assert_container_readable_secret(test, path):
+    info = path.stat()
+    mode = info.st_mode & 0o777
+    if info.st_uid == 1000:
+        test.assertEqual(mode, 0o600)
+    else:
+        test.assertEqual(mode, 0o644)
+        test.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+
+
 
 class ComposeManagerTests(unittest.TestCase):
     create = fixtures.RuntimeTests.create
@@ -465,7 +475,7 @@ class ComposeManagerTests(unittest.TestCase):
         worker = ManagerWorker(client, self.registry, self.engine)
         self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
         path = self.engine.secret_path(self.iid)
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        assert_container_readable_secret(self, path)
         document = json.loads(path.read_text())
         self.assertEqual(document['api_key'], workspace_key)
         self.assertEqual(document['source'], 'user')
@@ -492,7 +502,7 @@ class ComposeManagerTests(unittest.TestCase):
         self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
         path = self.engine.secret_path(self.iid)
         self.assertEqual(path.read_text(), '')
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        assert_container_readable_secret(self, path)
 
     def test_runtime_secret_requires_a_lease_and_rejects_stop_jobs(self):
         client = self.start_http()
@@ -548,7 +558,7 @@ class ComposeManagerTests(unittest.TestCase):
         worker = ManagerWorker(client, self.registry, self.engine)
         self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
         path = self.engine.bot_social_path(self.iid)
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        assert_container_readable_secret(self, path)
         document = json.loads(path.read_text())
         self.assertEqual(document['server'], 'https://team.social.example')
         self.assertEqual(document['displayName'], 'Team')
@@ -571,7 +581,7 @@ class ComposeManagerTests(unittest.TestCase):
         self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
         path = self.engine.bot_social_path(self.iid)
         self.assertEqual(path.read_text(), '')
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        assert_container_readable_secret(self, path)
 
     def test_runtime_bot_social_requires_a_lease_and_rejects_stop_jobs(self):
         client = self.start_http()
@@ -600,7 +610,7 @@ class ComposeManagerTests(unittest.TestCase):
         worker = ManagerWorker(client, self.registry, self.engine)
         self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
         path = self.engine.runtime_key_path(self.iid)
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        assert_container_readable_secret(self, path)
         document = json.loads(path.read_text())
         self.assertEqual(set(document), {'origin', 'token', 'hostname'})
         self.assertEqual(document['origin'], 'https://management.test')

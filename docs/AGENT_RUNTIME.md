@@ -2,7 +2,7 @@
 
 This slice binds a workspace agent directory record to a workspace FlyBot *container instance*, then dispatches authorized conversations through the existing `/v1/agent` infer task contract. It is self-written for OpenTeamily.
 
-The management process does not call a model provider and does not add a second chat engine. A lease-gated manager endpoint issues an instance runtime key; the compose manager writes that key to a private 0600 file and bind-mounts it at `/run/secrets/openteamily-runtime-key.json`. The container's `agent-loop.mjs` authenticates with `/v1/agent/connect` and runs the same claim / model-access / result loop as the optional own-machine daemon. Tests that finish a reply with a fake OpenAI-compatible server are labeled as such; they are not a real vendor. The CI container job also uses that labeled fake provider: it proves the live container path, not a real-vendor model.
+The management process does not call a model provider and does not add a second chat engine. A lease-gated manager endpoint issues an instance runtime key; the compose manager writes that key to a file readable by container user 1000 (0600 after chown, or 0644 under a 0700 secrets directory) and bind-mounts it at `/run/secrets/openteamily-runtime-key.json`. The container's `agent-loop.mjs` authenticates with `/v1/agent/connect` and runs the same claim / model-access / result loop as the optional own-machine daemon. Tests that finish a reply with a fake OpenAI-compatible server are labeled as such; they are not a real vendor. The CI container job also uses that labeled fake provider: it proves the live container path, not a real-vendor model.
 
 ## Routes
 
