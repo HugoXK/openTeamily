@@ -71,6 +71,52 @@ def check_offline() -> int:
         errors += 1
     else:
         print("OK versions.json vips 8.18.7")
+    src = OFFER / "corresponding-source.json"
+    if not src.is_file():
+        print("FAIL: missing corresponding-source.json")
+        errors += 1
+        return errors
+    payload = json.loads(src.read_text())
+    if payload.get("public_redistributable_image") is not False:
+        print("FAIL: corresponding-source.json must not claim a public redistributable image")
+        errors += 1
+    if payload.get("reproducible_rebuild_verified") is not False:
+        print("FAIL: corresponding-source.json must not claim a verified rebuild")
+        errors += 1
+    required = {
+        "vips": "https://github.com/libvips/libvips/releases/download/v8.18.7/vips-8.18.7.tar.xz",
+        "glib": "https://download.gnome.org/sources/glib/2.90/glib-2.90.0.tar.xz",
+        "fribidi": "https://github.com/fribidi/fribidi/releases/download/v1.0.17/fribidi-1.0.17.tar.xz",
+        "exif": "https://github.com/libexif/libexif/releases/download/v0.6.26/libexif-0.6.26.tar.xz",
+        "heif": "https://github.com/strukturag/libheif/releases/download/v1.23.5/libheif-1.23.5.tar.gz",
+        "rsvg": "https://download.gnome.org/sources/librsvg/2.63/librsvg-2.63.2.tar.xz",
+        "pango": "https://download.gnome.org/sources/pango/1.58/pango-1.58.2.tar.xz",
+        "proxy-libintl": "https://github.com/frida/proxy-libintl/archive/0.5.tar.gz",
+        "cairo": "https://cairographics.org/releases/cairo-1.18.6.tar.xz",
+    }
+    by_id = {row["id"]: row for row in payload.get("libraries") or []}
+    version_key = {"vips": "vips", "glib": "glib", "fribidi": "fribidi", "exif": "exif", "heif": "heif",
+                   "rsvg": "rsvg", "pango": "pango", "proxy-libintl": "proxy-libintl", "cairo": "cairo"}
+    for key, url in required.items():
+        row = by_id.get(key)
+        expected_version = versions.get(version_key[key])
+        if not row or row.get("url") != url or row.get("version") != expected_version:
+            print(f"FAIL: corresponding-source {key} url/version drift")
+            errors += 1
+        elif key == "vips" and not row.get("sha256_verified_in_this_repo"):
+            print("FAIL: libvips sha256 should remain recorded as verified")
+            errors += 1
+        elif key != "vips" and row.get("sha256_verified_in_this_repo"):
+            print(f"FAIL: {key} sha256 is not verified in this repo; do not invent a hash clearance")
+            errors += 1
+        else:
+            print(f"OK corresponding-source {key}")
+    gaps = payload.get("unresolved_preferred_source_gaps") or []
+    if len(gaps) < 3:
+        print("FAIL: unresolved preferred-source gaps must stay explicit")
+        errors += 1
+    else:
+        print("OK unresolved preferred-source gaps recorded")
     return errors
 
 

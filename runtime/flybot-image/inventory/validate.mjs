@@ -51,6 +51,25 @@ if (expectImage) {
     .concat(files.filter((p) => /KaTeX-LICENSE|font-notices\/katex/i.test(p)))
   need(katexNotices.length > 0, 'KaTeX font payloads must have a copied license/notice')
 
+  const inventoryPaths = []
+  for (const f of inv.bundled_notices.files || []) inventoryPaths.push(f.path)
+  for (const f of inv.fonts.files || []) inventoryPaths.push(f.path)
+  for (const f of inv.fonts.notices || []) inventoryPaths.push(f.path)
+  for (const tree of Object.values(inv.npm.trees || {})) {
+    for (const pkg of tree.packages || []) {
+      for (const f of pkg.license_files || []) inventoryPaths.push(f.path)
+    }
+  }
+  const sharpPackageNotice = inventoryPaths.some((p) => /@img\/sharp-libvips-linux-x64\/THIRD-PARTY-NOTICES\.md$/i.test(p))
+  const sharpPackageLgpl = inventoryPaths.some((p) => /@img\/sharp-libvips-linux-x64\/.*lgpl/i.test(p))
+  need(sharpPackageNotice, 'missing in-package sharp-libvips THIRD-PARTY-NOTICES.md on license_files or notices')
+  need(sharpPackageLgpl, 'missing in-package sharp-libvips LGPL text on license_files or notices')
+  const codiconFonts = (inv.fonts.files || []).filter((f) => /codicon/i.test(f.path) && /\.(ttf|woff2?)$/i.test(f.path))
+  need(codiconFonts.length > 0, 'image should contain Playwright Codicon font payloads')
+  const codiconNotices = inventoryPaths.filter((p) => /font-notices\/codicon/i.test(p) && /license/i.test(p)
+    || /Codicon-LICENSE/i.test(p))
+  need(codiconNotices.length > 0, 'Codicon font payloads must have a copied license/notice')
+
 }
 
 if (fail.length) {

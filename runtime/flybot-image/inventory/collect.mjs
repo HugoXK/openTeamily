@@ -165,12 +165,22 @@ function readJson(path) {
   try { return JSON.parse(readFileSync(path, 'utf8')) } catch { return null }
 }
 
+function isPackageLicenseFile(name) {
+  // Attribution files that travel with a package. Broader than licenseNames
+  // so THIRD-PARTY-NOTICES.md and LGPL-*.txt are recorded, but not README.md.
+  const lower = String(name || '').toLowerCase()
+  if (licenseNames.has(lower)) return true
+  if (/^(license|licence|copying|copyright|notice)(\.|$)/i.test(name)) return true
+  if (/license|licence|copying|copyright|notice|ofl|lgpl|gpl/i.test(lower)) return true
+  return false
+}
+
 function packageLicenseFiles(dir) {
   let names
   try { names = readdirSync(dir) } catch { return [] }
   const out = []
   for (const name of names) {
-    if (!licenseNames.has(name.toLowerCase())) continue
+    if (!isPackageLicenseFile(name)) continue
     const path = join(dir, name)
     const st = safeStat(path)
     if (!st?.isFile()) continue
@@ -264,14 +274,14 @@ function collectFonts() {
       if (!st) return
       const suffix = lower.includes('.') ? lower.slice(lower.lastIndexOf('.')) : ''
       const isFont = fontSuffixes.has(suffix)
-      const isNotice = licenseNames.has(lower) && /font|ofl|katex|montserrat|sil/i.test(path)
-      if (!isFont && !isNotice && !/katex|montserrat/i.test(path)) return
-      if (isNotice || licenseNames.has(lower)) {
+      const isNotice = isAttributionFile(entry.name) && /font|ofl|katex|montserrat|sil|codicon|playwright/i.test(path)
+      if (!isFont && !isNotice && !/katex|montserrat|codicon/i.test(path)) return
+      if (isNotice || (isAttributionFile(entry.name) && /font|ofl|katex|montserrat|sil|codicon|playwright/i.test(path))) {
         const file = safeRead(path)
         if (file) notices.push({ path: rel(path), bytes: file.bytes, sha256: file.sha256, truncated: file.truncated, text: file.truncated ? null : file.text })
         return
       }
-      if (isFont || /katex|montserrat/i.test(entry.name)) {
+      if (isFont || /katex|montserrat|codicon/i.test(entry.name)) {
         files.push({ path: rel(path), bytes: st.size, kind: isFont ? 'font-binary' : 'related', sha256: st.size <= 1_000_000 ? sha256(readFileSync(path)) : null })
       }
     })
