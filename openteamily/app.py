@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, invites, members, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, invites, members, memory, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -41,6 +41,7 @@ class Config:
     max_automations_per_workspace: int = 20
     max_artifacts_per_workspace: int = 50
     max_shares_per_artifact: int = 10
+    max_memory_pages_per_workspace: int = 100
     max_agents_per_workspace: int = 50
     max_conversations_per_user: int = 50
     max_messages_per_conversation: int = 200
@@ -700,6 +701,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|preview|file|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
             if artifact_path:
                 return self.artifact_dispatch(db, session, method, query, now, env, *artifact_path.groups())
+            memory_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/memory(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
+            if memory_path:
+                return self.memory_dispatch(db, session, method, query, now, env, *memory_path.groups())
             if path == '/v1/invites/accept' and method == 'POST' and not query:
                 return self.accept_invite(db, session, now, self.body(env, ['token']))
             invite_path = re.fullmatch(
@@ -1613,6 +1618,119 @@ class App:
             db, aid, workspace['id'], now, 'agent_task', row['id'], task_kind=row['kind'],
         )
         return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], aid))}, []
+
+
+
+    def memory_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if target_id is None and method == 'GET':
+            try:
+                limit, cursor, args = self.pagination(query, allowed=('q',))
+            except APIError:
+                raise
+            except Exception:
+                refuse(400, 'invalid', 'Invalid pagination parameters')
+            needle = args.get('q', [''])[0].strip().casefold()
+            if len(needle) > 80:
+                refuse(400, 'invalid', 'Invalid memory request')
+            rows = memory.listing(db, workspace['id'], cursor, limit + 1, needle)
+            items = [memory.view(row, include_body=False) for row in rows[:limit]]
+            return 200, {'items': items,
+                         'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
+        if target_id is None and method == 'POST' and not query:
+            return self.create_memory_page(db, workspace, session, now, env)
+        if target_id is None:
+            refuse(400, 'invalid', 'Invalid memory request')
+        row = memory.load(db, workspace['id'], target_id)
+        if row is None:
+            refuse(404, 'not_found', 'Memory page not found')
+        if removing:
+            if method != 'POST' or query:
+                refuse(400, 'invalid', 'Invalid memory request')
+            if not memory.can_edit(actor, session['user_id'], row):
+                refuse(403, 'forbidden', 'Not allowed to change this memory page')
+            self.body(env, [])
+            db.execute('DELETE FROM memory_pages WHERE id=?', (row['id'],))
+            return 200, {'removed': memory.view(row, include_body=False)}, []
+        if method == 'GET' and not query and not removing:
+            return 200, {'page': memory.view(row)}, []
+        if method != 'POST' or query or removing:
+            refuse(400, 'invalid', 'Invalid memory request')
+        return self.update_memory_page(db, workspace, session, actor, row, now, self.body(env, ['revision', 'changes']))
+
+    def create_memory_page(self, db, workspace, session, now, env):
+        body = self.body(env, ['title', 'body'])
+        title, content = body.get('title'), body.get('body', '')
+        if not memory.valid_title(title) or not memory.valid_body(content):
+            refuse(400, 'invalid', 'Provide a memory page title and body')
+        title = title.strip()
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        payload = {'title': title, 'body': content}
+        key_hash, request_hash = digest('memory:' + key), digest(
+            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+        )
+        prior = db.execute(
+            'SELECT * FROM memory_pages WHERE workspace_id=? AND key_hash=?', (workspace['id'], key_hash)
+        ).fetchone()
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'page': memory.view(memory.load(db, workspace['id'], prior['id']))}, []
+        title_digest = memory.title_hash(title)
+        if db.execute(
+            'SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=?', (workspace['id'], title_digest)
+        ).fetchone():
+            refuse(409, 'conflict', 'A memory page with this title already exists')
+        if (db.execute('SELECT COUNT(*) FROM memory_pages WHERE workspace_id=?', (workspace['id'],)).fetchone()[0]
+                >= self.config.max_memory_pages_per_workspace):
+            refuse(429, 'quota', 'Memory page capacity reached')
+        page_id = uuid4().hex
+        db.execute(
+            'INSERT INTO memory_pages VALUES(?,?,?,?,?,1,?,?,?,?,?,?)',
+            (page_id, workspace['id'], title, title_digest, content, now, now,
+             session['user_id'], session['user_id'], key_hash, request_hash),
+        )
+        return 201, {'page': memory.view(memory.load(db, workspace['id'], page_id))}, []
+
+    def update_memory_page(self, db, workspace, session, actor, row, now, body):
+        if not memory.can_edit(actor, session['user_id'], row):
+            refuse(403, 'forbidden', 'Not allowed to change this memory page')
+        revision, changes = body.get('revision'), body.get('changes')
+        if type(revision) is not int or not 0 <= revision <= 2 ** 31 or not isinstance(changes, dict) or not changes:
+            refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
+        if set(changes) - {'title', 'body'}:
+            refuse(400, 'invalid', 'Unknown memory field')
+        if revision != row['revision']:
+            raise RuntimeFault(409, 'conflict', 'Memory page changed elsewhere; reload and retry',
+                               memory.view(row))
+        title = row['title']
+        content = row['body']
+        if 'title' in changes:
+            if not memory.valid_title(changes['title']):
+                refuse(400, 'invalid', 'Provide a memory page title and body')
+            title = changes['title'].strip()
+        if 'body' in changes:
+            if not memory.valid_body(changes['body']):
+                refuse(400, 'invalid', 'Provide a memory page title and body')
+            content = changes['body']
+        if title == row['title'] and content == row['body']:
+            return 200, {'page': memory.view(row)}, []
+        title_digest = memory.title_hash(title)
+        if title != row['title'] and db.execute(
+            'SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=? AND id!=?',
+            (workspace['id'], title_digest, row['id']),
+        ).fetchone():
+            refuse(409, 'conflict', 'A memory page with this title already exists')
+        db.execute(
+            'UPDATE memory_pages SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
+            (title, title_digest, content, row['revision'] + 1, now, session['user_id'], row['id']),
+        )
+        return 200, {'page': memory.view(memory.load(db, workspace['id'], row['id']))}, []
 
 
     def workspace_agent_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, archiving):

@@ -6,7 +6,7 @@ from tests import test_settings_page as settings_page_tests
 
 PAGES = (
     '/settings', '/agents', '/automations', '/artifacts',
-    '/members', '/team', '/runtimes',
+    '/members', '/team', '/runtimes', '/memory',
 )
 
 CAPTURE_IDS = {
@@ -22,6 +22,8 @@ CAPTURE_IDS = {
     '/team': ('wizard-form', 'step-1', 'step-2', 'step-3', 'next'),
     '/runtimes': ('runtimes-panel', 'connect-panel', 'key-list',
                   'connection-list', 'issued-token'),
+    '/memory': ('main-panel', 'memory-list', 'editor-form',
+                'search', 'new-title'),
 }
 
 

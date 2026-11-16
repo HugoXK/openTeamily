@@ -53,6 +53,7 @@ All responses are JSON and no-store. There is no CORS support. Errors are `{erro
 | GET/POST | `/v1/runtime/connections`, `/v1/runtime/tasks` | Own-machine connection status, echo/infer dispatch, cancel; see [RUNTIME_KEYS.md](RUNTIME_KEYS.md) |
 | GET/POST | `/v1/agent/*` | Runtime-key agent connect, heartbeat, task transport and one-time model-access; Bearer only, cookies rejected |
 | GET/POST | `/v1/workspaces/{id}/artifacts` | Workspace documents, static websites, media files, and whiteboards: list, create, read, edit, remove, preview, file download, and explicit revocable read-only shares. See [ARTIFACTS.md](ARTIFACTS.md) |
+| GET/POST | `/v1/workspaces/{id}/memory` | Workspace memory pages: list, create (persisted immediately), read, revisioned edit, and delete. See [MEMORY.md](MEMORY.md). A same-origin editor is at `/memory` |
 | GET/POST | `/v1/workspaces/{id}/automations` | Configuration, explicit or background tick, run records, cancel and durable results. See [AUTOMATIONS.md](AUTOMATIONS.md) |
 | GET/POST | `/v1/workspaces/{id}/agents` | Workspace agent directory: create, list, read, edit, and archive records. Distinct from `/v1/agent/*` runtime transport. See [WORKSPACE_AGENTS.md](WORKSPACE_AGENTS.md). Conversations: [AGENT_CONVERSATIONS.md](AGENT_CONVERSATIONS.md). Container binding: [AGENT_RUNTIME.md](AGENT_RUNTIME.md). A same-origin page is at `/agents` |
 
