@@ -73,17 +73,22 @@ function decorateStatus(node) {
 }
 
 async function loadAppearance() {
+  const controller = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), 3000) : null;
   try {
     const response = await fetch('/v1/settings', {
       method: 'GET',
       credentials: 'same-origin',
       headers: { Accept: 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie) },
+      signal: controller ? controller.signal : undefined,
     });
     if (!response.ok) return null;
     const body = await response.json();
     return (body && body.settings && body.settings.values) || null;
   } catch (error) {
     return null;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
