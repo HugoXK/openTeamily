@@ -1,5 +1,7 @@
 # 管理面与运行实例目标契约
 
+实施状态更新：PR16 仍是冻结的认证/工作区切片；后续独立分支已实现 instance/jobs、revision、manager 租约边界及显式模拟，详见 [生命周期切片](RUNTIME_IMPLEMENTATION.md)。以下“首 PR 未实现”描述保留 PR16 边界，不代表后续分支没有这些代码；真实容器/产品对照仍未通过。
+
 这是目标契约，不是已经实现的 API 清单。首个实施 PR **只实现账号/会话/CSRF 与 owner 隔离的工作区记录**。实例、jobs、manager 鉴权、fake RuntimeBackend、Compose 执行与真实容器验收仍待后续切片；请求不会假成功。完整 #2 及总任务 #1 保持开放。
 
 独立新写设计，MIT 只适用于本仓新材料；不授予任何上游代码/镜像复用权。具体已实现请求、限额、安全边界见 [管理 API](MANAGEMENT_API.md)。

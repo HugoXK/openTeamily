@@ -7,3 +7,7 @@ This PR delivers authentication/session/CSRF and owner-scoped workspace records,
 Full runtime acceptance, Compose, volume retention, upgrade/backup/purge and real browser acceptance remain unimplemented, not passed or silently skipped.
 
 Teamily evidence and comparison status must accompany every product acceptance; see MANAGEMENT_API.md and ACCEPTANCE.md. Internal management tests validate self-hosting foundations only, not Teamily internals or product equivalence.
+
+## Lifecycle follow-up (separate branch/PR, depends on #16)
+
+Durable instance/jobs/revisions, lease-fenced manager routes, memory/SQLite fake receipts/state and the unchanged Deployment JS planner are now implemented; see RUNTIME_IMPLEMENTATION.md. Tests remain simulations, not real runtime/product acceptance. Operational manager/Compose execution, runtime log stream, recovery, real volumes and deployment remain owed. Do not close #2.

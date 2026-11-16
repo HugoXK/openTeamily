@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
+from .lifecycle import RuntimeFault, UNSUPPORTED
 
 
 class APIError(Exception):
@@ -72,8 +73,9 @@ def object_only(pairs):
 
 
 class App:
-    def __init__(self, store, config, clock=time.time):
+    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None):
         self.store, self.config, self.clock = store, config, clock
+        self.lifecycle, self.manager_auth = lifecycle, manager_auth
 
     def __call__(self, env, start_response):
         headers = [('Content-Type', 'application/json; charset=utf-8'), ('Cache-Control', 'no-store'),
@@ -82,8 +84,10 @@ class App:
         try:
             status, body, extra = self.dispatch(env)
             headers += extra
-        except APIError as error:
+        except (APIError, RuntimeFault) as error:
             status, body = error.status, {'error': {'code': error.code, 'message': error.message}}
+            if isinstance(error, RuntimeFault) and error.current is not None:
+                body['error']['current'] = error.current
             if status == 429:
                 headers.append(('Retry-After', str(self.config.auth_window)))
         except (sqlite3.Error, OSError):
@@ -92,7 +96,7 @@ class App:
             status, body = 500, {'error': {'code': 'internal', 'message': 'Internal service error'}}
         data = json.dumps(body, ensure_ascii=True, separators=(',', ':')).encode('utf-8')
         headers.append(('Content-Length', str(len(data))))
-        reasons = {200: 'OK', 201: 'Created', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
+        reasons = {200: 'OK', 201: 'Created', 202: 'Accepted', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
                    404: 'Not Found', 405: 'Method Not Allowed', 409: 'Conflict', 411: 'Length Required',
                    413: 'Content Too Large', 415: 'Unsupported Media Type', 429: 'Too Many Requests',
                    500: 'Internal Server Error', 501: 'Not Implemented', 503: 'Service Unavailable'}
@@ -264,6 +268,18 @@ class App:
             with self.store.transaction() as db:
                 headers = self.new_session(db, user['id'], now)
             return 200, {'user': {'id': user['id'], 'username': user['username']}}, headers
+        runtime_path = re.fullmatch(r'/v1/workspaces/[0-9a-f]{32}/instances|/v1/instances/[0-9a-f]{32}(?:/[a-z]+)?|/v1/jobs/[0-9a-f]{32}', path)
+        if self.lifecycle is not None and (runtime_path or path.startswith('/v1/internal/')):
+            if path.startswith('/v1/internal/'):
+                if self.manager_auth is None:
+                    refuse(401, 'manager_auth', 'Manager access is not configured')
+                manager = self.manager_auth.authenticate(env)
+                return self.manager_dispatch(env, manager, method, path, query)
+            with self.store.connect() as db:
+                session = self.authenticated(db, env, now)
+            if method == 'POST':
+                self.csrf_check(env, session)
+            return self.runtime_dispatch(env, session['user_id'], method, path, query)
         with self.store.transaction() as db:
             session = self.authenticated(db, env, now)
             if method == 'POST':
@@ -336,3 +352,84 @@ class App:
     @staticmethod
     def workspace(row):
         return {key: row[key] for key in ('id', 'owner_id', 'name', 'created')}
+
+    @staticmethod
+    def pagination(query, allowed=()):
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=3) if query else {}
+            if set(args) - {'limit', 'cursor', *allowed} or any(len(v) != 1 for v in args.values()):
+                raise ValueError()
+            limit, cursor = args.get('limit', ['20'])[0], args.get('cursor', [''])[0]
+            if not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 100 or (cursor and not re.fullmatch(r'[0-9a-f]{32}', cursor)):
+                raise ValueError()
+            return int(limit), cursor, args
+        except ValueError:
+            refuse(400, 'invalid', 'Invalid pagination parameters')
+
+    def runtime_dispatch(self, env, owner, method, path, query):
+        runtime = self.lifecycle
+        match = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/instances', path)
+        if match:
+            if method == 'POST':
+                self.body(env, [])
+                created, result = runtime.create(owner, match[1], env.get('HTTP_IDEMPOTENCY_KEY', ''))
+                return 201 if created else 200, result, []
+            limit, cursor, _ = self.pagination(query)
+            return 200, runtime.listing(owner, match[1], limit, cursor), []
+        match = re.fullmatch(r'/v1/jobs/([0-9a-f]{32})', path)
+        if match and method == 'GET' and not query:
+            return 200, {'job': runtime.get_job(owner, match[1])}, []
+        match = re.fullmatch(r'/v1/instances/([0-9a-f]{32})(?:/([a-z]+))?', path)
+        if match:
+            iid, action = match.groups()
+            # Authorization precedes even unsupported operation disclosure.
+            instance = runtime.inspect(owner, iid)
+            if method == 'GET' and action is None and not query:
+                return 200, {'instance': instance}, []
+            if method == 'POST' and action in UNSUPPORTED:
+                self.body(env, [])
+                refuse(501, 'unsupported', 'This runtime operation is not implemented')
+            if method == 'POST' and action in ('start', 'stop', 'restart'):
+                body = self.body(env, ['expected_revision', 'operation_id'] if action == 'restart' else ['expected_revision'])
+                changed, result = getattr(runtime, action)(owner, iid, **body)
+                return 202 if changed else 200, result, []
+            if method == 'GET' and action == 'logs':
+                try:
+                    args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=1) if query else {}
+                    if set(args) - {'tail'} or any(len(v) != 1 for v in args.values()):
+                        raise ValueError()
+                    tail = args.get('tail', ['100'])[0]
+                    if not re.fullmatch(r'[0-9]{1,3}', tail):
+                        raise ValueError()
+                except ValueError:
+                    refuse(400, 'invalid', 'Invalid log options')
+                return 200, runtime.logs(owner, iid, int(tail)), []
+        refuse(404, 'not_found', 'Route not found')
+
+    def manager_dispatch(self, env, manager, method, path, query):
+        runtime = self.lifecycle
+        if path == '/v1/internal/instances' and method == 'GET':
+            limit, cursor, args = self.pagination(query, ('desired',))
+            desired = args.get('desired', [None])[0]
+            if desired not in (None, 'running', 'stopped'):
+                refuse(400, 'invalid', 'Invalid desired filter')
+            return 200, runtime.manager_list(manager, desired, limit, cursor), []
+        if path == '/v1/internal/jobs/claim' and method == 'POST':
+            body = self.body(env, ['instance_id'])
+            iid = body.get('instance_id')
+            if not isinstance(iid, str) or not re.fullmatch(r'[0-9a-f]{32}', iid):
+                refuse(400, 'invalid', 'Invalid instance_id')
+            return 200, {'claim': runtime.claim(manager, iid)}, []
+        match = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/(observe|heartbeat)', path)
+        if match and method == 'POST':
+            allowed = ['job_id', 'observed_revision', 'lease']
+            if match[2] == 'observe':
+                allowed += ['observed', 'process_ref', 'error_code']
+            body = self.body(env, allowed)
+            required = {'job_id', 'observed_revision', 'lease'} | ({'observed'} if match[2] == 'observe' else set())
+            if not required <= body.keys() or not isinstance(body['job_id'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['job_id']):
+                refuse(400, 'invalid', 'Incomplete or invalid manager observation')
+            body['jid'], body['revision'] = body.pop('job_id'), body.pop('observed_revision')
+            handler = runtime.observe if match[2] == 'observe' else runtime.heartbeat
+            return 200, handler(manager, match[1], **body), []
+        refuse(404, 'not_found', 'Route not found')
