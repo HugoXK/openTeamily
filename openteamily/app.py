@@ -41,6 +41,7 @@ class Config:
     max_automations_per_workspace: int = 20
     max_artifacts_per_workspace: int = 50
     max_shares_per_artifact: int = 10
+    max_versions_per_artifact: int = 100
     max_memory_pages_per_workspace: int = 100
     max_memory_actions_per_workspace: int = 200
     max_memory_links_per_workspace: int = 500
@@ -705,7 +706,7 @@ class App:
             if auto_path:
                 return self.automation_dispatch(db, session, method, query, now, env, *auto_path.groups())
             artifact_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|preview|file|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|preview|file|export|restore|versions(?:/(\d{1,8})(?:/(export))?)?|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
             if artifact_path:
                 return self.artifact_dispatch(db, session, method, query, now, env, *artifact_path.groups())
             memory_action_path = re.fullmatch(
@@ -1213,7 +1214,7 @@ class App:
             return 200, {'removed': self.automation_view(db, row, session['user_id'])}, []
         return self.update_automation(db, workspace, actor, row, now, self.body(env, ['revision', 'changes']))
 
-    def artifact_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, action, share_id, share_revoking):
+    def artifact_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, action, version, version_export, share_id, share_revoking):
         workspace = members.load(db, workspace_id, session['user_id'])
         if workspace is None:
             refuse(404, 'not_found', 'Workspace not found')
@@ -1239,15 +1240,19 @@ class App:
         row = artifacts.load(db, workspace['id'], target_id)
         if row is None:
             refuse(404, 'not_found', 'Artifact not found')
+        if action == 'export' or (action and action.startswith('versions')) or action == 'restore':
+            return self.artifact_history_dispatch(
+                db, session, method, query, now, env, actor, row, action, version, version_export
+            )
         if action == 'remove':
             if method != 'POST' or query:
                 refuse(400, 'invalid', 'Invalid artifact request')
             if not artifacts.can_edit(actor, session['user_id'], row):
                 refuse(403, 'forbidden', 'Not allowed to change this document')
             self.body(env, [])
-            digest_hex = row['media_sha256']
+            digests = artifacts.media_digests(db, row['id'])
             db.execute('DELETE FROM artifacts WHERE id=?', (row['id'],))
-            if digest_hex:
+            for digest_hex in digests:
                 artifacts.unlink_media(self.store.data_dir, workspace['id'], digest_hex, db)
             return 200, {'removed': artifacts.view(row, include_body=False)}, []
         if action == 'preview':
@@ -1324,7 +1329,7 @@ class App:
         artifacts.set_render(db, aid, kind)
         if board is not None and not artifacts.attach_board(db, aid, board):
             refuse(400, 'invalid', 'Provide a whiteboard title and board')
-        return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], aid))}, []
+        return self.artifact_saved(db, workspace['id'], aid, 201)
 
     def update_artifact(self, db, workspace, session, actor, row, now, body):
         if not artifacts.can_edit(actor, session['user_id'], row):
@@ -1367,6 +1372,7 @@ class App:
             unchanged = title == row['title'] and artifacts.board_json(board) == row['board_json']
         if unchanged:
             return 200, {'artifact': artifacts.view(row)}, []
+        self.guard_artifact_versions(db, row['id'])
         title_digest = artifacts.title_hash(title)
         if title != row['title'] and db.execute(
             'SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?',
@@ -1379,8 +1385,99 @@ class App:
         )
         if kind == 'whiteboard' and not artifacts.attach_board(db, row['id'], board):
             refuse(400, 'invalid', 'Provide a valid board')
-        return 200, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], row['id']))}, []
+        return self.artifact_saved(db, workspace['id'], row['id'], 200)
 
+
+    def artifact_saved(self, db, workspace_id, artifact_id, status):
+        row = artifacts.load(db, workspace_id, artifact_id)
+        artifacts.record_version(db, row)
+        return status, {'artifact': artifacts.view(row)}, []
+
+    def guard_artifact_versions(self, db, artifact_id):
+        if artifacts.version_count(db, artifact_id) >= self.config.max_versions_per_artifact:
+            refuse(429, 'quota', 'Version capacity reached')
+
+    def artifact_history_dispatch(self, db, session, method, query, now, env, actor, row, action, version, version_export):
+        artifacts.record_version(db, row)
+        if action == 'export':
+            if method != 'GET' or query:
+                refuse(400, 'invalid', 'Invalid artifact request')
+            return self.export_artifact(row, from_version=False)
+        if action == 'restore':
+            if method != 'POST' or query or version or version_export:
+                refuse(400, 'invalid', 'Invalid artifact request')
+            return self.restore_artifact(db, session, actor, row, now, self.body(env, ['revision', 'to']))
+        if method != 'GET' or query:
+            refuse(400, 'invalid', 'Invalid artifact request')
+        if version is None:
+            items = [artifacts.version_view(item, include_body=False) for item in artifacts.list_versions(db, row['id'])]
+            return 200, {'items': items}, []
+        try:
+            revision = int(version)
+        except (TypeError, ValueError):
+            refuse(400, 'invalid', 'Invalid artifact request')
+        snapshot = artifacts.load_version(db, row['id'], revision)
+        if snapshot is None:
+            refuse(404, 'not_found', 'Version not found')
+        if version_export == 'export':
+            return self.export_artifact(snapshot, from_version=True, workspace_id=row['workspace_id'])
+        if version_export:
+            refuse(400, 'invalid', 'Invalid artifact request')
+        return 200, {'version': artifacts.version_view(snapshot)}, []
+
+    def export_artifact(self, row, from_version=False, workspace_id=None):
+        workspace_id = workspace_id or row['workspace_id']
+        try:
+            payload, content_type, filename = artifacts.export_bytes(
+                row, self.store.data_dir, workspace_id, from_version=from_version
+            )
+        except (OSError, ValueError):
+            refuse(404, 'not_found', 'Artifact not found')
+        return 200, payload, artifacts.export_headers(content_type, filename)
+
+    def restore_artifact(self, db, session, actor, row, now, body):
+        if not artifacts.can_edit(actor, session['user_id'], row):
+            refuse(403, 'forbidden', 'Not allowed to change this document')
+        if type(body.get('revision')) is not int or type(body.get('to')) is not int:
+            refuse(400, 'invalid', 'Provide the current revision and a version to restore')
+        if not 1 <= body['to'] <= 2 ** 31 or not 0 <= body['revision'] <= 2 ** 31:
+            refuse(400, 'invalid', 'Provide the current revision and a version to restore')
+        if body['revision'] != row['revision']:
+            raise RuntimeFault(409, 'conflict', 'Document changed elsewhere; reload and retry',
+                               artifacts.view(row))
+        snapshot = artifacts.load_version(db, row['id'], body['to'])
+        if snapshot is None:
+            refuse(404, 'not_found', 'Version not found')
+        if artifacts.same_as_version(row, snapshot):
+            return 200, {'artifact': artifacts.view(row)}, []
+        self.guard_artifact_versions(db, row['id'])
+        title = snapshot['title']
+        title_digest = artifacts.title_hash(title)
+        if title != row['title'] and db.execute(
+            'SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?',
+            (row['workspace_id'], title_digest, row['id']),
+        ).fetchone():
+            refuse(409, 'conflict', 'A document with this title already exists')
+        kind = snapshot['kind']
+        content = snapshot['body'] if kind in ('document', 'website') else ''
+        db.execute(
+            'UPDATE artifacts SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
+            (title, title_digest, content, row['revision'] + 1, now, session['user_id'], row['id']),
+        )
+        artifacts.set_render(db, row['id'], kind)
+        if kind == 'whiteboard':
+            board = artifacts.decode_board(snapshot['board']) or dict(artifacts.EMPTY_BOARD)
+            if not artifacts.attach_board(db, row['id'], board):
+                refuse(400, 'invalid', 'Provide a valid board')
+        elif kind == 'media':
+            artifacts.attach_media(
+                db, row['id'], snapshot['mime'], snapshot['byte_count'],
+                snapshot['sha256'], snapshot['filename'],
+            )
+        else:
+            db.execute('DELETE FROM artifact_media WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (row['id'],))
+        return self.artifact_saved(db, row['workspace_id'], row['id'], 200)
 
     def artifact_share_dispatch(self, db, session, method, query, now, env, actor, row, share_id, share_revoking):
         if share_id is None and method == 'GET' and not query:
@@ -1513,7 +1610,7 @@ class App:
              session['user_id'], session['user_id'], key_hash, request_hash),
         )
         artifacts.attach_media(db, aid, mime, len(data), digest_hex, filename)
-        return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], aid))}, []
+        return self.artifact_saved(db, workspace['id'], aid, 201)
 
     def replace_media_artifact(self, db, workspace, session, row, now, env):
         fields, data, mime, filename, title = self._media_upload(env)
@@ -1538,6 +1635,7 @@ class App:
         ).fetchone():
             refuse(409, 'conflict', 'A document with this title already exists')
         previous = row['media_sha256']
+        self.guard_artifact_versions(db, row['id'])
         try:
             digest_hex = artifacts.write_media(self.store.data_dir, workspace['id'], data)
         except OSError:
@@ -1549,7 +1647,7 @@ class App:
         artifacts.attach_media(db, row['id'], mime, len(data), digest_hex, filename)
         if previous and previous != digest_hex:
             artifacts.unlink_media(self.store.data_dir, workspace['id'], previous, db)
-        return 200, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], row['id']))}, []
+        return self.artifact_saved(db, workspace['id'], row['id'], 200)
 
     def save_run_artifact(self, db, workspace, session, automation, run, now, body):
         title = body.get('title')
@@ -1591,7 +1689,7 @@ class App:
             db, aid, workspace['id'], now, 'automation_run', run['id'],
             automation_id=automation['id'], automation_title=auto_title,
         )
-        return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], aid))}, []
+        return self.artifact_saved(db, workspace['id'], aid, 201)
 
     def save_task_artifact(self, db, session, task, now, body):
         title = body.get('title')
@@ -1639,7 +1737,7 @@ class App:
         artifacts.attach_source(
             db, aid, workspace['id'], now, 'agent_task', row['id'], task_kind=row['kind'],
         )
-        return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], aid))}, []
+        return self.artifact_saved(db, workspace['id'], aid, 201)
 
 
 
@@ -2566,7 +2664,7 @@ class App:
         )
         artifacts.attach_chat_source(
             db, artifact_id, workspace['id'], now, row['id'], message['id'], row['agent_id'])
-        return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], artifact_id))}, []
+        return self.artifact_saved(db, workspace['id'], artifact_id, 201)
 
     def invite_dispatch(self, db, session, method, query, now, env, workspace_id, invite_id, revoking):
         workspace = members.load(db, workspace_id, session['user_id'])

@@ -9,3 +9,5 @@
 #board-canvas { width: 100%; max-width: 800px; height: auto; border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); background: #fff; touch-action: none; }
 #board-tools { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: .6rem; }
 #editor-form textarea { min-height: 16rem; width: 100%; font: inherit; }
+#version-list { list-style: none; padding: 0; margin: 0 0 1rem; }
+#version-list li { display: flex; flex-wrap: wrap; gap: .75rem; align-items: baseline; padding: .4rem 0; }

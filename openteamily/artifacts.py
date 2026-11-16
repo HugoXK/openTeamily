@@ -77,6 +77,21 @@ CREATE TABLE IF NOT EXISTS artifact_chat_sources (
  agent_id TEXT,
  created INTEGER NOT NULL,
  UNIQUE(workspace_id, message_id));
+CREATE TABLE IF NOT EXISTS artifact_versions (
+ artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+ revision INTEGER NOT NULL CHECK(revision >= 1),
+ title TEXT NOT NULL,
+ kind TEXT NOT NULL CHECK(kind IN ('document', 'website', 'whiteboard', 'media')),
+ body TEXT NOT NULL,
+ board TEXT,
+ mime TEXT,
+ byte_count INTEGER,
+ sha256 TEXT,
+ filename TEXT,
+ created INTEGER NOT NULL,
+ created_by TEXT NOT NULL REFERENCES users(id),
+ PRIMARY KEY (artifact_id, revision));
+CREATE INDEX IF NOT EXISTS artifact_version_item ON artifact_versions(artifact_id, revision);
 '''
 
 KINDS = ('document', 'website', 'whiteboard', 'media')
@@ -274,6 +289,144 @@ def load_chat_artifact(db, workspace_id, message_id):
     if row is None:
         return None
     return load(db, workspace_id, row['artifact_id'])
+
+
+VERSION_SELECT = (
+    'SELECT v.*, u.username AS created_by_username '
+    'FROM artifact_versions v JOIN users u ON u.id=v.created_by '
+)
+
+
+def version_count(db, artifact_id):
+    return db.execute(
+        'SELECT COUNT(*) FROM artifact_versions WHERE artifact_id=?', (artifact_id,)
+    ).fetchone()[0]
+
+
+def record_version(db, row):
+    kind = public_kind(row)
+    body = row['body'] if kind in ('document', 'website') else ''
+    board = row['board_json'] if kind == 'whiteboard' else None
+    mime = row['media_mime'] if kind == 'media' else None
+    byte_count = row['media_bytes'] if kind == 'media' else None
+    digest_hex = row['media_sha256'] if kind == 'media' else None
+    filename = row['media_filename'] if kind == 'media' else None
+    db.execute(
+        'INSERT OR IGNORE INTO artifact_versions '
+        'VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+        (row['id'], row['revision'], row['title'], kind, body, board, mime, byte_count,
+         digest_hex, filename, row['updated'], row['updated_by']),
+    )
+
+
+def list_versions(db, artifact_id):
+    return db.execute(
+        VERSION_SELECT + 'WHERE v.artifact_id=? ORDER BY v.revision DESC', (artifact_id,)
+    ).fetchall()
+
+
+def load_version(db, artifact_id, revision):
+    return db.execute(
+        VERSION_SELECT + 'WHERE v.artifact_id=? AND v.revision=?', (artifact_id, revision)
+    ).fetchone()
+
+
+def version_view(row, include_body=True):
+    kind = row['kind']
+    data = {
+        'revision': row['revision'],
+        'title': row['title'],
+        'kind': kind,
+        'created': row['created'],
+        'created_by': row['created_by_username'],
+    }
+    if kind == 'media':
+        data['media'] = {
+            'mime': row['mime'],
+            'bytes': row['byte_count'],
+            'filename': row['filename'],
+        }
+    elif include_body:
+        if kind == 'whiteboard':
+            data['board'] = decode_board(row['board']) or dict(EMPTY_BOARD)
+        else:
+            data['body'] = row['body']
+    return data
+
+
+def same_as_version(row, snapshot):
+    if public_kind(row) != snapshot['kind'] or row['title'] != snapshot['title']:
+        return False
+    kind = snapshot['kind']
+    if kind == 'media':
+        return row['media_sha256'] == snapshot['sha256'] and row['media_filename'] == snapshot['filename']
+    if kind == 'whiteboard':
+        return row['board_json'] == snapshot['board']
+    return row['body'] == snapshot['body']
+
+
+def media_digests(db, artifact_id):
+    values = set()
+    current = db.execute(
+        'SELECT sha256 FROM artifact_media WHERE artifact_id=?', (artifact_id,)
+    ).fetchone()
+    if current and current['sha256']:
+        values.add(current['sha256'])
+    for item in db.execute(
+        'SELECT sha256 FROM artifact_versions WHERE artifact_id=? AND sha256 IS NOT NULL',
+        (artifact_id,),
+    ):
+        values.add(item['sha256'])
+    return values
+
+
+def export_filename(title, kind, revision=None, media_filename=None):
+    if kind == 'media':
+        name = clean_filename(media_filename or '')
+        return name if name != 'file' or not media_filename else 'file'
+    suffix = {'document': '.txt', 'website': '.html', 'whiteboard': '.svg'}.get(kind, '.txt')
+    tag = kind + (f'-{revision}' if revision else '')
+    base = tag + suffix
+    return base if SAFE_FILENAME.fullmatch(base) else 'artifact' + suffix
+
+
+def export_headers(content_type, filename, csp=None):
+    name = clean_filename(filename)
+    headers = [
+        ('Content-Type', content_type),
+        ('Content-Security-Policy', csp or "default-src 'none'; sandbox; frame-ancestors 'none'; object-src 'none'"),
+        ('Cross-Origin-Resource-Policy', 'same-origin'),
+        ('X-Content-Type-Options', 'nosniff'),
+        ('X-Frame-Options', 'DENY'),
+        ('Content-Disposition', 'attachment; filename="' + name + '"'),
+        ('Permissions-Policy', 'camera=(), microphone=(), geolocation=()'),
+    ]
+    return headers
+
+
+def export_bytes(row, data_dir, workspace_id, from_version=False):
+    kind = row['kind'] if from_version else public_kind(row)
+    title = row['title']
+    revision = row['revision']
+    if kind == 'media':
+        mime = row['mime'] if from_version else row['media_mime']
+        digest_hex = row['sha256'] if from_version else row['media_sha256']
+        filename = row['filename'] if from_version else row['media_filename']
+        expected = row['byte_count'] if from_version else row['media_bytes']
+        payload = read_media_bytes(data_dir, workspace_id, digest_hex, expected)
+        name = export_filename(title, kind, revision, filename)
+        return payload, mime, name
+    if kind == 'website':
+        payload = render_website_page(title, row['body']).encode('utf-8')
+        return payload, 'text/html; charset=utf-8', export_filename(title, kind, revision)
+    if kind == 'whiteboard':
+        raw = row['board'] if from_version else row['board_json']
+        board = decode_board(raw) or dict(EMPTY_BOARD)
+        payload = render_board_svg(board).encode('utf-8')
+        return payload, 'image/svg+xml; charset=utf-8', export_filename(title, kind, revision)
+    body = row['body'] if isinstance(row['body'], str) else ''
+    payload = body.encode('utf-8')
+    return payload, 'text/plain; charset=utf-8', export_filename(title, kind, revision)
 
 
 def unique_title(db, workspace_id, title, suffix):
@@ -794,12 +947,17 @@ def read_media_bytes(data_dir, workspace_id, digest_hex, expected=None):
 
 
 def unlink_media(data_dir, workspace_id, digest_hex, db):
-    count = db.execute(
+    current = db.execute(
         'SELECT COUNT(*) FROM artifact_media md JOIN artifacts a ON a.id=md.artifact_id '
         'WHERE a.workspace_id=? AND md.sha256=?',
         (workspace_id, digest_hex),
     ).fetchone()[0]
-    if count:
+    historic = db.execute(
+        'SELECT COUNT(*) FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id '
+        'WHERE a.workspace_id=? AND v.sha256=?',
+        (workspace_id, digest_hex),
+    ).fetchone()[0]
+    if current or historic:
         return
     path = media_path(data_dir, workspace_id, digest_hex)
     try:
