@@ -11,7 +11,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "node --test test/facade.test.js test/ledger-rooms.test.js",
-    "test:host": "node --import ../ds-bot-upstream/ds-bot/test/harness-resolve.mjs --test test/host-social.test.js"
+    "test": "node --test test/facade.test.js test/ledger-rooms.test.js test/onboard-unit.test.js",
+    "test:host": "node --import ../ds-bot-upstream/ds-bot/test/harness-resolve.mjs --test test/host-social.test.js test/onboard-fake-server.test.js"
   }
 }

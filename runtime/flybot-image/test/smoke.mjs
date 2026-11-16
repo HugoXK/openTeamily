@@ -116,7 +116,70 @@ try {
     throw new Error(`Bot API probe failed (${api.status}):\n${api.stderr}\ncontainer logs:\n${later.stdout}\n${later.stderr}`)
   }
 
-  console.log('PASS: image user 1000, port 8080, read-only start, profile wrapper, Bot API, FlyBot social API')
+  const fakeSrc = new URL('./fake-bot-social.mjs', import.meta.url)
+  const copied = docker(['cp', fakeSrc.pathname, `${server}:/data/fake-bot-social.mjs`], { allowFailure: true })
+  if (copied.status !== 0) {
+    throw new Error(`could not copy the fake Bot Social server into /data: ${copied.stderr}`)
+  }
+  docker(['exec', '-d', server, 'node', '/data/fake-bot-social.mjs', '--host', '127.0.0.1', '--port', '8787'])
+  const platformProbe = `
+    const response = await fetch('http://127.0.0.1:8787/v1/platform');
+    if (!response.ok) throw new Error('fake Bot Social is not up: ' + response.status);
+  `
+  const socialDeadline = Date.now() + 10_000
+  let fakeReady = false
+  while (Date.now() < socialDeadline) {
+    if (docker(['exec', server, 'node', '--input-type=module', '-e', platformProbe], { allowFailure: true }).status === 0) {
+      fakeReady = true
+      break
+    }
+    await setTimeout(200)
+  }
+  assert.ok(fakeReady, 'fake Bot Social must listen on 127.0.0.1:8787 inside the container')
+
+  const onboard = docker(['exec', server, 'node', '--input-type=module', '-e', `
+    import assert from 'node:assert/strict'
+    import { lstatSync, readFileSync } from 'node:fs'
+    const login = await fetch(process.argv[1], { redirect: 'manual' })
+    const cookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
+    assert.ok(cookie, 'login must return a cookie')
+    const idle = await fetch('http://${address}:8080/api/flybot', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ endpoint: 'social/server', payload: {} }),
+    })
+    assert.ok(idle.ok, 'social/server must answer before onboarding: ' + idle.status)
+    const before = await idle.json()
+    assert.ok(before.ok, before.error?.message)
+    assert.equal(before.value?.server ?? null, null)
+    const set = await fetch('http://${address}:8080/api/flybot', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ endpoint: 'social/server-set', payload: { server: 'http://127.0.0.1:8787', confirm: true } }),
+    })
+    const body = await set.json()
+    assert.ok(set.ok && body.ok, 'social/server-set must onboard: ' + set.status + ' ' + JSON.stringify(body.error || body.value))
+    assert.equal(body.value.state, 'connected')
+    assert.equal(body.value.server, 'http://127.0.0.1:8787')
+    const credPath = '/data/bot/flybot-social.json'
+    const info = lstatSync(credPath)
+    assert.equal(info.mode & 0o777, 0o600)
+    const saved = JSON.parse(readFileSync(credPath, 'utf8'))
+    assert.equal(typeof saved.token, 'string')
+    assert.match(saved.token, /^ot-fake-[0-9a-f]{32}$/)
+    process.stdout.write(saved.token)
+  `, tokenUrl], { allowFailure: true })
+  if (onboard.status !== 0) {
+    const later = docker(['logs', server], { allowFailure: true })
+    throw new Error(`Bot Social onboard probe failed (${onboard.status}):\n${onboard.stderr}\n${onboard.stdout}\ncontainer logs:\n${later.stdout}\n${later.stderr}`)
+  }
+  const connectorToken = onboard.stdout.trim()
+  assert.match(connectorToken, /^ot-fake-[0-9a-f]{32}$/)
+  const afterLogs = docker(['logs', server], { allowFailure: true })
+  const afterCombined = `${afterLogs.stdout}\n${afterLogs.stderr}`
+  assert.equal(afterCombined.includes(connectorToken), false, 'connector token must not appear in container logs')
+
+  console.log('PASS: image user 1000, port 8080, read-only start, profile wrapper, Bot API, FlyBot social API, fake Bot Social onboard')
 } finally {
   for (const container of containers) docker(['rm', '--force', container], { allowFailure: true })
   for (const volume of volumes) docker(['volume', 'rm', volume], { allowFailure: true })

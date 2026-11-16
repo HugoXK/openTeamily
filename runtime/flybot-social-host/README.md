@@ -1,4 +1,4 @@
-# FlyBot social host adapter (first slice)
+# FlyBot social host adapter
 
 OpenTeamily-authored (root MIT). This directory is **not** part of the
 unmodified `runtime/ds-bot-upstream/` tree and is **not** a FlyBot
@@ -28,11 +28,19 @@ truth.
 - Group rooms listed by the façade are the upstream rooms, and ledger
   append/read uses the `group-{id}` book.
 
+## This slice also proves
+
+- Live Bot Social onboarding against an in-process fake server that issues
+  only `ot-fake-` tokens: first start writes mode 0600 credentials, the token
+  does not appear in logs, a second start does not onboard again, and a torn
+  credentials file is refused rather than replaced.
+
 ## Not in this slice
 
-- A complete Bot Social onboarding / live server.
-- Wiring into the management server or a redistributable image.
-- Richer group/DM Teamily-parity flows (the first web slot host is in `runtime/flybot-web-slots/`).
+- Wiring the Bot Social server URL through the management server, or a
+  redistributable public image (issue #3).
+- Richer group/DM Teamily-parity flows (the first web slot host is in
+  `runtime/flybot-web-slots/`).
 - Remote-member semantics beyond passing `updateRoom({ remove })` for
   local Bots, and recording remote participant removals on the façade.
 

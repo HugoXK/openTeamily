@@ -6,6 +6,7 @@
 import { createRuntime } from '../../ds-bot-upstream/ds-bot/index.js'
 import { applyOnRuntime } from '../../flybot-social-host/index.js'
 import { registerFlybotRoute } from '../../flybot-web-slots/index.js'
+import { loadBotSocialConfig } from '../bot-social-config.js'
 
 // Same inject list as runtime/ds-bot-upstream/ds-bot/index.js — this plugin
 // stands in for ds-bot in the web profile so createRuntime runs once.
@@ -14,11 +15,15 @@ export const inject = ['llm', 'tools', 'systemPrompt', 'sessionController', 'ses
 
 export function apply(ctx, config = {}) {
   const rt = createRuntime(ctx, config)
+  const collaboration = loadBotSocialConfig()
   const attached = applyOnRuntime(rt, ctx, {
     inboxPollMs: 15_000,
     facePollMs: 4_000,
     presence: true,
-    onboard: false,
+    ...(collaboration.server ? {
+      server: collaboration.server,
+      ...(collaboration.displayName ? { displayName: collaboration.displayName } : {}),
+    } : {}),
     ...(config.social ?? {}),
   })
   registerFlybotRoute(ctx, attached.flybot)

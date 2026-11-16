@@ -11,9 +11,9 @@ separate product.
 | Layer | In tree | Integrated with `openteamily/` / `manager/`? |
 | --- | --- | --- |
 | Management auth, workspaces, instance jobs, fake/simulated runtime | Yes (already on `main`) | n/a |
-| FlyBot customization source | `runtime/flybot/plugins/social`, `docker/` helpers, `runtime/flybot-image/` | **Image recipe only.** CI can build and smoke a container on v0.3.6 + social host. Lifecycle jobs do not yet start that image through the compose executor. |
-| Bot Social source | `services/bot-social` | **No.** No management routes or secrets handling were added. |
-| `@flybot/social` | `runtime/flybot/plugins/social` | **First slice:** `runtime/flybot-social-host/` attaches a `flybot` façade to the unmodified v0.3.6 `createRuntime()` host (group rooms use the 0.3.5+ write-ahead ledger). Not wired to the management server; no live Bot Social onboarding. |
+| FlyBot customization source | `runtime/flybot/plugins/social`, `docker/` helpers, `runtime/flybot-image/` | **Image + compose start.** Lifecycle jobs can start the digest-pinned image through the compose executor, including the model-API secret bind. |
+| Bot Social source | `services/bot-social` | **Not wired into management.** The runtime can onboard to a configured server (including a CI fake). Connector tokens stay on the instance volume; management does not store them. |
+| `@flybot/social` | `runtime/flybot/plugins/social` | **Host + live onboard path.** `runtime/flybot-social-host/` attaches a `flybot` façade to the unmodified v0.3.6 `createRuntime()` host (group rooms use the 0.3.5+ write-ahead ledger). When a server URL is set (file, env, or Settings → Bot Social), the plugin onboards and stores the connector token on the instance volume. CI proves this against a fake server with `ot-fake-` tokens only. Management still does not inject the server URL or handle connector tokens. |
 
 Keeping the snapshots as **optional modules** is intentional.
 
