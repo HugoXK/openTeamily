@@ -1,4 +1,4 @@
-"""Same-origin settings page for the /v1/settings API (issue #4, slice 2).
+"""Same-origin management pages for the /v1 APIs (settings and automations).
 
 Serves only an exact asset allowlist. API security stays in App; this wrapper
 does not interpret /v1 routes. Self-written; no upstream or Teamily source.
@@ -11,16 +11,20 @@ from urllib.parse import urlsplit
 
 class SettingsPage:
     ASSETS = {
-        '/settings': ('index.html', 'text/html; charset=utf-8'),
-        '/settings/app.mjs': ('app.mjs', 'text/javascript; charset=utf-8'),
-        '/settings/app.css': ('app.css', 'text/css; charset=utf-8'),
+        '/settings': ('settings', 'index.html', 'text/html; charset=utf-8'),
+        '/settings/app.mjs': ('settings', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/settings/app.css': ('settings', 'app.css', 'text/css; charset=utf-8'),
+        '/automations': ('automations', 'index.html', 'text/html; charset=utf-8'),
+        '/automations/app.mjs': ('automations', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/automations/app.css': ('automations', 'app.css', 'text/css; charset=utf-8'),
     }
+    PREFIXES = ('/settings', '/automations')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'")
 
     def __init__(self, api):
         self.api = api
-        self.root = Path(__file__).absolute().parent / 'static' / 'settings'
+        self.root = Path(__file__).absolute().parent / 'static'
 
     @property
     def config(self):
@@ -30,9 +34,10 @@ class SettingsPage:
     def config(self, value):
         self.api.config = value
 
-    def _asset(self, name):
+    def _asset(self, directory, name):
         # Never resolve user input into a filename. Reject symlinks, including the asset directory.
-        root_fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        folder = self.root / directory
+        root_fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root_fd)
             try:
@@ -49,10 +54,13 @@ class SettingsPage:
         finally:
             os.close(root_fd)
 
+    def _unknown_page(self, path):
+        return any(path == prefix or path.startswith(prefix + '/') for prefix in self.PREFIXES)
+
     def __call__(self, env, start_response):
         path = env.get('PATH_INFO', '')
         if path not in self.ASSETS:
-            if path.startswith('/settings/') or path == '/settings':
+            if self._unknown_page(path):
                 start_response('404 Not Found', [('Content-Type', 'text/plain; charset=utf-8'),
                                                  ('Cache-Control', 'no-store'),
                                                  ('Content-Length', '9')])
@@ -75,9 +83,9 @@ class SettingsPage:
         elif env.get('QUERY_STRING'):
             status, data = '400 Bad Request', b'Queries not supported'
         else:
-            name, content_type = self.ASSETS[path]
+            directory, name, content_type = self.ASSETS[path]
             try:
-                data = self._asset(name)
+                data = self._asset(directory, name)
                 status = '200 OK'
             except OSError:
                 status, data = '503 Service Unavailable', b'UI asset unavailable'

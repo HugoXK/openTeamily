@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>自动化 · OpenTeamily</title>
+  <link rel="stylesheet" href="/automations/app.css">
+  <script type="module" src="/automations/app.mjs"></script>
+</head>
+<body>
+  <header>
+    <p class="brand">OpenTeamily / FlyBot</p>
+    <h1>自动化</h1>
+    <p class="note">选项语义按 2026-11-16 第一轮对照补齐。生活类模板当时没有记下来，这一页不会编造。还不能写成已经功能对等。启用后不会在这个网页进程里自动计时，需要明确触发一次。</p>
+    <nav>
+      <a href="/settings">账号设置</a>
+    </nav>
+  </header>
+  <p id="status" role="status"></p>
+  <section id="login-panel" hidden>
+    <h2>登录</h2>
+    <form id="login-form" method="post" action="/v1/auth/login">
+      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
+      <button type="submit">登录</button>
+    </form>
+    <div id="oidc-providers"></div>
+  </section>
+  <section id="main-panel" hidden>
+    <p id="whoami"></p>
+    <label>工作区
+      <select id="workspace"></select>
+    </label>
+    <section id="list-panel">
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-category="mine" aria-selected="true">我的自动化</button>
+        <button type="button" role="tab" data-category="work" aria-selected="false">工作</button>
+        <button type="button" role="tab" data-category="life" aria-selected="false">生活</button>
+      </div>
+      <label>搜索 <input id="search" type="text" maxlength="80" autocomplete="off"></label>
+      <ul id="automation-list"></ul>
+      <p id="list-empty" class="note" hidden>这个分类下还没有自动化。</p>
+      <button type="button" id="new-automation">新建自动化</button>
+    </section>
+    <form id="editor-form" method="post" action="/v1/workspaces" hidden>
+      <fieldset>
+        <legend>模板</legend>
+        <label>工作模板
+          <select name="template_id"></select>
+        </label>
+        <p id="life-note" class="note" hidden>生活类模板还没有从对照里记下来，目前不能从这一栏创建。</p>
+      </fieldset>
+      <fieldset>
+        <legend>标签</legend>
+        <label>意图 <input type="text" name="intent" maxlength="80" autocomplete="off"></label>
+        <label>范围
+          <select name="scope">
+            <option value="once">只运行一次</option>
+            <option value="ongoing">长期运行</option>
+          </select>
+        </label>
+        <label>参与成员（用户名，逗号分隔） <input type="text" name="participants" maxlength="512" autocomplete="off"></label>
+        <label>参与的智能体（可选，逗号分隔） <input type="text" name="agents" maxlength="512" autocomplete="off"></label>
+      </fieldset>
+      <fieldset>
+        <legend>时间安排</legend>
+        <label><input type="radio" name="kind" value="now"> 立即运行</label>
+        <label><input type="radio" name="kind" value="later"> 稍后一次</label>
+        <label><input type="radio" name="kind" value="daily"> 每天</label>
+        <label><input type="radio" name="kind" value="weekly"> 每周</label>
+        <label><input type="radio" name="kind" value="monthly"> 每月</label>
+        <label><input type="radio" name="kind" value="weekdays"> 工作日</label>
+        <label>日期 <input type="date" name="date"></label>
+        <label>时间 <input type="time" name="time" value="09:00"></label>
+        <label>星期
+          <select name="weekday">
+            <option value="1">星期一</option>
+            <option value="2">星期二</option>
+            <option value="3">星期三</option>
+            <option value="4">星期四</option>
+            <option value="5">星期五</option>
+            <option value="6">星期六</option>
+            <option value="7">星期日</option>
+          </select>
+        </label>
+        <label>每月第几天 <input type="number" name="day" min="1" max="31" value="1"></label>
+        <label>时区 <input type="text" name="time_zone" value="Asia/Shanghai" maxlength="64" autocomplete="off"></label>
+      </fieldset>
+      <fieldset>
+        <legend>已编排的提示词</legend>
+        <p class="note">可以根据标签自动生成，也可以直接改。</p>
+        <textarea name="prompt" maxlength="4000"></textarea>
+        <label><input type="checkbox" name="enabled"> 启用</label>
+      </fieldset>
+      <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
+      <button type="submit" id="save-automation">保存</button>
+      <button type="button" id="tick-automation">立即触发一次</button>
+      <button type="button" id="cancel-editor">返回列表</button>
+      <button type="button" id="remove-automation">删除</button>
+    </form>
+    <form id="logout-form" method="post" action="/v1/auth/logout">
+      <button type="submit">退出登录</button>
+    </form>
+  </section>
+</body>
+</html>

@@ -52,6 +52,6 @@ Run rows are an additive `automation_runs` table on schema `user_version` 1. Def
 
 ## Not in this slice
 
-No background daemon, no real container execution, no public page, no agent-mode switch. The list API supports search and work/life/custom/mine tabs; a same-origin list page is a follow-up. This is still not Teamily automation parity.
+No background daemon, no real container execution, no public unauthenticated page, no agent-mode switch. A same-origin page at `/automations` lists automations with search and 我的/工作/生活 tabs, and edits the tag fields, schedule kinds and compiled prompt through the existing API. Life templates remain absent. Enabling a record still does not start a background timer; the page can request an explicit tick. This is still not Teamily automation parity.
 
 Dispatch hooks receive the workspace-or-platform model API (redacted in run records). See [MODEL_API.md](MODEL_API.md). This is not container execution and not Teamily parity.
