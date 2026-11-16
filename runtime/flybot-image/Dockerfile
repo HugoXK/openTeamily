@@ -52,6 +52,7 @@ COPY ds-bot-upstream/NOTICE /opt/licenses/ds-bot/NOTICE
 COPY flybot/plugins/social /opt/openteamily/runtime/flybot/plugins/social
 COPY flybot/LICENSE /opt/licenses/flybot/LICENSE
 COPY flybot/NOTICE /opt/licenses/flybot/NOTICE
+COPY third_party/libreoffice-kit /opt/licenses/libreoffice-kit
 COPY flybot-social-host /opt/openteamily/runtime/flybot-social-host
 COPY flybot-web-slots /opt/openteamily/runtime/flybot-web-slots
 COPY flybot-image /opt/openteamily/runtime/flybot-image

@@ -137,10 +137,13 @@ def check_shipped() -> int:
     else:
         print("OK DSH git tag", DSH_TAG_COMMIT, "correspondence still unverified")
     if kit.get("license") != LIBREOFFICE_LICENSE or "blocker" not in (kit.get("redistribution") or ""):
-        print("FAIL: libreoffice-kit MPL blocker not recorded")
+        print("FAIL: libreoffice-kit MPL clearance blocker not recorded")
+        errors += 1
+    elif kit.get("source_offer") != "runtime/third_party/libreoffice-kit":
+        print("FAIL: libreoffice-kit source offer path not recorded")
         errors += 1
     else:
-        print("OK libreoffice-kit recorded as MPL-2.0 blocker")
+        print("OK libreoffice-kit MPL-2.0 clearance still blocked; source offer recorded")
     dockerfile = (ROOT / "runtime/flybot-image/Dockerfile").read_text()
     if "does not close issue" in dockerfile.lower() or "closes issue" in dockerfile.lower():
         print("FAIL: Dockerfile uses GitHub closing-keyword phrasing")

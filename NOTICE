@@ -21,10 +21,12 @@ The FlyBot runtime image recipe (runtime/flybot-image/Dockerfile) additionally
 installs packages that are not all vendored in this repository, including
 @deepseek-ai/dsh@0.2.2-rc.1 and its production direct dependencies. One of
 those dependencies, @deepseek-ai/dsh-skill-office, depends on
-@deepseek-ai/libreoffice-kit (MPL-2.0). Until corresponding-source
-obligations for that kit are met, or the office skill and kit are excluded
-from the default image, this repository does not offer a public
-redistributable runtime image.
+@deepseek-ai/libreoffice-kit (MPL-2.0). Corresponding source and notices
+for kit 0.1.5, and for the Linux wasm engine package that a default image
+may install, are offered in runtime/third_party/libreoffice-kit/ (office
+functionality is retained). Whether that offer satisfies MPL for a
+published image is not decided here; this repository still does not offer
+a public redistributable runtime image.
 
 A packaged inventory of what this revision ships, with versions, declared
 licenses, integrity hashes, and remaining unknowns, is in

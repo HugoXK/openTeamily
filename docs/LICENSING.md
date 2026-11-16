@@ -30,3 +30,10 @@ The inventory records remaining legal blockers for a public image
 (including MPL-2.0 LibreOffice kit obligations and an unenumerated Debian
 base-image source offer). It is not a legal opinion, and it is not a public
 release of a redistributable image. Related tracking remains open: issue 3.
+
+Corresponding source and notices for `@deepseek-ai/libreoffice-kit@0.1.5`
+(and the Linux wasm engine that a default image may install) are offered in
+[`runtime/third_party/libreoffice-kit/`](../runtime/third_party/libreoffice-kit/).
+Office conversion is retained. That offer is not a legal opinion and is not
+clearance to publish a pre-built image. Related tracking remains open: issue 3.
+
