@@ -92,6 +92,73 @@ async function loadAppearance() {
   }
 }
 
+
+function signedInPanel(doc) {
+  return doc.getElementById('settings-panel') || doc.getElementById('main-panel');
+}
+
+function closeAccountMenu(doc) {
+  const menu = doc.getElementById('account-menu');
+  const button = doc.getElementById('account-menu-button');
+  if (menu) menu.setAttribute('hidden', '');
+  if (button) button.setAttribute('aria-expanded', 'false');
+}
+
+function syncAccountSlot(doc) {
+  const slot = doc.querySelector('.account-slot');
+  const panel = signedInPanel(doc);
+  if (!slot) return;
+  const visible = Boolean(panel && !panel.hasAttribute('hidden'));
+  if (visible) slot.removeAttribute('hidden');
+  else {
+    slot.setAttribute('hidden', '');
+    closeAccountMenu(doc);
+  }
+  const who = doc.getElementById('whoami');
+  const name = who ? (who.textContent || '').trim() : '';
+  const identity = doc.getElementById('account-identity');
+  if (identity) identity.textContent = name;
+  const button = doc.getElementById('account-menu-button');
+  if (button) {
+    const letters = name.replace(/[^0-9A-Za-z\u4e00-\u9fff]+/g, '');
+    button.textContent = letters ? letters.slice(0, 2).toUpperCase() : '账户';
+  }
+}
+
+function bindAccountMenu(doc) {
+  const button = doc.getElementById('account-menu-button');
+  const menu = doc.getElementById('account-menu');
+  if (!button || !menu || button.dataset.bound === '1') return;
+  button.dataset.bound = '1';
+  button.addEventListener('click', event => {
+    event.stopPropagation();
+    const open = menu.hasAttribute('hidden');
+    if (open) {
+      menu.removeAttribute('hidden');
+      button.setAttribute('aria-expanded', 'true');
+    } else {
+      closeAccountMenu(doc);
+    }
+  });
+  doc.addEventListener('click', event => {
+    const slot = doc.querySelector('.account-slot');
+    if (!slot || slot.hasAttribute('hidden')) return;
+    if (slot.contains(event.target)) return;
+    closeAccountMenu(doc);
+  });
+  doc.addEventListener('keydown', event => {
+    if (event.key === 'Escape') closeAccountMenu(doc);
+  });
+  const panel = signedInPanel(doc);
+  const who = doc.getElementById('whoami');
+  if (typeof MutationObserver === 'function') {
+    const sync = () => syncAccountSlot(doc);
+    if (panel) new MutationObserver(sync).observe(panel, { attributes: true, attributeFilter: ['hidden'] });
+    if (who) new MutationObserver(sync).observe(who, { childList: true, characterData: true, subtree: true });
+  }
+  syncAccountSlot(doc);
+}
+
 function enhanceChrome() {
   document.body.classList.add('app');
   if (!document.querySelector('.skip-link')) {
@@ -106,6 +173,7 @@ function enhanceChrome() {
   }
   markNavigation();
   decorateStatus(document.getElementById('status'));
+  bindAccountMenu(document);
 }
 
 function valuesFromDom(doc) {

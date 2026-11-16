@@ -10,23 +10,29 @@
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/memory/app.mjs"></script>
 </head>
-<body>
+<body class="app-workspace">
   <a class="skip-link" href="#main">跳到主要内容</a>
-  <header>
-    <p class="brand">OpenTeamily / FlyBot</p>
-    <h1>记忆</h1>
-    <p class="note">本切片提供工作区记忆页、下一步行动和关系图谱。新建会立即落盘，作者或所有者/管理员可以改或删。话题、正文中的 [[标题]] 以及手动连接会出现在总览图谱里。画像、分享和导出尚未实现。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
-    <nav aria-label="管理导航">
-      <a href="/settings">账号设置</a>
-      <a href="/automations">自动化</a>
-      <a href="/agents">智能体</a>
-      <a href="/memory">记忆</a>
-      <a href="/artifacts">作品库</a>
-      <a href="/members">成员</a>
-      <a href="/runtimes">运行时</a>
-      <a href="/team">创建团队</a>
-    </nav>
-  </header>
+  <nav class="app-rail" aria-label="应用导航">
+    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
+    <a href="/chat" title="聊天">聊天</a>
+    <a href="/agents" title="智能体">智能体</a>
+    <a href="/automations" title="自动化">自动化</a>
+    <a href="/memory" title="记忆">记忆</a>
+    <a href="/artifacts" title="作品">作品</a>
+    <button type="button" class="rail-link" disabled title="未实现：发现动态">发现</button>
+    <span class="rail-spacer"></span>
+    <div class="account-slot" hidden>
+      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <div id="account-menu" class="account-menu" role="menu" hidden>
+        <p id="account-identity" class="account-identity"></p>
+        <a href="/team" role="menuitem">创建团队</a>
+        <a href="/settings" role="menuitem">所有设置</a>
+        <form id="logout-form" method="post" action="/v1/auth/logout">
+          <button type="submit">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </nav>
   <p id="status" role="status"></p>
   <main id="main">
   <section id="login-panel" hidden>
@@ -39,6 +45,10 @@
     <div id="oidc-providers"></div>
   </section>
   <section id="main-panel" hidden>
+    <header class="page-top">
+      <h1>记忆</h1>
+      <p class="note">本切片提供工作区记忆页、下一步行动和关系图谱。新建会立即落盘，作者或所有者/管理员可以改或删。话题、正文中的 [[标题]] 以及手动连接会出现在总览图谱里。画像、分享和导出尚未实现。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
+    </header>
     <p id="whoami"></p>
     <label>工作区
       <select id="workspace"></select>
@@ -126,9 +136,6 @@
         <button type="button" id="delete-action">删除</button>
         <button type="button" id="close-action-editor">返回列表</button>
       </div>
-    </form>
-    <form id="logout-form" method="post" action="/v1/auth/logout">
-      <button type="submit">退出登录</button>
     </form>
   </section>
   </main>

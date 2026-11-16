@@ -21,10 +21,17 @@
     <a href="/artifacts" title="作品">作品</a>
     <button type="button" class="rail-link" disabled title="未实现：发现动态">发现</button>
     <span class="rail-spacer"></span>
-    <a href="/members" title="成员">成员</a>
-    <a href="/runtimes" title="运行时">运行时</a>
-    <a href="/team" title="创建团队">团队</a>
-    <a href="/settings" title="设置">设置</a>
+    <div class="account-slot" hidden>
+      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <div id="account-menu" class="account-menu" role="menu" hidden>
+        <p id="account-identity" class="account-identity"></p>
+        <a href="/team" role="menuitem">创建团队</a>
+        <a href="/settings" role="menuitem">所有设置</a>
+        <form id="logout-form" method="post" action="/v1/auth/logout">
+          <button type="submit">退出登录</button>
+        </form>
+      </div>
+    </div>
   </nav>
   <section id="session-pane" class="session-pane">
     <div class="session-toolbar">
@@ -97,9 +104,6 @@
     <section id="chat-panel">
       <p id="chat-note" class="note" hidden></p>
     </section>
-    <form id="logout-form" method="post" action="/v1/auth/logout">
-      <button type="submit">退出登录</button>
-    </form>
   </section>
   </main>
 </body>

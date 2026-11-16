@@ -158,6 +158,21 @@ async function main() {
       'API key field is empty and no one-time secret banner is visible',
     );
     screenshots.push(path.basename(await shot(page, outDir, '02-settings-signed-in.png')));
+    try {
+      await page.locator('#account-menu-button').click();
+      await page.locator('#account-menu').waitFor({ state: 'visible', timeout: 8000 });
+      const menuText = await visibleText(page.locator('#account-menu'));
+      const settingsHref = await page.locator('#account-menu a[href="/settings"]').getAttribute('href');
+      record(
+        'account_menu',
+        menuText.includes('所有设置') && menuText.includes('退出登录') && menuText.includes('创建团队') && settingsHref === '/settings' && !/积分|套餐|升级/.test(menuText),
+        menuText || 'account menu empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '23-account-menu.png')));
+      await page.keyboard.press('Escape');
+    } catch (error) {
+      record('account_menu', false, String(error));
+    }
 
     await page.goto(`${origin}/agents`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });

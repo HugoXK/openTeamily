@@ -81,6 +81,14 @@ class ShellPageTests(unittest.TestCase):
             self.assertNotIn('teamily.com', html.lower(), path)
             for ident in CAPTURE_IDS[path]:
                 self.assertIn(f'id="{ident}"', html, f'{path} missing {ident}')
+            self.assertIn('aria-label="应用导航"', html, path)
+            self.assertIn('id="account-menu"', html, path)
+            self.assertIn('id="account-menu-button"', html, path)
+            self.assertIn('id="logout-form"', html, path)
+            self.assertIn('所有设置', html, path)
+            self.assertIn('href="/settings"', html, path)
+            self.assertNotIn('积分中心', html, path)
+            self.assertNotIn('套餐与账单', html, path)
             self.assertIn("default-src 'none'", page['headers']['Content-Security-Policy'])
             if path == '/runtimes':
                 self.assertIn('data-tab="connect"', html)

@@ -10,22 +10,29 @@
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/team/app.mjs"></script>
 </head>
-<body>
+<body class="app-workspace">
   <a class="skip-link" href="#main">跳到主要内容</a>
-  <header>
-    <p class="brand">OpenTeamily / FlyBot</p>
-    <h1>创建团队</h1>
-    <p class="note">分三步创建：名称最多 60 个字，团队 ID 为 3 到 30 个小写字母、数字或连字符，然后选择新建独立工作区或把当前工作区转成团队。团队内的角色和邀请还没有和 Teamily 对照过，不能写成已经功能对等。</p>
-    <nav aria-label="管理导航">
-      <a href="/settings">账号设置</a>
-      <a href="/automations">自动化</a>
-      <a href="/agents">智能体</a>
-      <a href="/memory">记忆</a>
-      <a href="/artifacts">作品库</a>
-      <a href="/members">成员</a>
-      <a href="/runtimes">运行时</a>
-    </nav>
-  </header>
+  <nav class="app-rail" aria-label="应用导航">
+    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
+    <a href="/chat" title="聊天">聊天</a>
+    <a href="/agents" title="智能体">智能体</a>
+    <a href="/automations" title="自动化">自动化</a>
+    <a href="/memory" title="记忆">记忆</a>
+    <a href="/artifacts" title="作品">作品</a>
+    <button type="button" class="rail-link" disabled title="未实现：发现动态">发现</button>
+    <span class="rail-spacer"></span>
+    <div class="account-slot" hidden>
+      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <div id="account-menu" class="account-menu" role="menu" hidden>
+        <p id="account-identity" class="account-identity"></p>
+        <a href="/team" role="menuitem">创建团队</a>
+        <a href="/settings" role="menuitem">所有设置</a>
+        <form id="logout-form" method="post" action="/v1/auth/logout">
+          <button type="submit">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </nav>
   <p id="status" role="status"></p>
   <main id="main">
   <section id="login-panel" hidden>
@@ -38,6 +45,10 @@
     <div id="oidc-providers"></div>
   </section>
   <section id="main-panel" hidden>
+    <header class="page-top">
+      <h1>创建团队</h1>
+      <p class="note">分三步创建：名称最多 60 个字，团队 ID 为 3 到 30 个小写字母、数字或连字符，然后选择新建独立工作区或把当前工作区转成团队。团队内的角色和邀请还没有和 Teamily 对照过，不能写成已经功能对等。</p>
+    </header>
     <p id="whoami"></p>
     <p id="steps"><span data-step="1" aria-current="step">1 名称</span><span data-step="2">2 团队 ID</span><span data-step="3">3 工作区</span></p>
     <form id="wizard-form" method="post" action="/v1/teams">
@@ -65,9 +76,6 @@
         <button type="button" id="next">下一步</button>
         <button type="submit" id="submit" hidden>创建团队</button>
       </div>
-    </form>
-    <form id="logout-form" method="post" action="/v1/auth/logout">
-      <button type="submit">退出登录</button>
     </form>
   </section>
   </main>
