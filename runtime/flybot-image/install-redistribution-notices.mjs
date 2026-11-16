@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Copy KaTeX, sharp-libvips, and Anthropic SDK notices into a filesystem
+// Copy KaTeX, Codicon, sharp-libvips, and Anthropic SDK notices into a filesystem
 // root (the image or a fixture). Notices are placed under /opt/licenses
-// and beside actual KaTeX font payloads / the sharp-libvips package so
+// and beside actual KaTeX and Codicon font payloads / the sharp-libvips package so
 // they travel with the files they describe. Does not alter functionality
 // and does not publish an image.
 import { copyFileSync, mkdirSync, readdirSync, existsSync, statSync, realpathSync } from 'node:fs'
@@ -59,6 +59,8 @@ function copy(src, dest) {
 
 const katexLicense = join(NOTICES, 'font-notices/katex/LICENSE')
 const katexNotice = join(NOTICES, 'font-notices/katex/NOTICE.md')
+const codiconLicense = join(NOTICES, 'font-notices/codicon/LICENSE.txt')
+const codiconNotice = join(NOTICES, 'font-notices/codicon/NOTICE.md')
 const sharpFiles = [
   'PACKAGING-LICENSE',
   'THIRD-PARTY-NOTICES.md',
@@ -76,6 +78,12 @@ if (existsSync(katexLicense)) {
 if (existsSync(katexNotice)) {
   copy(katexNotice, join(ROOT, 'opt/licenses/font-notices/katex/NOTICE.md'))
 }
+if (existsSync(codiconLicense)) {
+  copy(codiconLicense, join(ROOT, 'opt/licenses/font-notices/codicon/LICENSE.txt'))
+}
+if (existsSync(codiconNotice)) {
+  copy(codiconNotice, join(ROOT, 'opt/licenses/font-notices/codicon/NOTICE.md'))
+}
 if (existsSync(anthropicLicense)) {
   copy(anthropicLicense, join(ROOT, 'opt/licenses/anthropic-sdk/LICENSE'))
 }
@@ -84,6 +92,7 @@ for (const [src, name] of sharpFiles) {
 }
 
 const katexDirs = new Set()
+const codiconDirs = new Set()
 const sharpDirs = new Set()
 for (const start of ['usr/local', 'opt', 'data']) {
   const dir = join(ROOT, start)
@@ -91,6 +100,7 @@ for (const start of ['usr/local', 'opt', 'data']) {
   walk(dir, (path, entry) => {
     if (!entry.isFile) return
     if (/^KaTeX_.*\.(woff2|woff|ttf)$/i.test(entry.name)) katexDirs.add(dirname(path))
+    if (/^codicon.*\.(ttf|woff2|woff)$/i.test(entry.name)) codiconDirs.add(dirname(path))
     if (entry.name === 'package.json' && path.includes('sharp-libvips-linux-x64')) {
       sharpDirs.add(dirname(path))
     }
@@ -101,10 +111,15 @@ for (const dir of katexDirs) {
   if (existsSync(katexLicense)) copy(katexLicense, join(dir, 'KaTeX-LICENSE.txt'))
   if (existsSync(katexNotice)) copy(katexNotice, join(dir, 'KaTeX-NOTICE.md'))
 }
+for (const dir of codiconDirs) {
+  if (existsSync(codiconLicense)) copy(codiconLicense, join(dir, 'Codicon-LICENSE.txt'))
+  if (existsSync(codiconNotice)) copy(codiconNotice, join(dir, 'Codicon-NOTICE.md'))
+}
 for (const dir of sharpDirs) {
   for (const [src, name] of sharpFiles) {
     if (existsSync(src) && name !== 'README.md') copy(src, join(dir, name))
   }
 }
 console.log('katex_font_dirs', katexDirs.size)
+console.log('codicon_font_dirs', codiconDirs.size)
 console.log('sharp_libvips_dirs', sharpDirs.size)

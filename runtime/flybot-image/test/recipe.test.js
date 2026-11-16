@@ -104,3 +104,11 @@ test('template links the web-slot host and loads the social client without bundl
   const socialWeb = JSON.parse(readFileSync(join(root, '..', 'flybot-web-slots', 'social-web', 'package.json'), 'utf8'))
   assert.equal(socialWeb.exports['./client'], '../../../flybot/plugins/social/client.js')
 })
+
+test('notice installer runs again after the web profile is installed', () => {
+  const docker = read('Dockerfile')
+  const profile = docker.indexOf('dsh plugin --profile web')
+  const second = docker.lastIndexOf('install-redistribution-notices.mjs')
+  assert.ok(profile !== -1 && second !== -1)
+  assert.ok(second > profile)
+})

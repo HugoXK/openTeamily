@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
@@ -78,8 +78,30 @@ test('fixture inventory records OS, npm closures, fonts, and bundled notices', (
       { path: '/opt/licenses/sharp-libvips/LGPL-3.0.txt' },
       { path: '/opt/licenses/anthropic-sdk/LICENSE' },
     ]
-    imageLike.fonts.files = [...(imageLike.fonts.files || []), { path: '/opt/demo/KaTeX_Main-Regular.woff2' }]
-    imageLike.fonts.notices = [...(imageLike.fonts.notices || []), { path: '/opt/demo/KaTeX-LICENSE.txt' }]
+    imageLike.fonts.files = [
+      ...(imageLike.fonts.files || []),
+      { path: '/opt/demo/KaTeX_Main-Regular.woff2' },
+      { path: '/opt/dsh-template/profiles/web/node_modules/ds-bot/node_modules/playwright-core/lib/vite/traceViewer/codicon.DCmgc-ay.ttf' },
+    ]
+    imageLike.fonts.notices = [
+      ...(imageLike.fonts.notices || []),
+      { path: '/opt/demo/KaTeX-LICENSE.txt' },
+      { path: '/opt/licenses/font-notices/codicon/LICENSE.txt' },
+    ]
+    imageLike.bundled_notices.files.push({ path: '/opt/licenses/font-notices/codicon/LICENSE.txt' })
+    const dshTree = imageLike.npm.trees.global_dsh
+    dshTree.packages = [
+      ...(dshTree.packages || []),
+      {
+        name: '@img/sharp-libvips-linux-x64',
+        version: '1.3.4',
+        path: '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@img/sharp-libvips-linux-x64',
+        license_files: [
+          { path: '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@img/sharp-libvips-linux-x64/THIRD-PARTY-NOTICES.md' },
+          { path: '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@img/sharp-libvips-linux-x64/LGPL-3.0.txt' },
+        ],
+      },
+    ]
     const weak = join(out, 'weak-profile.json')
     writeFileSync(weak, JSON.stringify(imageLike))
     const expectImage = runValidate(weak, ['--expect-image'])
@@ -115,5 +137,46 @@ test('validate rejects a public-image clearance claim', () => {
     assert.match(checked.stderr, /public redistributable image/)
   } finally {
     rmSync(out, { recursive: true, force: true })
+  }
+})
+
+test('collector records in-package sharp notices and Codicon licenses after the installer runs', () => {
+  const dest = mkdtempSync(join(tmpdir(), 'ot-inv-shipped-'))
+  const installer = join(root, 'install-redistribution-notices.mjs')
+  const notices = join(root, '..', 'third_party')
+  try {
+    const fontDir = join(dest, 'usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/fonts')
+    mkdirSync(fontDir, { recursive: true })
+    writeFileSync(join(fontDir, 'KaTeX_Main-Regular.woff2'), 'WOFF')
+    const sharpDir = join(dest, 'usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@img/sharp-libvips-linux-x64')
+    mkdirSync(sharpDir, { recursive: true })
+    writeFileSync(join(sharpDir, 'package.json'), '{"name":"@img/sharp-libvips-linux-x64","version":"1.3.4","license":"LGPL-3.0-or-later"}\n')
+    const dshDir = join(dest, 'usr/local/lib/node_modules/@deepseek-ai/dsh')
+    mkdirSync(dshDir, { recursive: true })
+    writeFileSync(join(dshDir, 'package.json'), '{"name":"@deepseek-ai/dsh","version":"0.2.2-rc.1","license":"MIT"}\n')
+    const codiconDir = join(dest, 'opt/dsh-template/profiles/web/node_modules/ds-bot/node_modules/playwright-core/lib/vite/traceViewer')
+    mkdirSync(codiconDir, { recursive: true })
+    writeFileSync(join(codiconDir, 'codicon.DCmgc-ay.ttf'), 'TTF')
+    const result = spawnSync(process.execPath, [installer, '--root', dest, '--notices', notices], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    const { out, inventory } = runCollect(dest)
+    try {
+      const sharp = inventory.npm.trees.global_dsh.packages.find((p) => p.name === '@img/sharp-libvips-linux-x64')
+      assert.ok(sharp, 'sharp package missing from inventory')
+      const licensePaths = (sharp.license_files || []).map((f) => f.path)
+      assert.ok(licensePaths.some((p) => p.endsWith('/@img/sharp-libvips-linux-x64/THIRD-PARTY-NOTICES.md')), licensePaths.join(','))
+      assert.ok(licensePaths.some((p) => p.endsWith('/@img/sharp-libvips-linux-x64/LGPL-3.0.txt')), licensePaths.join(','))
+      assert.ok((inventory.fonts.files || []).some((f) => /codicon/i.test(f.path)))
+      const noticePaths = (inventory.fonts.notices || []).map((f) => f.path)
+        .concat((inventory.bundled_notices.files || []).map((f) => f.path))
+      assert.ok(noticePaths.some((p) => /Codicon-LICENSE\.txt$/i.test(p) || /font-notices\/codicon\/LICENSE/i.test(p)), noticePaths.join(','))
+      const inventoryFile = join(out, 'inventory.json')
+      const checked = runValidate(inventoryFile)
+      assert.equal(checked.status, 0, checked.stderr || checked.stdout)
+    } finally {
+      rmSync(out, { recursive: true, force: true })
+    }
+  } finally {
+    rmSync(dest, { recursive: true, force: true })
   }
 })

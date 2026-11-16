@@ -61,6 +61,9 @@ COPY flybot-web-slots /opt/openteamily/runtime/flybot-web-slots
 COPY flybot-image /opt/openteamily/runtime/flybot-image
 # Place KaTeX and sharp-libvips notices beside the payloads they describe,
 # in addition to /opt/licenses. Related tracking remains open: issue 3.
+# The web profile (Playwright Codicon fonts) is installed later; the
+# installer is run again after that step so those licenses travel with
+# the font payloads too.
 RUN node /opt/openteamily/runtime/flybot-image/install-redistribution-notices.mjs --root / --notices /opt/licenses
 
 # Materialize dsh native bindings under /usr/local (executable) so a noexec
@@ -87,6 +90,7 @@ RUN mkdir -p /opt/dsh-template \
     && node /opt/openteamily/runtime/flybot-image/prepare-template.mjs \
     && pnpm --dir /opt/dsh-template/profiles/web install --prefer-offline --no-frozen-lockfile \
     && node /opt/openteamily/runtime/flybot-image/prepare-template.mjs \
+    && node /opt/openteamily/runtime/flybot-image/install-redistribution-notices.mjs --root / --notices /opt/licenses \
     && mkdir -p /data /data/workspace /data/home \
     && chown -R 1000:1000 /opt/dsh-template /opt/openteamily /opt/licenses /data /home/node
 
