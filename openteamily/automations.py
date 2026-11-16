@@ -90,8 +90,64 @@ TEMPLATES = {
         'id': 'timezone_handoff', 'title': '跨时区接力', 'category': 'work',
         'prompt': '把当前进度、未决问题和交接材料整理成下一时区的人能直接接着做的说明。',
     },
+    'birthday_reminder': {
+        'id': 'birthday_reminder', 'title': '生日和纪念日提醒', 'category': 'life',
+        'prompt': '在日期到来前提醒我，并给出可以参考的礼物建议。',
+    },
+    'habit_reminder': {
+        'id': 'habit_reminder', 'title': '健康和习惯提醒', 'category': 'life',
+        'prompt': '在约定的时间提醒我做固定的健康或习惯事项。',
+    },
+    'family_checkin': {
+        'id': 'family_checkin', 'title': '关心家人', 'category': 'life',
+        'prompt': '定期问候家人，发现可能的异常时提醒我。',
+    },
+    'gathering': {
+        'id': 'gathering', 'title': '组织聚会', 'category': 'life',
+        'prompt': '对照大家的空闲时间，给出聚会时间和地点的建议。',
+    },
+    'trip_plan': {
+        'id': 'trip_plan', 'title': '规划旅行', 'category': 'life',
+        'prompt': '整理行程、住宿和预算，方便和同行的人一起改。',
+    },
+    'visual_post': {
+        'id': 'visual_post', 'title': '制作图片或短视频', 'category': 'life',
+        'prompt': '按主题生成适合发布的图片或短视频。',
+    },
+    'interest_brief': {
+        'id': 'interest_brief', 'title': '每日兴趣简报', 'category': 'life',
+        'prompt': '每天汇总我关注的话题，写成简报。',
+    },
+    'money_decision': {
+        'id': 'money_decision', 'title': '个人理财决策', 'category': 'life',
+        'prompt': '一起理清一笔消费或一项财务决定。',
+    },
+    'skill_practice': {
+        'id': 'skill_practice', 'title': '学习一项技能', 'category': 'life',
+        'prompt': '为选定的技能安排包含练习和打卡的每周计划。',
+    },
+    'photo_album': {
+        'id': 'photo_album', 'title': '回忆和相册', 'category': 'life',
+        'prompt': '把照片整理成可以分享的回忆相册。',
+    },
+    'listen_to_friend': {
+        'id': 'listen_to_friend', 'title': '陪伴朋友', 'category': 'life',
+        'prompt': '在朋友情绪低落时，改成以倾听为主的回应。',
+    },
+    'price_watch': {
+        'id': 'price_watch', 'title': '购物比价提醒', 'category': 'life',
+        'prompt': '跟踪指定商品的价格，降价时提醒我。',
+    },
 }
 SCOPES = ('once', 'ongoing')
+INTENTS = {
+    'research': '研究',
+    'monitor': '监测',
+    'create': '创作',
+    'analyze': '分析',
+    'plan': '规划',
+    'collaborate': '协同',
+}
 
 TIME = re.compile(r'(?:[01]\d|2[0-3]):[0-5]\d')
 DATE = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}')
@@ -121,7 +177,7 @@ def _unicode(value):
 
 
 def valid_intent(value):
-    return isinstance(value, str) and 1 <= len(value.strip()) <= 80 and '\x00' not in value and _unicode(value)
+    return value == '' or value in INTENTS
 
 
 def valid_scope(value):
@@ -203,7 +259,7 @@ def compile_prompt(template_id, intent, scope, schedule, participants, agents):
     if template['prompt']:
         lines.append(template['prompt'])
     if intent:
-        lines.append('意图：' + intent.strip())
+        lines.append('意图：' + INTENTS.get(intent, intent))
     lines.append('范围：只运行一次' if scope == 'once' else '范围：长期运行')
     kind = schedule.get('kind')
     zone = schedule.get('time_zone', '')

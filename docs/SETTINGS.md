@@ -20,17 +20,17 @@ Unknown keys, wrong types, unsupported values or an empty `changes` object are r
 | `appearance` | `system`, `light`, `dark`, `auto` | `system` |
 | `appearance_schedule` | `sunset_sunrise`, `custom` | `sunset_sunrise` |
 | `appearance_start` / `appearance_end` | `HH:MM` 24-hour | `18:00` / `07:00` |
-| `language` | 18 candidate locale codes (see below) | `zh-CN` |
-| `chat_language` | `auto` or the same 18 codes | `auto` |
+| `language` | 18 recaptured system languages, mapped to BCP-47 (see below) | `zh-CN` |
+| `chat_language` | `auto` or the 17 recaptured chat languages | `auto` |
 | `auto_translate` | boolean | `false` |
 | `send_shortcut` | `enter`, `mod_enter` | `enter` |
 | `message_folding` | `compact`, `standard`, `none` | `standard` |
 | `document_cards` | boolean | `false` |
 | `link_previews` | boolean | `true` |
 | `task_completion_reminders` | boolean | `true` |
-| `likes_visibility` / `favorites_visibility` | `everyone`, `private` | `everyone` |
+| `likes_visible` / `favorites_visible` | boolean | `true` |
 
-Option semantics follow the 2026-11-16 round-1 Teamily contrast (appearance auto + schedule, three-level message folding, document cards default off, chat language, auto-translate, link previews, task-completion reminders, likes/favorites visibility, skill secrets). The 18 language codes (`zh-CN`, `zh-TW`, `en`, `ja`, `ko`, `fr`, `de`, `es`, `pt-BR`, `ru`, `it`, `vi`, `th`, `id`, `ar`, `hi`, `tr`, `ms`) were **not recorded individually** in that report; this is a candidate list, not a recapture of Teamily's exact set. Privacy values were only compared at the "likes/favorites list visibility" level (`everyone`/`private` is an OpenTeamily encoding). This slice is still not settings parity. The retired `fold_long_messages` boolean is accepted on write (`true`→`standard`, `false`→`none`) and is migrated on read; GET no longer returns it.
+Option semantics follow the 2026-11-16 round-1 and round-2 Teamily contrasts. System languages (18) and chat languages (17) use our BCP-47 mappings because Teamily does not expose codes: system `en,fa,fr,de,es,it,pt-BR,ru,id,ms,hi,bn,th,ja,ko,zh-HK,zh-TW,zh-CN`; chat adds `auto` plus `en,fa,fr,de,es,pt,it,ru,id,vi,bn,th,ar,ja,ko,zh-Hant,zh-CN`. Privacy is two default-on checkboxes (allow others to see likes / favorites). The retired `likes_visibility`/`favorites_visibility` values `everyone`/`private` are accepted on write and migrated on read. Custom appearance period fields were **not captured**; `appearance_start`/`appearance_end` as `HH:MM` remain unverified. This is still not settings parity.
 
 ## Storage
 

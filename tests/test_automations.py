@@ -41,9 +41,12 @@ class AutomationTests(unittest.TestCase):
         items = response['body']['items']
         self.assertEqual(items[0]['id'], 'custom')
         work = [item for item in items if item['category'] == 'work']
+        life = [item for item in items if item['category'] == 'life']
         self.assertEqual(len(work), 12)
-        self.assertTrue(all(item['prompt'] and item['title'] for item in work))
+        self.assertEqual(len(life), 12)
+        self.assertTrue(all(item['prompt'] and item['title'] for item in work + life))
         self.assertIn('daily_brief', [item['id'] for item in work])
+        self.assertIn('birthday_reminder', [item['id'] for item in life])
         self.assertEqual(Client(self.app).call('GET', '/v1/automation-templates')['status'], 401)
 
     def test_create_list_get_persist_and_do_not_enable(self):
@@ -139,7 +142,7 @@ class AutomationTests(unittest.TestCase):
         created = self.create(self.alice, title='Weekday brief', key='automation-create-0010',
                               template_id='daily_brief', prompt='',
                               schedule={'kind': 'weekdays', 'time': '09:00', 'time_zone': 'UTC'},
-                              intent='给团队的晨报', scope='ongoing', agents=['brief-bot'])
+                              intent='monitor', scope='ongoing', agents=['brief-bot'])
         self.assertEqual(created['status'], 201, created)
         item = created['body']['automation']
         self.assertEqual(item['template_id'], 'daily_brief')
