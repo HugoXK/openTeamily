@@ -817,3 +817,51 @@ body.app-workspace > main > #settings-panel {
   padding: 1.25rem 1.5rem 3rem;
   box-sizing: border-box;
 }
+
+
+body.app-workspace .account-sub {
+  display: grid;
+}
+
+body.app-workspace .account-sub > button {
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0.55rem 0.9rem;
+  border: 0;
+  background: transparent;
+  color: var(--ot-ink);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+body.app-workspace .account-sub > button:hover {
+  background: var(--ot-bg-accent);
+}
+
+body.app-workspace .account-sub > button[aria-expanded="true"] {
+  font-weight: 650;
+}
+
+body.app-workspace #help-menu {
+  display: grid;
+  padding: 0 0 0.25rem 0.6rem;
+}
+
+body.app-workspace #help-menu[hidden] {
+  display: none !important;
+}
+
+body.app-workspace #help-menu a,
+body.app-workspace #help-menu button {
+  font-size: 0.92rem;
+}
+
+body.app-workspace #help-menu button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  font-weight: 400;
+  color: var(--ot-muted);
+}

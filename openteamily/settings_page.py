@@ -43,8 +43,12 @@ class SettingsPage:
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.css': ('chat', 'app.css', 'text/css; charset=utf-8'),
         '/discover': ('agents', 'index.html', 'text/html; charset=utf-8'),
+        '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
+        '/profile/app.mjs': ('profile', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/download': ('download', 'index.html', 'text/html; charset=utf-8'),
+        '/download/app.mjs': ('download', 'app.mjs', 'text/javascript; charset=utf-8'),
     }
-    PREFIXES = ('/settings', '/automations', '/team', '/members', '/runtimes', '/artifacts', '/agents', '/memory', '/install', '/shell', '/chat', '/discover')
+    PREFIXES = ('/settings', '/automations', '/team', '/members', '/runtimes', '/artifacts', '/agents', '/memory', '/install', '/shell', '/chat', '/discover', '/profile', '/download')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")
