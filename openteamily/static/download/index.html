@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>下载 · OpenTeamily</title>
+  <link rel="stylesheet" href="/shell/app.css">
+  <script type="module" src="/shell/app.mjs"></script>
+  <script type="module" src="/download/app.mjs"></script>
+</head>
+<body class="app-workspace">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <nav class="app-rail" aria-label="应用导航">
+    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
+    <a href="/chat" title="聊天">聊天</a>
+    <a href="/agents" title="智能体">智能体</a>
+    <a href="/automations" title="自动化">自动化</a>
+    <a href="/memory" title="记忆">记忆</a>
+    <a href="/artifacts" title="作品">作品</a>
+    <button type="button" class="rail-link" disabled title="未实现：发现动态">发现</button>
+    <span class="rail-spacer"></span>
+    <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
+    <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
+    <a href="/download" title="下载">下载</a>
+    <div class="account-slot" hidden>
+      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <div id="account-menu" class="account-menu" role="menu" hidden>
+        <p id="account-identity" class="account-identity"></p>
+        <a href="/profile" role="menuitem">查看我的资料</a>
+        <a href="/team" role="menuitem">创建团队</a>
+        <div class="account-sub">
+          <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
+          <div id="help-menu" hidden>
+            <button type="button" disabled title="未实现：OpenTeamily 还没有帮助中心">帮助中心</button>
+            <a href="/download" role="menuitem">下载</a>
+            <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
+            <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
+          </div>
+        </div>
+        <a href="/settings" role="menuitem">所有设置</a>
+        <form id="logout-form" method="post" action="/v1/auth/logout">
+          <button type="submit">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </nav>
+  <p id="status" role="status"></p>
+  <main id="main">
+  <section id="login-panel" hidden>
+    <h2>登录</h2>
+    <form id="login-form" method="post" action="/v1/auth/login">
+      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
+      <button type="submit">登录</button>
+    </form>
+  </section>
+  <section id="main-panel" hidden>
+    <header class="page-top">
+      <h1>下载</h1>
+      <p class="note">对照里记录的 Teamily 下载页列出了网页版和移动、桌面客户端，但没有留下版式截图。本页只提供 OpenTeamily 已经存在的安装方式，不假装有官方 iOS、Android、macOS 或 Windows 客户端。</p>
+    </header>
+    <p id="whoami"></p>
+    <section id="download-web">
+      <h2>网页版</h2>
+      <p>当前就是浏览器里的 OpenTeamily / FlyBot 管理面，没有单独的安装包。</p>
+    </section>
+    <section id="download-runtime">
+      <h2>FlyBot 运行时</h2>
+      <p class="note">在自己的机器上连接管理端。请显式下载 zipapp 再启动，不要把安装脚本管道给 shell。这里没有 Teamily 的地址。</p>
+      <p><a href="/install/flybot.pyz">下载 flybot.pyz</a></p>
+      <p>下载后显式启动，例如：</p>
+      <pre id="daemon-command">python3 flybot.pyz daemon start --origin __ORIGIN__ --key-file ./runtime-key</pre>
+      <p class="note">也可以使用源码树里的 <code>python3 -m openteamily.flybot</code>。运行时密钥在「运行时」页生成。</p>
+      <p><a href="/runtimes">打开运行时页</a></p>
+    </section>
+    <section id="download-unavailable">
+      <h2>尚未提供</h2>
+      <p>
+        <button type="button" disabled title="未实现：没有 OpenTeamily iOS 客户端">iOS</button>
+        <button type="button" disabled title="未实现：没有 OpenTeamily Android 客户端">Android</button>
+        <button type="button" disabled title="未实现：没有 OpenTeamily macOS 客户端">macOS</button>
+        <button type="button" disabled title="未实现：没有 OpenTeamily Windows 客户端">Windows</button>
+      </p>
+    </section>
+  </section>
+  </main>
+</body>
+</html>

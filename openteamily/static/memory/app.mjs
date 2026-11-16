@@ -345,7 +345,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
-    document.getElementById('whoami').textContent = '已登录：' + currentUser.username;
+    const whoami = document.getElementById('whoami');
+    whoami.dataset.username = currentUser.username;
+    whoami.textContent = '已登录：' + currentUser.username;
     const prefs = await request('GET', '/v1/settings');
     if (prefs.status === 200) applyTheme(prefs.body.settings);
     const listed = await request('GET', '/v1/workspaces');

@@ -161,12 +161,16 @@ async function main() {
     try {
       await page.locator('#account-menu-button').click();
       await page.locator('#account-menu').waitFor({ state: 'visible', timeout: 8000 });
+      await page.locator('#help-menu-button').click();
+      await page.locator('#help-menu').waitFor({ state: 'visible', timeout: 8000 });
       const menuText = await visibleText(page.locator('#account-menu'));
       const settingsHref = await page.locator('#account-menu a[href="/settings"]').getAttribute('href');
+      const initials = String(ready.username || '').slice(0, 2).toUpperCase();
+      const settingsButton = (await visibleText(page.locator('#account-menu-button'))).trim();
       record(
         'account_menu',
-        menuText.includes('所有设置') && menuText.includes('退出登录') && menuText.includes('创建团队') && settingsHref === '/settings' && !/积分|套餐|升级/.test(menuText),
-        menuText || 'account menu empty',
+        menuText.includes('所有设置') && menuText.includes('退出登录') && menuText.includes('创建团队') && menuText.includes('查看我的资料') && menuText.includes('帮助中心') && menuText.includes('下载') && settingsHref === '/settings' && settingsButton === initials && !/积分|套餐|升级/.test(menuText) && !/contact@teamily\.ai/.test(menuText),
+        `button=${settingsButton}; ${menuText || 'account menu empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '23-account-menu.png')));
       await page.keyboard.press('Escape');
@@ -397,6 +401,22 @@ async function main() {
       actionList || 'action list empty',
     );
     screenshots.push(path.basename(await shot(page, outDir, '18-memory-list.png')));
+    try {
+      const initials = String(ready.username || '').slice(0, 2).toUpperCase();
+      await page.locator('#account-menu-button').click();
+      await page.locator('#account-menu').waitFor({ state: 'visible', timeout: 8000 });
+      const memoryButton = (await visibleText(page.locator('#account-menu-button'))).trim();
+      const identity = (await visibleText(page.locator('#account-identity'))).trim();
+      record(
+        'memory_account_button',
+        memoryButton === initials && identity === ready.username && !identity.includes('已登录'),
+        `button=${memoryButton}; identity=${identity}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '24-memory-account.png')));
+      await page.keyboard.press('Escape');
+    } catch (error) {
+      record('memory_account_button', false, String(error));
+    }
 
     try {
       await page.locator('#memory-list button', { hasText: ready.memory_title }).first().click();
@@ -500,6 +520,32 @@ async function main() {
       screenshots.push(path.basename(await shot(page, outDir, '21-memory-after-delete.png')));
     } catch (error) {
       record('action_delete', false, String(error));
+    }
+
+    try {
+      await page.goto(`${origin}/profile`, { waitUntil: 'load' });
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+      await waitForLocatorText(page, '#profile-username', ready.username);
+      const profileName = (await visibleText(page.locator('#profile-username'))).trim();
+      record('profile_username', profileName === ready.username, profileName || 'profile empty');
+      screenshots.push(path.basename(await shot(page, outDir, '25-profile.png')));
+    } catch (error) {
+      record('profile_username', false, String(error));
+    }
+
+    try {
+      await page.goto(`${origin}/download`, { waitUntil: 'load' });
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#download-runtime').waitFor({ state: 'visible', timeout: 8000 });
+      const downloadText = await visibleText(page.locator('#main-panel'));
+      record(
+        'download_page',
+        downloadText.includes('flybot.pyz') && downloadText.includes('未实现') && downloadText.includes('iOS'),
+        downloadText || 'download empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '26-download.png')));
+    } catch (error) {
+      record('download_page', false, String(error));
     }
 
     await context.close();

@@ -96,7 +96,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
-    document.getElementById('whoami').textContent = '已登录为 ' + currentUser.username;
+    const whoami = document.getElementById('whoami');
+    whoami.dataset.username = currentUser.username;
+    whoami.textContent = '已登录为 ' + currentUser.username;
     const listed = await request('GET', '/v1/workspaces?limit=100');
     workspaces = listed.status === 200 ? (listed.body.items || []) : [];
     const previous = workspaceSelect.value;

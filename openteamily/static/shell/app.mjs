@@ -15,7 +15,7 @@ function markNavigation() {
   for (const link of document.querySelectorAll('nav a[href]')) {
     const href = link.getAttribute('href') || '';
     if (!href.startsWith('/')) continue;
-    const target = href.split('?')[0].replace(/\/+$/, '') || '/';
+    const target = href.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
     if (target === here) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
@@ -72,7 +72,7 @@ function decorateStatus(node) {
   }
 }
 
-async function loadAppearance() {
+async function loadSettings() {
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), 3000) : null;
   try {
@@ -84,12 +84,30 @@ async function loadAppearance() {
     });
     if (!response.ok) return null;
     const body = await response.json();
-    return (body && body.settings && body.settings.values) || null;
+    const settings = body && body.settings;
+    if (!settings) return null;
+    return { values: settings.values || {}, revision: settings.revision || 0 };
   } catch (error) {
     return null;
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+async function loadAppearance() {
+  const loaded = await loadSettings();
+  return loaded ? loaded.values : null;
+}
+
+export function accountNameFromLabel(text, dataset) {
+  if (dataset && dataset.username) return String(dataset.username).trim();
+  const raw = String(text || '').trim();
+  return raw.replace(/^(已登录为|已登录)\s*[:：]?\s*/, '');
+}
+
+export function accountInitials(name) {
+  const letters = String(name || '').replace(/[^0-9A-Za-z\u4e00-\u9fff]+/g, '');
+  return letters ? letters.slice(0, 2).toUpperCase() : '账户';
 }
 
 
@@ -100,8 +118,12 @@ function signedInPanel(doc) {
 function closeAccountMenu(doc) {
   const menu = doc.getElementById('account-menu');
   const button = doc.getElementById('account-menu-button');
+  const help = doc.getElementById('help-menu');
+  const helpButton = doc.getElementById('help-menu-button');
   if (menu) menu.setAttribute('hidden', '');
   if (button) button.setAttribute('aria-expanded', 'false');
+  if (help) help.setAttribute('hidden', '');
+  if (helpButton) helpButton.setAttribute('aria-expanded', 'false');
 }
 
 function syncAccountSlot(doc) {
@@ -115,13 +137,14 @@ function syncAccountSlot(doc) {
     closeAccountMenu(doc);
   }
   const who = doc.getElementById('whoami');
-  const name = who ? (who.textContent || '').trim() : '';
+  const name = accountNameFromLabel(who ? who.textContent : '', who ? who.dataset : null);
   const identity = doc.getElementById('account-identity');
   if (identity) identity.textContent = name;
   const button = doc.getElementById('account-menu-button');
-  if (button) {
-    const letters = name.replace(/[^0-9A-Za-z\u4e00-\u9fff]+/g, '');
-    button.textContent = letters ? letters.slice(0, 2).toUpperCase() : '账户';
+  if (button) button.textContent = accountInitials(name);
+  for (const node of doc.querySelectorAll('.rail-signed-in')) {
+    if (visible) node.removeAttribute('hidden');
+    else node.setAttribute('hidden', '');
   }
 }
 
@@ -157,6 +180,79 @@ function bindAccountMenu(doc) {
     if (who) new MutationObserver(sync).observe(who, { childList: true, characterData: true, subtree: true });
   }
   syncAccountSlot(doc);
+  bindHelpMenu(doc);
+  bindAppearanceToggle(doc);
+}
+
+function bindHelpMenu(doc) {
+  const button = doc.getElementById('help-menu-button');
+  const menu = doc.getElementById('help-menu');
+  if (!button || !menu || button.dataset.bound === '1') return;
+  button.dataset.bound = '1';
+  button.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const open = menu.hasAttribute('hidden');
+    if (open) {
+      menu.removeAttribute('hidden');
+      button.setAttribute('aria-expanded', 'true');
+    } else {
+      menu.setAttribute('hidden', '');
+      button.setAttribute('aria-expanded', 'false');
+    }
+  });
+}
+
+function appearanceLabel(theme) {
+  return theme === 'dark' ? '深色' : '浅色';
+}
+
+function syncAppearanceButton(doc, values, now, media) {
+  const button = doc.getElementById('appearance-toggle');
+  if (!button) return;
+  const theme = resolveTheme(values || { appearance: 'system' }, now, media);
+  button.textContent = appearanceLabel(theme);
+  button.setAttribute('aria-pressed', theme === 'dark' ? 'true' : 'false');
+}
+
+function bindAppearanceToggle(doc) {
+  const button = doc.getElementById('appearance-toggle');
+  if (!button || button.dataset.bound === '1') return;
+  button.dataset.bound = '1';
+  button.addEventListener('click', async event => {
+    event.preventDefault();
+    if (button.dataset.busy === '1') return;
+    button.dataset.busy = '1';
+    try {
+      const loaded = await loadSettings();
+      if (!loaded) return;
+      const current = resolveTheme(loaded.values);
+      const next = current === 'dark' ? 'light' : 'dark';
+      const response = await fetch('/v1/settings', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfCookie(document.cookie),
+        },
+        body: JSON.stringify({ revision: loaded.revision, changes: { appearance: next } }),
+      });
+      if (!response.ok) return;
+      const body = await response.json();
+      const values = (body && body.settings && body.settings.values) || { ...loaded.values, appearance: next };
+      applyResolvedTheme(doc, values);
+      syncAppearanceButton(doc, values);
+      const form = doc.getElementById('settings-form');
+      if (form && form.elements && form.elements.appearance) {
+        for (const option of form.querySelectorAll('[name="appearance"]')) {
+          option.checked = option.value === next;
+        }
+      }
+    } finally {
+      button.dataset.busy = '0';
+    }
+  });
 }
 
 function enhanceChrome() {
@@ -194,12 +290,16 @@ export function startShell(doc = document, options = {}) {
   const target = doc.defaultView || (typeof window !== 'undefined' ? window : null);
   const run = async () => {
     enhanceChrome();
-    const values = options.values !== undefined ? options.values : await loadAppearance();
-    applyResolvedTheme(doc, values || { appearance: 'system' }, options.now, options.media);
+    const loaded = options.values !== undefined ? { values: options.values } : await loadSettings();
+    const values = (loaded && loaded.values) || { appearance: 'system' };
+    applyResolvedTheme(doc, values, options.now, options.media);
+    syncAppearanceButton(doc, values, options.now, options.media);
     if (doc.body && typeof MutationObserver === 'function') {
       new MutationObserver(() => {
         if (doc.body && (doc.body.dataset.theme || doc.body.dataset.schedule)) {
-          applyResolvedTheme(doc, valuesFromDom(doc), options.now, options.media);
+          const next = valuesFromDom(doc);
+          applyResolvedTheme(doc, next, options.now, options.media);
+          syncAppearanceButton(doc, next, options.now, options.media);
         }
       }).observe(doc.body, { attributes: true, attributeFilter: ['data-theme', 'data-schedule'] });
     }

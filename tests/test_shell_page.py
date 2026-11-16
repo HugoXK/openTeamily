@@ -7,6 +7,7 @@ from tests import test_settings_page as settings_page_tests
 PAGES = (
     '/settings', '/agents', '/chat', '/automations', '/artifacts',
     '/members', '/team', '/runtimes', '/memory', '/discover',
+    '/profile', '/download',
 )
 
 CAPTURE_IDS = {
@@ -29,6 +30,9 @@ CAPTURE_IDS = {
                   'connection-list', 'issued-token'),
     '/memory': ('main-panel', 'memory-list', 'editor-form',
                 'search', 'new-title', 'graph-canvas', 'topic-list'),
+    '/profile': ('main-panel', 'whoami', 'profile-username'),
+    '/download': ('main-panel', 'download-web', 'download-runtime',
+                  'download-unavailable', 'daemon-command'),
 }
 
 
@@ -55,6 +59,8 @@ class ShellPageTests(unittest.TestCase):
         self.assertNotIn(b'teamily.com', script['body'].lower())
         self.assertIn(b'export function resolveTheme', script['body'])
         self.assertIn(b'export function startShell', script['body'])
+        self.assertIn(b'export function accountNameFromLabel', script['body'])
+        self.assertIn('已登录为'.encode(), script['body'])
         head = self.raw.call('HEAD', '/shell/app.css')
         self.assertEqual(head['status'], 200)
         self.assertEqual(head['body'], b'')
@@ -89,6 +95,11 @@ class ShellPageTests(unittest.TestCase):
             self.assertIn('href="/settings"', html, path)
             self.assertNotIn('积分中心', html, path)
             self.assertNotIn('套餐与账单', html, path)
+            self.assertNotIn('contact@teamily.ai', html.lower(), path)
+            self.assertIn('id="help-menu"', html, path)
+            self.assertIn('查看我的资料', html, path)
+            self.assertIn('href="/download"', html, path)
+            self.assertIn('id="appearance-toggle"', html, path)
             self.assertIn("default-src 'none'", page['headers']['Content-Security-Policy'])
             if path == '/runtimes':
                 self.assertIn('data-tab="connect"', html)
