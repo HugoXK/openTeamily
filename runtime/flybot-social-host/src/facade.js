@@ -25,7 +25,17 @@ const presentRoom = (room, rt) => {
     ledgerBook: groupLedgerBook(room.id),
     participants: [
       ...(room.members ?? []).map(id => ({ kind: 'bot', id, remote: false, name: rt.botOf?.(id)?.name })),
-      ...remotes.map(entry => ({ kind: entry.kind ?? 'bot', id: entry.id ?? entry.handle, handle: entry.handle, remote: true, name: entry.name ?? entry.displayName })),
+      ...remotes.map(entry => ({
+        kind: entry.kind ?? 'bot',
+        id: entry.id ?? entry.handle,
+        handle: entry.handle,
+        remote: true,
+        name: entry.name ?? entry.displayName,
+        ...(entry.admittedBy ? { admittedBy: entry.admittedBy } : {}),
+        ...(entry.ownerHome ? { ownerHome: entry.ownerHome } : {}),
+        ...(entry.leftSeq !== undefined ? { leftSeq: entry.leftSeq } : {}),
+        ...(entry.leftAt ? { leftAt: entry.leftAt } : {}),
+      })),
     ],
   }
 }
@@ -37,7 +47,7 @@ const pluginFlag = (rt, id) => {
   return true
 }
 
-export function createFlybotFacade(rt, { fields } = {}) {
+export function createFlybotFacade(rt, { fields, clock } = {}) {
   const listeners = new Map()
   const handlers = new Map()
   const fieldStore = fields ?? new Map()
@@ -52,9 +62,114 @@ export function createFlybotFacade(rt, { fields } = {}) {
   const appliedFaceLines = new Map()
   const faceLineListeners = []
   const ticketPeers = []
+  const openLinks = []
+  const seatedClaims = new Set()
   const lineSeq = new Map()
   let inviteServer
+  let lastInvitePreviewAt = 0
+  let invitePreviewCursor = 0
   let watching = false
+  const nowMs = () => (typeof clock === 'function' ? clock() : Date.now())
+  const PREVIEW_GAP_MS = 60_000
+  const MAX_BACKOFF_MS = 10 * 60_000
+
+  const normHandle = (value) => String(value ?? '').trim().toLowerCase()
+
+  const previewBackoff = (error) => {
+    const text = `${error?.code ?? ''} ${error?.message ?? ''}`.toLowerCase()
+    if (!/(too many attempts|rate_limited|locked_out|rate.?limit)/.test(text)) return 0
+    const named = Number(error?.retryAfter ?? error?.retry_after ?? error?.retryAfterMs)
+    if (Number.isFinite(named) && named > 0) return Math.min(named > 1000 ? named : named * 1000, MAX_BACKOFF_MS)
+    return MAX_BACKOFF_MS
+  }
+
+  const rememberPeer = (peer) => {
+    const from = peer.from
+    const to = normHandle(peer.to)
+    const scope = String(peer.scope ?? '')
+    const ticket = peer.ticket
+    if (!from || !to || !scope) return
+    const exists = ticketPeers.some(item => item.from === from && item.scope === scope && normHandle(item.to) === to && (item.ticket ?? ticket) === ticket)
+    if (!exists) ticketPeers.push({ from, to, scope, ...(ticket ? { ticket } : {}) })
+  }
+
+  const dropPeersForTicket = (ticket) => {
+    for (let i = ticketPeers.length - 1; i >= 0; i--) {
+      if (ticketPeers[i].ticket === ticket) ticketPeers.splice(i, 1)
+    }
+  }
+
+  const claimKey = (ticket, home) => `${ticket}::${normHandle(home)}`
+
+  const ensureRoom = (roomId, patch = {}) => {
+    if (!rt.state) rt.state = {}
+    if (!rt.state.rooms) rt.state.rooms = {}
+    const existing = roomRecord(roomId) ?? rt.state.rooms[roomId]
+    const room = existing ?? { id: roomId, members: [], mode: 'admin', named: true }
+    room.id = roomId
+    Object.assign(room, patch)
+    rt.state.rooms[roomId] = room
+    return room
+  }
+
+  const seatRemote = (room, claimer) => {
+    const handle = normHandle(claimer.handle ?? claimer.home)
+    if (!handle) return
+    const remotes = room.remoteParticipants ?? []
+    const already = remotes.find(entry => normHandle(entry.handle ?? entry.id) === handle && entry.leftSeq === undefined)
+    const row = {
+      kind: 'bot',
+      remote: true,
+      id: handle,
+      handle,
+      name: claimer.name ?? claimer.displayName ?? handle,
+      admittedBy: 'ticket',
+      ...(claimer.home ? { ownerHome: normHandle(claimer.home) } : {}),
+    }
+    if (already) Object.assign(already, row)
+    else remotes.push(row)
+    room.remoteParticipants = remotes
+  }
+
+  const peersForLink = (link, handles) => {
+    const bots = (link.bots?.length ? link.bots : (roomRecord(link.roomId)?.members ?? []))
+    for (const from of bots) {
+      for (const handle of handles) rememberPeer({ from, to: handle, scope: link.scope ?? link.roomId, ticket: link.ticket })
+    }
+  }
+
+  const seatHostClaim = async (link, claimer) => {
+    const home = claimer.home ?? claimer.handle
+    if (!home) return
+    const key = claimKey(link.ticket, home)
+    if (seatedClaims.has(key)) return
+    const handles = (claimer.handles ?? [claimer.handle ?? claimer.home]).filter(Boolean).map(normHandle)
+    if (!handles.length) return
+    const room = roomRecord(link.roomId)
+    if (!room) return
+    for (const handle of handles) seatRemote(room, { ...claimer, handle, home })
+    peersForLink(link, handles)
+    seatedClaims.add(key)
+    const ids = link.bots ?? room.members ?? []
+    if (ids.length && typeof inviteServer?.identify === 'function') {
+      await inviteServer.identify(ids)
+    }
+    return presentRoom(room, rt)
+  }
+
+  const recordLink = (ticket, spec = {}) => {
+    const roomId = String(spec.roomId ?? '')
+    if (!ticket || !roomId) return undefined
+    const existing = openLinks.find(item => item.ticket === ticket)
+    const bots = (spec.bots ?? roomRecord(roomId)?.members ?? []).map(bot => bot.id ?? bot).filter(Boolean)
+    const link = existing ?? { ticket, roomId, bots, scope: roomId }
+    link.roomId = roomId
+    link.scope = roomId
+    link.bots = bots
+    link.withdrawn = false
+    if (!existing) openLinks.push(link)
+    return link
+  }
   let roomApprovalProvider
   let chatApprovalProvider
   const approvalListeners = []
@@ -330,14 +445,86 @@ export function createFlybotFacade(rt, { fields } = {}) {
         }
       },
       ticketPeers() {
-        return [...ticketPeers]
+        return ticketPeers.map(({ from, to, scope }) => ({ from, to, scope }))
       },
       serveInvites(handlers) {
         inviteServer = handlers
         return () => { if (inviteServer === handlers) inviteServer = undefined }
       },
+      async mintInvite(spec = {}) {
+        if (flybot.readOnly() || !inviteServer?.mint) return undefined
+        const minted = await inviteServer.mint(spec)
+        if (!minted?.ticket) return undefined
+        recordLink(minted.ticket, { roomId: spec.roomId ?? minted.roomId, bots: spec.bots ?? minted.bots })
+        return minted
+      },
+      async claimInvite(ticket, handles = []) {
+        if (flybot.readOnly() || !ticket || !inviteServer?.claim) return undefined
+        const preview = await (inviteServer.preview ?? inviteServer.verify)?.(ticket)
+        const remoteRoomId = String(preview?.roomId ?? preview?.scope ?? '')
+        const invitedBy = normHandle(preview?.inviter ?? preview?.from ?? preview?.home ?? '')
+        const localHandles = (Array.isArray(handles) ? handles : []).map(item => item.id ?? item.handle ?? item).filter(Boolean)
+        const claimed = await inviteServer.claim(ticket, localHandles)
+        const scope = remoteRoomId || String(claimed?.roomId ?? ticket)
+        const localId = `share-${scope}`
+        const locals = localHandles.length ? localHandles : (flybot.bot.list().map(bot => bot.id))
+        const room = ensureRoom(claimed?.localRoomId ?? (preview?.joined && flybot.rooms.list().find(item => item.sharedFrom?.ticket === ticket)?.id) ?? localId, {
+          name: preview?.name ?? claimed?.name ?? 'Shared group',
+          origin: 'inbound-share',
+          members: [...new Set(locals)],
+          sharedFrom: { ticket, remoteRoomId: scope, ...(invitedBy ? { invitedBy } : {}) },
+        })
+        if (invitedBy) seatRemote(room, { handle: invitedBy, home: invitedBy, name: preview?.inviterName })
+        for (const from of room.members) {
+          if (invitedBy) rememberPeer({ from, to: invitedBy, scope, ticket })
+        }
+        return presentRoom(room, rt)
+      },
+      async revokeInvite(ticket, opts) {
+        if (flybot.readOnly() || !ticket) return undefined
+        const result = await inviteServer?.revoke?.(ticket, opts)
+        const link = openLinks.find(item => item.ticket === ticket)
+        if (link) link.withdrawn = true
+        dropPeersForTicket(ticket)
+        return result
+      },
+      async seatClaim(ticket, home) {
+        if (flybot.readOnly() || !ticket) return undefined
+        const link = openLinks.find(item => item.ticket === ticket && !item.withdrawn)
+        if (!link) return undefined
+        return seatHostClaim(link, { home, handle: home, handles: [home] })
+      },
       async seatOpenClaims() {
-        return inviteServer?.claim ? undefined : undefined
+        if (flybot.readOnly() || !inviteServer) return undefined
+        const inspect = inviteServer.verify ?? inviteServer.preview
+        if (typeof inspect !== 'function') return undefined
+        const now = nowMs()
+        const due = openLinks.filter(link => !link.withdrawn && (link.retryAfter ?? 0) <= now)
+        if (!due.length) return undefined
+        if (lastInvitePreviewAt && now - lastInvitePreviewAt < PREVIEW_GAP_MS) return undefined
+        const link = due[invitePreviewCursor % due.length]
+        invitePreviewCursor += 1
+        let preview
+        try {
+          preview = await inspect(link.ticket)
+        } catch (error) {
+          const wait = previewBackoff(error)
+          if (wait) {
+            link.retryAfter = now + wait
+            return undefined
+          }
+          throw error
+        }
+        lastInvitePreviewAt = now
+        link.lastPreviewAt = now
+        if (!preview) return undefined
+        const claimers = preview.claimers ?? (preview.claimer ? [preview.claimer] : [])
+        const seated = []
+        for (const claimer of claimers) {
+          const room = await seatHostClaim(link, claimer)
+          if (room) seated.push(room)
+        }
+        return seated
       },
     },
     ledger: {
