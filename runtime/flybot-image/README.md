@@ -37,14 +37,20 @@ docker build -f runtime/flybot-image/Dockerfile \
   runtime
 ```
 
-CI (`.github/workflows/flybot-runtime-image.yml`) builds this image and runs
-`test/smoke.mjs`.
+CI (`.github/workflows/flybot-runtime-image.yml`) builds this image, runs
+`test/smoke.mjs`, and uploads a license/package inventory of the built image
+as the `flybot-runtime-image-license-inventory` artifact. The image is not
+published. That artifact is the live inventory for the build; see
+`inventory/README.md`.
 
 ## What this slice does not claim
 
-- It does **not** close [issue #3](https://github.com/openTeamily/openTeamily/issues/3).
+- Related tracking remains open: [issue 3](https://github.com/openTeamily/openTeamily/issues/3),
+  [issue 1](https://github.com/openTeamily/openTeamily/issues/1), and
+  [issue 5](https://github.com/openTeamily/openTeamily/issues/5).
   DeepSeek Harness `0.2.2-rc.1`, the Node/Debian base image, and third-party
-  notices still need a redistribution audit before a public image release.
+  notices still need review before a public image release. The CI inventory
+  is evidence collection, not legal clearance.
 - Management can inject a validated Bot Social server URL at instance start
   (`docs/BOT_SOCIAL.md`); operators can also set a file or env (see below)
   or use Settings → Bot Social. This is not live third-party proof.
