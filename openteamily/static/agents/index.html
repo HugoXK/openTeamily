@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>智能体 · OpenTeamily</title>
+  <link rel="stylesheet" href="/agents/app.css">
+  <script type="module" src="/agents/app.mjs"></script>
+</head>
+<body>
+  <header>
+    <p class="brand">OpenTeamily / FlyBot</p>
+    <h1>智能体</h1>
+    <p class="note">这里只保存工作区里的智能体目录：名称、简介和说明。管理进程不会运行它们，也还没有公开主页或 Auto / Instant / Agentic 模式。这些默认值没有和 Teamily 对照过，不能写成已经功能对等。运行时连接仍走 /v1/agent，和本页不是同一套接口。</p>
+    <nav>
+      <a href="/settings">账号设置</a>
+      <a href="/automations">自动化</a>
+      <a href="/members">成员</a>
+      <a href="/artifacts">作品库</a>
+      <a href="/runtimes">运行时</a>
+      <a href="/team">创建团队</a>
+    </nav>
+  </header>
+  <p id="status" role="status"></p>
+  <section id="login-panel" hidden>
+    <h2>登录</h2>
+    <form id="login-form" method="post" action="/v1/auth/login">
+      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
+      <button type="submit">登录</button>
+    </form>
+  </section>
+  <section id="main-panel" hidden>
+    <p id="whoami"></p>
+    <label>工作区
+      <select id="workspace"></select>
+    </label>
+    <p id="role-note" class="note"></p>
+    <section id="list-panel">
+      <h2>目录</h2>
+      <ul id="agent-list"></ul>
+      <p id="agents-empty" class="note" hidden>这个工作区还没有智能体。</p>
+    </section>
+    <form id="create-form" method="post" action="/v1/workspaces" hidden>
+      <fieldset>
+        <legend>新建智能体</legend>
+        <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
+        <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
+        <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+        <button type="submit">创建</button>
+      </fieldset>
+    </form>
+    <form id="edit-form" method="post" action="/v1/workspaces" hidden>
+      <fieldset>
+        <legend>编辑智能体</legend>
+        <input type="hidden" name="id">
+        <input type="hidden" name="revision">
+        <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
+        <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
+        <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+        <div class="actions">
+          <button type="submit">保存</button>
+          <button type="button" id="archive-button">归档</button>
+          <button type="button" id="cancel-edit">取消</button>
+        </div>
+      </fieldset>
+    </form>
+    <form id="logout-form" method="post" action="/v1/auth/logout">
+      <button type="submit">退出登录</button>
+    </form>
+  </section>
+</body>
+</html>

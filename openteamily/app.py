@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import artifacts, automations, bot_social, invites, members, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
+from . import agents, artifacts, automations, bot_social, invites, members, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -40,6 +40,7 @@ class Config:
     max_automations_per_workspace: int = 20
     max_artifacts_per_workspace: int = 50
     max_shares_per_artifact: int = 10
+    max_agents_per_workspace: int = 50
     max_runs_per_automation: int = 200
     auth_peer_limit: int = 20
     auth_name_limit: int = 10
@@ -706,6 +707,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/members(?:/([0-9a-f]{32})(/remove)?)?', path)
             if member_path:
                 return self.member_dispatch(db, session, method, query, now, env, *member_path.groups())
+            agent_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/agents(?:/([0-9a-f]{32})(?:/(archive))?)?', path)
+            if agent_path:
+                return self.workspace_agent_dispatch(db, session, method, query, now, env, *agent_path.groups())
             match = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})(/instances)?', path)
             if match:
                 row = members.load(db, match[1], session['user_id'])
@@ -1427,6 +1432,136 @@ class App:
             db, aid, workspace['id'], now, 'agent_task', row['id'], task_kind=row['kind'],
         )
         return 201, {'artifact': artifacts.view(artifacts.load(db, workspace['id'], aid))}, []
+
+
+    def workspace_agent_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, archiving):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if target_id is None and method == 'GET':
+            return self.list_workspace_agents(db, workspace, actor, query)
+        if target_id is None and method == 'POST' and not query:
+            if not agents.can_manage(actor):
+                refuse(403, 'forbidden', 'Only owners and admins can create agents')
+            return self.create_workspace_agent(db, workspace, session, now, env)
+        if target_id is None:
+            refuse(400, 'invalid', 'Invalid agent request')
+        row = agents.load(db, workspace['id'], target_id)
+        if row is None or (row['archived'] == 1 and not agents.can_manage(actor)):
+            refuse(404, 'not_found', 'Agent not found')
+        if archiving:
+            if method != 'POST' or query:
+                refuse(400, 'invalid', 'Invalid agent request')
+            if not agents.can_manage(actor):
+                refuse(403, 'forbidden', 'Only owners and admins can archive agents')
+            return self.archive_workspace_agent(db, row, now, self.body(env, ['revision']))
+        if method == 'GET' and not query:
+            return 200, {'agent': agents.view(row)}, []
+        if method != 'POST' or query:
+            refuse(400, 'invalid', 'Invalid agent request')
+        if not agents.can_manage(actor):
+            refuse(403, 'forbidden', 'Only owners and admins can change agents')
+        return self.update_workspace_agent(db, workspace, row, now, self.body(env, ['revision', 'name', 'summary', 'instructions']))
+
+    def list_workspace_agents(self, db, workspace, actor, query):
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=3) if query else {}
+            if set(args) - {'limit', 'cursor', 'include_archived'} or any(len(v) != 1 for v in args.values()):
+                raise ValueError()
+            limit, cursor = args.get('limit', ['20'])[0], args.get('cursor', [''])[0]
+            flagged = args.get('include_archived', ['0'])[0]
+            if flagged not in ('0', '1') or not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 100:
+                raise ValueError()
+            if cursor and not re.fullmatch(r'[0-9a-f]{32}', cursor):
+                raise ValueError()
+        except ValueError:
+            refuse(400, 'invalid', 'Invalid pagination parameters')
+        include_archived = flagged == '1'
+        if include_archived and not agents.can_manage(actor):
+            refuse(403, 'forbidden', 'Only owners and admins can list archived agents')
+        rows = agents.listing(db, workspace['id'], cursor, int(limit) + 1, include_archived)
+        return 200, {'items': [agents.view(row) for row in rows[:int(limit)]],
+                     'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
+
+    def create_workspace_agent(self, db, workspace, session, now, env):
+        body = self.body(env, ['name', 'summary', 'instructions'])
+        name, summary, instructions = body.get('name'), body.get('summary', ''), body.get('instructions', '')
+        if not agents.valid_name(name) or not agents.valid_summary(summary) or not agents.valid_instructions(instructions):
+            refuse(400, 'invalid', 'Provide an agent name, summary, and instructions')
+        name, summary = name.strip(), summary.strip()
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        payload = {'name': name, 'summary': summary, 'instructions': instructions}
+        key_hash, request_hash = digest('agent:' + key), digest(
+            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+        )
+        prior = db.execute(
+            'SELECT * FROM workspace_agents WHERE workspace_id=? AND key_hash=?',
+            (workspace['id'], key_hash),
+        ).fetchone()
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'agent': agents.view(prior)}, []
+        if db.execute(
+            'SELECT id FROM workspace_agents WHERE workspace_id=? AND name_hash=?',
+            (workspace['id'], agents.name_hash(name)),
+        ).fetchone():
+            refuse(409, 'conflict', 'An agent with this name already exists')
+        if (db.execute('SELECT COUNT(*) FROM workspace_agents WHERE workspace_id=?',
+                       (workspace['id'],)).fetchone()[0] >= self.config.max_agents_per_workspace):
+            refuse(429, 'quota', 'Agent capacity reached')
+        agent_id = uuid4().hex
+        db.execute(
+            'INSERT INTO workspace_agents VALUES(?,?,?,?,?,?,1,?,?,?,0,?,?)',
+            (agent_id, workspace['id'], name, agents.name_hash(name), summary, instructions,
+             now, now, session['user_id'], key_hash, request_hash),
+        )
+        return 201, {'agent': agents.view(agents.load(db, workspace['id'], agent_id))}, []
+
+    def update_workspace_agent(self, db, workspace, row, now, body):
+        if body.get('revision') != row['revision']:
+            refuse(409, 'conflict', 'Agent was updated; reload and retry')
+        name = body.get('name', row['name'])
+        summary = body.get('summary', row['summary'])
+        instructions = body.get('instructions', row['instructions'])
+        if not agents.valid_name(name) or not agents.valid_summary(summary) or not agents.valid_instructions(instructions):
+            refuse(400, 'invalid', 'Provide an agent name, summary, and instructions')
+        name, summary = name.strip(), summary.strip()
+        if set(body) == {'revision'}:
+            refuse(400, 'invalid', 'Provide a name, summary, or instructions change')
+        other = db.execute(
+            'SELECT id FROM workspace_agents WHERE workspace_id=? AND name_hash=? AND id!=?',
+            (workspace['id'], agents.name_hash(name), row['id']),
+        ).fetchone()
+        if other:
+            refuse(409, 'conflict', 'An agent with this name already exists')
+        db.execute(
+            'UPDATE workspace_agents SET name=?, name_hash=?, summary=?, instructions=?, '
+            'revision=?, updated=? WHERE id=? AND revision=?',
+            (name, agents.name_hash(name), summary, instructions, row['revision'] + 1, now,
+             row['id'], row['revision']),
+        )
+        updated = agents.load(db, workspace['id'], row['id'])
+        if updated is None or updated['revision'] != row['revision'] + 1:
+            refuse(409, 'conflict', 'Agent was updated; reload and retry')
+        return 200, {'agent': agents.view(updated)}, []
+
+    def archive_workspace_agent(self, db, row, now, body):
+        if body.get('revision') != row['revision']:
+            refuse(409, 'conflict', 'Agent was updated; reload and retry')
+        if row['archived'] == 1:
+            return 200, {'agent': agents.view(row)}, []
+        db.execute(
+            'UPDATE workspace_agents SET archived=1, revision=?, updated=? WHERE id=? AND revision=?',
+            (row['revision'] + 1, now, row['id'], row['revision']),
+        )
+        updated = agents.load(db, row['workspace_id'], row['id'])
+        if updated is None or updated['archived'] != 1:
+            refuse(409, 'conflict', 'Agent was updated; reload and retry')
+        return 200, {'agent': agents.view(updated)}, []
 
     def invite_dispatch(self, db, session, method, query, now, env, workspace_id, invite_id, revoking):
         workspace = members.load(db, workspace_id, session['user_id'])
