@@ -286,10 +286,11 @@ class LoopbackAgentTests(unittest.TestCase):
             stdout=stdout, stderr=stderr)
         self.assertEqual(code, 0, stderr.getvalue())
         self.assertNotIn(new_token, stdout.getvalue() + stderr.getvalue())
+        root = Path(__file__).resolve().parents[1]
         process = subprocess.run(
             [sys.executable, '-m', 'openteamily.flybot', 'daemon', 'start',
              '--origin', origin, '--key-file', str(new_file), '--hostname', 'proc', '--once'],
-            cwd='/tmp/openteamily-lane2-agent', env={**os.environ, 'PYTHONPATH': '/tmp/openteamily-lane2-agent'},
+            cwd=str(root), env={**os.environ, 'PYTHONPATH': str(root)},
             capture_output=True, text=True, timeout=10)
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertNotIn(new_token, process.stdout + process.stderr)
