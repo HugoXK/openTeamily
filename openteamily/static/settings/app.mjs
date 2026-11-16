@@ -29,6 +29,27 @@ export function applyTheme(document, values) {
   document.body.dataset.theme = values.appearance === 'system' ? '' : values.appearance;
 }
 
+export function readModelForm(form) {
+  const data = new FormData(form);
+  const provider = data.get('provider') || '';
+  const changes = {};
+  if (provider) {
+    changes.provider = provider;
+    changes.base_url = data.get('base_url') || '';
+    changes.model = data.get('model') || '';
+  }
+  const key = data.get('api_key');
+  if (key) changes.api_key = key;
+  return changes;
+}
+
+export function fillModelForm(form, values) {
+  form.elements.provider.value = values && values.api_key_set ? (values.provider || '') : '';
+  form.elements.base_url.value = values && values.api_key_set ? (values.base_url || '') : '';
+  form.elements.model.value = values && values.api_key_set ? (values.model || '') : '';
+  form.elements.api_key.value = '';
+}
+
 export function fillForm(form, values) {
   for (const option of form.querySelectorAll('[name="appearance"], [name="send_shortcut"]')) {
     option.checked = option.value === values[option.name];
@@ -49,8 +70,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const settingsPanel = document.getElementById('settings-panel');
   const whoami = document.getElementById('whoami');
   const form = document.getElementById('settings-form');
+  const modelForm = document.getElementById('model-api-form');
   let revision = 0;
   let current = null;
+  let modelRevision = 0;
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -95,6 +118,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     revision = settings.body.settings.revision;
     fillForm(form, current);
     applyTheme(document, current);
+    if (modelForm) {
+      const model = await request('GET', '/v1/model-api');
+      if (model.status === 200) {
+        modelRevision = model.body.model_api.revision;
+        fillModelForm(modelForm, model.body.model_api);
+        const effective = model.body.effective || {};
+        const source = effective.source === 'account' ? '正在使用你自己的配置' :
+          effective.source === 'platform' ? '正在使用平台默认配置' : '还没有可用的模型 API';
+        const label = effective.model ? `${source}（${effective.provider || ''} ${effective.model}）` : source;
+        document.getElementById('model-effective').textContent = label;
+        document.getElementById('model-key-state').textContent = model.body.model_api.api_key_set ? '已保存个人密钥（不会回显）。' : '未设置个人密钥。';
+      }
+    }
   }
 
   async function renderProviders() {
@@ -160,6 +196,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     applyTheme(document, current);
     show('ok', '已保存。');
   });
+
+  if (modelForm) {
+    modelForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const changes = readModelForm(modelForm);
+      if (!Object.keys(changes).length) {
+        show('ok', '没有需要保存的模型 API 更改。');
+        return;
+      }
+      const result = await request('POST', '/v1/model-api', {revision: modelRevision, changes});
+      modelForm.elements.api_key.value = '';
+      if (result.status === 409) {
+        show('error', '模型 API 已在别处更新，已重新加载，请再保存一次。');
+        await load();
+        return;
+      }
+      if (result.status !== 200) {
+        show('error', messageFor(result.body.error, '保存模型 API 失败。'));
+        return;
+      }
+      show('ok', '模型 API 已保存。');
+      await load();
+    });
+  }
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
     event.preventDefault();

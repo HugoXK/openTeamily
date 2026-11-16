@@ -112,7 +112,7 @@ COMMIT;''')
             self.write(db, iid, state)
 
 
-    def dispatch_automation(self, payload, db=None):
+    def dispatch_automation(self, payload, db=None, model_api_key=None):
         """Record an automation hook. Never starts Docker or a Compose process."""
         if (not isinstance(payload, dict) or not isinstance(payload.get('automation_id'), str)
                 or not isinstance(payload.get('run_id'), str) or not isinstance(payload.get('workspace_id'), str)):
@@ -128,14 +128,18 @@ COMMIT;''')
             return [row[0] for row in conn.execute(
                 'SELECT id FROM instances WHERE workspace_id=? ORDER BY id', (payload['workspace_id'],))]
         def record(conn, ids):
-            self.dispatches.append({
+            recorded = {
                 'automation_id': payload['automation_id'],
                 'workspace_id': payload['workspace_id'],
                 'run_id': payload['run_id'],
                 'due_at': payload.get('due_at'),
                 'title': payload.get('title'),
                 'instance_ids': list(ids),
-            })
+                'model_api': payload.get('model_api'),
+                'model_api_key_set': bool(model_api_key),
+                'model_api_key_digest': digest(model_api_key) if model_api_key else None,
+            }
+            self.dispatches.append(recorded)
             if conn is not None and self.store:
                 conn.execute('CREATE TABLE IF NOT EXISTS fake_automation_dispatches ('
                           'run_id TEXT PRIMARY KEY, value TEXT NOT NULL)')

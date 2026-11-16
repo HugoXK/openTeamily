@@ -6,6 +6,7 @@ import re
 import time
 from uuid import uuid4
 
+from . import members
 from .security import digest, opaque
 
 ID = re.compile(r'[0-9a-f]{32}')
@@ -130,15 +131,24 @@ class Lifecycle:
                 db.execute("UPDATE instances SET blocked=1,observed='unknown',health='unknown',error_code='interrupted' WHERE id=?", (iid,))
 
     @staticmethod
-    def workspace(db, owner, wid):
-        if db.execute('SELECT id FROM workspaces WHERE id=? AND owner_id=?', (wid, owner)).fetchone() is None:
+    def workspace(db, user, wid, write=False):
+        row = members.load(db, wid, user)
+        if row is None:
             fail(404, 'not_found', 'Workspace not found')
+        if write and members.role_of(db, row, user) not in ('owner', 'admin'):
+            fail(403, 'forbidden', 'Not allowed to operate instances')
+        return row
 
     @staticmethod
-    def owned(db, owner, iid):
-        row = db.execute('SELECT * FROM instances WHERE id=? AND owner_id=?', (iid, owner)).fetchone()
+    def owned(db, user, iid, write=False):
+        row = db.execute('SELECT * FROM instances WHERE id=?', (iid,)).fetchone()
         if row is None:
             fail(404, 'not_found', 'Instance not found')
+        workspace = members.load(db, row['workspace_id'], user)
+        if workspace is None:
+            fail(404, 'not_found', 'Instance not found')
+        if write and members.role_of(db, workspace, user) not in ('owner', 'admin'):
+            fail(403, 'forbidden', 'Not allowed to operate instances')
         return row
 
     @staticmethod
@@ -179,7 +189,7 @@ class Lifecycle:
             fail(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         now = int(self.clock())
         with self.store.transaction() as db:
-            self.workspace(db, owner, wid)
+            self.workspace(db, owner, wid, write=True)
             old = db.execute('SELECT id FROM instances WHERE workspace_id=? AND create_key=?', (wid, digest(key))).fetchone()
             if old:
                 return False, self.result(db, old['id'])
@@ -202,7 +212,7 @@ class Lifecycle:
         self.expire()
         with self.store.connect() as db:
             self.workspace(db, owner, wid)
-            rows = db.execute('SELECT * FROM instances WHERE owner_id=? AND workspace_id=? AND id>? ORDER BY id LIMIT ?', (owner, wid, cursor, limit + 1)).fetchall()
+            rows = db.execute('SELECT * FROM instances WHERE workspace_id=? AND id>? ORDER BY id LIMIT ?', (wid, cursor, limit + 1)).fetchall()
             return {'items': [self.snapshot(r) for r in rows[:limit]], 'cursor': rows[limit-1]['id'] if len(rows) > limit else None}
 
     def intent(self, owner, iid, action, operation_id=None, expected_revision=None):
@@ -212,7 +222,7 @@ class Lifecycle:
             fail(400, 'invalid', 'Invalid expected_revision')
         self.expire()
         with self.store.transaction() as db:
-            row = self.owned(db, owner, iid)
+            row = self.owned(db, owner, iid, write=True)
             if action == 'restart' and operation_id:
                 old = db.execute('SELECT * FROM runtime_jobs WHERE instance_id=? AND operation_id=?', (iid, operation_id)).fetchone()
                 if old:
@@ -249,9 +259,15 @@ class Lifecycle:
     def get_job(self, owner, jid):
         self.expire()
         with self.store.connect() as db:
-            row = db.execute('SELECT j.* FROM runtime_jobs j JOIN instances i ON i.id=j.instance_id WHERE j.id=? AND i.owner_id=?', (jid, owner)).fetchone()
+            row = db.execute('SELECT j.* FROM runtime_jobs j JOIN instances i ON i.id=j.instance_id WHERE j.id=?', (jid,)).fetchone()
             if row is None:
                 fail(404, 'not_found', 'Job not found')
+            try:
+                self.owned(db, owner, row['instance_id'])
+            except RuntimeFault as error:
+                if error.status == 404:
+                    fail(404, 'not_found', 'Job not found')
+                raise
             return self.job(row)
 
     def manager_list(self, manager, desired=None, limit=20, cursor=''):

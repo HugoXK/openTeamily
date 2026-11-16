@@ -33,6 +33,8 @@ An additive `user_settings` table (`CREATE TABLE IF NOT EXISTS`) in the existing
 
 The development server now also serves a same-origin page at `/settings` (assets `/settings/app.css` and `/settings/app.mjs`). It logs in through the existing auth API and reads/writes `/v1/settings` with CSRF and revision checks. Only the keys in the table above are shown; Teamily-only options such as appearance schedules, a separate chat language or automatic translation are not invented here.
 
+The page also has a model API section for an optional personal override. The platform default is shown as the effective configuration when no override is set. Keys are write-only. See [MODEL_API.md](MODEL_API.md). This is not Teamily credits or billing.
+
 The page is not browser E2E evidence. Acceptance against Teamily's real settings pages remains [#14](https://github.com/openTeamily/openTeamily/issues/14).
 
 ## Not in this slice

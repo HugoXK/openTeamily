@@ -54,6 +54,27 @@
       </fieldset>
       <button type="submit" id="save">保存</button>
     </form>
+    <form id="model-api-form" method="post" action="/v1/model-api">
+      <fieldset>
+        <legend>模型 API</legend>
+        <p class="note">OpenTeamily 不用积分。默认使用平台管理员配置的模型 API；你可以在这里改成自己的。密钥只能写入，保存后不会再显示明文。</p>
+        <p id="model-effective"></p>
+        <label>提供商
+          <select name="provider">
+            <option value="">使用平台默认</option>
+            <option value="openai">OpenAI 兼容</option>
+            <option value="azure">Azure</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="custom">自定义</option>
+          </select>
+        </label>
+        <label>Base URL <input type="url" name="base_url" maxlength="512" placeholder="https://" autocomplete="off"></label>
+        <label>模型 <input type="text" name="model" maxlength="128" autocomplete="off"></label>
+        <label>API 密钥 <input type="password" name="api_key" maxlength="4096" autocomplete="new-password" placeholder="留空表示不更改"></label>
+        <p id="model-key-state" class="note"></p>
+      </fieldset>
+      <button type="submit" id="save-model-api">保存模型 API</button>
+    </form>
     <form id="logout-form" method="post" action="/v1/auth/logout">
       <button type="submit">退出登录</button>
     </form>
