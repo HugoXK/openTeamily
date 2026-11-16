@@ -42,6 +42,9 @@ test('wrapper plugin boots upstream createRuntime and the social façade once', 
   assert.match(plugin, /onboard: false/)
   const prepare = read('prepare-template.mjs')
   assert.match(prepare, /name !== 'ds-bot'/)
+  assert.match(prepare, /symlinkSync\(dir, dest\)/)
+  assert.match(prepare, /link:\$\{dir\}/)
+
   assert.match(prepare, /@openteamily\/flybot-runtime/)
   const manifest = JSON.parse(read('plugin/package.json'))
   assert.equal(manifest.name, '@openteamily/flybot-runtime')

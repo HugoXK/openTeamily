@@ -18,11 +18,16 @@ FROM ${NODE_IMAGE} AS build
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 ARG DSH_VERSION=0.2.2-rc.1
 
-RUN corepack enable \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 make g++ \
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable \
     && npm config set registry "$NPM_REGISTRY" --global \
     && COREPACK_NPM_REGISTRY="$NPM_REGISTRY" pnpm config set registry "$NPM_REGISTRY" --global \
     && npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" \
-        --allow-scripts=@deepseek-ai/dsh-subprocess-local,node-pty,koffi,@google/genai,protobufjs
+        --allow-scripts=@deepseek-ai/dsh-subprocess-local,node-pty,koffi,@google/genai,protobufjs,node-addon-require-builtin,node-addon-native-custom-loader,node-addon-require-builtin-linux-x64-gnu \
+    && npm rebuild --prefix /usr/local/lib/node_modules/@deepseek-ai/dsh \
+    && node -e "require('/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/node-addon-require-builtin')"
 
 FROM ${NODE_IMAGE}
 
@@ -69,6 +74,7 @@ RUN mkdir -p /opt/dsh-template \
     && dsh plugin --profile web add /opt/openteamily/runtime/flybot-image/plugin \
     && node /opt/openteamily/runtime/flybot-image/prepare-template.mjs \
     && pnpm --dir /opt/dsh-template/profiles/web install --prefer-offline --no-frozen-lockfile \
+    && node /opt/openteamily/runtime/flybot-image/prepare-template.mjs \
     && mkdir -p /data /data/workspace /data/home \
     && chown -R 1000:1000 /opt/dsh-template /opt/openteamily /opt/licenses /data /home/node
 

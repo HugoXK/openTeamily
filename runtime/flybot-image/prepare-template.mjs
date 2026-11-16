@@ -1,8 +1,9 @@
 // Rewrite the image's template web profile so plugins stay at their image
 // paths (link:) and the wrapper is the only OpenTeamily/ds-bot bundle.
 // Run during the image build after `dsh plugin --profile web add` has created
-// the official DSH web template.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+// the official DSH web template, and again after `pnpm install` so symlinks
+// are absolute and still work when the template is copied to /data.
+import { lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 const home = process.env.DSH_HOME || '/opt/dsh-template'
@@ -41,5 +42,15 @@ writeFileSync(path, JSON.stringify(next, null, 2) + '\n')
 const workspace = join(profile, 'pnpm-workspace.yaml')
 if (!existsSync(workspace)) {
   writeFileSync(workspace, 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n')
+}
+
+// pnpm may write a relative symlink from /opt/dsh-template/profiles/web that
+// breaks after the entrypoint copies the template to /data. Force absolute.
+for (const [name, dir] of Object.entries(LINKS)) {
+  const dest = join(profile, 'node_modules', name)
+  mkdirSync(dirname(dest), { recursive: true })
+  try { lstatSync(dest); rmSync(dest, { recursive: true, force: true }) } catch { /* no existing link */ }
+  symlinkSync(dir, dest)
+  console.log('linked', name, '->', dir)
 }
 console.log('prepared template profile', dirname(path), 'bundles=', next.dsh.profile.bundles.join(','))
