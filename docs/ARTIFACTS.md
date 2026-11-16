@@ -2,7 +2,7 @@
 
 Related: [#9](https://github.com/openTeamily/openTeamily/issues/9), [#1](https://github.com/openTeamily/openTeamily/issues/1). Those tracking issues stay open.
 
-This slice stores workspace-scoped **documents**, **static websites**, **media files**, and **whiteboards**. Automation or agent results can be saved as documents with provenance. Read-only share links are created only when someone asks, and they can be revoked. It is self-written and is **not** Teamily works-library parity.
+This slice stores workspace-scoped **documents**, **static websites**, **media files**, and **whiteboards**. Automation or agent results can be saved as documents with provenance. Each save keeps a revision snapshot that can be listed, exported, or restored as a new revision (history is not rewritten). Read-only share links are created only when someone asks, and they can be revoked. It is self-written and is **not** Teamily works-library parity.
 
 Completed messages in an authorized user/agent conversation can be saved as documents with provenance (`source.kind=agent_message`) and are idempotent per message. Scripted web apps are not enabled on the management origin.
 
@@ -27,11 +27,17 @@ Completed messages in an authorized user/agent conversation can be saved as docu
 | POST | `/v1/workspaces/{id}/artifacts/{id}/file` | Replace media (`revision` form field) |
 | GET | `/v1/workspaces/{id}/artifacts/{id}/preview` | Sandboxed HTML render (media previews are a text/html wrapper, not a scripted player) |
 | GET/POST | `/v1/workspaces/{id}/artifacts/{id}/shares` and `.../revoke` | Explicit, revocable, read-only shares |
+| GET | `/v1/workspaces/{id}/artifacts/{id}/versions` | Revision history (metadata only, newest first) |
+| GET | `/v1/workspaces/{id}/artifacts/{id}/versions/{revision}` | One snapshot, including body, board, or media metadata |
+| GET | `/v1/workspaces/{id}/artifacts/{id}/export` and `.../versions/{revision}/export` | Download the current or a historical snapshot as an attachment |
+| POST | `/v1/workspaces/{id}/artifacts/{id}/restore` | `{revision, to}` restores snapshot `to` as a new revision. Same-content restore does not bump. Author, owner or admin only |
 | GET | `/share/{token}` | Public read-only render or media bytes. Invalid or revoked tokens are `404` |
 
 Media files are at most 2 MiB. Allowed sniffed types: `image/png`, `image/jpeg`, `image/gif`, `image/webp`, `audio/mpeg`, `audio/ogg`, `audio/wav`, `video/mp4`, `video/webm`. Objects are stored under the private data directory as `{workspace_id}/{sha256}`, never under a user-supplied path. Whiteboard JSON is at most 65536 bytes, with at most 200 strokes.
 
-Title is unique per workspace. Default cap is 50 items. Tables are additive; `user_version` stays 1. Creating or saving an item does not publish a share.
+Title is unique per workspace. Default cap is 50 items and 100 stored revisions per item. Tables are additive; `user_version` stays 1. Creating or saving an item does not publish a share. Each successful create, edit, media replace, or restore writes a snapshot. Existing items without history are backfilled from the current row on the first history read.
+
+Exports use `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`. Documents are `text/plain`, websites are sanitized HTML, whiteboards are SVG, and media is the original sniffed bytes. Share links do not gain an export route in this slice.
 
 ## Permissions
 
@@ -43,4 +49,4 @@ Documents are escaped text. Websites and whiteboards are sanitized and served wi
 
 ## Not claimed
 
-No public homepage, no scripted web apps, no Teamily comparison, no browser E2E. This issue stays open until those are done and compared.
+No public homepage, no scripted web apps, no meeting-notes ingest, no Teamily comparison, no browser E2E. This issue stays open until those are done and compared.

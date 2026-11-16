@@ -236,9 +236,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     sharePanel.hidden = !current || !current.id;
     document.getElementById('share-once').hidden = true;
     document.getElementById('share-once').textContent = '';
-    if (current && current.id) await loadShares();
-    else {
+    const versionPanel = document.getElementById('version-panel');
+    versionPanel.hidden = !current || !current.id;
+    if (current && current.id) {
+      await loadShares();
+      await loadVersions();
+    } else {
       document.getElementById('share-list').textContent = '';
+      document.getElementById('version-list').textContent = '';
     }
   }
 
@@ -276,6 +281,57 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           await loadShares();
         });
         row.appendChild(revoke);
+      }
+      list.appendChild(row);
+    }
+  }
+
+  function exportHref(revision) {
+    const base = `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`;
+    return revision ? `${base}/versions/${revision}/export` : `${base}/export`;
+  }
+
+  async function loadVersions() {
+    const list = document.getElementById('version-list');
+    const empty = document.getElementById('version-empty');
+    list.textContent = '';
+    if (!current || !current.id || !workspaceId()) return;
+    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/versions`);
+    if (listed.status !== 200) {
+      show('error', messageFor(listed.body.error, '无法读取版本历史。'));
+      return;
+    }
+    const items = listed.body.items || [];
+    empty.hidden = items.length > 0;
+    for (const item of items) {
+      const row = document.createElement('li');
+      const meta = document.createElement('span');
+      meta.className = 'note';
+      meta.textContent = `修订 ${item.revision} · ${item.title || ''} · ${item.created_by || ''}`;
+      row.appendChild(meta);
+      const download = document.createElement('a');
+      download.href = exportHref(item.revision);
+      download.textContent = '导出';
+      row.appendChild(download);
+      if (item.revision !== current.revision) {
+        const restore = document.createElement('button');
+        restore.type = 'button';
+        restore.textContent = '恢复为新修订';
+        restore.addEventListener('click', async () => {
+          const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/restore`, {
+            revision: current.revision,
+            to: item.revision,
+          });
+          if (result.status !== 200) {
+            show('error', messageFor(result.body.error, '恢复失败。'));
+            return;
+          }
+          current = result.body.artifact;
+          fillEditor(current);
+          show('ok', `已恢复为修订 ${current.revision}。`);
+          await loadVersions();
+        });
+        row.appendChild(restore);
       }
       list.appendChild(row);
     }
@@ -552,6 +608,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     once.textContent = share.path ? ('链接只显示一次：' + share.path) : '链接已创建，请立即复制。';
     show('ok', '已创建只读分享链接，完整地址只显示这一次。');
     await loadShares();
+  });
+
+  document.getElementById('export-artifact').addEventListener('click', () => {
+    if (!current || !current.id || !workspaceId()) {
+      show('error', '请先保存作品，再导出。');
+      return;
+    }
+    globalThis.location.assign(exportHref());
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
