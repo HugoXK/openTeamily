@@ -16,9 +16,19 @@ export function readAgentForm(form) {
   };
 }
 
-export function idempotencyKey() {
+export function idempotencyKey(prefix) {
   const raw = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
-  return ('agent-' + raw.replace(/-/g, '')).slice(0, 64);
+  return ((prefix || 'agent-') + raw.replace(/-/g, '')).slice(0, 64);
+}
+
+export function statusLabel(message) {
+  if (!message) return '';
+  if (message.status === 'queued' && message.error_code === 'no_agent') return '等待已连接的运行时。';
+  if (message.status === 'queued') return '排队中。';
+  if (message.status === 'running') return '生成中。';
+  if (message.status === 'failed') return '回复失败' + (message.error_code ? '（' + message.error_code + '）' : '') + '。';
+  if (message.status === 'cancelled') return '已取消。';
+  return message.body || '';
 }
 
 function messageFor(error, fallback) {
@@ -33,9 +43,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const workspaceSelect = document.getElementById('workspace');
   const createForm = document.getElementById('create-form');
   const editForm = document.getElementById('edit-form');
+  const chatPanel = document.getElementById('chat-panel');
   let currentUser = null;
   let actor = null;
   let workspaces = [];
+  let currentAgent = null;
+  let currentConversation = null;
+  let pollTimer = 0;
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -56,6 +70,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function workspaceId() {
     return workspaceSelect.value;
+  }
+
+  function agentBase() {
+    return `/v1/workspaces/${workspaceId()}/agents/${currentAgent && currentAgent.id}`;
+  }
+
+  function stopPolling() {
+    if (pollTimer) {
+      globalThis.clearTimeout(pollTimer);
+      pollTimer = 0;
+    }
   }
 
   async function load() {
@@ -90,6 +115,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.getElementById('agents-empty').hidden = false;
       createForm.hidden = true;
       editForm.hidden = true;
+      chatPanel.hidden = true;
       show('', '');
       return;
     }
@@ -99,6 +125,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function loadWorkspace() {
     const id = workspaceId();
     if (!id) return;
+    currentAgent = null;
+    currentConversation = null;
+    stopPolling();
+    chatPanel.hidden = true;
     const detail = await request('GET', `/v1/workspaces/${id}`);
     if (detail.status !== 200) {
       show('error', messageFor(detail.body.error, '无法打开工作区。'));
@@ -110,10 +140,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : null;
     actor = self ? self.role : (detail.body.workspace && detail.body.workspace.owner_id === currentUser.id ? 'owner' : 'member');
     document.getElementById('role-note').textContent = actor === 'owner'
-      ? '你是这个工作区的所有者，可以创建和归档智能体。'
+      ? '你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。'
       : actor === 'admin'
-        ? '你是管理员，可以创建和归档智能体。'
-        : '你是成员，可以查看目录，但不能改。';
+        ? '你是管理员，可以创建和归档智能体，并与自己的智能体对话。'
+        : '你是成员，可以查看目录并与自己的智能体对话，但不能改目录。';
     createForm.hidden = !canManage(actor);
     editForm.hidden = true;
     const listed = await request('GET', `/v1/workspaces/${id}/agents?limit=100`);
@@ -145,6 +175,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function fillEdit(agent) {
+    currentAgent = agent;
     editForm.hidden = false;
     editForm.elements.id.value = agent.id;
     editForm.elements.revision.value = String(agent.revision);
@@ -157,6 +188,86 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     document.getElementById('archive-button').hidden = !writable;
     editForm.querySelector('button[type="submit"]').hidden = !writable;
+    document.getElementById('chat-title').textContent = '与 ' + agent.name + ' 的对话';
+    chatPanel.hidden = false;
+  }
+
+  function renderMessages(items) {
+    const list = document.getElementById('message-list');
+    list.replaceChildren();
+    let pending = false;
+    for (const item of items || []) {
+      const li = document.createElement('li');
+      const role = document.createElement('p');
+      role.className = 'role';
+      role.textContent = item.role === 'user' ? '你' : '智能体';
+      const body = document.createElement('p');
+      const waiting = item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
+      const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
+      body.className = waiting ? 'pending' : (failed ? 'failed' : '');
+      body.textContent = item.role === 'user' ? (item.body || '') : statusLabel(item);
+      li.append(role, body);
+      if (item.role === 'assistant' && item.status === 'succeeded' && item.body) {
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.dataset.save = item.id;
+        save.textContent = '保存到作品库';
+        li.append(save);
+      }
+      list.append(li);
+      if (waiting) pending = true;
+    }
+    return pending;
+  }
+
+  async function loadConversations() {
+    if (!currentAgent) return;
+    const listed = await request('GET', `${agentBase()}/conversations?limit=100`);
+    if (listed.status !== 200) {
+      show('error', messageFor(listed.body.error, '无法加载对话。'));
+      return;
+    }
+    const items = listed.body.items || [];
+    const list = document.getElementById('conversation-list');
+    list.replaceChildren();
+    for (const item of items) {
+      const li = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'link';
+      button.dataset.conversation = item.id;
+      button.textContent = item.title || '对话';
+      li.append(button);
+      list.append(li);
+    }
+    document.getElementById('conversations-empty').hidden = items.length > 0;
+    if (!currentConversation && items.length) {
+      await openConversation(items[0].id);
+    } else if (currentConversation) {
+      await openConversation(currentConversation.id);
+    } else {
+      document.getElementById('message-list').replaceChildren();
+    }
+  }
+
+  function schedulePoll() {
+    stopPolling();
+    pollTimer = globalThis.setTimeout(() => {
+      if (currentConversation) openConversation(currentConversation.id);
+    }, 2000);
+  }
+
+  async function openConversation(id) {
+    if (!currentAgent) return;
+    const result = await request('GET', `${agentBase()}/conversations/${id}`);
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法打开对话。'));
+      return;
+    }
+    currentConversation = result.body.conversation;
+    const pending = renderMessages(result.body.items);
+    if (pending) schedulePoll();
+    else stopPolling();
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -183,7 +294,82 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '无法打开这个智能体。'));
       return;
     }
+    currentConversation = null;
+    stopPolling();
     fillEdit(result.body.agent);
+    await loadConversations();
+  });
+
+  document.getElementById('conversation-list').addEventListener('click', async event => {
+    const button = event.target.closest('button[data-conversation]');
+    if (!button) return;
+    await openConversation(button.dataset.conversation);
+  });
+
+  document.getElementById('new-conversation').addEventListener('click', async () => {
+    if (!currentAgent) return;
+    const result = await request('POST', `${agentBase()}/conversations`, {title: '新对话'}, {
+      'Idempotency-Key': idempotencyKey('chat-'),
+    });
+    if (result.status !== 201 && result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法创建对话。'));
+      return;
+    }
+    currentConversation = result.body.conversation;
+    document.getElementById('message-list').replaceChildren();
+    show('ok', '已开始新对话。');
+    await loadConversations();
+  });
+
+  document.getElementById('chat-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!currentAgent) return;
+    const text = document.getElementById('chat-body').value;
+    if (!text.trim()) {
+      show('error', '请填写消息。');
+      return;
+    }
+    if (!currentConversation) {
+      const created = await request('POST', `${agentBase()}/conversations`, {title: '新对话'}, {
+        'Idempotency-Key': idempotencyKey('chat-'),
+      });
+      if (created.status !== 201 && created.status !== 200) {
+        show('error', messageFor(created.body.error, '无法创建对话。'));
+        return;
+      }
+      currentConversation = created.body.conversation;
+    }
+    const result = await request(
+      'POST',
+      `${agentBase()}/conversations/${currentConversation.id}/messages`,
+      {body: text},
+      {'Idempotency-Key': idempotencyKey('msg-')},
+    );
+    if (result.status !== 201 && result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法发送。'));
+      return;
+    }
+    document.getElementById('chat-body').value = '';
+    show(result.body.reply && result.body.reply.error_code === 'no_agent' ? 'error' : 'ok',
+         result.body.reply && result.body.reply.error_code === 'no_agent'
+           ? '消息已保存，正在等待已连接的运行时。'
+           : '已发送。');
+    await loadConversations();
+  });
+
+  document.getElementById('message-list').addEventListener('click', async event => {
+    const button = event.target.closest('button[data-save]');
+    if (!button || !currentConversation) return;
+    const result = await request(
+      'POST',
+      `${agentBase()}/conversations/${currentConversation.id}/messages/${button.dataset.save}/artifact`,
+      {},
+    );
+    if (result.status !== 201 && result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法保存到作品库。'));
+      return;
+    }
+    show('ok', '已保存到作品库。');
   });
 
   createForm.addEventListener('submit', async event => {
@@ -202,9 +388,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     event.currentTarget.reset();
-    show('ok', '已保存到目录。管理进程不会运行它。');
+    show('ok', '已保存到目录。对话仍由已连接的运行时执行。');
     await loadWorkspace();
-    if (result.body.agent) fillEdit(result.body.agent);
+    if (result.body.agent) {
+      fillEdit(result.body.agent);
+      await loadConversations();
+    }
   });
 
   editForm.addEventListener('submit', async event => {
@@ -222,9 +411,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '无法保存。'));
       return;
     }
-    show('ok', '已更新。');
+    show('ok', '已更新。之后的对话会使用新的说明。');
+    const keep = currentConversation && currentConversation.id;
     await loadWorkspace();
     fillEdit(result.body.agent);
+    if (keep) currentConversation = {id: keep, ...currentConversation};
+    await loadConversations();
   });
 
   document.getElementById('archive-button').addEventListener('click', async () => {
@@ -245,6 +437,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('cancel-edit').addEventListener('click', () => {
     editForm.hidden = true;
+    chatPanel.hidden = true;
+    currentAgent = null;
+    currentConversation = null;
+    stopPolling();
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {

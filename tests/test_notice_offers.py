@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 KATEX = ROOT / "runtime" / "third_party" / "font-notices" / "katex"
 SHARP = ROOT / "runtime" / "third_party" / "sharp-libvips"
 ANTHROPIC = ROOT / "runtime" / "third_party" / "anthropic-sdk"
+CODICON = ROOT / "runtime" / "third_party" / "font-notices" / "codicon"
 
 
 class NoticeOfferTests(unittest.TestCase):
@@ -104,6 +105,43 @@ class NoticeOfferTests(unittest.TestCase):
         restore = script.index('chown -R "$(id -u):$(id -g)" "$OUT"')
         self.assertLess(restore, offer)
         self.assertIn("uid 1000", script)
+
+    def test_codicon_license_matches_playwright_v1_64_1_source(self):
+        data = (CODICON / "LICENSE.txt").read_bytes()
+        self.assertEqual(hashlib.sha256(data).hexdigest(), "20535828272932407c2f5172aeb714ac7b374a34e5ecb1825af509f2902cde54")
+        self.assertEqual(len(data), 1087)
+        self.assertIn(b"MIT License", data)
+        self.assertIn(b"Microsoft Corporation", data)
+        pins = json.loads((CODICON / "pins.json").read_text())
+        self.assertEqual(pins["playwright_core"], "1.64.1")
+        self.assertEqual(pins["playwright_git"], "cfe490d941f992655948eee8fd4fd94e1c4234bf")
+        self.assertEqual(pins["font_sha256"], "0f1d5219934e96e83b8db162d60b4d8c09b5de1e7d38031cbafe4a3c0f2889c9")
+        self.assertFalse(pins["font_binaries_vendored"])
+        self.assertFalse(pins["npm_tarball_ships_license_beside_font"])
+        self.assertFalse(pins["public_redistributable_image"])
+        self.assertFalse(any(p.suffix.lower() in {".ttf", ".woff", ".woff2"} for p in CODICON.iterdir() if p.is_file()))
+
+    def test_corresponding_source_records_exact_build_script_urls_and_gaps(self):
+        payload = json.loads((SHARP / "corresponding-source.json").read_text())
+        self.assertIs(payload["public_redistributable_image"], False)
+        self.assertIs(payload["reproducible_rebuild_verified"], False)
+        by_id = {row["id"]: row for row in payload["libraries"]}
+        self.assertEqual(
+            by_id["cairo"]["url"],
+            "https://cairographics.org/releases/cairo-1.18.6.tar.xz",
+        )
+        self.assertEqual(by_id["cairo"]["version"], "1.18.6")
+        self.assertFalse(by_id["cairo"]["sha256_verified_in_this_repo"])
+        self.assertEqual(
+            by_id["vips"]["url"],
+            "https://github.com/libvips/libvips/releases/download/v8.18.7/vips-8.18.7.tar.xz",
+        )
+        self.assertTrue(by_id["vips"]["sha256_verified_in_this_repo"])
+        self.assertGreaterEqual(len(payload["unresolved_preferred_source_gaps"]), 3)
+        text = (SHARP / "CORRESPONDING-SOURCE.md").read_text()
+        self.assertIn("not a legal", text.lower())
+        self.assertIn("https://download.gnome.org/sources/glib/2.90/glib-2.90.0.tar.xz", text)
+
 
 
 if __name__ == "__main__":

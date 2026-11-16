@@ -69,6 +69,14 @@ CREATE TABLE IF NOT EXISTS artifact_media (
 CREATE TABLE IF NOT EXISTS artifact_boards (
  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
  board TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS artifact_chat_sources (
+ artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ conversation_id TEXT NOT NULL,
+ message_id TEXT NOT NULL,
+ agent_id TEXT,
+ created INTEGER NOT NULL,
+ UNIQUE(workspace_id, message_id));
 '''
 
 KINDS = ('document', 'website', 'whiteboard', 'media')
@@ -119,7 +127,9 @@ ROW_SELECT = (
     'm.render AS render, s.source_kind AS source_kind, s.source_id AS source_id, '
     's.automation_id AS automation_id, s.automation_title AS automation_title, '
     's.task_kind AS task_kind, md.mime AS media_mime, md.byte_count AS media_bytes, '
-    'md.sha256 AS media_sha256, md.filename AS media_filename, b.board AS board_json '
+    'md.sha256 AS media_sha256, md.filename AS media_filename, b.board AS board_json, '
+    'cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id, '
+    'cs.agent_id AS chat_agent_id '
     'FROM artifacts a '
     'JOIN users cu ON cu.id=a.created_by '
     'JOIN users uu ON uu.id=a.updated_by '
@@ -127,6 +137,7 @@ ROW_SELECT = (
     'LEFT JOIN artifact_sources s ON s.artifact_id=a.id '
     'LEFT JOIN artifact_media md ON md.artifact_id=a.id '
     'LEFT JOIN artifact_boards b ON b.artifact_id=a.id '
+    'LEFT JOIN artifact_chat_sources cs ON cs.artifact_id=a.id '
 )
 
 
@@ -151,6 +162,15 @@ def public_kind(row):
 
 
 def source_view(row):
+    if row['chat_message_id']:
+        data = {
+            'kind': 'agent_message',
+            'id': row['chat_message_id'],
+            'conversation_id': row['chat_conversation_id'],
+        }
+        if row['chat_agent_id']:
+            data['agent_id'] = row['chat_agent_id']
+        return data
     if not row['source_kind']:
         return None
     data = {'kind': row['source_kind'], 'id': row['source_id']}
@@ -233,6 +253,23 @@ def load_source_artifact(db, workspace_id, source_kind, source_id):
     row = db.execute(
         'SELECT artifact_id FROM artifact_sources WHERE workspace_id=? AND source_kind=? AND source_id=?',
         (workspace_id, source_kind, source_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return load(db, workspace_id, row['artifact_id'])
+
+
+def attach_chat_source(db, artifact_id, workspace_id, now, conversation_id, message_id, agent_id=None):
+    db.execute(
+        'INSERT INTO artifact_chat_sources VALUES(?,?,?,?,?,?)',
+        (artifact_id, workspace_id, conversation_id, message_id, agent_id, now),
+    )
+
+
+def load_chat_artifact(db, workspace_id, message_id):
+    row = db.execute(
+        'SELECT artifact_id FROM artifact_chat_sources WHERE workspace_id=? AND message_id=?',
+        (workspace_id, message_id),
     ).fetchone()
     if row is None:
         return None

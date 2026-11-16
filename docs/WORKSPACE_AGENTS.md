@@ -40,7 +40,7 @@ The same owner workspace + idempotency key + payload returns the original record
 
 - Public or unlisted homepages, share links, and embeddable conversations.
 - Auto / Instant / Agentic or any other invented mode field.
-- Binding an agent record to a running container, model adapter switch, or automation run.
+- Binding an agent record to a running container, model adapter switch, or automation run. Authorized user/agent conversations now live in [AGENT_CONVERSATIONS.md](AGENT_CONVERSATIONS.md) and reuse runtime infer tasks.
 - Teamily comparison or browser end-to-end acceptance. Issue #6 stays open.
 
 ## Tests
