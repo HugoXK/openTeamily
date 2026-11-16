@@ -420,6 +420,12 @@ class App:
             if not isinstance(iid, str) or not re.fullmatch(r'[0-9a-f]{32}', iid):
                 refuse(400, 'invalid', 'Invalid instance_id')
             return 200, {'claim': runtime.claim(manager, iid)}, []
+        recovery = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/recover', path)
+        if recovery and method == 'POST' and not query:
+            body = self.body(env, ['expected_revision', 'operation_id', 'confirmation'])
+            if set(body) != {'expected_revision', 'operation_id', 'confirmation'}:
+                refuse(400, 'invalid', 'Recovery confirmation, revision and operation key required')
+            return 200, runtime.recover(manager, recovery[1], **body), []
         match = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/(observe|heartbeat)', path)
         if match and method == 'POST':
             allowed = ['job_id', 'observed_revision', 'lease']
