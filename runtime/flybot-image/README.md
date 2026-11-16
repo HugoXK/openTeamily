@@ -41,7 +41,10 @@ CI (`.github/workflows/flybot-runtime-image.yml`) builds this image, runs
 `test/smoke.mjs`, and uploads a license/package inventory of the built image
 as the `flybot-runtime-image-license-inventory` artifact. The image is not
 published. That artifact is the live inventory for the build; see
-`inventory/README.md`.
+`inventory/README.md`. The recipe also copies KaTeX, sharp-libvips, and
+Anthropic SDK notices into `/opt/licenses` and beside the matching
+payloads (see `../third_party/`). Debian exact-version source-offer text
+is generated into the same artifact. None of that is legal clearance.
 
 ## What this slice does not claim
 

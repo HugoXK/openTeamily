@@ -32,3 +32,30 @@ A packaged inventory of what this revision ships, with versions, declared
 licenses, integrity hashes, and remaining unknowns, is in
 docs/reuse-audit/SHIPPED.md and docs/reuse-audit/shipped-pins.json. That
 inventory is not a legal opinion.
+
+The default FlyBot runtime image also installs packages that are not all
+vendored here. Notices collected for some of those, from the #56 built-image
+inventory, are offered in:
+
+  runtime/third_party/font-notices/katex/   MIT LICENSE shipped with the
+                                           KaTeX package whose woff2
+                                           payloads match the image fonts
+  runtime/third_party/sharp-libvips/        notices and source pointers for
+                                           @img/sharp-libvips-linux-x64
+                                           (LGPL, plus other listed terms)
+  runtime/third_party/anthropic-sdk/        MIT LICENSE of
+                                           @anthropic-ai/sdk@0.129.0 as
+                                           found in the image; this is not
+                                           the official Claude Code terms
+
+The image recipe copies those texts to /opt/licenses and, for KaTeX fonts
+and the sharp-libvips package, next to the payloads themselves. A Debian
+source-offer listing of the exact installed package versions is produced
+as a CI artifact by scripts/debian-source-offer.py. Those collections are
+not a legal opinion and this repository still does not offer a public
+redistributable runtime image.
+
+The vendored DS-Bot NOTICE was reviewed in
+docs/reuse-audit/DS-BOT-NOTICE-REVIEW.md. @deepseek-ai/dsh@0.2.2-rc.1 npm
+tarball correspondence with the git tag's compiled JavaScript remains
+explicitly unverified.

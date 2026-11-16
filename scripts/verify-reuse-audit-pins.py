@@ -168,6 +168,29 @@ def check_shipped() -> int:
         errors += 1
     else:
         print("OK image inventory collector present")
+    expected_offers = {
+        "runtime/third_party/font-notices/katex/LICENSE": "766ccc1f306c885aa45542a9846bbd0a505b27a0374f146778171c2254ce18e3",
+        "runtime/third_party/anthropic-sdk/LICENSE": "8bf96984ff8bcfae7e48cae76a529e8a25317ba9e02abf7fd3cc64fdf95657a6",
+        "runtime/third_party/sharp-libvips/THIRD-PARTY-NOTICES.md": "6f0d5086e3bcbee12bcdacf5878b31d1104002aeecaeb241d3fff466108082fe",
+        "runtime/third_party/sharp-libvips/LGPL-3.0.txt": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
+    }
+    for rel, expected in expected_offers.items():
+        path = ROOT / rel
+        if not path.is_file():
+            print(f"FAIL: missing {rel}")
+            errors += 1
+            continue
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest != expected:
+            print(f"FAIL: {rel} sha256 {digest} != {expected}")
+            errors += 1
+        else:
+            print(f"OK offer {rel}")
+    if "install-redistribution-notices.mjs" not in dockerfile:
+        print("FAIL: Dockerfile must install redistribution notices into the image")
+        errors += 1
+    else:
+        print("OK Dockerfile installs redistribution notices")
     return errors
 
 

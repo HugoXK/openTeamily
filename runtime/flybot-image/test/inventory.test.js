@@ -71,6 +71,15 @@ test('fixture inventory records OS, npm closures, fonts, and bundled notices', (
     assert.equal(checked.status, 0, checked.stderr || checked.stdout)
     const imageLike = structuredClone(inventory)
     imageLike.npm.trees.profile_web.package_count = 1
+    imageLike.bundled_notices.files = [
+      ...(imageLike.bundled_notices.files || []),
+      { path: '/opt/licenses/font-notices/katex/LICENSE' },
+      { path: '/opt/licenses/sharp-libvips/THIRD-PARTY-NOTICES.md' },
+      { path: '/opt/licenses/sharp-libvips/LGPL-3.0.txt' },
+      { path: '/opt/licenses/anthropic-sdk/LICENSE' },
+    ]
+    imageLike.fonts.files = [...(imageLike.fonts.files || []), { path: '/opt/demo/KaTeX_Main-Regular.woff2' }]
+    imageLike.fonts.notices = [...(imageLike.fonts.notices || []), { path: '/opt/demo/KaTeX-LICENSE.txt' }]
     const weak = join(out, 'weak-profile.json')
     writeFileSync(weak, JSON.stringify(imageLike))
     const expectImage = runValidate(weak, ['--expect-image'])
