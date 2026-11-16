@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {
+  addableRoles, canAdd, canChange, canInvite, canRemove,
+  readAccept, readAddMember, readInvite,
+} from '../openteamily/static/members/app.mjs';
+
+test('permission helpers follow the documented role defaults', () => {
+  assert.deepEqual(addableRoles('owner'), ['admin', 'member']);
+  assert.deepEqual(addableRoles('admin'), ['member']);
+  assert.deepEqual(addableRoles('member'), []);
+  assert.equal(canAdd('owner'), true);
+  assert.equal(canAdd('member'), false);
+  assert.equal(canChange('owner'), true);
+  assert.equal(canChange('admin'), false);
+  assert.equal(canInvite('admin'), true);
+  assert.equal(canInvite('member'), false);
+  assert.equal(canRemove('owner', {user_id: 'b', role: 'admin'}, 'a'), true);
+  assert.equal(canRemove('admin', {user_id: 'b', role: 'admin'}, 'a'), false);
+  assert.equal(canRemove('admin', {user_id: 'b', role: 'member'}, 'a'), true);
+  assert.equal(canRemove('member', {user_id: 'b', role: 'member'}, 'a'), false);
+  assert.equal(canRemove('member', {user_id: 'me', role: 'member'}, 'me'), true);
+  assert.equal(canRemove('owner', {user_id: 'a', role: 'owner'}, 'a'), false);
+});
+
+test('readAddMember and readInvite map form fields', () => {
+  const values = {username: ' Bob ', role: 'admin', expires_days: '7', max_uses: '2', token: ' tok '};
+  const fake = {get(name) { return values[name]; }};
+  const original = globalThis.FormData;
+  globalThis.FormData = class { constructor() { return fake; } };
+  try {
+    assert.deepEqual(readAddMember({}), {username: 'Bob', role: 'admin'});
+    assert.deepEqual(readInvite({}), {role: 'admin', expires_in: 604800, max_uses: 2});
+    assert.deepEqual(readAccept({}), {token: 'tok'});
+  } finally {
+    globalThis.FormData = original;
+  }
+});
