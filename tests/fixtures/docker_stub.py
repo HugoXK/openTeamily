@@ -42,11 +42,16 @@ elif args[0] == 'inspect':
     running = state['running']
     mounts = [{'Type': 'volume', 'Name': state['project'], 'Destination': '/data', 'RW': True}]
     binds = []
-    for volume in manifest['services']['flybot'].get('volumes', []):
-        if isinstance(volume, dict) and volume.get('type') == 'bind' and volume.get('target') in ('/run/secrets/openteamily-model-api.json', '/run/secrets/openteamily-bot-social.json'):
-            source = str((root / volume['source']).resolve()) if not Path(volume['source']).is_absolute() else volume['source']
-            mounts.append({'Type': 'bind', 'Source': source, 'Destination': volume['target'], 'RW': not volume.get('read_only', False)})
-            binds.append(source + ':' + volume['target'] + (':ro' if volume.get('read_only') else ''))
+    if state.get('binds'):
+        for item in state['binds']:
+            mounts.append({k: item[k] for k in ('Type', 'Source', 'Destination', 'RW')})
+            binds.append(item['bind'])
+    else:
+        for volume in manifest['services']['flybot'].get('volumes', []):
+            if isinstance(volume, dict) and volume.get('type') == 'bind' and volume.get('target') in ('/run/secrets/openteamily-model-api.json', '/run/secrets/openteamily-bot-social.json'):
+                source = str((root / volume['source']).resolve()) if not Path(volume['source']).is_absolute() else volume['source']
+                mounts.append({'Type': 'bind', 'Source': source, 'Destination': volume['target'], 'RW': not volume.get('read_only', False)})
+                binds.append(source + ':' + volume['target'] + (':ro' if volume.get('read_only') else ''))
     if ctrl.get('extra_bind'):
         mounts.append({'Type': 'bind', 'Source': '/etc/passwd', 'Destination': '/evil', 'RW': False})
         binds.append('/etc/passwd:/evil:ro')
@@ -66,8 +71,21 @@ elif args[0] == 'compose':
         if verb == 'up':
             time.sleep(ctrl.get('start_delay', 0))
         state.setdefault('id', hashlib.sha256(project.encode()).hexdigest())
-        state.update(project=project, volume=True, env_keys=sorted(os.environ))
+        state.update(project=project, volume=True, env_keys=sorted(os.environ), last_argv=args)
         state.setdefault('sentinel', 'persistent-test-content')
+        force = '--force-recreate' in args
+        if '-v' in args or '--volumes' in args:
+            raise SystemExit(63)  # tests must never request volume deletion
+        if verb in ('create', 'up') and (force or 'binds' not in state):
+            iid = project[3:]
+            manifest = json.loads((root / ('compose-' + iid + '.json')).read_text())
+            snap = []
+            for volume in manifest['services']['flybot'].get('volumes', []):
+                if isinstance(volume, dict) and volume.get('type') == 'bind' and volume.get('target') in ('/run/secrets/openteamily-model-api.json', '/run/secrets/openteamily-bot-social.json'):
+                    source = str((root / volume['source']).resolve()) if not Path(volume['source']).is_absolute() else volume['source']
+                    snap.append({'Type': 'bind', 'Source': source, 'Destination': volume['target'], 'RW': not volume.get('read_only', False),
+                                 'bind': source + ':' + volume['target'] + (':ro' if volume.get('read_only') else '')})
+            state['binds'] = snap
         if verb in ('up', 'restart'):
             if not ctrl.get('unchanged_identity') or not state.get('generation'):
                 state['generation'] = state.get('generation', 0) + 1

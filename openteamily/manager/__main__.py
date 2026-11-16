@@ -47,7 +47,7 @@ def main(argv=None):
     init.add_argument('--socket', default='/run/docker.sock')
     init.add_argument('--healthcheck-json', help='Optional CMD argv JSON; otherwise image MUST provide a Docker HEALTHCHECK')
     init.add_argument('--publish-port', type=int, help='Optional loopback-only host port mapping to container TCP8080')
-    for name in ('plan', 'inspect', 'logs', 'run-once', 'recover'):
+    for name in ('plan', 'inspect', 'logs', 'run-once', 'recover', 'migrate-manifest'):
         cmd = sub.add_parser(name)
         cmd.add_argument('--instance-id', required=True)
         if name == 'logs':
@@ -57,6 +57,8 @@ def main(argv=None):
             cmd.add_argument('--confirm-no-active-executors', action='store_true')
             cmd.add_argument('--expected-revision', type=int)
             cmd.add_argument('--operation-id', help='Fresh 16..64 character operator key; reuse this key on uncertain HTTP retry')
+        if name == 'migrate-manifest':
+            cmd.add_argument('--apply', action='store_true', help='Rewrite a compatible frozen compose file; never deletes the named volume or secret files')
     args = parser.parse_args(argv)
     try:
         if args.command == 'init':
@@ -65,35 +67,48 @@ def main(argv=None):
             require(bool(args.config), 'config_required')
             iid = check_id(args.instance_id)
             registry = Registry(args.config)
-            entry, path = registry.entry(iid)
-            if args.command == 'plan':
-                result = {'status': 'plan_only', 'instance_id': iid, 'compose_file': str(path), 'image': entry['image'], 'executed': False}
+            if args.command == 'migrate-manifest':
+                preview = registry.preview_manifest(iid) if not args.apply else registry.apply_manifest_upgrade(iid)
+                if args.apply and preview.get('status') in ('upgraded', 'current'):
+                    engine = ComposeEngine(registry, Runner(registry, enabled=False))
+                    if not engine.secret_path(iid).exists():
+                        engine.install_secret(iid, None)
+                    if not engine.bot_social_path(iid).exists():
+                        engine.install_bot_social(iid, None)
+                    preview['secret_files'] = 'created_if_missing'
+                preview['executed'] = False
+                preview['volume_deleted'] = False
+                result = preview
             else:
-                require(args.execute and registry.config['execution_enabled'] is True, 'execution_disabled')
-                cfg = registry.config
-                client = ManagerClient(cfg['base_url'], cfg['manager_id'], cfg['token'], enabled=True, host_header=cfg['server_host'])
-                snapshot = client.snapshot(iid)  # separate grant authorization even for logs/inspect
-                registry.entry(iid, snapshot)
-                engine = ComposeEngine(registry, Runner(registry, enabled=True))
-                if args.command == 'run-once':
-                    result = ManagerWorker(client, registry, engine).run_once(iid)
+                entry, path = registry.entry(iid)
+                if args.command == 'plan':
+                    result = {'status': 'plan_only', 'instance_id': iid, 'compose_file': str(path), 'image': entry['image'], 'executed': False, 'volume': 'ot-' + iid}
                 else:
-                    with instance_lock(registry.root, iid):
-                        state = engine.inspect(iid)
-                        if args.command == 'inspect':
-                            result = {'instance': snapshot, 'engine': state}
-                        elif args.command == 'logs':
-                            stdout, stderr = engine.compose(iid, 'logs', tail=args.tail)
-                            result = {'source': 'operator-compose-logs', 'instance_id': iid, 'tail': args.tail,
-                                      'public_runtime_log_api': False, 'text': redact(stdout + '\n' + stderr, (cfg['token'],))}
-                        else:
-                            result = {'mode': 'dry-run', 'applied': False, 'instance': snapshot, 'engine': state,
-                                      'note': 'Wait for all previous executors/daemon actions to finish; apply queues a fenced STOP, never resumes an interrupted action'}
-                            if args.apply:
-                                require(args.confirm_no_active_executors, 'explicit_quiescence_confirmation_required')
-                                recovered = client.recover(iid, args.expected_revision, args.operation_id)
-                                result = {'mode': 'applied', 'applied': True, 'result': recovered,
-                                          'note': 'Recovery accepted or replayed; inspect current revision and run-once to confirm its fenced STOP before any new owner start'}
+                    require(args.execute and registry.config['execution_enabled'] is True, 'execution_disabled')
+                    cfg = registry.config
+                    client = ManagerClient(cfg['base_url'], cfg['manager_id'], cfg['token'], enabled=True, host_header=cfg['server_host'])
+                    snapshot = client.snapshot(iid)  # separate grant authorization even for logs/inspect
+                    registry.entry(iid, snapshot)
+                    engine = ComposeEngine(registry, Runner(registry, enabled=True))
+                    if args.command == 'run-once':
+                        result = ManagerWorker(client, registry, engine).run_once(iid)
+                    else:
+                        with instance_lock(registry.root, iid):
+                            state = engine.inspect(iid)
+                            if args.command == 'inspect':
+                                result = {'instance': snapshot, 'engine': state}
+                            elif args.command == 'logs':
+                                stdout, stderr = engine.compose(iid, 'logs', tail=args.tail)
+                                result = {'source': 'operator-compose-logs', 'instance_id': iid, 'tail': args.tail,
+                                          'public_runtime_log_api': False, 'text': redact(stdout + '\n' + stderr, (cfg['token'],))}
+                            else:
+                                result = {'mode': 'dry-run', 'applied': False, 'instance': snapshot, 'engine': state,
+                                          'note': 'Wait for all previous executors/daemon actions to finish; apply queues a fenced STOP, never resumes an interrupted action'}
+                                if args.apply:
+                                    require(args.confirm_no_active_executors, 'explicit_quiescence_confirmation_required')
+                                    recovered = client.recover(iid, args.expected_revision, args.operation_id)
+                                    result = {'mode': 'applied', 'applied': True, 'result': recovered,
+                                              'note': 'Recovery accepted or replayed; inspect current revision and run-once to confirm its fenced STOP before any new owner start'}
         print(json.dumps(result, sort_keys=True))
         return 1 if result.get('status') == 'uncertain' else 0
     except (ManagerError, OSError, ValueError, TypeError, KeyError) as error:

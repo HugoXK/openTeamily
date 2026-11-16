@@ -24,6 +24,57 @@ BOT_SOCIAL_BIND_SUFFIX = ':' + BOT_SOCIAL_TARGET + ':ro'
 ALLOWED_BIND_SUFFIXES = (SECRET_BIND_SUFFIX, BOT_SOCIAL_BIND_SUFFIX)
 ALLOWED_BIND_TARGETS = (SECRET_TARGET, BOT_SOCIAL_TARGET)
 
+def compose_bytes(document):
+    return (json.dumps(document, sort_keys=True, separators=(',', ':')) + '\n').encode()
+
+
+def volume_key(item):
+    if not isinstance(item, dict):
+        return None
+    return (item.get('type'), item.get('source'), item.get('target'), bool(item.get('read_only')))
+
+
+def added_secret_binds(stored, expected):
+    """If stored is expected plus only missing allowlisted secret binds, return those binds.
+
+    Anything else (removed mounts, changed image, unexpected keys) returns None so the
+    exact-content check still fails closed. Named volume identity must stay the same.
+    """
+    if not isinstance(stored, dict) or not isinstance(expected, dict):
+        return None
+    if stored.get('volumes') != expected.get('volumes'):
+        return None
+    stored_svc, expected_svc = (stored.get('services') or {}).get('flybot'), (expected.get('services') or {}).get('flybot')
+    if not isinstance(stored_svc, dict) or not isinstance(expected_svc, dict):
+        return None
+    stored_vols = stored_svc.get('volumes')
+    expected_vols = expected_svc.get('volumes')
+    if not isinstance(stored_vols, list) or not isinstance(expected_vols, list):
+        return None
+    stored_rest = {k: v for k, v in stored_svc.items() if k != 'volumes'}
+    expected_rest = {k: v for k, v in expected_svc.items() if k != 'volumes'}
+    if stored_rest != expected_rest:
+        return None
+    if {k: v for k, v in stored.items() if k != 'services'} != {k: v for k, v in expected.items() if k != 'services'}:
+        return None
+    stored_keys = [volume_key(item) for item in stored_vols]
+    expected_keys = [volume_key(item) for item in expected_vols]
+    if None in stored_keys or None in expected_keys:
+        return None
+    if any(key not in expected_keys for key in stored_keys):
+        return None
+    added = [item for item, key in zip(expected_vols, expected_keys) if key not in stored_keys]
+    if not added:
+        return []
+    allowed = []
+    for item in added:
+        if item.get('type') != 'bind' or item.get('read_only') is not True:
+            return None
+        if item.get('target') not in ALLOWED_BIND_TARGETS or '..' in str(item.get('source') or ''):
+            return None
+        allowed.append(item)
+    return allowed
+
 
 def secret_relpath(iid):
     check_id(iid)
@@ -74,6 +125,7 @@ class Registry:
         self.config_path = str(config_path)
         self.root = Path(config_path).parent
         self.config = read_private(config_path)
+        self.upgrades = {}
         cfg = self.config
         require(isinstance(cfg, dict) and set(cfg) == {'version', 'execution_enabled', 'base_url', 'server_host', 'manager_id', 'token', 'docker', 'socket', 'instances'}, 'config_fields')
         require(type(cfg['version']) is int and cfg['version'] == 1 and type(cfg['execution_enabled']) is bool, 'config_version')
@@ -99,11 +151,49 @@ class Registry:
         path = self.root / ('compose-' + iid + '.json')
         if not path.exists() and not path.is_symlink():
             write_new(path, expected)
+        stored = read_private(path)
+        if stored != expected:
+            added = added_secret_binds(stored, expected)
+            require(added is not None, 'manifest_changed')
+            # Rewrite only the frozen compose file. The named volume ot-<id> and
+            # existing secret files are not removed or replaced here.
+            replace_private(path, compose_bytes(expected))
+            self.upgrades[iid] = [item['target'] for item in added]
         require(read_private(path) == expected, 'manifest_changed')
         if snapshot is not None:
             require(snapshot.get('id') == iid and snapshot.get('backend_mode') == 'compose' and
                     snapshot.get('image_ref') == entry['image'] and snapshot.get('volume_ref') == 'ot-' + iid, 'claim_registry_mismatch')
         return entry, path
+
+    def preview_manifest(self, iid):
+        """Describe a compose-file upgrade without writing. Never touches the volume."""
+        check_id(iid)
+        require(iid in self.config['instances'], 'instance_not_registered')
+        expected = manifest(iid, self.config['instances'][iid])
+        path = self.root / ('compose-' + iid + '.json')
+        volume = 'ot-' + iid
+        note = 'The named volume and existing secret files are left in place. A container created from the old file still needs a no-delete recreate so new binds attach.'
+        if not path.exists() and not path.is_symlink():
+            return {'status': 'missing', 'volume': volume, 'compose_file': str(path), 'note': note}
+        stored = read_private(path)
+        if stored == expected:
+            return {'status': 'current', 'volume': volume, 'compose_file': str(path)}
+        added = added_secret_binds(stored, expected)
+        if added is None:
+            return {'status': 'incompatible', 'reason': 'manifest_changed', 'volume': volume, 'compose_file': str(path),
+                    'note': 'The frozen compose file does not match a known secret-bind addition. The volume was not modified. Recreate the instance only after reviewing the file; do not delete the ot-<id> volume.'}
+        return {'status': 'upgradeable', 'volume': volume, 'compose_file': str(path),
+                'added': [item['target'] for item in added], 'note': note}
+
+    def apply_manifest_upgrade(self, iid):
+        preview = self.preview_manifest(iid)
+        if preview['status'] == 'current':
+            return preview
+        require(preview['status'] == 'upgradeable', preview.get('reason') or 'manifest_changed')
+        self.entry(iid)
+        preview['status'] = 'upgraded'
+        preview['added'] = self.upgrades.get(iid, preview.get('added') or [])
+        return preview
 
 
 class Runner:
@@ -213,15 +303,18 @@ class ComposeEngine:
         commands = {
             'create': ['create', '--no-build', '--no-recreate', '--pull', 'never', 'flybot'],
             'start': ['up', '--detach', '--no-build', '--no-recreate', '--no-deps', '--pull', 'never', 'flybot'],
+            'create-recreate': ['create', '--no-build', '--force-recreate', '--pull', 'never', 'flybot'],
+            'start-recreate': ['up', '--detach', '--no-build', '--force-recreate', '--no-deps', '--pull', 'never', 'flybot'],
             'stop': ['stop', '--timeout', '10', 'flybot'],
             'recover': ['stop', '--timeout', '10', 'flybot'],
             'restart': ['restart', '--no-deps', '--timeout', '10', 'flybot'],
             'ps': ['ps', '--all', '--quiet', '--no-trunc', 'flybot'],
             'logs': ['logs', '--no-color', '--no-log-prefix', '--tail', str(tail), 'flybot']}
         require(operation in commands, 'operation_not_allowed')
+        require('--force-recreate' not in commands[operation] or '-v' not in commands[operation], 'operation_not_allowed')
         return self.runner.run(['compose', '--env-file', '/dev/null', '-f', str(path), '--project-directory', str(self.registry.root),
                                 '-p', 'ot-' + iid, *commands[operation]], heartbeat=heartbeat,
-                               timeout=60 if operation in ('create', 'start', 'stop', 'restart', 'recover') else 10)
+                               timeout=60 if operation in ('create', 'start', 'create-recreate', 'start-recreate', 'stop', 'restart', 'recover') else 10)
 
     def volume_check(self, iid, heartbeat=lambda: None):
         name = 'ot-' + check_id(iid)
@@ -251,7 +344,7 @@ class ComposeEngine:
         ids = text.split()
         require(len(ids) <= 1 and all(re.fullmatch('[0-9a-f]{64}', x) for x in ids), 'container_scope')
         if not ids:
-            return {'present': False, 'stopped': True, 'healthy': False, 'process_ref': None, 'status': 'absent', 'health': 'unknown'}
+            return {'present': False, 'stopped': True, 'healthy': False, 'process_ref': None, 'status': 'absent', 'health': 'unknown', 'needs_recreate': False, 'volume': 'ot-' + iid}
         raw, _ = self.runner.run(['inspect', '--type', 'container', ids[0]], heartbeat=heartbeat)
         data = json_loads(raw)
         require(isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict), 'inspect_shape')
@@ -270,8 +363,13 @@ class ComposeEngine:
             matched = [suffix for suffix in ALLOWED_BIND_SUFFIXES if bind.endswith(suffix)]
             require(len(matched) == 1, 'unsafe_container')
             return matched[0]
-        require(isinstance(binds, list) and len(binds) == len(ALLOWED_BIND_SUFFIXES)
-                and sorted(bind_suffix(bind) for bind in binds) == sorted(ALLOWED_BIND_SUFFIXES), 'unsafe_container')
+        require(isinstance(binds, list), 'unsafe_container')
+        present_suffixes = sorted(bind_suffix(bind) for bind in binds)
+        allowed = sorted(ALLOWED_BIND_SUFFIXES)
+        require(all(suffix in allowed for suffix in present_suffixes), 'unsafe_container')
+        needs_recreate = present_suffixes != allowed
+        if not needs_recreate:
+            require(len(binds) == len(ALLOWED_BIND_SUFFIXES), 'unsafe_container')
         expected_ports = {'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': str(entry['publish_port'])}]} if entry['publish_port'] is not None else {}
         require((host.get('PortBindings') or {}) == expected_ports, 'unsafe_ports')
         labels = config.get('Labels')
@@ -281,12 +379,16 @@ class ComposeEngine:
         data_mounts = [m for m in mounts if isinstance(m, dict) and m.get('Destination') == '/data']
         require(len(data_mounts) == 1 and data_mounts[0].get('Type') == 'volume' and data_mounts[0].get('Name') == 'ot-' + iid and
                 data_mounts[0].get('RW') is True, 'volume_scope')
-        def require_secret_bind(target, code='secret_mount'):
+        def secret_bind(target):
             found = [m for m in mounts if isinstance(m, dict) and m.get('Destination') == target]
+            if not found:
+                return None
             require(len(found) == 1 and found[0].get('Type') == 'bind' and found[0].get('RW') is False
-                    and '..' not in str(found[0].get('Source') or ''), code)
-        require_secret_bind(SECRET_TARGET)
-        require_secret_bind(BOT_SOCIAL_TARGET, 'bot_social_mount')
+                    and '..' not in str(found[0].get('Source') or ''), 'secret_mount')
+            return found[0]
+        present_secrets = [target for target in ALLOWED_BIND_TARGETS if secret_bind(target) is not None]
+        if set(present_secrets) != set(ALLOWED_BIND_TARGETS):
+            needs_recreate = True
         require(all(isinstance(m, dict) and (m.get('Destination') == '/data' or
                     m.get('Destination') in ALLOWED_BIND_TARGETS or
                     (m.get('Type') == 'tmpfs' and m.get('Destination') == '/tmp')) for m in mounts), 'unexpected_mount')
@@ -300,7 +402,8 @@ class ComposeEngine:
         return {'present': True, 'stopped': state.get('Running') is False and state.get('Status') in ('created', 'exited') and not state.get('Restarting'),
                 'healthy': running and isinstance(health, dict) and health.get('Status') == 'healthy', 'process_ref': ref,
                 'status': state.get('Status') if state.get('Status') in ('running', 'created', 'exited', 'dead', 'paused', 'restarting', 'removing') else 'unknown',
-                'health': health.get('Status') if isinstance(health, dict) and health.get('Status') in ('healthy', 'unhealthy', 'starting') else 'unknown'}
+                'health': health.get('Status') if isinstance(health, dict) and health.get('Status') in ('healthy', 'unhealthy', 'starting') else 'unknown',
+                'needs_recreate': needs_recreate, 'volume': 'ot-' + iid}
 
     def wait(self, iid, action, previous=None, heartbeat=lambda: None, timeout=30):
         deadline = time.monotonic() + timeout
@@ -310,10 +413,11 @@ class ComposeEngine:
         while True:
             bounded_heartbeat()
             state = self.inspect(iid, bounded_heartbeat)
-            if action in ('create', 'stop', 'recover'):
-                if state['stopped'] and (action != 'create' or state['present']):
+            if action in ('create', 'create-recreate', 'stop', 'recover'):
+                if state['stopped'] and state.get('needs_recreate') is not True and (action in ('stop', 'recover') or state['present']):
                     return {'observed': 'stopped'}
-            elif state['healthy'] and (action != 'restart' or state['process_ref'] != previous):
+            elif state['healthy'] and state.get('needs_recreate') is not True and (
+                    action != 'restart' or state['process_ref'] != previous):
                 return {'observed': 'running', 'process_ref': state['process_ref']}
             require(time.monotonic() < deadline, 'readiness_timeout')
             time.sleep(0.1)
