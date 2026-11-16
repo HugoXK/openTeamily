@@ -45,7 +45,8 @@ CI (`.github/workflows/flybot-runtime-image.yml`) builds this image and runs
 - It does **not** close [issue #3](https://github.com/openTeamily/openTeamily/issues/3).
   DeepSeek Harness `0.2.2-rc.1`, the Node/Debian base image, and third-party
   notices still need a redistribution audit before a public image release.
-- Live Bot Social onboarding is off (`onboard: false`); that is a later slice.
+- Management-plane injection of a Bot Social server URL is not wired yet;
+  operators can set a file or env (see below) or use Settings → Bot Social.
 - The official ds-bot web client is not a second profile bundle (createRuntime
   already runs once). Composer `@` mentions and the Bot details drawer stay
   in the FlyBot registry until a later slice.
@@ -99,6 +100,39 @@ bind path is frozen in the compose file; only the file contents are updated
 before create, start or restart. The key is not placed in compose environment
 variables, image layers, user HTTP APIs, claim receipts or operator logs.
 Do not put keys in the Dockerfile, in git, or in a world-readable volume.
+
+
+## Bot Social onboarding (optional, tokens stay on the volume)
+
+If a Bot Social server URL is present, the existing `@flybot/social` plugin
+onboards the home and writes connector credentials to
+`$DSH_HOME/bot/flybot-social.json` (in this image, `/data/bot/flybot-social.json`),
+mode 0600. A second start reuses that file and does not call onboard again.
+A torn or unreadable credentials file is refused; it is not replaced by a
+new onboard. Tokens are never baked into the image, never committed, and
+must not appear in logs.
+
+The wrapper does not force `onboard: false`. The default server URL is
+resolved in this order (a user Settings override still wins at runtime):
+
+1. `$OPENTEAMILY_BOT_SOCIAL_FILE` if set (must resolve under `/run/secrets/`
+   or `/data/secrets/`)
+2. otherwise `/run/secrets/openteamily-bot-social.json`
+3. otherwise `/data/secrets/bot-social.json`
+4. otherwise `$OPENTEAMILY_BOT_SOCIAL_SERVER` or `$FLYBOT_SOCIAL_SERVER`
+
+Example file (a URL only; do not put a connector token here):
+
+```json
+{
+  "server": "https://social.example",
+  "displayName": "FlyBot"
+}
+```
+
+CI smokes this path against an in-container fake Bot Social that issues only
+`ot-fake-` tokens. That is not a live third-party Bot Social and is not a
+management-plane integration.
 
 ## Compose manager contract
 

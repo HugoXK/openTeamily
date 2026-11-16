@@ -124,3 +124,43 @@ test('attachFlybot declares flybot through cordis provide when the context has i
   assert.equal(provided[0][1], flybot)
   assert.equal(ctx.flybot, flybot)
 })
+
+test('bot.send.use, transports.add and tools.register are present so social can start', async () => {
+  const flybot = createFlybotFacade(stubRuntime())
+  const seen = []
+  const offSend = flybot.bot.send.use({
+    name: 'test',
+    priority: 10,
+    async handle(msg) {
+      seen.push(msg.text)
+      return { ok: true }
+    },
+  })
+  const result = await flybot.bot.send({ text: 'hello' })
+  assert.deepEqual(result, { ok: true })
+  assert.deepEqual(seen, ['hello'])
+  offSend()
+  assert.equal(await flybot.bot.send({ text: 'later' }), undefined)
+  assert.equal(typeof flybot.bot.send.priority.APPROVAL, 'number')
+  assert.equal(flybot.bot.find('Writer')?.id, 'b')
+
+  const offTransport = flybot.transports.add('bot-social', { async send() { return { id: 'x' } } })
+  assert.equal(typeof flybot.transports.get('bot-social').send, 'function')
+  offTransport()
+  assert.equal(flybot.transports.get('bot-social'), undefined)
+
+  const offTool = flybot.tools.register({ name: 'list_friend_bots', async execute() { return [] } })
+  assert.equal(flybot.tools.list()[0].name, 'list_friend_bots')
+  offTool()
+  assert.equal(flybot.tools.list().length, 0)
+
+  await flybot.grants.set('a', [{ grantee: '@bob.home' }])
+  assert.equal(flybot.grants.has('a', '@bob.home'), true)
+  assert.equal(flybot.bot.hasAnyGrant(), true)
+
+  const offChat = flybot.remote.chats.onSend(async () => {})
+  assert.equal(typeof offChat, 'function')
+  await flybot.remote.chats.deliver({ handle: '@bob.home', text: 'hi' })
+  assert.equal(flybot.remote.chats.list().at(-1).text, 'hi')
+  offChat()
+})

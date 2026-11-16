@@ -38,6 +38,32 @@ export function createFlybotFacade(rt, { fields } = {}) {
   const handlers = new Map()
   const fieldStore = fields ?? new Map()
   const remoteByRoom = new Map()
+  const grantStore = new Map()
+  const sendHooks = []
+  const transportMap = new Map()
+  const toolList = []
+  const chatLog = []
+  const chatSendListeners = []
+
+  const botSend = async (msg) => {
+    if (flybot.readOnly()) return undefined
+    const hooks = [...sendHooks].sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
+    for (const hook of hooks) {
+      const result = await hook.handle?.(msg)
+      if (result !== undefined) return result
+    }
+    return undefined
+  }
+  botSend.use = (hook) => {
+    if (!hook || typeof hook.handle !== 'function') return () => {}
+    sendHooks.push(hook)
+    return () => {
+      const at = sendHooks.indexOf(hook)
+      if (at !== -1) sendHooks.splice(at, 1)
+    }
+  }
+  botSend.priority = { POLICY: 100, ROUTING: 400, APPROVAL: 900, TRANSPORT: 1000 }
+
 
   const emit = (name, payload) => {
     for (const listener of listeners.get(name) ?? []) listener(payload)
@@ -97,7 +123,19 @@ export function createFlybotFacade(rt, { fields } = {}) {
       get(id) {
         return rt.botOf?.(id) ?? rt.state?.bots?.[id]
       },
-      async update(id, patch) {
+      find(query) {
+        const list = flybot.bot.list()
+        if (query == null || query === '') return undefined
+        if (typeof query === 'object') {
+          if (query.id) return flybot.bot.get(query.id)
+          if (query.isMain) return list.find(bot => bot.isMain) ?? list[0]
+          if (query.name) return list.find(bot => bot.name === query.name)
+          return undefined
+        }
+        const text = String(query)
+        return list.find(bot => bot.id === text || bot.name === text)
+      },
+      update: async (id, patch) => {
         if (flybot.readOnly()) return
         if (typeof rt.updateBot === 'function') return rt.updateBot(id, patch)
         const bot = flybot.bot.get(id)
@@ -105,8 +143,12 @@ export function createFlybotFacade(rt, { fields } = {}) {
         return bot
       },
       hasAnyGrant() {
+        for (const grants of grantStore.values()) {
+          if (grants.length > 0) return true
+        }
         return false
       },
+      send: botSend,
     },
     fields: {
       get(botId, key) {
@@ -167,13 +209,65 @@ export function createFlybotFacade(rt, { fields } = {}) {
       },
     },
     grants: {
-      of() { return [] },
-      has() { return false },
-      async set() {},
+      of(botId) {
+        return [...(grantStore.get(botId) ?? [])]
+      },
+      has(botId, grantee) {
+        const handle = String(grantee ?? '')
+        if (!handle) return false
+        return (grantStore.get(botId) ?? []).some((grant) => (
+          grant.grantee === handle || grant.member === handle || grant.home === handle
+        ))
+      },
+      async set(botId, grants) {
+        if (flybot.readOnly()) return
+        grantStore.set(botId, Array.isArray(grants) ? [...grants] : [])
+      },
     },
     remote: {
       publish() { return undefined },
-      chats: { list() { return [] } },
+      chats: {
+        list() {
+          return [...chatLog]
+        },
+        onSend(fn) {
+          if (typeof fn !== 'function') return () => {}
+          chatSendListeners.push(fn)
+          return () => {
+            const at = chatSendListeners.indexOf(fn)
+            if (at !== -1) chatSendListeners.splice(at, 1)
+          }
+        },
+        async deliver(msg) {
+          if (flybot.readOnly()) return undefined
+          const entry = { ...(msg && typeof msg === 'object' ? msg : { text: String(msg ?? '') }) }
+          chatLog.push(entry)
+          flybot.emit?.('remote.chat', entry)
+          return entry
+        },
+      },
+    },
+    transports: {
+      add(name, impl) {
+        transportMap.set(name, impl)
+        return () => { transportMap.delete(name) }
+      },
+      get(name) {
+        return transportMap.get(name)
+      },
+    },
+    tools: {
+      register(def) {
+        if (!def) return () => {}
+        toolList.push(def)
+        return () => {
+          const at = toolList.indexOf(def)
+          if (at !== -1) toolList.splice(at, 1)
+        }
+      },
+      list() {
+        return [...toolList]
+      },
     },
     _handlers: handlers,
   }
