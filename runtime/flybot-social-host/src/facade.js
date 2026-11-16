@@ -182,7 +182,19 @@ export function createFlybotFacade(rt, { fields } = {}) {
 
 export function attachFlybot(rt, ctx) {
   const flybot = createFlybotFacade(rt)
-  if (typeof ctx?.set === 'function') ctx.set('flybot', flybot)
-  else if (ctx) ctx.flybot = flybot
+  if (!ctx) return flybot
+  // Real DSH/cordis contexts reject `ctx.set('flybot', …)` unless the service
+  // was declared with provide(). Host unit tests use a plain `set` mock.
+  if (typeof ctx.provide === 'function') {
+    try {
+      ctx.provide('flybot', flybot)
+    } catch {
+      try { ctx.provide('flybot') } catch { /* already declared */ }
+      if (typeof ctx.set === 'function') ctx.set('flybot', flybot)
+    }
+  } else if (typeof ctx.set === 'function') {
+    ctx.set('flybot', flybot)
+  }
+  if (ctx.flybot === undefined) ctx.flybot = flybot
   return flybot
 }

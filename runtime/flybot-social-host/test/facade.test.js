@@ -110,3 +110,17 @@ test('pluginEnabled false leaves social endpoints unregistered', (t) => {
   applySocial(ctx, { inboxPollMs: 0, onboard: false, presence: false })
   assert.equal(flybot._handlers.get('social/server'), undefined)
 })
+
+test('attachFlybot declares flybot through cordis provide when the context has it', (t) => {
+  isolatedHome(t)
+  const provided = []
+  const ctx = {
+    provide(name, value) { provided.push([name, value]); this[name] = value },
+    set() { throw new Error('cannot set property "flybot" without provide') },
+  }
+  const flybot = attachFlybot(stubRuntime(), ctx)
+  assert.equal(provided.length, 1)
+  assert.equal(provided[0][0], 'flybot')
+  assert.equal(provided[0][1], flybot)
+  assert.equal(ctx.flybot, flybot)
+})

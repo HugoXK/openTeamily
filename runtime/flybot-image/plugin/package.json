@@ -1,0 +1,24 @@
+{
+  "name": "@openteamily/flybot-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenTeamily DSH plugin: boot unmodified upstream ds-bot v0.3.6 and attach @flybot/social through flybot-social-host. Not a fork of the vendor tree.",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "flybot",
+    "openteamily"
+  ],
+  "dsh": {
+    "client": {
+      "platform": "web"
+    },
+    "bundle": { "patch": "./cordis.patch.yml" }
+  }
+}

@@ -11,7 +11,7 @@ separate product.
 | Layer | In tree | Integrated with `openteamily/` / `manager/`? |
 | --- | --- | --- |
 | Management auth, workspaces, instance jobs, fake/simulated runtime | Yes (already on `main`) | n/a |
-| FlyBot customization source | `runtime/flybot/plugins/social`, `docker/` helpers | **No.** The runtime baseline is upstream DS-Bot v0.3.6 (PR #21), not a vendored FlyBot `core/` fork. Lifecycle jobs do not build or start this tree. |
+| FlyBot customization source | `runtime/flybot/plugins/social`, `docker/` helpers, `runtime/flybot-image/` | **Image recipe only.** CI can build and smoke a container on v0.3.6 + social host. Lifecycle jobs do not yet start that image through the compose executor. |
 | Bot Social source | `services/bot-social` | **No.** No management routes or secrets handling were added. |
 | `@flybot/social` | `runtime/flybot/plugins/social` | **First slice:** `runtime/flybot-social-host/` attaches a `flybot` façade to the unmodified v0.3.6 `createRuntime()` host (group rooms use the 0.3.5+ write-ahead ledger). Not wired to the management server; no live Bot Social onboarding. |
 
@@ -19,12 +19,13 @@ Keeping the snapshots as **optional modules** is intentional.
 
 ## Later integration sketch (not implemented)
 
-1. **FlyBot container:** an allowlisted manager starts a compose project that
-   packs only imported packages (`core/`, `@flybot/social`) plus a future
-   OpenTeamily-owned image recipe. Do not revive the official upstream
+1. **FlyBot container:** an allowlisted manager starts a compose project using
+   a digest-pinned build of `runtime/flybot-image/` (unmodified v0.3.6 +
+   `@flybot/social` via the social host). Do not revive the official upstream
    Dockerfile that packs excluded plugins. Web/API still must not mount the
-   Docker socket or accept arbitrary images, commands, or mounts. Image build
-   remains blocked on the DSH/base-image gaps in [GAPS.md](GAPS.md).
+   Docker socket or accept arbitrary images, commands, or mounts. Publishing
+   a redistributable image remains blocked on the DSH/base-image gaps in
+   [GAPS.md](GAPS.md).
 2. **Instance login** stays the instance's own session, not a management-DB
    plaintext token.
 3. **Bot Social:** management records an optional collaboration endpoint and
@@ -33,5 +34,6 @@ Keeping the snapshots as **optional modules** is intentional.
 4. **Tree / workflow / project / timeline:** only after a dedicated import as
    in [OPTIONAL-PLUGINS.md](OPTIONAL-PLUGINS.md).
 
-Until those steps land, do not describe OpenTeamily as running FlyBot
-containers from this snapshot or providing Bot Social collaboration.
+Until the management-plane wiring and #3 audit land, do not describe
+OpenTeamily as shipping a license-complete public FlyBot image or providing
+Bot Social collaboration. CI image smoke is not that claim.

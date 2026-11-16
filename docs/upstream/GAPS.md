@@ -11,24 +11,30 @@ system.”
   does not vendor that tree and does not vendor the old FlyBot `core/` fork.
 - `@flybot/social` has a first-slice host adapter in `runtime/flybot-social-host/`
   (façade over unmodified v0.3.6 `createRuntime()`, group rooms on the 0.3.5+
-  write-ahead ledger). Live Bot Social onboarding, management wiring, `dsh web`
-  UI slots, and a redistributable image are still open.
+  write-ahead ledger). An OpenTeamily-authored image recipe lives in
+  `runtime/flybot-image/` (CI builds and smokes it under the compose manager
+  contract). Live Bot Social onboarding, management-plane create/start/stop of
+  that image, `dsh web` UI slots, and a license-complete public image release
+  are still open.
 - Host-integration tests that imported FlyBot `core/` were removed, not ported.
   The new adapter tests cover façade + ledger + `apply()` on the v0.3.6 host.
 
 ## Docker / image
 
 - Official FlyBot `Dockerfile` and `compose.yaml` were **not** imported. They
-  pack plugins this snapshot excludes and install DSH globally.
-- A future OpenTeamily recipe would use the PR #21 upstream image (DSH
-  `0.2.2-rc.1` as pinned there) plus this customization layer, on a base image.
-- Open audit items that block redistributing such an image remain: npm ↔ git
-  correspondence for DSH, MPL LibreOffice kit, OFL fonts, possible Claude
-  payloads, and base-image copyright/source offer.
+  pack plugins this snapshot excludes and assume a root entrypoint.
+- `runtime/flybot-image/` is the OpenTeamily recipe: USER 1000, port 8080,
+  HEALTHCHECK, `/data` workspace, wrapper plugin on unmodified v0.3.6 plus
+  the social host. CI (`.github/workflows/flybot-runtime-image.yml`) builds
+  and smokes it. That does not close issue #3 and is not a public release.
+- Open audit items that still block redistributing a published image: npm ↔ git
+  correspondence for DSH 0.2.2-rc.1, MPL LibreOffice kit, OFL fonts, possible
+  Claude payloads, and base-image copyright/source offer.
 
 ## DeepSeek Harness / complete function
 
-- This PR does not install DSH and does not run `dsh web`.
+- The import PRs did not run `dsh web`. The image recipe CI does, as a container
+  smoke only.
 - Lark connector dependency is declared on the (now-removed) core package and
   is not vendored or tested here.
 
