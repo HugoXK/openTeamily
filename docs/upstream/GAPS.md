@@ -18,10 +18,11 @@ system.”
   server URL is configured (CI uses a fake server and `ot-fake-` tokens only).
   The management server can now inject a validated platform or workspace
   server URL into that file at instance start (tokens stay off management).
-  Composer `@` mentions / Bot details in the official ds-bot drawer, full
-  room-link behavior behind ticketPeers/serveInvites/seatOpenClaims, and a
+  Composer `@` mentions / Bot details in the official ds-bot drawer, and a
   license-complete public image release are still open. The social façade
-  now posts group/DM lines and hosts
+  now posts group/DM lines, seats room-link claims behind
+  ticketPeers/serveInvites/seatOpenClaims (in-process fake invite server
+  tests only; not a live Bot Social or Teamily comparison), and hosts
   face-to-face rooms on the v0.3.6 ledger; Teamily comparison of those
   flows is not done.
 - Host-integration tests that imported FlyBot `core/` were removed, not ported.
