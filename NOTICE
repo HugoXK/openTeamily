@@ -40,16 +40,23 @@ inventory, are offered in:
   runtime/third_party/font-notices/katex/   MIT LICENSE shipped with the
                                            KaTeX package whose woff2
                                            payloads match the image fonts
+  runtime/third_party/font-notices/codicon/ MIT LICENSE from Playwright
+                                           v1.64.1 next to the Codicon
+                                           font whose ttf payloads match
+                                           the image
   runtime/third_party/sharp-libvips/        notices and source pointers for
                                            @img/sharp-libvips-linux-x64
-                                           (LGPL, plus other listed terms)
+                                           (LGPL, plus other listed terms),
+                                           including exact build-script
+                                           URLs for bundled LGPL/cairo
+                                           libraries
   runtime/third_party/anthropic-sdk/        MIT LICENSE of
                                            @anthropic-ai/sdk@0.129.0 as
                                            found in the image; this is not
                                            the official Claude Code terms
 
-The image recipe copies those texts to /opt/licenses and, for KaTeX fonts
-and the sharp-libvips package, next to the payloads themselves. A Debian
+The image recipe copies those texts to /opt/licenses and, for KaTeX and
+Codicon fonts and the sharp-libvips package, next to the payloads themselves. A Debian
 source-offer listing of the exact installed package versions is produced
 as a CI artifact by scripts/debian-source-offer.py. Those collections are
 not a legal opinion and this repository still does not offer a public

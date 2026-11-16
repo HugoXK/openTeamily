@@ -39,10 +39,13 @@ has none.
   https://github.com/libvips/libvips/releases/download/v8.18.7/vips-8.18.7.tar.xz
   sha256 `5baaead3b0bb20ffdb9e9ff09aa9fda08620923df77b63b436654cb5e0b3bf94`
 - Other libraries compiled into the same `.so` are listed with versions in
-  `versions.json`. Several are LGPL (glib, fribidi, libexif, libheif,
-  librsvg, pango, proxy-libintl, libvips). cairo 1.18.6 is listed as
-  Mozilla Public License 1.1. Those additional corresponding-source and
-  MPL questions are not decided here.
+  `versions.json`. Exact source URLs that `build/posix.sh` at the npm
+  `gitHead` uses for the LGPL-listed libraries and for cairo 1.18.6 are
+  recorded in `CORRESPONDING-SOURCE.md` and `corresponding-source.json`.
+  Independent sha256 verification in this repo exists only for the libvips
+  8.18.7 tarball. No reproducible rebuild of the shipped `.so` was
+  performed. Sufficiency of those pointers as a corresponding-source or
+  MPL offer is not decided here.
 
 `scripts/fetch-sharp-libvips-sources.py` can verify these pins offline,
 or download the libvips source tarball with `--fetch` into a directory

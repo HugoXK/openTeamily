@@ -170,6 +170,7 @@ def check_shipped() -> int:
         print("OK image inventory collector present")
     expected_offers = {
         "runtime/third_party/font-notices/katex/LICENSE": "766ccc1f306c885aa45542a9846bbd0a505b27a0374f146778171c2254ce18e3",
+        "runtime/third_party/font-notices/codicon/LICENSE.txt": "20535828272932407c2f5172aeb714ac7b374a34e5ecb1825af509f2902cde54",
         "runtime/third_party/anthropic-sdk/LICENSE": "8bf96984ff8bcfae7e48cae76a529e8a25317ba9e02abf7fd3cc64fdf95657a6",
         "runtime/third_party/sharp-libvips/THIRD-PARTY-NOTICES.md": "6f0d5086e3bcbee12bcdacf5878b31d1104002aeecaeb241d3fff466108082fe",
         "runtime/third_party/sharp-libvips/LGPL-3.0.txt": "e3a994d82e644b03a792a930f574002658412f62407f5fee083f2555c5f23118",
@@ -186,6 +187,17 @@ def check_shipped() -> int:
             errors += 1
         else:
             print(f"OK offer {rel}")
+    cs = ROOT / "runtime/third_party/sharp-libvips/corresponding-source.json"
+    if not cs.is_file():
+        print("FAIL: missing corresponding-source.json")
+        errors += 1
+    else:
+        payload = json.loads(cs.read_text())
+        if payload.get("public_redistributable_image") is not False or payload.get("reproducible_rebuild_verified") is not False:
+            print("FAIL: corresponding-source.json must not claim a public image or verified rebuild")
+            errors += 1
+        else:
+            print("OK corresponding-source.json present without clearance claims")
     if "install-redistribution-notices.mjs" not in dockerfile:
         print("FAIL: Dockerfile must install redistribution notices into the image")
         errors += 1

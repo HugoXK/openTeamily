@@ -86,7 +86,8 @@ DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包
 ### 3.5 依据 #56 artifact 已做的通知与源码收集（仍非法律结论）
 
 - **KaTeX 字体：** #56 镜像在 `@deepseek-ai/dsh-web-frontend@0.2.2-rc.1` 的 `dist/assets/fonts/` 中有 19 个 `KaTeX_*.woff2`，当时旁边没有 KaTeX 许可文本（同目录已有 `Montserrat-OFL.txt`，sha256 `861d64229728…7065f`，与 DSH 标签钉扎一致）。这些 woff2 与 `katex@0.18.7`（以及抽查的 `katex@0.16.47`）包内字体字节相同。`katex@0.18.7` 与 git 标签 `v0.18.7` 只随附 MIT `LICENSE`，没有 `OFL.txt`。本仓把该 MIT 文本放在 [`runtime/third_party/font-notices/katex/`](../../runtime/third_party/font-notices/katex/)，镜像配方会把它拷到 `/opt/licenses/font-notices/katex/` 以及含有 `KaTeX_*.woff2` 的目录（`KaTeX-LICENSE.txt`）。本仓不内嵌字体二进制。是否另有 SIL OFL 适用于更早祖先字体，此处不作结论。
-- **sharp-libvips：** 镜像含 `@img/sharp-libvips-linux-x64@1.3.4`（声明 LGPL-3.0-or-later）。其 npm tarball **没有** LICENSE / THIRD-PARTY-NOTICES 文件。通知、LGPL-2.1 / LGPL-3 文本、版本表和 libvips 8.18.7 源码指针见 [`runtime/third_party/sharp-libvips/`](../../runtime/third_party/sharp-libvips/)。公式配方把它们拷到 `/opt/licenses/sharp-libvips/` 和该 npm 包目录。`.so` 不纳入本仓。同一二进制还列有 cairo 的 MPL-1.1 及其它 LGPL 组件；这些对应源码是否充分属于法律解释。`scripts/fetch-sharp-libvips-sources.py` 可离线核钉扎，或用 `--fetch` 把 libvips 源码包下到指定目录。
+- **sharp-libvips：** 镜像含 `@img/sharp-libvips-linux-x64@1.3.4`（声明 LGPL-3.0-or-later）。其 npm tarball **没有** LICENSE / THIRD-PARTY-NOTICES 文件。通知、LGPL-2.1 / LGPL-3 文本、版本表和 libvips 8.18.7 源码指针见 [`runtime/third_party/sharp-libvips/`](../../runtime/third_party/sharp-libvips/)。公式配方把它们拷到 `/opt/licenses/sharp-libvips/` 和该 npm 包目录；清单收集器会按包内路径把这些通知记入 `license_files`，并由 `--expect-image` 校验。`.so` 不纳入本仓。`build/posix.sh` 在 npm `gitHead` `ebb95f8…` 上对 LGPL 组件和 cairo 1.18.6 使用的确切下载 URL 见 [`CORRESPONDING-SOURCE.md`](../../runtime/third_party/sharp-libvips/CORRESPONDING-SOURCE.md)。本仓只核验了 libvips 8.18.7 tarball 的 sha256；其余 tarball/补丁哈希与 `.so` 的可复现对应仍明确未核实。这些指针是否构成充分对应源码或 MPL 要约，属于法律解释。
+- **Playwright Codicon：** #60 镜像中 3 个 `codicon*.ttf`（sha256 `0f1d5219…2889c9`，80340 字节）与 `playwright-core@1.64.1` npm 包及 git 标签 `v1.64.1`（`cfe490d941f992655948eee8fd4fd94e1c4234bf`）里 `packages/web/src/third_party/vscode/codicon.ttf` 字节相同。该目录唯一的许可文件是 MIT `LICENSE.txt`（1087 字节，sha256 `20535828…de54`，Copyright 2015-present Microsoft Corporation）。npm 包在字体旁没有这份文本。本仓把它放在 [`runtime/third_party/font-notices/codicon/`](../../runtime/third_party/font-notices/codicon/)，配方会拷到 `/opt/licenses/font-notices/codicon/` 以及字体旁的 `Codicon-LICENSE.txt`。本仓不内嵌字体二进制。是否另有 vscode-codicons 的 Creative Commons 条款，此处不作结论（该修订的 Playwright 目录中没有这份文本）。
 - **Debian：** `scripts/debian-source-offer.py` 根据现场 `inventory.json` 生成带有确切 `source_package=source_version` 的 `debian-source-offer.md`，并由 CI 随 artifact 上传。本仓仍不托管 Debian 源码。#56 构建为 bookworm，116 个二进制包；`git` 为 `1:2.39.5-0+deb12u3`。要约是否充分属于法律解释。
 - **DS-Bot NOTICE：** 已对 v0.3.6 NOTICE 正文做归属审阅，见 [DS-BOT-NOTICE-REVIEW.md](DS-BOT-NOTICE-REVIEW.md)。这是对通知文件的阅读记录，不是对其中每个上游项目的许可结案。
 - **DSH tarball 与 git 已编译 JS：** 仍然明确为未核实。没有 `gitHead`，也没有在本轮重现字节级对应；不编造已经对齐的结论。
@@ -94,10 +95,10 @@ DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包
 ### 3.6 仍待完成的审阅与解释
 
 - LibreOffice kit 的 MPL 3.2/3.3 解释，以及 0.1.5 首选形式的公开 git 对象，仍然开放。
-- sharp-libvips 中除 libvips 以外的 LGPL 组件，以及 cairo 的 MPL-1.1，对应源码要约是否充分，仍然开放。
+- sharp-libvips 中除 libvips 以外的 LGPL 组件，以及 cairo 的 MPL-1.1：构建脚本 URL 已按确切版本记录，但其余 tarball/补丁 sha256 与 `.so` 可复现对应仍未核实；要约是否充分仍然开放。
 - Debian 源码要约是否充分，仍然开放。
 - KaTeX 字体是否另受 OFL 约束，仍然开放（上游包本身未附 OFL 文本）。
-- Playwright Codicon 字体尚未单独做字体许可审阅。
+- Playwright Codicon 已按 v1.64.1 源码目录中的 MIT `LICENSE.txt` 收集；是否另有 vscode-codicons CC 条款，仍然开放。
 - 商标授权待核。
 
 ## 4. 建议动作
@@ -107,7 +108,7 @@ DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包
 | 本仓新撰写材料、管理面、自写 stub | 可按根 MIT 再分发源码；保留根 LICENSE 与 NOTICE，并附带导入树的许可文本。 |
 | 已导入的 FlyBot / DS-Bot / Bot Social 树 | 保持原许可与 NOTICE / 版权，不得改标为本仓 MIT。 |
 | 自托管构建本镜像供自己运行 | 可以按配方构建；CI 已证明镜像能构建并启动。这不等于已取得公开发行授权。 |
-| 公开发布预构建运行时镜像或其它发行物 | **先不要做。** 至少需要：对 LibreOffice kit 与 sharp-libvips（含 cairo MPL-1.1）的对应源码要约是否满足再分发镜像义务作出法律解释；判断 Debian 源码要约是否充分；按需完成 KaTeX 字体 OFL 问题与商标审阅。`@anthropic-ai/sdk` 的 MIT 文本已经按镜像所载记录，不得写成 Claude Code 条款已核清。DSH 已编译 JS 的 tarball 与 git 对应仍明确未核实。办公与图像处理功能保留，不靠排除组件回避。 |
+| 公开发布预构建运行时镜像或其它发行物 | **先不要做。** 至少需要：对 LibreOffice kit 与 sharp-libvips（含 cairo MPL-1.1）的对应源码要约是否满足再分发镜像义务作出法律解释；判断 Debian 源码要约是否充分；按需完成 KaTeX 字体 OFL、Codicon 是否另有 CC 条款，以及商标审阅。`@anthropic-ai/sdk` 的 MIT 文本已经按镜像所载记录，不得写成 Claude Code 条款已核清。DSH 已编译 JS 的 tarball 与 git 对应仍明确未核实。办公与图像处理功能保留，不靠排除组件回避。 |
 | Project / Timeline 插件 | 现在不复制；若复用须先修 #18 记录的静态风险。 |
 | Birfy/flybot-control-plane | 禁止导入。 |
 
@@ -118,8 +119,8 @@ DSH `dsh-v0.2.2-rc.1` 的 `THIRD_PARTY_NOTICES.md` 写明该 kit 及其平台包
 1. MPL-2.0 LibreOffice kit 仍会随默认 DSH 安装进入镜像（办公功能保留）。本仓已提供 0.1.5 的源码与通知要约，但公开 git 没有找到 0.1.5 对应提交，且该要约是否满足再分发镜像的 MPL 义务尚未作出法律解释。
 2. `@deepseek-ai/dsh@0.2.2-rc.1` 的 npm tarball 与 git 标签 `dsh-v0.2.2-rc.1` 的已编译 JS **仍然明确未核实**；本轮未重现字节级对应，也不宣称已经对齐。
 3. Debian 源码要约已按确切安装版本生成流程与 CI 输出，本仓仍不托管 Debian 源码。该要约是否充分属于法律解释。
-4. `@img/sharp-libvips-linux-x64@1.3.4` 的通知与 libvips 8.18.7 源码指针已放入本仓并拷入镜像；同一 `.so` 中其它 LGPL 组件以及 cairo 的 MPL-1.1 是否已有充分对应源码，属于法律解释。
+4. `@img/sharp-libvips-linux-x64@1.3.4` 的通知与 libvips 8.18.7 源码指针已放入本仓并拷入镜像。同一 `.so` 中其它 LGPL 组件以及 cairo 的 MPL-1.1，已记录 `build/posix.sh` 使用的确切源码 URL；除 libvips 外的 tarball/补丁 sha256 与可复现重建仍明确未核实。这些指针是否充分属于法律解释。
 5. `#56` 扫描到的 `@anthropic-ai/sdk@0.129.0` MIT 文本已按镜像所载记录。官方 Claude Code / `claude-agent-sdk` 条款未在该扫描中出现，也不得用这份 MIT 文本替代。扫描不能覆盖启动后的可选下载。
-6. KaTeX 字体已附上与字节对应的上游 MIT LICENSE。是否另有 OFL 义务、Playwright Codicon 字体许可、以及商标授权，仍待审阅。DS-Bot v0.3.6 NOTICE 已做归属阅读记录，不是对其中每个上游的结案。
+6. KaTeX 字体已附上与字节对应的上游 MIT LICENSE。是否另有 OFL 义务，仍然开放。Playwright Codicon 已按 v1.64.1 源码目录中的 MIT 文本收集；是否另有 CC 条款，仍然开放。商标授权仍待审阅。DS-Bot v0.3.6 NOTICE 已做归属阅读记录，不是对其中每个上游的结案。
 
 校验：在仓库根目录运行 `python3 scripts/verify-reuse-audit-pins.py`（离线检查历史钉扎与本清单哈希）。`python3 -m unittest tests.test_shipped_licenses` 检查根 NOTICE / 导入树许可文件是否存在，且磁盘哈希与 `shipped-pins.json` 一致。
