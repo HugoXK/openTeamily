@@ -22,10 +22,11 @@ Pins, hashes, counts, and documented modifications are in
 | --- | --- | --- | --- |
 | FlyBot customization layer | https://github.com/ThinkFlowLab/FlyBot | `e26895e737b1218875aafa1f74ab1d3464f287d2` (2026-11-16 00:07:14 UTC) | Apache-2.0 + `NOTICE` at `runtime/flybot/` |
 | Bot Social needed set | https://github.com/Birfy/bot-social | `8706824f53f6cce8212470bc6b442f7271cccd3e` (2026-11-16 07:41:41 UTC) | MIT, Copyright (c) 2026 Birfy, at `services/bot-social/` |
-| DS-Bot runtime baseline | https://github.com/Fei2411/DS-Bot | v0.3.6 / `a66cc737cfb6c3d8a2597e748cded6cab1206dd3` (PR #21; not vendored in this PR) | Apache-2.0, in PR #21's `runtime/ds-bot-upstream/` |
+| DS-Bot runtime baseline | https://github.com/Fei2411/DS-Bot | v0.3.6 / `a66cc737cfb6c3d8a2597e748cded6cab1206dd3` (PR #21, now on `main`) | Apache-2.0, in `runtime/ds-bot-upstream/` |
 
-OpenTeamily base at first import: `main` `2cbd0c1c0845338ded1d9c9455a6c9c2c40a4d52`.
-This branch also contains a regular merge of `main` `ccad9c17` (PR #19).
+OpenTeamily base: `main` `402b5c907963389d020bf6dc064ee3f69b69f0d9` (after PR #21, which this import merged onto).
+The first-import draft started from `main` `2cbd0c1c0845338ded1d9c9455a6c9c2c40a4d52`.
+The historical FlyBot core pin `2b10c70b614e969117b68ddc6fd14e68968272f2` equals upstream `0f130e7d134bf63e8988b2d53fd6846138ac3d73` (ds-bot tree `5834c00d9c21b972e4b32ad90489443da2a10324`); recorded in [ds-bot-pin-equivalence.json](ds-bot-pin-equivalence.json) and not imported.
 
 ## Layout
 
