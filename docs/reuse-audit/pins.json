@@ -166,5 +166,15 @@
         }
       }
     }
+  },
+  "shipped_inventory": {
+    "date_asia_shanghai": "2026-11-16",
+    "documents": [
+      "docs/reuse-audit/SHIPPED.md",
+      "docs/reuse-audit/shipped-pins.json",
+      "NOTICE"
+    ],
+    "inventoried_against": "e67e712f9f8389f842c33d204e6c6e6a0014df73",
+    "note": "Coverage for exactly what this revision ships. Historical #18 hashes above are unchanged, including dsh-v0.2.1-rc.2 THIRD_PARTY_NOTICES. DSH 0.2.2-rc.1 evidence and remaining legal blockers live in the shipped inventory. issue 3 remains open. This is not a public redistributable image."
   }
 }

@@ -1,0 +1,32 @@
+OpenTeamily
+Copyright (c) 2026 OpenTeamily contributors
+
+This product includes material under more than one license. The root LICENSE
+(MIT) covers newly written OpenTeamily material only. It does not relicense
+imported or vendored trees, and it does not relicense third-party packages
+installed by the FlyBot runtime image recipe.
+
+Imported and vendored trees keep their own LICENSE and NOTICE files:
+
+  runtime/flybot/              Apache License 2.0 and NOTICE
+  runtime/ds-bot-upstream/     Apache License 2.0 and NOTICE
+                               (unmodified Fei2411/DS-Bot v0.3.6)
+  services/bot-social/         MIT, Copyright (c) 2026 Birfy
+
+Redistributors must retain those texts, copyright notices, and attribution
+conditions, and must not describe the combined work as entirely MIT or as
+entirely original to OpenTeamily.
+
+The FlyBot runtime image recipe (runtime/flybot-image/Dockerfile) additionally
+installs packages that are not all vendored in this repository, including
+@deepseek-ai/dsh@0.2.2-rc.1 and its production direct dependencies. One of
+those dependencies, @deepseek-ai/dsh-skill-office, depends on
+@deepseek-ai/libreoffice-kit (MPL-2.0). Until corresponding-source
+obligations for that kit are met, or the office skill and kit are excluded
+from the default image, this repository does not offer a public
+redistributable runtime image.
+
+A packaged inventory of what this revision ships, with versions, declared
+licenses, integrity hashes, and remaining unknowns, is in
+docs/reuse-audit/SHIPPED.md and docs/reuse-audit/shipped-pins.json. That
+inventory is not a legal opinion.
