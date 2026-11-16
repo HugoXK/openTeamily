@@ -5,15 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>作品库 · OpenTeamily</title>
+  <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/artifacts/app.css">
+  <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/artifacts/app.mjs"></script>
 </head>
 <body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
   <header>
     <p class="brand">OpenTeamily / FlyBot</p>
     <h1>作品库</h1>
     <p class="note">作品库目前支持文档、静态网站、媒体文件和白板：可以创建、打开、编辑和修订。自动化或代理的结果可以保存为带出处的文档。只读分享链接需要明确创建，可以撤销，不会自动发布。网站和白板用隔离沙箱和 CSP 渲染；媒体按探测到的类型发送，并带 nosniff。管理页本身不执行作品里的脚本。已完成的智能体对话消息可以保存为带出处的文档。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
-    <nav>
+    <nav aria-label="管理导航">
       <a href="/settings">账号设置</a>
       <a href="/automations">自动化</a>
       <a href="/agents">智能体</a>
@@ -24,6 +27,7 @@
     </nav>
   </header>
   <p id="status" role="status"></p>
+  <main id="main">
   <section id="login-panel" hidden>
     <h2>登录</h2>
     <form id="login-form" method="post" action="/v1/auth/login">
@@ -88,5 +92,6 @@
       <button type="submit">退出登录</button>
     </form>
   </section>
+  </main>
 </body>
 </html>

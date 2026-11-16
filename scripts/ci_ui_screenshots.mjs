@@ -115,7 +115,10 @@ async function main() {
   try {
     const anonymous = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'zh-CN' });
     const loginPage = await anonymous.newPage();
-    await loginPage.goto(`${origin}/settings`, { waitUntil: 'networkidle' });
+    // Wait for `load`, not a quiet network: shell and page scripts issue
+    // same-origin API calls after load, which can prevent a quiet-network wait
+    // from ever finishing on the loopback runner.
+    await loginPage.goto(`${origin}/settings`, { waitUntil: 'load' });
     await loginPage.locator('#login-panel').waitFor({ state: 'visible', timeout: 15000 });
     const userValue = await loginPage.locator('#username').inputValue();
     const passValue = await loginPage.locator('#password').inputValue();
@@ -139,7 +142,7 @@ async function main() {
 
     const page = await context.newPage();
 
-    await page.goto(`${origin}/settings`, { waitUntil: 'networkidle' });
+    await page.goto(`${origin}/settings`, { waitUntil: 'load' });
     await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
     const who = await visibleText(page.locator('#whoami'));
     const keyState = await visibleText(page.locator('#model-key-state'));
@@ -156,9 +159,15 @@ async function main() {
     );
     screenshots.push(path.basename(await shot(page, outDir, '02-settings-signed-in.png')));
 
-    await page.goto(`${origin}/agents`, { waitUntil: 'networkidle' });
+    await page.goto(`${origin}/agents`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
-    const agentsList = await visibleText(page.locator('#agent-list'));
+    let agentsList = '';
+    try {
+      await waitForLocatorText(page, '#agent-list', ready.agent_name);
+      agentsList = await visibleText(page.locator('#agent-list'));
+    } catch (error) {
+      agentsList = String(error);
+    }
     record('agents_list', agentsList.includes(ready.agent_name), agentsList || 'agent list empty');
     screenshots.push(path.basename(await shot(page, outDir, '03-agents-list.png')));
     try {
@@ -209,9 +218,15 @@ async function main() {
       record('agents_conversation_send', false, String(error), { soft: ready.connection_status !== 'online' });
     }
 
-    await page.goto(`${origin}/automations`, { waitUntil: 'networkidle' });
+    await page.goto(`${origin}/automations`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
-    const autoList = await visibleText(page.locator('#automation-list'));
+    let autoList = '';
+    try {
+      await waitForLocatorText(page, '#automation-list', ready.automation_title);
+      autoList = await visibleText(page.locator('#automation-list'));
+    } catch (error) {
+      autoList = String(error);
+    }
     record('automations_list', autoList.includes(ready.automation_title), autoList || 'automation list empty');
     screenshots.push(path.basename(await shot(page, outDir, '05-automations-list.png')));
     try {
@@ -232,19 +247,28 @@ async function main() {
       record('automations_run_history', false, String(error), { soft: true });
     }
 
-    await page.goto(`${origin}/artifacts`, { waitUntil: 'networkidle' });
+    await page.goto(`${origin}/artifacts`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
-    const artifacts = await visibleText(page.locator('#artifact-list'));
+    const artifactTitles = [ready.document_title, ready.media_title, ready.board_title, ready.website_title];
+    let artifacts = '';
+    try {
+      for (const title of artifactTitles) {
+        await waitForLocatorText(page, '#artifact-list', title);
+      }
+      artifacts = await visibleText(page.locator('#artifact-list'));
+    } catch (error) {
+      artifacts = String(error);
+    }
     record(
       'artifacts_list',
-      [ready.document_title, ready.media_title, ready.board_title, ready.website_title].every((title) => artifacts.includes(title)),
+      artifactTitles.every((title) => artifacts.includes(title)),
       artifacts || 'artifact list empty',
     );
     screenshots.push(path.basename(await shot(page, outDir, '07-artifacts-list.png')));
 
     const openArtifact = async (title, file, checkName, extra, { soft = true } = {}) => {
       try {
-        await page.goto(`${origin}/artifacts`, { waitUntil: 'networkidle' });
+        await page.goto(`${origin}/artifacts`, { waitUntil: 'load' });
         await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
         await page.locator('#artifact-list').waitFor({ state: 'visible', timeout: 15000 });
         await openListItem(page, title, '#artifact-list');
@@ -278,10 +302,18 @@ async function main() {
       return preview.isVisible();
     });
 
-    await page.goto(`${origin}/members`, { waitUntil: 'networkidle' });
+    await page.goto(`${origin}/members`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
-    const members = await visibleText(page.locator('#member-list'));
-    const invites = await visibleText(page.locator('#invite-list'));
+    let members = '';
+    let invites = '';
+    try {
+      await waitForLocatorText(page, '#member-list', ready.username);
+      await waitForLocatorText(page, '#member-list', ready.member_username);
+      members = await visibleText(page.locator('#member-list'));
+      invites = await visibleText(page.locator('#invite-list'));
+    } catch (error) {
+      members = members || String(error);
+    }
     record(
       'members',
       members.includes(ready.username) && members.includes(ready.member_username),
@@ -289,7 +321,7 @@ async function main() {
     );
     screenshots.push(path.basename(await shot(page, outDir, '12-members.png')));
 
-    await page.goto(`${origin}/team`, { waitUntil: 'networkidle' });
+    await page.goto(`${origin}/team`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
     const teamHeading = await visibleText(page.locator('h1'));
     const step1 = await page.locator('#wizard-form #step-1').isVisible();
@@ -310,7 +342,7 @@ async function main() {
       record('team_wizard_steps', false, String(error), { soft: true });
     }
 
-    await page.goto(`${origin}/runtimes`, { waitUntil: 'networkidle' });
+    await page.goto(`${origin}/runtimes`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
     const runtimeHeading = await visibleText(page.locator('#runtimes-panel h2'));
     record('runtimes', runtimeHeading.includes('自托管 FlyBot'), runtimeHeading || 'runtimes tab missing');

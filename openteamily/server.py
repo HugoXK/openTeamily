@@ -1,6 +1,7 @@
 """Loopback-only development WSGI runner, not an internet-facing production server."""
 import argparse
-from wsgiref.simple_server import WSGIRequestHandler, make_server
+import socketserver
+from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
 
 from .app import App, Config
 from .store import Store
@@ -18,6 +19,15 @@ class QuietHandler(WSGIRequestHandler):
     def log_message(self, format, *args):
         # Do not write URLs, queries, cookies or bodies to request logs.
         pass
+
+
+class ThreadedWSGIServer(socketserver.ThreadingMixIn, WSGIServer):
+    """Allow overlapping asset and API requests on the loopback runner.
+
+    This is still not an internet-facing production server.
+    """
+    daemon_threads = True
+    block_on_close = False
 
 
 def main():
@@ -57,7 +67,7 @@ def main():
         app.start_automation_worker()
     # Never changes firewall/proxy rules or binds the development service to all interfaces.
     try:
-        with make_server('127.0.0.1', args.port, page, handler_class=QuietHandler) as server:
+        with make_server('127.0.0.1', args.port, page, handler_class=QuietHandler, server_class=ThreadedWSGIServer) as server:
             server.serve_forever()
     finally:
         app.stop_automation_worker()

@@ -5,15 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
   <title>自动化 · OpenTeamily</title>
+  <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/automations/app.css">
+  <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/automations/app.mjs"></script>
 </head>
 <body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
   <header>
     <p class="brand">OpenTeamily / FlyBot</p>
     <h1>自动化</h1>
     <p class="note">选项语义按 2026-11-16 第一轮对照补齐。生活模板、意图动词和时间选项已按 2026-11-16 第二轮对照补齐。每月的日期输入仍未完整记下。还不能写成已经功能对等。服务进程会在后台按点运行已启用的自动化，并把结果写在运行记录里；也可以手动触发一次。循环测试里的假提供方不能当成真实模型厂商已经验证。</p>
-    <nav>
+    <nav aria-label="管理导航">
       <a href="/settings">账号设置</a>
       <a href="/agents">智能体</a>
       <a href="/memory">记忆</a>
@@ -24,6 +27,7 @@
     </nav>
   </header>
   <p id="status" role="status"></p>
+  <main id="main">
   <section id="login-panel" hidden>
     <h2>登录</h2>
     <form id="login-form" method="post" action="/v1/auth/login">
@@ -126,5 +130,6 @@
       <button type="submit">退出登录</button>
     </form>
   </section>
+  </main>
 </body>
 </html>
