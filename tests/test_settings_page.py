@@ -82,10 +82,12 @@ class SettingsPageTests(unittest.TestCase):
 
     def test_html_lists_only_documented_setting_keys(self):
         html = self.raw.call('GET', '/settings')['body'].decode()
-        for name in ('appearance', 'language', 'send_shortcut', 'fold_long_messages', 'document_cards'):
+        for name in ('appearance', 'appearance_schedule', 'language', 'chat_language', 'auto_translate',
+                     'send_shortcut', 'message_folding', 'document_cards', 'link_previews',
+                     'task_completion_reminders', 'likes_visibility', 'favorites_visibility'):
             self.assertIn(f'name="{name}"', html)
-        self.assertNotIn('auto-translate', html)
-        self.assertNotIn('sunset', html)
+        self.assertIn('sunset_sunrise', html)
+        self.assertNotIn('name="fold_long_messages"', html)
 
 
 if __name__ == '__main__':

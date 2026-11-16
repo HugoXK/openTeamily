@@ -17,13 +17,20 @@ Unknown keys, wrong types, unsupported values or an empty `changes` object are r
 
 | Key | Allowed | Default |
 |---|---|---|
-| `appearance` | `system`, `light`, `dark` | `system` |
-| `language` | `zh-CN`, `en` | `zh-CN` |
+| `appearance` | `system`, `light`, `dark`, `auto` | `system` |
+| `appearance_schedule` | `sunset_sunrise`, `custom` | `sunset_sunrise` |
+| `appearance_start` / `appearance_end` | `HH:MM` 24-hour | `18:00` / `07:00` |
+| `language` | 18 candidate locale codes (see below) | `zh-CN` |
+| `chat_language` | `auto` or the same 18 codes | `auto` |
+| `auto_translate` | boolean | `false` |
 | `send_shortcut` | `enter`, `mod_enter` | `enter` |
-| `fold_long_messages` | boolean | `true` |
-| `document_cards` | boolean | `true` |
+| `message_folding` | `compact`, `standard`, `none` | `standard` |
+| `document_cards` | boolean | `false` |
+| `link_previews` | boolean | `true` |
+| `task_completion_reminders` | boolean | `true` |
+| `likes_visibility` / `favorites_visibility` | `everyone`, `private` | `everyone` |
 
-The capability areas (appearance, language basics, shortcuts, message folding and document cards) come from the #4 scope. The **specific option values and defaults are OpenTeamily assumptions**; they have not been compared with Teamily's real settings page, role, operation and result. Until that comparison is recorded (#14), this slice must not be described as settings parity. Additional Teamily options found during comparison are added as new keys, not invented ahead of time.
+Option semantics follow the 2026-11-16 round-1 Teamily contrast (appearance auto + schedule, three-level message folding, document cards default off, chat language, auto-translate, link previews, task-completion reminders, likes/favorites visibility, skill secrets). The 18 language codes (`zh-CN`, `zh-TW`, `en`, `ja`, `ko`, `fr`, `de`, `es`, `pt-BR`, `ru`, `it`, `vi`, `th`, `id`, `ar`, `hi`, `tr`, `ms`) were **not recorded individually** in that report; this is a candidate list, not a recapture of Teamily's exact set. Privacy values were only compared at the "likes/favorites list visibility" level (`everyone`/`private` is an OpenTeamily encoding). This slice is still not settings parity. The retired `fold_long_messages` boolean is accepted on write (`true`→`standard`, `false`→`none`) and is migrated on read; GET no longer returns it.
 
 ## Storage
 
@@ -31,7 +38,7 @@ An additive `user_settings` table (`CREATE TABLE IF NOT EXISTS`) in the existing
 
 ## Settings page (slice 2)
 
-The development server now also serves a same-origin page at `/settings` (assets `/settings/app.css` and `/settings/app.mjs`). It logs in through the existing auth API and reads/writes `/v1/settings` with CSRF and revision checks. Only the keys in the table above are shown; Teamily-only options such as appearance schedules, a separate chat language or automatic translation are not invented here.
+The same-origin page at `/settings` reads and writes `/v1/settings` and lists write-only skill secrets at `/v1/skill-secrets` (name `A-Z` then `A-Z0-9_`, value stored wrapped, never returned). Custom appearance times were not fully captured in the first contrast pass; start/end use `HH:MM`.
 
 The page also has a model API section for an optional personal override. The platform default is shown as the effective configuration when no override is set. Keys are write-only. See [MODEL_API.md](MODEL_API.md). This is not Teamily credits or billing.
 
