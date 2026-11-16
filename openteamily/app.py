@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import members, settings
+from . import automations, members, settings
 
 
 class APIError(Exception):
@@ -35,6 +35,7 @@ class Config:
     max_workspaces_per_user: int = 20
     max_workspaces: int = 10000
     max_members_per_workspace: int = 50
+    max_automations_per_workspace: int = 20
     auth_peer_limit: int = 20
     auth_name_limit: int = 10
     auth_global_limit: int = 100
@@ -359,6 +360,12 @@ class App:
                 rows = members.visible(db, session['user_id'], cursor, int(limit) + 1)
                 return 200, {'items': [self.workspace(row) for row in rows[:int(limit)]],
                              'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
+            if path == '/v1/automation-templates' and method == 'GET' and not query:
+                return 200, {'items': automations.templates()}, []
+            auto_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/([0-9a-f]{32})(/remove)?)?', path)
+            if auto_path:
+                return self.automation_dispatch(db, session, method, query, now, env, *auto_path.groups())
             member_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/members(?:/([0-9a-f]{32})(/remove)?)?', path)
             if member_path:
@@ -473,6 +480,156 @@ class App:
             (workspace['id'], target['user_id']),
         )
         return 200, {'removed': members.view(target)}, []
+
+    def automation_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if target_id is None and method == 'GET' and not query:
+            rows = db.execute(
+                'SELECT * FROM automations WHERE workspace_id=? ORDER BY id', (workspace['id'],)
+            ).fetchall()
+            return 200, {'items': [automations.view(row) for row in rows]}, []
+        if target_id is None and method == 'POST' and not query:
+            return self.create_automation(db, workspace, actor, now, env)
+        if target_id is None:
+            refuse(400, 'invalid', 'Invalid automation request')
+        row = db.execute(
+            'SELECT * FROM automations WHERE id=? AND workspace_id=?', (target_id, workspace['id'])
+        ).fetchone()
+        if row is None:
+            refuse(404, 'not_found', 'Automation not found')
+        if method == 'GET' and not removing and not query:
+            return 200, {'automation': automations.view(row)}, []
+        if method != 'POST' or query:
+            refuse(400, 'invalid', 'Invalid automation request')
+        if removing:
+            if actor not in ('owner', 'admin'):
+                refuse(403, 'forbidden', 'Not allowed to change automations')
+            self.body(env, [])
+            db.execute('DELETE FROM automations WHERE id=?', (row['id'],))
+            return 200, {'removed': automations.view(row)}, []
+        return self.update_automation(db, workspace, actor, row, now, self.body(env, ['revision', 'changes']))
+
+    def resolve_participants(self, db, workspace, names):
+        allowed = {workspace['owner_id']}
+        for item in db.execute('SELECT user_id FROM workspace_members WHERE workspace_id=?', (workspace['id'],)):
+            allowed.add(item['user_id'])
+        resolved, seen = [], set()
+        for raw in names:
+            user = db.execute('SELECT id, username FROM users WHERE username=?', (raw.lower(),)).fetchone()
+            if user is None or user['id'] not in allowed or user['id'] in seen:
+                refuse(404, 'not_found', 'Participant not found')
+            seen.add(user['id'])
+            resolved.append({'user_id': user['id'], 'username': user['username']})
+        return resolved
+
+    def create_automation(self, db, workspace, actor, now, env):
+        if actor not in ('owner', 'admin'):
+            refuse(403, 'forbidden', 'Not allowed to change automations')
+        body = self.body(env, ['title', 'prompt', 'template_id', 'schedule', 'participants'])
+        title, prompt, template_id = body.get('title'), body.get('prompt'), body.get('template_id')
+        schedule, names = body.get('schedule'), body.get('participants')
+        if (not automations.valid_title(title) or not automations.valid_prompt(prompt)
+                or template_id not in automations.TEMPLATES or not automations.valid_schedule(schedule)
+                or not automations.valid_usernames(names)):
+            refuse(400, 'invalid', 'Provide a title, prompt, custom template, schedule and participants')
+        title = title.strip()
+        schedule = automations.normalize_schedule(schedule)
+        participants = self.resolve_participants(db, workspace, names)
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        payload = json.dumps({'title': title, 'prompt': prompt, 'template_id': template_id,
+                              'schedule': schedule, 'participants': [item['username'] for item in participants]},
+                             sort_keys=True, separators=(',', ':'))
+        key_hash, request_hash, title_hash = digest(key), digest(payload), digest(title.casefold())
+        existing = db.execute(
+            'SELECT * FROM automations WHERE workspace_id=? AND key_hash=?', (workspace['id'], key_hash)
+        ).fetchone()
+        if existing:
+            if existing['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'automation': automations.view(existing)}, []
+        titled = db.execute(
+            'SELECT id FROM automations WHERE workspace_id=? AND title_hash=?', (workspace['id'], title_hash)
+        ).fetchone()
+        if titled:
+            refuse(409, 'conflict', 'An automation with this title already exists')
+        if (db.execute('SELECT COUNT(*) FROM automations WHERE workspace_id=?', (workspace['id'],)).fetchone()[0]
+                >= self.config.max_automations_per_workspace):
+            refuse(429, 'quota', 'Automation capacity reached')
+        aid = uuid4().hex
+        db.execute(
+            'INSERT INTO automations VALUES(?,?,?,?,?,?,?,?,0,1,?,?,?,?)',
+            (aid, workspace['id'], title, title_hash, prompt, template_id,
+             json.dumps(schedule, sort_keys=True, separators=(',', ':')),
+             json.dumps(participants, sort_keys=True, separators=(',', ':')),
+             now, now, key_hash, request_hash),
+        )
+        row = db.execute('SELECT * FROM automations WHERE id=?', (aid,)).fetchone()
+        return 201, {'automation': automations.view(row)}, []
+
+    def update_automation(self, db, workspace, actor, row, now, body):
+        if actor not in ('owner', 'admin'):
+            refuse(403, 'forbidden', 'Not allowed to change automations')
+        revision, changes = body.get('revision'), body.get('changes')
+        if type(revision) is not int or not 1 <= revision <= 2 ** 31 or not isinstance(changes, dict) or not changes:
+            refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
+        allowed = {'title', 'prompt', 'schedule', 'participants', 'enabled'}
+        if set(changes) - allowed:
+            refuse(400, 'invalid', 'Unknown automation field')
+        current = automations.view(row)
+        if revision != current['revision']:
+            raise RuntimeFault(409, 'conflict', 'Automation changed elsewhere; reload and retry', current)
+        title = current['title']
+        prompt = current['prompt']
+        schedule = current['schedule']
+        participants = current['participants']
+        enabled = current['enabled']
+        if 'title' in changes:
+            if not automations.valid_title(changes['title']):
+                refuse(400, 'invalid', 'Provide a title, prompt, custom template, schedule and participants')
+            title = changes['title'].strip()
+        if 'prompt' in changes:
+            if not automations.valid_prompt(changes['prompt']):
+                refuse(400, 'invalid', 'Provide a title, prompt, custom template, schedule and participants')
+            prompt = changes['prompt']
+        if 'schedule' in changes:
+            if not automations.valid_schedule(changes['schedule']):
+                refuse(400, 'invalid', 'Provide a title, prompt, custom template, schedule and participants')
+            schedule = automations.normalize_schedule(changes['schedule'])
+        if 'participants' in changes:
+            if not automations.valid_usernames(changes['participants']):
+                refuse(400, 'invalid', 'Provide a title, prompt, custom template, schedule and participants')
+            participants = self.resolve_participants(db, workspace, changes['participants'])
+        if 'enabled' in changes:
+            if type(changes['enabled']) is not bool:
+                refuse(400, 'invalid', 'enabled must be a boolean')
+            enabled = changes['enabled']
+        unchanged = (title == current['title'] and prompt == current['prompt'] and schedule == current['schedule']
+                     and participants == current['participants'] and enabled == current['enabled'])
+        if unchanged:
+            return 200, {'automation': current}, []
+        title_hash = digest(title.casefold())
+        if title_hash != row['title_hash']:
+            clash = db.execute(
+                'SELECT id FROM automations WHERE workspace_id=? AND title_hash=? AND id!=?',
+                (workspace['id'], title_hash, row['id']),
+            ).fetchone()
+            if clash:
+                refuse(409, 'conflict', 'An automation with this title already exists')
+        db.execute(
+            'UPDATE automations SET title=?, title_hash=?, prompt=?, schedule=?, participants=?, '
+            'enabled=?, revision=?, updated=? WHERE id=?',
+            (title, title_hash, prompt,
+             json.dumps(schedule, sort_keys=True, separators=(',', ':')),
+             json.dumps(participants, sort_keys=True, separators=(',', ':')),
+             1 if enabled else 0, current['revision'] + 1, now, row['id']),
+        )
+        updated = db.execute('SELECT * FROM automations WHERE id=?', (row['id'],)).fetchone()
+        return 200, {'automation': automations.view(updated)}, []
 
     @staticmethod
     def pagination(query, allowed=()):
