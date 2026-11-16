@@ -10,9 +10,9 @@ Teamily's automation UI was opened historically (template, prompt, time, partici
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/v1/automation-templates` | Session required. Currently only the self-authored `custom` template |
-| GET | `/v1/workspaces/{id}/automations` | Visible to workspace owner and members |
-| POST | `/v1/workspaces/{id}/automations` | `{title,prompt,template_id,schedule,participants}`. Owner or admin. Requires `Idempotency-Key`, exact Origin and CSRF. Created records are **disabled** |
+| GET | `/v1/automation-templates` | Session required. `custom` plus twelve work templates (rephrased titles; no life tab yet) |
+| GET | `/v1/workspaces/{id}/automations` | Visible to workspace owner and members. Optional `q` (title/prompt search) and `category` (`work`, `life`, `custom`, `mine`) |
+| POST | `/v1/workspaces/{id}/automations` | `{title,prompt,template_id,schedule,participants}` plus optional tag fields `intent`, `scope` (`once` default / `ongoing`), `agents`. An omitted/empty prompt is compiled from the tags and template. Owner or admin. Requires `Idempotency-Key`, exact Origin and CSRF. Created records are **disabled** |
 | GET | `/v1/workspaces/{id}/automations/{id}` | Visible to workspace owner and members |
 | POST | `/v1/workspaces/{id}/automations/{id}` | `{revision,changes}` partial update. Stale `revision` → `409` with `error.current` |
 | POST | `/v1/workspaces/{id}/automations/{id}/remove` | `{}`. Owner or admin |
@@ -22,13 +22,18 @@ Teamily's automation UI was opened historically (template, prompt, time, partici
 
 `participants` is a list of existing usernames that must already be the owner or a member of the workspace. Titles are unique per workspace (case-insensitive) and are the dedup key; the same `Idempotency-Key` plus payload returns the original record.
 
-## Schedule (OpenTeamily defaults — not yet Teamily-verified)
+## Schedule (round-1 contrast; not parity)
 
 | `kind` | Fields |
 |---|---|
-| `once` | `date` (`YYYY-MM-DD`), `time` (`HH:MM` 24h), `time_zone` (IANA, validated with `zoneinfo`) |
+| `now` | `time_zone` only. Fires a single stable slot (`due_at=0`) on the first tick after the record is enabled |
+| `once` (also accepts `later`) | `date` (`YYYY-MM-DD`), `time` (`HH:MM` 24h), `time_zone` (IANA, validated with `zoneinfo`) |
 | `daily` | `time`, `time_zone` |
 | `weekly` | `time`, `time_zone`, `weekday` (`1`=Monday … `7`=Sunday) |
+| `monthly` | `time`, `time_zone`, `day` (`1`–`31`; skipped in months that do not have that day) |
+| `weekdays` | `time`, `time_zone`; Monday–Friday |
+
+Tag fields compile into an editable prompt: template text, intent, scope, schedule, participating agents and members. Editing the prompt marks `compiled` false. Life templates were not captured in the first contrast pass and are not invented here. The twelve work titles are rephrased, not copied marketing text.
 
 ## Storage and roles
 
@@ -47,6 +52,6 @@ Run rows are an additive `automation_runs` table on schema `user_version` 1. Def
 
 ## Not in this slice
 
-No background daemon, no real container execution, no public page, no agent-mode switch, no UI. Multi-target delivery beyond a list of workspace members, and any comparison with Teamily templates, remain later work.
+No background daemon, no real container execution, no public page, no agent-mode switch. The list API supports search and work/life/custom/mine tabs; a same-origin list page is a follow-up. This is still not Teamily automation parity.
 
 Dispatch hooks receive the workspace-or-platform model API (redacted in run records). See [MODEL_API.md](MODEL_API.md). This is not container execution and not Teamily parity.
