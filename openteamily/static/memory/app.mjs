@@ -36,6 +36,41 @@ export function dueAtFromDate(value) {
   return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / 1000;
 }
 
+export function parseTopics(value) {
+  const names = [];
+  const seen = new Set();
+  for (const part of String(value || '').split(/[,，\n]/)) {
+    const name = part.trim();
+    if (!name) continue;
+    const key = name.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names;
+}
+
+export function formatTopics(topics) {
+  return (topics || []).join('，');
+}
+
+export function graphLayout(nodes, width = 640, height = 400, padding = 56) {
+  const list = [...(nodes || [])].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const cx = width / 2;
+  const cy = height / 2;
+  if (list.length === 0) return [];
+  if (list.length === 1) return [{id: list[0].id, x: cx, y: cy}];
+  const radius = Math.max(0, Math.min(cx, cy) - padding);
+  return list.map((node, index) => {
+    const angle = ((Math.PI * 2 * index) / list.length) - (Math.PI / 2);
+    return {
+      id: node.id,
+      x: Number((cx + radius * Math.cos(angle)).toFixed(2)),
+      y: Number((cy + radius * Math.sin(angle)).toFixed(2)),
+    };
+  });
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -157,6 +192,145 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderActions(listed.body.items || []);
   }
 
+
+  function svgNode(name, attrs) {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', name);
+    for (const [key, value] of Object.entries(attrs || {})) node.setAttribute(key, value);
+    return node;
+  }
+
+  function truncateLabel(title) {
+    const text = String(title || '');
+    return text.length > 18 ? `${text.slice(0, 17)}…` : text;
+  }
+
+  function renderGraph(graph) {
+    const canvas = document.getElementById('graph-canvas');
+    const counts = document.getElementById('graph-counts');
+    const topicList = document.getElementById('topic-list');
+    const topicEmpty = document.getElementById('topic-empty');
+    const payload = graph || {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
+    const stats = payload.counts || {nodes: 0, edges: 0, topics: 0};
+    if (counts) counts.textContent = `${stats.nodes} 个节点 · ${stats.edges} 条连接 · ${stats.topics} 个话题`;
+    if (canvas) {
+      canvas.replaceChildren();
+      const placed = graphLayout(payload.nodes);
+      const byId = new Map(placed.map((node) => [node.id, node]));
+      for (const edge of payload.edges || []) {
+        const from = byId.get(edge.source);
+        const to = byId.get(edge.target);
+        if (!from || !to) continue;
+        canvas.appendChild(svgNode('line', {
+          class: 'graph-edge', x1: from.x, y1: from.y, x2: to.x, y2: to.y,
+        }));
+      }
+      for (const node of payload.nodes || []) {
+        const point = byId.get(node.id);
+        if (!point) continue;
+        const group = svgNode('g', {'data-id': node.id, class: 'graph-item'});
+        const button = svgNode('circle', {class: 'graph-node', cx: point.x, cy: point.y, r: 8});
+        const label = svgNode('text', {
+          class: 'graph-label', x: point.x, y: point.y + 22, 'text-anchor': 'middle',
+        });
+        label.textContent = truncateLabel(node.title);
+        group.appendChild(button);
+        group.appendChild(label);
+        group.addEventListener('click', () => openPage(node.id));
+        canvas.appendChild(group);
+      }
+    }
+    if (topicList) {
+      topicList.replaceChildren();
+      for (const topic of payload.topics || []) {
+        const item = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = `${topic.name} · ${topic.page_count}`;
+        button.addEventListener('click', () => {
+          const first = topic.pages && topic.pages[0];
+          if (first) openPage(first.id);
+        });
+        item.appendChild(button);
+        topicList.appendChild(item);
+      }
+    }
+    if (topicEmpty) topicEmpty.hidden = !!(payload.topics && payload.topics.length);
+  }
+
+  let currentGraph = {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
+
+  async function loadGraph() {
+    const id = workspaceId();
+    if (!id) {
+      currentGraph = {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
+      renderGraph(currentGraph);
+      return;
+    }
+    const seen = await request('GET', `/v1/workspaces/${id}/memory/graph`);
+    if (seen.status !== 200) {
+      currentGraph = {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
+      renderGraph(currentGraph);
+      show('error', messageFor(seen.body.error, '无法加载记忆图谱。'));
+      return;
+    }
+    currentGraph = seen.body;
+    renderGraph(currentGraph);
+  }
+
+  function renderPageLinks() {
+    const box = document.getElementById('page-links');
+    const select = document.getElementById('link-target');
+    if (!box || !currentPage) return;
+    box.replaceChildren();
+    const edges = (currentGraph.edges || []).filter((edge) => edge.source === currentPage.id || edge.target === currentPage.id);
+    for (const edge of edges) {
+      const otherId = edge.source === currentPage.id ? edge.target : edge.source;
+      const other = (currentGraph.nodes || []).find((node) => node.id === otherId);
+      const row = document.createElement('p');
+      row.className = 'note';
+      const label = document.createElement('span');
+      label.textContent = `${edge.kind === 'manual' ? '手动连接' : '正文提及'} · ${other ? other.title : otherId}`;
+      row.appendChild(label);
+      if (edge.kind === 'manual' && edge.id) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = '删除连接';
+        button.addEventListener('click', () => removeLink(edge.id));
+        row.appendChild(button);
+      }
+      box.appendChild(row);
+    }
+    if (select) {
+      const used = new Set(edges.map((edge) => (edge.source === currentPage.id ? edge.target : edge.source)));
+      used.add(currentPage.id);
+      select.replaceChildren();
+      const empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = '选择记忆页';
+      select.appendChild(empty);
+      for (const page of currentGraph.nodes || pageChoices) {
+        if (used.has(page.id)) continue;
+        const option = document.createElement('option');
+        option.value = page.id;
+        option.textContent = page.title;
+        select.appendChild(option);
+      }
+    }
+  }
+
+  async function removeLink(linkId) {
+    const id = workspaceId();
+    if (!id || !linkId) return;
+    const removed = await request('POST', `/v1/workspaces/${id}/memory/links/${linkId}/remove`, {});
+    if (removed.status !== 200) {
+      show('error', messageFor(removed.body.error, '无法删除连接。'));
+      return;
+    }
+    show('ok', '已删除连接。');
+    await loadGraph();
+    renderPageLinks();
+  }
+
   async function loadSession() {
     const session = await request('GET', '/v1/auth/session');
     if (session.status !== 200 || !session.body.user) {
@@ -221,6 +395,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       renderList([]);
       fillPageSelect(document.getElementById('new-action-page'), '');
       renderActions([]);
+      renderGraph({nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}});
       return;
     }
     const needle = document.getElementById('search').value.trim();
@@ -229,6 +404,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       pageChoices = [];
       renderList([]);
       renderActions([]);
+      renderGraph({nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}});
       show('error', messageFor(listed.body.error, '无法加载记忆页。'));
       return;
     }
@@ -236,6 +412,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderList(pageChoices);
     fillPageSelect(document.getElementById('new-action-page'), '');
     await loadActions();
+    await loadGraph();
   }
 
   async function openPage(pageId) {
@@ -253,8 +430,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editor.hidden = false;
     editor.elements.title.value = currentPage.title;
     editor.elements.body.value = currentPage.body || '';
+    editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
+    renderPageLinks();
   }
 
   async function openAction(actionId) {
@@ -344,15 +523,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!id || !currentPage) return;
     const saved = await request('POST', `/v1/workspaces/${id}/memory/${currentPage.id}`, {
       revision: currentPage.revision,
-      changes: {title: editor.elements.title.value, body: editor.elements.body.value},
+      changes: {
+        title: editor.elements.title.value,
+        body: editor.elements.body.value,
+        topics: parseTopics(editor.elements.topics.value),
+      },
     });
     if (saved.status !== 200 || !saved.body.page) {
       show('error', messageFor(saved.body.error, '无法保存记忆页。'));
       return;
     }
     currentPage = saved.body.page;
+    editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
+    await loadGraph();
+    renderPageLinks();
     show('ok', '已保存。');
   });
 
@@ -367,6 +553,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     show('ok', '已删除。');
     await loadWorkspace();
   });
+
+  const addLink = document.getElementById('add-link');
+  if (addLink) {
+    addLink.addEventListener('click', async () => {
+      const id = workspaceId();
+      const target = document.getElementById('link-target');
+      if (!id || !currentPage || !target || !target.value) return;
+      const created = await fetcher(`/v1/workspaces/${id}/memory/links`, {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfCookie(document.cookie),
+          'Idempotency-Key': randomKey(),
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({source: currentPage.id, target: target.value}),
+      });
+      let parsed = {};
+      try { parsed = await created.json(); } catch { parsed = {}; }
+      if (created.status !== 201 && created.status !== 200) {
+        show('error', messageFor(parsed.error, '无法添加连接。'));
+        return;
+      }
+      show('ok', '已添加连接。');
+      await loadGraph();
+      renderPageLinks();
+    });
+  }
 
   document.getElementById('close-editor').addEventListener('click', () => loadWorkspace());
 

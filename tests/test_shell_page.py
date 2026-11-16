@@ -23,7 +23,7 @@ CAPTURE_IDS = {
     '/runtimes': ('runtimes-panel', 'connect-panel', 'key-list',
                   'connection-list', 'issued-token'),
     '/memory': ('main-panel', 'memory-list', 'editor-form',
-                'search', 'new-title'),
+                'search', 'new-title', 'graph-canvas', 'topic-list'),
 }
 
 

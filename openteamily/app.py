@@ -43,6 +43,7 @@ class Config:
     max_shares_per_artifact: int = 10
     max_memory_pages_per_workspace: int = 100
     max_memory_actions_per_workspace: int = 200
+    max_memory_links_per_workspace: int = 500
     max_agents_per_workspace: int = 50
     max_conversations_per_user: int = 50
     max_messages_per_conversation: int = 200
@@ -706,6 +707,13 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/memory/actions(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if memory_action_path:
                 return self.memory_action_dispatch(db, session, method, query, now, env, *memory_action_path.groups())
+            memory_graph_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/memory/graph', path)
+            if memory_graph_path:
+                return self.memory_graph(db, session, method, query, memory_graph_path.group(1))
+            memory_link_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/memory/links(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
+            if memory_link_path:
+                return self.memory_link_dispatch(db, session, method, query, now, env, *memory_link_path.groups())
             memory_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/memory(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if memory_path:
@@ -1642,7 +1650,7 @@ class App:
             if len(needle) > 80:
                 refuse(400, 'invalid', 'Invalid memory request')
             rows = memory.listing(db, workspace['id'], cursor, limit + 1, needle)
-            items = [memory.view(row, include_body=False) for row in rows[:limit]]
+            items = memory.decorate_many(db, rows[:limit], include_body=False)
             return 200, {'items': items,
                          'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
         if target_id is None and method == 'POST' and not query:
@@ -1658,24 +1666,26 @@ class App:
             if not memory.can_edit(actor, session['user_id'], row):
                 refuse(403, 'forbidden', 'Not allowed to change this memory page')
             self.body(env, [])
+            removed = memory.decorate(db, row, include_body=False)
             db.execute('DELETE FROM memory_pages WHERE id=?', (row['id'],))
-            return 200, {'removed': memory.view(row, include_body=False)}, []
+            return 200, {'removed': removed}, []
         if method == 'GET' and not query and not removing:
-            return 200, {'page': memory.view(row)}, []
+            return 200, {'page': memory.decorate(db, row)}, []
         if method != 'POST' or query or removing:
             refuse(400, 'invalid', 'Invalid memory request')
         return self.update_memory_page(db, workspace, session, actor, row, now, self.body(env, ['revision', 'changes']))
 
     def create_memory_page(self, db, workspace, session, now, env):
-        body = self.body(env, ['title', 'body'])
+        body = self.body(env, ['title', 'body', 'topics'])
         title, content = body.get('title'), body.get('body', '')
-        if not memory.valid_title(title) or not memory.valid_body(content):
+        topics = memory.normalize_topics(body.get('topics') if 'topics' in body else [])
+        if not memory.valid_title(title) or not memory.valid_body(content) or topics is None:
             refuse(400, 'invalid', 'Provide a memory page title and body')
         title = title.strip()
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
-        payload = {'title': title, 'body': content}
+        payload = {'title': title, 'body': content, 'topics': topics}
         key_hash, request_hash = digest('memory:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         )
@@ -1685,7 +1695,7 @@ class App:
         if prior:
             if prior['request_hash'] != request_hash:
                 refuse(409, 'conflict', 'Idempotency key was used for a different request')
-            return 200, {'page': memory.view(memory.load(db, workspace['id'], prior['id']))}, []
+            return 200, {'page': memory.decorate(db, memory.load(db, workspace['id'], prior['id']))}, []
         title_digest = memory.title_hash(title)
         if db.execute(
             'SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=?', (workspace['id'], title_digest)
@@ -1700,7 +1710,8 @@ class App:
             (page_id, workspace['id'], title, title_digest, content, now, now,
              session['user_id'], session['user_id'], key_hash, request_hash),
         )
-        return 201, {'page': memory.view(memory.load(db, workspace['id'], page_id))}, []
+        memory.replace_topics(db, workspace['id'], page_id, topics)
+        return 201, {'page': memory.decorate(db, memory.load(db, workspace['id'], page_id))}, []
 
     def update_memory_page(self, db, workspace, session, actor, row, now, body):
         if not memory.can_edit(actor, session['user_id'], row):
@@ -1708,13 +1719,15 @@ class App:
         revision, changes = body.get('revision'), body.get('changes')
         if type(revision) is not int or not 0 <= revision <= 2 ** 31 or not isinstance(changes, dict) or not changes:
             refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
-        if set(changes) - {'title', 'body'}:
+        if set(changes) - {'title', 'body', 'topics'}:
             refuse(400, 'invalid', 'Unknown memory field')
         if revision != row['revision']:
             raise RuntimeFault(409, 'conflict', 'Memory page changed elsewhere; reload and retry',
-                               memory.view(row))
+                               memory.decorate(db, row))
         title = row['title']
         content = row['body']
+        current_topics = memory.topics_for(db, [row['id']]).get(row['id'], [])
+        topics = current_topics
         if 'title' in changes:
             if not memory.valid_title(changes['title']):
                 refuse(400, 'invalid', 'Provide a memory page title and body')
@@ -1723,8 +1736,12 @@ class App:
             if not memory.valid_body(changes['body']):
                 refuse(400, 'invalid', 'Provide a memory page title and body')
             content = changes['body']
-        if title == row['title'] and content == row['body']:
-            return 200, {'page': memory.view(row)}, []
+        if 'topics' in changes:
+            topics = memory.normalize_topics(changes['topics'])
+            if topics is None:
+                refuse(400, 'invalid', 'Provide valid memory topics')
+        if title == row['title'] and content == row['body'] and topics == current_topics:
+            return 200, {'page': memory.decorate(db, row)}, []
         title_digest = memory.title_hash(title)
         if title != row['title'] and db.execute(
             'SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=? AND id!=?',
@@ -1735,9 +1752,80 @@ class App:
             'UPDATE memory_pages SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
             (title, title_digest, content, row['revision'] + 1, now, session['user_id'], row['id']),
         )
-        return 200, {'page': memory.view(memory.load(db, workspace['id'], row['id']))}, []
+        if 'topics' in changes:
+            memory.replace_topics(db, workspace['id'], row['id'], topics)
+        return 200, {'page': memory.decorate(db, memory.load(db, workspace['id'], row['id']))}, []
 
 
+
+    def memory_graph(self, db, session, method, query, workspace_id):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        if method != 'GET' or query:
+            refuse(400, 'invalid', 'Invalid memory graph request')
+        return 200, memory.graph(db, workspace['id']), []
+
+    def memory_link_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if target_id is None and method == 'POST' and not query:
+            return self.create_memory_link(db, workspace, session, now, env)
+        if target_id is None:
+            refuse(400, 'invalid', 'Invalid memory link request')
+        row = memory.load_link(db, workspace['id'], target_id)
+        if row is None:
+            refuse(404, 'not_found', 'Memory link not found')
+        if not removing or method != 'POST' or query:
+            refuse(400, 'invalid', 'Invalid memory link request')
+        if not memory.can_edit_link(actor, session['user_id'], row):
+            refuse(403, 'forbidden', 'Not allowed to change this memory link')
+        self.body(env, [])
+        db.execute('DELETE FROM memory_links WHERE id=?', (row['id'],))
+        return 200, {'removed': memory.link_view(row)}, []
+
+    def create_memory_link(self, db, workspace, session, now, env):
+        body = self.body(env, ['source', 'target'])
+        source, target = body.get('source'), body.get('target')
+        if not memory.valid_page_ref(source) or not memory.valid_page_ref(target):
+            refuse(400, 'invalid', 'Provide two memory pages in this workspace')
+        pair = memory.link_pair(source, target)
+        if pair is None:
+            refuse(400, 'invalid', 'A memory link needs two different pages')
+        left, right = pair
+        if memory.load(db, workspace['id'], left) is None or memory.load(db, workspace['id'], right) is None:
+            refuse(400, 'invalid', 'Linked memory page not found in this workspace')
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        payload = {'source': left, 'target': right}
+        key_hash, request_hash = digest('memory-link:' + key), digest(
+            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+        )
+        prior = db.execute(
+            'SELECT * FROM memory_links WHERE workspace_id=? AND key_hash=?', (workspace['id'], key_hash)
+        ).fetchone()
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'link': memory.link_view(memory.load_link(db, workspace['id'], prior['id']))}, []
+        existing = db.execute(
+            'SELECT id FROM memory_links WHERE workspace_id=? AND left_id=? AND right_id=?',
+            (workspace['id'], left, right),
+        ).fetchone()
+        if existing:
+            refuse(409, 'conflict', 'A memory link between these pages already exists')
+        if (db.execute('SELECT COUNT(*) FROM memory_links WHERE workspace_id=?', (workspace['id'],)).fetchone()[0]
+                >= self.config.max_memory_links_per_workspace):
+            refuse(429, 'quota', 'Memory link capacity reached')
+        link_id = uuid4().hex
+        db.execute(
+            'INSERT INTO memory_links VALUES(?,?,?,?,?,?,?,?)',
+            (link_id, workspace['id'], left, right, now, session['user_id'], key_hash, request_hash),
+        )
+        return 201, {'link': memory.link_view(memory.load_link(db, workspace['id'], link_id))}, []
 
     def memory_action_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
         workspace = members.load(db, workspace_id, session['user_id'])
