@@ -580,7 +580,7 @@ class ComposeManagerTests(unittest.TestCase):
         worker = ManagerWorker(client, self.registry, self.engine)
         self.assertEqual(worker.run_once(self.iid)['observed'], 'stopped')
         path = self.engine.bot_social_path(self.iid)
-        self.assertEqual(path.read_text(), '')
+        self.assertEqual(json.loads(path.read_text()), {})
         assert_container_readable_secret(self, path)
 
     def test_runtime_bot_social_requires_a_lease_and_rejects_stop_jobs(self):
@@ -712,7 +712,7 @@ class ComposeManagerTests(unittest.TestCase):
         self.assertEqual(done['status'], 'upgraded')
         self.assertFalse(done['volume_deleted'])
         self.assertTrue(self.engine.bot_social_path(self.iid).exists())
-        self.assertEqual(self.engine.bot_social_path(self.iid).read_text(), '')
+        self.assertEqual(json.loads(self.engine.bot_social_path(self.iid).read_text()), {})
         self.assertTrue(self.engine.runtime_key_path(self.iid).exists())
         self.assertEqual(self.engine.runtime_key_path(self.iid).read_text(), '')
 

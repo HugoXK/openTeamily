@@ -73,8 +73,10 @@ function assertAllowedPath(input) {
 }
 
 export function parseBotSocialConfig(raw) {
+  const text = String(raw ?? '').trim()
+  if (text === '') return {}
   let data
-  try { data = JSON.parse(raw) } catch {
+  try { data = JSON.parse(text) } catch {
     throw new BotSocialConfigError('Bot Social config file is not valid JSON')
   }
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {

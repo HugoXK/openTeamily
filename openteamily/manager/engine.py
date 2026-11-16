@@ -313,11 +313,11 @@ class ComposeEngine:
         return path
 
     def install_bot_social(self, iid, payload):
-        """Write the resolved Bot Social URL file (or empty). Never accepts a token."""
+        """Write the resolved Bot Social URL file (or {}). Never accepts a token."""
         self.registry.entry(iid)
         path = self.bot_social_path(iid)
         if payload is None:
-            raw = b''
+            raw = (json.dumps({}) + chr(10)).encode()
         else:
             require(isinstance(payload, dict), 'bot_social_payload')
             require('token' not in payload and 'api_key' not in payload, 'bot_social_payload')
