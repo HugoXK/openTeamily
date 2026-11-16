@@ -168,6 +168,24 @@ class ManagerClient:
         require(doc.get('source') in ('platform', 'workspace'), 'bot_social_shape')
         return doc
 
+    def runtime_agent_key(self, iid, claim):
+        """Lease-gated fetch of the instance runtime key. The token is written to a file and not logged."""
+        check_id(iid)
+        job = claim['job']
+        data = self.call('POST', f'/v1/internal/instances/{iid}/runtime-agent-key', {
+            'job_id': job['id'], 'observed_revision': job['revision'], 'lease': claim['lease']})
+        require(isinstance(data, dict) and set(data) == {'runtime_key_present', 'runtime_key'}, 'runtime_key_shape')
+        require(data['runtime_key_present'] in (True, False), 'runtime_key_shape')
+        if data['runtime_key_present'] is False:
+            require(data['runtime_key'] is None, 'runtime_key_shape')
+            return None
+        doc = data['runtime_key']
+        require(isinstance(doc, dict) and set(doc) == {'origin', 'token', 'hostname'}, 'runtime_key_shape')
+        for key in ('origin', 'token', 'hostname'):
+            require(isinstance(doc[key], str) and doc[key], 'runtime_key_shape')
+        return doc
+
+
     def recover(self, iid, revision, operation_id):
         check_id(iid)
         require(type(revision) is int and revision > 0 and isinstance(operation_id, str) and KEY.fullmatch(operation_id), 'recovery_fields')

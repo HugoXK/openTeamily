@@ -16,6 +16,15 @@ try {
   process.exit(1)
 }
 
+const loop = spawn(process.execPath, [new URL('./agent-loop.mjs', import.meta.url).pathname], {
+  stdio: ['ignore', 'ignore', 'inherit'],
+  env: process.env,
+  detached: false,
+})
+loop.on('error', (error) => {
+  console.error('entrypoint: agent-loop could not start:', error.message)
+})
+
 const child = spawn('dsh', process.argv.slice(2), { stdio: 'inherit', env: process.env })
 const forward = (signal) => {
   try { child.kill(signal) } catch { /* child already gone */ }
@@ -27,6 +36,7 @@ child.on('error', (error) => {
   process.exit(1)
 })
 child.on('exit', (code, signal) => {
+  try { loop.kill('SIGTERM') } catch { /* already gone */ }
   if (signal) process.exit(1)
   process.exit(code ?? 1)
 })

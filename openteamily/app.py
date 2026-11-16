@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agents, artifacts, automations, bot_social, conversations, invites, members, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, invites, members, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -710,6 +710,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/members(?:/([0-9a-f]{32})(/remove)?)?', path)
             if member_path:
                 return self.member_dispatch(db, session, method, query, now, env, *member_path.groups())
+            agent_runtime_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/runtime(?:/(unbind))?', path)
+            if agent_runtime_path:
+                return self.agent_runtime_dispatch(db, session, method, query, now, env, *agent_runtime_path.groups())
             conversation_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/conversations'
                 r'(?:/([0-9a-f]{32})(?:/(messages(?:/([0-9a-f]{32})(?:/(artifact))?)?))?)?', path)
@@ -1740,6 +1744,100 @@ class App:
             refuse(409, 'conflict', 'Agent was updated; reload and retry')
         return 200, {'agent': agents.view(updated)}, []
 
+    def public_message(self, db, row):
+        data = conversations.message_view(row)
+        data['dispatch'] = agent_runtime.message_dispatch_view(agent_runtime.load_dispatch(db, row['id']))
+        return data
+
+    def workspace_instance(self, db, workspace_id, instance_id):
+        if self.lifecycle is None:
+            return None
+        if not isinstance(instance_id, str) or not re.fullmatch(r'[0-9a-f]{32}', instance_id):
+            return None
+        self.lifecycle.expire_with(db)
+        row = db.execute(
+            'SELECT * FROM instances WHERE id=? AND workspace_id=?',
+            (instance_id, workspace_id),
+        ).fetchone()
+        return None if row is None else self.lifecycle.snapshot(row)
+
+    def agent_runtime_dispatch(self, db, session, method, query, now, env, workspace_id, agent_id, unbinding):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        agent = agents.load(db, workspace['id'], agent_id)
+        if agent is None or (agent['archived'] == 1 and not agents.can_manage(actor)):
+            refuse(404, 'not_found', 'Agent not found')
+        if method == 'GET' and not unbinding and not query:
+            return self.get_agent_runtime(db, workspace, agent)
+        if method == 'POST' and unbinding == 'unbind' and not query:
+            if not agents.can_manage(actor):
+                refuse(403, 'forbidden', 'Only owners and admins can change agent runtime bindings')
+            return self.unbind_agent_runtime(db, workspace, agent, now, self.body(env, ['revision']))
+        if method == 'POST' and not unbinding and not query:
+            if not agents.can_manage(actor):
+                refuse(403, 'forbidden', 'Only owners and admins can change agent runtime bindings')
+            if agent['archived'] == 1:
+                refuse(409, 'conflict', 'Archived agents cannot be bound to a runtime')
+            return self.bind_agent_runtime(db, workspace, session, agent, now, self.body(env, ['instance_id', 'revision']))
+        refuse(400, 'invalid', 'Invalid agent runtime request')
+
+    def get_agent_runtime(self, db, workspace, agent):
+        binding = agent_runtime.load_binding(db, workspace['id'], agent['id'])
+        if binding is None:
+            return 200, {'runtime': None}, []
+        return 200, {'runtime': agent_runtime.binding_view(binding, self.binding_status(db, binding))}, []
+
+    def binding_status(self, db, binding):
+        snapshot = self.workspace_instance(db, binding['workspace_id'], binding['instance_id'])
+        if snapshot is None or not agent_runtime.instance_usable(snapshot):
+            return 'unavailable'
+        now = int(self.clock())
+        if agent_runtime.online_instance_connection(
+                db, binding['instance_id'], now, self.config.runtime_heartbeat_seconds) is not None:
+            return 'online'
+        return 'offline'
+
+    def bind_agent_runtime(self, db, workspace, session, agent, now, body):
+        if self.lifecycle is None:
+            refuse(501, 'unsupported', 'Runtime lifecycle is not enabled')
+        instance_id = body.get('instance_id')
+        snapshot = self.workspace_instance(db, workspace['id'], instance_id)
+        if snapshot is None:
+            refuse(404, 'not_found', 'Instance not found')
+        current = agent_runtime.load_binding(db, workspace['id'], agent['id'])
+        if current:
+            if body.get('revision') not in (None, current['revision']) and body.get('revision') != current['revision']:
+                refuse(409, 'conflict', 'Agent runtime binding was updated; reload and retry')
+            if current['instance_id'] == instance_id:
+                return 200, {'runtime': agent_runtime.binding_view(current, self.binding_status(db, current))}, []
+            if body.get('revision') != current['revision']:
+                refuse(409, 'conflict', 'Agent runtime binding was updated; reload and retry')
+            db.execute(
+                'UPDATE workspace_agent_bindings SET instance_id=?, revision=?, updated=? WHERE agent_id=? AND revision=?',
+                (instance_id, current['revision'] + 1, now, agent['id'], current['revision']),
+            )
+            updated = agent_runtime.load_binding(db, workspace['id'], agent['id'])
+            return 200, {'runtime': agent_runtime.binding_view(updated, self.binding_status(db, updated))}, []
+        db.execute(
+            'INSERT INTO workspace_agent_bindings VALUES(?,?,?,?,?,?,?)',
+            (agent['id'], workspace['id'], instance_id, 1, session['user_id'], now, now),
+        )
+        created = agent_runtime.load_binding(db, workspace['id'], agent['id'])
+        return 201, {'runtime': agent_runtime.binding_view(created, self.binding_status(db, created))}, []
+
+    def unbind_agent_runtime(self, db, workspace, agent, now, body):
+        current = agent_runtime.load_binding(db, workspace['id'], agent['id'])
+        if current is None:
+            return 200, {'runtime': None}, []
+        if body.get('revision') != current['revision']:
+            refuse(409, 'conflict', 'Agent runtime binding was updated; reload and retry')
+        db.execute('DELETE FROM workspace_agent_bindings WHERE agent_id=? AND revision=?',
+                   (agent['id'], current['revision']))
+        return 200, {'runtime': None}, []
+
+
     def conversation_dispatch(self, db, session, method, query, now, env, workspace_id, agent_id,
                               conversation_id, rest, message_id, saving):
         workspace = members.load(db, workspace_id, session['user_id'])
@@ -1766,7 +1864,7 @@ class App:
             items = conversations.messages(db, row['id'], '', 201) or []
             return 200, {'conversation': conversations.conversation_view(row),
                          'agent': agents.view(agent),
-                         'items': [conversations.message_view(item) for item in items[:200]],
+                         'items': [self.public_message(db, item) for item in items[:200]],
                          'cursor': items[199]['id'] if len(items) > 200 else None}, []
         if rest == 'messages' and message_id is None and method == 'GET':
             return self.list_conversation_messages(db, row, query, now)
@@ -1848,7 +1946,7 @@ class App:
         rows = conversations.messages(db, row['id'], cursor, int(limit) + 1)
         if rows is None:
             refuse(400, 'invalid', 'Invalid pagination parameters')
-        return 200, {'items': [conversations.message_view(item) for item in rows[:int(limit)]],
+        return 200, {'items': [self.public_message(db, item) for item in rows[:int(limit)]],
                      'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
 
     def send_conversation_message(self, db, workspace, session, agent, row, now, env):
@@ -1878,8 +1976,8 @@ class App:
             ).fetchone()
             if assistant:
                 assistant = conversations.load_message(db, row['id'], assistant['id'])
-            return 200, {'message': conversations.message_view(user_row),
-                         'reply': conversations.message_view(assistant) if assistant else None}, []
+            return 200, {'message': self.public_message(db, user_row),
+                         'reply': self.public_message(db, assistant) if assistant else None}, []
         pending = db.execute(
             'SELECT COUNT(*) FROM agent_messages WHERE conversation_id=? AND role=? AND status IN (?,?)',
             (row['id'], 'assistant', 'queued', 'running'),
@@ -1906,13 +2004,17 @@ class App:
              text, 'succeeded', None, None, agent['revision'], now, now, key_hash, request_hash,
              next_seq + 1),
         )
-        task_id, error_code = self.queue_infer_task(db, session['user_id'], now, prompt, workspace['id'])
+        task_id, error_code, dispatch = self.queue_infer_task(
+            db, session['user_id'], now, prompt, workspace['id'], agent['id'])
         db.execute(
             'INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (assistant_id, row['id'], workspace['id'], agent['id'], session['user_id'], 'assistant',
              '', 'queued', task_id, error_code, agent['revision'], now, now, None, None,
              next_seq + 2),
         )
+        if dispatch:
+            agent_runtime.attach_dispatch(
+                db, assistant_id, dispatch['source'], dispatch.get('instance_id'), dispatch.get('connection_id'))
         title = row['title']
         if title == '新对话':
             title = conversations.default_title(text)
@@ -1921,22 +2023,36 @@ class App:
         else:
             db.execute('UPDATE agent_conversations SET updated=? WHERE id=?', (now, row['id']))
         return 201, {
-            'message': conversations.message_view(conversations.load_message(db, row['id'], user_id)),
-            'reply': conversations.message_view(conversations.load_message(db, row['id'], assistant_id)),
+            'message': self.public_message(db, conversations.load_message(db, row['id'], user_id)),
+            'reply': self.public_message(db, conversations.load_message(db, row['id'], assistant_id)),
         }, []
 
-    def queue_infer_task(self, db, user_id, now, prompt, workspace_id):
+    def queue_infer_task(self, db, user_id, now, prompt, workspace_id, agent_id=None):
         stale = self.config.runtime_heartbeat_seconds
-        target = runtime_connect.online_connection(db, user_id, now, stale, None)
-        if target is False or target is None:
-            return None, 'no_agent'
+        target = None
+        dispatch = {'source': 'connection', 'instance_id': None, 'connection_id': None}
+        if agent_id:
+            binding = agent_runtime.load_binding(db, workspace_id, agent_id)
+            if binding is not None:
+                snapshot = self.workspace_instance(db, workspace_id, binding['instance_id'])
+                if agent_runtime.instance_usable(snapshot):
+                    target = agent_runtime.online_instance_connection(db, binding['instance_id'], now, stale)
+                    if target is not None:
+                        dispatch = {'source': 'instance', 'instance_id': binding['instance_id'],
+                                    'connection_id': target['id']}
+                        user_id = target['user_id']
+        if target is None:
+            target = runtime_connect.online_connection(db, user_id, now, stale, None, personal=True)
+            if target is False or target is None:
+                return None, 'no_agent', None
+            dispatch = {'source': 'connection', 'instance_id': None, 'connection_id': target['id']}
         try:
             row = runtime_connect.create_task(
-                db, user_id, target['id'], now, 'infer', prompt,
+                db, target['user_id'], target['id'], now, 'infer', prompt,
                 self.config.runtime_task_timeout_seconds, workspace_id)
         except ValueError:
-            return None, 'quota'
-        return row['id'], None
+            return None, 'quota', None
+        return row['id'], None, dispatch
 
     def reconcile_conversation(self, db, row, now):
         pending = db.execute(
@@ -1944,13 +2060,53 @@ class App:
             (row['id'], 'assistant', 'queued', 'running'),
         ).fetchall()
         for message in pending:
+            retry = False
             if message['task_id']:
-                task = runtime_connect.load_task(db, message['task_id'], user_id=row['user_id'])
+                task = runtime_connect.load_task(db, message['task_id'])
                 if task is not None:
                     task = runtime_connect.expire_task(db, task, now)
-                conversations.apply_task(db, message, task, now)
-                continue
-            if message['error_code'] in (None, 'no_agent'):
+                if task is not None and task['status'] in ('succeeded', 'failed'):
+                    conversations.apply_task(db, message, task, now)
+                    continue
+                connection = None
+                if task is not None:
+                    connection = db.execute(
+                        'SELECT * FROM runtime_connections WHERE id=?', (task['connection_id'],)
+                    ).fetchone()
+                stale = self.config.runtime_heartbeat_seconds
+                revoked = False
+                if connection is not None:
+                    key = db.execute(
+                        'SELECT revoked FROM runtime_keys WHERE id=?', (connection['key_id'],)
+                    ).fetchone()
+                    revoked = bool(key and key['revoked'])
+                offline = connection is None or connection['last_seen'] + stale <= now or revoked
+                if task is None or (task['status'] == 'queued' and offline) or (
+                        task['status'] == 'failed' and True and (task is not None)):
+                    # Only retry failed timeouts or vanished/offline queued work, not active claims.
+                    failed = task is not None and task['status'] == 'failed'
+                    if failed:
+                        result = {}
+                        raw = task['result']
+                        if raw:
+                            try:
+                                parsed = json.loads(raw)
+                                if isinstance(parsed, dict):
+                                    result = parsed
+                            except (TypeError, ValueError, json.JSONDecodeError):
+                                result = {}
+                        if not (result.get('error') == 'timeout' or result.get('cancelled')):
+                            conversations.apply_task(db, message, task, now)
+                            continue
+                    if failed or task is None or (task['status'] == 'queued' and offline):
+                        retry = True
+                    else:
+                        conversations.apply_task(db, message, task, now)
+                        continue
+                else:
+                    conversations.apply_task(db, message, task, now)
+                    continue
+            if retry or message['error_code'] in (None, 'no_agent'):
                 agent = agents.load(db, row['workspace_id'], row['agent_id'])
                 if agent is None or agent['archived'] == 1:
                     continue
@@ -1964,11 +2120,18 @@ class App:
                 prompt = conversations.compose_prompt(agent, history, user['body'])
                 if not runtime_connect.valid_prompt(prompt):
                     continue
-                task_id, error_code = self.queue_infer_task(db, row['user_id'], now, prompt, row['workspace_id'])
+                task_id, error_code, dispatch = self.queue_infer_task(
+                    db, row['user_id'], now, prompt, row['workspace_id'], row['agent_id'])
+                if task_id and task_id == message['task_id']:
+                    continue
                 db.execute(
-                    'UPDATE agent_messages SET task_id=?, error_code=?, updated=? WHERE id=?',
-                    (task_id, error_code, now, message['id']),
+                    'UPDATE agent_messages SET task_id=?, error_code=?, status=?, updated=? WHERE id=?',
+                    (task_id, error_code, 'queued', now, message['id']),
                 )
+                db.execute('DELETE FROM agent_message_dispatch WHERE message_id=?', (message['id'],))
+                if dispatch:
+                    agent_runtime.attach_dispatch(
+                        db, message['id'], dispatch['source'], dispatch.get('instance_id'), dispatch.get('connection_id'))
 
     def save_conversation_message(self, db, workspace, session, actor, row, message_id, now, env):
         if not conversations.can_read(row, session['user_id']):
@@ -2519,6 +2682,13 @@ class App:
             if set(body) != {'job_id', 'observed_revision', 'lease'} or not isinstance(body['job_id'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['job_id']):
                 refuse(400, 'invalid', 'Incomplete or invalid manager observation')
             return 200, runtime.runtime_bot_social(manager, collaboration[1], body['job_id'], body['observed_revision'], body['lease']), []
+        agent_key = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/runtime-agent-key', path)
+        if agent_key and method == 'POST' and not query:
+            body = self.body(env, ['job_id', 'observed_revision', 'lease'])
+            if set(body) != {'job_id', 'observed_revision', 'lease'} or not isinstance(body['job_id'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['job_id']):
+                refuse(400, 'invalid', 'Incomplete or invalid manager observation')
+            return 200, runtime.runtime_agent_key(
+                manager, agent_key[1], body['job_id'], body['observed_revision'], body['lease'], self.config.origin), []
         match = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/(observe|heartbeat)', path)
         if match and method == 'POST':
             allowed = ['job_id', 'observed_revision', 'lease']

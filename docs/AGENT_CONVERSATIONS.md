@@ -2,7 +2,7 @@
 
 This slice adds a persistent, authorized conversation between a workspace member and a workspace agent record from [WORKSPACE_AGENTS.md](WORKSPACE_AGENTS.md). It is self-written for OpenTeamily. It does not copy Teamily, FlyBot Project, Bot Social, or DS-Bot source.
 
-The management process does not call a model provider. A send composes a prompt from the agent name, summary, instructions, and prior succeeded turns, then queues an existing runtime `infer` task on the **calling user's** online connection. Model-API resolution stays on that task path (workspace, then the workspace owner account, then the platform default). Tests that finish a reply with a fake OpenAI-compatible server are labeled as such; they are not a real vendor or a live container run.
+The management process does not call a model provider. A send composes a prompt from the agent name, summary, instructions, and prior succeeded turns, then queues an existing runtime `infer` task. If the agent is bound to a usable FlyBot container instance (see [AGENT_RUNTIME.md](AGENT_RUNTIME.md)), the task is assigned to that instance connection; otherwise the **calling user's** own-machine connection is used as a fallback. Model-API resolution stays on that task path (workspace, then the workspace owner account, then the platform default). Tests that finish a reply with a fake OpenAI-compatible server are labeled as such; they are not a real vendor or a live container run.
 
 `/v1/agent/*` remains the runtime-key transport. These routes are management conversation APIs.
 

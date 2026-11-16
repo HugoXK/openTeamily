@@ -21,8 +21,10 @@ SECRET_TARGET = '/run/secrets/openteamily-model-api.json'
 SECRET_BIND_SUFFIX = ':' + SECRET_TARGET + ':ro'
 BOT_SOCIAL_TARGET = '/run/secrets/openteamily-bot-social.json'
 BOT_SOCIAL_BIND_SUFFIX = ':' + BOT_SOCIAL_TARGET + ':ro'
-ALLOWED_BIND_SUFFIXES = (SECRET_BIND_SUFFIX, BOT_SOCIAL_BIND_SUFFIX)
-ALLOWED_BIND_TARGETS = (SECRET_TARGET, BOT_SOCIAL_TARGET)
+RUNTIME_KEY_TARGET = '/run/secrets/openteamily-runtime-key.json'
+RUNTIME_KEY_BIND_SUFFIX = ':' + RUNTIME_KEY_TARGET + ':ro'
+ALLOWED_BIND_SUFFIXES = (SECRET_BIND_SUFFIX, BOT_SOCIAL_BIND_SUFFIX, RUNTIME_KEY_BIND_SUFFIX)
+ALLOWED_BIND_TARGETS = (SECRET_TARGET, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET)
 
 def compose_bytes(document):
     return (json.dumps(document, sort_keys=True, separators=(',', ':')) + '\n').encode()
@@ -86,6 +88,11 @@ def bot_social_relpath(iid):
     return 'secrets/bot-social-' + iid + '.json'
 
 
+def runtime_key_relpath(iid):
+    check_id(iid)
+    return 'secrets/runtime-key-' + iid + '.json'
+
+
 def manifest(iid, entry):
     check_id(iid)
     require(isinstance(entry, dict) and set(entry) == {'image', 'healthcheck', 'publish_port'}, 'registry_fields')
@@ -103,6 +110,7 @@ def manifest(iid, entry):
                    {'type': 'volume', 'source': 'data', 'target': '/data'},
                    {'type': 'bind', 'source': secret_relpath(iid), 'target': SECRET_TARGET, 'read_only': True},
                    {'type': 'bind', 'source': bot_social_relpath(iid), 'target': BOT_SOCIAL_TARGET, 'read_only': True},
+                   {'type': 'bind', 'source': runtime_key_relpath(iid), 'target': RUNTIME_KEY_TARGET, 'read_only': True},
                ],
                'tmpfs': ['/tmp:rw,noexec,nosuid,size=67108864'],
                'logging': {'driver': 'local', 'options': {'max-size': '10m', 'max-file': '3'}}}
@@ -264,6 +272,9 @@ class ComposeEngine:
     def bot_social_path(self, iid):
         return self.registry.root / bot_social_relpath(iid)
 
+    def runtime_key_path(self, iid):
+        return self.registry.root / runtime_key_relpath(iid)
+
     def install_secret(self, iid, payload):
         """Write the resolved model-API file (or empty). Never logs the key."""
         self.registry.entry(iid)
@@ -291,6 +302,19 @@ class ComposeEngine:
         replace_private(path, raw)
         return path
 
+    def install_runtime_key(self, iid, payload):
+        """Write the instance runtime key file (or empty). Never logs the token."""
+        self.registry.entry(iid)
+        path = self.runtime_key_path(iid)
+        if payload is None:
+            raw = b''
+        else:
+            require(isinstance(payload, dict) and payload.get('token') and payload.get('origin') and payload.get('hostname'), 'runtime_key_payload')
+            allowed = {key: payload[key] for key in ('origin', 'token', 'hostname')}
+            raw = (json.dumps(allowed, separators=(',', ':')) + '\n').encode()
+        replace_private(path, raw)
+        return path
+
     def compose(self, iid, operation, *, heartbeat=lambda: None, tail=100):
         _, path = self.registry.entry(iid)
         require(type(tail) is int and 1 <= tail <= 100, 'log_tail')
@@ -299,6 +323,8 @@ class ComposeEngine:
                 self.install_secret(iid, None)
             if not self.bot_social_path(iid).exists():
                 self.install_bot_social(iid, None)
+            if not self.runtime_key_path(iid).exists():
+                self.install_runtime_key(iid, None)
         # Exact argv grammar only; neither API nor registry can supply a verb/flags.
         commands = {
             'create': ['create', '--no-build', '--no-recreate', '--pull', 'never', 'flybot'],
