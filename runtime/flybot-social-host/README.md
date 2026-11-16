@@ -37,15 +37,21 @@ truth.
 - Richer group/DM façade flows on the v0.3.6 ledger: notices, human and
   remote lines, face-to-face upsert/apply/drop, inbound DM deliver, and
   approval/invite hooks.
+- Room-link seating on the host seam: mint/claim/revoke go through
+  `serveInvites` handlers, `seatOpenClaims` previews one open link about
+  once a minute (with rate-limit backoff) and seats claimers as
+  `admittedBy: 'ticket'`, and `ticketPeers()` lists the from/to/scope
+  pairs the social plugin uses. Tests use an in-process fake invite
+  server only.
 
 ## Not in this slice
 
-- Wiring the Bot Social server URL through the management server, or a
-  redistributable public image (issue #3).
+- A redistributable public image (issue #3). The management server can
+  inject a validated Bot Social URL at instance start; see
+  `docs/BOT_SOCIAL.md`.
 - Composer `@` mentions and the Bot details drawer in the official
   ds-bot / dsh web client.
-- Full Teamily-parity group/DM comparison (the façade now posts group
-  lines to the write-ahead ledger, hosts face-to-face rooms, and lists
-  inbound DMs; that is not a Teamily comparison).
+- Live Bot Social room-invite HTTP, a Members-card UI, or a Teamily
+  comparison of group/DM or room-link flows.
 
 See `docs/upstream/GAPS.md` and `docs/upstream/INTEGRATION.md`.

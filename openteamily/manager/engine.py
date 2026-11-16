@@ -19,11 +19,20 @@ from .safety import LIMIT, ManagerError, require, trusted_path, read_private, wr
 IMAGE = re.compile(r'[a-z0-9][a-z0-9./:_-]{0,118}@sha256:[0-9a-f]{64}')
 SECRET_TARGET = '/run/secrets/openteamily-model-api.json'
 SECRET_BIND_SUFFIX = ':' + SECRET_TARGET + ':ro'
+BOT_SOCIAL_TARGET = '/run/secrets/openteamily-bot-social.json'
+BOT_SOCIAL_BIND_SUFFIX = ':' + BOT_SOCIAL_TARGET + ':ro'
+ALLOWED_BIND_SUFFIXES = (SECRET_BIND_SUFFIX, BOT_SOCIAL_BIND_SUFFIX)
+ALLOWED_BIND_TARGETS = (SECRET_TARGET, BOT_SOCIAL_TARGET)
 
 
 def secret_relpath(iid):
     check_id(iid)
     return 'secrets/model-api-' + iid + '.json'
+
+
+def bot_social_relpath(iid):
+    check_id(iid)
+    return 'secrets/bot-social-' + iid + '.json'
 
 
 def manifest(iid, entry):
@@ -42,6 +51,7 @@ def manifest(iid, entry):
                'volumes': [
                    {'type': 'volume', 'source': 'data', 'target': '/data'},
                    {'type': 'bind', 'source': secret_relpath(iid), 'target': SECRET_TARGET, 'read_only': True},
+                   {'type': 'bind', 'source': bot_social_relpath(iid), 'target': BOT_SOCIAL_TARGET, 'read_only': True},
                ],
                'tmpfs': ['/tmp:rw,noexec,nosuid,size=67108864'],
                'logging': {'driver': 'local', 'options': {'max-size': '10m', 'max-file': '3'}}}
@@ -161,6 +171,9 @@ class ComposeEngine:
     def secret_path(self, iid):
         return self.registry.root / secret_relpath(iid)
 
+    def bot_social_path(self, iid):
+        return self.registry.root / bot_social_relpath(iid)
+
     def install_secret(self, iid, payload):
         """Write the resolved model-API file (or empty). Never logs the key."""
         self.registry.entry(iid)
@@ -173,11 +186,29 @@ class ComposeEngine:
         replace_private(path, raw)
         return path
 
+    def install_bot_social(self, iid, payload):
+        """Write the resolved Bot Social URL file (or empty). Never accepts a token."""
+        self.registry.entry(iid)
+        path = self.bot_social_path(iid)
+        if payload is None:
+            raw = b''
+        else:
+            require(isinstance(payload, dict), 'bot_social_payload')
+            require('token' not in payload and 'api_key' not in payload, 'bot_social_payload')
+            require(isinstance(payload.get('server'), str) and payload['server'], 'bot_social_payload')
+            allowed = {key: payload[key] for key in ('server', 'displayName', 'source') if key in payload}
+            raw = (json.dumps(allowed, separators=(',', ':')) + '\n').encode()
+        replace_private(path, raw)
+        return path
+
     def compose(self, iid, operation, *, heartbeat=lambda: None, tail=100):
         _, path = self.registry.entry(iid)
         require(type(tail) is int and 1 <= tail <= 100, 'log_tail')
-        if operation in ('create', 'start', 'restart', 'up') and not self.secret_path(iid).exists():
-            self.install_secret(iid, None)
+        if operation in ('create', 'start', 'restart', 'up'):
+            if not self.secret_path(iid).exists():
+                self.install_secret(iid, None)
+            if not self.bot_social_path(iid).exists():
+                self.install_bot_social(iid, None)
         # Exact argv grammar only; neither API nor registry can supply a verb/flags.
         commands = {
             'create': ['create', '--no-build', '--no-recreate', '--pull', 'never', 'flybot'],
@@ -234,9 +265,13 @@ class ComposeEngine:
                 not host.get('Devices') and not host.get('PidMode') and
                 host.get('IpcMode') in ('private', 'shareable') and host.get('NetworkMode') == 'ot-' + iid + '_default' and
                 isinstance(host.get('SecurityOpt'), list) and any(x in host['SecurityOpt'] for x in ('no-new-privileges', 'no-new-privileges:true')), 'unsafe_container')
-        require(isinstance(binds, list) and (binds == [] or (
-            len(binds) == 1 and isinstance(binds[0], str) and binds[0].endswith(SECRET_BIND_SUFFIX) and '..' not in binds[0]
-        )), 'unsafe_container')
+        def bind_suffix(bind):
+            require(isinstance(bind, str) and '..' not in bind, 'unsafe_container')
+            matched = [suffix for suffix in ALLOWED_BIND_SUFFIXES if bind.endswith(suffix)]
+            require(len(matched) == 1, 'unsafe_container')
+            return matched[0]
+        require(isinstance(binds, list) and len(binds) == len(ALLOWED_BIND_SUFFIXES)
+                and sorted(bind_suffix(bind) for bind in binds) == sorted(ALLOWED_BIND_SUFFIXES), 'unsafe_container')
         expected_ports = {'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': str(entry['publish_port'])}]} if entry['publish_port'] is not None else {}
         require((host.get('PortBindings') or {}) == expected_ports, 'unsafe_ports')
         labels = config.get('Labels')
@@ -246,11 +281,14 @@ class ComposeEngine:
         data_mounts = [m for m in mounts if isinstance(m, dict) and m.get('Destination') == '/data']
         require(len(data_mounts) == 1 and data_mounts[0].get('Type') == 'volume' and data_mounts[0].get('Name') == 'ot-' + iid and
                 data_mounts[0].get('RW') is True, 'volume_scope')
-        secret_mounts = [m for m in mounts if isinstance(m, dict) and m.get('Destination') == SECRET_TARGET]
-        require(len(secret_mounts) == 1 and secret_mounts[0].get('Type') == 'bind' and secret_mounts[0].get('RW') is False
-                and '..' not in str(secret_mounts[0].get('Source') or ''), 'secret_mount')
+        def require_secret_bind(target, code='secret_mount'):
+            found = [m for m in mounts if isinstance(m, dict) and m.get('Destination') == target]
+            require(len(found) == 1 and found[0].get('Type') == 'bind' and found[0].get('RW') is False
+                    and '..' not in str(found[0].get('Source') or ''), code)
+        require_secret_bind(SECRET_TARGET)
+        require_secret_bind(BOT_SOCIAL_TARGET, 'bot_social_mount')
         require(all(isinstance(m, dict) and (m.get('Destination') == '/data' or
-                    m.get('Destination') == SECRET_TARGET or
+                    m.get('Destination') in ALLOWED_BIND_TARGETS or
                     (m.get('Type') == 'tmpfs' and m.get('Destination') == '/tmp')) for m in mounts), 'unexpected_mount')
         running = state.get('Running') is True and state.get('Status') == 'running' and not state.get('Paused') and not state.get('Restarting')
         started = state.get('StartedAt')
