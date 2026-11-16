@@ -12,7 +12,7 @@
   <header>
     <p class="brand">OpenTeamily / FlyBot</p>
     <h1>智能体</h1>
-    <p class="note">这里只保存工作区里的智能体目录：名称、简介和说明。管理进程不会运行它们，也还没有公开主页或 Auto / Instant / Agentic 模式。这些默认值没有和 Teamily 对照过，不能写成已经功能对等。运行时连接仍走 /v1/agent，和本页不是同一套接口。</p>
+    <p class="note">工作区成员可以维护智能体目录，并与自己的智能体进行持久对话。回复通过调用者已连接的运行时按 infer 任务排队，管理进程不会自己调用模型。没有公开主页，也没有 Auto / Instant / Agentic 模式。已完成的消息可以保存到作品库并保留出处。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
     <nav>
       <a href="/settings">账号设置</a>
       <a href="/automations">自动化</a>
@@ -66,6 +66,18 @@
         </div>
       </fieldset>
     </form>
+    <section id="chat-panel" hidden>
+      <h2 id="chat-title">对话</h2>
+      <p id="chat-note" class="note">选择一个智能体后，可以开始或继续你自己的对话。</p>
+      <ul id="conversation-list"></ul>
+      <p id="conversations-empty" class="note" hidden>还没有对话。</p>
+      <button type="button" id="new-conversation">新对话</button>
+      <ol id="message-list"></ol>
+      <form id="chat-form" method="post" action="/v1/workspaces">
+        <label class="stack">消息 <textarea id="chat-body" name="body" maxlength="4000" required></textarea></label>
+        <button type="submit">发送</button>
+      </form>
+    </section>
     <form id="logout-form" method="post" action="/v1/auth/logout">
       <button type="submit">退出登录</button>
     </form>
