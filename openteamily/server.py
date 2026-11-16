@@ -32,6 +32,8 @@ def main():
     parser.add_argument('--manager-grants', help='Operator-owned private JSON file containing manager credential digests and explicit instance grants')
     parser.add_argument('--operator-admin', help='Operator-owned private JSON file with a credential_hash for admin APIs (platform model API)')
     parser.add_argument('--oidc-providers', help='Operator-owned private JSON file of OIDC/OAuth client credentials; secrets are never logged')
+    parser.add_argument('--no-automation-worker', action='store_true',
+                        help='Do not start the background automation worker; explicit tick still works')
     args = parser.parse_args()
     if args.simulation and args.compose_image:
         parser.error('Choose simulation OR explicit Compose execution')
@@ -50,10 +52,15 @@ def main():
                                 allow_registration=args.open_registration), lifecycle=lifecycle, manager_auth=manager_auth, operator_admin=operator_admin, oidc_registry=oidc_registry)
     except (OSError, ValueError, TypeError):
         parser.error('Cannot initialize private storage or origin configuration')
-    app = SettingsPage(app)
+    page = SettingsPage(app)
+    if not args.no_automation_worker:
+        app.start_automation_worker()
     # Never changes firewall/proxy rules or binds the development service to all interfaces.
-    with make_server('127.0.0.1', args.port, app, handler_class=QuietHandler) as server:
-        server.serve_forever()
+    try:
+        with make_server('127.0.0.1', args.port, page, handler_class=QuietHandler) as server:
+            server.serve_forever()
+    finally:
+        app.stop_automation_worker()
 
 
 if __name__ == '__main__':

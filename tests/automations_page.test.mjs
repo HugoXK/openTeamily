@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { csrfCookie, listQuery, namesFromList, readEditor, scheduleFromForm, tabCategory } from '../openteamily/static/automations/app.mjs';
+import { csrfCookie, listQuery, namesFromList, readEditor, runResultText, runStatusLabel, scheduleFromForm, tabCategory } from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -50,4 +50,12 @@ test('readEditor collects tag fields', () => {
   } finally {
     globalThis.FormData = original;
   }
+});
+
+test('runStatusLabel and runResultText describe durable run rows', () => {
+  assert.equal(runStatusLabel({status: 'succeeded'}), '已完成');
+  assert.equal(runStatusLabel({status: 'queued', error_code: 'no_agent'}), '等待已连接的代理');
+  assert.equal(runStatusLabel({status: 'timeout'}), '已超时');
+  assert.equal(runResultText({result: {text: 'brief from fake provider'}}), 'brief from fake provider');
+  assert.equal(runResultText({result: {}}), '');
 });

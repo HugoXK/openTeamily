@@ -5,7 +5,7 @@ Teamily source. Schedule kinds, the twelve work templates, and the tag
 compiler follow the 2026-11-16 round-1 Teamily contrast. Titles are
 rephrased; this is not a verbatim copy and not automation parity. Life
 templates were not captured. Scheduling and run records live in
-scheduler.py; this module still does not execute containers.
+scheduler.py; run records can now carry a durable agent result. This module still does not execute containers.
 """
 import json
 import re
@@ -379,14 +379,41 @@ def run_view(row):
         dispatch = {}
     if not isinstance(dispatch, dict):
         dispatch = {}
-    return {
+    status = row['status']
+    error = row['error_code']
+    if error == 'cancelled':
+        status = 'cancelled'
+    elif error == 'timeout':
+        status = 'timeout'
+    result = dispatch.get('result')
+    visible = None
+    if isinstance(result, dict):
+        visible = {}
+        text = result.get('text')
+        if isinstance(text, str):
+            visible['text'] = text[:8000]
+        if isinstance(result.get('model'), str) and len(result['model']) <= 200:
+            visible['model'] = result['model']
+        if result.get('source') in ('workspace', 'account', 'platform'):
+            visible['source'] = result['source']
+        if result.get('cancelled') is True:
+            visible['cancelled'] = True
+        if isinstance(result.get('error'), str) and 1 <= len(result['error']) <= 200:
+            visible['error'] = result['error']
+        visible.pop('api_key', None)
+        if not visible:
+            visible = None
+    data = {
         'id': row['id'],
         'automation_id': row['automation_id'],
         'workspace_id': row['workspace_id'],
         'due_at': row['due_at'],
         'started': row['started'],
         'finished': row['finished'],
-        'status': row['status'],
-        'error_code': row['error_code'],
-        'dispatch': {key: dispatch[key] for key in ('instance_ids', 'backend') if key in dispatch},
+        'status': status,
+        'error_code': error,
+        'dispatch': {key: dispatch[key] for key in ('instance_ids', 'backend', 'task_id') if key in dispatch},
     }
+    if visible is not None:
+        data['result'] = visible
+    return data
