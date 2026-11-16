@@ -15,11 +15,17 @@ export function readKeyForm(form) {
 
 export function installCommands(origin) {
   const base = (origin || '').replace(/\/$/, '');
+  const start = `python3 -m openteamily.flybot daemon start --origin ${base} --key-file ./runtime-key`;
   return {
-    unix: `curl -fsSL ${base}/install/flybot.sh | sh`,
-    windows: `irm ${base}/install/flybot.ps1 | iex`,
-    daemon: `flybot daemon start --origin ${base} --key <runtime-key>`,
+    unix: 'git clone https://github.com/openTeamily/openTeamily\n# write the key to a private file such as ./runtime-key',
+    windows: 'git clone https://github.com/openTeamily/openTeamily\n# write the key to a private file such as .\\runtime-key',
+    daemon: start,
   };
+}
+
+export function readTestTask(form) {
+  const data = new FormData(form);
+  return {kind: 'echo', prompt: (data.get('prompt') || '').trim()};
 }
 
 export function listItemHasSecret(item) {
@@ -137,6 +143,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     await loadKeys();
   }
 
+  function renderConnections(items) {
+    const list = document.getElementById('connection-list');
+    const empty = document.getElementById('connections-empty');
+    if (!list) return;
+    list.textContent = '';
+    empty.hidden = items.length > 0;
+    for (const item of items) {
+      const row = document.createElement('li');
+      row.textContent = `${item.hostname || 'flybot'} · ${item.status === 'online' ? '在线' : '离线'}`;
+      list.appendChild(row);
+    }
+  }
+
   async function loadKeys() {
     const listed = await request('GET', '/v1/runtime-keys');
     if (listed.status !== 200) {
@@ -145,6 +164,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     }
     document.getElementById('device-id').textContent = listed.body.device_id || '';
     renderKeys(listed.body.items || []);
+    const connections = await request('GET', '/v1/runtime/connections');
+    if (connections.status === 200) renderConnections(connections.body.items || []);
   }
 
   async function load() {
@@ -208,6 +229,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     show('ok', '已生成密钥。完整密钥只显示这一次，列表只保留前缀。');
     await loadKeys();
   });
+
+  const taskForm = document.getElementById('task-form');
+  if (taskForm) {
+    taskForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const values = readTestTask(event.currentTarget);
+      if (!values.prompt) {
+        show('error', '请填写测试内容。');
+        return;
+      }
+      const result = await request('POST', '/v1/runtime/tasks', values);
+      if (result.status !== 201) {
+        show('error', messageFor(result.body.error, '无法发送任务。需要先启动守护进程。'));
+        return;
+      }
+      const box = document.getElementById('task-result');
+      box.hidden = false;
+      box.textContent = '已排队，等待这台机器上的守护进程回传结果。刷新连接列表可查看状态。';
+      show('ok', '已发送测试任务。');
+      event.currentTarget.reset();
+      await loadKeys();
+    });
+  }
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
     event.preventDefault();
