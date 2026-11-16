@@ -45,6 +45,38 @@ class SettingsPage:
     def config(self, value):
         self.api.config = value
 
+
+    def _bundle(self, env, start_response):
+        from .flybot_bundle import build
+        headers = [('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff'),
+                   ('Content-Security-Policy', self.CSP), ('Referrer-Policy', 'no-referrer'),
+                   ('Cross-Origin-Resource-Policy', 'same-origin'),
+                   ('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')]
+        origin = self.api.config.origin
+        if (env.get('HTTP_HOST') != urlsplit(origin).netloc
+                or env.get('HTTP_ORIGIN', origin) != origin
+                or env.get('HTTP_SEC_FETCH_SITE', '') not in ('', 'same-origin', 'none')):
+            data = b'Same-origin request required'
+            status, content_type = '403 Forbidden', 'text/plain; charset=utf-8'
+        elif env.get('REQUEST_METHOD') not in ('GET', 'HEAD'):
+            data = b'Use GET or HEAD'
+            status, content_type = '405 Method Not Allowed', 'text/plain; charset=utf-8'
+            headers.append(('Allow', 'GET, HEAD'))
+        elif env.get('QUERY_STRING'):
+            data = b'Queries not supported'
+            status, content_type = '400 Bad Request', 'text/plain; charset=utf-8'
+        else:
+            try:
+                data = build()
+                status, content_type = '200 OK', 'application/octet-stream'
+            except OSError:
+                data = b'UI asset unavailable'
+                status, content_type = '503 Service Unavailable', 'text/plain; charset=utf-8'
+        headers += [('Content-Type', content_type), ('Content-Length', str(len(data))),
+                    ('Content-Disposition', 'attachment; filename="flybot.pyz"')]
+        start_response(status, headers)
+        return [] if env.get('REQUEST_METHOD') == 'HEAD' else [data]
+
     def _asset(self, directory, name):
         # Never resolve user input into a filename. Reject symlinks, including the asset directory.
         folder = self.root / directory
@@ -70,6 +102,8 @@ class SettingsPage:
 
     def __call__(self, env, start_response):
         path = env.get('PATH_INFO', '')
+        if path == '/install/flybot.pyz':
+            return self._bundle(env, start_response)
         if path not in self.ASSETS:
             if self._unknown_page(path):
                 start_response('404 Not Found', [('Content-Type', 'text/plain; charset=utf-8'),

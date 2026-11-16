@@ -15,17 +15,17 @@ export function readKeyForm(form) {
 
 export function installCommands(origin) {
   const base = (origin || '').replace(/\/$/, '');
-  const start = `python3 -m openteamily.flybot daemon start --origin ${base} --key-file ./runtime-key`;
   return {
-    unix: 'git clone https://github.com/openTeamily/openTeamily\n# write the key to a private file such as ./runtime-key',
-    windows: 'git clone https://github.com/openTeamily/openTeamily\n# write the key to a private file such as .\\runtime-key',
-    daemon: start,
+    unix: `python3 -c 'from urllib.request import urlretrieve; urlretrieve("${base}/install/flybot.pyz", "flybot.pyz")'`,
+    windows: `Invoke-WebRequest -Uri ${base}/install/flybot.pyz -OutFile flybot.pyz`,
+    daemon: `python3 flybot.pyz daemon start --origin ${base} --key-file ./runtime-key`,
   };
 }
 
 export function readTestTask(form) {
   const data = new FormData(form);
-  return {kind: 'echo', prompt: (data.get('prompt') || '').trim()};
+  const kind = data.get('kind') === 'infer' ? 'infer' : 'echo';
+  return {kind, prompt: (data.get('prompt') || '').trim()};
 }
 
 export function listItemHasSecret(item) {

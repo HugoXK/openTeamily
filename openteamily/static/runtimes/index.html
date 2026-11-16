@@ -12,7 +12,7 @@
   <header>
     <p class="brand">OpenTeamily / FlyBot</p>
     <h1>运行时</h1>
-    <p class="note">连接标签按 2026-11-16 第二轮对照补上：生成 FlyBot 运行时密钥（只显示一次，列表只显示前缀，默认永不过期）、设备 ID，并用本仓库的 `python3 -m openteamily.flybot` 在自己的机器上注册、心跳和接收允许的任务。请显式启动该模块，不要把安装脚本管道给 shell。这里没有 Teamily 的地址，也不等同于 Teamily 的云端 Agent 或托管电脑。当前任务类型只有 echo，用来验证传输，不会在机器上执行任意命令。</p>
+    <p class="note">连接标签按 2026-11-16 第二轮对照补上：生成 FlyBot 运行时密钥（只显示一次，列表只显示前缀，默认永不过期）、设备 ID，用本服务提供的 `flybot.pyz` 或源码树里的 `python3 -m openteamily.flybot`，在自己的机器上注册、心跳，并运行允许的 echo 或 infer 任务。请显式下载并启动，不要把安装脚本管道给 shell。infer 使用你或平台已经配置的模型 API，密钥只下发一次，不会出现在任务列表或日志里。这里没有 Teamily 的地址，也不等同于 Teamily 的云端 Agent 或托管电脑。不会在机器上执行任意命令。</p>
     <nav>
       <a href="/settings">账号设置</a>
       <a href="/automations">自动化</a>
@@ -70,21 +70,25 @@
       <form id="task-form" method="post" action="/v1/runtime/tasks">
         <fieldset>
           <legend>发送测试任务</legend>
-          <p class="note">只支持 echo，用来确认守护进程能收到任务并返回结果，不会在那台机器上执行命令。</p>
+          <p class="note">可选 echo（传输自检）或 infer（用已配置的模型 API 做一次对话，密钥不会写进结果）。不会在那台机器上执行命令。</p>
+          <label>类型
+            <select name="kind">
+              <option value="echo">echo</option>
+              <option value="infer">infer</option>
+            </select>
+          </label>
           <label>内容 <input type="text" name="prompt" required maxlength="4000" autocomplete="off"></label>
           <button type="submit">发送</button>
           <p id="task-result" class="note" hidden></p>
         </fieldset>
       </form>
-      <h3>步骤 1：准备 CLI</h3>
-      <p class="note">使用 OpenTeamily 源码树里的模块。不要把安装脚本管道给 shell，脚本只会打印同样的命令。</p>
-      <pre id="install-unix">git clone https://github.com/openTeamily/openTeamily
-# 把生成的密钥写入仅自己可读的文件，例如 ./runtime-key</pre>
-      <pre id="install-windows">git clone https://github.com/openTeamily/openTeamily
-# Save the key to a private file, for example .\runtime-key</pre>
+      <h3>步骤 1：下载 CLI</h3>
+      <p class="note">从本服务显式下载 zipapp，不要把安装脚本管道给 shell。密钥写入仅自己可读的文件。</p>
+      <pre id="install-unix">python3 -c 'from urllib.request import urlretrieve; urlretrieve("__ORIGIN__/install/flybot.pyz", "flybot.pyz")'</pre>
+      <pre id="install-windows">Invoke-WebRequest -Uri __ORIGIN__/install/flybot.pyz -OutFile flybot.pyz</pre>
       <h3>步骤 2：启动守护进程</h3>
-      <p class="note">在源码树目录里显式运行下面的命令。把密钥放在 --key-file 里，不要写进 shell 历史。</p>
-      <pre id="daemon-command">python3 -m openteamily.flybot daemon start --origin __ORIGIN__ --key-file ./runtime-key</pre>
+      <p class="note">下载完成后显式启动。把密钥放在 --key-file 里，不要写进 shell 历史。</p>
+      <pre id="daemon-command">python3 flybot.pyz daemon start --origin __ORIGIN__ --key-file ./runtime-key</pre>
     </section>
     <form id="logout-form" method="post" action="/v1/auth/logout">
       <button type="submit">退出登录</button>

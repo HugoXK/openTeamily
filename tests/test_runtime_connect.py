@@ -171,13 +171,14 @@ class RuntimeConnectTests(unittest.TestCase):
         self.issue()
         with sqlite3.connect(self.path / 'management.sqlite3') as db:
             db.execute('DROP TABLE runtime_connections')
+            db.execute('DROP TABLE runtime_task_meta')
             db.execute('DROP TABLE runtime_tasks')
         Store(self.path)
         with sqlite3.connect(self.path / 'management.sqlite3') as db:
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 1)
             names = {row[0] for row in db.execute(
-                "SELECT name FROM sqlite_master WHERE name IN ('runtime_connections','runtime_tasks')")}
-            self.assertEqual(names, {'runtime_connections', 'runtime_tasks'})
+                "SELECT name FROM sqlite_master WHERE name IN ('runtime_connections','runtime_tasks','runtime_task_meta')")}
+            self.assertEqual(names, {'runtime_connections', 'runtime_tasks', 'runtime_task_meta'})
 
 
 class FlybotCliTests(unittest.TestCase):
