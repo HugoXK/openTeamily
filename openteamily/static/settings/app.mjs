@@ -99,6 +99,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       loginPanel.hidden = false;
       settingsPanel.hidden = true;
       show('', '');
+      await renderProviders();
       return;
     }
     if (session.status !== 200) {
@@ -129,6 +130,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         document.getElementById('model-effective').textContent = label;
         document.getElementById('model-key-state').textContent = model.body.model_api.api_key_set ? '已保存个人密钥（不会回显）。' : '未设置个人密钥。';
       }
+    }
+  }
+
+  async function renderProviders() {
+    const box = document.getElementById('oidc-providers');
+    if (!box) return;
+    box.textContent = '';
+    const listed = await request('GET', '/v1/auth/providers');
+    if (listed.status !== 200 || !listed.body.items || !listed.body.items.length) return;
+    for (const item of listed.body.items) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = '使用 ' + item.label + ' 登录';
+      button.dataset.provider = item.id;
+      button.addEventListener('click', async () => {
+        const started = await request('POST', '/v1/auth/oidc/start', {provider: item.id});
+        if (started.status !== 200 || !started.body.authorization_url) {
+          show('error', messageFor(started.body.error, '无法开始第三方登录。'));
+          return;
+        }
+        globalThis.location.assign(started.body.authorization_url);
+      });
+      box.appendChild(button);
     }
   }
 

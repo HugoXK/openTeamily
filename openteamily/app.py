@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import automations, invites, members, model_api, settings
+from . import automations, invites, members, model_api, oidc, settings
 
 
 class APIError(Exception):
@@ -78,11 +78,12 @@ def object_only(pairs):
 
 
 class App:
-    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None):
+    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None):
         self.store, self.config, self.clock = store, config, clock
         self.lifecycle, self.manager_auth = lifecycle, manager_auth
         self.automation_backend = automation_backend
         self.operator_admin = operator_admin
+        self.oidc_registry = oidc_registry
 
     def __call__(self, env, start_response):
         headers = [('Content-Type', 'application/json; charset=utf-8'), ('Cache-Control', 'no-store'),
@@ -103,7 +104,7 @@ class App:
             status, body = 500, {'error': {'code': 'internal', 'message': 'Internal service error'}}
         data = json.dumps(body, ensure_ascii=True, separators=(',', ':')).encode('utf-8')
         headers.append(('Content-Length', str(len(data))))
-        reasons = {200: 'OK', 201: 'Created', 202: 'Accepted', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
+        reasons = {200: 'OK', 201: 'Created', 202: 'Accepted', 302: 'Found', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
                    404: 'Not Found', 405: 'Method Not Allowed', 409: 'Conflict', 411: 'Length Required',
                    413: 'Content Too Large', 415: 'Unsupported Media Type', 429: 'Too Many Requests',
                    500: 'Internal Server Error', 501: 'Not Implemented', 503: 'Service Unavailable'}
@@ -223,7 +224,173 @@ class App:
                    (digest(token), digest(csrf), user_id, now + self.config.session_seconds, now))
         return self.session_headers(token, csrf)
 
+    def oidc_start(self, env, now, body):
+        provider_id = body.get('provider')
+        if not isinstance(provider_id, str) or self.oidc_registry is None:
+            refuse(404, 'not_found', 'Provider not found')
+        provider = self.oidc_registry.get(provider_id)
+        if provider is None:
+            refuse(404, 'not_found', 'Provider not found')
+        self.rate_limit(env, 'oidc:' + provider.id, now)
+        state, nonce = opaque(), opaque()
+        verifier, challenge = oidc.pkce_pair()
+        redirect_uri = self.config.origin + '/v1/auth/oidc/callback'
+        user_id = None
+        with self.store.transaction() as db:
+            token = self.cookies(env).get(self.config.cookie_names[0], '')
+            if re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
+                session = db.execute(
+                    'SELECT user_id FROM sessions WHERE token_hash=? AND expires>?', (digest(token), now)
+                ).fetchone()
+                user_id = None if session is None else session['user_id']
+            db.execute('DELETE FROM oidc_states WHERE expires<=?', (now,))
+            if db.execute('SELECT COUNT(*) FROM oidc_states').fetchone()[0] >= oidc.MAX_STATES:
+                refuse(429, 'quota', 'Authentication request limit reached; try later')
+            db.execute(
+                'INSERT INTO oidc_states VALUES(?,?,?,?,?,?,?)',
+                (digest(state), provider.id, nonce, oidc.wrap(oidc.wrapping_key(self.store), verifier),
+                 user_id, now, now + oidc.STATE_TTL),
+            )
+        url = self.oidc_registry.authorization_url(
+            provider, state=state, nonce=nonce, challenge=challenge, redirect_uri=redirect_uri)
+        return 200, {'authorization_url': url, 'provider': provider.id}, []
+
+    def oidc_callback(self, env, now, query):
+        if self.oidc_registry is None:
+            refuse(404, 'not_found', 'Provider not found')
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=8) if query else {}
+            if any(len(v) != 1 for v in args.values()):
+                raise ValueError()
+        except ValueError:
+            refuse(400, 'invalid', 'Invalid callback parameters')
+        if args.get('error'):
+            refuse(400, 'invalid', 'Sign-in was cancelled or rejected')
+        state, code = args.get('state', [None])[0], args.get('code', [None])[0]
+        if (not isinstance(state, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', state)
+                or not isinstance(code, str) or not 8 <= len(code) <= 256 or any(c < ' ' for c in code)):
+            refuse(400, 'invalid', 'Invalid callback parameters')
+        redirect_uri = self.config.origin + '/v1/auth/oidc/callback'
+        with self.store.transaction() as db:
+            row = db.execute('SELECT * FROM oidc_states WHERE state_hash=?', (digest(state),)).fetchone()
+            if row is None or row['expires'] <= now:
+                refuse(400, 'invalid', 'Sign-in session expired; start again')
+            db.execute('DELETE FROM oidc_states WHERE state_hash=?', (row['state_hash'],))
+            provider_id, nonce, verifier_blob, session_user = row['provider'], row['nonce'], row['verifier_blob'], row['user_id']
+        provider = self.oidc_registry.get(provider_id)
+        if provider is None:
+            refuse(404, 'not_found', 'Provider not found')
+        try:
+            verifier = oidc.unwrap(oidc.wrapping_key(self.store), verifier_blob)
+            identity = self.oidc_registry.exchange(
+                provider, code=code, verifier=verifier, redirect_uri=redirect_uri,
+                nonce=nonce, now=now)
+        except ValueError:
+            refuse(400, 'invalid', 'Sign-in could not be verified')
+        with self.store.transaction() as db:
+            return self.finish_oidc(db, now, identity, session_user)
+
+    def oidc_link(self, env, now):
+        self.origin_check(env)
+        if self.oidc_registry is None:
+            refuse(404, 'not_found', 'Provider not found')
+        with self.store.transaction() as db:
+            session = None
+            token_cookie = self.cookies(env).get(self.config.cookie_names[0], '')
+            if re.fullmatch(r'[A-Za-z0-9_-]{43}', token_cookie):
+                session = db.execute(
+                    'SELECT s.*,u.username,u.password_hash FROM sessions s JOIN users u ON u.id=s.user_id '
+                    'WHERE s.token_hash=? AND s.expires>?', (digest(token_cookie), now)
+                ).fetchone()
+            if session is not None:
+                self.csrf_check(env, session)
+                body = self.body(env, ['token'])
+            else:
+                body = self.body(env, ['token', 'username', 'password'])
+            token = body.get('token')
+            if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
+                refuse(400, 'invalid', 'Provide a valid link token')
+            db.execute('DELETE FROM oidc_link_tokens WHERE expires<=?', (now,))
+            row = db.execute('SELECT * FROM oidc_link_tokens WHERE token_hash=?', (digest(token),)).fetchone()
+            if row is None or row['expires'] <= now:
+                refuse(400, 'invalid', 'Link token expired; start again')
+            if session is not None:
+                if session['user_id'] != row['user_id']:
+                    refuse(403, 'forbidden', 'Sign in to the matching account to confirm')
+                user_id = session['user_id']
+            else:
+                try:
+                    username, password = self.credentials(body)
+                except APIError:
+                    raise
+                user = db.execute('SELECT * FROM users WHERE id=?', (row['user_id'],)).fetchone()
+                if user is None or user['username'] != username or not password_matches(password, user['password_hash']):
+                    dummy_verify(body.get('password') if isinstance(body.get('password'), str) else 'x' * 12)
+                    refuse(401, 'unauthorized', 'Invalid username or password')
+                user_id = user['id']
+            db.execute('DELETE FROM oidc_link_tokens WHERE token_hash=?', (row['token_hash'],))
+            identity = {'provider': row['provider'], 'subject': row['subject'], 'email': row['email']}
+            return self.finish_oidc(db, now, identity, user_id, confirmed=True)
+
+    def finish_oidc(self, db, now, identity, session_user_id, confirmed=False):
+        existing = db.execute(
+            'SELECT * FROM user_identities WHERE provider=? AND subject=?',
+            (identity['provider'], identity['subject']),
+        ).fetchone()
+        if existing:
+            if session_user_id and existing['user_id'] != session_user_id:
+                refuse(409, 'conflict', 'This login is already linked to another account')
+            return self.oidc_signed_in(db, now, existing['user_id'])
+        owner = db.execute('SELECT * FROM user_emails WHERE email=?', (identity['email'],)).fetchone()
+        if session_user_id:
+            if owner and owner['user_id'] != session_user_id:
+                refuse(409, 'conflict', 'This email is already linked to another account')
+            self.attach_oidc(db, session_user_id, identity, now)
+            return self.oidc_signed_in(db, now, session_user_id)
+        if owner and not confirmed:
+            token = opaque()
+            db.execute(
+                'INSERT INTO oidc_link_tokens VALUES(?,?,?,?,?,?)',
+                (digest(token), identity['provider'], identity['subject'], identity['email'],
+                 owner['user_id'], now + oidc.LINK_TTL),
+            )
+            hint = identity['email'][0] + '***@' + identity['email'].split('@', 1)[1]
+            return 409, {'error': {'code': 'link_required', 'message': 'Confirm linking this login to the existing account'},
+                         'link': {'token': token, 'email_hint': hint}}, []
+        if owner and confirmed:
+            self.attach_oidc(db, owner['user_id'], identity, now)
+            return self.oidc_signed_in(db, now, owner['user_id'])
+        user_id = uuid4().hex
+        base = oidc.username_for(identity['email'], user_id)
+        username, suffix = base, 0
+        while db.execute('SELECT id FROM users WHERE username=?', (username,)).fetchone():
+            suffix += 1
+            username = (base[:28] + '-' + str(suffix))[:64]
+        if db.execute('SELECT COUNT(*) FROM users').fetchone()[0] >= self.config.max_users:
+            refuse(429, 'quota', 'Account capacity reached')
+        db.execute(
+            'INSERT INTO users VALUES(?,?,?,?)',
+            (user_id, username, password_hash(opaque() + opaque()), now),
+        )
+        self.attach_oidc(db, user_id, identity, now)
+        return self.oidc_signed_in(db, now, user_id)
+
+    def attach_oidc(self, db, user_id, identity, now):
+        db.execute(
+            'INSERT INTO user_identities VALUES(?,?,?,?,?)',
+            (identity['provider'], identity['subject'], user_id, identity['email'], now),
+        )
+        if db.execute('SELECT email FROM user_emails WHERE email=?', (identity['email'],)).fetchone() is None:
+            db.execute('INSERT INTO user_emails VALUES(?,?,1,?)', (user_id, identity['email'], now))
+
+    def oidc_signed_in(self, db, now, user_id):
+        user = db.execute('SELECT id, username FROM users WHERE id=?', (user_id,)).fetchone()
+        headers = self.new_session(db, user['id'], now)
+        headers.append(('Location', '/settings'))
+        return 302, {'redirect': '/settings', 'user': {'id': user['id'], 'username': user['username']}}, headers
+
     def credentials(self, body):
+
         username, password = body.get('username'), body.get('password')
         if (not isinstance(username, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{2,63}', username)
                 or not isinstance(password, str) or not 12 <= len(password) <= 256):
@@ -275,6 +442,16 @@ class App:
             with self.store.transaction() as db:
                 headers = self.new_session(db, user['id'], now)
             return 200, {'user': {'id': user['id'], 'username': user['username']}}, headers
+        if path == '/v1/auth/providers' and method == 'GET' and not query:
+            items = self.oidc_registry.public() if self.oidc_registry else []
+            return 200, {'items': items}, []
+        if path == '/v1/auth/oidc/start' and method == 'POST' and not query:
+            self.origin_check(env)
+            return self.oidc_start(env, now, self.body(env, ['provider']))
+        if path == '/v1/auth/oidc/callback' and method == 'GET':
+            return self.oidc_callback(env, now, query)
+        if path == '/v1/auth/oidc/link' and method == 'POST' and not query:
+            return self.oidc_link(env, now)
         if path.startswith('/v1/admin/'):
             if self.operator_admin is None:
                 refuse(401, 'operator_auth', 'Separate loopback operator credentials required')

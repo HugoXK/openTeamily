@@ -6,6 +6,7 @@ from .app import App, Config
 from .store import Store
 from .lifecycle import Lifecycle, RuntimePolicy
 from .operator_config import load_manager_auth, load_operator_admin
+from .oidc import load_oidc_providers
 from .settings_page import SettingsPage
 
 
@@ -30,6 +31,7 @@ def main():
     parser.add_argument('--compose-image', help='Explicit Compose execution profile; operator-supplied image@sha256 digest, never pulled by Web')
     parser.add_argument('--manager-grants', help='Operator-owned private JSON file containing manager credential digests and explicit instance grants')
     parser.add_argument('--operator-admin', help='Operator-owned private JSON file with a credential_hash for admin APIs (platform model API)')
+    parser.add_argument('--oidc-providers', help='Operator-owned private JSON file of OIDC/OAuth client credentials; secrets are never logged')
     args = parser.parse_args()
     if args.simulation and args.compose_image:
         parser.error('Choose simulation OR explicit Compose execution')
@@ -43,8 +45,9 @@ def main():
         lifecycle = Lifecycle(store, policy) if args.simulation or args.compose_image else None
         manager_auth = load_manager_auth(args.manager_grants) if args.manager_grants else None
         operator_admin = load_operator_admin(args.operator_admin) if args.operator_admin else None
+        oidc_registry = load_oidc_providers(args.oidc_providers) if args.oidc_providers else None
         app = App(store, Config(origin=args.origin, insecure_local=args.insecure_local,
-                                allow_registration=args.open_registration), lifecycle=lifecycle, manager_auth=manager_auth, operator_admin=operator_admin)
+                                allow_registration=args.open_registration), lifecycle=lifecycle, manager_auth=manager_auth, operator_admin=operator_admin, oidc_registry=oidc_registry)
     except (OSError, ValueError, TypeError):
         parser.error('Cannot initialize private storage or origin configuration')
     app = SettingsPage(app)
