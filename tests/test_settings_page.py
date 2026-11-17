@@ -87,6 +87,11 @@ class SettingsPageTests(unittest.TestCase):
                      'task_completion_reminders', 'likes_visible', 'favorites_visible'):
             self.assertIn(f'name="{name}"', html)
         self.assertIn('sunset_sunrise', html)
+        self.assertIn('id="appearance"', html)
+        light, dark, auto, system = (html.find(f'value="{name}"') for name in ('light', 'dark', 'auto', 'system'))
+        self.assertTrue(-1 < light < dark < auto < system)
+        self.assertLess(html.find('始终使用浅色。'), html.find('始终使用深色。'))
+        self.assertIn('没有使用实际日出日落时刻', html)
         self.assertNotIn('name="fold_long_messages"', html)
 
 

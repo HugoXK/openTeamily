@@ -740,21 +740,22 @@ body.app-workspace .account-menu {
   left: calc(100% + 0.55rem);
   bottom: 0;
   z-index: 30;
-  width: 16.5rem;
-  padding: 0.55rem 0 0.35rem;
+  width: 18rem;
+  padding: 0.65rem 0 0.4rem;
   background: var(--ot-surface);
   color: var(--ot-ink);
   border: 1px solid var(--ot-line);
-  border-radius: var(--ot-radius);
+  border-radius: 1.1rem;
   box-shadow: var(--ot-shadow);
 }
 
 body.app-workspace .account-menu .account-identity {
-  margin: 0 0 0.35rem;
-  padding: 0.15rem 0.9rem 0.45rem;
+  margin: 0 0 0.4rem;
+  padding: 0.2rem 1rem 0.55rem;
   border-bottom: 1px solid var(--ot-line);
-  color: var(--ot-muted);
-  font-size: 0.85rem;
+  color: var(--ot-ink);
+  font-size: 0.95rem;
+  font-weight: 650;
 }
 
 body.app-workspace .account-menu a,
@@ -763,7 +764,7 @@ body.app-workspace .account-menu button {
   width: 100%;
   box-sizing: border-box;
   margin: 0;
-  padding: 0.55rem 0.9rem;
+  padding: 0.62rem 1rem;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -780,8 +781,8 @@ body.app-workspace .account-menu button:hover {
 }
 
 body.app-workspace .account-menu #logout-form {
-  margin: 0.25rem 0 0;
-  padding: 0.25rem 0 0;
+  margin: 0.35rem 0 0;
+  padding: 0.35rem 0 0;
   border-top: 1px solid var(--ot-line);
 }
 
@@ -864,4 +865,24 @@ body.app-workspace #help-menu button:disabled {
   cursor: not-allowed;
   font-weight: 400;
   color: var(--ot-muted);
+}
+
+body.app-workspace #help-menu-button {
+  justify-content: space-between;
+  align-items: center;
+}
+
+body.app-workspace #help-menu-button::after {
+  content: "›";
+  margin-left: auto;
+  color: var(--ot-muted);
+  font-size: 1.05rem;
+}
+
+body.app-workspace #help-menu-button[aria-expanded="true"]::after {
+  content: none;
+}
+
+body.app-workspace .account-sub > button {
+  padding: 0.62rem 1rem;
 }

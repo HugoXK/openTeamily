@@ -159,6 +159,26 @@ async function main() {
     );
     screenshots.push(path.basename(await shot(page, outDir, '02-settings-signed-in.png')));
     try {
+      const appearance = page.locator('#appearance');
+      await appearance.scrollIntoViewIfNeeded();
+      await waitForLocatorText(page, '#appearance-status', '当前为');
+      const appearanceText = await visibleText(appearance);
+      const values = await page.locator('#appearance > label.choice input[name="appearance"]').evaluateAll(
+        (inputs) => inputs.map((input) => input.value),
+      );
+      record(
+        'settings_appearance',
+        values.join(',') === 'light,dark,auto,system'
+          && appearanceText.includes('始终使用浅色。')
+          && appearanceText.includes('当前为')
+          && appearanceText.includes('侧栏「浅色」「深色」按钮也会写入已有外观设置'),
+        `values=${values.join(',')}; ${appearanceText || 'appearance fieldset empty'}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '27-settings-appearance.png')));
+    } catch (error) {
+      record('settings_appearance', false, String(error));
+    }
+    try {
       await page.locator('#account-menu-button').click();
       await page.locator('#account-menu').waitFor({ state: 'visible', timeout: 8000 });
       await page.locator('#help-menu-button').click();
