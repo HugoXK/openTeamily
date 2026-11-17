@@ -151,6 +151,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     current = settings.body.settings.values;
     revision = settings.body.settings.revision;
+    whoami.textContent = session.body.user.username;
+    loginPanel.hidden = true;
+    settingsPanel.hidden = false;
     fillForm(form, current);
     applyTheme(document, current);
     const appearanceStatus = document.getElementById('appearance-status');
@@ -160,9 +163,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const option = form.elements.language.selectedOptions[0];
       languageCurrent.textContent = option ? option.textContent : '';
     }
-    whoami.textContent = session.body.user.username;
-    loginPanel.hidden = true;
-    settingsPanel.hidden = false;
     if (modelForm) {
       const model = await request('GET', '/v1/model-api');
       if (model.status === 200) {
