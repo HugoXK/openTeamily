@@ -95,6 +95,7 @@ def _public_ready(seed, origin, login_file, run_status, connection_status, chat_
         'agent_name': seed['agent_name'],
         'conversation_id': seed['conversation_id'],
         'conversation_title': seed['conversation_title'],
+        'saved_message_title': seed['saved_message_title'],
         'chat_user_text': seed['chat_user_text'],
         'chat_live_text': seed['chat_live_text'],
         'social_dm_id': seed['social_dm_id'],

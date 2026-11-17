@@ -75,6 +75,20 @@ export function visibleArtifacts(items, options = {}) {
   return rows;
 }
 
+export function sessionFilterChoices(items) {
+  const sessions = [];
+  const seen = new Set();
+  for (const item of items || []) {
+    const id = item.source && item.source.conversation_id;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const title = String((item.source && item.source.conversation_title) || '').trim();
+    sessions.push({id, label: title || '对话'});
+  }
+  sessions.sort((left, right) => (left.label < right.label ? -1 : left.label > right.label ? 1 : left.id.localeCompare(right.id)));
+  return sessions;
+}
+
 export function viewFromSearch(search) {
   const value = new URLSearchParams(search || '').get('view');
   if (value === 'created') return {kind: 'all', scope: 'mine'};
@@ -362,26 +376,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     if (creatorEmpty) creatorEmpty.hidden = names.length > 0;
-    const sessions = [];
-    const seen = new Set();
-    for (const item of allItems || []) {
-      const id = item.source && item.source.conversation_id;
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      sessions.push(id);
-    }
+    const sessions = sessionFilterChoices(allItems);
     if (sessionBox) {
       sessionBox.replaceChildren();
-      for (const id of sessions) {
+      for (const session of sessions) {
         const label = document.createElement('label');
         const input = document.createElement('input');
         input.type = 'checkbox';
         input.name = 'session';
-        input.value = id;
-        input.checked = filterSessions.includes(id);
+        input.value = session.id;
+        input.checked = filterSessions.includes(session.id);
         input.addEventListener('change', () => { readFilters(); renderCatalog(); });
         label.appendChild(input);
-        label.appendChild(document.createTextNode(' ' + id));
+        label.appendChild(document.createTextNode(' ' + session.label));
         sessionBox.appendChild(label);
       }
     }

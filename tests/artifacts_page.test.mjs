@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   csrfCookie, listQuery, visibleArtifacts, artifactMatchesType,
   artifactMatchesModified, viewFromSearch, queryForView, FILE_TYPE_LABELS,
+  sessionFilterChoices,
 } from '../openteamily/static/artifacts/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
@@ -59,6 +60,20 @@ test('visibleArtifacts maps recorded filters onto existing fields', () => {
   assert.deepEqual(visibleArtifacts(items, {scope: 'memory'}).map((item) => item.title), ['Task']);
   assert.equal(artifactMatchesModified(items[3], 'd30', now), false);
   assert.equal(artifactMatchesModified(items[3], 'd90', now), true);
+});
+
+test('sessionFilterChoices uses conversation titles instead of raw ids', () => {
+  const choices = sessionFilterChoices([
+    {title: 'Clip', source: {kind: 'agent_message', conversation_id: 'c2', conversation_title: '晨会'}},
+    {title: 'Again', source: {kind: 'agent_message', conversation_id: 'c2', conversation_title: '晨会'}},
+    {title: 'Other', source: {kind: 'agent_message', conversation_id: 'c1'}},
+    {title: 'Plain', kind: 'document'},
+  ]);
+  assert.deepEqual(choices, [
+    {id: 'c1', label: '对话'},
+    {id: 'c2', label: '晨会'},
+  ]);
+  assert.equal(choices.some((row) => row.label === 'c1' || row.label === 'c2'), false);
 });
 
 test('viewFromSearch and queryForView stay on the recorded allowlist', () => {

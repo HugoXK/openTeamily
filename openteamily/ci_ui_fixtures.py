@@ -25,6 +25,7 @@ TEAM_SLUG = 'ci-fixture'
 EMPTY_WORKSPACE_NAME = '[CI FIXTURE] Empty library'
 AGENT_NAME = '[CI FIXTURE] Directory assistant'
 CHAT_TITLE = '[CI FIXTURE] Conversation'
+SAVED_MESSAGE_TITLE = '[CI FIXTURE] Saved chat message'
 CHAT_USER_TEXT = '[CI FIXTURE] Please reply with one labeled sentence.'
 CHAT_LIVE_TEXT = '[CI FIXTURE] Live UI send from the screenshot script.'
 SOCIAL_GROUP_TITLE = '[CI FIXTURE] Group chat'
@@ -148,11 +149,16 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-chat-0001'},
     ), (201,), 'create the fixture conversation')
     conversation_id = conversation['body']['conversation']['id']
-    _require(owner.call(
+    sent = _require(owner.call(
         'POST', '/v1/workspaces/%s/agents/%s/conversations/%s/messages' % (wid, agent_id, conversation_id),
         {'body': CHAT_USER_TEXT},
         {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-msg-0001'},
     ), (201,), 'send the fixture conversation message')
+    _require(owner.call(
+        'POST', '/v1/workspaces/%s/agents/%s/conversations/%s/messages/%s/artifact' % (
+            wid, agent_id, conversation_id, sent['body']['message']['id']),
+        {'title': SAVED_MESSAGE_TITLE},
+    ), (201,), 'save the fixture conversation message to the library')
     roster = _require(owner.call('GET', '/v1/workspaces/%s/members' % wid), (200,), 'list fixture members')
     member_id = next(item['user_id'] for item in roster['body']['items'] if item['username'] == MEMBER_USERNAME)
     social_dm = _require(owner.call(
@@ -239,6 +245,7 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         'agent_name': AGENT_NAME,
         'conversation_id': conversation_id,
         'conversation_title': CHAT_TITLE,
+        'saved_message_title': SAVED_MESSAGE_TITLE,
         'chat_user_text': CHAT_USER_TEXT,
         'chat_live_text': CHAT_LIVE_TEXT,
         'social_dm_id': social_dm_id,

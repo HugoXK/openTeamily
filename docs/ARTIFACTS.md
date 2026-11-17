@@ -4,7 +4,7 @@ Related: [#9](https://github.com/openTeamily/openTeamily/issues/9), [#1](https:/
 
 This slice stores workspace-scoped **documents**, **static websites**, **media files**, and **whiteboards**. Automation or agent results can be saved as documents with provenance. Each save keeps a revision snapshot that can be listed, exported, or restored as a new revision (history is not rewritten). Read-only share links are created only when someone asks, and they can be revoked. It is self-written and is **not** Teamily works-library parity.
 
-Completed messages in an authorized user/agent conversation can be saved as documents with provenance (`source.kind=agent_message`) and are idempotent per message. Scripted web apps are not enabled on the management origin.
+Completed messages in an authorized user/agent conversation can be saved as documents with provenance (`source.kind=agent_message`, plus `id`, `conversation_id`, optional `agent_id`, and `conversation_title` when the conversation still has a title) and are idempotent per message. The works-library filter lists those titles under「来源会话」instead of raw conversation ids. Scripted web apps are not enabled on the management origin.
 
 ## Supported operations
 

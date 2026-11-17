@@ -168,6 +168,8 @@ class AgentChatTests(unittest.TestCase):
         self.assertEqual(artifact['source']['id'], user_id)
         self.assertEqual(artifact['source']['conversation_id'], conv_id)
         self.assertEqual(artifact['source']['agent_id'], self.agent['id'])
+        self.assertEqual(artifact['source']['conversation_title'], '保存消息')
+        self.assertNotEqual(artifact['source']['conversation_title'], conv_id)
         again = self.alice.call(
             'POST', self.conversations() + f'/{conv_id}/messages/{user_id}/artifact',
             {'title': '另一个标题'})

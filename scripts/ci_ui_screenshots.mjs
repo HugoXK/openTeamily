@@ -677,7 +677,7 @@ async function main() {
     await page.goto(`${origin}/space`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
     await selectWorkspace(page, ready.workspace_name);
-    const artifactTitles = [ready.document_title, ready.media_title, ready.board_title, ready.website_title];
+    const artifactTitles = [ready.document_title, ready.media_title, ready.board_title, ready.website_title, ready.saved_message_title];
     let artifacts = '';
     try {
       for (const title of artifactTitles) {
@@ -766,6 +766,28 @@ async function main() {
         modified || 'filter modified missing',
       );
       screenshots.push(path.basename(await shot(page, outDir, '33-space-filter-modified.png')));
+      await page.locator('.filter-section[data-section="creators"] .filter-accordion').click();
+      const creators = await visibleText(page.locator('#filter-panel'));
+      record(
+        'artifacts_filter_creators',
+        creators.includes('创建人') && creators.includes(ready.username) && !creators.includes('暂无可筛选的创建人'),
+        creators || 'filter creators missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '64-space-filter-creator.png')));
+      await page.locator('.filter-section[data-section="sessions"] .filter-accordion').click();
+      const sessions = await visibleText(page.locator('#filter-panel'));
+      const hexId = /^[0-9a-f]{32}$/i;
+      const sessionLabels = await page.locator('#filter-session-list label').allTextContents();
+      record(
+        'artifacts_filter_sessions',
+        sessions.includes('来源会话')
+          && sessions.includes(ready.conversation_title)
+          && !sessions.includes('没有匹配的会话')
+          && sessionLabels.some((label) => label.includes(ready.conversation_title))
+          && sessionLabels.every((label) => !hexId.test(label.trim())),
+        sessions || 'filter sessions missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '65-space-filter-source-session.png')));
       await page.keyboard.press('Escape');
     } catch (error) {
       record('artifacts_filter_file_types', false, String(error));
@@ -812,6 +834,25 @@ async function main() {
         emptyAll || 'empty all missing',
       );
       screenshots.push(path.basename(await shot(page, outDir, '38-space-empty-all.png')));
+      await page.locator('#filter-button').click();
+      await page.locator('#filter-panel').waitFor({ state: 'visible', timeout: 8000 });
+      await page.locator('.filter-section[data-section="creators"] .filter-accordion').click();
+      const emptyCreators = await visibleText(page.locator('#filter-panel'));
+      record(
+        'artifacts_filter_creators_empty',
+        emptyCreators.includes('创建人') && emptyCreators.includes('暂无可筛选的创建人'),
+        emptyCreators || 'empty filter creators missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '66-space-filter-creator-empty.png')));
+      await page.locator('.filter-section[data-section="sessions"] .filter-accordion').click();
+      const emptySessions = await visibleText(page.locator('#filter-panel'));
+      record(
+        'artifacts_filter_sessions_empty',
+        emptySessions.includes('来源会话') && emptySessions.includes('没有匹配的会话'),
+        emptySessions || 'empty filter sessions missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '67-space-filter-source-session-empty.png')));
+      await page.keyboard.press('Escape');
       await page.locator('.artifact-scopes [data-scope="mine"]').click();
       await page.locator('#empty-all').waitFor({ state: 'visible', timeout: 8000 });
       const emptyMine = await visibleText(page.locator('#empty-all'));
