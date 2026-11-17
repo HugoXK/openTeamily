@@ -62,7 +62,7 @@
   <section id="main-panel" hidden>
     <header class="page-top">
       <h1>自动化</h1>
-      <p class="note">选项语义按 2026-11-16 第一轮对照补齐。生活模板、意图动词和时间选项已按 2026-11-16 第二轮对照补齐。每月的日期输入仍未完整记下。还不能写成已经功能对等。服务进程会在后台按点运行已启用的自动化，并把结果写在运行记录里；也可以手动触发一次。循环测试里的假提供方不能当成真实模型厂商已经验证。</p>
+      <p class="note">工作、生活页签展示 2026-11-16 对照记下的模板目录（标题和说明）。目录卡片的具体排版未经截图核实，不能写成界面已对等。意图、时间选项和生活模板文案已按第二轮对照补齐；每月的日期输入仍未完整记下。服务进程会在后台按点运行已启用的自动化，并把结果写在运行记录里；也可以手动触发一次。循环测试里的假提供方不能当成真实模型厂商已经验证。</p>
     </header>
     <p id="whoami"></p>
     <label>工作区
@@ -82,10 +82,9 @@
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <fieldset>
         <legend>模板</legend>
-        <label>工作模板
+        <label>模板
           <select name="template_id"></select>
         </label>
-        <p id="life-note" class="note" hidden>生活类模板还没有从对照里记下来，目前不能从这一栏创建。</p>
       </fieldset>
       <fieldset>
         <legend>标签</legend>
