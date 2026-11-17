@@ -7,7 +7,7 @@ from openteamily.app import App, Config
 from openteamily.ci_ui_fixtures import (
     ACTION_DUE_AT, ACTION_NOTES, ACTION_TITLE, AGENT_NAME, AUTOMATION_TITLE, BOARD_TITLE,
     CHAT_TITLE, CHAT_USER_TEXT, DOCUMENT_TITLE, EMPTY_WORKSPACE_NAME, MEDIA_TITLE,
-    MEMBER_USERNAME, MEMORY_BODY, MEMORY_TITLE, RUNTIME_KEY_NAME, TEAM_NAME, TEAM_SLUG,
+    MEMBER_USERNAME, MEMORY_BODY, MEMORY_TITLE, MEMORY_TOPIC, RUNTIME_KEY_NAME, TEAM_NAME, TEAM_SLUG,
     USERNAME, WEBSITE_TITLE, seed_fixtures, solid_png,
 )
 from openteamily.store import Store
@@ -75,7 +75,9 @@ class CiUiFixtureTests(unittest.TestCase):
         pages = client.call('GET', f'/v1/workspaces/{wid}/memory')
         self.assertEqual(pages['status'], 200, pages)
         self.assertEqual([row['title'] for row in pages['body']['items']], [MEMORY_TITLE])
+        self.assertEqual(pages['body']['items'][0]['topics'], [MEMORY_TOPIC])
         self.assertEqual(seed['memory_id'], pages['body']['items'][0]['id'])
+        self.assertEqual(seed['memory_topic'], MEMORY_TOPIC)
         seen_page = client.call('GET', f'/v1/workspaces/{wid}/memory/{seed["memory_id"]}')
         self.assertEqual(seen_page['status'], 200, seen_page)
         self.assertEqual(seen_page['body']['page']['body'], MEMORY_BODY)
@@ -106,6 +108,31 @@ class CiUiFixtureTests(unittest.TestCase):
         data = solid_png()
         self.assertTrue(data.startswith(b'\x89PNG\r\n\x1a\n'))
         self.assertGreater(len(data), 40)
+
+
+class CiUiReadyHandoffTests(unittest.TestCase):
+    def test_ready_json_carries_every_seed_key_the_browser_harness_reads(self):
+        import importlib.util
+        import re
+        root = Path(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location('ci_ui_screenshots_runner', root / 'scripts' / 'ci_ui_screenshots.py')
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        source = (root / 'scripts' / 'ci_ui_screenshots.py').read_text()
+        used = set(re.findall(r"seed\['([a-z_]+)'\]", source))
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        seed = seed_fixtures(
+            Path(temp.name), ORIGIN, 'fixture-password-not-for-screenshots', 'https://provider.test/v1',
+            'fixture-model-key-not-for-screenshots', insecure_local=False,
+        )
+        ready = runner._public_ready(seed, ORIGIN, Path(temp.name) / 'login', 'ok', 'ok', 'ok', 'sha')
+        harness = (root / 'scripts' / 'ci_ui_screenshots.mjs').read_text()
+        read = set(re.findall(r"\bready\.([a-z_]+)", harness)) - {'json'}  # the ready.json filename
+        self.assertIn('memory_topic', read)
+        self.assertEqual(sorted(read - set(ready)), [])
+        self.assertEqual(ready['memory_topic'], MEMORY_TOPIC)
+        self.assertTrue(used)
 
 
 if __name__ == '__main__':

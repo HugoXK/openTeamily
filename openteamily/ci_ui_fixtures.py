@@ -39,6 +39,7 @@ BOARD_TEXT = 'CI FIXTURE'
 RUNTIME_KEY_NAME = 'ci-fixture-desk'
 MEMORY_TITLE = '[CI FIXTURE] Memory page'
 MEMORY_BODY = 'This is synthetic CI screenshot fixture text for a memory page, not production data.'
+MEMORY_TOPIC = 'CI fixture'
 MEMORY_CREATE_TITLE = '[CI FIXTURE] Memory page created in UI'
 MEMORY_CREATE_BODY = 'Synthetic body entered in the CI screenshot script, not production data.'
 MEMORY_EDITED_TITLE = '[CI FIXTURE] Memory page after edit'
@@ -174,7 +175,7 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         },
     }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-board-0001'}), (201,), 'create the fixture whiteboard')
     memory = _require(owner.call('POST', '/v1/workspaces/%s/memory' % wid, {
-        'title': MEMORY_TITLE, 'body': MEMORY_BODY,
+        'title': MEMORY_TITLE, 'body': MEMORY_BODY, 'topics': [MEMORY_TOPIC],
     }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-memory-0001'}), (201,), 'create the fixture memory page')
     memory_id = memory['body']['page']['id']
     action = _require(owner.call('POST', '/v1/workspaces/%s/memory/actions' % wid, {
@@ -218,6 +219,7 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         'memory_id': memory_id,
         'memory_title': MEMORY_TITLE,
         'memory_body': MEMORY_BODY,
+        'memory_topic': MEMORY_TOPIC,
         'memory_create_title': MEMORY_CREATE_TITLE,
         'memory_create_body': MEMORY_CREATE_BODY,
         'memory_edited_title': MEMORY_EDITED_TITLE,
