@@ -45,6 +45,12 @@ export function mergeSessions(agentRows, socialRows, currentUserId) {
   return sessions;
 }
 
+export function messageSearchQuery(query, conversationId = '') {
+  const params = new URLSearchParams({q: query, limit: '20'});
+  if (conversationId) params.set('conversation_id', conversationId);
+  return params.toString();
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -110,6 +116,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentSource = 'agent';
   let pollTimer = 0;
   let searchTab = 'all';
+  let searchConversation = '';
+  let searchConversationTitle = '';
   let composeMode = 'group';
   let searchSeq = 0;
 
@@ -395,12 +403,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function setSearchTab(name) {
     searchTab = name;
+    if (name !== 'messages') searchConversation = '';
     for (const tab of document.querySelectorAll('#search-panel [data-search-tab]')) {
       tab.setAttribute('aria-selected', tab.dataset.searchTab === name ? 'true' : 'false');
     }
   }
 
-  function openSearchPanel(tab) {
+  function openSearchPanel(tab, conversationId = '') {
+    searchConversation = conversationId;
+    searchConversationTitle = document.getElementById('chat-title').textContent;
     document.getElementById('search-panel').hidden = false;
     document.getElementById('search-close').hidden = false;
     document.getElementById('conversation-group').hidden = true;
@@ -412,6 +423,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function closeSearchPanel() {
+    searchSeq++;
+    searchConversation = '';
     document.getElementById('search-panel').hidden = true;
     document.getElementById('search-close').hidden = true;
     document.getElementById('conversation-group').hidden = false;
@@ -497,7 +510,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const note = document.getElementById('search-source-note');
     results.replaceChildren();
     empty.hidden = true;
-    note.hidden = Boolean(query);
+    note.hidden = Boolean(query) && !searchConversation;
+    note.textContent = searchConversation
+      ? '仅搜索当前对话：' + searchConversationTitle
+      : '以下是当前工作区里已有的内容，不是站外推荐。';
     const seq = ++searchSeq;
 
     const unimplemented = {
@@ -511,7 +527,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (searchTab === 'messages' && !query) {
       empty.hidden = false;
-      empty.textContent = '输入关键词，搜索你在这个工作区里自己的消息。';
+      empty.textContent = searchConversation
+        ? '输入关键词，搜索当前对话中你有权查看的消息。'
+        : '输入关键词，搜索你在这个工作区里有权查看的消息。';
       return;
     }
 
@@ -519,7 +537,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if ((searchTab === 'messages' || searchTab === 'all') && query) {
       const result = await request(
         'GET',
-        `/v1/workspaces/${workspaceId()}/search/messages?q=${encodeURIComponent(query)}&limit=20`,
+        `/v1/workspaces/${workspaceId()}/search/messages?${messageSearchQuery(query, searchConversation)}`,
       );
       if (seq !== searchSeq) return;
       if (result.status === 200) {
@@ -685,14 +703,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadSessions();
   });
 
-  document.getElementById('session-search').addEventListener('focus', () => openSearchPanel());
+  document.getElementById('session-search').addEventListener('focus', () => {
+    if (!isSearchOpen()) openSearchPanel();
+  });
   document.getElementById('session-search').addEventListener('input', () => {
     if (!isSearchOpen()) openSearchPanel();
     else renderSearch();
   });
   document.getElementById('search-close').addEventListener('click', closeSearchPanel);
   document.getElementById('message-search').addEventListener('click', () => {
-    openSearchPanel('messages');
+    if (!currentConversation) {
+      show('error', '请先打开一个对话再搜索。');
+      return;
+    }
+    document.getElementById('session-search').value = '';
+    openSearchPanel('messages', currentConversation.id);
     document.getElementById('session-search').focus();
   });
   document.getElementById('search-panel').addEventListener('click', event => {

@@ -2692,8 +2692,8 @@ class App:
         if workspace is None:
             refuse(404, 'not_found', 'Workspace not found')
         try:
-            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=4) if query else {}
-            if set(args) - {'q', 'kind', 'limit', 'cursor'} or any(len(v) != 1 for v in args.values()):
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=5) if query else {}
+            if set(args) - {'q', 'kind', 'limit', 'cursor', 'conversation_id'} or any(len(v) != 1 for v in args.values()):
                 raise ValueError()
             text = args.get('q', [''])[0]
             if not search.valid_query(text):
@@ -2704,13 +2704,16 @@ class App:
             limit = args.get('limit', ['20'])[0]
             if not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 50:
                 raise ValueError()
+            conversation_id = args.get('conversation_id', [''])[0]
+            if 'conversation_id' in args and not search.HEX32.fullmatch(conversation_id):
+                raise ValueError()
             cursor = args.get('cursor', [''])[0]
             if cursor and not re.fullmatch(r'[0-9a-f]{32}', cursor):
                 raise ValueError()
         except ValueError:
             refuse(400, 'invalid', 'Invalid search parameters')
         rows = search.messages(db, workspace['id'], session['user_id'], text.strip(), kind,
-                               cursor, int(limit) + 1)
+                               cursor, int(limit) + 1, conversation_id)
         return 200, {'items': rows[:int(limit)],
                      'cursor': rows[int(limit) - 1]['message_id'] if len(rows) > int(limit) else None}, []
 
