@@ -218,3 +218,200 @@ a.settings-row:focus-visible {
   flex: 1 1 16rem;
   min-width: 0;
 }
+
+[data-settings-page] {
+  max-width: 36rem;
+  margin-inline: auto;
+}
+
+.settings-card-title {
+  margin: 0;
+  padding: 0.85rem 0 0.35rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.settings-card-intro {
+  margin: 0.85rem 0 0.35rem;
+  color: var(--ot-muted);
+}
+
+#privacy .settings-card-intro,
+#appearance-schedule-card .settings-card-title,
+#send-shortcut .settings-card-title {
+  padding-top: 0.85rem;
+}
+
+#language-section {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0.9rem;
+}
+
+#language-section > legend {
+  padding: 0;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--ot-muted);
+}
+
+.settings-field select {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  min-height: 2.4rem;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.65rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  font: inherit;
+}
+
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.settings-shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0.85rem 0;
+  border-top: 1px solid var(--ot-line);
+  font: inherit;
+}
+
+.settings-shortcut-row:first-of-type {
+  border-top: 1px solid var(--ot-line);
+}
+
+#send-shortcut .settings-card-title + .settings-shortcut-row {
+  border-top: 1px solid var(--ot-line);
+}
+
+.settings-shortcut-row select {
+  min-width: 8.5rem;
+  min-height: 2.1rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.65rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  font: inherit;
+}
+
+.shortcut-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.shortcut-keys kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.1rem;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 999px;
+  background: var(--ot-bg-accent);
+  color: var(--ot-muted);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.shortcut-plus {
+  color: var(--ot-muted);
+  font-size: 0.82rem;
+}
+
+.settings-toggle {
+  align-items: center;
+}
+
+.settings-toggle .settings-row-copy .hint {
+  color: var(--ot-muted);
+  font-size: 0.88rem;
+  font-weight: 400;
+}
+
+#message-display .settings-toggle {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+#message-display .settings-toggle .hint {
+  flex: none;
+  order: 0;
+  margin: 0.15rem 0 0;
+}
+
+.settings-toggle input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: 2.4rem;
+  height: 1.35rem;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ot-line);
+  position: relative;
+  cursor: pointer;
+}
+
+.settings-toggle input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 0.15rem;
+  left: 0.15rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 50%;
+  background: var(--ot-surface);
+  box-shadow: 0 1px 2px rgb(28 25 23 / 18%);
+  transition: transform 0.15s ease;
+}
+
+.settings-toggle input[type="checkbox"]:checked {
+  background: var(--ot-accent);
+}
+
+.settings-toggle input[type="checkbox"]:checked::after {
+  transform: translateX(1.05rem);
+}
+
+.settings-toggle input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--ot-focus);
+  outline-offset: 2px;
+}
+
+#privacy #save {
+  margin: 0.85rem 0 0.7rem;
+  padding: 0.45rem 0.95rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ot-bg-accent);
+  color: var(--ot-muted);
+}
+
+#privacy #save:enabled {
+  background: var(--ot-accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+#privacy #save:disabled {
+  cursor: default;
+}

@@ -124,7 +124,8 @@
           <label class="choice"><input type="radio" name="appearance" value="system"> <span>跟随系统<span class="hint">与设备的浅色或深色设置保持一致。</span></span></label>
         </fieldset>
         <fieldset id="appearance-schedule-card" class="settings-card">
-          <legend>自动切换</legend>
+          <legend class="visually-hidden">自动切换</legend>
+          <h2 class="settings-card-title">自动切换</h2>
           <label class="choice"><input type="radio" name="appearance_schedule" value="sunset_sunrise"> <span>日落到日出<span class="hint">按你所在地的日落和日出切换深浅色。</span></span></label>
           <label class="choice"><input type="radio" name="appearance_schedule" value="custom"> <span>自定义时段<span class="hint">在你设定的时间切换。</span></span></label>
           <div id="custom-period-fields" hidden>
@@ -132,10 +133,10 @@
             <label>结束 <input type="time" name="appearance_end"></label>
             <p class="note">自定义时段的具体字段还没有从对照里完整记下，这里暂用开始/结束时间，未经核对。</p>
           </div>
-          <p class="note">按时区（<span id="appearance-time-zone">Asia/Shanghai</span>）估算，可能相差一小时以上。时间不准时，可改用「自定义时段」。OpenTeamily 目前按系统浅色或深色偏好估算，没有使用实际日出日落时刻。</p>
+          <p class="note">按时区（<span id="appearance-time-zone">Asia/Shanghai</span>）估算，可能偏差一小时以上。时间不准时，可选用「自定义时段」。OpenTeamily 目前按系统浅色或深色偏好估算，没有使用实际日出日落时刻。</p>
+          <p id="appearance-status" class="note"></p>
+          <p class="note">到切换时间后，会等你停止操作约 1 分钟再切换，不打断正在进行的操作。侧栏「浅色」「深色」按钮也会写入已有外观设置；点击后的标签变化未经 Teamily 核实。</p>
         </fieldset>
-        <p id="appearance-status" class="note"></p>
-        <p class="note">到切换时间后，会等你停止操作约 1 分钟再切换，不打断正在进行的操作。侧栏「浅色」「深色」按钮也会写入已有外观设置；点击后的标签变化未经 Teamily 核实。</p>
       </div>
       <div data-settings-page="language" hidden>
         <header class="settings-subhead">
@@ -143,7 +144,7 @@
         </header>
         <fieldset id="language-section" class="settings-card">
           <legend class="visually-hidden">语言</legend>
-          <label>系统语言
+          <label class="settings-field">系统语言
             <select name="language">
               <option value="en">English</option>
               <option value="fa">فارسی</option>
@@ -165,7 +166,7 @@
               <option value="zh-CN">简体中文</option>
             </select>
           </label>
-          <label>聊天语言
+          <label class="settings-field">聊天语言
             <select name="chat_language">
               <option value="auto">跟随界面语言</option>
               <option value="en">English</option>
@@ -187,7 +188,7 @@
               <option value="zh-CN">简体中文</option>
             </select>
           </label>
-          <label><input type="checkbox" name="auto_translate"> 自动翻译消息</label>
+          <label class="settings-check"><input type="checkbox" name="auto_translate"> 自动翻译消息</label>
         </fieldset>
         <p class="note">「跟随界面语言」是 OpenTeamily 已有的选项，对照里的聊天语言列表没有单独记下这一项。</p>
       </div>
@@ -195,44 +196,64 @@
         <header class="settings-subhead">
           <a href="/settings" class="settings-back" aria-label="返回设置">‹ 快捷键</a>
         </header>
-        <fieldset id="send-shortcut" class="settings-card">
-          <legend>发送快捷键</legend>
-          <p class="note">对照记下了发送消息和换行的键位，但没有留下这一页的版式截图。选项接到原来的接口。</p>
-          <label><input type="radio" name="send_shortcut" value="enter"> Enter 发送</label>
-          <label><input type="radio" name="send_shortcut" value="mod_enter"> Ctrl + Enter 发送（换行用 Shift + Enter）</label>
-        </fieldset>
+        <section id="send-shortcut" class="settings-card">
+          <h2 class="settings-card-title">消息</h2>
+          <label class="settings-shortcut-row">发送消息
+            <select name="send_shortcut" aria-label="发送消息">
+              <option value="enter">Enter</option>
+              <option value="mod_enter">Ctrl + Enter</option>
+            </select>
+          </label>
+          <div class="settings-shortcut-row">
+            <span>换行</span>
+            <span id="newline-keys" class="shortcut-keys" aria-label="换行快捷键">
+              <kbd>Shift</kbd><span class="shortcut-plus">+</span><kbd>Enter</kbd>
+            </span>
+          </div>
+        </section>
       </div>
       <div data-settings-page="message-folding" hidden>
         <header class="settings-subhead">
-          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 消息折叠</a>
+          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 设置</a>
         </header>
-        <p class="settings-lead">选择长消息在对话里折叠前展示多少内容。</p>
+        <p class="settings-lead">选择长消息在对话里最先展示多少内容。</p>
         <fieldset id="message-display" class="settings-card">
           <legend class="visually-hidden">消息折叠</legend>
           <label class="choice"><input type="radio" name="message_folding" value="compact"> <span>紧凑<span class="hint">只展示很短的预览。适合以扫读为主的场景。</span></span></label>
           <label class="choice"><input type="radio" name="message_folding" value="standard"> <span>标准<span class="hint">展示适中的预览。推荐。</span></span></label>
-          <label class="choice"><input type="radio" name="message_folding" value="none"> <span>不折叠<span class="hint">完整展示每条消息。长消息会拉开推动聊天窗。</span></span></label>
-          <label class="settings-row settings-toggle">长文档收成卡片
-            <span class="hint">含多个章节的消息显示为卡片，可在对话旁边打开阅读，不再铺满消息流。</span>
-            <input type="checkbox" name="document_cards">
+          <label class="choice"><input type="radio" name="message_folding" value="none"> <span>不折叠<span class="hint">完整展示每条消息。长消息会把对话推得很高。</span></span></label>
+          <label class="settings-row settings-toggle">
+            <span class="settings-row-copy">
+              <span class="settings-row-title">长文档收成卡片</span>
+              <span class="hint">含多个章节的消息会显示为卡片，可在对话旁边打开阅读，不再铺满消息流。</span>
+            </span>
+            <input type="checkbox" name="document_cards" role="switch">
           </label>
         </fieldset>
       </div>
       <div data-settings-page="privacy" hidden>
         <header class="settings-subhead">
-          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 隐私</a>
+          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 隐私设置</a>
         </header>
         <fieldset id="privacy" class="settings-card">
-          <legend>隐私</legend>
-          <p class="note">管理你的社交动态对他人是否可见。对照记下了这两个开关和「保存更改」，但没有留下这一页的版式截图。</p>
-          <label class="settings-row settings-toggle">允许他人查看你点赞的内容
-            <input type="checkbox" name="likes_visible">
+          <legend class="visually-hidden">隐私设置</legend>
+          <p class="settings-card-intro">管理你的社交动态对他人的可见性</p>
+          <label class="settings-row settings-toggle">
+            <span class="settings-row-copy">
+              <span class="settings-row-title">点赞列表</span>
+              <span class="hint">允许他人查看你点赞的内容</span>
+            </span>
+            <input type="checkbox" name="likes_visible" role="switch">
           </label>
-          <label class="settings-row settings-toggle">允许他人查看你收藏的内容
-            <input type="checkbox" name="favorites_visible">
+          <label class="settings-row settings-toggle">
+            <span class="settings-row-copy">
+              <span class="settings-row-title">收藏列表</span>
+              <span class="hint">允许他人查看你收藏的内容</span>
+            </span>
+            <input type="checkbox" name="favorites_visible" role="switch">
           </label>
+          <button type="submit" id="save" disabled>保存更改</button>
         </fieldset>
-        <button type="submit" id="save">保存更改</button>
       </div>
     </form>
     <div data-settings-page="model-api" hidden>
