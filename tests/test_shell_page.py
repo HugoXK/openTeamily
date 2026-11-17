@@ -12,7 +12,7 @@ PAGES = (
 
 CAPTURE_IDS = {
     '/settings': ('login-panel', 'username', 'password', 'settings-panel',
-                  'whoami', 'model-key-state', 'model-api-form'),
+                  'whoami', 'model-key-state', 'model-api-form', 'settings-index'),
     '/agents': ('main-panel', 'agent-list', 'edit-form', 'chat-panel',
                 'conversation-list', 'message-list', 'chat-form',
                 'homepage-panel', 'publish-homepage', 'revoke-homepage',

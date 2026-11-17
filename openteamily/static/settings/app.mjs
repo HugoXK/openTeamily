@@ -92,7 +92,8 @@ export function fillForm(form, values) {
     form.elements[name].value = values[name];
   }
   for (const name of ['auto_translate', 'document_cards', 'link_previews', 'task_completion_reminders', 'likes_visible', 'favorites_visible']) {
-    form.elements[name].checked = values[name];
+    const field = form.elements[name];
+    if (field) field.checked = values[name];
   }
 }
 
@@ -148,16 +149,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(settings.body.error, '无法读取设置。'));
       return;
     }
-    loginPanel.hidden = true;
-    settingsPanel.hidden = false;
-    whoami.textContent = session.body.user.username;
     current = settings.body.settings.values;
     revision = settings.body.settings.revision;
+    whoami.textContent = session.body.user.username;
+    loginPanel.hidden = true;
+    settingsPanel.hidden = false;
     fillForm(form, current);
     applyTheme(document, current);
     const appearanceStatus = document.getElementById('appearance-status');
     if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
-    await renderSkillSecrets();
+    const languageCurrent = document.getElementById('language-current');
+    const languageSelect = form.querySelector('select[name="language"]');
+    if (languageCurrent && languageSelect) {
+      const option = languageSelect.selectedOptions[0];
+      languageCurrent.textContent = option ? option.textContent : '';
+    }
     if (modelForm) {
       const model = await request('GET', '/v1/model-api');
       if (model.status === 200) {
@@ -168,9 +174,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           effective.source === 'platform' ? '正在使用平台默认配置' : '还没有可用的模型 API';
         const label = effective.model ? `${source}（${effective.provider || ''} ${effective.model}）` : source;
         document.getElementById('model-effective').textContent = label;
-        document.getElementById('model-key-state').textContent = model.body.model_api.api_key_set ? '已保存个人密钥（不会回显）。' : '未设置个人密钥。';
+        const keyText = model.body.model_api.api_key_set ? '已保存个人密钥（不会回显）。' : '未设置个人密钥。';
+        document.getElementById('model-key-state').textContent = keyText;
+        const keyDetail = document.getElementById('model-key-state-detail');
+        if (keyDetail) keyDetail.textContent = keyText;
       }
     }
+    await renderSkillSecrets();
   }
 
   async function renderProviders() {

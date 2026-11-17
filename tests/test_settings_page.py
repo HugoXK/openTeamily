@@ -44,7 +44,12 @@ class SettingsPageTests(unittest.TestCase):
     def test_page_and_assets_are_served_with_strict_headers(self):
         page = self.raw.call('GET', '/settings')
         self.assertEqual(page['status'], 200)
-        self.assertIn('账号设置', page['body'].decode())
+        html = page['body'].decode()
+        self.assertIn('<h1>设置</h1>', html)
+        self.assertIn('id="settings-index"', html)
+        self.assertIn('账户与资料', html)
+        self.assertIn('AI 与智能体设置', html)
+        self.assertIn('偏好与安全', html)
         self.assertIn(b'/v1/settings', page['body'])
         self.assertIn('default-src \'none\'', page['headers']['Content-Security-Policy'])
         self.assertEqual(page['headers']['Cache-Control'], 'no-store')
@@ -93,6 +98,25 @@ class SettingsPageTests(unittest.TestCase):
         self.assertLess(html.find('始终使用浅色。'), html.find('始终使用深色。'))
         self.assertIn('没有使用实际日出日落时刻', html)
         self.assertNotIn('name="fold_long_messages"', html)
+
+    def test_overview_maps_existing_settings_and_omits_billing_shells(self):
+        html = self.raw.call('GET', '/settings')['body'].decode()
+        self.assertIn('id="settings-index"', html)
+        self.assertIn('href="/profile"', html)
+        self.assertIn('href="#language-section"', html)
+        self.assertIn('href="#model-api"', html)
+        self.assertIn('href="#skill-secrets"', html)
+        self.assertIn('href="/runtimes"', html)
+        self.assertIn('name="link_previews"', html)
+        self.assertNotIn('创作赚钱', html)
+        self.assertNotIn('积分中心', html)
+        self.assertNotIn('套餐与账单', html)
+        self.assertNotIn('教育优惠认证', html)
+        self.assertNotIn('兑换码', html)
+        self.assertNotIn('>升级<', html)
+        self.assertNotIn('Teamily Agent', html)
+
+
 
 
 if __name__ == '__main__':
