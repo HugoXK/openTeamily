@@ -54,6 +54,58 @@ export function formatTopics(topics) {
   return (topics || []).join('，');
 }
 
+export function memoryUpdatedLabel(updated) {
+  if (updated == null || updated === '') return '';
+  const date = new Date(Number(updated) * 1000);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString().slice(0, 10);
+}
+
+function topicKey(name) {
+  return String(name || '').trim().toLocaleLowerCase();
+}
+
+export function directoryGroups(pages, topicCatalog) {
+  const rows = [...(pages || [])];
+  const byId = new Map(rows.map((page) => [page.id, page]));
+  const catalog = [];
+  const seen = new Set();
+  const addTopic = (name) => {
+    const label = String(name || '').trim();
+    const key = topicKey(label);
+    if (!label || seen.has(key)) return;
+    seen.add(key);
+    catalog.push(label);
+  };
+  for (const topic of topicCatalog || []) {
+    addTopic(topic && topic.name);
+  }
+  for (const page of rows) {
+    for (const name of page.topics || []) addTopic(name);
+  }
+  const used = new Set();
+  const groups = [];
+  for (const name of catalog) {
+    const key = topicKey(name);
+    const items = [];
+    const seenIds = new Set();
+    const catalogTopic = (topicCatalog || []).find((topic) => topicKey(topic && topic.name) === key);
+    const hinted = (catalogTopic && catalogTopic.pages ? catalogTopic.pages : []).map((page) => page && page.id);
+    for (const page of rows) {
+      const tagged = (page.topics || []).some((item) => topicKey(item) === key);
+      const listed = hinted.includes(page.id);
+      if (!tagged && !listed) continue;
+      if (seenIds.has(page.id) || !byId.has(page.id)) continue;
+      seenIds.add(page.id);
+      items.push(page);
+      used.add(page.id);
+    }
+    if (!items.length) continue;
+    groups.push({name, count: items.length, pages: items});
+  }
+  return {groups, ungrouped: rows.filter((page) => !used.has(page.id))};
+}
+
 export function memoryPageFromSearch(search) {
   const value = new URLSearchParams(search || '').get('page');
   if (value === 'profile') return 'profile';
@@ -157,18 +209,52 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return rows;
   }
 
+  function pageButton(item) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'memory-page-link';
+    button.dataset.id = item.id;
+    const title = document.createElement('span');
+    title.className = 'memory-page-title';
+    title.textContent = item.title;
+    button.appendChild(title);
+    const meta = document.createElement('span');
+    meta.className = 'memory-page-meta';
+    const parts = [memoryUpdatedLabel(item.updated), ...(item.topics || [])].filter(Boolean);
+    meta.textContent = parts.join(' · ');
+    if (meta.textContent) button.appendChild(meta);
+    button.addEventListener('click', () => openPage(item.id));
+    return button;
+  }
+
+  function appendPage(parent, item) {
+    const li = document.createElement('li');
+    li.appendChild(pageButton(item));
+    parent.appendChild(li);
+  }
+
   function renderList(items) {
     const rows = visiblePages(items);
     listEl.replaceChildren();
-    for (const item of rows) {
-      const li = document.createElement('li');
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = item.title;
-      button.dataset.id = item.id;
-      button.addEventListener('click', () => openPage(item.id));
-      li.appendChild(button);
-      listEl.appendChild(li);
+    if (listFilter === 'all') {
+      const directory = directoryGroups(rows, currentGraph.topics);
+      for (const item of directory.ungrouped) appendPage(listEl, item);
+      for (const group of directory.groups) {
+        const li = document.createElement('li');
+        li.className = 'memory-topic-group';
+        const details = document.createElement('details');
+        details.open = true;
+        const summary = document.createElement('summary');
+        summary.textContent = `${group.name} ${group.count}`;
+        details.appendChild(summary);
+        const nested = document.createElement('ul');
+        for (const item of group.pages) appendPage(nested, item);
+        details.appendChild(nested);
+        li.appendChild(details);
+        listEl.appendChild(li);
+      }
+    } else {
+      for (const item of rows) appendPage(listEl, item);
     }
     emptyEl.hidden = rows.length > 0;
     const count = document.getElementById('filter-all-count');

@@ -7,7 +7,7 @@ from openteamily.app import App, Config
 from openteamily.ci_ui_fixtures import (
     ACTION_DUE_AT, ACTION_NOTES, ACTION_TITLE, AGENT_NAME, AUTOMATION_TITLE, BOARD_TITLE,
     CHAT_TITLE, CHAT_USER_TEXT, DOCUMENT_TITLE, EMPTY_WORKSPACE_NAME, MEDIA_TITLE,
-    MEMBER_USERNAME, MEMORY_BODY, MEMORY_TITLE, RUNTIME_KEY_NAME, TEAM_NAME, TEAM_SLUG,
+    MEMBER_USERNAME, MEMORY_BODY, MEMORY_TITLE, MEMORY_TOPIC, RUNTIME_KEY_NAME, TEAM_NAME, TEAM_SLUG,
     USERNAME, WEBSITE_TITLE, seed_fixtures, solid_png,
 )
 from openteamily.store import Store
@@ -75,7 +75,9 @@ class CiUiFixtureTests(unittest.TestCase):
         pages = client.call('GET', f'/v1/workspaces/{wid}/memory')
         self.assertEqual(pages['status'], 200, pages)
         self.assertEqual([row['title'] for row in pages['body']['items']], [MEMORY_TITLE])
+        self.assertEqual(pages['body']['items'][0]['topics'], [MEMORY_TOPIC])
         self.assertEqual(seed['memory_id'], pages['body']['items'][0]['id'])
+        self.assertEqual(seed['memory_topic'], MEMORY_TOPIC)
         seen_page = client.call('GET', f'/v1/workspaces/{wid}/memory/{seed["memory_id"]}')
         self.assertEqual(seen_page['status'], 200, seen_page)
         self.assertEqual(seen_page['body']['page']['body'], MEMORY_BODY)

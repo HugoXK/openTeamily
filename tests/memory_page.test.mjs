@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {actionQuery, csrfCookie, dueAtFromDate, dueDateValue, formatTopics, graphLayout, listQuery, memoryPageFromSearch, parseTopics, queryForMemoryPage} from '../openteamily/static/memory/app.mjs';
+import {actionQuery, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, formatTopics, graphLayout, listQuery, memoryPageFromSearch, memoryUpdatedLabel, parseTopics, queryForMemoryPage} from '../openteamily/static/memory/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -51,4 +51,42 @@ test('memoryPageFromSearch and queryForMemoryPage stay on the recorded allowlist
   assert.equal(queryForMemoryPage('profile'), '?page=profile');
   assert.equal(queryForMemoryPage('actions'), '?page=todos');
   assert.equal(queryForMemoryPage('meetings'), '');
+});
+
+test('memoryUpdatedLabel uses a UTC calendar date and ignores bad values', () => {
+  assert.equal(memoryUpdatedLabel(''), '');
+  assert.equal(memoryUpdatedLabel(null), '');
+  assert.equal(memoryUpdatedLabel('bad'), '');
+  assert.equal(memoryUpdatedLabel(Date.UTC(2026, 10, 17) / 1000), '2026-11-17');
+});
+
+test('directoryGroups clusters real topics and leaves untagged pages loose', () => {
+  const pages = [
+    {id: 'a', title: 'Alpha notes', topics: ['Work notes']},
+    {id: 'b', title: 'Beta plan', topics: ['Work notes', 'Planning']},
+    {id: 'c', title: 'Loose page', topics: []},
+    {id: 'd', title: 'Planner', topics: ['Planning']},
+  ];
+  const grouped = directoryGroups(pages, [
+    {name: 'Work notes', pages: [{id: 'a'}, {id: 'b'}], page_count: 2},
+    {name: 'Planning', pages: [{id: 'b'}, {id: 'd'}], page_count: 2},
+    {name: 'Empty leftover', pages: [{id: 'missing'}], page_count: 1},
+  ]);
+  assert.deepEqual(grouped.ungrouped.map((page) => page.id), ['c']);
+  assert.deepEqual(grouped.groups.map((group) => [group.name, group.count, group.pages.map((page) => page.id)]), [
+    ['Work notes', 2, ['a', 'b']],
+    ['Planning', 2, ['b', 'd']],
+  ]);
+  assert.equal(grouped.groups.some((group) => group.name === 'Getting Started' || group.name === 'Empty leftover'), false);
+});
+
+test('directoryGroups still groups from page topics when the catalog is empty', () => {
+  const grouped = directoryGroups(
+    [{id: 'n1', title: 'Solo', topics: ['Planning']}, {id: 'n2', title: 'Other'}],
+    [],
+  );
+  assert.deepEqual(grouped.ungrouped.map((page) => page.id), ['n2']);
+  assert.deepEqual(grouped.groups.map((group) => [group.name, group.count, group.pages.map((page) => page.id)]), [
+    ['Planning', 1, ['n1']],
+  ]);
 });

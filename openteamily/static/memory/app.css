@@ -191,6 +191,44 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   background: var(--ot-bg-accent);
 }
 
+#memory-list .memory-topic-group details {
+  margin: 0.15rem 0;
+}
+
+#memory-list .memory-topic-group summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.2rem 0.35rem;
+  font-weight: 600;
+}
+
+#memory-list .memory-topic-group summary::-webkit-details-marker {
+  display: none;
+}
+
+#memory-list .memory-topic-group ul {
+  list-style: none;
+  padding: 0 0 0 0.35rem;
+  margin: 0;
+}
+
+#memory-list .memory-page-link {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.12rem;
+}
+
+#memory-list .memory-page-title {
+  font-weight: 600;
+}
+
+#memory-list .memory-page-meta {
+  font-size: 0.8em;
+  color: var(--ot-muted, inherit);
+  opacity: 0.8;
+}
+
 .memory-center {
   display: flex;
   flex-direction: column;
