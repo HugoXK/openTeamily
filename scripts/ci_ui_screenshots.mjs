@@ -1556,6 +1556,46 @@ async function main() {
       record('discover_page', false, String(error));
     }
 
+    try {
+      if (!ready.homepage_file) {
+        throw new Error('ready.json is missing homepage_file');
+      }
+      const homepagePath = fs.readFileSync(ready.homepage_file, 'utf8').trim();
+      if (!/^\/a\/[A-Za-z0-9_-]{43}$/.test(homepagePath)) {
+        throw new Error('homepage-path sidecar is not a public share path');
+      }
+      await page.goto(`${origin}${homepagePath}`, {waitUntil: 'load'});
+      const homeText = await visibleText(page.locator('body'));
+      const sendDisabled = await page.locator('.composer button').isDisabled();
+      const createDisabled = await page.locator('.create-agent').isDisabled();
+      const composerDisabled = await page.locator('#public-composer').isDisabled();
+      const token = homepagePath.slice(3);
+      record(
+        'agent_public_homepage',
+        homeText.includes('OpenTeamily / FlyBot')
+          && homeText.includes('Agent profile')
+          && homeText.includes('Public page')
+          && homeText.includes(ready.agent_name)
+          && homeText.includes('Synthetic CI directory entry.')
+          && homeText.includes('Talk via')
+          && homeText.includes('Web conversation')
+          && homeText.includes('Built with FlyBot')
+          && homeText.includes('Create your own Agent')
+          && homeText.includes('未接通')
+          && sendDisabled
+          && createDisabled
+          && composerDisabled
+          && !/(?<!Open)Teamily|AVAILABLE NOW|\bLIVE\b/.test(homeText)
+          && !homeText.includes(ready.workspace_id)
+          && !homeText.includes(ready.agent_id)
+          && !homeText.includes(token),
+        (homeText || 'homepage empty').slice(0, 280),
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '77-agent-public-homepage.png')));
+    } catch (error) {
+      record('agent_public_homepage', false, String(error).replace(/\/a\/[A-Za-z0-9_-]{20,}/g, '/a/<redacted>'));
+    }
+
     await context.close();
   } finally {
     await browser.close();
