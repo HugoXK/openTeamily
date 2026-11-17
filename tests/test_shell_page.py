@@ -28,7 +28,9 @@ CAPTURE_IDS = {
     '/members': ('member-list', 'invite-list'),
     '/team': ('wizard-form', 'step-1', 'step-2', 'step-3', 'next'),
     '/runtimes': ('runtimes-panel', 'connect-panel', 'key-list',
-                  'connection-list', 'issued-token'),
+                  'connection-list', 'issued-token', 'detect-runtimes',
+                  'detected-list', 'hosted-agent-section',
+                  'hosted-computer-section', 'local-runtime-section'),
     '/memory': ('main-panel', 'memory-list', 'editor-form',
                 'search', 'new-page', 'graph-canvas', 'topic-list',
                 'overview-panel', 'actions-panel', 'action-list'),
@@ -105,6 +107,8 @@ class ShellPageTests(unittest.TestCase):
             self.assertIn("default-src 'none'", page['headers']['Content-Security-Policy'])
             if path == '/runtimes':
                 self.assertIn('data-tab="connect"', html)
+                self.assertIn('已检测到的运行时', html)
+                self.assertIn('连接远程机器', html)
             if path == '/agents':
                 self.assertIn('name="name"', html)
             if path == '/artifacts':

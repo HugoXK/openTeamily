@@ -1,7 +1,122 @@
-#steps { display: flex; gap: .8rem; margin: 0 0 1rem; }
-#steps span[aria-current="step"] { font-weight: 600; }
+/* Page-specific styles for /runtimes live alongside /shell/app.css. */
 
-.tabs { display: flex; gap: .6rem; margin: 0 0 1rem; flex-wrap: wrap; }
-.tabs [aria-selected="true"] { font-weight: 600; }
-pre { overflow: auto; padding: .6rem; border: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); }
-code { user-select: all; }
+body.app-workspace #main-panel,
+body.app-workspace #runtimes-panel,
+body.app-workspace #connect-panel {
+  max-width: 56rem;
+}
+
+.runtime-section {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0 0 1.15rem;
+}
+
+.runtime-section h2,
+.runtime-section h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.runtime-section h3 {
+  font-weight: 600;
+}
+
+.runtime-card {
+  display: grid;
+  gap: 0.35rem;
+  justify-items: start;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.75rem;
+  background: var(--ot-surface);
+}
+
+.runtime-card.is-unavailable {
+  background: var(--ot-bg-accent);
+  color: var(--ot-muted);
+}
+
+.runtime-card-title {
+  margin: 0;
+  font-weight: 650;
+}
+
+.runtime-card-state {
+  margin: 0;
+}
+
+#local-status-card[data-state="online"] .runtime-card-state {
+  color: var(--ot-accent);
+  font-weight: 650;
+}
+
+.setup-steps ol {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.setup-steps li {
+  display: grid;
+  gap: 0.35rem;
+  align-content: start;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.7rem;
+  background: var(--ot-surface);
+}
+
+.setup-steps h4,
+.setup-steps p {
+  margin: 0;
+}
+
+.setup-steps pre {
+  margin: 0;
+  max-width: 100%;
+}
+
+.detected-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.7rem;
+}
+
+.detected-bar h3 {
+  margin-right: auto;
+}
+
+.detected-bar button {
+  width: auto;
+}
+
+#detected-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+#detected-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 0.8rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.7rem;
+  background: var(--ot-surface);
+}
+
+@media (max-width: 44rem) {
+  .setup-steps ol {
+    grid-template-columns: 1fr;
+  }
+}

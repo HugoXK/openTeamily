@@ -427,8 +427,12 @@ async function main() {
 
     await page.goto(`${origin}/runtimes`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
-    const runtimeHeading = await visibleText(page.locator('#runtimes-panel h2'));
-    record('runtimes', runtimeHeading.includes('自托管 FlyBot'), runtimeHeading || 'runtimes tab missing');
+    const runtimePanel = await visibleText(page.locator('#runtimes-panel'));
+    record(
+      'runtimes',
+      runtimePanel.includes('自托管 FlyBot') && runtimePanel.includes('托管云端 Agent') && runtimePanel.includes('托管电脑') && runtimePanel.includes('已检测到的运行时') && runtimePanel.includes('连接远程机器'),
+      runtimePanel || 'runtimes tab missing',
+    );
     screenshots.push(path.basename(await shot(page, outDir, '14-runtimes.png')));
     await page.locator('[data-tab="connect"]').click();
     await page.locator('#connect-panel').waitFor({ state: 'visible', timeout: 15000 });
