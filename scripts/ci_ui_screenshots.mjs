@@ -636,6 +636,11 @@ async function main() {
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
     await selectWorkspace(page, ready.workspace_name);
     await waitForLocatorText(page, '#memory-list', ready.memory_title);
+    // The later memory editor uses the left directory, which stays visible,
+    // but action create/edit needs the next-actions panel shown again.
+    await page.locator('.memory-views [data-view="actions"]').click();
+    await page.locator('#actions-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await waitForLocatorText(page, '#action-list', ready.action_title);
     try {
       const initials = String(ready.username || '').slice(0, 2).toUpperCase();
       await page.locator('#account-menu-button').click();
