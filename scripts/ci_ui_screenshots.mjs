@@ -217,7 +217,7 @@ async function main() {
         hubText.includes('账户与资料')
           && hubText.includes('AI 与智能体设置')
           && hubText.includes('技能配置')
-          && hubText.includes('不用积分')
+          && (await page.locator('#model-api').textContent() || '').includes('OpenTeamily 不用积分')
           && await page.locator('#whoami').isVisible()
           && await page.locator('#settings-usage-card').count() === 0
           && await page.locator('#settings-upgrade').count() === 0
