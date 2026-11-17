@@ -45,6 +45,15 @@ export function mergeSessions(agentRows, socialRows, currentUserId) {
   return sessions;
 }
 
+
+export function shouldSendOnShortcut(event, sendShortcut = 'enter') {
+  if (!event || event.key !== 'Enter') return false;
+  if (event.isComposing || event.keyCode === 229) return false;
+  const modifier = Boolean(event.ctrlKey || event.metaKey);
+  if (sendShortcut === 'mod_enter') return modifier && !event.shiftKey && !event.altKey;
+  return !modifier && !event.shiftKey && !event.altKey;
+}
+
 export function messageSearchQuery(query, conversationId = '') {
   const params = new URLSearchParams({q: query, limit: '20'});
   if (conversationId) params.set('conversation_id', conversationId);
@@ -120,6 +129,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let searchConversationTitle = '';
   let composeMode = 'group';
   let searchSeq = 0;
+  let sendShortcut = 'enter';
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -632,7 +642,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('session-pane').hidden = false;
     document.body.classList.add('chat-open');
     document.getElementById('whoami').textContent = currentUser.username;
-    const listed = await request('GET', '/v1/workspaces?limit=100');
+    const [listed, settings] = await Promise.all([
+      request('GET', '/v1/workspaces?limit=100'),
+      request('GET', '/v1/settings'),
+    ]);
+    const stored = settings.status === 200 && settings.body && settings.body.settings
+      && settings.body.settings.values && settings.body.settings.values.send_shortcut;
+    sendShortcut = stored === 'mod_enter' ? 'mod_enter' : 'enter';
+    document.getElementById('chat-body').dataset.sendShortcut = sendShortcut;
     workspaces = listed.status === 200 ? (listed.body.items || []) : [];
     const wanted = hashParams().workspace || workspaceSelect.value;
     workspaceSelect.replaceChildren();
@@ -777,8 +794,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     show('ok', '会话已创建。');
   });
 
-  document.getElementById('chat-form').addEventListener('submit', async event => {
-    event.preventDefault();
+
+  async function sendCurrentMessage() {
     const text = document.getElementById('chat-body').value;
     if (!text.trim()) {
       show('error', '请填写消息。');
@@ -836,6 +853,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
            : '已发送。');
     await loadSessions();
     await openAgentConversation(currentAgent.id, currentConversation.id);
+  }
+
+  document.getElementById('chat-body').addEventListener('keydown', event => {
+    if (!shouldSendOnShortcut(event, sendShortcut)) return;
+    event.preventDefault();
+    if (!(document.getElementById('chat-body').value || '').trim()) return;
+    sendCurrentMessage();
+  }, true);
+
+  document.getElementById('chat-form').addEventListener('submit', event => {
+    event.preventDefault();
+    sendCurrentMessage();
   });
 
   document.getElementById('message-list').addEventListener('click', async event => {
