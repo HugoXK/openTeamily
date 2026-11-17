@@ -1,0 +1,185 @@
+"""Workspace human-to-human social messenger (issue #86).
+
+Self-written for OpenTeamily; no upstream or Teamily source. This slice adds
+direct messages and named group conversations between members of the same
+workspace. It deliberately does not add agent participants in replies, unread
+counts, notifications, attachments or cross-workspace delivery. Those remain
+separate issues; do not describe this as Teamily messenger parity.
+"""
+import re
+
+from .security import digest
+
+SCHEMA = '''
+CREATE TABLE IF NOT EXISTS social_conversations (
+ id TEXT PRIMARY KEY,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL CHECK(kind IN ('dm','group')),
+ title TEXT NOT NULL,
+ dm_key TEXT,
+ created INTEGER NOT NULL,
+ updated INTEGER NOT NULL,
+ key_hash TEXT NOT NULL,
+ request_hash TEXT NOT NULL,
+ UNIQUE(workspace_id, key_hash),
+ UNIQUE(workspace_id, dm_key));
+CREATE INDEX IF NOT EXISTS social_conversation_ws
+ ON social_conversations(workspace_id, id);
+CREATE TABLE IF NOT EXISTS social_members (
+ conversation_id TEXT NOT NULL REFERENCES social_conversations(id) ON DELETE CASCADE,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ created INTEGER NOT NULL,
+ PRIMARY KEY(conversation_id, user_id));
+CREATE INDEX IF NOT EXISTS social_member_user
+ ON social_members(workspace_id, user_id, conversation_id);
+CREATE TABLE IF NOT EXISTS social_messages (
+ id TEXT PRIMARY KEY,
+ conversation_id TEXT NOT NULL REFERENCES social_conversations(id) ON DELETE CASCADE,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ body TEXT NOT NULL,
+ seq INTEGER NOT NULL,
+ created INTEGER NOT NULL,
+ key_hash TEXT NOT NULL,
+ request_hash TEXT NOT NULL,
+ UNIQUE(conversation_id, seq),
+ UNIQUE(conversation_id, key_hash));
+CREATE INDEX IF NOT EXISTS social_message_list
+ ON social_messages(conversation_id, seq, id);
+'''
+
+KINDS = ('dm', 'group')
+TITLE_MAX = 80
+BODY_MAX = 4000
+CONTROL = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
+HEX32 = re.compile(r'[0-9a-f]{32}')
+
+
+def valid_title(value):
+    return isinstance(value, str) and 1 <= len(value.strip()) <= TITLE_MAX and not CONTROL.search(value)
+
+
+def valid_body(value):
+    return (isinstance(value, str) and 1 <= len(value) <= BODY_MAX and '\x00' not in value
+            and not any(ord(ch) < 32 and ch not in '\t\n\r' for ch in value))
+
+
+def valid_member_ids(value):
+    if not isinstance(value, list) or not 1 <= len(value) <= 49:
+        return False
+    if any(not isinstance(item, str) or not HEX32.fullmatch(item) for item in value):
+        return False
+    return len(set(value)) == len(value)
+
+
+def dm_key(first, second):
+    return digest('social-dm:' + ':'.join(sorted((first, second))))
+
+
+def conversation_view(row, members=None):
+    data = {key: row[key] for key in (
+        'id', 'workspace_id', 'kind', 'title', 'created', 'updated')}
+    if members is not None:
+        data['members'] = members
+    return data
+
+
+def message_view(row):
+    return {key: row[key] for key in (
+        'id', 'conversation_id', 'workspace_id', 'user_id', 'body', 'created')}
+
+
+def member_view(row):
+    return {key: row[key] for key in ('user_id', 'username', 'created')}
+
+
+def load(db, workspace_id, conversation_id):
+    return db.execute(
+        'SELECT * FROM social_conversations WHERE id=? AND workspace_id=?',
+        (conversation_id, workspace_id),
+    ).fetchone()
+
+
+def load_by_key(db, workspace_id, key_hash):
+    return db.execute(
+        'SELECT * FROM social_conversations WHERE workspace_id=? AND key_hash=?',
+        (workspace_id, key_hash),
+    ).fetchone()
+
+
+def load_dm(db, workspace_id, key):
+    return db.execute(
+        'SELECT * FROM social_conversations WHERE workspace_id=? AND dm_key=?',
+        (workspace_id, key),
+    ).fetchone()
+
+
+def is_member(db, conversation_id, workspace_id, user_id):
+    return db.execute(
+        'SELECT 1 FROM social_members WHERE conversation_id=? AND workspace_id=? AND user_id=?',
+        (conversation_id, workspace_id, user_id),
+    ).fetchone() is not None
+
+
+def member_rows(db, conversation_id):
+    rows = db.execute(
+        'SELECT m.user_id, u.username, m.created FROM social_members m '
+        'JOIN users u ON u.id=m.user_id WHERE m.conversation_id=? '
+        'ORDER BY u.username, m.user_id',
+        (conversation_id,),
+    ).fetchall()
+    return [member_view(row) for row in rows]
+
+
+def listing(db, workspace_id, user_id, cursor, limit):
+    return db.execute(
+        'SELECT c.* FROM social_conversations c JOIN social_members m '
+        'ON m.conversation_id=c.id WHERE c.workspace_id=? AND m.user_id=? AND c.id>? '
+        'ORDER BY c.id LIMIT ?',
+        (workspace_id, user_id, cursor, limit),
+    ).fetchall()
+
+
+def messages(db, conversation_id, cursor, limit):
+    start = 0
+    if cursor:
+        current = db.execute(
+            'SELECT seq FROM social_messages WHERE conversation_id=? AND id=?',
+            (conversation_id, cursor),
+        ).fetchone()
+        if current is None:
+            return None
+        start = current['seq']
+    return db.execute(
+        'SELECT * FROM social_messages WHERE conversation_id=? AND seq>? ORDER BY seq LIMIT ?',
+        (conversation_id, start, limit),
+    ).fetchall()
+
+
+def load_message_by_key(db, conversation_id, key_hash):
+    return db.execute(
+        'SELECT * FROM social_messages WHERE conversation_id=? AND key_hash=?',
+        (conversation_id, key_hash),
+    ).fetchone()
+
+
+def next_seq(db, conversation_id):
+    row = db.execute(
+        'SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM social_messages WHERE conversation_id=?',
+        (conversation_id,),
+    ).fetchone()
+    return row['seq']
+
+
+def workspace_member_ids(db, workspace):
+    ids = {workspace['owner_id']}
+    for row in db.execute(
+            'SELECT user_id FROM workspace_members WHERE workspace_id=?', (workspace['id'],)):
+        ids.add(row['user_id'])
+    return ids
+
+
+def username(db, user_id):
+    row = db.execute('SELECT username FROM users WHERE id=?', (user_id,)).fetchone()
+    return None if row is None else row['username']
