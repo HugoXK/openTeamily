@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { csrfCookie, listQuery, visibleArtifacts } from '../openteamily/static/artifacts/app.mjs';
+import {
+  csrfCookie, listQuery, visibleArtifacts, artifactMatchesType,
+  artifactMatchesModified, viewFromSearch, queryForView, FILE_TYPE_LABELS,
+} from '../openteamily/static/artifacts/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -23,4 +26,51 @@ test('visibleArtifacts filters by kind, saved messages and creator', () => {
   assert.deepEqual(visibleArtifacts(items, {kind: 'messages'}).map((item) => item.title), ['Clip']);
   assert.deepEqual(visibleArtifacts(items, {kind: 'meetings'}).map((item) => item.title), []);
   assert.deepEqual(visibleArtifacts(items, {scope: 'mine', username: 'alice'}).map((item) => item.title), ['Doc', 'Clip']);
+  assert.deepEqual(visibleArtifacts(items, {scope: 'favorites'}).map((item) => item.title), []);
+  assert.deepEqual(visibleArtifacts(items, {scope: 'memory'}).map((item) => item.title), []);
+});
+
+test('visibleArtifacts maps recorded filters onto existing fields', () => {
+  const now = Date.parse('2026-11-17T02:30:00Z');
+  const items = [
+    {title: 'Doc', kind: 'document', created_by: 'alice', updated: now / 1000 - 60},
+    {title: 'Site', kind: 'website', created_by: 'bob', updated: now / 1000 - 60},
+    {title: 'Photo', kind: 'media', created_by: 'alice', updated: now / 1000 - 60, media: {mime: 'image/png'}},
+    {title: 'Old', kind: 'document', created_by: 'alice', updated: now / 1000 - 40 * 24 * 60 * 60},
+    {title: 'Task', kind: 'document', created_by: 'alice', updated: now / 1000 - 60,
+      source: {kind: 'agent_task', conversation_id: 'c1'}},
+    {title: 'Clip', kind: 'document', created_by: 'alice', updated: now / 1000 - 60,
+      source: {kind: 'agent_message', conversation_id: 'c2'}},
+  ];
+  assert.equal(FILE_TYPE_LABELS.length, 13);
+  assert.equal(artifactMatchesType(items[0], '云文档'), true);
+  assert.equal(artifactMatchesType(items[5], '云文档'), false);
+  assert.equal(artifactMatchesType(items[2], '图片'), true);
+  assert.equal(artifactMatchesType(items[0], 'Markdown'), false);
+  assert.deepEqual(visibleArtifacts(items, {types: ['网页']}).map((item) => item.title), ['Site']);
+  assert.deepEqual(visibleArtifacts(items, {types: ['消息']}).map((item) => item.title), ['Clip']);
+  assert.deepEqual(visibleArtifacts(items, {types: ['Markdown']}).map((item) => item.title), []);
+  assert.deepEqual(visibleArtifacts(items, {modified: 'today', now}).map((item) => item.title),
+                   ['Doc', 'Site', 'Photo', 'Task', 'Clip']);
+  assert.deepEqual(visibleArtifacts(items, {modified: 'custom', now}).map((item) => item.title),
+                   items.map((item) => item.title));
+  assert.deepEqual(visibleArtifacts(items, {creators: ['bob']}).map((item) => item.title), ['Site']);
+  assert.deepEqual(visibleArtifacts(items, {sessions: ['c2']}).map((item) => item.title), ['Clip']);
+  assert.deepEqual(visibleArtifacts(items, {scope: 'memory'}).map((item) => item.title), ['Task']);
+  assert.equal(artifactMatchesModified(items[3], 'd30', now), false);
+  assert.equal(artifactMatchesModified(items[3], 'd90', now), true);
+});
+
+test('viewFromSearch and queryForView stay on the recorded allowlist', () => {
+  assert.deepEqual(viewFromSearch(''), {kind: 'all', scope: 'all'});
+  assert.deepEqual(viewFromSearch('?view=created'), {kind: 'all', scope: 'mine'});
+  assert.deepEqual(viewFromSearch('?view=starred'), {kind: 'all', scope: 'favorites'});
+  assert.deepEqual(viewFromSearch('?view=memory'), {kind: 'all', scope: 'memory'});
+  assert.deepEqual(viewFromSearch('?view=meetings'), {kind: 'meetings', scope: 'all'});
+  assert.deepEqual(viewFromSearch('?view=unknown'), {kind: 'all', scope: 'all'});
+  assert.equal(queryForView('all', 'all'), '');
+  assert.equal(queryForView('all', 'mine'), '?view=created');
+  assert.equal(queryForView('all', 'favorites'), '?view=starred');
+  assert.equal(queryForView('all', 'memory'), '?view=memory');
+  assert.equal(queryForView('meetings', 'all'), '?view=meetings');
 });

@@ -87,6 +87,8 @@ def _public_ready(seed, origin, login_file, run_status, connection_status, chat_
         'login_file': str(login_file),
         'workspace_name': seed['workspace_name'],
         'workspace_id': seed['workspace_id'],
+        'empty_workspace_name': seed['empty_workspace_name'],
+        'empty_workspace_id': seed['empty_workspace_id'],
         'team_slug': seed['team_slug'],
         'member_username': seed['member_username'],
         'agent_id': seed['agent_id'],

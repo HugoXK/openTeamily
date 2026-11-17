@@ -16,7 +16,8 @@ function markNavigation() {
     const href = link.getAttribute('href') || '';
     if (!href.startsWith('/')) continue;
     const target = href.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
-    if (target === here) link.setAttribute('aria-current', 'page');
+    const works = (value) => value === '/space' || value === '/artifacts';
+    if (target === here || (works(target) && works(here))) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
 }

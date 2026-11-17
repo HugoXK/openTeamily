@@ -22,6 +22,7 @@ MEMBER_USERNAME = 'cifixture2'
 WORKSPACE_NAME = 'CI Fixture Workspace'
 TEAM_NAME = 'CI Fixture Team'
 TEAM_SLUG = 'ci-fixture'
+EMPTY_WORKSPACE_NAME = '[CI FIXTURE] Empty library'
 AGENT_NAME = '[CI FIXTURE] Directory assistant'
 CHAT_TITLE = '[CI FIXTURE] Conversation'
 CHAT_USER_TEXT = '[CI FIXTURE] Please reply with one labeled sentence.'
@@ -181,6 +182,10 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         'memory_page_id': memory_id,
     }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-action-0001'}), (201,), 'create the fixture next action')
     action_id = action['body']['action']['id']
+    empty_space = _require(owner.call('POST', '/v1/workspaces', {'name': EMPTY_WORKSPACE_NAME},
+                                      {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-empty-space-0001'}),
+                           (200, 201), 'create the empty fixture workspace')
+    empty_workspace_id = empty_space['body']['workspace']['id']
     issued = _require(owner.call('POST', '/v1/runtime-keys', {'name': RUNTIME_KEY_NAME}),
                       (200, 201), 'issue a fixture runtime key')
     runtime_token = issued['body']['token']
@@ -193,6 +198,8 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         'member_username': MEMBER_USERNAME,
         'workspace_id': wid,
         'workspace_name': TEAM_NAME,
+        'empty_workspace_id': empty_workspace_id,
+        'empty_workspace_name': EMPTY_WORKSPACE_NAME,
         'team_slug': TEAM_SLUG,
         'agent_id': agent_id,
         'agent_name': AGENT_NAME,
