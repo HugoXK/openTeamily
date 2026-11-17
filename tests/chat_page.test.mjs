@@ -1,9 +1,39 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mergeSessions, SEARCH_TABS } from '../openteamily/static/chat/app.mjs';
+import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity } from '../openteamily/static/chat/app.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
+
+test('initial uses the first letter or digit and skips leading punctuation', () => {
+  assert.equal(initial('Helper'), 'H');
+  assert.equal(initial('产品群'), '产');
+  assert.equal(initial('[CI FIXTURE] Directory assistant'), 'C');
+  assert.equal(initial('...'), '?');
+  assert.equal(initial(''), '?');
+});
+
+test('chatIdentity shows a letter avatar only for a real conversation title', () => {
+  assert.deepEqual(chatIdentity('Directory assistant'), {
+    title: 'Directory assistant', initial: 'D', showAvatar: true,
+  });
+  assert.deepEqual(chatIdentity('  '), {title: '聊天', initial: '', showAvatar: false});
+  assert.deepEqual(chatIdentity('聊天'), {title: '聊天', initial: '', showAvatar: false});
+  const document = {
+    nodes: {
+      'chat-title': {textContent: ''},
+      'chat-avatar': {textContent: '', hidden: true},
+    },
+    getElementById(id) { return this.nodes[id]; },
+  };
+  applyChatIdentity(document, '[CI FIXTURE] Directory assistant');
+  assert.equal(document.nodes['chat-title'].textContent, '[CI FIXTURE] Directory assistant');
+  assert.equal(document.nodes['chat-avatar'].textContent, 'C');
+  assert.equal(document.nodes['chat-avatar'].hidden, false);
+  applyChatIdentity(document, '聊天');
+  assert.equal(document.nodes['chat-avatar'].hidden, true);
+  assert.equal(document.nodes['chat-avatar'].textContent, '');
+});
 
 test('SEARCH_TABS lists the recorded search scopes', () => {
   assert.deepEqual(SEARCH_TABS.map((entry) => entry[1]), [

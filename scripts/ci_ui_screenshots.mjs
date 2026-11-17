@@ -461,9 +461,31 @@ async function main() {
           && (listText.includes(ready.provider_text) || listText.includes(ready.chat_user_text)),
         listText || 'unified chat list empty',
       );
+      const identity = ((await page.locator('#chat-avatar').textContent()) || '').trim();
+      const identityHidden = await page.locator('#chat-avatar').isHidden();
+      const inviteDisabled = await page.locator('.chat-actions button[title="未实现：邀请"]').isDisabled();
+      const callDisabled = await page.locator('.chat-actions button[title="未实现：语音或视频通话"]').isDisabled();
+      const pinnedHidden = await page.locator('#pinned-group').isHidden();
+      const filterBox = await page.locator('#session-filter').boundingBox();
+      const searchBox = await page.locator('#session-search').boundingBox();
+      const addBox = await page.locator('#new-conversation').boundingBox();
+      const expectedInitial = ((ready.agent_name || '').match(/\p{L}|\p{N}/u) || ['?'])[0].toUpperCase();
+      record(
+        'chat_header_identity',
+        !identityHidden
+          && identity === expectedInitial
+          && inviteDisabled
+          && callDisabled
+          && pinnedHidden
+          && Boolean(filterBox && searchBox && addBox)
+          && filterBox.x < searchBox.x
+          && searchBox.x < addBox.x,
+        `avatar=${identity || 'empty'} hidden=${identityHidden} expected=${expectedInitial} order=${[filterBox && Math.round(filterBox.x), searchBox && Math.round(searchBox.x), addBox && Math.round(addBox.x)].join(',')}`,
+      );
       screenshots.push(path.basename(await shot(page, outDir, '16-agents-conversation.png')));
       screenshots.push(path.basename(await shot(page, outDir, '22-chat-desktop.png')));
       screenshots.push(path.basename(await shot(page, outDir, '62-chat-list-previews.png')));
+      screenshots.push(path.basename(await shot(page, outDir, '68-chat-header-identity.png')));
     } catch (error) {
       record('agents_conversation_history', false, String(error), { soft: ready.chat_status !== 'succeeded' });
     }

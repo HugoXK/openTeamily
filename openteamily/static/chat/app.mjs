@@ -102,9 +102,28 @@ function formatTime(value) {
   }).format(date);
 }
 
-function initial(name) {
+export function initial(name) {
   const text = (name || '').trim();
-  return text ? text.slice(0, 1).toUpperCase() : '?';
+  const match = text.match(/\p{L}|\p{N}/u);
+  return match ? match[0].toUpperCase() : '?';
+}
+
+export function chatIdentity(name) {
+  const title = (name || '').trim() || '聊天';
+  const placeholder = title === '聊天';
+  return {title, initial: placeholder ? '' : initial(title), showAvatar: !placeholder};
+}
+
+export function applyChatIdentity(document, name) {
+  const identity = chatIdentity(name);
+  const title = document.getElementById('chat-title');
+  const avatar = document.getElementById('chat-avatar');
+  if (title) title.textContent = identity.title;
+  if (avatar) {
+    avatar.textContent = identity.initial;
+    avatar.hidden = !identity.showAvatar;
+  }
+  return identity;
 }
 
 function matchesQuery(item, query) {
@@ -327,7 +346,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentAgent = agent;
     currentSource = 'agent';
-    document.getElementById('chat-title').textContent = agent.name;
+    applyChatIdentity(document, agent.name);
     setDirectoryLink({source: 'agent'});
     const result = await request('GET', `/v1/workspaces/${workspaceId()}/agents/${agentId}/conversations/${conversationId}`);
     if (result.status !== 200) {
@@ -352,8 +371,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     currentConversation = result.body.conversation;
-    document.getElementById('chat-title').textContent = conversationLabel(
-      currentConversation, currentUser && currentUser.id);
+    applyChatIdentity(document, conversationLabel(
+      currentConversation, currentUser && currentUser.id));
     setDirectoryLink({source: 'social'});
     writeHash({workspace: workspaceId(), social: conversationId});
     renderSocialMessages(result.body.items);
@@ -607,7 +626,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             currentAgent = agents.find(entry => entry.id === item.id) || null;
             currentConversation = null;
             currentSource = 'agent';
-            if (currentAgent) document.getElementById('chat-title').textContent = currentAgent.name;
+            if (currentAgent) applyChatIdentity(document, currentAgent.name);
             document.getElementById('chat-empty').hidden = false;
             document.getElementById('message-list').replaceChildren();
             writeHash({workspace: workspaceId(), agent: item.id});
@@ -685,7 +704,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       else {
         currentAgent = agents.find(item => item.id === start.agent) || null;
         currentSource = 'agent';
-        if (currentAgent) document.getElementById('chat-title').textContent = currentAgent.name;
+        if (currentAgent) applyChatIdentity(document, currentAgent.name);
         document.getElementById('chat-empty').hidden = false;
         writeHash({workspace: workspaceId(), agent: start.agent});
       }
@@ -718,7 +737,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeSearchPanel();
     closeComposeDialog();
     writeHash({workspace: workspaceId()});
-    document.getElementById('chat-title').textContent = '聊天';
+    applyChatIdentity(document, '聊天');
     document.getElementById('message-list').replaceChildren();
     document.getElementById('chat-empty').hidden = false;
     setDirectoryLink({source: 'agent'});
