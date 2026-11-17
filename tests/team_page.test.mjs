@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readWizard, validName, validSlug } from '../openteamily/static/team/app.mjs';
+import { readWizard, step1Ready, validName, validSlug } from '../openteamily/static/team/app.mjs';
 
 test('validName and validSlug match the contrast rules', () => {
   assert.equal(validName('团队'), true);
@@ -23,4 +23,12 @@ test('readWizard omits workspace_id unless converting', () => {
   } finally {
     globalThis.FormData = original;
   }
+});
+
+test('step1Ready requires both a valid name and a valid Team ID', () => {
+  assert.equal(step1Ready({name: '', slug: ''}), false);
+  assert.equal(step1Ready({name: 'Desk', slug: ''}), false);
+  assert.equal(step1Ready({name: '', slug: 'desk-team'}), false);
+  assert.equal(step1Ready({name: 'Desk', slug: 'ab'}), false);
+  assert.equal(step1Ready({name: 'Desk', slug: 'desk-team'}), true);
 });

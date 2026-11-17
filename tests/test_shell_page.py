@@ -34,7 +34,7 @@ CAPTURE_IDS = {
                'empty-starred', 'empty-memory', 'empty-meetings',
                'meetings-chrome'),
     '/members': ('member-list', 'invite-list'),
-    '/team': ('wizard-form', 'step-1', 'step-2', 'step-3', 'next'),
+    '/team': ('wizard-form', 'step-1', 'step-later', 'next', 'back', 'submit'),
     '/runtimes': ('runtimes-panel', 'connect-panel', 'key-list',
                   'connection-list', 'issued-token', 'detect-runtimes',
                   'detected-list', 'hosted-agent-section',
