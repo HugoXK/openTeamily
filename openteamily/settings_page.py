@@ -172,6 +172,10 @@ class SettingsPage:
             headers.append(('Allow', 'GET, HEAD'))
         elif not self._query_allowed(path, env.get('QUERY_STRING', '')):
             status, data = '400 Bad Request', b'Queries not supported'
+        elif path == '/messenger':
+            status, data = '302 Found', b''
+            headers.append(('Location', '/chat'))
+            content_type = 'text/plain; charset=utf-8'
         else:
             directory, name, content_type = self.ASSETS[path]
             try:

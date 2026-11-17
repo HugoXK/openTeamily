@@ -1,4 +1,4 @@
-"""Messenger page serving tests. In-process WSGI only; not browser E2E."""
+"""Former /messenger page now redirects to the unified /chat inbox."""
 import unittest
 
 from tests import test_settings_page as settings_page_tests
@@ -8,32 +8,30 @@ class MessengerPageTests(unittest.TestCase):
     def setUp(self):
         settings_page_tests.SettingsPageTests.setUp(self)
 
-    def test_page_and_assets_are_served_with_strict_headers(self):
+    def test_page_redirects_to_chat_and_keeps_assets(self):
         page = self.raw.call('GET', '/messenger')
-        self.assertEqual(page['status'], 200)
-        html = page['body'].decode()
-        self.assertIn('消息', html)
-        self.assertIn('id="create-conversation"', html)
-        self.assertIn('id="conversation-list"', html)
-        self.assertIn('id="message-list"', html)
-        self.assertIn('href="/messenger"', html)
-        self.assertIn('href="/discover"', html)
+        self.assertEqual(page['status'], 302, page)
+        self.assertEqual(page['headers']['Location'], '/chat')
+        self.assertEqual(page['body'], b'')
+        head = self.raw.call('HEAD', '/messenger')
+        self.assertEqual(head['status'], 302)
+        self.assertEqual(head['headers']['Location'], '/chat')
+        self.assertEqual(head['body'], b'')
+        chat = self.raw.call('GET', '/chat')
+        html = chat['body'].decode()
+        self.assertEqual(chat['status'], 200)
+        self.assertIn('id="compose-menu"', html)
+        self.assertIn('id="search-panel"', html)
+        self.assertIn('href="/chat"', html)
+        self.assertNotIn('href="/messenger"', html)
+        self.assertNotIn('id="create-conversation"', html)
         self.assertIn('id="account-menu"', html)
-        self.assertIn('id="appearance-toggle"', html)
-        self.assertNotIn('未实现：发现动态', html)
-        self.assertIn('id="status"', html)
-        self.assertIn('<nav', html)
-        self.assertIn("default-src 'none'", page['headers']['Content-Security-Policy'])
-        self.assertEqual(page['headers']['Cache-Control'], 'no-store')
-        self.assertEqual(page['headers']['X-Content-Type-Options'], 'nosniff')
         script = self.raw.call('GET', '/messenger/app.mjs')
         css = self.raw.call('GET', '/messenger/app.css')
         self.assertEqual(script['status'], 200)
         self.assertEqual(css['status'], 200)
         self.assertIn('javascript', script['headers']['Content-Type'])
         self.assertIn(b'conversationLabel', script['body'])
-        self.assertEqual(self.raw.call('HEAD', '/messenger')['status'], 200)
-        self.assertEqual(self.raw.call('HEAD', '/messenger')['body'], b'')
 
     def test_origin_and_method_checks_still_apply(self):
         self.assertEqual(self.raw.call('GET', '/messenger', origin='https://evil.test')['status'], 403)

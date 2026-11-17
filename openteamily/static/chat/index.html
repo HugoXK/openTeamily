@@ -15,7 +15,6 @@
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
     <a href="/chat" title="聊天">聊天</a>
-    <a href="/messenger" title="消息">消息</a>
     <a href="/agents" title="智能体">智能体</a>
     <a href="/automations" title="自动化">自动化</a>
     <a href="/memory" title="记忆">记忆</a>
@@ -51,22 +50,66 @@
   </nav>
   <section id="session-pane" class="session-pane">
     <div class="session-toolbar">
-      <label class="session-search">搜索 <input type="search" id="session-search" placeholder="搜索" maxlength="80"></label>
+      <button type="button" id="search-close" hidden title="关闭搜索">‹</button>
+      <label class="session-search">搜索 <input type="search" id="session-search" placeholder="搜索" maxlength="80" autocomplete="off"></label>
       <button type="button" id="session-filter" disabled title="未实现：会话筛选（全部/群聊/单聊/已读/未读）">筛选</button>
-      <button type="button" id="new-conversation" title="新对话">+</button>
+      <div class="compose-menu">
+        <button type="button" id="new-conversation" aria-haspopup="menu" aria-expanded="false" aria-controls="compose-menu" title="创建">+</button>
+        <div id="compose-menu" role="menu" hidden>
+          <a href="/agents" role="menuitem">创建智能体</a>
+          <button type="button" role="menuitem" id="compose-new-group">新建群组</button>
+          <button type="button" role="menuitem" id="compose-add-contact">添加联系人</button>
+          <a href="/space" role="menuitem">创建 Artifacts</a>
+          <a href="/automations" role="menuitem">创建自动化</a>
+          <button type="button" role="menuitem" disabled title="未实现：还没有第三方智能体接入">创建第三方智能体</button>
+          <button type="button" role="menuitem" disabled title="未实现：还没有视频会议">发起视频会议</button>
+          <button type="button" role="menuitem" disabled title="未实现：还没有视频会议">加入视频会议</button>
+        </div>
+      </div>
     </div>
     <label class="workspace-pick">工作区
       <select id="workspace"></select>
     </label>
     <p id="whoami"></p>
+    <section id="search-panel" hidden>
+      <div class="search-tabs" role="tablist" aria-label="搜索范围">
+        <button type="button" role="tab" data-search-tab="all" aria-selected="true">全部</button>
+        <button type="button" role="tab" data-search-tab="artifacts" aria-selected="false">Artifacts</button>
+        <button type="button" role="tab" data-search-tab="contacts" aria-selected="false">联系人</button>
+        <button type="button" role="tab" data-search-tab="groups" aria-selected="false">群组</button>
+        <button type="button" role="tab" data-search-tab="agents" aria-selected="false">智能体</button>
+        <button type="button" role="tab" data-search-tab="messages" aria-selected="false">消息</button>
+        <button type="button" role="tab" data-search-tab="files" aria-selected="false">文件</button>
+        <button type="button" role="tab" data-search-tab="documents" aria-selected="false">云文档</button>
+        <button type="button" role="tab" data-search-tab="media" aria-selected="false">媒体</button>
+        <button type="button" role="tab" data-search-tab="links" aria-selected="false">链接</button>
+      </div>
+      <p id="search-source-note" class="note">以下是当前工作区里已有的内容，不是站外推荐。</p>
+      <div id="search-results"></div>
+      <p id="search-empty" class="note" hidden></p>
+    </section>
     <section class="session-group" id="pinned-group" hidden>
       <h2>置顶</h2>
-      <p class="note">会话置顶还没有实现，不会在这里列出。</p>
+      <p class="note">会话置顶还没有接口，所以这里不会列出任何会话。</p>
     </section>
-    <section class="session-group">
+    <section class="session-group" id="conversation-group">
       <h2 id="conversation-heading">对话</h2>
       <ul id="conversation-list"></ul>
-      <p id="conversations-empty" class="note" hidden>还没有对话。到智能体目录里选一个智能体开始。</p>
+      <p id="conversations-empty" class="note" hidden>还没有对话。用右上角的 + 新建群组或添加联系人，或到智能体目录里开始聊天。</p>
+    </section>
+    <section id="compose-dialog" hidden>
+      <form id="compose-social-form">
+        <h2 id="compose-dialog-title">新建群组</h2>
+        <label id="compose-title-label">群名称 <input id="compose-title" maxlength="80" autocomplete="off"></label>
+        <fieldset>
+          <legend id="compose-members-legend">成员</legend>
+          <div id="member-choices" class="member-choices"></div>
+        </fieldset>
+        <div class="compose-dialog-actions">
+          <button type="button" id="compose-dialog-cancel">取消</button>
+          <button type="submit" id="compose-dialog-submit">创建</button>
+        </div>
+      </form>
     </section>
   </section>
   <p id="status" role="status"></p>
@@ -85,13 +128,13 @@
       <div class="chat-actions">
         <button type="button" disabled title="未实现：邀请">邀请</button>
         <button type="button" disabled title="未实现：语音或视频通话">通话</button>
-        <button type="button" id="message-search" disabled title="未实现：消息搜索">搜索</button>
+        <button type="button" id="message-search" title="搜索消息">搜索</button>
         <a id="open-agent-dir" href="/agents">资料</a>
       </div>
     </header>
     <details class="gap-note">
       <summary>对照说明</summary>
-      <p class="note">聊天是独立于智能体目录的三栏页面。回复通过已连接的运行时按 infer 任务排队，管理进程不会自己调用模型。技能、连接器、会议、语音、Agent 模式、邀请和通话尚未实现，对应按钮已禁用，不能使用。非空消息气泡和移动端布局是原创补充，未经 Teamily 对照。还不能写成已经功能对等。</p>
+      <p class="note">聊天页同时列出当前工作区的智能体会话和人↔人单聊、群聊。会话置顶还没有接口，所以没有置顶分组。技能、连接器、会议、语音、第三方智能体、邀请和通话尚未实现，对应按钮已禁用，不能使用。非空消息气泡和移动端布局是原创补充，未经 Teamily 对照。还不能写成已经功能对等。</p>
     </details>
     <div id="message-scroller">
       <p id="chat-empty" class="note">选择左侧的对话，或从智能体目录开始聊天。</p>
