@@ -451,22 +451,27 @@ async function main() {
 
 
     try {
+      // Agent send stays 409 while a reply is queued, so this uses the social thread.
       const enterText = '[CI FIXTURE] Enter shortcut send.';
+      await page.goto(`${origin}/chat#workspace=${ready.workspace_id}&social=${ready.social_group_id}`, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#chat-title', ready.social_group_title);
       await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#chat-body').click();
       await page.locator('#chat-body').fill(enterText);
       await page.locator('#chat-body').press('Enter');
-      await waitForLocatorText(page, '#message-list', enterText, 30000);
+      await waitForLocatorText(page, '#message-list', enterText, 15000);
       const afterEnter = await visibleText(page.locator('#message-list'));
       const composerValue = await page.locator('#chat-body').inputValue();
       record(
         'chat_send_enter_shortcut',
         afterEnter.includes(enterText) && composerValue === '',
         `composer=${JSON.stringify(composerValue)} ${afterEnter.slice(0, 240) || 'enter send empty'}`,
-        { soft: ready.connection_status !== 'online' },
       );
       screenshots.push(path.basename(await shot(page, outDir, '61-chat-send-enter.png')));
+      await page.goto(chatUrl, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#chat-title', ready.agent_name);
     } catch (error) {
-      record('chat_send_enter_shortcut', false, String(error), { soft: ready.connection_status !== 'online' });
+      record('chat_send_enter_shortcut', false, String(error));
     }
 
     try {
