@@ -157,7 +157,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/settings/missing')['status'], 404)
         self.assertEqual(self.raw.call('GET', '/settings/appearance', query='q=1')['status'], 400)
 
-    def test_channel_agent_api_and_connectors_pages_stay_disabled(self):
+    def test_channel_agent_api_and_connectors_pages_use_recorded_empty_states(self):
         html = self.raw.call('GET', '/settings/channels')['body'].decode()
         self.assertIn('data-settings-page="channels"', html)
         self.assertIn('WeChat Official Account', html)
@@ -176,8 +176,18 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('placeholder="搜索应用…"', connectors)
         self.assertIn('+ 添加 MCP 服务器', connectors)
         self.assertIn('还没有可连接的应用目录。', connectors)
-        self.assertIn('disabled title="未实现：对照里「添加 MCP 服务器」', connectors)
+        self.assertIn('id="add-mcp-server"', connectors)
+        self.assertIn('id="mcp-dialog"', connectors)
+        self.assertIn('在智能体里添加自定义 MCP 服务器', connectors)
+        self.assertIn('打开你创建的智能体、Personal AI 或内置智能体的聊天。', connectors)
+        self.assertIn('点输入框里的「连接器」。', connectors)
+        self.assertIn('点搜索框旁的「+」。', connectors)
+        self.assertIn('id="mcp-dialog-ack"', connectors)
+        self.assertIn('知道了', connectors)
+        self.assertIn('hidden role="dialog"', connectors)
+        self.assertNotIn('disabled title="未实现：对照里「添加 MCP 服务器」', connectors)
         self.assertNotIn('已连接', connectors)
+        self.assertIn('不会添加或连接服务器', connectors)
 
     def test_preference_subpages_follow_recorded_copy(self):
         html = self.raw.call('GET', '/settings/appearance')['body'].decode()

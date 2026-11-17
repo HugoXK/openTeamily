@@ -395,10 +395,23 @@
         <div class="connectors-toolbar">
           <label class="visually-hidden" for="connector-search">搜索应用</label>
           <input id="connector-search" type="search" placeholder="搜索应用…" maxlength="80" autocomplete="off">
-          <button type="button" disabled title="未实现：对照里「添加 MCP 服务器」只打开说明弹层后关闭，没有留下可实现的完整版式，也还没有 MCP 接入接口。">+ 添加 MCP 服务器</button>
+          <button type="button" id="add-mcp-server" aria-haspopup="dialog" aria-controls="mcp-dialog" aria-expanded="false">+ 添加 MCP 服务器</button>
         </div>
-        <p class="note">对照里有一份约 60 项的第三方应用目录，含官方标志，以及当时采集账号里已经接通的应用。这里不复制那些标志，也不假装已经连上任何第三方账号。搜索框可以输入，但目前没有可列出的应用。</p>
+        <p class="note">对照里有一份约 60 项的第三方应用目录，含官方标志，以及当时采集账号里已经接通的应用。这里不复制那些标志，也不假装已经连上任何第三方账号。搜索框可以输入，但目前没有可列出的应用。「添加 MCP 服务器」只打开对照里的说明弹层；「知道了」关闭说明，不会添加或连接服务器。OpenTeamily 还没有 MCP 接入接口。</p>
         <p id="connectors-empty" class="settings-card settings-empty">还没有可连接的应用目录。</p>
+        <div id="mcp-dialog" class="mcp-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-dialog-title">
+          <div class="mcp-dialog-card">
+            <h2 id="mcp-dialog-title">在智能体里添加自定义 MCP 服务器</h2>
+            <ol class="mcp-dialog-steps">
+              <li>打开你创建的智能体、Personal AI 或内置智能体的聊天。</li>
+              <li>点输入框里的「连接器」。</li>
+              <li>点搜索框旁的「+」。</li>
+            </ol>
+            <div class="mcp-dialog-actions">
+              <button type="button" id="mcp-dialog-ack">知道了</button>
+            </div>
+          </div>
+        </div>
     </div>
   </section>
   </main>

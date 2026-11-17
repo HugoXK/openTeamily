@@ -54,7 +54,7 @@ Related: [#4](https://github.com/openTeamily/openTeamily/issues/4), [#10](https:
 
 `/settings/channels`, `/settings/agent-access`, and `/settings/connectors` serve the same settings document as `/settings` (no-store, unknown subpath 404, query rejected 400). The hub in「AI 与智能体设置」links to them in the recorded order, keeping the OpenTeamily model API row. Visible copy uses 「Agent 渠道」 rather than a trademarked product title.
 
-This slice only lays out the recorded page structure. Connect / authorize / add-MCP controls stay disabled. Third-party brand marks and the recapture account's already-connected connector states are not reproduced. There is still no channel, Agent API, or connector backend. This is not Teamily or Impeccable comparison acceptance.
+This slice only lays out the recorded page structure. Connect / authorize controls stay disabled. On `/settings/connectors`,「添加 MCP 服务器」opens the recorded instruction dialog (title, three steps, and「知道了」). 「知道了」closes the explanation only; it does not add or connect an MCP server, and there is still no MCP API. Third-party brand marks and the recapture account's already-connected connector states are not reproduced. There is still no channel, Agent API, or connector backend. This is not Teamily or Impeccable comparison acceptance.
 
 
 ## Chat composer shortcuts
