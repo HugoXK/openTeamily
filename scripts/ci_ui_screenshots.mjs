@@ -180,26 +180,106 @@ async function main() {
       await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
       const appearance = page.locator('#appearance');
       await appearance.waitFor({ state: 'visible', timeout: 15000 });
-      await waitForLocatorText(page, '#appearance-status', '当前为');
       const appearanceText = `${await visibleText(page.locator('[data-settings-page="appearance"]'))}`;
       const values = await page.locator('#appearance > label.choice input[name="appearance"]').evaluateAll(
         (inputs) => inputs.map((input) => input.value),
       );
       await page.locator('#appearance input[value="auto"]').check();
       await page.locator('#appearance-schedule-card').waitFor({ state: 'visible', timeout: 15000 });
+      await waitForLocatorText(page, '#appearance-status', '当前为');
       const autoText = `${await visibleText(page.locator('#appearance-schedule-card'))}`;
       record(
         'settings_appearance',
         values.join(',') === 'light,dark,auto,system'
           && appearanceText.includes('始终使用浅色主题。')
           && appearanceText.includes('选择应用在此设备上的显示外观。')
-          && appearanceText.includes('当前为')
-          && autoText.includes('没有使用实际日出日落时刻'),
+          && autoText.includes('当前为')
+          && autoText.includes('没有使用实际日出日落时刻')
+          && autoText.includes('可选用「自定义时段」')
+          && autoText.includes('自动切换'),
         `values=${values.join(',')}; ${appearanceText || 'appearance page empty'} | auto=${autoText || 'schedule card empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '27-settings-appearance.png')));
     } catch (error) {
       record('settings_appearance', false, String(error));
+    }
+    try {
+      await page.goto(`${origin}/settings/language`, { waitUntil: 'load' });
+      await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const language = page.locator('[data-settings-page="language"]');
+      await language.waitFor({ state: 'visible', timeout: 15000 });
+      const languageText = `${await visibleText(language)}`;
+      record(
+        'settings_language',
+        languageText.includes('系统语言')
+          && languageText.includes('聊天语言')
+          && languageText.includes('自动翻译消息')
+          && languageText.includes('跟随界面语言'),
+        languageText || 'language page empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '47-settings-language.png')));
+    } catch (error) {
+      record('settings_language', false, String(error));
+    }
+    try {
+      await page.goto(`${origin}/settings/message-folding`, { waitUntil: 'load' });
+      await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const folding = page.locator('[data-settings-page="message-folding"]');
+      await folding.waitFor({ state: 'visible', timeout: 15000 });
+      const foldingText = `${await visibleText(folding)}`;
+      record(
+        'settings_message_folding',
+        foldingText.includes('选择长消息在对话里最先展示多少内容。')
+          && foldingText.includes('长消息会把对话推得很高。')
+          && foldingText.includes('长文档收成卡片')
+          && foldingText.includes('‹ 设置'),
+        foldingText || 'message-folding page empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '48-settings-message-folding.png')));
+    } catch (error) {
+      record('settings_message_folding', false, String(error));
+    }
+    try {
+      await page.goto(`${origin}/settings/privacy`, { waitUntil: 'load' });
+      await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const privacy = page.locator('[data-settings-page="privacy"]');
+      await privacy.waitFor({ state: 'visible', timeout: 15000 });
+      const privacyText = `${await visibleText(privacy)}`;
+      const saveDisabled = await page.locator('#save').isDisabled();
+      record(
+        'settings_privacy',
+        saveDisabled
+          && privacyText.includes('隐私设置')
+          && privacyText.includes('管理你的社交动态对他人的可见性')
+          && privacyText.includes('点赞列表')
+          && privacyText.includes('收藏列表')
+          && !privacyText.includes('没有留下这一页的版式截图'),
+        `saveDisabled=${saveDisabled}; ${privacyText || 'privacy page empty'}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '49-settings-privacy.png')));
+    } catch (error) {
+      record('settings_privacy', false, String(error));
+    }
+    try {
+      await page.goto(`${origin}/settings/shortcuts`, { waitUntil: 'load' });
+      await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const shortcuts = page.locator('[data-settings-page="shortcuts"]');
+      await shortcuts.waitFor({ state: 'visible', timeout: 15000 });
+      const shortcutsText = `${await visibleText(shortcuts)}`;
+      record(
+        'settings_shortcuts',
+        shortcutsText.includes('快捷键')
+          && shortcutsText.includes('消息')
+          && shortcutsText.includes('发送消息')
+          && shortcutsText.includes('换行')
+          && shortcutsText.includes('Enter')
+          && shortcutsText.includes('Shift')
+          && !shortcutsText.includes('没有留下这一页的版式截图'),
+        shortcutsText || 'shortcuts page empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '50-settings-shortcuts.png')));
+    } catch (error) {
+      record('settings_shortcuts', false, String(error));
     }
     try {
       await page.goto(`${origin}/settings/channels`, { waitUntil: 'load' });

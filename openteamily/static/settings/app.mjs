@@ -148,17 +148,59 @@ export function fillModelForm(form, values) {
 }
 
 export function fillForm(form, values) {
-  for (const option of form.querySelectorAll('[name="appearance"], [name="appearance_schedule"], [name="send_shortcut"]')) {
+  for (const option of form.querySelectorAll('[name="appearance"], [name="appearance_schedule"]')) {
     option.checked = option.value === values[option.name];
   }
   for (const name of ['appearance_start', 'appearance_end', 'language',
-                      'chat_language', 'message_folding']) {
-    form.elements[name].value = values[name];
+                      'chat_language', 'message_folding', 'send_shortcut']) {
+    const field = form.elements[name];
+    if (field) field.value = values[name];
   }
   for (const name of ['auto_translate', 'document_cards', 'link_previews', 'task_completion_reminders', 'likes_visible', 'favorites_visible']) {
     const field = form.elements[name];
-    if (field) field.checked = values[name];
+    if (field) {
+      field.checked = values[name];
+      if (field.getAttribute('role') === 'switch') field.setAttribute('aria-checked', values[name] ? 'true' : 'false');
+    }
   }
+}
+
+export function newlineBinding(sendShortcut) {
+  return sendShortcut === 'mod_enter' ? 'Enter' : 'Shift+Enter';
+}
+
+export function syncShortcutRows(document, values) {
+  const keys = document.getElementById('newline-keys');
+  if (!keys) return;
+  const binding = newlineBinding(values && values.send_shortcut);
+  keys.replaceChildren();
+  const parts = binding.split('+');
+  parts.forEach((part, index) => {
+    if (index) {
+      const plus = document.createElement('span');
+      plus.className = 'shortcut-plus';
+      plus.textContent = '+';
+      keys.appendChild(plus);
+    }
+    const key = document.createElement('kbd');
+    key.textContent = part;
+    keys.appendChild(key);
+  });
+}
+
+export function privacyChanges(current, next) {
+  const changes = {};
+  if (!current || !next) return changes;
+  for (const key of ['likes_visible', 'favorites_visible']) {
+    if (current[key] !== next[key]) changes[key] = next[key];
+  }
+  return changes;
+}
+
+export function syncPrivacySaveButton(document, current, next) {
+  const button = document.getElementById('save');
+  if (!button) return;
+  button.disabled = Object.keys(privacyChanges(current, next)).length === 0;
 }
 
 function messageFor(error, fallback) {
@@ -194,6 +236,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (languageCurrent && languageSelect) {
       const option = languageSelect.selectedOptions[0];
       languageCurrent.textContent = option ? option.textContent : '';
+    }
+    if (current) {
+      syncShortcutRows(document, current);
+      syncPrivacySaveButton(document, current, readForm(form));
     }
   }
 
@@ -327,6 +373,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   settingsPanel.addEventListener('change', (event) => {
     const name = event.target && event.target.name;
+    if (name === 'likes_visible' || name === 'favorites_visible') {
+      const field = event.target;
+      if (field && field.getAttribute('role') === 'switch') {
+        field.setAttribute('aria-checked', field.checked ? 'true' : 'false');
+      }
+      syncPrivacySaveButton(document, current, readForm(form));
+      return;
+    }
+    if (name === 'document_cards' && event.target && event.target.getAttribute('role') === 'switch') {
+      event.target.setAttribute('aria-checked', event.target.checked ? 'true' : 'false');
+    }
+    if (name === 'send_shortcut') syncShortcutRows(document, readForm(form));
     if (!AUTOSAVE_KEYS.includes(name)) return;
     const message = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end'].includes(name)
       ? '外观已更新。' : '已保存。';
@@ -358,6 +416,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillForm(form, current);
     refreshAppearance();
     show('ok', '已保存。');
+    syncPrivacySaveButton(document, current, readForm(form));
   });
 
   async function renderSkillSecrets() {

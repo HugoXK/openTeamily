@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applySettingsView, csrfCookie, describeAppearance, diff, readForm, settingsViewFromLocation, syncAppearanceExtras } from '../openteamily/static/settings/app.mjs';
+import { applySettingsView, csrfCookie, describeAppearance, diff, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -115,4 +115,38 @@ test('syncAppearanceExtras hides schedule controls until auto is selected', () =
   syncAppearanceExtras(document, {appearance: 'auto', appearance_schedule: 'custom'});
   assert.equal(scheduleCard.hidden, false);
   assert.equal(customFields.hidden, false);
+});
+
+test('newlineBinding complements the recorded send shortcut', () => {
+  assert.equal(newlineBinding('enter'), 'Shift+Enter');
+  assert.equal(newlineBinding('mod_enter'), 'Enter');
+  assert.equal(newlineBinding(undefined), 'Shift+Enter');
+});
+
+test('syncShortcutRows renders complementary key chips', () => {
+  const children = [];
+  const keys = {
+    replaceChildren() { children.length = 0; },
+    appendChild(node) { children.push(node); return node; },
+  };
+  const document = {
+    getElementById(id) { return id === 'newline-keys' ? keys : null; },
+    createElement(tag) { return {tagName: tag, className: '', textContent: ''}; },
+  };
+  syncShortcutRows(document, {send_shortcut: 'enter'});
+  assert.deepEqual(children.filter((node) => node.tagName === 'kbd').map((node) => node.textContent), ['Shift', 'Enter']);
+  syncShortcutRows(document, {send_shortcut: 'mod_enter'});
+  assert.deepEqual(children.filter((node) => node.tagName === 'kbd').map((node) => node.textContent), ['Enter']);
+});
+
+test('syncPrivacySaveButton stays disabled until a privacy value changes', () => {
+  const button = {disabled: false};
+  const document = { getElementById(id) { return id === 'save' ? button : null; } };
+  const current = {likes_visible: true, favorites_visible: true};
+  syncPrivacySaveButton(document, current, current);
+  assert.equal(button.disabled, true);
+  syncPrivacySaveButton(document, current, {...current, likes_visible: false});
+  assert.equal(button.disabled, false);
+  assert.deepEqual(privacyChanges(current, {...current, favorites_visible: false}), {favorites_visible: false});
+  assert.deepEqual(privacyChanges(current, current), {});
 });
