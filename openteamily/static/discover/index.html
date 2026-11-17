@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>发现 · OpenTeamily</title>
+  <link rel="stylesheet" href="/shell/app.css">
+  <link rel="stylesheet" href="/discover/app.css">
+  <script type="module" src="/shell/app.mjs"></script>
+  <script type="module" src="/discover/app.mjs"></script>
+</head>
+<body class="app-workspace">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <nav class="app-rail" aria-label="应用导航">
+    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
+    <a href="/chat" title="聊天">聊天</a>
+    <a href="/messenger" title="消息">消息</a>
+    <a href="/agents" title="智能体">智能体</a>
+    <a href="/automations" title="自动化">自动化</a>
+    <a href="/memory" title="记忆">记忆</a>
+    <a href="/space" title="作品">作品</a>
+    <a href="/discover" title="发现">发现</a>
+    <span class="rail-spacer"></span>
+    <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
+    <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
+    <a href="/download" title="下载">下载</a>
+    <div class="account-slot" hidden>
+      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <div id="account-menu" class="account-menu" role="menu" hidden>
+        <p id="account-identity" class="account-identity"></p>
+        <a href="/profile" role="menuitem">查看我的资料</a>
+        <a href="/team" role="menuitem">创建团队</a>
+        <div class="account-sub">
+          <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
+          <div id="help-menu" hidden>
+            <button type="button" disabled title="未实现：OpenTeamily 还没有帮助中心">帮助中心</button>
+            <a href="/download" role="menuitem">下载</a>
+            <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
+            <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
+          </div>
+        </div>
+        <a href="/settings" role="menuitem">所有设置</a>
+        <form id="logout-form" method="post" action="/v1/auth/logout">
+          <button type="submit">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </nav>
+  <p id="status" role="status"></p>
+  <main id="main">
+  <section id="login-panel" hidden>
+    <h2>登录</h2>
+    <form id="login-form" method="post" action="/v1/auth/login">
+      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
+      <button type="submit">登录</button>
+    </form>
+  </section>
+  <section id="main-panel" hidden>
+    <header class="page-top">
+      <h1>发现</h1>
+      <p class="note">工作区所有者可以把自己的智能体选择性地收录到公共目录。目录只显示名称和简介，不显示指令、工作区或令牌。这不是 Teamily Discover 的推荐/信息流对等。</p>
+      <p id="whoami"></p>
+    </header>
+    <section aria-label="公共目录">
+      <h2>公共智能体</h2>
+      <p id="discover-empty" class="note" hidden>还没有收录任何智能体。</p>
+      <ul id="discover-list" class="catalog"></ul>
+    </section>
+    <section aria-label="收录管理">
+      <h2>收录管理</h2>
+      <label class="workspace-pick">工作区
+        <select id="workspace"></select>
+      </label>
+      <p class="note">只有工作区所有者或管理员可以改动收录。slug 需为 3–30 个字符的小写字母、数字或连字符。</p>
+      <p id="manage-empty" class="note" hidden>这个工作区还没有智能体。</p>
+      <ul id="manage-list" class="manage-list"></ul>
+    </section>
+  </section>
+  </main>
+</body>
+</html>

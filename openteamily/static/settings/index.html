@@ -64,7 +64,7 @@
     <div data-settings-hub>
     <header class="page-top">
       <h1>设置</h1>
-      <p class="note">按对照把总览和已有设置子页分开。没有用量摘要、升级按钮、积分或套餐，也没有做成空壳的渠道或应用连接器。子页接到原来的设置接口；这不是 Teamily 或 Impeccable 对照验收。</p>
+      <p class="note">按对照把总览和已有设置子页分开。没有用量摘要、升级按钮、积分或套餐。渠道、Agent API 和应用连接器先按对照搭开页面结构，连接和授权入口保持禁用，不复制第三方标志，也不假装已经连上外部账号。这不是 Teamily 或 Impeccable 对照验收。</p>
     </header>
     <p id="whoami"></p>
     <nav class="workspace-links" aria-label="工作区">
@@ -78,8 +78,21 @@
       <section class="settings-group" aria-labelledby="group-ai">
         <h2 id="group-ai">AI 与智能体设置</h2>
         <a class="settings-row" href="/settings/language">语言 <span id="language-current" class="settings-row-meta"></span></a>
+        <a class="settings-row" href="/settings/channels">Agent 渠道</a>
+        <a class="settings-row settings-row-stack" href="/settings/agent-access">
+          <span class="settings-row-copy">
+            <span class="settings-row-title">Agent API</span>
+            <span class="settings-row-meta">在本实例之外使用你的 agent：网站、API、AI 客户端</span>
+          </span>
+        </a>
         <a class="settings-row" href="#model-api">模型 API <span id="model-key-state" class="settings-row-meta">平台默认或你自己的配置，不用积分</span></a>
         <a class="settings-row" href="#skill-secrets">技能密钥</a>
+        <a class="settings-row settings-row-stack" href="/settings/connectors">
+          <span class="settings-row-copy">
+            <span class="settings-row-title">应用连接器</span>
+            <span class="settings-row-meta">你的 agent 可以使用的第三方账号</span>
+          </span>
+        </a>
         <a class="settings-row" href="/runtimes">运行时</a>
       </section>
       <section class="settings-group" aria-labelledby="group-prefs">
@@ -262,6 +275,55 @@
         <button type="submit" id="save-skill-secret">保存技能密钥</button>
       </fieldset>
     </form>
+    </div>
+    <div data-settings-page="channels" hidden>
+        <header class="settings-subhead">
+          <a href="/settings" class="settings-back" aria-label="返回设置">‹ Agent 渠道</a>
+        </header>
+        <p class="settings-lead">通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。</p>
+        <ul class="settings-card channel-list">
+          <li class="channel-row">
+            <span>WeChat Official Account</span>
+            <button type="button" disabled title="未实现：OpenTeamily 还没有接入 WeChat Official Account。对照里未点连接。">+ 连接</button>
+          </li>
+          <li class="channel-row">
+            <span>Apple iMessage</span>
+            <button type="button" disabled title="未实现：OpenTeamily 还没有接入 Apple iMessage。对照里未点连接。">+ 连接</button>
+          </li>
+          <li class="channel-row">
+            <span>Slack</span>
+            <button type="button" disabled title="未实现：OpenTeamily 还没有接入 Slack。对照里未点连接。">+ 连接</button>
+          </li>
+          <li class="channel-row">
+            <span>WhatsApp</span>
+            <button type="button" disabled title="未实现：OpenTeamily 还没有接入 WhatsApp。对照里未点连接。">+ 连接</button>
+          </li>
+        </ul>
+        <p class="note">对照页标题带有专有品牌，这里只用「Agent 渠道」。没有复制第三方渠道标志。连接会进入外部账号流程，本页只展示记录下来的渠道名单，按钮保持禁用。</p>
+    </div>
+    <div data-settings-page="agent-access" hidden>
+        <header class="settings-subhead">
+          <a href="/settings" class="settings-back" aria-label="返回设置">‹ Agent API</a>
+        </header>
+        <p class="settings-lead">你的 agent 可以从本实例之外被使用。要修改某一种方式，请到该 agent 的 Agent API。开发者文档还没有独立页面。</p>
+        <h2 class="settings-section-title">Agents</h2>
+        <p class="settings-card settings-empty">你的 agent 还没有向本实例之外开放。</p>
+        <h2 class="settings-section-title">已授权的 AI 客户端</h2>
+        <p class="settings-lead">那些被授权使用你的 agent 的客户端，例如 Claude Code，撤销后立即失效。</p>
+        <p class="settings-card settings-empty">没有已授权的 AI 客户端。</p>
+        <p class="note">这是对照空态的版式。OpenTeamily 还没有站外 Agent API 或授权客户端接口，所以这里不会列出可点的开放或撤销操作。</p>
+    </div>
+    <div data-settings-page="connectors" hidden>
+        <header class="settings-subhead">
+          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 应用连接器</a>
+        </header>
+        <div class="connectors-toolbar">
+          <label class="visually-hidden" for="connector-search">搜索应用</label>
+          <input id="connector-search" type="search" placeholder="搜索应用…" maxlength="80" autocomplete="off">
+          <button type="button" disabled title="未实现：对照里「添加 MCP 服务器」只打开说明弹层后关闭，没有留下可实现的完整版式，也还没有 MCP 接入接口。">+ 添加 MCP 服务器</button>
+        </div>
+        <p class="note">对照里有一份约 60 项的第三方应用目录，含官方标志，以及当时采集账号里已经接通的应用。这里不复制那些标志，也不假装已经连上任何第三方账号。搜索框可以输入，但目前没有可列出的应用。</p>
+        <p id="connectors-empty" class="settings-card settings-empty">还没有可连接的应用目录。</p>
     </div>
   </section>
   </main>

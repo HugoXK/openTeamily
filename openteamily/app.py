@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, invites, members, memory, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, social, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -450,6 +450,10 @@ class App:
             if method != 'GET' or query:
                 refuse(400, 'invalid', 'Invalid homepage request')
             return self.render_agent_homepage(homepage_path[1])
+        if path == '/v1/discover/agents':
+            if method != 'GET':
+                refuse(405, 'method', 'Only GET is supported')
+            return self.discover_list(query)
         if path in ('/v1/auth/register', '/v1/auth/login') and method == 'POST':
             self.origin_check(env)  # Login/registration CSRF protection before a session exists.
             body = self.body(env, ['username', 'password'])
@@ -746,11 +750,18 @@ class App:
                 r'(?:/([0-9a-f]{32})(?:/(messages(?:/([0-9a-f]{32})(?:/(artifact))?)?))?)?', path)
             if conversation_path:
                 return self.conversation_dispatch(db, session, method, query, now, env, *conversation_path.groups())
+            search_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/search/messages', path)
+            if search_path:
+                return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
                 r'(?:/([0-9a-f]{32})(?:/(messages))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
+            discover_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/discover(?:/(revoke))?', path)
+            if discover_path:
+                return self.agent_discover_dispatch(db, session, method, query, now, env, *discover_path.groups())
             homepage_api = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/homepage(?:/(revoke))?', path)
             if homepage_api:
@@ -2673,6 +2684,97 @@ class App:
         artifacts.attach_chat_source(
             db, artifact_id, workspace['id'], now, row['id'], message['id'], row['agent_id'])
         return self.artifact_saved(db, workspace['id'], artifact_id, 201)
+
+    def search_messages(self, db, session, method, query, workspace_id):
+        if method != 'GET':
+            refuse(405, 'method', 'Only GET is supported')
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=4) if query else {}
+            if set(args) - {'q', 'kind', 'limit', 'cursor'} or any(len(v) != 1 for v in args.values()):
+                raise ValueError()
+            text = args.get('q', [''])[0]
+            if not search.valid_query(text):
+                raise ValueError()
+            kind = args.get('kind', ['all'])[0]
+            if kind not in search.KINDS:
+                raise ValueError()
+            limit = args.get('limit', ['20'])[0]
+            if not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 50:
+                raise ValueError()
+            cursor = args.get('cursor', [''])[0]
+            if cursor and not re.fullmatch(r'[0-9a-f]{32}', cursor):
+                raise ValueError()
+        except ValueError:
+            refuse(400, 'invalid', 'Invalid search parameters')
+        rows = search.messages(db, workspace['id'], session['user_id'], text.strip(), kind,
+                               cursor, int(limit) + 1)
+        return 200, {'items': rows[:int(limit)],
+                     'cursor': rows[int(limit) - 1]['message_id'] if len(rows) > int(limit) else None}, []
+
+    def discover_list(self, query):
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=3) if query else {}
+            if set(args) - {'q', 'limit', 'cursor'} or any(len(v) != 1 for v in args.values()):
+                raise ValueError()
+            text = args.get('q', [''])[0]
+            if len(text) > 80 or any(ord(ch) < 32 for ch in text):
+                raise ValueError()
+            limit = args.get('limit', ['20'])[0]
+            if not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 50:
+                raise ValueError()
+            cursor = args.get('cursor', [''])[0]
+            if cursor and not discover.valid_slug(cursor):
+                raise ValueError()
+        except ValueError:
+            refuse(400, 'invalid', 'Invalid discover parameters')
+        with self.store.connect() as db:
+            rows = discover.listing(db, text, cursor, int(limit) + 1)
+            return 200, {'items': [discover.public_view(row) for row in rows[:int(limit)]],
+                         'cursor': rows[int(limit) - 1]['slug'] if len(rows) > int(limit) else None}, []
+
+    def agent_discover_dispatch(self, db, session, method, query, now, env, workspace_id,
+                                agent_id, revoking):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        agent = agents.load(db, workspace['id'], agent_id)
+        if agent is None:
+            refuse(404, 'not_found', 'Agent not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        row = discover.load(db, agent['id'])
+        if revoking is None and method == 'GET' and not query:
+            return 200, {'discover': discover.metadata_view(row)}, []
+        if actor not in ('owner', 'admin'):
+            refuse(403, 'forbidden', 'Only the owner or an admin can change discover listing')
+        if revoking == 'revoke' and method == 'POST' and not query:
+            self.body(env, [])
+            if row is not None:
+                db.execute('UPDATE agent_discover SET listed=0, updated=? WHERE agent_id=?', (now, agent['id']))
+            return 200, {'discover': discover.metadata_view(discover.load(db, agent['id']))}, []
+        if revoking is None and method == 'POST' and not query:
+            if agent['archived'] == 1:
+                refuse(409, 'conflict', 'Archived agents cannot be listed in discover')
+            slug = self.body(env, ['slug']).get('slug')
+            if not discover.valid_slug(slug):
+                refuse(400, 'invalid', 'Provide a valid discover slug')
+            try:
+                if row is None:
+                    db.execute(
+                        'INSERT INTO agent_discover VALUES(?,?,?,1,?,?)',
+                        (agent['id'], workspace['id'], slug, now, now))
+                    created = True
+                else:
+                    db.execute(
+                        'UPDATE agent_discover SET slug=?, listed=1, updated=? WHERE agent_id=?',
+                        (slug, now, agent['id']))
+                    created = False
+            except sqlite3.IntegrityError:
+                refuse(409, 'conflict', 'That discover slug is already in use')
+            return (201 if created else 200), {'discover': discover.metadata_view(discover.load(db, agent['id']))}, []
+        refuse(400, 'invalid', 'Invalid discover request')
 
     def social_dispatch(self, db, session, method, query, now, env, workspace_id,
                         conversation_id, action):

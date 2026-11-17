@@ -47,3 +47,11 @@ The page is not browser E2E evidence. Acceptance against Teamily's real settings
 ## Not in this slice
 
 No chat shell, no keyboard handling in the chat input, no translation catalogue, no runtime/instance propagation. Browser acceptance is not claimed.
+
+## Settings pages (channels, Agent API, connectors)
+
+Related: [#4](https://github.com/openTeamily/openTeamily/issues/4), [#10](https://github.com/openTeamily/openTeamily/issues/10), [#11](https://github.com/openTeamily/openTeamily/issues/11), [#14](https://github.com/openTeamily/openTeamily/issues/14). These issues stay open.
+
+`/settings/channels`, `/settings/agent-access`, and `/settings/connectors` serve the same settings document as `/settings` (no-store, unknown subpath 404, query rejected 400). The hub in「AI 与智能体设置」links to them in the recorded order, keeping the OpenTeamily model API row. Visible copy uses 「Agent 渠道」 rather than a trademarked product title.
+
+This slice only lays out the recorded page structure. Connect / authorize / add-MCP controls stay disabled. Third-party brand marks and the recapture account's already-connected connector states are not reproduced. There is still no channel, Agent API, or connector backend. This is not Teamily or Impeccable comparison acceptance.

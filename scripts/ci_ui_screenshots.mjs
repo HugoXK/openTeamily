@@ -202,6 +202,71 @@ async function main() {
       record('settings_appearance', false, String(error));
     }
     try {
+      await page.goto(`${origin}/settings/channels`, { waitUntil: 'load' });
+      await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const channels = page.locator('[data-settings-page="channels"]');
+      await channels.waitFor({ state: 'visible', timeout: 15000 });
+      const channelsText = `${await visibleText(channels)}`;
+      const connectButtons = page.locator('[data-settings-page="channels"] button');
+      const connectCount = await connectButtons.count();
+      const allDisabled = (await connectButtons.evaluateAll((buttons) => buttons.every((button) => button.disabled))) && connectCount === 4;
+      record(
+        'settings_channels',
+        allDisabled
+          && channelsText.includes('Agent 渠道')
+          && channelsText.includes('WeChat Official Account')
+          && channelsText.includes('Apple iMessage')
+          && channelsText.includes('Slack')
+          && channelsText.includes('WhatsApp')
+          && !channelsText.includes('Teamily Agent')
+          && !/积分|套餐|升级/.test(channelsText),
+        `buttons=${connectCount}; disabled=${allDisabled}; ${channelsText || 'channels page empty'}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '44-settings-channels.png')));
+    } catch (error) {
+      record('settings_channels', false, String(error));
+    }
+    try {
+      await page.goto(`${origin}/settings/agent-access`, { waitUntil: 'load' });
+      await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const agentAccess = page.locator('[data-settings-page="agent-access"]');
+      await agentAccess.waitFor({ state: 'visible', timeout: 15000 });
+      const agentText = `${await visibleText(agentAccess)}`;
+      record(
+        'settings_agent_access',
+        agentText.includes('Agent API')
+          && agentText.includes('你的 agent 还没有向本实例之外开放。')
+          && agentText.includes('没有已授权的 AI 客户端。')
+          && agentText.includes('Claude Code')
+          && !/积分|套餐|升级/.test(agentText),
+        agentText || 'agent-access page empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '45-settings-agent-access.png')));
+    } catch (error) {
+      record('settings_agent_access', false, String(error));
+    }
+    try {
+      await page.goto(`${origin}/settings/connectors`, { waitUntil: 'load' });
+      await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const connectors = page.locator('[data-settings-page="connectors"]');
+      await connectors.waitFor({ state: 'visible', timeout: 15000 });
+      const connectorsText = `${await visibleText(connectors)}`;
+      const addMcpDisabled = await page.locator('[data-settings-page="connectors"] button').isDisabled();
+      record(
+        'settings_connectors',
+        addMcpDisabled
+          && connectorsText.includes('应用连接器')
+          && connectorsText.includes('添加 MCP 服务器')
+          && connectorsText.includes('还没有可连接的应用目录。')
+          && !connectorsText.includes('已连接')
+          && !/积分|套餐|升级/.test(connectorsText),
+        `addDisabled=${addMcpDisabled}; ${connectorsText || 'connectors page empty'}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '46-settings-connectors.png')));
+    } catch (error) {
+      record('settings_connectors', false, String(error));
+    }
+    try {
       await page.locator('#account-menu-button').click();
       await page.locator('#account-menu').waitFor({ state: 'visible', timeout: 8000 });
       await page.locator('#help-menu-button').click();

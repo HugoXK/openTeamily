@@ -45,7 +45,7 @@ class ChatPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/chat/missing')['status'], 404)
         discover = self.raw.call('GET', '/discover')
         self.assertEqual(discover['status'], 200)
-        self.assertIn('id="agent-list"', discover['body'].decode())
+        self.assertIn('id="discover-list"', discover['body'].decode())
 
     def test_page_rejects_cross_origin_queries_and_writes(self):
         self.assertEqual(self.raw.call('GET', '/chat', origin='https://evil.test')['status'], 403)
