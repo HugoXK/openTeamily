@@ -76,7 +76,7 @@
       <section class="settings-group" aria-labelledby="group-ai">
         <h2 id="group-ai">AI 与智能体设置</h2>
         <a class="settings-row" href="#language">语言 <span id="language-current" class="settings-row-meta"></span></a>
-        <a class="settings-row" href="#model-api">模型 API <span class="settings-row-meta">平台默认或你自己的配置，不用积分</span></a>
+        <a class="settings-row" href="#model-api">模型 API <span id="model-key-state" class="settings-row-meta">平台默认或你自己的配置，不用积分</span></a>
         <a class="settings-row" href="#skill-secrets">技能密钥</a>
         <a class="settings-row" href="/runtimes">运行时</a>
       </section>
@@ -199,7 +199,7 @@
         <label>Base URL <input type="url" name="base_url" maxlength="512" placeholder="https://" autocomplete="off"></label>
         <label>模型 <input type="text" name="model" maxlength="128" autocomplete="off"></label>
         <label>API 密钥 <input type="password" name="api_key" maxlength="4096" autocomplete="new-password" placeholder="留空表示不更改"></label>
-        <p id="model-key-state" class="note"></p>
+        <p id="model-key-state-detail" class="note"></p>
       </fieldset>
       <button type="submit" id="save-model-api">保存模型 API</button>
     </form>
