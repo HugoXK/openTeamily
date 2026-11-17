@@ -11,6 +11,7 @@
 
 - **#20** 已按需把 FlyBot 定制层写入 `runtime/flybot/`（社交插件、docker 辅助脚本与选定文档，保留 Apache-2.0 `LICENSE` / `NOTICE`），把 Bot Social 必要集写入 `services/bot-social/`（保留 MIT 与 Birfy 版权）。未导入 `runtime/flybot/core/`、旧的 `ds-bot.pin.json`、Project / Timeline / tree / workflow 插件，以及未核商标的品牌/演示图。
 - **#21** 已把上游 [Fei2411/DS-Bot](https://github.com/Fei2411/DS-Bot) **v0.3.6**（`a66cc737cfb6c3d8a2597e748cded6cab1206dd3`）作为未修改钉扎副本放入 `runtime/ds-bot-upstream/`。`LICENSE` 与 #18 记录的 Apache-2.0 文本相同（sha256 `c71d239d...`）。**`NOTICE` 已变**：v0.3.6 为 sha256 `4c7d3e4e7607f02ed9e4fb940442be7d0d107b57beb54660e1526a7be07c2aad`（15557 字节），不同于 FlyBot / 历史钉扎 `2b10c70` 的 `94f05bc4...`（3835 字节）；新增对更多 DSH 派生文件以及 Simple Icons（CC0）、Context7（MIT）、Playwright（Apache-2.0）等声明。此处只记录哈希与差异，**不是**对新增声明的完整法律重读。
+- **上游跟踪（2026-11-17）** 将钉扎更新为 [Fei2411/DS-Bot](https://github.com/Fei2411/DS-Bot) **v0.3.8**（`5e9b7da8882da3b68d8a0624342708c2150a9156`）。LICENSE 哈希未变。NOTICE 现为 sha256 `9950f67d1743a33a420581e44e8f7473e6ab78b69c7e55ea8a84b476c3cf2a39`（15675 字节）；相对 v0.3.6 仅扩展 Agent logos 商标归属（Antigravity、GitHub Copilot、Kimi、MiniMax、Mistral AI）。仍只核哈希与该差异，**不是**完整法律重读。
 - 当前运行时钉扎的 DSH 为 **`0.2.2-rc.1`**（见 `runtime/ds-bot-upstream.pin.json`）。#18 只审计了 `dsh-v0.2.1-rc.2`。0.2.2-rc.1 的传递依赖、npm 与 git 标签对应、MPL / 镜像再分发义务仍为 **待核**，#3 不得关闭。
 
 #18 写的「在审计剩余项关闭前不要把源码拷入本仓」已被后续按需导入取代；禁止改标为 MIT、禁止导入无许可证控制面、禁止导入 Teamily 专有资产，这几条仍然有效。
@@ -23,7 +24,7 @@
 
 构建成品的现场文件/软件包/许可清单由 CI 在已有的 FlyBot runtime image 作业中收集，并作为 `flybot-runtime-image-license-inventory` artifact 上传（不发布镜像）。收集程序和夹具测试见 [`runtime/flybot-image/inventory/`](../../runtime/flybot-image/inventory/)。该 artifact 记录全局 DSH、额外包与 profile 的已安装闭包、Debian 版权哈希与 deb-src 指针、Claude 载荷是否出现及找到的条款文本、字体/OFL 通知，以及 `/opt/licenses` 中的 NOTICE 与商标字样。这是合规收集，不是法律意见，也不是公开发行授权。对照 artifact 的审阅、MPL 3.2/3.3 解释、tarball 与 git 已编译 JS 的对应、Debian 源码要约是否充分等事项仍然开放。相关跟踪仍保持开放：issue 3。
 
-随后已依据 #56 的现场清单，把与镜像中 KaTeX 字体字节对应的上游 MIT LICENSE、`@img/sharp-libvips-linux-x64@1.3.4` 的通知与 libvips 8.18.7 源码指针、以及 `@anthropic-ai/sdk@0.129.0` 在镜像中的 MIT 文本放入 `runtime/third_party/`，并由镜像配方拷到 `/opt/licenses` 及相应载荷旁边。CI 还会按确切安装版本生成 Debian 源码要约清单。对 v0.3.6 NOTICE 的归属审阅见 [DS-BOT-NOTICE-REVIEW.md](DS-BOT-NOTICE-REVIEW.md)。这些是合规收集与阅读记录，不是法律结案，也不是公开发行授权。DSH 已编译 JS 的 tarball 对应仍明确未核实。相关跟踪仍保持开放：issue 3。
+随后已依据 #56 的现场清单，把与镜像中 KaTeX 字体字节对应的上游 MIT LICENSE、`@img/sharp-libvips-linux-x64@1.3.4` 的通知与 libvips 8.18.7 源码指针、以及 `@anthropic-ai/sdk@0.129.0` 在镜像中的 MIT 文本放入 `runtime/third_party/`，并由镜像配方拷到 `/opt/licenses` 及相应载荷旁边。CI 还会按确切安装版本生成 Debian 源码要约清单。对 v0.3.6 NOTICE 的归属审阅及 v0.3.8 商标列表补记见 [DS-BOT-NOTICE-REVIEW.md](DS-BOT-NOTICE-REVIEW.md)。这些是合规收集与阅读记录，不是法律结案，也不是公开发行授权。DSH 已编译 JS 的 tarball 对应仍明确未核实。相关跟踪仍保持开放：issue 3。
 
 
 

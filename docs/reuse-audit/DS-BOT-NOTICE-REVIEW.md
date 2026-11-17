@@ -27,3 +27,9 @@ The file is longer than the historical FlyBot / DS-Bot NOTICE `94f05bc4…` (383
 - The inlined MIT grant under DeepSeek Harness is the standard MIT permission text. This review records that it is present; it is not a completeness audit of every DSH file named in the bullet list.
 
 The vendored tree remains unmodified Apache-2.0 + this NOTICE. Redistributors must keep both.
+
+## v0.3.8 addendum (2026-11-17, Asia/Shanghai)
+
+File now sha256 `9950f67d1743a33a420581e44e8f7473e6ab78b69c7e55ea8a84b476c3cf2a39` (15675 bytes), still an unmodified copy of the upstream NOTICE at Fei2411/DS-Bot v0.3.8 (`5e9b7da8882da3b68d8a0624342708c2150a9156`).
+
+The only change from the v0.3.6 text reviewed above is the closing “Agent logos” paragraph: it now also names Antigravity (Google), GitHub Copilot (GitHub), Kimi (Moonshot AI), MiniMax (MiniMax), and Mistral AI, and says Antigravity marks (with Devin and OpenAI) come from the vendors' application icons. This remains trademark attribution, not a license grant and not a re-review of every earlier NOTICE section.

@@ -86,7 +86,7 @@ ON_DISK = {
     "runtime/flybot/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
     "runtime/flybot/NOTICE": "94f05bc42e635dee7082583c010dc13fb084b1ed9cdcfed6b9e5246c763027ca",
     "runtime/ds-bot-upstream/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
-    "runtime/ds-bot-upstream/NOTICE": "4c7d3e4e7607f02ed9e4fb940442be7d0d107b57beb54660e1526a7be07c2aad",
+    "runtime/ds-bot-upstream/NOTICE": "9950f67d1743a33a420581e44e8f7473e6ab78b69c7e55ea8a84b476c3cf2a39",
     "runtime/ds-bot-upstream/ds-bot/LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
     "services/bot-social/LICENSE": "6f5b168b7397507ec7854d3787079ae4185826ea0a9ade831a269fabe3e737c3",
 }
