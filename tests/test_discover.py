@@ -116,10 +116,16 @@ class DiscoverCatalogPageTests(unittest.TestCase):
             self.assertEqual(feed['status'], 200)
             feed_text = feed['body'].decode()
             for marker in ('id="feed-panel"', 'id="feed-query"', '搜索动态、创作者…', '关注', '动态',
+                           'id="feed-following-empty"', '关注列表暂无动态',
+                           '你关注的人发布动态后会显示在这里。',
                            'id="feed-note"', '也不会展示奖励活动或推荐内容', 'id="catalog-view" hidden',
                            'href="/discover?tab=agents"', '热门', '3D 作品', 'AI 与科技', '美容'):
                 self.assertIn(marker, feed_text, marker)
+            self.assertIn('hidden', feed_text.split('id="feed-following-empty"', 1)[1].split('>', 1)[0])
             self.assertNotIn('积分中心', feed_text)
+            self.assertNotIn('最多领取', feed_text)
+            self.assertNotIn('CREDITS', feed_text)
+            self.assertNotIn('没有对照截图', feed_text)
             self.assertNotIn('href="/d/', feed_text)
             page = case.raw.call('GET', '/discover', query='tab=agents')
             self.assertEqual(page['status'], 200)

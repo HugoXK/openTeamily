@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { validSlug, catalogItems, agentDiscoverPairs, isAgentsCatalog, FEED_CATEGORIES, FEED_ACTIVITY_NOTE, FEED_FOLLOWING_NOTE, FEED_SEARCH_NOTE } from '../openteamily/static/discover/app.mjs';
+import { validSlug, catalogItems, agentDiscoverPairs, isAgentsCatalog, FEED_CATEGORIES, FEED_ACTIVITY_NOTE, FEED_FOLLOWING_EMPTY_TITLE, FEED_FOLLOWING_EMPTY_BODY, FEED_FOLLOWING_NOTE, FEED_SEARCH_NOTE } from '../openteamily/static/discover/app.mjs';
 
 test('validSlug mirrors the server slug rule', () => {
   assert.equal(validSlug('on-call'), true);
@@ -139,12 +139,21 @@ test('default discover view is the unconnected feed and does not load the catalo
   assert.equal(el('feed-panel').hidden, false);
   assert.equal(el('catalog-view').hidden, true);
   assert.equal(el('feed-note').textContent, FEED_ACTIVITY_NOTE);
+  assert.equal(el('feed-following-empty').hidden, true);
   assert.equal(el('feed-tab-activity').attributes['aria-selected'], 'true');
   assert.equal(requests.some(([path]) => path.startsWith('/v1/discover/agents')), false);
   el('feed-tab-following').handlers.click();
   assert.equal(el('feed-note').textContent, FEED_FOLLOWING_NOTE);
+  assert.equal(el('feed-following-empty').hidden, false);
   assert.equal(el('feed-tab-following').attributes['aria-selected'], 'true');
+  assert.equal(FEED_FOLLOWING_EMPTY_TITLE, '关注列表暂无动态');
+  assert.equal(FEED_FOLLOWING_EMPTY_BODY, '你关注的人发布动态后会显示在这里。');
+  assert.equal(FEED_FOLLOWING_NOTE.includes('没有对照截图'), false);
+  assert.match(FEED_FOLLOWING_NOTE, /关注关系还没有接口/);
   el('feed-search').handlers.submit({preventDefault() {}});
   assert.equal(el('feed-search-note').hidden, false);
   assert.equal(el('feed-search-note').textContent, FEED_SEARCH_NOTE);
+  el('feed-tab-activity').handlers.click();
+  assert.equal(el('feed-following-empty').hidden, true);
+  assert.equal(el('feed-note').textContent, FEED_ACTIVITY_NOTE);
 });

@@ -1355,12 +1355,18 @@ async function main() {
       );
       screenshots.push(path.basename(await shot(page, outDir, '52-discover.png')));
       await page.locator('#feed-tab-following').click();
-      await waitForLocatorText(page, '#feed-note', '关注页的内容结构没有对照截图');
+      await waitForLocatorText(page, '#feed-following-empty', '关注列表暂无动态');
+      const followingText = `${await visibleText(page.locator('#feed-panel'))}`;
       record(
         'discover_following',
         (await page.locator('#feed-tab-following').getAttribute('aria-selected')) === 'true'
-          && (await visibleText(page.locator('#feed-note'))).includes('这个视图尚未接通'),
-        await visibleText(page.locator('#feed-note')),
+          && (await page.locator('#feed-following-empty').isVisible())
+          && followingText.includes('关注列表暂无动态')
+          && followingText.includes('你关注的人发布动态后会显示在这里。')
+          && followingText.includes('关注关系还没有接口')
+          && !followingText.includes('没有对照截图')
+          && !/积分|套餐|升级|CREDITS/.test(followingText),
+        followingText.slice(0, 240) || 'following empty',
       );
       screenshots.push(path.basename(await shot(page, outDir, '63-discover-following.png')));
       await page.goto(`${origin}/discover?tab=agents`, { waitUntil: 'load' });
