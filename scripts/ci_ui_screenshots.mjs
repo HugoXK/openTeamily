@@ -176,20 +176,26 @@ async function main() {
     );
     screenshots.push(path.basename(await shot(page, outDir, '02-settings-signed-in.png')));
     try {
+      await page.goto(`${origin}/settings/appearance`, { waitUntil: 'load' });
+      await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
       const appearance = page.locator('#appearance');
-      await appearance.scrollIntoViewIfNeeded();
+      await appearance.waitFor({ state: 'visible', timeout: 15000 });
       await waitForLocatorText(page, '#appearance-status', '当前为');
-      const appearanceText = await visibleText(appearance);
+      const appearanceText = `${await visibleText(page.locator('[data-settings-page="appearance"]'))}`;
       const values = await page.locator('#appearance > label.choice input[name="appearance"]').evaluateAll(
         (inputs) => inputs.map((input) => input.value),
       );
+      await page.locator('#appearance input[value="auto"]').check();
+      await page.locator('#appearance-schedule-card').waitFor({ state: 'visible', timeout: 15000 });
+      const autoText = `${await visibleText(page.locator('#appearance-schedule-card'))}`;
       record(
         'settings_appearance',
         values.join(',') === 'light,dark,auto,system'
-          && appearanceText.includes('始终使用浅色。')
+          && appearanceText.includes('始终使用浅色主题。')
+          && appearanceText.includes('选择应用在此设备上的显示外观。')
           && appearanceText.includes('当前为')
-          && appearanceText.includes('侧栏「浅色」「深色」按钮也会写入已有外观设置'),
-        `values=${values.join(',')}; ${appearanceText || 'appearance fieldset empty'}`,
+          && autoText.includes('没有使用实际日出日落时刻'),
+        `values=${values.join(',')}; ${appearanceText || 'appearance page empty'} | auto=${autoText || 'schedule card empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '27-settings-appearance.png')));
     } catch (error) {

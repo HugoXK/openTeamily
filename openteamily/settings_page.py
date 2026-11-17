@@ -12,6 +12,11 @@ from urllib.parse import urlsplit
 class SettingsPage:
     ASSETS = {
         '/settings': ('settings', 'index.html', 'text/html; charset=utf-8'),
+        '/settings/appearance': ('settings', 'index.html', 'text/html; charset=utf-8'),
+        '/settings/language': ('settings', 'index.html', 'text/html; charset=utf-8'),
+        '/settings/message-folding': ('settings', 'index.html', 'text/html; charset=utf-8'),
+        '/settings/privacy': ('settings', 'index.html', 'text/html; charset=utf-8'),
+        '/settings/shortcuts': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/app.mjs': ('settings', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/settings/app.css': ('settings', 'app.css', 'text/css; charset=utf-8'),
         '/automations': ('automations', 'index.html', 'text/html; charset=utf-8'),
