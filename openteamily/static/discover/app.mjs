@@ -24,12 +24,26 @@ export function catalogQuery(text = '', cursor = '') {
   return '/v1/discover/agents?' + params.toString();
 }
 
+export const FEED_CATEGORIES = [
+  '热门', '网页', '小游戏', '图片', '音乐', '幻灯片', '视频', '3D 作品',
+  '短剧', '文章', '教程', '看板', '行情', '小程序', '故事', '娱乐', 'AI 与科技', '美容',
+];
+
+export const FEED_ACTIVITY_NOTE = '动态信息流还没有接口，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。';
+export const FEED_FOLLOWING_NOTE = '关注页的内容结构没有对照截图，这个视图尚未接通。';
+export const FEED_SEARCH_NOTE = '搜索动态和创作者尚未接通：没有对应的公开接口。';
+
+export function isAgentsCatalog(location) {
+  const search = location && typeof location.search === 'string' ? location.search : '';
+  return new URLSearchParams(search).get('tab') === 'agents';
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
 }
 
-export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } = {}) {
+export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), location = globalThis.location } = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
@@ -39,6 +53,24 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
   let cursor = '';
   let activeQuery = '';
   let catalogRequest = 0;
+  const agentsView = isAgentsCatalog(location);
+
+  function showDiscoverView() {
+    const feed = document.getElementById('feed-panel');
+    const catalog = document.getElementById('catalog-view');
+    if (feed) feed.hidden = agentsView;
+    if (catalog) catalog.hidden = !agentsView;
+  }
+
+  function setFeedTab(tab) {
+    const following = tab === 'following';
+    const followingBtn = document.getElementById('feed-tab-following');
+    const activityBtn = document.getElementById('feed-tab-activity');
+    if (followingBtn) followingBtn.setAttribute('aria-selected', following ? 'true' : 'false');
+    if (activityBtn) activityBtn.setAttribute('aria-selected', following ? 'false' : 'true');
+    const note = document.getElementById('feed-note');
+    if (note) note.textContent = following ? FEED_FOLLOWING_NOTE : FEED_ACTIVITY_NOTE;
+  }
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -210,7 +242,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
   }
 
   async function load() {
-    await loadCatalog();
+    showDiscoverView();
+    if (agentsView) await loadCatalog();
     const session = await request('GET', '/v1/auth/session');
     if (session.status !== 200) {
       currentUser = null;
@@ -223,18 +256,20 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
-    document.getElementById('catalog-manage').hidden = false;
+    document.getElementById('catalog-manage').hidden = !agentsView;
     document.getElementById('whoami').textContent = currentUser.username;
-    const listed = await request('GET', '/v1/workspaces?limit=100');
-    const workspaces = listed.status === 200 ? (listed.body.items || []) : [];
-    workspaceSelect.replaceChildren();
-    for (const space of workspaces) {
-      const option = document.createElement('option');
-      option.value = space.id;
-      option.textContent = space.name;
-      workspaceSelect.append(option);
+    if (agentsView) {
+      const listed = await request('GET', '/v1/workspaces?limit=100');
+      const workspaces = listed.status === 200 ? (listed.body.items || []) : [];
+      workspaceSelect.replaceChildren();
+      for (const space of workspaces) {
+        const option = document.createElement('option');
+        option.value = space.id;
+        option.textContent = space.name;
+        workspaceSelect.append(option);
+      }
+      await loadManage();
     }
-    await loadManage();
     show('', '');
   }
 
@@ -254,13 +289,31 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
   workspaceSelect.addEventListener('change', loadManage);
   document.getElementById('catalog-search').addEventListener('submit', event => {
     event.preventDefault();
-    loadCatalog();
+    if (agentsView) return loadCatalog();
   });
   document.getElementById('catalog-clear').addEventListener('click', () => {
     document.getElementById('catalog-query').value = '';
-    loadCatalog();
+    if (agentsView) return loadCatalog();
   });
-  document.getElementById('catalog-more').addEventListener('click', () => loadCatalog(true));
+  document.getElementById('catalog-more').addEventListener('click', () => {
+    if (agentsView) return loadCatalog(true);
+  });
+  const feedSearch = document.getElementById('feed-search');
+  if (feedSearch) {
+    feedSearch.addEventListener('submit', event => {
+      event.preventDefault();
+      const note = document.getElementById('feed-search-note');
+      if (note) {
+        note.hidden = false;
+        note.textContent = FEED_SEARCH_NOTE;
+      }
+    });
+  }
+  for (const tab of ['following', 'activity']) {
+    const button = document.getElementById(tab === 'following' ? 'feed-tab-following' : 'feed-tab-activity');
+    if (button) button.addEventListener('click', () => setFeedTab(tab));
+  }
+  if (!agentsView) setFeedTab('activity');
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
     event.preventDefault();

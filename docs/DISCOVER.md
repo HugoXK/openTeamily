@@ -28,13 +28,15 @@ Additive `agent_discover` table (`CREATE TABLE IF NOT EXISTS`) with a unique glo
 
 ## Page
 
-`/discover` is a same-origin management page that renders the public catalog and, for a selected workspace, lets an owner/admin publish or revoke a slug. The public API can be consumed without a session. The recorded agents view is also available at `/discover?tab=agents` (other HTML queries remain rejected). The public cards stay visible without a session; authenticated listing management is collapsed below the directory. Search submits the existing name/summary `q` API, 12 results per cursor page, with clear, loading, empty and error states. The count says how many have been displayed, not a fabricated total. Card initials are generated locally, not third-party avatars. Card chat actions, AI teams, category and creator filters are explicitly unconnected: the public projection has no execution path or those metadata fields. No `/d/{slug}` route or secret homepage token is invented.
+`/discover` is a same-origin management page. With no query it renders the recorded 关注 / 动态 feed chrome: a search field, those two tabs, and the captured category chips. The feed, follow view, feed search, and category filters are explicitly unconnected — there is no public feed API, so the page states that clearly and does not invent cards, recommendations, or reward banners. Other HTML queries remain rejected except the recorded catalog view at `/discover?tab=agents`.
 
-CI uses synthetic opt-in listings to capture populated cards, matching/empty search, and cursor paging. This is not a Teamily or Impeccable acceptance.
+`/discover?tab=agents` still renders the public agent catalog and, for a selected workspace, lets an owner/admin publish or revoke a slug. The public API can be consumed without a session. The public cards stay visible without a session; authenticated listing management is collapsed below the directory. Search submits the existing name/summary `q` API, 12 results per cursor page, with clear, loading, empty and error states. The count says how many have been displayed, not a fabricated total. Card initials are generated locally, not third-party avatars. Card chat actions, AI teams, category and creator filters are explicitly unconnected: the public projection has no execution path or those metadata fields. No `/d/{slug}` route or secret homepage token is invented.
+
+CI captures the default feed chrome and, on `?tab=agents`, synthetic opt-in listings for populated cards, matching/empty search, and cursor paging. This is not a Teamily or Impeccable acceptance.
 
 ## Explicitly not in this slice
 
-- Recommendation/ranking, public feed, follow/like/comment.
+- Recommendation/ranking, a real public feed, follow/like/comment, or reward campaigns.
 - Public conversation or agent execution from a listing.
 - Cross-instance federation, Bot Social transport, or any Teamily comparison.
 - Browser acceptance. Tests are in-process WSGI + temporary SQLite and pure Node helpers.

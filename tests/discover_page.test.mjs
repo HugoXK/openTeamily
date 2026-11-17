@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { validSlug, catalogItems, agentDiscoverPairs } from '../openteamily/static/discover/app.mjs';
+import { validSlug, catalogItems, agentDiscoverPairs, isAgentsCatalog, FEED_CATEGORIES, FEED_ACTIVITY_NOTE, FEED_FOLLOWING_NOTE, FEED_SEARCH_NOTE } from '../openteamily/static/discover/app.mjs';
 
 test('validSlug mirrors the server slug rule', () => {
   assert.equal(validSlug('on-call'), true);
@@ -11,6 +11,20 @@ test('validSlug mirrors the server slug rule', () => {
   assert.equal(validSlug('abc-'), false);
   assert.equal(validSlug('a'.repeat(31)), false);
   assert.equal(validSlug(null), false);
+});
+
+test('isAgentsCatalog only matches the recorded tab=agents query', () => {
+  assert.equal(isAgentsCatalog({search: ''}), false);
+  assert.equal(isAgentsCatalog({search: '?tab=agents'}), true);
+  assert.equal(isAgentsCatalog({search: '?tab=teams'}), false);
+  assert.equal(isAgentsCatalog(undefined), false);
+});
+
+test('recorded feed categories stay in the captured order', () => {
+  assert.deepEqual(FEED_CATEGORIES, [
+    '热门', '网页', '小游戏', '图片', '音乐', '幻灯片', '视频', '3D 作品',
+    '短剧', '文章', '教程', '看板', '行情', '小程序', '故事', '娱乐', 'AI 与科技', '美容',
+  ]);
 });
 
 test('catalogItems tolerates missing bodies', () => {
@@ -72,7 +86,7 @@ test('anonymous catalog search/clear/paging use public GETs and never publish on
       : {items: [{name: 'Fixture', slug: cursor ? 'fixture-two' : 'fixture-one', summary: '<script>not HTML</script>'}],
         cursor: cursor ? null : 'fixture-one'}};
   };
-  await mount(doc, {fetcher});
+  await mount(doc, {fetcher, location: {search: '?tab=agents'}});
   const el = id => doc.getElementById(id);
   assert.equal(el('main-panel').hidden, false);
   assert.equal(el('catalog-manage').hidden, true);
@@ -100,7 +114,7 @@ test('anonymous catalog search/clear/paging use public GETs and never publish on
 test('catalog failure displays an error and leaves loading state', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();
-  await mount(doc, {fetcher: async path => {
+  await mount(doc, {location: {search: '?tab=agents'}, fetcher: async path => {
     if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
     throw new Error('fixture unavailable');
   }});
@@ -108,4 +122,29 @@ test('catalog failure displays an error and leaves loading state', async () => {
   assert.match(doc.getElementById('catalog-error').textContent, /fixture unavailable/);
   assert.equal(doc.getElementById('catalog-panel').attributes['aria-busy'], 'false');
   assert.equal(doc.getElementById('discover-empty').hidden, true);
+});
+
+test('default discover view is the unconnected feed and does not load the catalog API', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const requests = [];
+  const fetcher = async (path, options) => {
+    requests.push([path, options.method]);
+    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location: {search: ''}});
+  const el = id => doc.getElementById(id);
+  assert.equal(el('main-panel').hidden, false);
+  assert.equal(el('feed-panel').hidden, false);
+  assert.equal(el('catalog-view').hidden, true);
+  assert.equal(el('feed-note').textContent, FEED_ACTIVITY_NOTE);
+  assert.equal(el('feed-tab-activity').attributes['aria-selected'], 'true');
+  assert.equal(requests.some(([path]) => path.startsWith('/v1/discover/agents')), false);
+  el('feed-tab-following').handlers.click();
+  assert.equal(el('feed-note').textContent, FEED_FOLLOWING_NOTE);
+  assert.equal(el('feed-tab-following').attributes['aria-selected'], 'true');
+  el('feed-search').handlers.submit({preventDefault() {}});
+  assert.equal(el('feed-search-note').hidden, false);
+  assert.equal(el('feed-search-note').textContent, FEED_SEARCH_NOTE);
 });
