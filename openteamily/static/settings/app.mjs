@@ -107,6 +107,24 @@ export function applySettingsView(document, view) {
   for (const node of document.querySelectorAll('[data-settings-page]')) {
     node.hidden = node.getAttribute('data-settings-page') !== current;
   }
+  if (current !== 'connectors' && typeof document.getElementById === 'function') {
+    syncMcpDialog(document, false);
+  }
+}
+
+export function syncMcpDialog(document, open) {
+  const dialog = document.getElementById('mcp-dialog');
+  const trigger = document.getElementById('add-mcp-server');
+  if (!dialog) return;
+  const wasOpen = !dialog.hidden;
+  dialog.hidden = !open;
+  if (trigger) trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) {
+    const ack = document.getElementById('mcp-dialog-ack');
+    if (ack && typeof ack.focus === 'function') ack.focus();
+  } else if (wasOpen && trigger && typeof trigger.focus === 'function') {
+    trigger.focus();
+  }
 }
 
 export function syncAppearanceExtras(document, values) {
@@ -496,6 +514,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = null;
     revision = 0;
     await load();
+  });
+
+  const addMcp = document.getElementById('add-mcp-server');
+  const mcpAck = document.getElementById('mcp-dialog-ack');
+  if (addMcp) {
+    addMcp.addEventListener('click', () => syncMcpDialog(document, true));
+  }
+  if (mcpAck) {
+    mcpAck.addEventListener('click', () => syncMcpDialog(document, false));
+  }
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    const dialog = document.getElementById('mcp-dialog');
+    if (!dialog || dialog.hidden) return;
+    event.preventDefault();
+    syncMcpDialog(document, false);
   });
 
   globalThis.addEventListener('hashchange', renderView);

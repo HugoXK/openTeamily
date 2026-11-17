@@ -376,10 +376,11 @@ async function main() {
       const connectors = page.locator('[data-settings-page="connectors"]');
       await connectors.waitFor({ state: 'visible', timeout: 15000 });
       const connectorsText = `${await visibleText(connectors)}`;
-      const addMcpDisabled = await page.locator('[data-settings-page="connectors"] button').isDisabled();
+      const addMcp = page.locator('#add-mcp-server');
+      const addMcpDisabled = await addMcp.isDisabled();
       record(
         'settings_connectors',
-        addMcpDisabled
+        !addMcpDisabled
           && connectorsText.includes('应用连接器')
           && connectorsText.includes('添加 MCP 服务器')
           && connectorsText.includes('还没有可连接的应用目录。')
@@ -388,6 +389,23 @@ async function main() {
         `addDisabled=${addMcpDisabled}; ${connectorsText || 'connectors page empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '46-settings-connectors.png')));
+      await addMcp.click();
+      const mcpDialog = page.locator('#mcp-dialog');
+      await mcpDialog.waitFor({ state: 'visible', timeout: 15000 });
+      const mcpText = `${await visibleText(mcpDialog)}`;
+      record(
+        'settings_connectors_mcp_dialog',
+        mcpText.includes('在智能体里添加自定义 MCP 服务器')
+          && mcpText.includes('打开你创建的智能体、Personal AI 或内置智能体的聊天。')
+          && mcpText.includes('点输入框里的「连接器」。')
+          && mcpText.includes('点搜索框旁的「+」。')
+          && mcpText.includes('知道了'),
+        mcpText || 'mcp dialog empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '75-settings-connectors-mcp.png')));
+      await page.locator('#mcp-dialog-ack').click();
+      await mcpDialog.waitFor({ state: 'hidden', timeout: 15000 });
+      record('settings_connectors_mcp_dialog_closed', await mcpDialog.isHidden(), '知道了 closes the instruction dialog');
     } catch (error) {
       record('settings_connectors', false, String(error));
     }

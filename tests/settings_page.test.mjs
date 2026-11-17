@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applySettingsView, csrfCookie, describeAppearance, diff, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
+import { applySettingsView, csrfCookie, describeAppearance, diff, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -149,4 +149,43 @@ test('syncPrivacySaveButton stays disabled until a privacy value changes', () =>
   assert.equal(button.disabled, false);
   assert.deepEqual(privacyChanges(current, {...current, favorites_visible: false}), {favorites_visible: false});
   assert.deepEqual(privacyChanges(current, current), {});
+});
+
+test('syncMcpDialog opens and closes the recorded instruction dialog', () => {
+  const dialog = {hidden: true};
+  const trigger = {attrs: {'aria-expanded': 'false'}, setAttribute(name, value) { this.attrs[name] = value; }, focus() { this.focused = true; }};
+  const ack = {focus() { this.focused = true; }};
+  const document = {
+    getElementById(id) {
+      if (id === 'mcp-dialog') return dialog;
+      if (id === 'add-mcp-server') return trigger;
+      if (id === 'mcp-dialog-ack') return ack;
+      return null;
+    },
+  };
+  syncMcpDialog(document, true);
+  assert.equal(dialog.hidden, false);
+  assert.equal(trigger.attrs['aria-expanded'], 'true');
+  assert.equal(ack.focused, true);
+  syncMcpDialog(document, false);
+  assert.equal(dialog.hidden, true);
+  assert.equal(trigger.attrs['aria-expanded'], 'false');
+  assert.equal(trigger.focused, true);
+});
+
+test('applySettingsView closes the MCP dialog when leaving connectors', () => {
+  const dialog = {hidden: false};
+  const trigger = {attrs: {'aria-expanded': 'true'}, setAttribute(name, value) { this.attrs[name] = value; }, focus() { this.focused = true; }};
+  const nodes = [];
+  const document = {
+    querySelectorAll() { return nodes; },
+    getElementById(id) {
+      if (id === 'mcp-dialog') return dialog;
+      if (id === 'add-mcp-server') return trigger;
+      return null;
+    },
+  };
+  applySettingsView(document, 'hub');
+  assert.equal(dialog.hidden, true);
+  assert.equal(trigger.attrs['aria-expanded'], 'false');
 });
