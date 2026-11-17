@@ -12,7 +12,7 @@ All paths are under `/v1/workspaces/{workspace_id}/agents/{agent_id}`. Writes ne
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/conversations` | The current user's conversations with this agent. Keyset pagination: `limit=1..100` (default 20), optional UUID-hex `cursor`. |
+| GET | `/conversations` | The current user's conversations with this agent. Keyset pagination: `limit=1..100` (default 20), optional UUID-hex `cursor`. Each item includes a last-message `preview`. |
 | POST | `/conversations` | Create. Body: optional `title` (default `新对话`). Requires `Idempotency-Key` (16–64 `A-Za-z0-9_-`). |
 | GET | `/conversations/{id}` | Conversation snapshot plus up to 200 messages. Reconciles queued or running replies first, including a retry when a previous send had `no_agent` and a connection is now online. |
 | GET | `/conversations/{id}/messages` | Message list. `limit=1..200` (default 50), optional `cursor`. Also reconciles. |
@@ -23,7 +23,7 @@ The same-origin page at `/agents` includes the conversation panel.
 
 ## Record shape and bounds
 
-Conversations: `id`, `workspace_id`, `agent_id`, `user_id`, `title`, `created`, `updated`. A conversation is owned by the user who created it. Other members, including workspace admins, receive `404`.
+Conversations: `id`, `workspace_id`, `agent_id`, `user_id`, `title`, `created`, `updated`, and `preview`. `preview` is a whitespace-collapsed snippet of the latest non-empty message the caller can already read, at most 160 characters plus an ellipsis if truncated. Empty conversations have an empty `preview`. A conversation is owned by the user who created it. Other members, including workspace admins, receive `404`. Full message bodies remain only on message endpoints.
 
 Messages: `id`, `conversation_id`, `workspace_id`, `agent_id`, `user_id`, `role` (`user` or `assistant`), `body`, `status` (`queued`, `running`, `succeeded`, `failed`, `cancelled`), `task_id`, `error_code`, `agent_revision`, `created`, `updated`.
 

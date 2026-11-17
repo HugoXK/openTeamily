@@ -110,6 +110,38 @@ class SocialMessengerTests(unittest.TestCase):
         # A DM is deduplicated per workspace even under a different idempotency key.
         self.assertEqual(self.create(self.alice, 'dm', [self.bob_id], key='social-create-0003')['status'], 200)
 
+    def test_listing_preview_is_last_authorized_snippet(self):
+        created = self.create(self.alice, 'dm', [self.bob_id], key='social-preview-0001')
+        self.assertEqual(created['status'], 201, created)
+        conv = created['body']['conversation']
+        self.assertEqual(conv['preview'], '')
+        empty = self.alice.call('GET', self.base())
+        self.assertEqual(empty['status'], 200)
+        self.assertEqual(empty['body']['items'][0]['preview'], '')
+        self.alice.call(
+            'POST', self.base() + f'/{conv["id"]}/messages', {'body': '  第一句\n请看这里  '},
+            {'HTTP_IDEMPOTENCY_KEY': 'social-preview-msg01'})
+        mid = self.alice.call('GET', self.base())
+        self.assertEqual(mid['body']['items'][0]['preview'], '第一句 请看这里')
+        long_body = '预览' + ('很长的正文内容' * 30)
+        self.bob.call(
+            'POST', self.base() + f'/{conv["id"]}/messages', {'body': long_body},
+            {'HTTP_IDEMPOTENCY_KEY': 'social-preview-msg02'})
+        listed = self.alice.call('GET', self.base())
+        self.assertEqual(listed['status'], 200)
+        item = listed['body']['items'][0]
+        self.assertEqual(item['id'], conv['id'])
+        from openteamily.search import snippet
+        self.assertEqual(item['preview'], snippet(long_body))
+        self.assertLessEqual(len(item['preview']), 161)
+        self.assertTrue(item['preview'].endswith('…'))
+        self.assertNotIn(long_body, item['preview'])
+        self.assertNotIn('body', item)
+        snapshot = self.bob.call('GET', self.base() + f'/{conv["id"]}')
+        self.assertEqual(snapshot['body']['conversation']['preview'], snippet(long_body))
+        # A later conversation Eve cannot join should not appear in Eve's workspace list.
+        self.assertEqual(self.eve.call('GET', self.base())['status'], 404)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -12,7 +12,7 @@ All paths are under `/v1/workspaces/{workspace_id}/social/conversations`. Caller
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/` | Conversations the caller belongs to. Keyset pagination: `limit=1..100` (default 20), optional UUID-hex `cursor`. Each item includes its member list. |
+| GET | `/` | Conversations the caller belongs to. Keyset pagination: `limit=1..100` (default 20), optional UUID-hex `cursor`. Each item includes its member list and a last-message `preview`. |
 | POST | `/` | Create `{kind:"dm"\|"group", member_ids:[...], title?}`. Requires `Idempotency-Key` (16–64 `A-Za-z0-9_-`). |
 | GET | `/{conversation_id}` | Snapshot plus up to 100 messages and the member list. |
 | GET | `/{conversation_id}/messages` | Messages: `limit=1..100` (default 20), optional UUID-hex `cursor`. |
@@ -22,7 +22,7 @@ All paths are under `/v1/workspaces/{workspace_id}/social/conversations`. Caller
 
 ## Record shape and bounds
 
-Conversations: `id`, `workspace_id`, `kind` (`dm` or `group`), `title`, `created`, `updated`, and `members` (`user_id`, `username`, `created`). Raw message bodies are only returned from a message endpoint the caller may read.
+Conversations: `id`, `workspace_id`, `kind` (`dm` or `group`), `title`, `created`, `updated`, `members` (`user_id`, `username`, `created`), and `preview`. `preview` is a whitespace-collapsed snippet of the latest message the caller can already read, at most 160 characters plus an ellipsis if truncated. Empty conversations have an empty `preview`. Full message bodies remain only on message endpoints.
 
 Messages: `id`, `conversation_id`, `workspace_id`, `user_id`, `body`, `created`.
 

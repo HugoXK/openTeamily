@@ -30,6 +30,31 @@ test('mergeSessions combines agent and social rows without inventing pins', () =
     ['agent', 'c1', 'Helper'],
   ]);
   assert.equal(sessions.every((row) => row.pinned == null), true);
+  assert.deepEqual(sessions.map((row) => row.preview), [
+    '单聊 · 2 人',
+    '群聊 · 2 人',
+    'Old thread',
+  ]);
+});
+
+test('mergeSessions prefers a last-message preview from the listing', () => {
+  const sessions = mergeSessions(
+    [{id: 'c1', agent_id: 'ag', title: 'Old thread', preview: 'Latest assistant reply', updated: 10, agent: {id: 'ag', name: 'Helper'}}],
+    [
+      {id: 's1', kind: 'dm', title: 'bob', preview: '你好 Alice', updated: 30, members: [
+        {user_id: alice, username: 'alice'}, {user_id: bob, username: 'bob'},
+      ]},
+      {id: 's2', kind: 'group', title: '产品群', preview: '', updated: 20, members: [
+        {user_id: alice, username: 'alice'}, {user_id: bob, username: 'bob'},
+      ]},
+    ],
+    alice,
+  );
+  assert.deepEqual(sessions.map((row) => [row.id, row.preview]), [
+    ['s1', '你好 Alice'],
+    ['s2', '群聊 · 2 人'],
+    ['c1', 'Latest assistant reply'],
+  ]);
 });
 
 
