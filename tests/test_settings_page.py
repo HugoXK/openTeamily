@@ -101,27 +101,24 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('settings-card-title', html)
         self.assertNotIn('name="fold_long_messages"', html)
 
-    def test_overview_maps_existing_settings_and_shows_recorded_billing_chrome(self):
+    def test_overview_maps_existing_settings_and_omits_billing_chrome(self):
         html = self.raw.call('GET', '/settings')['body'].decode()
         self.assertIn('id="settings-index"', html)
-        self.assertIn('id="settings-usage-card"', html)
-        self.assertIn('id="settings-upgrade"', html)
-        self.assertIn('>升级</button>', html)
-        self.assertRegex(html, r'<button[^>]*id="settings-upgrade"[^>]*disabled')
-        self.assertIn('创作者与奖励', html)
-        self.assertIn('套餐、账单与用量', html)
-        self.assertIn('创作赚钱', html)
-        self.assertIn('积分中心', html)
-        self.assertIn('套餐与账单', html)
-        self.assertIn('教育优惠认证', html)
-        self.assertIn('兑换码', html)
+        self.assertIn('id="whoami"', html)
+        self.assertIn('href="/members"', html)
         self.assertIn('技能配置', html)
+        self.assertIn('不用积分', html)
+        self.assertNotIn('id="settings-usage-card"', html)
+        self.assertNotIn('id="settings-upgrade"', html)
+        self.assertNotIn('id="group-creator"', html)
+        self.assertNotIn('id="group-billing"', html)
+        self.assertNotIn('>升级</button>', html)
+        for label in ('创作者与奖励', '套餐、账单与用量', '创作赚钱', '积分中心', '套餐与账单', '教育优惠认证', '兑换码'):
+            self.assertNotIn(label, html)
         account = html.find('id="group-account"')
-        creator = html.find('id="group-creator"')
-        billing = html.find('id="group-billing"')
         ai = html.find('id="group-ai"')
         prefs = html.find('id="group-prefs"')
-        self.assertTrue(-1 < account < creator < billing < ai < prefs)
+        self.assertTrue(-1 < account < ai < prefs)
         self.assertIn('href="/profile"', html)
         self.assertIn('href="/settings/language"', html)
         self.assertIn('href="/settings/channels"', html)
@@ -152,11 +149,6 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('settings-row-chevron', html)
         self.assertNotIn('按对照把总览和已有设置子页分开', html)
         self.assertIn('class="visually-hidden"', html)
-        self.assertIn('id="settings-upgrade"', html)
-        self.assertIn('disabled title="未实现：对照里的「升级」', html)
-        for label in ('创作赚钱', '积分中心', '套餐与账单', '用量', '教育优惠认证', '兑换码'):
-            self.assertIn(f'class="settings-row" disabled title="未实现：对照里的「{label}」', html)
-        self.assertEqual(html.count('class="settings-row" disabled title="未实现：'), 6)
         self.assertNotIn('0m 后重置', html)
         self.assertNotIn('已赚取', html)
         self.assertNotIn('$CASH', html)
@@ -168,6 +160,9 @@ class SettingsPageTests(unittest.TestCase):
         self.assertNotIn('href="/pricing"', html)
         self.assertNotIn('Teamily Agent', html)
         self.assertNotIn('<img', html)
+        # Isolated word「用量」must not return as a billing-row label.
+        self.assertNotIn('>用量</span>', html)
+        self.assertNotIn('5 小时窗口', html)
 
     def test_recorded_subpages_serve_the_same_settings_shell(self):
         for path in ('/settings/appearance', '/settings/language',
