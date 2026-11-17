@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity } from '../openteamily/static/chat/app.mjs';
+import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES } from '../openteamily/static/chat/app.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
@@ -128,4 +128,42 @@ test('shouldSendOnShortcut honors enter and Ctrl/Cmd+Enter bindings and ignores 
   assert.equal(shouldSendOnShortcut(keyEvent({ctrlKey: true, shiftKey: true}), 'mod_enter'), false);
   assert.equal(shouldSendOnShortcut(keyEvent(), 'unknown'), true);
   assert.equal(shouldSendOnShortcut(null, 'enter'), false);
+});
+
+test('composeSelectedLabel reports the recorded selected count', () => {
+  assert.equal(composeSelectedLabel(0), '已选 0');
+  assert.equal(composeSelectedLabel(2), '已选 2');
+});
+
+test('filterMemberChoices matches usernames without inventing members', () => {
+  const members = [
+    {user_id: alice, username: 'alice'},
+    {user_id: bob, username: 'bob'},
+  ];
+  assert.deepEqual(filterMemberChoices(members, alice, '').map((member) => member.username), ['bob']);
+  assert.deepEqual(filterMemberChoices(members, alice, 'BO').map((member) => member.username), ['bob']);
+  assert.deepEqual(filterMemberChoices(members, alice, 'zzz'), []);
+});
+
+test('composeCreateEnabled stays off until a custom-group selection exists', () => {
+  assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'custom', selectedCount: 0}), false);
+  assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'custom', selectedCount: 1}), true);
+  assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', selectedCount: 3}), false);
+  assert.equal(composeCreateEnabled({composeMode: 'contact', groupMode: 'custom', selectedCount: 1}), true);
+  assert.equal(composeCreateEnabled({composeMode: 'contact', selectedCount: 0}), false);
+});
+
+test('composeGroupPayload omits a blank title so the existing API can default it', () => {
+  assert.deepEqual(composeGroupPayload([bob], '  产品群  '), {
+    kind: 'group', member_ids: [bob], title: '产品群',
+  });
+  assert.deepEqual(composeGroupPayload([bob], '   '), {kind: 'group', member_ids: [bob]});
+});
+
+test('group create chrome keeps the recorded labels and no billing copy', () => {
+  assert.equal(GROUP_CREATE_INTRO, '添加名称，然后邀请好友并添加 AI 智能体。');
+  assert.deepEqual(GROUP_CREATE_MODES, [
+    ['custom', '自定义群组'],
+    ['team', 'AI 智能体团队'],
+  ]);
 });

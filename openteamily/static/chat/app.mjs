@@ -65,6 +65,39 @@ export function messageSearchQuery(query, conversationId = '') {
   return params.toString();
 }
 
+export const GROUP_CREATE_INTRO = '添加名称，然后邀请好友并添加 AI 智能体。';
+export const GROUP_CREATE_MODES = [
+  ['custom', '自定义群组'],
+  ['team', 'AI 智能体团队'],
+];
+
+export function composeSelectedLabel(count) {
+  return '已选 ' + Number(count || 0);
+}
+
+export function filterMemberChoices(members, currentUserId, query) {
+  const needle = String(query || '').trim().toLocaleLowerCase();
+  const list = memberChoices(members, currentUserId);
+  if (!needle) return list;
+  return list.filter(member => String(member.username || '').toLocaleLowerCase().includes(needle));
+}
+
+export function composeCreateEnabled(options) {
+  const mode = options && options.composeMode;
+  const groupMode = (options && options.groupMode) || 'custom';
+  const selectedCount = Number((options && options.selectedCount) || 0);
+  if (mode === 'contact') return selectedCount === 1;
+  if (mode === 'group') return groupMode === 'custom' && selectedCount >= 1;
+  return false;
+}
+
+export function composeGroupPayload(memberIds, title) {
+  const body = {kind: 'group', member_ids: memberIds};
+  const name = String(title || '').trim();
+  if (name) body.title = name;
+  return body;
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -152,6 +185,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let searchConversation = '';
   let searchConversationTitle = '';
   let composeMode = 'group';
+  let groupMode = 'custom';
   let searchSeq = 0;
   let sendShortcut = 'enter';
 
@@ -395,9 +429,66 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     button.setAttribute('aria-expanded', 'false');
   }
 
+  function selectedMemberCount() {
+    return document.querySelectorAll('#member-choices input[name="member"]:checked').length;
+  }
+
+  function syncComposeCreate() {
+    const button = document.getElementById('compose-dialog-submit');
+    button.disabled = !composeCreateEnabled({
+      composeMode,
+      groupMode,
+      selectedCount: selectedMemberCount(),
+    });
+  }
+
+  function applyMemberFilter() {
+    const input = document.getElementById('compose-member-search');
+    const needle = (input.value || '').trim().toLocaleLowerCase();
+    const labels = [...document.querySelectorAll('#member-choices label')];
+    let visible = 0;
+    for (const label of labels) {
+      const show = !needle || label.textContent.trim().toLocaleLowerCase().includes(needle);
+      label.hidden = !show;
+      if (show) visible += 1;
+    }
+    const empty = document.getElementById('compose-members-empty');
+    if (!labels.length) {
+      empty.hidden = false;
+      empty.textContent = '没有可邀请的工作区成员。';
+    } else if (!visible) {
+      empty.hidden = false;
+      empty.textContent = '没有匹配的成员。';
+    } else {
+      empty.hidden = true;
+    }
+  }
+
+  function syncSelectedCount() {
+    document.getElementById('compose-selected-count').textContent = composeSelectedLabel(selectedMemberCount());
+    syncComposeCreate();
+  }
+
+  function setGroupMode(mode) {
+    groupMode = mode === 'team' ? 'team' : 'custom';
+    for (const button of document.querySelectorAll('#compose-mode-switch [data-group-mode]')) {
+      button.setAttribute('aria-selected', button.dataset.groupMode === groupMode ? 'true' : 'false');
+    }
+    const team = composeMode === 'group' && groupMode === 'team';
+    document.getElementById('compose-team-note').hidden = !team;
+    document.getElementById('compose-member-picker').hidden = team;
+    if (composeMode === 'group') {
+      document.getElementById('compose-title-label').hidden = team;
+    }
+    syncComposeCreate();
+  }
+
   function closeComposeDialog() {
     document.getElementById('compose-dialog').hidden = true;
     document.getElementById('compose-social-form').reset();
+    setGroupMode('custom');
+    applyMemberFilter();
+    syncSelectedCount();
   }
 
   function renderMemberChoices(single) {
@@ -412,6 +503,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       label.append(box, document.createTextNode(member.username));
       holder.append(label);
     }
+    applyMemberFilter();
+    syncSelectedCount();
   }
 
   function openComposeDialog(mode) {
@@ -419,19 +512,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     composeMode = mode;
     const dialog = document.getElementById('compose-dialog');
     dialog.hidden = false;
-    const titleLabel = document.getElementById('compose-title-label');
-    const titleInput = document.getElementById('compose-title');
-    if (mode === 'group') {
-      document.getElementById('compose-dialog-title').textContent = '新建群组';
-      document.getElementById('compose-members-legend').textContent = '成员';
-      titleLabel.hidden = false;
-      titleInput.required = false;
-    } else {
-      document.getElementById('compose-dialog-title').textContent = '添加联系人';
-      document.getElementById('compose-members-legend').textContent = '选择一位成员，开始单聊';
-      titleLabel.hidden = true;
-      titleInput.value = '';
-    }
+    const isGroup = mode === 'group';
+    document.getElementById('compose-dialog-title').textContent = isGroup ? '新建群组' : '添加联系人';
+    document.getElementById('compose-members-legend').textContent = isGroup ? '成员' : '选择一位成员，开始单聊';
+    document.getElementById('compose-intro').hidden = !isGroup;
+    document.getElementById('compose-mode-switch').hidden = !isGroup;
+    document.getElementById('compose-title-label').hidden = !isGroup;
+    document.getElementById('compose-member-tools').hidden = !isGroup;
+    document.getElementById('compose-team-note').hidden = true;
+    document.getElementById('compose-member-picker').hidden = false;
+    if (!isGroup) document.getElementById('compose-title').value = '';
+    document.getElementById('compose-member-search').value = '';
+    setGroupMode('custom');
     renderMemberChoices(mode === 'contact');
   }
 
@@ -786,9 +878,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('compose-new-group').addEventListener('click', () => openComposeDialog('group'));
   document.getElementById('compose-add-contact').addEventListener('click', () => openComposeDialog('contact'));
   document.getElementById('compose-dialog-cancel').addEventListener('click', closeComposeDialog);
+  document.getElementById('compose-mode-switch').addEventListener('click', event => {
+    const button = event.target.closest('[data-group-mode]');
+    if (!button || composeMode !== 'group') return;
+    setGroupMode(button.dataset.groupMode);
+  });
+  document.getElementById('compose-member-search').addEventListener('input', applyMemberFilter);
+  document.getElementById('member-choices').addEventListener('change', syncSelectedCount);
 
   document.getElementById('compose-social-form').addEventListener('submit', async event => {
     event.preventDefault();
+    if (composeMode === 'group' && groupMode !== 'custom') {
+      show('error', '未接通：还不能从这里创建 AI 智能体团队。');
+      return;
+    }
     const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')]
       .map(box => box.value);
     if (!memberIds.length) {
@@ -800,13 +903,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', '请选择一位成员。');
       return;
     }
-    if (composeMode === 'group' && !title) {
-      show('error', '请填写群名称。');
-      return;
-    }
     const body = composeMode === 'contact'
       ? {kind: 'dm', member_ids: memberIds.slice(0, 1)}
-      : {kind: 'group', member_ids: memberIds, title};
+      : composeGroupPayload(memberIds, title);
     const result = await request('POST', socialBase(), body, {'Idempotency-Key': idempotencyKey('social-')});
     if (result.status !== 201 && result.status !== 200) {
       show('error', messageFor(result.body.error, '无法创建会话。'));
