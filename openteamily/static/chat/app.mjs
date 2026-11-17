@@ -649,6 +649,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const stored = settings.status === 200 && settings.body && settings.body.settings
       && settings.body.settings.values && settings.body.settings.values.send_shortcut;
     sendShortcut = stored === 'mod_enter' ? 'mod_enter' : 'enter';
+    document.getElementById('chat-body').dataset.sendShortcut = sendShortcut;
     workspaces = listed.status === 200 ? (listed.body.items || []) : [];
     const wanted = hashParams().workspace || workspaceSelect.value;
     workspaceSelect.replaceChildren();
@@ -794,17 +795,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
 
-  document.getElementById('chat-body').addEventListener('keydown', event => {
-    if (!shouldSendOnShortcut(event, sendShortcut)) return;
-    event.preventDefault();
-    if (!(document.getElementById('chat-body').value || '').trim()) return;
-    const submit = document.querySelector('#chat-form button[type="submit"]');
-    if (submit) submit.click();
-    else document.getElementById('chat-form').dispatchEvent(new Event('submit', {cancelable: true, bubbles: true}));
-  }, true);
-
-  document.getElementById('chat-form').addEventListener('submit', async event => {
-    event.preventDefault();
+  async function sendCurrentMessage() {
     const text = document.getElementById('chat-body').value;
     if (!text.trim()) {
       show('error', '请填写消息。');
@@ -862,6 +853,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
            : '已发送。');
     await loadSessions();
     await openAgentConversation(currentAgent.id, currentConversation.id);
+  }
+
+  document.getElementById('chat-body').addEventListener('keydown', event => {
+    if (!shouldSendOnShortcut(event, sendShortcut)) return;
+    event.preventDefault();
+    if (!(document.getElementById('chat-body').value || '').trim()) return;
+    sendCurrentMessage();
+  }, true);
+
+  document.getElementById('chat-form').addEventListener('submit', event => {
+    event.preventDefault();
+    sendCurrentMessage();
   });
 
   document.getElementById('message-list').addEventListener('click', async event => {

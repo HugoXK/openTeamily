@@ -461,20 +461,25 @@ async function main() {
       await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#chat-body').click();
       await page.locator('#chat-body').fill(enterText);
-      const enterEvent = await page.locator('#chat-body').evaluate((el) => {
-        const ev = new KeyboardEvent('keydown', {
-          key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
-        });
-        el.dispatchEvent(ev);
-        return {prevented: ev.defaultPrevented, value: el.value};
-      });
-      await waitForLocatorText(page, '#message-list', enterText, 15000);
+      await page.keyboard.press('Enter');
+      try {
+        await waitForLocatorText(page, '#message-list', enterText, 15000);
+      } catch (error) {
+        const snap = await page.evaluate(() => ({
+          title: document.getElementById('chat-title') && document.getElementById('chat-title').textContent,
+          status: document.getElementById('status') && document.getElementById('status').textContent,
+          composer: document.getElementById('chat-body') && document.getElementById('chat-body').value,
+          shortcut: document.getElementById('chat-body') && document.getElementById('chat-body').dataset.sendShortcut,
+          list: (document.getElementById('message-list') && document.getElementById('message-list').innerText || '').slice(0, 240),
+        }));
+        throw new Error(`${error.message} ${JSON.stringify(snap)}`);
+      }
       const afterEnter = await visibleText(page.locator('#message-list'));
       const composerValue = await page.locator('#chat-body').inputValue();
       record(
         'chat_send_enter_shortcut',
-        afterEnter.includes(enterText) && composerValue === '' && enterEvent.prevented === true,
-        `title=${JSON.stringify(await visibleText(page.locator('#chat-title')))} prevented=${enterEvent.prevented} composer=${JSON.stringify(composerValue)} ${afterEnter.slice(0, 240) || 'enter send empty'}`,
+        afterEnter.includes(enterText) && composerValue === '',
+        `composer=${JSON.stringify(composerValue)} ${afterEnter.slice(0, 240) || 'enter send empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '61-chat-send-enter.png')));
     } catch (error) {
