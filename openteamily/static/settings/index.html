@@ -61,9 +61,10 @@
     <div id="oidc-providers"></div>
   </section>
   <section id="settings-panel" hidden>
+    <div data-settings-hub>
     <header class="page-top">
       <h1>设置</h1>
-      <p class="note">按 2026-11-17 设置总览对照布置已有功能。没有用量摘要、升级按钮、积分或套餐。没有做成空壳的渠道、应用连接器或未见子页。外观、快捷键、消息显示和隐私仍在本页，并接到原来的接口。</p>
+      <p class="note">按对照把总览和已有设置子页分开。没有用量摘要、升级按钮、积分或套餐，也没有做成空壳的渠道或应用连接器。子页接到原来的设置接口；这不是 Teamily 或 Impeccable 对照验收。</p>
     </header>
     <p id="whoami"></p>
     <nav class="workspace-links" aria-label="工作区">
@@ -76,7 +77,7 @@
       </section>
       <section class="settings-group" aria-labelledby="group-ai">
         <h2 id="group-ai">AI 与智能体设置</h2>
-        <a class="settings-row" href="#language-section">语言 <span id="language-current" class="settings-row-meta"></span></a>
+        <a class="settings-row" href="/settings/language">语言 <span id="language-current" class="settings-row-meta"></span></a>
         <a class="settings-row" href="#model-api">模型 API <span id="model-key-state" class="settings-row-meta">平台默认或你自己的配置，不用积分</span></a>
         <a class="settings-row" href="#skill-secrets">技能密钥</a>
         <a class="settings-row" href="/runtimes">运行时</a>
@@ -86,105 +87,147 @@
         <label class="settings-row settings-toggle">显示链接预览
           <input type="checkbox" name="link_previews" form="settings-form">
         </label>
-        <a class="settings-row" href="#appearance">外观</a>
-        <a class="settings-row" href="#send-shortcut">发送快捷键</a>
-        <a class="settings-row" href="#message-display">消息显示</a>
-        <a class="settings-row" href="#privacy">隐私</a>
+        <label class="settings-row settings-toggle">任务完成提醒
+          <input type="checkbox" name="task_completion_reminders" form="settings-form">
+        </label>
+        <a class="settings-row" href="/settings/appearance">外观</a>
+        <a class="settings-row" href="/settings/shortcuts">发送快捷键</a>
+        <a class="settings-row" href="/settings/message-folding">消息折叠</a>
+        <a class="settings-row" href="/settings/privacy">隐私</a>
       </section>
     </nav>
+    </div>
     <form id="settings-form" method="post" action="/v1/settings">
-      <fieldset id="appearance">
-        <legend>外观</legend>
-        <p class="note">选择这台设备上的显示外观。对照里外观页会在改选项后立即生效，不必再点保存。侧栏「浅色」「深色」按钮也会写入已有外观设置；自动和跟随系统只能在本页选择。侧栏点击行为未经 Teamily 核实。</p>
-        <label class="choice"><input type="radio" name="appearance" value="light"> <span>浅色<span class="hint">始终使用浅色。</span></span></label>
-        <label class="choice"><input type="radio" name="appearance" value="dark"> <span>深色<span class="hint">始终使用深色。</span></span></label>
-        <label class="choice"><input type="radio" name="appearance" value="auto"> <span>自动<span class="hint">白天浅色、夜间深色，按下面的自动切换规则切换。</span></span></label>
-        <label class="choice"><input type="radio" name="appearance" value="system"> <span>跟随系统<span class="hint">与设备的浅色或深色设置保持一致。</span></span></label>
-        <fieldset class="sub">
-          <legend>自动切换</legend>
-          <label class="choice"><input type="radio" name="appearance_schedule" value="sunset_sunrise"> <span>日落到日出<span class="hint">OpenTeamily 目前按系统浅色/深色偏好估算，没有使用实际日出日落时刻。</span></span></label>
-          <label class="choice"><input type="radio" name="appearance_schedule" value="custom"> <span>自定义时段<span class="hint">在设定的时间之间切换。</span></span></label>
-          <label>开始 <input type="time" name="appearance_start" required></label>
-          <label>结束 <input type="time" name="appearance_end" required></label>
-          <p class="note">自定义时段的具体字段还没有从对照里完整记下，这里暂用开始/结束时间，未经核对。</p>
+      <div data-settings-page="appearance" hidden>
+        <header class="settings-subhead">
+          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 外观</a>
+        </header>
+        <p class="settings-lead">选择应用在此设备上的显示外观。</p>
+        <fieldset id="appearance" class="settings-card">
+          <legend class="visually-hidden">外观</legend>
+          <label class="choice"><input type="radio" name="appearance" value="light"> <span>浅色<span class="hint">始终使用浅色主题。</span></span></label>
+          <label class="choice"><input type="radio" name="appearance" value="dark"> <span>深色<span class="hint">始终使用深色主题。</span></span></label>
+          <label class="choice"><input type="radio" name="appearance" value="auto"> <span>自动<span class="hint">白天浅色、夜间深色。按日出日落或你设定的时间切换。</span></span></label>
+          <label class="choice"><input type="radio" name="appearance" value="system"> <span>跟随系统<span class="hint">与设备的浅色或深色设置保持一致。</span></span></label>
         </fieldset>
-        <p id="appearance-status" class="note"></p>
-      </fieldset>
-      <fieldset id="language-section">
-        <legend>语言</legend>
-        <label>界面语言
-          <select name="language">
-            <option value="en">English</option>
-            <option value="fa">فارسی</option>
-            <option value="fr">Français</option>
-            <option value="de">Deutsch</option>
-            <option value="es">Español</option>
-            <option value="it">Italiano</option>
-            <option value="pt-BR">Português (Brasil)</option>
-            <option value="ru">Русский</option>
-            <option value="id">Bahasa Indonesia</option>
-            <option value="ms">Bahasa Melayu</option>
-            <option value="hi">हिन्दी</option>
-            <option value="bn">বাংলা</option>
-            <option value="th">ภาษาไทย</option>
-            <option value="ja">日本語</option>
-            <option value="ko">한국어</option>
-            <option value="zh-HK">繁體中文(香港)</option>
-            <option value="zh-TW">繁體中文(台灣)</option>
-            <option value="zh-CN">简体中文</option>
-          </select>
-        </label>
-        <label>聊天语言
-          <select name="chat_language">
-            <option value="auto">跟随界面语言</option>
-            <option value="en">English</option>
-            <option value="fa">فارسی</option>
-            <option value="fr">Français</option>
-            <option value="de">Deutsch</option>
-            <option value="es">Español</option>
-            <option value="pt">Português</option>
-            <option value="it">Italiano</option>
-            <option value="ru">Русский</option>
-            <option value="id">Bahasa Indonesia</option>
-            <option value="vi">Tiếng Việt</option>
-            <option value="bn">বাংলা</option>
-            <option value="th">ไทย</option>
-            <option value="ar">العربية</option>
-            <option value="ja">日本語</option>
-            <option value="ko">한국어</option>
-            <option value="zh-Hant">繁體中文</option>
-            <option value="zh-CN">简体中文</option>
-          </select>
-        </label>
-        <label><input type="checkbox" name="auto_translate"> 自动翻译消息</label>
-      </fieldset>
-      <fieldset id="send-shortcut">
-        <legend>发送快捷键</legend>
-        <label><input type="radio" name="send_shortcut" value="enter"> Enter 发送</label>
-        <label><input type="radio" name="send_shortcut" value="mod_enter"> Ctrl + Enter 发送（换行用 Shift + Enter）</label>
-      </fieldset>
-      <fieldset id="message-display">
-        <legend>消息显示</legend>
-        <label>消息折叠
-          <select name="message_folding">
-            <option value="compact">紧凑</option>
-            <option value="standard">标准</option>
-            <option value="none">不折叠</option>
-          </select>
-        </label>
-        <label><input type="checkbox" name="document_cards"> 把长文档收成卡片</label>
-        <label><input type="checkbox" name="task_completion_reminders"> 任务完成提醒</label>
-      </fieldset>
-      <fieldset id="privacy">
-        <legend>隐私</legend>
-        <p class="note">管理你的社交动态对他人是否可见。</p>
-        <label><input type="checkbox" name="likes_visible"> 允许他人查看你点赞的内容</label>
-        <label><input type="checkbox" name="favorites_visible"> 允许他人查看你收藏的内容</label>
-      </fieldset>
-      <button type="submit" id="save">保存</button>
+        <fieldset id="appearance-schedule-card" class="settings-card">
+          <legend>自动切换</legend>
+          <label class="choice"><input type="radio" name="appearance_schedule" value="sunset_sunrise"> <span>日落到日出<span class="hint">按你所在地的日落和日出切换深浅色。</span></span></label>
+          <label class="choice"><input type="radio" name="appearance_schedule" value="custom"> <span>自定义时段<span class="hint">在你设定的时间切换。</span></span></label>
+          <div id="custom-period-fields" hidden>
+            <label>开始 <input type="time" name="appearance_start"></label>
+            <label>结束 <input type="time" name="appearance_end"></label>
+            <p class="note">自定义时段的具体字段还没有从对照里完整记下，这里暂用开始/结束时间，未经核对。</p>
+          </div>
+          <p class="note">按时区（<span id="appearance-time-zone">Asia/Shanghai</span>）估算，可能相差一小时以上。时间不准时，可改用「自定义时段」。OpenTeamily 目前按系统浅色或深色偏好估算，没有使用实际日出日落时刻。</p>
+          <p id="appearance-status" class="note"></p>
+          <p class="note">到切换时间后，会等你停止操作约 1 分钟再切换，不打断正在进行的操作。侧栏「浅色」「深色」按钮也会写入已有外观设置；点击后的标签变化未经 Teamily 核实。</p>
+        </fieldset>
+      </div>
+      <div data-settings-page="language" hidden>
+        <header class="settings-subhead">
+          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 语言</a>
+        </header>
+        <fieldset id="language-section" class="settings-card">
+          <legend class="visually-hidden">语言</legend>
+          <label>系统语言
+            <select name="language">
+              <option value="en">English</option>
+              <option value="fa">فارسی</option>
+              <option value="fr">Français</option>
+              <option value="de">Deutsch</option>
+              <option value="es">Español</option>
+              <option value="it">Italiano</option>
+              <option value="pt-BR">Português (Brasil)</option>
+              <option value="ru">Русский</option>
+              <option value="id">Bahasa Indonesia</option>
+              <option value="ms">Bahasa Melayu</option>
+              <option value="hi">हिन्दी</option>
+              <option value="bn">বাংলা</option>
+              <option value="th">ภาษาไทย</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+              <option value="zh-HK">繁體中文(香港)</option>
+              <option value="zh-TW">繁體中文(台灣)</option>
+              <option value="zh-CN">简体中文</option>
+            </select>
+          </label>
+          <label>聊天语言
+            <select name="chat_language">
+              <option value="auto">跟随界面语言</option>
+              <option value="en">English</option>
+              <option value="fa">فارسی</option>
+              <option value="fr">Français</option>
+              <option value="de">Deutsch</option>
+              <option value="es">Español</option>
+              <option value="pt">Português</option>
+              <option value="it">Italiano</option>
+              <option value="ru">Русский</option>
+              <option value="id">Bahasa Indonesia</option>
+              <option value="vi">Tiếng Việt</option>
+              <option value="bn">বাংলা</option>
+              <option value="th">ไทย</option>
+              <option value="ar">العربية</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+              <option value="zh-Hant">繁體中文</option>
+              <option value="zh-CN">简体中文</option>
+            </select>
+          </label>
+          <label><input type="checkbox" name="auto_translate"> 自动翻译消息</label>
+        </fieldset>
+        <p class="note">「跟随界面语言」是 OpenTeamily 已有的选项，对照里的聊天语言列表没有单独记下这一项。</p>
+      </div>
+      <div data-settings-page="shortcuts" hidden>
+        <header class="settings-subhead">
+          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 快捷键</a>
+        </header>
+        <fieldset id="send-shortcut" class="settings-card">
+          <legend>发送快捷键</legend>
+          <p class="note">对照记下了发送消息和换行的键位，但没有留下这一页的版式截图。选项接到原来的接口。</p>
+          <label><input type="radio" name="send_shortcut" value="enter"> Enter 发送</label>
+          <label><input type="radio" name="send_shortcut" value="mod_enter"> Ctrl + Enter 发送（换行用 Shift + Enter）</label>
+        </fieldset>
+      </div>
+      <div data-settings-page="message-folding" hidden>
+        <header class="settings-subhead">
+          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 消息折叠</a>
+        </header>
+        <p class="settings-lead">选择长消息在对话里折叠前展示多少内容。</p>
+        <fieldset id="message-display" class="settings-card">
+          <legend class="visually-hidden">消息折叠</legend>
+          <label class="choice"><input type="radio" name="message_folding" value="compact"> <span>紧凑<span class="hint">只展示很短的预览。适合以扫读为主的场景。</span></span></label>
+          <label class="choice"><input type="radio" name="message_folding" value="standard"> <span>标准<span class="hint">展示适中的预览。推荐。</span></span></label>
+          <label class="choice"><input type="radio" name="message_folding" value="none"> <span>不折叠<span class="hint">完整展示每条消息。长消息会拉开推动聊天窗。</span></span></label>
+          <label class="settings-row settings-toggle">长文档收成卡片
+            <span class="hint">含多个章节的消息显示为卡片，可在对话旁边打开阅读，不再铺满消息流。</span>
+            <input type="checkbox" name="document_cards">
+          </label>
+        </fieldset>
+      </div>
+      <div data-settings-page="privacy" hidden>
+        <header class="settings-subhead">
+          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 隐私</a>
+        </header>
+        <fieldset id="privacy" class="settings-card">
+          <legend>隐私</legend>
+          <p class="note">管理你的社交动态对他人是否可见。对照记下了这两个开关和「保存更改」，但没有留下这一页的版式截图。</p>
+          <label class="settings-row settings-toggle">允许他人查看你点赞的内容
+            <input type="checkbox" name="likes_visible">
+          </label>
+          <label class="settings-row settings-toggle">允许他人查看你收藏的内容
+            <input type="checkbox" name="favorites_visible">
+          </label>
+        </fieldset>
+        <button type="submit" id="save">保存更改</button>
+      </div>
     </form>
+    <div data-settings-page="model-api" hidden>
+        <header class="settings-subhead">
+          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 模型 API</a>
+        </header>
     <form id="model-api-form" method="post" action="/v1/model-api">
-      <fieldset id="model-api">
+      <fieldset id="model-api" class="settings-card">
         <legend>模型 API</legend>
         <p class="note">OpenTeamily 不用积分。默认使用平台管理员配置的模型 API；你可以在这里改成自己的。密钥只能写入，保存后不会再显示明文。</p>
         <p id="model-effective"></p>
@@ -204,16 +247,22 @@
       </fieldset>
       <button type="submit" id="save-model-api">保存模型 API</button>
     </form>
+    </div>
+    <div data-settings-page="skill-secrets" hidden>
+        <header class="settings-subhead">
+          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 技能密钥</a>
+        </header>
     <form id="skill-secrets-form" method="post" action="/v1/skill-secrets">
-      <fieldset id="skill-secrets">
+      <fieldset id="skill-secrets" class="settings-card">
         <legend>技能密钥</legend>
-        <p class="note">名称只能用大写字母、数字和下划线，并且必须以字母开头。值保存后不会回显。</p>
+        <p class="note">名称只能用大写字母、数字和下划线，并且必须以字母开头。值保存后不会回显。对照里的技能配置页是独立子页，空态为「暂无密钥」，但没有留下版式截图。</p>
         <ul id="skill-secret-list"></ul>
         <label>名称 <input name="name" maxlength="64" autocomplete="off" spellcheck="false"></label>
         <label>值 <input name="value" type="password" maxlength="4096" autocomplete="new-password"></label>
         <button type="submit" id="save-skill-secret">保存技能密钥</button>
       </fieldset>
     </form>
+    </div>
   </section>
   </main>
 </body>

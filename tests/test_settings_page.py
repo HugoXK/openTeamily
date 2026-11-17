@@ -95,7 +95,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('id="appearance"', html)
         light, dark, auto, system = (html.find(f'value="{name}"') for name in ('light', 'dark', 'auto', 'system'))
         self.assertTrue(-1 < light < dark < auto < system)
-        self.assertLess(html.find('始终使用浅色。'), html.find('始终使用深色。'))
+        self.assertLess(html.find('始终使用浅色主题。'), html.find('始终使用深色主题。'))
         self.assertIn('没有使用实际日出日落时刻', html)
         self.assertNotIn('name="fold_long_messages"', html)
 
@@ -103,10 +103,18 @@ class SettingsPageTests(unittest.TestCase):
         html = self.raw.call('GET', '/settings')['body'].decode()
         self.assertIn('id="settings-index"', html)
         self.assertIn('href="/profile"', html)
-        self.assertIn('href="#language-section"', html)
+        self.assertIn('href="/settings/language"', html)
         self.assertIn('href="#model-api"', html)
         self.assertIn('href="#skill-secrets"', html)
         self.assertIn('href="/runtimes"', html)
+        self.assertIn('href="/settings/appearance"', html)
+        self.assertIn('href="/settings/shortcuts"', html)
+        self.assertIn('href="/settings/message-folding"', html)
+        self.assertIn('href="/settings/privacy"', html)
+        self.assertIn('系统语言', html)
+        self.assertIn('始终使用浅色主题。', html)
+        self.assertIn('选择长消息在对话里折叠前展示多少内容。', html)
+        self.assertIn('保存更改', html)
         self.assertIn('name="link_previews"', html)
         self.assertNotIn('创作赚钱', html)
         self.assertNotIn('积分中心', html)
@@ -115,7 +123,18 @@ class SettingsPageTests(unittest.TestCase):
         self.assertNotIn('兑换码', html)
         self.assertNotIn('>升级<', html)
         self.assertNotIn('Teamily Agent', html)
-
+    def test_recorded_subpages_serve_the_same_settings_shell(self):
+        for path in ('/settings/appearance', '/settings/language',
+                     '/settings/message-folding', '/settings/privacy',
+                     '/settings/shortcuts'):
+            page = self.raw.call('GET', path)
+            self.assertEqual(page['status'], 200, path)
+            html = page['body'].decode()
+            self.assertIn('id="settings-index"', html)
+            self.assertIn(f'data-settings-page="{path.rsplit("/", 1)[-1]}"', html)
+            self.assertEqual(page['headers']['Cache-Control'], 'no-store')
+        self.assertEqual(self.raw.call('GET', '/settings/missing')['status'], 404)
+        self.assertEqual(self.raw.call('GET', '/settings/appearance', query='q=1')['status'], 400)
 
 
 

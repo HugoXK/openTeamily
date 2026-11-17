@@ -62,6 +62,67 @@ export function describeAppearance(values) {
   return '当前为' + look + '（跟随系统）。';
 }
 
+
+const AUTOSAVE_KEYS = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end',
+                       'language', 'chat_language', 'auto_translate', 'send_shortcut',
+                       'message_folding', 'document_cards', 'link_previews',
+                       'task_completion_reminders'];
+
+const PATH_VIEWS = {
+  '/settings/appearance': 'appearance',
+  '/settings/language': 'language',
+  '/settings/message-folding': 'message-folding',
+  '/settings/privacy': 'privacy',
+  '/settings/shortcuts': 'shortcuts',
+};
+
+const HASH_VIEWS = {
+  appearance: 'appearance',
+  'language-section': 'language',
+  language: 'language',
+  'message-display': 'message-folding',
+  'message-folding': 'message-folding',
+  privacy: 'privacy',
+  'send-shortcut': 'shortcuts',
+  shortcuts: 'shortcuts',
+  'model-api': 'model-api',
+  'skill-secrets': 'skill-secrets',
+};
+
+export function settingsViewFromLocation(pathname, hash) {
+  const path = String(pathname || '').replace(/\/+$/, '');
+  if (PATH_VIEWS[path]) return PATH_VIEWS[path];
+  const name = String(hash || '').replace(/^#/, '');
+  return HASH_VIEWS[name] || 'hub';
+}
+
+export function applySettingsView(document, view) {
+  const current = view || 'hub';
+  for (const node of document.querySelectorAll('[data-settings-hub]')) {
+    node.hidden = current !== 'hub';
+  }
+  for (const node of document.querySelectorAll('[data-settings-page]')) {
+    node.hidden = node.getAttribute('data-settings-page') !== current;
+  }
+}
+
+export function syncAppearanceExtras(document, values) {
+  const scheduleCard = document.getElementById('appearance-schedule-card');
+  const customFields = document.getElementById('custom-period-fields');
+  if (scheduleCard) scheduleCard.hidden = !values || values.appearance !== 'auto';
+  if (customFields) {
+    customFields.hidden = !(values && values.appearance === 'auto' && values.appearance_schedule === 'custom');
+  }
+  const zone = document.getElementById('appearance-time-zone');
+  if (zone) {
+    try {
+      zone.textContent = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai';
+    } catch (error) {
+      zone.textContent = 'Asia/Shanghai';
+    }
+  }
+}
+
 export function readModelForm(form) {
   const data = new FormData(form);
   const provider = data.get('provider') || '';
@@ -113,6 +174,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let current = null;
   let modelRevision = 0;
 
+  function renderView() {
+    const location = globalThis.location || {};
+    const view = settingsViewFromLocation(location.pathname, location.hash);
+    applySettingsView(document, view);
+    if (current) syncAppearanceExtras(document, current);
+  }
+
+  function refreshAppearance() {
+    applyTheme(document, current);
+    syncAppearanceExtras(document, current);
+    const appearanceStatus = document.getElementById('appearance-status');
+    if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
+    const languageCurrent = document.getElementById('language-current');
+    const languageSelect = form.querySelector('select[name="language"]');
+    if (languageCurrent && languageSelect) {
+      const option = languageSelect.selectedOptions[0];
+      languageCurrent.textContent = option ? option.textContent : '';
+    }
+  }
+
   function show(kind, text) {
     status.dataset.kind = kind;
     status.textContent = text;
@@ -155,15 +236,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     loginPanel.hidden = true;
     settingsPanel.hidden = false;
     fillForm(form, current);
-    applyTheme(document, current);
-    const appearanceStatus = document.getElementById('appearance-status');
-    if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
-    const languageCurrent = document.getElementById('language-current');
-    const languageSelect = form.querySelector('select[name="language"]');
-    if (languageCurrent && languageSelect) {
-      const option = languageSelect.selectedOptions[0];
-      languageCurrent.textContent = option ? option.textContent : '';
-    }
+    refreshAppearance();
+    renderView();
     if (modelForm) {
       const model = await request('GET', '/v1/model-api');
       if (model.status === 200) {
@@ -220,40 +294,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  const appearanceBox = document.getElementById('appearance');
-  if (appearanceBox) {
-    appearanceBox.addEventListener('change', async () => {
-      if (!current) return;
-      const changes = diff(current, readForm(form));
-      const appearanceChanges = {};
-      for (const key of ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end']) {
-        if (Object.prototype.hasOwnProperty.call(changes, key)) appearanceChanges[key] = changes[key];
-      }
-      if (!Object.keys(appearanceChanges).length) return;
-      const result = await request('POST', '/v1/settings', {revision, changes: appearanceChanges});
-      if (result.status === 409) {
-        current = result.body.error.current.values;
-        revision = result.body.error.current.revision;
-        fillForm(form, current);
-        applyTheme(document, current);
-        const appearanceStatus = document.getElementById('appearance-status');
-        if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
-        show('error', '设置已在别处更新，已重新加载。');
-        return;
-      }
-      if (result.status !== 200) {
-        show('error', messageFor(result.body.error, '无法更新外观。'));
-        return;
-      }
-      current = result.body.settings.values;
-      revision = result.body.settings.revision;
+  async function autosave(successMessage) {
+    if (!current) return;
+    const changes = diff(current, readForm(form));
+    const selected = {};
+    for (const key of AUTOSAVE_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(changes, key)) selected[key] = changes[key];
+    }
+    if (!Object.keys(selected).length) return;
+    const result = await request('POST', '/v1/settings', {revision, changes: selected});
+    if (result.status === 409) {
+      current = result.body.error.current.values;
+      revision = result.body.error.current.revision;
       fillForm(form, current);
-      applyTheme(document, current);
-      const appearanceStatus = document.getElementById('appearance-status');
-      if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
-      show('ok', '外观已更新。');
-    });
+      refreshAppearance();
+      show('error', '设置已在别处更新，已重新加载。');
+      return;
+    }
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, successMessage === '外观已更新。' ? '无法更新外观。' : '无法保存设置。'));
+      return;
+    }
+    current = result.body.settings.values;
+    revision = result.body.settings.revision;
+    fillForm(form, current);
+    refreshAppearance();
+    show('ok', successMessage);
   }
+
+  settingsPanel.addEventListener('change', (event) => {
+    const name = event.target && event.target.name;
+    if (!AUTOSAVE_KEYS.includes(name)) return;
+    const message = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end'].includes(name)
+      ? '外观已更新。' : '已保存。';
+    autosave(message);
+  });
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -267,9 +342,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       current = result.body.error.current.values;
       revision = result.body.error.current.revision;
       fillForm(form, current);
-      applyTheme(document, current);
-      const appearanceStatus = document.getElementById('appearance-status');
-      if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
+      refreshAppearance();
       show('error', '设置已在别处更新，已重新加载，请再保存一次。');
       return;
     }
@@ -280,9 +353,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = result.body.settings.values;
     revision = result.body.settings.revision;
     fillForm(form, current);
-    applyTheme(document, current);
-    const appearanceStatus = document.getElementById('appearance-status');
-    if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
+    refreshAppearance();
     show('ok', '已保存。');
   });
 
@@ -365,6 +436,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
+  globalThis.addEventListener('hashchange', renderView);
+  renderView();
   return load();
 }
 

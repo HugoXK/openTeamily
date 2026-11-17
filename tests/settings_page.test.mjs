@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { csrfCookie, describeAppearance, diff, readForm } from '../openteamily/static/settings/app.mjs';
+import { applySettingsView, csrfCookie, describeAppearance, diff, readForm, settingsViewFromLocation, syncAppearanceExtras } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -53,4 +53,63 @@ test('describeAppearance states the resolved look without inventing sunrise time
   assert.doesNotMatch(describeAppearance({appearance: 'auto', appearance_schedule: 'sunset_sunrise'}),
                       /直到|\d{1,2}:\d{2}/);
   assert.match(describeAppearance({appearance: 'system'}), /跟随系统/);
+});
+
+test('settingsViewFromLocation maps recorded paths and leftover hashes', () => {
+  assert.equal(settingsViewFromLocation('/settings', ''), 'hub');
+  assert.equal(settingsViewFromLocation('/settings/', ''), 'hub');
+  assert.equal(settingsViewFromLocation('/settings/appearance', ''), 'appearance');
+  assert.equal(settingsViewFromLocation('/settings/language', ''), 'language');
+  assert.equal(settingsViewFromLocation('/settings/message-folding', ''), 'message-folding');
+  assert.equal(settingsViewFromLocation('/settings/privacy', ''), 'privacy');
+  assert.equal(settingsViewFromLocation('/settings/shortcuts', ''), 'shortcuts');
+  assert.equal(settingsViewFromLocation('/settings', '#appearance'), 'appearance');
+  assert.equal(settingsViewFromLocation('/settings', '#language-section'), 'language');
+  assert.equal(settingsViewFromLocation('/settings', '#send-shortcut'), 'shortcuts');
+  assert.equal(settingsViewFromLocation('/settings', '#message-display'), 'message-folding');
+  assert.equal(settingsViewFromLocation('/settings', '#model-api'), 'model-api');
+});
+
+test('applySettingsView shows one recorded page at a time', () => {
+  const hub = {hidden: false};
+  const appearance = {hidden: true, getAttribute: () => 'appearance'};
+  const language = {hidden: true, getAttribute: () => 'language'};
+  const document = {
+    querySelectorAll(selector) {
+      if (selector === '[data-settings-hub]') return [hub];
+      if (selector === '[data-settings-page]') return [appearance, language];
+      return [];
+    },
+  };
+  applySettingsView(document, 'appearance');
+  assert.equal(hub.hidden, true);
+  assert.equal(appearance.hidden, false);
+  assert.equal(language.hidden, true);
+  applySettingsView(document, 'hub');
+  assert.equal(hub.hidden, false);
+  assert.equal(appearance.hidden, true);
+  assert.equal(language.hidden, true);
+});
+
+test('syncAppearanceExtras hides schedule controls until auto is selected', () => {
+  const scheduleCard = {hidden: false};
+  const customFields = {hidden: false};
+  const zone = {textContent: ''};
+  const document = {
+    getElementById(id) {
+      if (id === 'appearance-schedule-card') return scheduleCard;
+      if (id === 'custom-period-fields') return customFields;
+      if (id === 'appearance-time-zone') return zone;
+      return null;
+    },
+  };
+  syncAppearanceExtras(document, {appearance: 'light', appearance_schedule: 'custom'});
+  assert.equal(scheduleCard.hidden, true);
+  assert.equal(customFields.hidden, true);
+  syncAppearanceExtras(document, {appearance: 'auto', appearance_schedule: 'sunset_sunrise'});
+  assert.equal(scheduleCard.hidden, false);
+  assert.equal(customFields.hidden, true);
+  syncAppearanceExtras(document, {appearance: 'auto', appearance_schedule: 'custom'});
+  assert.equal(scheduleCard.hidden, false);
+  assert.equal(customFields.hidden, false);
 });
