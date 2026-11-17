@@ -62,7 +62,7 @@
   <section id="main-panel" hidden>
     <header class="artifacts-top">
       <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏（收起后的版式未经对照核实）">展开侧边栏</button>
-      <h1 class="visually-hidden">作品库</h1>
+      <h1 class="visually-hidden" id="space-title">作品库</h1>
       <nav class="artifact-scopes" id="artifact-scopes" aria-label="作品范围">
         <button type="button" data-scope="all" aria-current="page">全部</button>
         <button type="button" data-scope="mine">我创建的</button>
@@ -70,6 +70,7 @@
         <button type="button" data-scope="memory">Memory</button>
       </nav>
       <div id="meetings-chrome" hidden>
+        <h1 class="meetings-title" id="meetings-title">我的会议</h1>
         <p id="meetings-caption">你参加或组织过的录音会议，最新的在前。</p>
         <div class="meeting-scopes" role="tablist" aria-label="会议范围">
           <button type="button" data-meeting-scope="joined" aria-current="page">我参加的</button>
@@ -139,7 +140,10 @@
           <span class="visually-hidden">列表视图</span>
         </button>
       </div>
-      <button type="button" id="artifact-notify" disabled title="未实现：还没有作品通知接口">通知</button>
+      <button type="button" id="artifact-notify" disabled title="未实现：还没有作品通知接口" aria-label="通知">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3.5A5.3 5.3 0 0 1 17.3 8.8v3.1l1.5 2.7H5.2l1.5-2.7V8.8A5.3 5.3 0 0 1 12 3.5zm-2.6 14.2h5.2a2.6 2.6 0 0 1-5.2 0z"/></svg>
+        <span class="visually-hidden">通知</span>
+      </button>
     </header>
     <p id="layout-note" class="note" hidden>有作品时的网格版式还没有对照证据，所以现在仍用已有的列表展示，不会发明卡片网格。</p>
     <p id="whoami" class="visually-hidden"></p>
@@ -233,6 +237,7 @@
             <button type="button" id="new-website">新建网站</button>
           </div>
           <div id="empty-meetings" hidden>
+            <div class="empty-hero" aria-hidden="true"><span class="empty-cta-icon" data-tone="wave" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M11 7h2v10h-2V7z"/><path fill="currentColor" d="M8.1 9.2c1.15 1.05 1.15 4.55 0 5.6l-1.25-1.05c.7-.8.7-2.7 0-3.5l1.25-1.05zm7.8 0 1.25 1.05c-.7.8-.7 2.7 0 3.5l-1.25 1.05c-1.15-1.05-1.15-4.55 0-5.6zM5.6 7.3c2.05 1.85 2.05 7.55 0 9.4l-1.35-1.1c1.55-1.55 1.55-5.65 0-7.2l1.35-1.1zm12.8 0 1.35 1.1c-1.55 1.55-1.55 5.65 0 7.2l-1.35 1.1c-2.05-1.85-2.05-7.55 0-9.4z"/></svg></span></div>
             <h2>还没有录过音的会议</h2>
             <p>在会议中开启录音后，回放和纪要会出现在这里。</p>
             <p class="note">未实现：OpenTeamily 还没有会议作品接口，这里不会列出假的会议。</p>
