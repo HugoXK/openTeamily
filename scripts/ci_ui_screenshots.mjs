@@ -1110,6 +1110,14 @@ async function main() {
         && await page.locator('#catalog-more').isVisible()
         && await page.locator('#discover-list article button:disabled').count() === 12,
         await visibleText(page.locator('#catalog-count')));
+      const geometry = await page.locator('#discover-list article').evaluateAll(cards => {
+        const boxes = cards.map(card => card.getBoundingClientRect());
+        return boxes.every((a, index) => boxes.slice(index + 1).every(b =>
+          a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top));
+      });
+      const catalogWidth = await page.locator('#main-panel').evaluate(node => node.getBoundingClientRect().width);
+      record('discover_layout', geometry && catalogWidth > 900,
+        `nonoverlap=${geometry}; panelWidth=${catalogWidth}`);
       screenshots.push(path.basename(await shot(page, outDir, '56-discover-catalog.png')));
       await page.locator('#catalog-more').click();
       await waitForLocatorText(page, '#catalog-count', '13 个智能体');
