@@ -60,33 +60,71 @@
     <div id="oidc-providers"></div>
   </section>
   <section id="main-panel" hidden>
-    <header class="page-top">
-      <h1>记忆</h1>
-      <p class="note">本切片提供工作区记忆页、下一步行动和关系图谱。新建会立即落盘，作者或所有者/管理员可以改或删。话题、正文中的 [[标题]] 以及手动连接会出现在总览图谱里。画像、分享和导出尚未实现。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
+    <header class="memory-top">
+      <div class="memory-top-start">
+        <h1>记忆</h1>
+        <p id="view-title">总览</p>
+        <button type="button" id="toggle-dir" title="收起或展开目录">收起目录</button>
+      </div>
+      <p id="whoami" class="visually-hidden"></p>
+      <label class="workspace-picker">工作区
+        <select id="workspace"></select>
+      </label>
+      <p id="graph-counts" class="memory-counts"></p>
     </header>
-    <p id="whoami"></p>
-    <label>工作区
-      <select id="workspace"></select>
-    </label>
-    <section id="list-panel">
-      <section id="overview-panel">
-        <h2>总览</h2>
-        <p id="graph-counts" class="note"></p>
-        <svg id="graph-canvas" viewBox="0 0 640 400" role="img" aria-label="记忆图谱"></svg>
-        <p class="note">单击节点打开记忆页。正文里的 [[标题]] 会连到同工作区已有页面，也可以手动添加连接。</p>
-        <h3>话题</h3>
+    <p class="note memory-disclaimer">对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。画像、会议、分享和导出尚未实现。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
+    <section id="list-panel" class="memory-workspace" data-view="overview">
+      <aside class="memory-dir" id="memory-dir">
+        <button type="button" id="new-page">新建</button>
+        <label>搜索主题
+          <input id="search" type="text" maxlength="80" autocomplete="off" placeholder="搜索主题……">
+        </label>
+        <div class="memory-filters" role="group" aria-label="筛选">
+          <button type="button" data-filter="all" aria-pressed="true">全部 <span id="filter-all-count">0</span></button>
+          <button type="button" data-filter="updated">更新</button>
+          <button type="button" data-filter="topics">标签</button>
+        </div>
+        <div id="topic-filter-box" hidden>
+          <p class="note">对照里没有打开标签下拉，这里用已有话题做筛选，交互未经核实。</p>
+          <div id="topic-filter-chips"></div>
+        </div>
+        <nav class="memory-views" aria-label="记忆视图">
+          <button type="button" data-view="overview" aria-current="page">总览</button>
+          <button type="button" data-view="profile">我的资料</button>
+          <button type="button" data-view="actions">下一步行动</button>
+          <a href="/artifacts">我的作品</a>
+          <button type="button" data-view="meetings">我的会议</button>
+        </nav>
+        <ul id="memory-list"></ul>
+        <p id="list-empty" class="note" hidden>这个工作区还没有记忆页。</p>
+      </aside>
+      <section id="overview-panel" class="memory-center">
+        <label class="topic-search">搜索主题
+          <input id="topic-search" type="text" maxlength="80" autocomplete="off" placeholder="搜索主题……">
+        </label>
+        <div class="graph-stage">
+          <svg id="graph-canvas" viewBox="0 0 640 400" role="img" aria-label="记忆图谱"></svg>
+          <div class="graph-zoom">
+            <button type="button" id="graph-zoom-in" title="放大">+</button>
+            <button type="button" id="graph-zoom-out" title="缩小">−</button>
+            <button type="button" id="graph-zoom-reset" title="重置缩放">重置</button>
+          </div>
+        </div>
+        <p class="note">单击节点打开记忆页。正文里的 [[标题]] 会连到同工作区已有页面，也可以手动添加连接。对照里还写了双击打开和悬停预览，本页尚未实现这些手势。</p>
+      </section>
+      <aside class="memory-side" id="memory-side">
+        <div class="side-tabs" role="tablist">
+          <button type="button" data-side="topics" aria-selected="true">话题亮点</button>
+          <button type="button" data-side="recent">最近更新</button>
+        </div>
         <ul id="topic-list"></ul>
         <p id="topic-empty" class="note" hidden>这个工作区还没有话题。</p>
-      </section>
-      <label>搜索 <input id="search" type="text" maxlength="80" autocomplete="off"></label>
-      <ul id="memory-list"></ul>
-      <p id="list-empty" class="note" hidden>这个工作区还没有记忆页。</p>
-      <form id="new-form">
-        <label>标题 <input id="new-title" name="title" type="text" maxlength="80" required autocomplete="off"></label>
-        <button type="submit" id="new-page">新建记忆页</button>
-      </form>
-      <section id="actions-panel">
+        <ul id="recent-list" hidden></ul>
+        <p id="recent-empty" class="note" hidden>还没有最近更新。</p>
+      </aside>
+      <section id="actions-panel" hidden>
         <h2>下一步行动</h2>
+        <p class="note">对照里这一页当时只看到加载文案，没有完整版式。这里继续用已有的行动列表和编辑接口，不能当成版式对等。</p>
         <label>筛选
           <select id="action-filter">
             <option value="open" selected>未完成</option>
@@ -107,6 +145,14 @@
           </label>
           <button type="submit" id="new-action">新建行动</button>
         </form>
+      </section>
+      <section id="profile-panel" hidden>
+        <h2>我的资料</h2>
+        <p class="note">未实现：对照里这一页当时只看到「正在为你勾勒画像 / 正在个性化你的洞察」，没有完整版式。OpenTeamily 还没有画像接口，不能保存。</p>
+      </section>
+      <section id="meetings-panel" hidden>
+        <h2>我的会议</h2>
+        <p class="note">未实现：对照里说明这是「你参加或组织过的录音会议」，但没有留下完整列表版式。OpenTeamily 还没有会议作品接口。</p>
       </section>
     </section>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
