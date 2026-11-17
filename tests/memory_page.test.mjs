@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {actionQuery, applyDirectoryCollapsed, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, formatTopics, graphLayout, listQuery, memoryPageFromSearch, memoryUpdatedLabel, parseTopics, queryForMemoryPage} from '../openteamily/static/memory/app.mjs';
+import {actionQuery, applyDirectoryCollapsed, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, formatTopics, graphLayout, listQuery, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, topicTag} from '../openteamily/static/memory/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -58,6 +58,19 @@ test('memoryUpdatedLabel uses a UTC calendar date and ignores bad values', () =>
   assert.equal(memoryUpdatedLabel(null), '');
   assert.equal(memoryUpdatedLabel('bad'), '');
   assert.equal(memoryUpdatedLabel(Date.UTC(2026, 10, 17) / 1000), '2026-11-17');
+});
+
+test('topicTag and memoryPageMeta render date plus hash tags without inventing a 新 badge', () => {
+  assert.equal(topicTag(''), '');
+  assert.equal(topicTag('  wiki  '), '#wiki');
+  assert.equal(topicTag('#already'), '#already');
+  assert.equal(memoryPageMeta({}), '');
+  assert.equal(
+    memoryPageMeta({updated: Date.UTC(2026, 10, 17) / 1000, topics: ['CI fixture', '#keep']}),
+    '2026-11-17 · #CI fixture · #keep',
+  );
+  assert.equal(memoryPagePreview({}), '');
+  assert.equal(memoryPagePreview({preview: '  First line of the page.  '}), 'First line of the page.');
 });
 
 test('directoryGroups clusters real topics and leaves untagged pages loose', () => {

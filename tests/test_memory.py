@@ -45,6 +45,7 @@ class MemoryPageTests(unittest.TestCase):
         self.assertEqual(len(listed['body']['items']), 1)
         self.assertEqual(listed['body']['items'][0]['title'], 'Notes')
         self.assertNotIn('body', listed['body']['items'][0])
+        self.assertEqual(listed['body']['items'][0]['preview'], '')
         seen = self.alice.call('GET', f'/v1/workspaces/{self.wid}/memory/{item["id"]}')
         self.assertEqual(seen['status'], 200)
         self.assertEqual(seen['body']['page']['body'], '')
@@ -73,6 +74,32 @@ class MemoryPageTests(unittest.TestCase):
         self.assertEqual(self.alice.call('GET', f'/v1/workspaces/{self.wid}/memory/{item["id"]}')['status'], 404)
         with sqlite3.connect(self.path / 'management.sqlite3') as db:
             self.assertIsNone(db.execute('SELECT id FROM memory_pages WHERE id=?', (item['id'],)).fetchone())
+
+    def test_list_and_graph_include_preview_not_body(self):
+        blank = self.create(body='', title='Blank page', key='memory-create-blank01')
+        self.assertEqual(blank['status'], 201, blank)
+        filled = self.create(body='  First\nline  and more.', title='Filled page', key='memory-create-fill001')
+        self.assertEqual(filled['status'], 201, filled)
+        long_body = ('word ' * 80).strip()
+        long = self.create(body=long_body, title='Long page', key='memory-create-long001')
+        self.assertEqual(long['status'], 201, long)
+        listed = self.alice.call('GET', f'/v1/workspaces/{self.wid}/memory')
+        self.assertEqual(listed['status'], 200)
+        by_title = {item['title']: item for item in listed['body']['items']}
+        self.assertNotIn('body', by_title['Blank page'])
+        self.assertEqual(by_title['Blank page']['preview'], '')
+        self.assertEqual(by_title['Filled page']['preview'], 'First line and more.')
+        self.assertTrue(by_title['Long page']['preview'].endswith('…'))
+        self.assertEqual(by_title['Long page']['preview'], long_body[:160] + '…')
+        graph = self.alice.call('GET', f'/v1/workspaces/{self.wid}/memory/graph')
+        self.assertEqual(graph['status'], 200, graph)
+        graph_by_title = {item['title']: item for item in graph['body']['nodes']}
+        self.assertNotIn('body', graph_by_title['Filled page'])
+        self.assertEqual(graph_by_title['Filled page']['preview'], 'First line and more.')
+        removed = self.alice.call('POST', f'/v1/workspaces/{self.wid}/memory/{filled["body"]["page"]["id"]}/remove', {})
+        self.assertEqual(removed['status'], 200, removed)
+        self.assertNotIn('body', removed['body']['removed'])
+        self.assertEqual(removed['body']['removed']['preview'], 'First line and more.')
 
     def test_permissions_isolation_and_search(self):
         created = self.create()

@@ -9,6 +9,7 @@ or Teamily memory parity, and it is not browser E2E acceptance.
 """
 import re
 
+from .search import snippet
 from .security import digest
 
 SCHEMA = """
@@ -102,6 +103,8 @@ def view(row, include_body=True, topics=None):
     }
     if include_body:
         data['body'] = row['body']
+    else:
+        data['preview'] = snippet(row['body'])
     if topics is not None:
         data['topics'] = list(topics)
     return data

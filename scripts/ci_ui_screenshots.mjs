@@ -1057,7 +1057,7 @@ async function main() {
     await waitForLocatorText(page, '#memory-list', ready.memory_title);
     const memoryList = await visibleText(page.locator('#memory-list'));
     const overview = await visibleText(page.locator('#list-panel'));
-    record('memory_list', memoryList.includes(ready.memory_title) && memoryList.includes(`${ready.memory_topic} 1`) && !memoryList.includes('Teamily Wiki') && !memoryList.includes('Getting Started'), memoryList || 'memory list empty');
+    record('memory_list', memoryList.includes(ready.memory_title) && memoryList.includes(`${ready.memory_topic} 1`) && memoryList.includes(ready.memory_body) && memoryList.includes(`#${ready.memory_topic}`) && !memoryList.includes('Teamily Wiki') && !memoryList.includes('Getting Started') && !memoryList.includes('新'), memoryList || 'memory list empty');
     record(
       'memory_overview',
       overview.includes('总览') && overview.includes('我的资料') && overview.includes('下一步行动') && overview.includes('我的作品') && overview.includes('我的会议') && overview.includes('话题亮点') && overview.includes('新建') && await page.locator('#graph-canvas').isVisible() && !/积分|套餐|升级/.test(overview),
@@ -1074,6 +1074,15 @@ async function main() {
       dirText || 'memory directory chrome missing',
     );
     screenshots.push(path.basename(await shot(page, outDir, '18-memory-list.png')));
+    record(
+      'memory_dir_previews',
+      await page.locator('#memory-list .memory-page-preview').count() === 1
+        && (await visibleText(page.locator('#memory-list .memory-page-preview'))) === ready.memory_body
+        && await page.locator('#memory-list .memory-page-icon svg').count() === 1
+        && !memoryList.includes('新'),
+      memoryList || 'memory directory preview missing',
+    );
+    screenshots.push(path.basename(await shot(page, outDir, '70-memory-dir-previews.png')));
     try {
       await page.locator('#dir-collapse').click();
       await page.locator('#dir-expand').waitFor({ state: 'visible', timeout: 8000 });
@@ -1118,6 +1127,8 @@ async function main() {
           && profileView.includes('未接通')
           && profileDir.includes(ready.memory_title)
           && profileDir.includes(`${ready.memory_topic} 1`)
+          && profileDir.includes(ready.memory_body)
+          && profileDir.includes(`#${ready.memory_topic}`)
           && await page.locator('#dream-profile').isDisabled()
           && !profileView.includes('Develops and maintains software')
           && !profileDir.includes('Teamily Wiki')
