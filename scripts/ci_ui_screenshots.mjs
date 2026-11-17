@@ -308,7 +308,46 @@ async function main() {
       artifactTitles.every((title) => artifacts.includes(title)),
       artifacts || 'artifact list empty',
     );
+    const catalog = await visibleText(page.locator('#list-panel'));
+    const top = await visibleText(page.locator('.artifacts-top'));
+    record(
+      'artifacts_catalog',
+      top.includes('全部') && top.includes('我创建的') && top.includes('收藏') && top.includes('Memory')
+        && catalog.includes('全部作品') && catalog.includes('网站') && catalog.includes('文档')
+        && catalog.includes('媒体') && catalog.includes('消息') && catalog.includes('会议')
+        && catalog.includes('新建') && !/积分|套餐|升级/.test(top + catalog),
+      `${top} :: ${catalog || 'catalog empty'}`,
+    );
     screenshots.push(path.basename(await shot(page, outDir, '07-artifacts-list.png')));
+    try {
+      await page.locator('#new-menu-button').click();
+      await page.locator('#new-menu').waitFor({ state: 'visible', timeout: 8000 });
+      const menu = await visibleText(page.locator('#new-menu'));
+      record(
+        'artifacts_new_menu',
+        menu.includes('云文档') && menu.includes('白板') && menu.includes('上传') && !menu.includes('新建网站'),
+        menu || 'new menu empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '30-artifacts-new-menu.png')));
+      await page.keyboard.press('Escape');
+    } catch (error) {
+      record('artifacts_new_menu', false, String(error));
+    }
+    try {
+      await page.locator('.artifact-kinds [data-kind="meetings"]').click();
+      await page.locator('#empty-meetings').waitFor({ state: 'visible', timeout: 8000 });
+      const meetings = await visibleText(page.locator('#empty-meetings'));
+      record(
+        'artifacts_meetings_unimplemented',
+        meetings.includes('未实现') && meetings.includes('录音会议'),
+        meetings || 'meetings empty missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '31-artifacts-meetings-empty.png')));
+      await page.locator('.artifact-kinds [data-kind="all"]').click();
+      await waitForLocatorText(page, '#artifact-list', ready.document_title);
+    } catch (error) {
+      record('artifacts_meetings_unimplemented', false, String(error));
+    }
 
     const openArtifact = async (title, file, checkName, extra, { soft = true } = {}) => {
       try {

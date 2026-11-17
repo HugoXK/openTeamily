@@ -12,6 +12,21 @@ export function listQuery(search) {
   return needle ? ('?q=' + encodeURIComponent(needle)) : '';
 }
 
+export function visibleArtifacts(items, {kind = 'all', scope = 'all', username = ''} = {}) {
+  let rows = [...(items || [])];
+  if (scope === 'mine' && username) {
+    rows = rows.filter((item) => item.created_by === username);
+  }
+  if (kind === 'meetings') return [];
+  if (kind === 'messages') {
+    return rows.filter((item) => item.source && item.source.kind === 'agent_message');
+  }
+  if (kind && kind !== 'all') {
+    return rows.filter((item) => item.kind === kind);
+  }
+  return rows;
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -37,6 +52,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let workspaces = [];
   let current = null;
   let draftKind = 'document';
+  let catalogKind = 'all';
+  let catalogScope = 'all';
+  let allItems = [];
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -177,7 +195,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const source = document.getElementById('editor-source');
     if (item && item.source) {
       source.hidden = false;
-      const from = item.source.kind === 'agent_task' ? '代理任务' : '自动化运行';
+      const from = item.source.kind === 'agent_message' ? '对话消息'
+        : item.source.kind === 'agent_task' ? '代理任务' : '自动化运行';
       const name = item.source.automation_title || item.source.task_kind || '';
       source.textContent = `出处：${from}${name ? ' · ' + name : ''} · ${item.source.id}`;
     } else {
@@ -197,11 +216,49 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  function closeNewMenu() {
+    const menu = document.getElementById('new-menu');
+    const button = document.getElementById('new-menu-button');
+    if (menu) menu.hidden = true;
+    if (button) button.setAttribute('aria-expanded', 'false');
+  }
+
+  function renderCatalog() {
+    const username = currentUser && currentUser.username;
+    const items = visibleArtifacts(allItems, {kind: catalogKind, scope: catalogScope, username});
+    renderList(items, (item) => openEditor(item));
+    const empty = document.getElementById('list-empty');
+    const emptyAll = document.getElementById('empty-all');
+    const emptyKind = document.getElementById('empty-kind');
+    const emptyMeetings = document.getElementById('empty-meetings');
+    const emptyMessage = document.getElementById('list-empty-message');
+    const newWebsite = document.getElementById('new-website');
+    if (!empty) return;
+    const isEmpty = items.length === 0;
+    empty.hidden = !isEmpty;
+    if (!isEmpty) return;
+    const noWorkspace = emptyMessage && emptyMessage.textContent === '还没有工作区。';
+    const showAllEmpty = catalogKind === 'all' && catalogScope === 'all' && !noWorkspace;
+    if (emptyAll) emptyAll.hidden = !showAllEmpty;
+    if (emptyMeetings) emptyMeetings.hidden = catalogKind !== 'meetings';
+    if (emptyKind) emptyKind.hidden = showAllEmpty || catalogKind === 'meetings' || noWorkspace;
+    if (emptyMessage) emptyMessage.hidden = !noWorkspace;
+    if (newWebsite) newWebsite.hidden = !(emptyKind && !emptyKind.hidden && catalogKind === 'website');
+    if (emptyKind && !emptyKind.hidden) {
+      const note = document.getElementById('empty-kind-note');
+      if (note) {
+        if (catalogKind === 'messages') note.textContent = '还没有从对话保存到作品库的消息。';
+        else if (catalogScope === 'mine') note.textContent = '还没有你创建的作品。';
+        else note.textContent = '这一类还没有作品。';
+      }
+    }
+  }
+
   function renderList(items, onOpen) {
     const list = document.getElementById('artifact-list');
     const empty = document.getElementById('list-empty');
     list.textContent = '';
-    empty.hidden = items.length > 0;
+    if (empty) empty.hidden = items.length > 0;
     for (const item of items) {
       const row = document.createElement('li');
       const open = document.createElement('button');
@@ -211,7 +268,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       open.addEventListener('click', () => onOpen(item));
       const meta = document.createElement('span');
       meta.className = 'note';
-      meta.textContent = `${kindLabel(item.kind)} · ${item.created_by || ''}`;
+      const source = item.source && item.source.kind === 'agent_message' ? ' · 消息' : '';
+      meta.textContent = `${kindLabel(item.kind)} · ${item.created_by || ''}${source}`;
       row.appendChild(open);
       row.appendChild(meta);
       list.appendChild(row);
@@ -219,6 +277,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openEditor(item) {
+    closeNewMenu();
     current = item;
     listPanel.hidden = true;
     form.hidden = false;
@@ -345,7 +404,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(listed.body.error, '无法读取作品库。'));
       return;
     }
-    renderList(listed.body.items || [], item => openEditor(item));
+    allItems = listed.body.items || [];
+    renderCatalog();
   }
 
   async function load() {
@@ -364,7 +424,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
-    document.getElementById('whoami').textContent = currentUser.username;
+    const whoami = document.getElementById('whoami');
+    whoami.dataset.username = currentUser.username;
+    whoami.textContent = currentUser.username;
     const space = await request('GET', '/v1/workspaces?limit=100');
     if (space.status !== 200) {
       show('error', messageFor(space.body.error, '无法读取工作区。'));
@@ -383,12 +445,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       workspaceSelect.value = previous;
     }
     if (!workspaces.length) {
+      allItems = [];
       document.getElementById('artifact-list').textContent = '';
-      document.getElementById('list-empty').hidden = false;
-      document.getElementById('list-empty').textContent = '还没有工作区。';
+      const emptyMessage = document.getElementById('list-empty-message');
+      if (emptyMessage) emptyMessage.textContent = '还没有工作区。';
+      renderCatalog();
       return;
     }
-    document.getElementById('list-empty').textContent = '这个工作区还没有文档。';
+    const emptyMessage = document.getElementById('list-empty-message');
+    if (emptyMessage) emptyMessage.textContent = '这个工作区还没有作品。';
     form.hidden = true;
     listPanel.hidden = false;
     await loadList();
@@ -413,6 +478,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('new-artifact').addEventListener('click', () => {
     draftKind = 'document';
+    closeNewMenu();
     openEditor({kind: 'document'});
   });
 
@@ -424,14 +490,67 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('new-media').addEventListener('click', () => {
     draftKind = 'media';
     document.getElementById('media-file').value = '';
+    closeNewMenu();
     openEditor({kind: 'media'});
   });
 
   document.getElementById('new-board').addEventListener('click', () => {
     draftKind = 'whiteboard';
     boardState = {schema: 'openteamily.whiteboard.v1', width: 800, height: 600, strokes: []};
+    closeNewMenu();
     openEditor({kind: 'whiteboard'});
   });
+
+  function bindCreate(id, start) {
+    const button = document.getElementById(id);
+    if (button) button.addEventListener('click', start);
+  }
+
+  bindCreate('empty-new-document', () => {
+    draftKind = 'document';
+    openEditor({kind: 'document'});
+  });
+
+  const newMenuButton = document.getElementById('new-menu-button');
+  if (newMenuButton) {
+    newMenuButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const menu = document.getElementById('new-menu');
+      if (!menu) return;
+      const open = menu.hidden;
+      menu.hidden = !open;
+      newMenuButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+  document.addEventListener('click', (event) => {
+    const wrap = document.querySelector('.new-menu-wrap');
+    if (wrap && !wrap.contains(event.target)) closeNewMenu();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeNewMenu();
+  });
+
+  for (const button of document.querySelectorAll('.artifact-kinds [data-kind]')) {
+    button.addEventListener('click', () => {
+      catalogKind = button.getAttribute('data-kind') || 'all';
+      for (const item of document.querySelectorAll('.artifact-kinds [data-kind]')) {
+        if (item.getAttribute('data-kind') === catalogKind) item.setAttribute('aria-current', 'page');
+        else item.removeAttribute('aria-current');
+      }
+      renderCatalog();
+    });
+  }
+  for (const button of document.querySelectorAll('.artifact-scopes [data-scope]')) {
+    if (button.disabled) continue;
+    button.addEventListener('click', () => {
+      catalogScope = button.getAttribute('data-scope') || 'all';
+      for (const item of document.querySelectorAll('.artifact-scopes [data-scope]')) {
+        if (item.getAttribute('data-scope') === catalogScope) item.setAttribute('aria-current', 'page');
+        else item.removeAttribute('aria-current');
+      }
+      renderCatalog();
+    });
+  }
 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
     current = null;
