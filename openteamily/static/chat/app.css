@@ -2,6 +2,17 @@
    visit (rail + ~350px session column + main canvas + bottom composer).
    Colors stay FlyBot tokens. Non-empty message bubbles are an original
    supplement and were not compared this round. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .session-pane {
   display: flex;
   flex-direction: column;
@@ -14,16 +25,64 @@
 
 .session-toolbar {
   display: flex;
-  gap: 0.35rem;
+  gap: 0.4rem;
   align-items: center;
+}
+
+.session-toolbar .toolbar-icon,
+.session-toolbar .toolbar-add {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--ot-line);
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+
+.session-toolbar .toolbar-add {
+  background: var(--ot-accent);
+  border-color: var(--ot-accent);
+  color: var(--ot-surface);
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.session-toolbar .toolbar-icon:disabled {
+  opacity: 0.7;
 }
 
 .session-search {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 2rem;
+  padding: 0 0.7rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 999px;
+  background: var(--ot-surface);
 }
 
-.session-search input { width: 100%; min-width: 0; }
+.session-search .search-icon {
+  display: inline-flex;
+  color: var(--ot-muted);
+}
+
+.session-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 0.35rem 0;
+}
+
+.session-search input:focus-visible { outline: none; }
 .workspace-pick, .session-pane #whoami {
   margin: 0.55rem 0 0;
   font-size: 0.85rem;
@@ -127,9 +186,33 @@
   border-radius: 1.25rem;
 }
 
+.chat-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.chat-identity .avatar {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
 .chat-top h1 {
-  margin: 0 auto 0 0;
+  margin: 0;
   font-size: 1rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-actions {

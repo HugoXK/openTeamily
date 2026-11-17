@@ -51,10 +51,18 @@
   <section id="session-pane" class="session-pane">
     <div class="session-toolbar">
       <button type="button" id="search-close" hidden title="关闭搜索">‹</button>
-      <label class="session-search">搜索 <input type="search" id="session-search" placeholder="搜索" maxlength="80" autocomplete="off"></label>
-      <button type="button" id="session-filter" disabled title="未实现：会话筛选（全部/群聊/单聊/已读/未读）">筛选</button>
+      <button type="button" id="session-filter" class="toolbar-icon" disabled title="未实现：会话筛选（全部/群聊/单聊/已读/未读）" aria-label="筛选">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 6h16v2H4V6zm3 5h10v2H7v-2zm3 5h4v2h-4v-2z"/></svg>
+      </button>
+      <label class="session-search">
+        <span class="visually-hidden">搜索</span>
+        <span class="search-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10 4a6 6 0 1 1 0 12 6 6 0 0 1 0-12zm0 2a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm6.3 8.9 1.4-1.4 4.2 4.2-1.4 1.4-4.2-4.2z"/></svg>
+        </span>
+        <input type="search" id="session-search" placeholder="搜索" maxlength="80" autocomplete="off">
+      </label>
       <div class="compose-menu">
-        <button type="button" id="new-conversation" aria-haspopup="menu" aria-expanded="false" aria-controls="compose-menu" title="创建">+</button>
+        <button type="button" id="new-conversation" class="toolbar-add" aria-haspopup="menu" aria-expanded="false" aria-controls="compose-menu" title="创建" aria-label="创建">+</button>
         <div id="compose-menu" role="menu" hidden>
           <a href="/agents" role="menuitem">创建智能体</a>
           <button type="button" role="menuitem" id="compose-new-group">新建群组</button>
@@ -124,7 +132,10 @@
   </section>
   <section id="main-panel" hidden>
     <header class="chat-top">
-      <h1 id="chat-title">聊天</h1>
+      <div class="chat-identity">
+        <span id="chat-avatar" class="avatar" hidden></span>
+        <h1 id="chat-title">聊天</h1>
+      </div>
       <div class="chat-actions">
         <button type="button" disabled title="未实现：邀请">邀请</button>
         <button type="button" disabled title="未实现：语音或视频通话">通话</button>
