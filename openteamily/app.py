@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, social, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -750,6 +750,9 @@ class App:
                 r'(?:/([0-9a-f]{32})(?:/(messages(?:/([0-9a-f]{32})(?:/(artifact))?)?))?)?', path)
             if conversation_path:
                 return self.conversation_dispatch(db, session, method, query, now, env, *conversation_path.groups())
+            search_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/search/messages', path)
+            if search_path:
+                return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
                 r'(?:/([0-9a-f]{32})(?:/(messages))?)?', path)
@@ -2681,6 +2684,35 @@ class App:
         artifacts.attach_chat_source(
             db, artifact_id, workspace['id'], now, row['id'], message['id'], row['agent_id'])
         return self.artifact_saved(db, workspace['id'], artifact_id, 201)
+
+    def search_messages(self, db, session, method, query, workspace_id):
+        if method != 'GET':
+            refuse(405, 'method', 'Only GET is supported')
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=4) if query else {}
+            if set(args) - {'q', 'kind', 'limit', 'cursor'} or any(len(v) != 1 for v in args.values()):
+                raise ValueError()
+            text = args.get('q', [''])[0]
+            if not search.valid_query(text):
+                raise ValueError()
+            kind = args.get('kind', ['all'])[0]
+            if kind not in search.KINDS:
+                raise ValueError()
+            limit = args.get('limit', ['20'])[0]
+            if not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 50:
+                raise ValueError()
+            cursor = args.get('cursor', [''])[0]
+            if cursor and not re.fullmatch(r'[0-9a-f]{32}', cursor):
+                raise ValueError()
+        except ValueError:
+            refuse(400, 'invalid', 'Invalid search parameters')
+        rows = search.messages(db, workspace['id'], session['user_id'], text.strip(), kind,
+                               cursor, int(limit) + 1)
+        return 200, {'items': rows[:int(limit)],
+                     'cursor': rows[int(limit) - 1]['message_id'] if len(rows) > int(limit) else None}, []
 
     def discover_list(self, query):
         try:
