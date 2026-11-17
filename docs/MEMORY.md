@@ -8,7 +8,7 @@ This slice stores workspace-scoped **memory pages**, **next actions**, optional 
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/v1/workspaces/{id}/memory` | Lists pages (title, topics and metadata; no body). Optional `q`, `limit`, `cursor` |
+| GET | `/v1/workspaces/{id}/memory` | Lists pages (title, topics, a bounded `preview`, and metadata; no body). Optional `q`, `limit`, `cursor` |
 | POST | `/v1/workspaces/{id}/memory` | Create `{title, body, topics?}`. `body` may be empty. `topics` is a list of names. Requires an Idempotency-Key |
 | GET | `/v1/workspaces/{id}/memory/{id}` | One page, including body and topics |
 | POST | `/v1/workspaces/{id}/memory/{id}` | Revisioned `{revision, changes: {title?, body?, topics?}}` |
@@ -24,7 +24,7 @@ This slice stores workspace-scoped **memory pages**, **next actions**, optional 
 
 Page titles are unique per workspace (case-insensitive). Action titles are not unique. Default caps are 100 pages, 200 actions and 500 manual links. A page may have up to 8 topics; names are 1–40 characters and are unique per page case-insensitively. Tables are additive; `user_version` stays 1. A same-origin editor and overview graph are at `/memory`. Recorded Teamily views `/memory?page=profile` and `/memory?page=todos` are served by the same page. The profile view only lays out the three recorded section headings; there is still no profile API, and the 「做梦」 control stays disabled. The todos view reuses the existing next-actions API. Empty copy is the recorded「当前没有可预期的事项。」
 
-The `/memory` left directory now follows the recorded chrome: the heading is「记忆」,「+ 新建」is the existing create control (it still writes a page immediately), search uses the recorded「搜索主题……」placeholder, and the view list is vertical with icons (总览 / 我的资料 / 下一步行动 / 我的作品 / 我的会议). 「收起侧边栏」hides the directory for the current page view only and leaves an「展开侧边栏」control; that collapsed layout was not recaptured, is not persisted, and is not a contrast claim. Unread counts,「新」badges, profile body text, and a recapture-wiki Getting Started group are still not invented.
+The `/memory` left directory now follows the recorded chrome: the heading is「记忆」,「+ 新建」is the existing create control (it still writes a page immediately), search uses the recorded「搜索主题……」placeholder, and the view list is vertical with icons (总览 / 我的资料 / 下一步行动 / 我的作品 / 我的会议). Directory rows use an original document icon, the page title, a one-line `preview` from the existing body (whitespace-collapsed, capped at 160 characters, same helper as message search), and a meta line of the UTC date plus `#topic` labels. 「收起侧边栏」hides the directory for the current page view only and leaves an「展开侧边栏」control; that collapsed layout was not recaptured, is not persisted, and is not a contrast claim. Unread counts,「新」badges, profile body text, and a recapture-wiki Getting Started group are still not invented. List search still matches titles only.
 
 `[[Title]]` mentions in a page body create graph edges to an existing same-workspace page with that title. Missing titles and self-mentions are ignored. A manual link and a mention between the same pair appear as one edge (`manual` if a stored link exists). Deleting a page removes its topics and manual links, and mention edges disappear with the body.
 

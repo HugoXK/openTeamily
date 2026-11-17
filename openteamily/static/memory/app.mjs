@@ -61,6 +61,22 @@ export function memoryUpdatedLabel(updated) {
   return date.toISOString().slice(0, 10);
 }
 
+export function topicTag(name) {
+  const label = String(name || '').trim();
+  if (!label) return '';
+  return label.startsWith('#') ? label : `#${label}`;
+}
+
+export function memoryPageMeta(item) {
+  const topics = (item && item.topics) || [];
+  const parts = [memoryUpdatedLabel(item && item.updated), ...topics.map(topicTag)].filter(Boolean);
+  return parts.join(' · ');
+}
+
+export function memoryPagePreview(item) {
+  return String((item && item.preview) || '').trim();
+}
+
 function topicKey(name) {
   return String(name || '').trim().toLocaleLowerCase();
 }
@@ -227,15 +243,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     button.type = 'button';
     button.className = 'memory-page-link';
     button.dataset.id = item.id;
+    const icon = document.createElement('span');
+    icon.className = 'memory-page-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('fill', 'currentColor');
+    path.setAttribute('d', 'M7 3h7l5 5v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm6 1.5V9h4.5L13 4.5z');
+    svg.appendChild(path);
+    icon.appendChild(svg);
+    button.appendChild(icon);
+    const text = document.createElement('span');
+    text.className = 'memory-page-text';
     const title = document.createElement('span');
     title.className = 'memory-page-title';
     title.textContent = item.title;
-    button.appendChild(title);
+    text.appendChild(title);
+    const preview = memoryPagePreview(item);
+    if (preview) {
+      const snippet = document.createElement('span');
+      snippet.className = 'memory-page-preview';
+      snippet.textContent = preview;
+      text.appendChild(snippet);
+    }
     const meta = document.createElement('span');
     meta.className = 'memory-page-meta';
-    const parts = [memoryUpdatedLabel(item.updated), ...(item.topics || [])].filter(Boolean);
-    meta.textContent = parts.join(' · ');
-    if (meta.textContent) button.appendChild(meta);
+    meta.textContent = memoryPageMeta(item);
+    if (meta.textContent) text.appendChild(meta);
+    button.appendChild(text);
     button.addEventListener('click', () => openPage(item.id));
     return button;
   }

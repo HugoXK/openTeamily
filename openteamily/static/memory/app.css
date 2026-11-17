@@ -337,15 +337,45 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 
 #memory-list .memory-page-link {
   display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+
+#memory-list .memory-page-icon {
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
+  color: var(--ot-muted, inherit);
+  opacity: 0.8;
+}
+
+#memory-list .memory-page-icon svg {
+  display: block;
+}
+
+#memory-list .memory-page-text {
+  display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 0.12rem;
+  min-width: 0;
+  flex: 1;
+}
+
+#memory-list .memory-page-title,
+#memory-list .memory-page-preview,
+#memory-list .memory-page-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 #memory-list .memory-page-title {
   font-weight: 600;
 }
 
+#memory-list .memory-page-preview,
 #memory-list .memory-page-meta {
   font-size: 0.8em;
   color: var(--ot-muted, inherit);
