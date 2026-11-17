@@ -458,20 +458,27 @@ async function main() {
       await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#chat-body').click();
       await page.locator('#chat-body').fill(enterText);
-      await page.locator('#chat-body').press('Enter');
+      const enterEvent = await page.locator('#chat-body').evaluate((el) => {
+        const ev = new KeyboardEvent('keydown', {
+          key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true,
+        });
+        el.dispatchEvent(ev);
+        return {prevented: ev.defaultPrevented, value: el.value};
+      });
       await waitForLocatorText(page, '#message-list', enterText, 15000);
       const afterEnter = await visibleText(page.locator('#message-list'));
       const composerValue = await page.locator('#chat-body').inputValue();
       record(
         'chat_send_enter_shortcut',
-        afterEnter.includes(enterText) && composerValue === '',
-        `composer=${JSON.stringify(composerValue)} ${afterEnter.slice(0, 240) || 'enter send empty'}`,
+        afterEnter.includes(enterText) && composerValue === '' && enterEvent.prevented === true,
+        `prevented=${enterEvent.prevented} composer=${JSON.stringify(composerValue)} ${afterEnter.slice(0, 240) || 'enter send empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '61-chat-send-enter.png')));
-      await page.goto(chatUrl, {waitUntil: 'load'});
-      await waitForLocatorText(page, '#chat-title', ready.agent_name);
     } catch (error) {
       record('chat_send_enter_shortcut', false, String(error));
+    } finally {
+      await page.goto(chatUrl, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#chat-title', ready.agent_name);
     }
 
     try {

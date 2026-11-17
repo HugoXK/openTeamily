@@ -798,10 +798,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!shouldSendOnShortcut(event, sendShortcut)) return;
     event.preventDefault();
     if (!(document.getElementById('chat-body').value || '').trim()) return;
-    const form = document.getElementById('chat-form');
-    if (typeof form.requestSubmit === 'function') form.requestSubmit();
-    else form.dispatchEvent(new Event('submit', {cancelable: true, bubbles: true}));
-  });
+    const submit = document.querySelector('#chat-form button[type="submit"]');
+    if (submit) submit.click();
+    else document.getElementById('chat-form').dispatchEvent(new Event('submit', {cancelable: true, bubbles: true}));
+  }, true);
 
   document.getElementById('chat-form').addEventListener('submit', async event => {
     event.preventDefault();
