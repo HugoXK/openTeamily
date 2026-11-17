@@ -62,7 +62,7 @@
   <section id="main-panel" hidden>
     <header class="page-top">
       <h1>运行时</h1>
-      <p class="note">连接标签按 2026-11-16 第二轮对照补上：生成 FlyBot 运行时密钥（只显示一次，列表只显示前缀，默认永不过期）、设备 ID，用本服务提供的 `flybot.pyz` 或源码树里的 `python3 -m openteamily.flybot`，在自己的机器上注册、心跳，并运行允许的 echo 或 infer 任务。请显式下载并启动，不要把安装脚本管道给 shell。infer 使用你或平台已经配置的模型 API，密钥只下发一次，不会出现在任务列表或日志里。这里没有 Teamily 的地址，也不等同于 Teamily 的云端 Agent 或托管电脑。不会在机器上执行任意命令。</p>
+      <p class="note">按 2026-11-16 对照记下的「运行时 / 连接」页来布置：托管云端 Agent、托管电脑，以及本地已检测运行时。OpenTeamily 不提供托管云端 Agent 或托管电脑，这两项只作标明未提供，不能保存。本地连接沿用已有的 FlyBot 代理：生成密钥、显式下载 flybot.pyz、启动守护进程。检测只会刷新已向本管理面登记的连接，不会扫描本机或局域网。这里没有 Teamily 的地址或桌面应用。</p>
     </header>
     <p id="whoami"></p>
     <div class="tabs" role="tablist">
@@ -70,9 +70,58 @@
       <button type="button" role="tab" data-tab="connect" aria-selected="false">连接</button>
     </div>
     <section id="runtimes-panel">
-      <h2>自托管 FlyBot</h2>
-      <p class="note">OpenTeamily 在自己的管理端里创建和启停 FlyBot 容器。这一页不提供 Teamily 的云端 Agent，也不提供托管电脑。要把任务发到你自己的机器，请打开「连接」。</p>
-      <button type="button" id="open-connect">连接一台机器</button>
+      <section class="runtime-section" id="hosted-agent-section">
+        <h2>托管云端 Agent</h2>
+        <p class="note">对照里这里是由平台托管、无需自备设备的云端 Agent。OpenTeamily 不提供这项服务，智能体跑在你自己的 FlyBot 容器或已连接的机器上。</p>
+        <article class="runtime-card is-unavailable" id="hosted-agent-card">
+          <p class="runtime-card-title">托管云端 Agent</p>
+          <p class="runtime-card-state" id="hosted-agent-state">未提供</p>
+          <button type="button" disabled title="未实现：OpenTeamily 不提供由平台托管的云端 Agent">不可用</button>
+        </article>
+      </section>
+      <section class="runtime-section" id="hosted-computer-section">
+        <h2>托管电脑</h2>
+        <p class="note">对照里这一项写的是尚未配置、即将推出的托管云端计算机。OpenTeamily 不提供这项服务，也没有可保存的配置表单。</p>
+        <article class="runtime-card is-unavailable" id="hosted-computer-card">
+          <p class="runtime-card-title">托管云端计算机</p>
+          <p class="runtime-card-state" id="hosted-computer-state">尚未配置</p>
+          <button type="button" disabled title="未实现：OpenTeamily 不提供托管云端计算机">即将推出</button>
+        </article>
+      </section>
+      <section class="runtime-section" id="local-runtime-section">
+        <h2>自托管 FlyBot</h2>
+        <article class="runtime-card" id="local-status-card" data-state="empty">
+          <p class="runtime-card-title">本地运行时</p>
+          <p class="runtime-card-state" id="local-status-label">尚未连接本机或远程设备</p>
+          <p class="note" id="local-status-detail">请在「连接」里生成密钥，下载 flybot.pyz，在自己的机器上启动守护进程并用同一账号登记。OpenTeamily 没有官方桌面应用。</p>
+        </article>
+        <div class="setup-steps" id="local-setup">
+          <h3>完成连接</h3>
+          <ol>
+            <li>
+              <h4>1. 下载 CLI</h4>
+              <p>从本服务显式下载 zipapp，不要把安装脚本管道给 shell。</p>
+              <p><a href="/install/flybot.pyz">下载 flybot.pyz</a> · <a href="/download">打开下载页</a></p>
+            </li>
+            <li>
+              <h4>2. 启动守护进程</h4>
+              <p>把密钥放在 --key-file 里，不要写进 shell 历史。</p>
+              <pre id="local-daemon-command">python3 flybot.pyz daemon start --origin __ORIGIN__ --key-file ./runtime-key</pre>
+            </li>
+            <li>
+              <h4>3. 完成连接</h4>
+              <p>守护进程登记并心跳后，会出现在下方列表。也可以打开「连接」生成密钥或发送测试任务。</p>
+            </li>
+          </ol>
+        </div>
+        <div class="detected-bar">
+          <h3>已检测到的运行时</h3>
+          <button type="button" id="detect-runtimes">检测</button>
+          <button type="button" id="open-connect">连接远程机器</button>
+        </div>
+        <ul id="detected-list"></ul>
+        <p id="detected-empty" class="note" hidden>还没有向本管理面登记过的 FlyBot 运行时。检测只会刷新已有连接，不会扫描本机进程或局域网。</p>
+      </section>
     </section>
     <section id="connect-panel" hidden>
       <h2>连接一台机器</h2>

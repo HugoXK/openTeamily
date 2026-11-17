@@ -32,6 +32,18 @@ export function listItemHasSecret(item) {
   return Boolean(item && Object.prototype.hasOwnProperty.call(item, 'token'));
 }
 
+export function summarizeConnections(items) {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  const online = list.filter(item => item.status === 'online');
+  if (online.length) {
+    return {kind: 'online', label: '在线', items: list, preview: online};
+  }
+  if (list.length) {
+    return {kind: 'offline', label: '离线', items: list, preview: list};
+  }
+  return {kind: 'empty', label: '尚未连接本机或远程设备', items: [], preview: []};
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -71,9 +83,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     const unix = document.getElementById('install-unix');
     const windows = document.getElementById('install-windows');
     const daemon = document.getElementById('daemon-command');
+    const localDaemon = document.getElementById('local-daemon-command');
     if (unix) unix.textContent = commands.unix;
     if (windows) windows.textContent = commands.windows;
     if (daemon) daemon.textContent = commands.daemon;
+    if (localDaemon) localDaemon.textContent = commands.daemon;
   }
 
   async function request(method, path, body) {
@@ -148,12 +162,60 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     const empty = document.getElementById('connections-empty');
     if (!list) return;
     list.textContent = '';
-    empty.hidden = items.length > 0;
+    if (empty) empty.hidden = items.length > 0;
     for (const item of items) {
       const row = document.createElement('li');
       row.textContent = `${item.hostname || 'flybot'} · ${item.status === 'online' ? '在线' : '离线'}`;
       list.appendChild(row);
     }
+    renderDetected(items);
+    renderLocalStatus(items);
+  }
+
+  function renderDetected(items) {
+    const list = document.getElementById('detected-list');
+    const empty = document.getElementById('detected-empty');
+    if (!list) return;
+    list.textContent = '';
+    if (empty) empty.hidden = items.length > 0;
+    for (const item of items) {
+      const row = document.createElement('li');
+      const name = document.createElement('span');
+      name.textContent = item.hostname || 'flybot';
+      const state = document.createElement('span');
+      state.textContent = item.status === 'online' ? '在线' : '离线';
+      row.appendChild(name);
+      row.appendChild(state);
+      list.appendChild(row);
+    }
+  }
+
+  function renderLocalStatus(items) {
+    const summary = summarizeConnections(items);
+    const card = document.getElementById('local-status-card');
+    const label = document.getElementById('local-status-label');
+    const detail = document.getElementById('local-status-detail');
+    if (card) card.dataset.state = summary.kind;
+    if (label) label.textContent = summary.label;
+    if (!detail) return;
+    if (summary.kind === 'empty') {
+      detail.textContent = '请在「连接」里生成密钥，下载 flybot.pyz，在自己的机器上启动守护进程并用同一账号登记。OpenTeamily 没有官方桌面应用。';
+      return;
+    }
+    const names = summary.preview.map(item => item.hostname || 'flybot').join('、');
+    detail.textContent = summary.kind === 'online'
+      ? `${names} 已连接。任务会发到这些机器。`
+      : `${names} 已登记但不在线。请确认守护进程仍在运行。`;
+  }
+
+  async function detectRuntimes() {
+    const connections = await request('GET', '/v1/runtime/connections');
+    if (connections.status !== 200) {
+      show('error', messageFor(connections.body.error, '无法检测已登记的运行时。'));
+      return;
+    }
+    renderConnections(connections.body.items || []);
+    show('ok', '已刷新向本管理面登记过的运行时。这不会扫描本机进程或局域网。');
   }
 
   async function loadKeys() {
@@ -207,6 +269,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     button.addEventListener('click', () => showTab(button.dataset.tab));
   }
   document.getElementById('open-connect').addEventListener('click', () => showTab('connect'));
+  const detectButton = document.getElementById('detect-runtimes');
+  if (detectButton) {
+    detectButton.addEventListener('click', () => detectRuntimes());
+  }
 
   document.getElementById('key-form').addEventListener('submit', async event => {
     event.preventDefault();

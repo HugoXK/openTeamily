@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { installCommands, listItemHasSecret, readKeyForm } from '../openteamily/static/runtimes/app.mjs';
+import { installCommands, listItemHasSecret, readKeyForm, summarizeConnections } from '../openteamily/static/runtimes/app.mjs';
 
 test('readKeyForm omits expiry when never is selected', () => {
   const values = {name: ' Laptop ', expires: 'never'};
@@ -24,4 +24,16 @@ test('install commands use the current origin and FlyBot names', () => {
   assert.equal(commands.unix.includes('curl -fsSL'), false);
   assert.equal(listItemHasSecret({name: 'x', prefix: 'abcd1234'}), false);
   assert.equal(listItemHasSecret({name: 'x', prefix: 'abcd1234', token: 'secret'}), true);
+});
+
+test('summarizeConnections reports empty, offline, and online local status', () => {
+  assert.deepEqual(summarizeConnections(), {kind: 'empty', label: '尚未连接本机或远程设备', items: [], preview: []});
+  const offline = [{hostname: 'desk', status: 'offline'}];
+  assert.equal(summarizeConnections(offline).kind, 'offline');
+  assert.equal(summarizeConnections(offline).label, '离线');
+  const mixed = [{hostname: 'old', status: 'offline'}, {hostname: 'desk', status: 'online'}];
+  const summary = summarizeConnections(mixed);
+  assert.equal(summary.kind, 'online');
+  assert.equal(summary.label, '在线');
+  assert.deepEqual(summary.preview, [{hostname: 'desk', status: 'online'}]);
 });
