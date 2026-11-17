@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {actionQuery, csrfCookie, dueAtFromDate, dueDateValue, formatTopics, graphLayout, listQuery, parseTopics} from '../openteamily/static/memory/app.mjs';
+import {actionQuery, csrfCookie, dueAtFromDate, dueDateValue, formatTopics, graphLayout, listQuery, memoryPageFromSearch, parseTopics, queryForMemoryPage} from '../openteamily/static/memory/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -40,4 +40,15 @@ test('graphLayout places a single node at the center and sorts a circle by id', 
   assert.equal(placed[0].y, 50);
   assert.equal(placed[1].x, 100);
   assert.equal(placed[1].y, 150);
+});
+
+test('memoryPageFromSearch and queryForMemoryPage stay on the recorded allowlist', () => {
+  assert.equal(memoryPageFromSearch(''), 'overview');
+  assert.equal(memoryPageFromSearch('?page=profile'), 'profile');
+  assert.equal(memoryPageFromSearch('?page=todos'), 'actions');
+  assert.equal(memoryPageFromSearch('?page=unknown'), 'overview');
+  assert.equal(queryForMemoryPage('overview'), '');
+  assert.equal(queryForMemoryPage('profile'), '?page=profile');
+  assert.equal(queryForMemoryPage('actions'), '?page=todos');
+  assert.equal(queryForMemoryPage('meetings'), '');
 });

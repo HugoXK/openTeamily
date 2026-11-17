@@ -22,7 +22,7 @@ This slice stores workspace-scoped **memory pages**, **next actions**, optional 
 | POST | `/v1/workspaces/{id}/memory/actions/{id}` | Revisioned `{revision, changes: {title?, notes?, status?, due_at?, memory_page_id?}}`. `due_at` or `memory_page_id` may be `null` to clear |
 | POST | `/v1/workspaces/{id}/memory/actions/{id}/remove` | Delete the action |
 
-Page titles are unique per workspace (case-insensitive). Action titles are not unique. Default caps are 100 pages, 200 actions and 500 manual links. A page may have up to 8 topics; names are 1–40 characters and are unique per page case-insensitively. Tables are additive; `user_version` stays 1. A same-origin editor and overview graph are at `/memory`.
+Page titles are unique per workspace (case-insensitive). Action titles are not unique. Default caps are 100 pages, 200 actions and 500 manual links. A page may have up to 8 topics; names are 1–40 characters and are unique per page case-insensitively. Tables are additive; `user_version` stays 1. A same-origin editor and overview graph are at `/memory`. Recorded Teamily views `/memory?page=profile` and `/memory?page=todos` are served by the same page. The profile view only lays out the three recorded section headings; there is still no profile API, and the 「做梦」 control stays disabled. The todos view reuses the existing next-actions API. Empty copy is the recorded「当前没有可预期的事项。」
 
 `[[Title]]` mentions in a page body create graph edges to an existing same-workspace page with that title. Missing titles and self-mentions are ignored. A manual link and a mention between the same pair appear as one edge (`manual` if a stored link exists). Deleting a page removes its topics and manual links, and mention edges disappear with the body.
 
@@ -34,6 +34,6 @@ Workspace members may list, read and create pages and actions, read the graph, a
 
 ## Not in this slice
 
-No profile ("我的资料"), versions beyond the revision number, share or export links, and no "我的作品 / 我的会议" artifact browse. Those remain later slices on issue 8 and issue 9. Timeline and Project are not used as a memory implementation.
+The profile page has no save API yet. 「做梦」 was not opened in the recapture and is not implemented. Versions beyond the revision number, share or export links, and in-app "我的会议" artifact browse remain later slices on issue 8 and issue 9. "我的作品" already links to `/space`. Timeline and Project are not used as a memory implementation.
 
 No Teamily comparison and no browser E2E are claimed. Issue 8 stays open.
