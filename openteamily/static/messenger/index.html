@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>消息 · OpenTeamily</title>
+  <link rel="stylesheet" href="/shell/app.css">
+  <link rel="stylesheet" href="/messenger/app.css">
+  <script type="module" src="/shell/app.mjs"></script>
+  <script type="module" src="/messenger/app.mjs"></script>
+</head>
+<body class="app-workspace">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <nav class="app-rail" aria-label="应用导航">
+    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
+    <a href="/chat" title="聊天">聊天</a>
+    <a href="/messenger" title="消息">消息</a>
+    <a href="/agents" title="智能体">智能体</a>
+    <a href="/automations" title="自动化">自动化</a>
+    <a href="/memory" title="记忆">记忆</a>
+    <a href="/space" title="作品">作品</a>
+    <span class="rail-spacer"></span>
+    <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
+    <a href="/download" title="下载">下载</a>
+  </nav>
+  <p id="status" role="status"></p>
+  <main id="main">
+  <section id="login-panel" hidden>
+    <h2>登录</h2>
+    <form id="login-form" method="post" action="/v1/auth/login">
+      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
+      <button type="submit">登录</button>
+    </form>
+  </section>
+  <section id="main-panel" hidden>
+    <header class="page-top">
+      <h1>消息</h1>
+      <p class="note">工作区内的人↔人单聊与群聊。这里还没有 Agent 入群、未读、通知或附件；这些是后续切片。</p>
+      <p id="whoami"></p>
+      <label class="workspace-pick">工作区
+        <select id="workspace"></select>
+      </label>
+    </header>
+    <div class="messenger-layout">
+      <section class="conversation-pane" aria-label="会话列表">
+        <ul id="conversation-list"></ul>
+        <p id="conversations-empty" class="note" hidden>还没有会话。用下面的表单新建单聊或群聊。</p>
+        <form id="create-conversation" class="create-form">
+          <h2>新建会话</h2>
+          <label>类型
+            <select id="conversation-kind">
+              <option value="dm">单聊</option>
+              <option value="group">群聊</option>
+            </select>
+          </label>
+          <label>标题（群聊可选） <input id="conversation-title" maxlength="80"></label>
+          <fieldset>
+            <legend>成员</legend>
+            <div id="member-choices" class="member-choices"></div>
+          </fieldset>
+          <button type="submit">创建</button>
+        </form>
+      </section>
+      <section class="chat-pane" aria-label="会话内容">
+        <h2 id="chat-title">消息</h2>
+        <div id="message-scroller" class="message-scroller">
+          <p id="chat-empty" class="note">选择一个会话，或新建一个。</p>
+          <ul id="message-list"></ul>
+        </div>
+        <form id="message-form" class="message-form">
+          <label class="visually-hidden" for="message-body">消息</label>
+          <textarea id="message-body" maxlength="4000" rows="3" placeholder="输入消息"></textarea>
+          <button type="submit">发送</button>
+        </form>
+      </section>
+    </div>
+    <form id="logout-form" method="post" action="/v1/auth/logout">
+      <button type="submit">退出登录</button>
+    </form>
+  </section>
+  </main>
+</body>
+</html>

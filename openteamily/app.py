@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, invites, members, memory, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, invites, members, memory, model_api, oidc, runtime_connect, runtime_keys, settings, skill_secrets, social, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -48,6 +48,9 @@ class Config:
     max_agents_per_workspace: int = 50
     max_conversations_per_user: int = 50
     max_messages_per_conversation: int = 200
+    max_social_conversations_per_workspace: int = 200
+    max_social_messages_per_conversation: int = 500
+    max_social_members_per_conversation: int = 50
     max_runs_per_automation: int = 200
     auth_peer_limit: int = 20
     auth_name_limit: int = 10
@@ -743,6 +746,11 @@ class App:
                 r'(?:/([0-9a-f]{32})(?:/(messages(?:/([0-9a-f]{32})(?:/(artifact))?)?))?)?', path)
             if conversation_path:
                 return self.conversation_dispatch(db, session, method, query, now, env, *conversation_path.groups())
+            social_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
+                r'(?:/([0-9a-f]{32})(?:/(messages))?)?', path)
+            if social_path:
+                return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             homepage_api = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/homepage(?:/(revoke))?', path)
             if homepage_api:
@@ -2665,6 +2673,132 @@ class App:
         artifacts.attach_chat_source(
             db, artifact_id, workspace['id'], now, row['id'], message['id'], row['agent_id'])
         return self.artifact_saved(db, workspace['id'], artifact_id, 201)
+
+    def social_dispatch(self, db, session, method, query, now, env, workspace_id,
+                        conversation_id, action):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        if conversation_id is None and action is None:
+            if method == 'GET':
+                limit, cursor, _ = self.pagination(query)
+                rows = social.listing(db, workspace['id'], session['user_id'], cursor, limit + 1)
+                items = []
+                for row in rows[:limit]:
+                    items.append(social.conversation_view(row, social.member_rows(db, row['id'])))
+                return 200, {'items': items,
+                             'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
+            if method == 'POST' and not query:
+                return self.create_social_conversation(db, workspace, session, now, env)
+            refuse(400, 'invalid', 'Invalid messenger request')
+        if conversation_id is None:
+            refuse(404, 'not_found', 'Conversation not found')
+        row = social.load(db, workspace['id'], conversation_id)
+        if row is None or not social.is_member(db, row['id'], workspace['id'], session['user_id']):
+            refuse(404, 'not_found', 'Conversation not found')
+        if action is None and method == 'GET' and not query:
+            items = social.messages(db, row['id'], '', 101) or []
+            return 200, {'conversation': social.conversation_view(row, social.member_rows(db, row['id'])),
+                         'items': [social.message_view(item) for item in items[:100]],
+                         'cursor': items[99]['id'] if len(items) > 100 else None}, []
+        if action == 'messages' and method == 'GET':
+            limit, cursor, _ = self.pagination(query)
+            rows = social.messages(db, row['id'], cursor, limit + 1)
+            if rows is None:
+                refuse(400, 'invalid', 'Invalid pagination parameters')
+            return 200, {'items': [social.message_view(item) for item in rows[:limit]],
+                         'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
+        if action == 'messages' and method == 'POST' and not query:
+            return self.send_social_message(db, workspace, session, row, now, env)
+        refuse(400, 'invalid', 'Invalid messenger request')
+
+    def create_social_conversation(self, db, workspace, session, now, env):
+        body = self.body(env, ['kind', 'member_ids', 'title'])
+        kind, member_ids = body.get('kind'), body.get('member_ids')
+        if kind not in social.KINDS or not social.valid_member_ids(member_ids):
+            refuse(400, 'invalid', 'Provide a kind and 1–49 member ids')
+        title = body.get('title')
+        if title is not None and not social.valid_title(title):
+            refuse(400, 'invalid', 'Provide a valid conversation title')
+        if title is not None:
+            title = title.strip()
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        members_set = {session['user_id'], *member_ids}
+        if len(members_set) < 2:
+            refuse(400, 'invalid', 'A conversation needs at least two distinct members')
+        if kind == 'dm' and len(members_set) != 2:
+            refuse(400, 'invalid', 'A direct message has exactly two members')
+        allowed = social.workspace_member_ids(db, workspace)
+        if not members_set.issubset(allowed):
+            refuse(400, 'invalid', 'Every member must belong to the workspace')
+        if len(members_set) > self.config.max_social_members_per_conversation:
+            refuse(429, 'quota', 'Conversation member limit reached')
+        payload = {'kind': kind, 'member_ids': sorted(member_ids), 'title': title}
+        key_hash, request_hash = digest('social-conversation:' + key), digest(
+            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False))
+        prior = social.load_by_key(db, workspace['id'], key_hash)
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'conversation': social.conversation_view(prior, social.member_rows(db, prior['id']))}, []
+        dm = None
+        if kind == 'dm':
+            first, second = sorted(members_set)
+            dm = social.load_dm(db, workspace['id'], social.dm_key(first, second))
+            if dm is not None:
+                return 200, {'conversation': social.conversation_view(dm, social.member_rows(db, dm['id']))}, []
+            if not title:
+                other = second if first == session['user_id'] else first
+                title = social.username(db, other) or '单聊'
+        elif not title:
+            title = '群聊'
+        if not social.valid_title(title):
+            refuse(400, 'invalid', 'Provide a valid conversation title')
+        if (db.execute('SELECT COUNT(*) FROM social_conversations WHERE workspace_id=?',
+                       (workspace['id'],)).fetchone()[0]
+                >= self.config.max_social_conversations_per_workspace):
+            refuse(429, 'quota', 'Conversation capacity reached')
+        conversation_id = uuid4().hex
+        dm_hash = social.dm_key(*sorted(members_set)) if kind == 'dm' else None
+        db.execute(
+            'INSERT INTO social_conversations VALUES(?,?,?,?,?,?,?,?,?)',
+            (conversation_id, workspace['id'], kind, title, dm_hash, now, now, key_hash, request_hash))
+        for user_id in sorted(members_set):
+            db.execute(
+                'INSERT INTO social_members VALUES(?,?,?,?)',
+                (conversation_id, workspace['id'], user_id, now))
+        row = social.load(db, workspace['id'], conversation_id)
+        return 201, {'conversation': social.conversation_view(row, social.member_rows(db, conversation_id))}, []
+
+    def send_social_message(self, db, workspace, session, row, now, env):
+        body = self.body(env, ['body'])
+        text = body.get('body')
+        if not social.valid_body(text):
+            refuse(400, 'invalid', 'Provide a message')
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        key_hash, request_hash = digest('social-message:' + key), digest(
+            json.dumps({'body': text}, sort_keys=True, separators=(',', ':'), ensure_ascii=False))
+        prior = social.load_message_by_key(db, row['id'], key_hash)
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'message': social.message_view(prior)}, []
+        if (db.execute('SELECT COUNT(*) FROM social_messages WHERE conversation_id=?',
+                       (row['id'],)).fetchone()[0]
+                >= self.config.max_social_messages_per_conversation):
+            refuse(429, 'quota', 'Message capacity reached')
+        message_id = uuid4().hex
+        db.execute(
+            'INSERT INTO social_messages VALUES(?,?,?,?,?,?,?,?,?)',
+            (message_id, row['id'], workspace['id'], session['user_id'], text,
+             social.next_seq(db, row['id']), now, key_hash, request_hash))
+        db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, row['id']))
+        message = db.execute('SELECT * FROM social_messages WHERE id=?', (message_id,)).fetchone()
+        return 201, {'message': social.message_view(message)}, []
 
     def invite_dispatch(self, db, session, method, query, now, env, workspace_id, invite_id, revoking):
         workspace = members.load(db, workspace_id, session['user_id'])
