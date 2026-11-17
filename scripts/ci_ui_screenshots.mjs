@@ -449,6 +449,26 @@ async function main() {
       record('agents_conversation_send', false, String(error), { soft: ready.connection_status !== 'online' });
     }
 
+
+    try {
+      const enterText = '[CI FIXTURE] Enter shortcut send.';
+      await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#chat-body').fill(enterText);
+      await page.locator('#chat-body').press('Enter');
+      await waitForLocatorText(page, '#message-list', enterText, 30000);
+      const afterEnter = await visibleText(page.locator('#message-list'));
+      const composerValue = await page.locator('#chat-body').inputValue();
+      record(
+        'chat_send_enter_shortcut',
+        afterEnter.includes(enterText) && composerValue === '',
+        `composer=${JSON.stringify(composerValue)} ${afterEnter.slice(0, 240) || 'enter send empty'}`,
+        { soft: ready.connection_status !== 'online' },
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '61-chat-send-enter.png')));
+    } catch (error) {
+      record('chat_send_enter_shortcut', false, String(error), { soft: ready.connection_status !== 'online' });
+    }
+
     try {
       await page.locator('#new-conversation').click();
       const menu = page.locator('#compose-menu');

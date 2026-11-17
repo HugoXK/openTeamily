@@ -55,3 +55,15 @@ Related: [#4](https://github.com/openTeamily/openTeamily/issues/4), [#10](https:
 `/settings/channels`, `/settings/agent-access`, and `/settings/connectors` serve the same settings document as `/settings` (no-store, unknown subpath 404, query rejected 400). The hub in「AI 与智能体设置」links to them in the recorded order, keeping the OpenTeamily model API row. Visible copy uses 「Agent 渠道」 rather than a trademarked product title.
 
 This slice only lays out the recorded page structure. Connect / authorize / add-MCP controls stay disabled. Third-party brand marks and the recapture account's already-connected connector states are not reproduced. There is still no channel, Agent API, or connector backend. This is not Teamily or Impeccable comparison acceptance.
+
+
+## Chat composer shortcuts
+
+The unified `/chat` composer reads `send_shortcut` from `GET /v1/settings`. The
+default `enter` sends on Enter and keeps Shift+Enter as a newline, matching the
+recorded shortcuts page. `mod_enter` sends on Ctrl or Cmd+Enter and leaves a
+plain Enter as a newline. IME composition does not send. A missing, invalid, or
+unreadable setting falls back to `enter` and does not block the chat page.
+Message folding, auto-translate and link-preview rendering are not applied in
+the transcript here because those result layouts were not recaptured. This is
+not Teamily or Impeccable acceptance.

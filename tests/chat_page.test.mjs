@@ -42,3 +42,35 @@ test('messageSearchQuery adds only an explicit conversation scope and encodes ke
   assert.equal(scoped.get('conversation_id'), 'a'.repeat(32));
   assert.deepEqual([...scoped.keys()].sort(), ['conversation_id', 'limit', 'q']);
 });
+
+
+function keyEvent(overrides) {
+  return {
+    key: 'Enter',
+    isComposing: false,
+    keyCode: 13,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    altKey: false,
+    ...overrides,
+  };
+}
+
+test('shouldSendOnShortcut honors enter and Ctrl/Cmd+Enter bindings and ignores IME', async () => {
+  const {shouldSendOnShortcut} = await import('../openteamily/static/chat/app.mjs');
+  assert.equal(shouldSendOnShortcut(keyEvent(), 'enter'), true);
+  assert.equal(shouldSendOnShortcut(keyEvent({shiftKey: true}), 'enter'), false);
+  assert.equal(shouldSendOnShortcut(keyEvent({ctrlKey: true}), 'enter'), false);
+  assert.equal(shouldSendOnShortcut(keyEvent({metaKey: true}), 'enter'), false);
+  assert.equal(shouldSendOnShortcut(keyEvent({altKey: true}), 'enter'), false);
+  assert.equal(shouldSendOnShortcut(keyEvent({key: 'a'}), 'enter'), false);
+  assert.equal(shouldSendOnShortcut(keyEvent({isComposing: true}), 'enter'), false);
+  assert.equal(shouldSendOnShortcut(keyEvent({keyCode: 229}), 'enter'), false);
+  assert.equal(shouldSendOnShortcut(keyEvent({ctrlKey: true}), 'mod_enter'), true);
+  assert.equal(shouldSendOnShortcut(keyEvent({metaKey: true}), 'mod_enter'), true);
+  assert.equal(shouldSendOnShortcut(keyEvent(), 'mod_enter'), false);
+  assert.equal(shouldSendOnShortcut(keyEvent({ctrlKey: true, shiftKey: true}), 'mod_enter'), false);
+  assert.equal(shouldSendOnShortcut(keyEvent(), 'unknown'), true);
+  assert.equal(shouldSendOnShortcut(null, 'enter'), false);
+});

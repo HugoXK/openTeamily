@@ -45,6 +45,15 @@ export function mergeSessions(agentRows, socialRows, currentUserId) {
   return sessions;
 }
 
+
+export function shouldSendOnShortcut(event, sendShortcut = 'enter') {
+  if (!event || event.key !== 'Enter') return false;
+  if (event.isComposing || event.keyCode === 229) return false;
+  const modifier = Boolean(event.ctrlKey || event.metaKey);
+  if (sendShortcut === 'mod_enter') return modifier && !event.shiftKey && !event.altKey;
+  return !modifier && !event.shiftKey && !event.altKey;
+}
+
 export function messageSearchQuery(query, conversationId = '') {
   const params = new URLSearchParams({q: query, limit: '20'});
   if (conversationId) params.set('conversation_id', conversationId);
@@ -120,6 +129,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let searchConversationTitle = '';
   let composeMode = 'group';
   let searchSeq = 0;
+  let sendShortcut = 'enter';
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -632,7 +642,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('session-pane').hidden = false;
     document.body.classList.add('chat-open');
     document.getElementById('whoami').textContent = currentUser.username;
-    const listed = await request('GET', '/v1/workspaces?limit=100');
+    const [listed, settings] = await Promise.all([
+      request('GET', '/v1/workspaces?limit=100'),
+      request('GET', '/v1/settings'),
+    ]);
+    const stored = settings.status === 200 && settings.body && settings.body.settings
+      && settings.body.settings.values && settings.body.settings.values.send_shortcut;
+    sendShortcut = stored === 'mod_enter' ? 'mod_enter' : 'enter';
     workspaces = listed.status === 200 ? (listed.body.items || []) : [];
     const wanted = hashParams().workspace || workspaceSelect.value;
     workspaceSelect.replaceChildren();
@@ -775,6 +791,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadSessions();
     await openSocialConversation(result.body.conversation.id);
     show('ok', '会话已创建。');
+  });
+
+
+  document.getElementById('chat-body').addEventListener('keydown', event => {
+    if (!shouldSendOnShortcut(event, sendShortcut)) return;
+    event.preventDefault();
+    if (!(document.getElementById('chat-body').value || '').trim()) return;
+    const form = document.getElementById('chat-form');
+    if (typeof form.requestSubmit === 'function') form.requestSubmit();
+    else form.dispatchEvent(new Event('submit', {cancelable: true, bubbles: true}));
   });
 
   document.getElementById('chat-form').addEventListener('submit', async event => {
