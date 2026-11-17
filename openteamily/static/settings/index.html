@@ -64,6 +64,14 @@
     <header class="page-top">
       <h1>设置</h1>
     </header>
+    <section id="settings-usage-card" class="settings-usage-card" aria-labelledby="usage-card-title">
+      <div class="usage-ring" aria-hidden="true"><span class="usage-ring-mark">—</span></div>
+      <div class="usage-copy">
+        <h2 id="usage-card-title" class="usage-title">未接通</h2>
+        <p class="usage-meta">对照里这里是套餐剩余时间和 5 小时窗口说明。OpenTeamily 不做套餐、5 小时窗口或积分用量，所以没有可显示的剩余时间。</p>
+      </div>
+      <button type="button" id="settings-upgrade" disabled title="未实现：对照里的「升级」会进入套餐或付费，OpenTeamily 没有这条流程。">升级</button>
+    </section>
     <p id="whoami"></p>
     <nav class="workspace-links" aria-label="工作区">
       <a href="/members">成员</a>
@@ -77,6 +85,50 @@
           <span class="settings-row-label">账户与资料</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
+        </div>
+      </section>
+      <section class="settings-cluster" aria-labelledby="group-creator">
+        <h2 id="group-creator">创作者与奖励</h2>
+        <div class="settings-group">
+        <button type="button" class="settings-row" disabled title="未实现：对照里的「创作赚钱」是创作者分成与提现，OpenTeamily 没有这条流程，也不显示余额。">
+          <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 6h16v2H4V6zm0 5h16v7H4v-7zm3 2.2v2.6h3v-2.6H7z"/></svg></span>
+          <span class="settings-row-label">创作赚钱</span>
+          <span class="settings-row-meta">未实现</span>
+          <span class="settings-row-chevron" aria-hidden="true">›</span>
+        </button>
+        <button type="button" class="settings-row" disabled title="未实现：对照里的「积分中心」是抵扣金与排行榜，OpenTeamily 不做积分机制，也不显示余额。">
+          <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8 7V5.8A4 4 0 0 1 12 2a4 4 0 0 1 4 3.8V7h2.5A1.5 1.5 0 0 1 20 8.5v10A1.5 1.5 0 0 1 18.5 20h-13A1.5 1.5 0 0 1 4 18.5v-10A1.5 1.5 0 0 1 5.5 7H8zm2 0h4V5.9A2 2 0 0 0 12 4a2 2 0 0 0-2 1.9V7z"/></svg></span>
+          <span class="settings-row-label">积分中心</span>
+          <span class="settings-row-meta">未实现</span>
+          <span class="settings-row-chevron" aria-hidden="true">›</span>
+        </button>
+        </div>
+      </section>
+      <section class="settings-cluster" aria-labelledby="group-billing">
+        <h2 id="group-billing">套餐、账单与用量</h2>
+        <div class="settings-group">
+        <button type="button" class="settings-row" disabled title="未实现：对照里的「套餐与账单」会进入订阅，OpenTeamily 没有套餐，也不显示当前档位。">
+          <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M4 6h16v3H4V6zm0 5h16v8H4v-8zm3 2.2v2.2h4v-2.2H7z"/></svg></span>
+          <span class="settings-row-label">套餐与账单</span>
+          <span class="settings-row-meta">未实现</span>
+          <span class="settings-row-chevron" aria-hidden="true">›</span>
+        </button>
+        <button type="button" class="settings-row" disabled title="未实现：对照里的「用量」有 5 小时窗口和每周上限，OpenTeamily 没有用量接口，也不显示剩余百分比。">
+          <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm0 2a7 7 0 1 0 0 14 7 7 0 0 0 0-14zm.8 2.2v5.1l3.6 2.1-.8 1.4L11 12.2V7.2h1.8z"/></svg></span>
+          <span class="settings-row-label">用量</span>
+          <span class="settings-row-meta">未实现</span>
+          <span class="settings-row-chevron" aria-hidden="true">›</span>
+        </button>
+        <button type="button" class="settings-row" disabled title="未实现：对照里的「教育优惠认证」要验证学校邮箱，OpenTeamily 没有认证或优惠流程。">
+          <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 9.5 12 5l9 4.5-9 4.5L3 9.5zm3.2 3.3v3.2L12 19l5.8-3v-3.2L12 16.3 6.2 12.8z"/></svg></span>
+          <span class="settings-row-label">教育优惠认证</span>
+          <span class="settings-row-chevron" aria-hidden="true">›</span>
+        </button>
+        <button type="button" class="settings-row" disabled title="未实现：对照里的「兑换码」会兑换付费时长，OpenTeamily 没有兑换流程。">
+          <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M3 8h13.5A4.5 4.5 0 0 1 21 12.5 4.5 4.5 0 0 1 16.5 17H3l2-2.5L3 12l2-1.5L3 8zm5.5 2.2v5.6h1.8v-5.6H8.5z"/></svg></span>
+          <span class="settings-row-label">兑换码</span>
+          <span class="settings-row-chevron" aria-hidden="true">›</span>
+        </button>
         </div>
       </section>
       <section class="settings-cluster" aria-labelledby="group-ai">
@@ -109,7 +161,7 @@
         </a>
         <a class="settings-row" href="#skill-secrets">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M14 4a6 6 0 0 1 3.7 10.7L21 18v3h-3v-2h-2v-2h-2.2l-1.1-1.1A6 6 0 1 1 14 4zm0 2a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm1 2h2v2h-2V8z"/></svg></span>
-          <span class="settings-row-label">技能密钥</span>
+          <span class="settings-row-label">技能配置</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         <a class="settings-row settings-row-stack" href="/settings/connectors">
@@ -395,10 +447,23 @@
         <div class="connectors-toolbar">
           <label class="visually-hidden" for="connector-search">搜索应用</label>
           <input id="connector-search" type="search" placeholder="搜索应用…" maxlength="80" autocomplete="off">
-          <button type="button" disabled title="未实现：对照里「添加 MCP 服务器」只打开说明弹层后关闭，没有留下可实现的完整版式，也还没有 MCP 接入接口。">+ 添加 MCP 服务器</button>
+          <button type="button" id="add-mcp-server" aria-haspopup="dialog" aria-controls="mcp-dialog" aria-expanded="false">+ 添加 MCP 服务器</button>
         </div>
-        <p class="note">对照里有一份约 60 项的第三方应用目录，含官方标志，以及当时采集账号里已经接通的应用。这里不复制那些标志，也不假装已经连上任何第三方账号。搜索框可以输入，但目前没有可列出的应用。</p>
+        <p class="note">对照里有一份约 60 项的第三方应用目录，含官方标志，以及当时采集账号里已经接通的应用。这里不复制那些标志，也不假装已经连上任何第三方账号。搜索框可以输入，但目前没有可列出的应用。「添加 MCP 服务器」只打开对照里的说明弹层；「知道了」关闭说明，不会添加或连接服务器。OpenTeamily 还没有 MCP 接入接口。</p>
         <p id="connectors-empty" class="settings-card settings-empty">还没有可连接的应用目录。</p>
+        <div id="mcp-dialog" class="mcp-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-dialog-title">
+          <div class="mcp-dialog-card">
+            <h2 id="mcp-dialog-title">在智能体里添加自定义 MCP 服务器</h2>
+            <ol class="mcp-dialog-steps">
+              <li>打开你创建的智能体、Personal AI 或内置智能体的聊天。</li>
+              <li>点输入框里的「连接器」。</li>
+              <li>点搜索框旁的「+」。</li>
+            </ol>
+            <div class="mcp-dialog-actions">
+              <button type="button" id="mcp-dialog-ack">知道了</button>
+            </div>
+          </div>
+        </div>
     </div>
   </section>
   </main>

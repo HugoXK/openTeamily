@@ -1,9 +1,11 @@
 """Public agent homepage tests (issue #6). In-process WSGI + temporary SQLite only.
 
-These tests prove share-link access control. They are not browser E2E,
-embeddable conversations, a live container run, or Teamily parity.
+These tests prove share-link access control and the recorded public
+profile typography. They are not browser E2E, embeddable conversations,
+a live container run, or Teamily parity.
 """
 from pathlib import Path
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -76,10 +78,25 @@ class AgentHomepageTests(unittest.TestCase):
         self.assertIn('文档助手', html)
         self.assertIn('整理笔记', html)
         self.assertIn('OpenTeamily / FlyBot', html)
+        self.assertIn('Agent profile', html)
+        self.assertIn('Public page', html)
+        self.assertIn('Talk via', html)
+        self.assertIn('Web conversation', html)
+        self.assertIn('Talk directly with 文档助手.', html)
+        self.assertIn('Built with FlyBot', html)
+        self.assertIn('Create your own Agent', html)
+        self.assertIn('disabled', html)
+        self.assertIn('未接通：公开主页不会发送消息。', html)
+        self.assertIn('未接通：公开主页不会创建智能体。', html)
+        self.assertIn('does not run a conversation', html)
+        self.assertNotIn('AVAILABLE NOW', html)
+        self.assertNotIn('LIVE', html)
+        self.assertIsNone(re.search(r'(?<!Open)Teamily', html))
         self.assertNotIn('系统提示请保密。', html)
         self.assertNotIn(item['id'], html)
         self.assertNotIn(self.wid, html)
         self.assertNotIn(token, html)
+        self.assertIn('>文<', html)  # letter avatar, not a copied mark
         self.assertIn('text/html', page['headers']['Content-Type'])
         self.assertIn("frame-ancestors 'none'", page['headers']['Content-Security-Policy'])
         self.assertEqual(page['headers']['X-Frame-Options'], 'DENY')
@@ -139,6 +156,21 @@ class AgentHomepageTests(unittest.TestCase):
         self.assertEqual(self.publish(anonymous, fresh['id'])['status'], 401)
         self.assertEqual(self.guest.call('POST', '/a/' + ('B' * 43), origin=None)['status'], 400)
         self.assertEqual(self.guest.call('GET', '/a/' + ('B' * 43), query='x=1', origin=None)['status'], 400)
+
+    def test_homepage_typography_escapes_name_and_omits_unverified_chrome(self):
+        from openteamily.agents import render_homepage
+        html = render_homepage({
+            'name': '<Script>Bot',
+            'summary': 'Hello & goodbye',
+        })
+        self.assertIn('&lt;Script&gt;Bot', html)
+        self.assertIn('Hello &amp; goodbye', html)
+        self.assertIn('>S<', html)
+        self.assertNotIn('<Script>', html)
+        self.assertIsNone(re.search(r'(?<!Open)Teamily', html))
+        self.assertNotIn('AVAILABLE NOW', html)
+        self.assertIn('placeholder="Message &lt;Script&gt;Bot on the web…"', html)
+        self.assertIn('disabled', html)
 
     def test_existing_v1_database_gains_the_homepage_table(self):
         self.create()

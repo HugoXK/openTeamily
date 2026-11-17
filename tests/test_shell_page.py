@@ -116,8 +116,14 @@ class ShellPageTests(unittest.TestCase):
             self.assertIn('id="logout-form"', html, path)
             self.assertIn('所有设置', html, path)
             self.assertIn('href="/settings"', html, path)
-            self.assertNotIn('积分中心', html, path)
-            self.assertNotIn('套餐与账单', html, path)
+            if path == '/settings':
+                self.assertIn('积分中心', html)
+                self.assertIn('套餐与账单', html)
+                self.assertIn('id="settings-upgrade"', html)
+                self.assertRegex(html, r'<button[^>]*id="settings-upgrade"[^>]*disabled')
+            else:
+                self.assertNotIn('积分中心', html, path)
+                self.assertNotIn('套餐与账单', html, path)
             self.assertNotIn('contact@teamily.ai', html.lower(), path)
             self.assertIn('id="help-menu"', html, path)
             self.assertIn('查看我的资料', html, path)

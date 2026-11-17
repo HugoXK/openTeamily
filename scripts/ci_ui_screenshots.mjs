@@ -210,6 +210,35 @@ async function main() {
     );
     screenshots.push(path.basename(await shot(page, outDir, '02-settings-signed-in.png')));
     try {
+      const hubText = `${await visibleText(page.locator('#settings-index'))}`;
+      const usageText = `${await visibleText(page.locator('#settings-usage-card'))}`;
+      const upgradeDisabled = await page.locator('#settings-upgrade').isDisabled();
+      record(
+        'settings_hub_recorded_groups',
+        usageText.includes('未接通')
+          && usageText.includes('升级')
+          && usageText.includes('5 小时窗口')
+          && upgradeDisabled
+          && hubText.includes('创作者与奖励')
+          && hubText.includes('套餐、账单与用量')
+          && hubText.includes('创作赚钱')
+          && hubText.includes('积分中心')
+          && hubText.includes('套餐与账单')
+          && hubText.includes('教育优惠认证')
+          && hubText.includes('兑换码')
+          && hubText.includes('技能配置')
+          && !usageText.includes('0m 后重置')
+          && !hubText.includes('已赚取')
+          && !hubText.includes('$CASH')
+          && !hubText.includes('CREDIT')
+          && !hubText.includes('剩余 100%'),
+        `upgradeDisabled=${upgradeDisabled}; usage=${usageText || 'usage empty'} | hub=${hubText || 'hub empty'}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '76-settings-hub-groups.png')));
+    } catch (error) {
+      record('settings_hub_recorded_groups', false, String(error));
+    }
+    try {
       await page.goto(`${origin}/settings/appearance`, { waitUntil: 'load' });
       await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
       const appearance = page.locator('#appearance');
@@ -376,10 +405,11 @@ async function main() {
       const connectors = page.locator('[data-settings-page="connectors"]');
       await connectors.waitFor({ state: 'visible', timeout: 15000 });
       const connectorsText = `${await visibleText(connectors)}`;
-      const addMcpDisabled = await page.locator('[data-settings-page="connectors"] button').isDisabled();
+      const addMcp = page.locator('#add-mcp-server');
+      const addMcpDisabled = await addMcp.isDisabled();
       record(
         'settings_connectors',
-        addMcpDisabled
+        !addMcpDisabled
           && connectorsText.includes('应用连接器')
           && connectorsText.includes('添加 MCP 服务器')
           && connectorsText.includes('还没有可连接的应用目录。')
@@ -388,6 +418,23 @@ async function main() {
         `addDisabled=${addMcpDisabled}; ${connectorsText || 'connectors page empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '46-settings-connectors.png')));
+      await addMcp.click();
+      const mcpDialog = page.locator('#mcp-dialog');
+      await mcpDialog.waitFor({ state: 'visible', timeout: 15000 });
+      const mcpText = `${await visibleText(mcpDialog)}`;
+      record(
+        'settings_connectors_mcp_dialog',
+        mcpText.includes('在智能体里添加自定义 MCP 服务器')
+          && mcpText.includes('打开你创建的智能体、Personal AI 或内置智能体的聊天。')
+          && mcpText.includes('点输入框里的「连接器」。')
+          && mcpText.includes('点搜索框旁的「+」。')
+          && mcpText.includes('知道了'),
+        mcpText || 'mcp dialog empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '75-settings-connectors-mcp.png')));
+      await page.locator('#mcp-dialog-ack').click();
+      await mcpDialog.waitFor({ state: 'hidden', timeout: 15000 });
+      record('settings_connectors_mcp_dialog_closed', await mcpDialog.isHidden(), '知道了 closes the instruction dialog');
     } catch (error) {
       record('settings_connectors', false, String(error));
     }
@@ -1519,6 +1566,46 @@ async function main() {
 
     } catch (error) {
       record('discover_page', false, String(error));
+    }
+
+    try {
+      if (!ready.homepage_file) {
+        throw new Error('ready.json is missing homepage_file');
+      }
+      const homepagePath = fs.readFileSync(ready.homepage_file, 'utf8').trim();
+      if (!/^\/a\/[A-Za-z0-9_-]{43}$/.test(homepagePath)) {
+        throw new Error('homepage-path sidecar is not a public share path');
+      }
+      await page.goto(`${origin}${homepagePath}`, {waitUntil: 'load'});
+      const homeText = await visibleText(page.locator('body'));
+      const sendDisabled = await page.locator('.composer button').isDisabled();
+      const createDisabled = await page.locator('.create-agent').isDisabled();
+      const composerDisabled = await page.locator('#public-composer').isDisabled();
+      const token = homepagePath.slice(3);
+      record(
+        'agent_public_homepage',
+        homeText.includes('OpenTeamily / FlyBot')
+          && homeText.includes('Agent profile')
+          && homeText.includes('Public page')
+          && homeText.includes(ready.agent_name)
+          && homeText.includes('Synthetic CI directory entry.')
+          && homeText.includes('Talk via')
+          && homeText.includes('Web conversation')
+          && homeText.includes('Built with FlyBot')
+          && homeText.includes('Create your own Agent')
+          && homeText.includes('未接通')
+          && sendDisabled
+          && createDisabled
+          && composerDisabled
+          && !/(?<!Open)Teamily|AVAILABLE NOW|\bLIVE\b/.test(homeText)
+          && !homeText.includes(ready.workspace_id)
+          && !homeText.includes(ready.agent_id)
+          && !homeText.includes(token),
+        (homeText || 'homepage empty').slice(0, 280),
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '77-agent-public-homepage.png')));
+    } catch (error) {
+      record('agent_public_homepage', false, String(error).replace(/\/a\/[A-Za-z0-9_-]{20,}/g, '/a/<redacted>'));
     }
 
     await context.close();

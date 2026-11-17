@@ -1,7 +1,8 @@
 """Synthetic, clearly labeled fixtures for CI screenshots of the management UI.
 
 Throwaway data only. Never log or return passwords, session cookies, invite
-tokens, or runtime keys. Not a Teamily or production dataset.
+tokens, runtime keys, or public homepage tokens. Not a Teamily or production
+dataset.
 """
 from datetime import datetime, timezone
 import os
@@ -131,6 +132,13 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         'instructions': 'Keep replies short. This agent is fixture data only.',
     }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-agent-0001'}), (201,), 'create the fixture agent')
     agent_id = agent['body']['agent']['id']
+    published = _require(owner.call(
+        'POST', '/v1/workspaces/%s/agents/%s/homepage' % (wid, agent_id), {},
+    ), (200, 201), 'publish the fixture agent homepage')
+    homepage_path = published['body']['agent']['homepage']['path']
+    homepage_file = data_dir / 'homepage-path'
+    homepage_file.write_text(homepage_path + '\n')
+    os.chmod(homepage_file, 0o600)
     # Synthetic public catalog entries exercise real search and cursor paging.
     _require(owner.call('POST', '/v1/workspaces/%s/agents/%s/discover' % (wid, agent_id),
                         {'slug': 'ci-directory-assistant'}), (200, 201), 'list fixture agent')
@@ -243,6 +251,7 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         'team_slug': TEAM_SLUG,
         'agent_id': agent_id,
         'agent_name': AGENT_NAME,
+        'homepage_file': str(homepage_file),
         'conversation_id': conversation_id,
         'conversation_title': CHAT_TITLE,
         'saved_message_title': SAVED_MESSAGE_TITLE,

@@ -13,6 +13,7 @@ from openteamily.ci_ui_fixtures import (
 )
 from openteamily.store import Store
 from tests.test_management import Client, ORIGIN
+from tests.test_settings_page import RawClient
 
 
 class CiUiFixtureTests(unittest.TestCase):
@@ -111,6 +112,21 @@ class CiUiFixtureTests(unittest.TestCase):
         self.assertNotIn(model_key, str(model['body']))
         self.assertTrue((data_dir / 'runtime-key').exists())
         self.assertEqual((data_dir / 'runtime-key').stat().st_mode & 0o077, 0)
+        homepage_file = data_dir / 'homepage-path'
+        self.assertTrue(homepage_file.exists())
+        self.assertEqual(homepage_file.stat().st_mode & 0o077, 0)
+        self.assertEqual(seed['homepage_file'], str(homepage_file))
+        homepage_path = homepage_file.read_text().strip()
+        self.assertRegex(homepage_path, r'^/a/[A-Za-z0-9_-]{43}$')
+        dumped = repr(seed)
+        self.assertNotIn(homepage_path, dumped)
+        self.assertNotIn(homepage_path.rsplit('/', 1)[-1], dumped)
+        public = RawClient(app).call('GET', homepage_path, origin=None)
+        self.assertEqual(public['status'], 200, public)
+        html = public['body'].decode()
+        self.assertIn(AGENT_NAME, html)
+        self.assertIn('Agent profile', html)
+        self.assertNotIn(homepage_path.rsplit('/', 1)[-1], html)
 
     def test_solid_png_is_a_small_visible_fixture(self):
         data = solid_png()

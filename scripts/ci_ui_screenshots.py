@@ -93,6 +93,7 @@ def _public_ready(seed, origin, login_file, run_status, connection_status, chat_
         'member_username': seed['member_username'],
         'agent_id': seed['agent_id'],
         'agent_name': seed['agent_name'],
+        'homepage_file': seed['homepage_file'],
         'conversation_id': seed['conversation_id'],
         'conversation_title': seed['conversation_title'],
         'saved_message_title': seed['saved_message_title'],

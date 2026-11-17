@@ -91,6 +91,77 @@
   margin: 0.75rem 0 0;
 }
 
+
+.settings-usage-card {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin: 0 0 1.5rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  background: var(--ot-surface);
+  box-shadow: var(--ot-shadow);
+}
+
+.usage-ring {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  border: 3px solid var(--ot-line);
+  border-radius: 50%;
+  color: var(--ot-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.usage-copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.usage-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.usage-meta {
+  margin: 0;
+  color: var(--ot-muted);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+#settings-upgrade {
+  flex: 0 0 auto;
+  margin-left: 0.25rem;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 999px;
+  background: var(--ot-bg-accent);
+  color: inherit;
+  font: inherit;
+  font-weight: 650;
+}
+
+#settings-upgrade:disabled,
+button.settings-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+button.settings-row {
+  width: 100%;
+  text-align: left;
+}
+
 .settings-index {
   display: grid;
   gap: 1.15rem;
@@ -451,4 +522,62 @@ a.settings-row:focus-visible {
 
 #privacy #save:disabled {
   cursor: default;
+}
+
+.mcp-dialog {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(12 10 9 / 45%);
+  padding: 1.5rem;
+  z-index: 20;
+}
+
+.mcp-dialog[hidden] {
+  display: none;
+}
+
+.mcp-dialog-card {
+  width: min(24rem, 100%);
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  box-shadow: var(--ot-shadow);
+  padding: 1.05rem 1.1rem 1rem;
+}
+
+#mcp-dialog-title {
+  margin: 0 0 0.75rem;
+  font-size: 0.98rem;
+  font-weight: 650;
+}
+
+.mcp-dialog-steps {
+  margin: 0;
+  padding: 0 0 0 1.15rem;
+  color: var(--ot-ink);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.mcp-dialog-steps li + li {
+  margin-top: 0.35rem;
+}
+
+.mcp-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+#mcp-dialog-ack {
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  background: var(--ot-bg-accent);
+  color: var(--ot-ink);
 }
