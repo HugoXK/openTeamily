@@ -141,6 +141,8 @@ class SettingsPage:
             return True
         if path in ('/space', '/artifacts'):
             return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings')
+        if path == '/discover':
+            return query == 'tab=agents'
         if path == '/memory':
             return query in ('page=profile', 'page=todos')
         return False

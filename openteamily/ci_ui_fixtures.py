@@ -130,6 +130,18 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         'instructions': 'Keep replies short. This agent is fixture data only.',
     }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-agent-0001'}), (201,), 'create the fixture agent')
     agent_id = agent['body']['agent']['id']
+    # Synthetic public catalog entries exercise real search and cursor paging.
+    _require(owner.call('POST', '/v1/workspaces/%s/agents/%s/discover' % (wid, agent_id),
+                        {'slug': 'ci-directory-assistant'}), (200, 201), 'list fixture agent')
+    for index in range(12):
+        public_agent = _require(owner.call('POST', '/v1/workspaces/%s/agents' % wid, {
+            'name': '[CI FIXTURE] Catalog helper %02d' % index,
+            'summary': 'Synthetic public catalog entry, not a real creator.',
+            'instructions': 'Fixture only.',
+        }, {'HTTP_IDEMPOTENCY_KEY': 'ci-catalog-agent-%04d' % index}), (201,), 'create catalog fixture')
+        _require(owner.call('POST', '/v1/workspaces/%s/agents/%s/discover' % (
+            wid, public_agent['body']['agent']['id']), {'slug': 'ci-helper-%02d' % index}),
+                 (200, 201), 'list catalog fixture')
     conversation = _require(owner.call(
         'POST', '/v1/workspaces/%s/agents/%s/conversations' % (wid, agent_id),
         {'title': CHAT_TITLE},

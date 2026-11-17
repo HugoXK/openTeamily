@@ -1105,6 +1105,34 @@ async function main() {
         `whoami=${discoverWho || '(empty)'}; current=${discoverCurrent}; ${discoverText || 'discover empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '52-discover.png')));
+      await page.locator('#discover-list article').first().waitFor({state: 'visible'});
+      record('discover_cards', await page.locator('#discover-list article').count() === 12
+        && await page.locator('#catalog-more').isVisible()
+        && await page.locator('#discover-list article button:disabled').count() === 12,
+        await visibleText(page.locator('#catalog-count')));
+      screenshots.push(path.basename(await shot(page, outDir, '56-discover-catalog.png')));
+      await page.locator('#catalog-more').click();
+      await waitForLocatorText(page, '#catalog-count', '13 个智能体');
+      record('discover_pagination', await page.locator('#discover-list article').count() === 13
+        && await page.locator('#catalog-more').isHidden(), '13 real fixture entries after cursor page');
+      await page.locator('#catalog-query').fill(ready.agent_name);
+      await page.locator('#catalog-search button[type="submit"]').click();
+      await waitForLocatorText(page, '#catalog-count', '1 个智能体');
+      record('discover_search', await page.locator('#discover-list article').count() === 1
+        && (await visibleText(page.locator('#discover-list'))).includes(ready.agent_name),
+        await visibleText(page.locator('#catalog-count')));
+      screenshots.push(path.basename(await shot(page, outDir, '57-discover-search.png')));
+      await page.locator('#catalog-query').fill('ci-no-match-702194');
+      await page.locator('#catalog-search button[type="submit"]').click();
+      await page.locator('#discover-empty').waitFor({state: 'visible'});
+      record('discover_search_empty', (await visibleText(page.locator('#discover-empty'))).includes('没有匹配'),
+        await visibleText(page.locator('#discover-empty')));
+      screenshots.push(path.basename(await shot(page, outDir, '58-discover-search-empty.png')));
+      await page.locator('#catalog-clear').click();
+      await waitForLocatorText(page, '#catalog-count', '12 个智能体');
+      record('discover_search_clear', await page.locator('#catalog-query').inputValue() === ''
+        && await page.locator('#catalog-more').isVisible(), 'clear resets the first page');
+
     } catch (error) {
       record('discover_page', false, String(error));
     }
