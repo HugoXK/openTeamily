@@ -6,7 +6,7 @@ This slice adds a **server-side, authorization-scoped** message search across th
 
 ## Route
 
-`GET /v1/workspaces/{workspace_id}/search/messages?q=&kind=all|agent|social&limit=&cursor=`
+`GET /v1/workspaces/{workspace_id}/search/messages?q=&kind=all|agent|social&limit=&cursor=&conversation_id=`
 
 - Requires a session. The caller must belong to the workspace; outsiders get `404`.
 - `q`: 1–80 characters, no control characters. Required.
@@ -32,10 +32,25 @@ The workspace id is also part of every query, so a caller cannot search another 
 
 ## Page wiring
 
-The API is available now. The `/chat` search box still filters already-loaded session rows client-side; wiring it to this endpoint (with result navigation) is tracked as follow-up because it needs both agent and social conversation routing. Do not describe the current UI search as server-side.
+The unified `/chat` sidebar message tab calls this endpoint and can open authorized agent or social conversations from results. The other tabs use existing workspace data or are labeled unimplemented. This is workspace-authorized search, not an instance-wide index. Results remain bounded to the requested page.
 
 ## Explicitly not in this slice
 
 - Full-text/`FTS5` index, ranking, highlights beyond a plain snippet, semantic/vector search.
 - Global (cross-workspace) search, cross-instance federation, Bot Social transport.
-- Browser E2E and Teamily comparison. Tests are in-process WSGI + temporary SQLite.
+- Teamily comparison and a separate, uncaptured search-dialog layout. Authorization tests use in-process WSGI + temporary SQLite; fixture-only browser checks cover global and current-conversation search.
+
+
+## Conversation-header search
+
+The `/chat` header search reuses the existing message panel with an explicit
+“仅搜索当前对话” scope. The left sidebar search remains workspace-wide; switching
+to a non-message tab or closing the panel clears the conversation scope.
+`conversation_id` is optional, exactly 32 lowercase hex characters when present.
+It narrows both authorized agent/social queries **before** cursor pagination;
+it never replaces user, membership or workspace checks. A nonexistent or
+inaccessible conversation produces no results, not a permission bypass.
+
+This is a functional scope correction based on the recorded conversation-header
+search action, not a claim about an uncaptured separate search-dialog layout.
+No separate panel is invented and no Teamily writes were performed.

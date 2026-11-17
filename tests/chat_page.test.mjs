@@ -31,3 +31,14 @@ test('mergeSessions combines agent and social rows without inventing pins', () =
   ]);
   assert.equal(sessions.every((row) => row.pinned == null), true);
 });
+
+
+test('messageSearchQuery adds only an explicit conversation scope and encodes keywords', async () => {
+  const {messageSearchQuery} = await import('../openteamily/static/chat/app.mjs');
+  const global = new URLSearchParams(messageSearchQuery('budget & 预算'));
+  assert.equal(global.get('q'), 'budget & 预算');
+  assert.equal(global.has('conversation_id'), false);
+  const scoped = new URLSearchParams(messageSearchQuery('budget & 预算', 'a'.repeat(32)));
+  assert.equal(scoped.get('conversation_id'), 'a'.repeat(32));
+  assert.deepEqual([...scoped.keys()].sort(), ['conversation_id', 'limit', 'q']);
+});

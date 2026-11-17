@@ -74,6 +74,44 @@ class SearchTests(unittest.TestCase):
         other = self.bob.workspace('bob-space', 'request_example_0002')['body']['workspace']['id']
         self.assertEqual(self.search(self.alice, 'q=预算表', workspace_id=other)['status'], 404)
 
+    def test_conversation_scope_applies_before_pagination(self):
+        for conversation_id, expected in ((self.conv_id, 'agent'), (self.dm_id, 'social')):
+            scoped = self.search(self.alice, f'q=预算表&conversation_id={conversation_id}&limit=1')
+            self.assertEqual(scoped['status'], 200, scoped)
+            self.assertEqual([item['kind'] for item in scoped['body']['items']], [expected])
+            self.assertEqual({item['conversation_id'] for item in scoped['body']['items']}, {conversation_id})
+            self.assertIsNone(scoped['body']['cursor'])
+        self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/social/conversations/{self.dm_id}/messages',
+            {'body': '预算表第二版'}, {'HTTP_IDEMPOTENCY_KEY': 'scope-social-msg-0002'})
+        first = self.search(self.alice, f'q=预算表&conversation_id={self.dm_id}&limit=1&kind=social')
+        cursor = first['body']['cursor']
+        self.assertTrue(cursor)
+        rest = self.search(self.alice, f'q=预算表&conversation_id={self.dm_id}&limit=1&cursor={cursor}&kind=social')
+        self.assertEqual(len(rest['body']['items']), 1)
+        self.assertEqual(rest['body']['items'][0]['conversation_id'], self.dm_id)
+        self.assertNotEqual(first['body']['items'][0]['message_id'], rest['body']['items'][0]['message_id'])
+
+    def test_scoping_cannot_expand_read_permissions(self):
+        # Even a workspace member cannot read another user's agent conversations.
+        self.assertEqual(self.search(self.bob, f'q=预算表&conversation_id={self.conv_id}')['body']['items'], [])
+        self.assertEqual(len(self.search(self.bob, f'q=预算表&conversation_id={self.dm_id}')['body']['items']), 1)
+        self.assertEqual(self.search(self.eve, f'q=预算表&conversation_id={self.dm_id}')['status'], 404)
+        self.assertEqual(self.search(self.alice, 'q=预算表&conversation_id=' + '0' * 32)['body']['items'], [])
+        self.assertEqual(self.search(self.alice, f'q=预算表&conversation_id={self.dm_id}&kind=agent')['body']['items'], [])
+        self.alice.call('POST', f'/v1/workspaces/{self.wid}/members', {'username': 'eve', 'role': 'member'})
+        self.assertEqual(self.search(self.eve, f'q=预算表&conversation_id={self.dm_id}')['body']['items'], [])
+        other = self.alice.workspace('another-space', 'scoped-another-0001')['body']['workspace']['id']
+        self.assertEqual(self.search(self.alice, f'q=预算表&conversation_id={self.dm_id}', workspace_id=other)['body']['items'], [])
+
+    def test_scope_validation_stays_strict(self):
+        for query in ('q=x&conversation_id=', 'q=x&conversation_id=BAD',
+                      'q=x&conversation_id=' + 'a' * 33,
+                      'q=x&conversation_id=' + 'A' * 32,
+                      f'q=x&conversation_id={self.dm_id}&conversation_id={self.conv_id}',
+                      f'q=x&conversation_id={self.dm_id}&unknown=value'):
+            self.assertEqual(self.search(self.alice, query)['status'], 400, query)
+
     def test_validation_and_methods(self):
         self.assertEqual(self.search(self.alice, 'q=')['status'], 400)
         self.assertEqual(self.alice.call('GET', f'/v1/workspaces/{self.wid}/search/messages')['status'], 400)

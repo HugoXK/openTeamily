@@ -26,26 +26,28 @@ def snippet(body):
     return text[:SNIPPET_MAX] + '…'
 
 
-def agent_rows(db, workspace_id, user_id, text, cursor, limit):
+def agent_rows(db, workspace_id, user_id, text, cursor, limit, conversation_id=''):
     return db.execute(
         'SELECT m.id, m.conversation_id, m.body, m.created, m.role, '
         'c.title, a.name AS agent_name '
         'FROM agent_messages m JOIN agent_conversations c ON c.id=m.conversation_id '
         'LEFT JOIN workspace_agents a ON a.id=c.agent_id '
         'WHERE m.workspace_id=? AND c.user_id=? AND m.id>? '
+        "AND (?='' OR m.conversation_id=?) "
         'AND instr(lower(m.body), lower(?))>0 ORDER BY m.id LIMIT ?',
-        (workspace_id, user_id, cursor, text, limit),
+        (workspace_id, user_id, cursor, conversation_id, conversation_id, text, limit),
     ).fetchall()
 
 
-def social_rows(db, workspace_id, user_id, text, cursor, limit):
+def social_rows(db, workspace_id, user_id, text, cursor, limit, conversation_id=''):
     return db.execute(
         'SELECT m.id, m.conversation_id, m.body, m.created, c.title, c.kind AS conversation_kind '
         'FROM social_messages m JOIN social_conversations c ON c.id=m.conversation_id '
         'JOIN social_members s ON s.conversation_id=c.id AND s.user_id=? '
         'WHERE m.workspace_id=? AND m.id>? '
+        "AND (?='' OR m.conversation_id=?) "
         'AND instr(lower(m.body), lower(?))>0 ORDER BY m.id LIMIT ?',
-        (user_id, workspace_id, cursor, text, limit),
+        (user_id, workspace_id, cursor, conversation_id, conversation_id, text, limit),
     ).fetchall()
 
 
@@ -64,13 +66,13 @@ def item(kind, row):
     }
 
 
-def messages(db, workspace_id, user_id, text, kind, cursor, limit):
+def messages(db, workspace_id, user_id, text, kind, cursor, limit, conversation_id=''):
     collected = []
     if kind in ('all', 'agent'):
         collected.extend(item('agent', row) for row in agent_rows(
-            db, workspace_id, user_id, text, cursor, limit))
+            db, workspace_id, user_id, text, cursor, limit, conversation_id))
     if kind in ('all', 'social'):
         collected.extend(item('social', row) for row in social_rows(
-            db, workspace_id, user_id, text, cursor, limit))
+            db, workspace_id, user_id, text, cursor, limit, conversation_id))
     collected.sort(key=lambda entry: entry['message_id'])
     return collected[:limit]

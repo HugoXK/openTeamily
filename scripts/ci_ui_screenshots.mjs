@@ -522,6 +522,38 @@ async function main() {
       record('chat_search_messages', false, String(error));
     }
 
+    try {
+      // The header action must scope on the server, not filter a global first page.
+      await page.locator('#message-search').click();
+      await waitForLocatorText(page, '#search-source-note', '仅搜索当前对话');
+      await page.locator('#session-search').fill('[CI FIXTURE]');
+      await waitForLocatorText(page, '#search-results', ready.chat_user_text, 15000);
+      const scopedAgent = await visibleText(page.locator('#search-results'));
+      record('chat_search_agent_scope', scopedAgent.includes(ready.agent_name)
+        && !scopedAgent.includes(ready.social_group_title)
+        && !scopedAgent.includes(ready.social_message_text), scopedAgent);
+      screenshots.push(path.basename(await shot(page, outDir, '59-chat-search-current-agent.png')));
+      // Leaving the message scope restores workspace-wide message hits.
+      await page.locator('#search-panel [data-search-tab="all"]').click();
+      await page.locator('#search-panel [data-search-tab="messages"]').click();
+      await waitForLocatorText(page, '#search-results', ready.social_message_text, 15000);
+      record('chat_search_scope_reset', (await visibleText(page.locator('#search-results'))).includes(ready.social_group_title),
+        'non-message tab clears conversation restriction');
+      await page.goto(`${origin}/chat#workspace=${ready.workspace_id}&social=${ready.social_group_id}`, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#chat-title', ready.social_group_title);
+      await page.locator('#message-search').click();
+      await waitForLocatorText(page, '#search-source-note', '仅搜索当前对话');
+      await page.locator('#session-search').fill('[CI FIXTURE]');
+      await waitForLocatorText(page, '#search-results', ready.social_message_text, 15000);
+      const scopedSocial = await visibleText(page.locator('#search-results'));
+      record('chat_search_social_scope', scopedSocial.includes(ready.social_group_title)
+        && !scopedSocial.includes(ready.agent_name) && !scopedSocial.includes(ready.chat_user_text), scopedSocial);
+      screenshots.push(path.basename(await shot(page, outDir, '60-chat-search-current-group.png')));
+      await page.locator('#search-close').click();
+    } catch (error) {
+      record('chat_search_conversation_scope', false, String(error));
+    }
+
     await page.setViewportSize({ width: 1280, height: 900 });
 
     await page.goto(`${origin}/automations`, { waitUntil: 'load' });
