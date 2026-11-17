@@ -1220,11 +1220,29 @@ async function main() {
         discoverWho === ready.username
           && discoverText.includes('发现')
           && discoverCurrent > 0
-          && (discoverText.includes('还没有收录任何智能体。') || discoverText.includes(ready.agent_name))
+          && discoverText.includes('关注')
+          && discoverText.includes('动态')
+          && discoverText.includes('搜索动态、创作者')
+          && discoverText.includes('动态信息流还没有接口')
+          && discoverText.includes('热门')
+          && discoverText.includes('/discover?tab=agents')
+          && await page.locator('#feed-panel').isVisible()
+          && await page.locator('#catalog-view').isHidden()
           && !/积分|套餐|升级/.test(discoverText),
         `whoami=${discoverWho || '(empty)'}; current=${discoverCurrent}; ${discoverText || 'discover empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '52-discover.png')));
+      await page.locator('#feed-tab-following').click();
+      await waitForLocatorText(page, '#feed-note', '关注页的内容结构没有对照截图');
+      record(
+        'discover_following',
+        (await page.locator('#feed-tab-following').getAttribute('aria-selected')) === 'true'
+          && (await visibleText(page.locator('#feed-note'))).includes('这个视图尚未接通'),
+        await visibleText(page.locator('#feed-note')),
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '63-discover-following.png')));
+      await page.goto(`${origin}/discover?tab=agents`, { waitUntil: 'load' });
+      await page.locator('#catalog-view').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#discover-list article').first().waitFor({state: 'visible'});
       record('discover_cards', await page.locator('#discover-list article').count() === 12
         && await page.locator('#catalog-more').isVisible()

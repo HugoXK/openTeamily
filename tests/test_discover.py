@@ -112,14 +112,22 @@ class DiscoverCatalogPageTests(unittest.TestCase):
         case = ChatPageTests()
         case.setUp()
         try:
-            for query in ('', 'tab=agents'):
-                page = case.raw.call('GET', '/discover', query=query)
-                self.assertEqual(page['status'], 200)
-                text = page['body'].decode()
-                for marker in ('id="catalog-query"', 'id="catalog-more"', 'id="catalog-count"',
-                               'id="catalog-manage" hidden', 'AI 团队（未接通）'):
-                    self.assertIn(marker, text)
-                self.assertNotIn('href="/d/', text)
+            feed = case.raw.call('GET', '/discover', query='')
+            self.assertEqual(feed['status'], 200)
+            feed_text = feed['body'].decode()
+            for marker in ('id="feed-panel"', 'id="feed-query"', '搜索动态、创作者…', '关注', '动态',
+                           'id="feed-note"', '也不会展示奖励活动或推荐内容', 'id="catalog-view" hidden',
+                           'href="/discover?tab=agents"', '热门', '3D 作品', 'AI 与科技', '美容'):
+                self.assertIn(marker, feed_text, marker)
+            self.assertNotIn('积分中心', feed_text)
+            self.assertNotIn('href="/d/', feed_text)
+            page = case.raw.call('GET', '/discover', query='tab=agents')
+            self.assertEqual(page['status'], 200)
+            text = page['body'].decode()
+            for marker in ('id="catalog-query"', 'id="catalog-more"', 'id="catalog-count"',
+                           'id="catalog-manage" hidden', 'AI 团队（未接通）', 'id="feed-panel"'):
+                self.assertIn(marker, text)
+            self.assertNotIn('href="/d/', text)
             for query in ('tab=teams', 'tab=agents&x=1', 'q=test', 'tab=agents&tab=agents'):
                 self.assertEqual(case.raw.call('GET', '/discover', query=query)['status'], 400)
             self.assertEqual(case.raw.call('GET', '/settings/not-a-page')['status'], 404)
