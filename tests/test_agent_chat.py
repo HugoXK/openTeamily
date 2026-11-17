@@ -188,6 +188,36 @@ class AgentChatTests(unittest.TestCase):
                           if self.eve.call('GET', f'/v1/workspaces/{evespace}/artifacts/{artifact["id"]}')['status'] == 200
                           else None)
 
+    def test_listing_preview_is_last_authorized_snippet(self):
+        created = self.alice.call(
+            'POST', self.conversations(), {'title': '预览对话'},
+            {'HTTP_IDEMPOTENCY_KEY': 'agent-chat-preview-01'})
+        self.assertEqual(created['status'], 201, created)
+        conv = created['body']['conversation']
+        self.assertEqual(conv['preview'], '')
+        empty = self.alice.call('GET', self.conversations())
+        self.assertEqual(empty['status'], 200)
+        self.assertEqual(empty['body']['items'][0]['preview'], '')
+        from openteamily.search import snippet
+        long_body = '预览' + ('很长的正文内容' * 30)
+        sent = self.alice.call(
+            'POST', self.conversations() + f'/{conv["id"]}/messages',
+            {'body': long_body},
+            {'HTTP_IDEMPOTENCY_KEY': 'agent-chat-preview-m1'})
+        self.assertEqual(sent['status'], 201, sent)
+        listed = self.alice.call('GET', self.conversations())
+        self.assertEqual(listed['status'], 200)
+        item = listed['body']['items'][0]
+        self.assertEqual(item['id'], conv['id'])
+        self.assertEqual(item['preview'], snippet(long_body))
+        self.assertTrue(item['preview'].endswith('…'))
+        self.assertNotIn(long_body, item['preview'])
+        self.assertNotIn('body', item)
+        # Workspace members cannot read another user's agent-conversation previews.
+        bob_list = self.bob.call('GET', self.conversations())
+        self.assertEqual(bob_list['status'], 200)
+        self.assertEqual(bob_list['body']['items'], [])
+
     def test_existing_v1_library_gains_conversation_tables_without_version_bump(self):
         path = Path(self.temp.name) / 'state'
         with sqlite3.connect(path / 'management.sqlite3') as db:

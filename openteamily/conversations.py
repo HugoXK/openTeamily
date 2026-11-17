@@ -9,6 +9,8 @@ are not a real vendor or a live container run.
 import json
 import re
 
+from . import search
+
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS agent_conversations (
@@ -70,9 +72,39 @@ def default_title(text):
     return line[:TITLE_MAX]
 
 
-def conversation_view(row):
-    return {key: row[key] for key in (
+def conversation_view(row, preview=''):
+    data = {key: row[key] for key in (
         'id', 'workspace_id', 'agent_id', 'user_id', 'title', 'created', 'updated')}
+    data['preview'] = preview or ''
+    return data
+
+
+def last_previews(db, workspace_id, conversation_ids):
+    ids = [item for item in conversation_ids if item]
+    if not ids:
+        return {}
+    placeholders = ','.join('?' * len(ids))
+    rows = db.execute(
+        'SELECT conversation_id, body FROM ('
+        ' SELECT conversation_id, body,'
+        ' ROW_NUMBER() OVER (PARTITION BY conversation_id ORDER BY seq DESC, id DESC) AS rn'
+        f' FROM agent_messages WHERE workspace_id=? AND conversation_id IN ({placeholders})'
+        " AND trim(body) != '') ranked WHERE rn=1",
+        (workspace_id, *ids),
+    ).fetchall()
+    return {row['conversation_id']: search.snippet(row['body']) for row in rows}
+
+
+def conversation_item(db, row):
+    preview = last_previews(db, row['workspace_id'], [row['id']]).get(row['id'], '')
+    return conversation_view(row, preview)
+
+
+def conversation_items(db, rows):
+    if not rows:
+        return []
+    previews = last_previews(db, rows[0]['workspace_id'], [row['id'] for row in rows])
+    return [conversation_view(row, previews.get(row['id'], '')) for row in rows]
 
 
 def message_view(row):

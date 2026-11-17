@@ -2373,7 +2373,7 @@ class App:
             self.reconcile_conversation(db, row, now)
             row = conversations.load_conversation(db, workspace['id'], conversation_id)
             items = conversations.messages(db, row['id'], '', 201) or []
-            return 200, {'conversation': conversations.conversation_view(row),
+            return 200, {'conversation': conversations.conversation_item(db, row),
                          'agent': agents.snapshot(db, agent),
                          'items': [self.public_message(db, item) for item in items[:200]],
                          'cursor': items[199]['id'] if len(items) > 200 else None}, []
@@ -2403,7 +2403,7 @@ class App:
             refuse(400, 'invalid', 'Invalid pagination parameters')
         rows = conversations.listing(
             db, workspace['id'], session['user_id'], agent['id'], cursor, int(limit) + 1)
-        return 200, {'items': [conversations.conversation_view(row) for row in rows[:int(limit)]],
+        return 200, {'items': conversations.conversation_items(db, rows[:int(limit)]),
                      'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
 
     def create_conversation(self, db, workspace, session, agent, now, env):
@@ -2426,7 +2426,7 @@ class App:
         if prior:
             if prior['request_hash'] != request_hash:
                 refuse(409, 'conflict', 'Idempotency key was used for a different request')
-            return 200, {'conversation': conversations.conversation_view(prior)}, []
+            return 200, {'conversation': conversations.conversation_item(db, prior)}, []
         if (db.execute(
                 'SELECT COUNT(*) FROM agent_conversations WHERE workspace_id=? AND user_id=?',
                 (workspace['id'], session['user_id'])).fetchone()[0]
@@ -2439,7 +2439,7 @@ class App:
              now, now, key_hash, request_hash),
         )
         row = conversations.load_conversation(db, workspace['id'], conversation_id)
-        return 201, {'conversation': conversations.conversation_view(row)}, []
+        return 201, {'conversation': conversations.conversation_item(db, row)}, []
 
     def list_conversation_messages(self, db, row, query, now):
         try:
@@ -2788,9 +2788,7 @@ class App:
             if method == 'GET':
                 limit, cursor, _ = self.pagination(query)
                 rows = social.listing(db, workspace['id'], session['user_id'], cursor, limit + 1)
-                items = []
-                for row in rows[:limit]:
-                    items.append(social.conversation_view(row, social.member_rows(db, row['id'])))
+                items = social.conversation_items(db, rows[:limit])
                 return 200, {'items': items,
                              'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
             if method == 'POST' and not query:
@@ -2803,7 +2801,7 @@ class App:
             refuse(404, 'not_found', 'Conversation not found')
         if action is None and method == 'GET' and not query:
             items = social.messages(db, row['id'], '', 101) or []
-            return 200, {'conversation': social.conversation_view(row, social.member_rows(db, row['id'])),
+            return 200, {'conversation': social.conversation_item(db, row),
                          'items': [social.message_view(item) for item in items[:100]],
                          'cursor': items[99]['id'] if len(items) > 100 else None}, []
         if action == 'messages' and method == 'GET':
@@ -2847,13 +2845,13 @@ class App:
         if prior:
             if prior['request_hash'] != request_hash:
                 refuse(409, 'conflict', 'Idempotency key was used for a different request')
-            return 200, {'conversation': social.conversation_view(prior, social.member_rows(db, prior['id']))}, []
+            return 200, {'conversation': social.conversation_item(db, prior)}, []
         dm = None
         if kind == 'dm':
             first, second = sorted(members_set)
             dm = social.load_dm(db, workspace['id'], social.dm_key(first, second))
             if dm is not None:
-                return 200, {'conversation': social.conversation_view(dm, social.member_rows(db, dm['id']))}, []
+                return 200, {'conversation': social.conversation_item(db, dm)}, []
             if not title:
                 other = second if first == session['user_id'] else first
                 title = social.username(db, other) or '单聊'
@@ -2875,7 +2873,7 @@ class App:
                 'INSERT INTO social_members VALUES(?,?,?,?)',
                 (conversation_id, workspace['id'], user_id, now))
         row = social.load(db, workspace['id'], conversation_id)
-        return 201, {'conversation': social.conversation_view(row, social.member_rows(db, conversation_id))}, []
+        return 201, {'conversation': social.conversation_item(db, row)}, []
 
     def send_social_message(self, db, workspace, session, row, now, env):
         body = self.body(env, ['body'])

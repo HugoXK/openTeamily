@@ -456,11 +456,14 @@ async function main() {
         listText.includes(ready.agent_name)
           && listText.includes(ready.member_username)
           && listText.includes(ready.social_group_title)
-          && listText.includes('对话'),
+          && listText.includes('对话')
+          && listText.includes(ready.social_message_text)
+          && (listText.includes(ready.provider_text) || listText.includes(ready.chat_user_text)),
         listText || 'unified chat list empty',
       );
       screenshots.push(path.basename(await shot(page, outDir, '16-agents-conversation.png')));
       screenshots.push(path.basename(await shot(page, outDir, '22-chat-desktop.png')));
+      screenshots.push(path.basename(await shot(page, outDir, '62-chat-list-previews.png')));
     } catch (error) {
       record('agents_conversation_history', false, String(error), { soft: ready.chat_status !== 'succeeded' });
     }

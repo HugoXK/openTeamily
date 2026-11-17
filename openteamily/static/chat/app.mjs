@@ -14,6 +14,11 @@ export const SEARCH_TABS = [
   ['links', '链接'],
 ];
 
+export function sessionPreview(row, fallback) {
+  const text = typeof row.preview === 'string' ? row.preview.trim() : '';
+  return text || fallback || '';
+}
+
 export function mergeSessions(agentRows, socialRows, currentUserId) {
   const sessions = [];
   for (const row of agentRows || []) {
@@ -24,7 +29,7 @@ export function mergeSessions(agentRows, socialRows, currentUserId) {
       agent: row.agent,
       kind: 'agent',
       title: (row.agent && row.agent.name) || row.title || '对话',
-      preview: row.title || '',
+      preview: sessionPreview(row, row.title || ''),
       updated: row.updated || 0,
     });
   }
@@ -35,9 +40,9 @@ export function mergeSessions(agentRows, socialRows, currentUserId) {
       kind: row.kind,
       members: row.members,
       title: conversationLabel(row, currentUserId),
-      preview: row.kind === 'group'
+      preview: sessionPreview(row, row.kind === 'group'
         ? '群聊 · ' + ((row.members || []).length) + ' 人'
-        : '单聊 · ' + ((row.members || []).length) + ' 人',
+        : '单聊 · ' + ((row.members || []).length) + ' 人'),
       updated: row.updated || 0,
     });
   }

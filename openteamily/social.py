@@ -9,6 +9,7 @@ separate issues; do not describe this as Teamily messenger parity.
 import re
 
 from .security import digest
+from . import search
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS social_conversations (
@@ -77,9 +78,10 @@ def dm_key(first, second):
     return digest('social-dm:' + ':'.join(sorted((first, second))))
 
 
-def conversation_view(row, members=None):
+def conversation_view(row, members=None, preview=''):
     data = {key: row[key] for key in (
         'id', 'workspace_id', 'kind', 'title', 'created', 'updated')}
+    data['preview'] = preview or ''
     if members is not None:
         data['members'] = members
     return data
@@ -130,6 +132,36 @@ def member_rows(db, conversation_id):
         (conversation_id,),
     ).fetchall()
     return [member_view(row) for row in rows]
+
+def last_previews(db, workspace_id, conversation_ids):
+    ids = [item for item in conversation_ids if item]
+    if not ids:
+        return {}
+    placeholders = ','.join('?' * len(ids))
+    rows = db.execute(
+        'SELECT conversation_id, body FROM ('
+        ' SELECT conversation_id, body,'
+        ' ROW_NUMBER() OVER (PARTITION BY conversation_id ORDER BY seq DESC, id DESC) AS rn'
+        f' FROM social_messages WHERE workspace_id=? AND conversation_id IN ({placeholders})'
+        " AND trim(body) != '') ranked WHERE rn=1",
+        (workspace_id, *ids),
+    ).fetchall()
+    return {row['conversation_id']: search.snippet(row['body']) for row in rows}
+
+
+def conversation_item(db, row, members=None):
+    preview = last_previews(db, row['workspace_id'], [row['id']]).get(row['id'], '')
+    if members is None:
+        members = member_rows(db, row['id'])
+    return conversation_view(row, members, preview)
+
+
+def conversation_items(db, rows):
+    if not rows:
+        return []
+    previews = last_previews(db, rows[0]['workspace_id'], [row['id'] for row in rows])
+    return [conversation_view(row, member_rows(db, row['id']), previews.get(row['id'], ''))
+            for row in rows]
 
 
 def listing(db, workspace_id, user_id, cursor, limit):
