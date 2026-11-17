@@ -104,9 +104,20 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('id="settings-index"', html)
         self.assertIn('href="/profile"', html)
         self.assertIn('href="/settings/language"', html)
+        self.assertIn('href="/settings/channels"', html)
+        self.assertIn('href="/settings/agent-access"', html)
         self.assertIn('href="#model-api"', html)
         self.assertIn('href="#skill-secrets"', html)
+        self.assertIn('href="/settings/connectors"', html)
         self.assertIn('href="/runtimes"', html)
+        language = html.find('href="/settings/language"')
+        channels = html.find('href="/settings/channels"')
+        agent_api = html.find('href="/settings/agent-access"')
+        model_api = html.find('href="#model-api"')
+        skills = html.find('href="#skill-secrets"')
+        connectors = html.find('href="/settings/connectors"')
+        runtimes = html.find('href="/runtimes"')
+        self.assertTrue(-1 < language < channels < agent_api < model_api < skills < connectors < runtimes)
         self.assertIn('href="/settings/appearance"', html)
         self.assertIn('href="/settings/shortcuts"', html)
         self.assertIn('href="/settings/message-folding"', html)
@@ -123,10 +134,13 @@ class SettingsPageTests(unittest.TestCase):
         self.assertNotIn('兑换码', html)
         self.assertNotIn('>升级<', html)
         self.assertNotIn('Teamily Agent', html)
+        self.assertNotIn('<img', html)
+
     def test_recorded_subpages_serve_the_same_settings_shell(self):
         for path in ('/settings/appearance', '/settings/language',
                      '/settings/message-folding', '/settings/privacy',
-                     '/settings/shortcuts'):
+                     '/settings/shortcuts', '/settings/channels',
+                     '/settings/agent-access', '/settings/connectors'):
             page = self.raw.call('GET', path)
             self.assertEqual(page['status'], 200, path)
             html = page['body'].decode()
@@ -135,6 +149,29 @@ class SettingsPageTests(unittest.TestCase):
             self.assertEqual(page['headers']['Cache-Control'], 'no-store')
         self.assertEqual(self.raw.call('GET', '/settings/missing')['status'], 404)
         self.assertEqual(self.raw.call('GET', '/settings/appearance', query='q=1')['status'], 400)
+
+    def test_channel_agent_api_and_connectors_pages_stay_disabled(self):
+        html = self.raw.call('GET', '/settings/channels')['body'].decode()
+        self.assertIn('data-settings-page="channels"', html)
+        self.assertIn('WeChat Official Account', html)
+        self.assertIn('Apple iMessage', html)
+        self.assertIn('Slack', html)
+        self.assertIn('WhatsApp', html)
+        self.assertEqual(html.count('+ 连接'), 4)
+        self.assertEqual(html.count('title="未实现：OpenTeamily 还没有接入'), 4)
+        self.assertIn('disabled', html)
+        self.assertNotIn('Teamily Agent', html)
+        agent = self.raw.call('GET', '/settings/agent-access')['body'].decode()
+        self.assertIn('你的 agent 还没有向本实例之外开放。', agent)
+        self.assertIn('没有已授权的 AI 客户端。', agent)
+        self.assertIn('Claude Code', agent)
+        connectors = self.raw.call('GET', '/settings/connectors')['body'].decode()
+        self.assertIn('placeholder="搜索应用…"', connectors)
+        self.assertIn('+ 添加 MCP 服务器', connectors)
+        self.assertIn('还没有可连接的应用目录。', connectors)
+        self.assertIn('disabled title="未实现：对照里「添加 MCP 服务器」', connectors)
+        self.assertNotIn('已连接', connectors)
+
 
 
 

@@ -74,6 +74,9 @@ const PATH_VIEWS = {
   '/settings/message-folding': 'message-folding',
   '/settings/privacy': 'privacy',
   '/settings/shortcuts': 'shortcuts',
+  '/settings/channels': 'channels',
+  '/settings/agent-access': 'agent-access',
+  '/settings/connectors': 'connectors',
 };
 
 const HASH_VIEWS = {
