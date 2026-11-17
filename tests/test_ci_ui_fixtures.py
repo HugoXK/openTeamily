@@ -110,5 +110,30 @@ class CiUiFixtureTests(unittest.TestCase):
         self.assertGreater(len(data), 40)
 
 
+class CiUiReadyHandoffTests(unittest.TestCase):
+    def test_ready_json_carries_every_seed_key_the_browser_harness_reads(self):
+        import importlib.util
+        import re
+        root = Path(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location('ci_ui_screenshots_runner', root / 'scripts' / 'ci_ui_screenshots.py')
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        source = (root / 'scripts' / 'ci_ui_screenshots.py').read_text()
+        used = set(re.findall(r"seed\['([a-z_]+)'\]", source))
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        seed = seed_fixtures(
+            Path(temp.name), ORIGIN, 'fixture-password-not-for-screenshots', 'https://provider.test/v1',
+            'fixture-model-key-not-for-screenshots', insecure_local=False,
+        )
+        ready = runner._public_ready(seed, ORIGIN, Path(temp.name) / 'login', 'ok', 'ok', 'ok', 'sha')
+        harness = (root / 'scripts' / 'ci_ui_screenshots.mjs').read_text()
+        read = set(re.findall(r"\bready\.([a-z_]+)", harness)) - {'json'}  # the ready.json filename
+        self.assertIn('memory_topic', read)
+        self.assertEqual(sorted(read - set(ready)), [])
+        self.assertEqual(ready['memory_topic'], MEMORY_TOPIC)
+        self.assertTrue(used)
+
+
 if __name__ == '__main__':
     unittest.main()

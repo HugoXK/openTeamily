@@ -108,6 +108,7 @@ def _public_ready(seed, origin, login_file, run_status, connection_status, chat_
         'memory_id': seed['memory_id'],
         'memory_title': seed['memory_title'],
         'memory_body': seed['memory_body'],
+        'memory_topic': seed['memory_topic'],
         'memory_create_title': seed['memory_create_title'],
         'memory_create_body': seed['memory_create_body'],
         'memory_edited_title': seed['memory_edited_title'],
