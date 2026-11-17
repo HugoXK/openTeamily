@@ -103,7 +103,7 @@ class SettingsPageTests(unittest.TestCase):
         html = self.raw.call('GET', '/settings')['body'].decode()
         self.assertIn('id="settings-index"', html)
         self.assertIn('href="/profile"', html)
-        self.assertIn('href="#language"', html)
+        self.assertIn('href="#language-section"', html)
         self.assertIn('href="#model-api"', html)
         self.assertIn('href="#skill-secrets"', html)
         self.assertIn('href="/runtimes"', html)
