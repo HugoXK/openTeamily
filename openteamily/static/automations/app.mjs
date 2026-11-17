@@ -65,6 +65,36 @@ export function runResultText(run) {
   return '';
 }
 
+
+export function catalogItems(templates, category, search) {
+  const tab = tabCategory(category);
+  if (tab !== 'work' && tab !== 'life') return [];
+  const needle = (search || '').trim().toLowerCase();
+  return (templates || []).filter(item => {
+    if (!item || item.category !== tab) return false;
+    if (!needle) return true;
+    const hay = `${item.title || ''} ${item.prompt || ''}`.toLowerCase();
+    return hay.includes(needle);
+  });
+}
+
+export function draftFromTemplate(template, username) {
+  const draft = {
+    template_id: template && template.id ? template.id : 'custom',
+    title: (template && template.title) || '',
+    prompt: (template && template.prompt) || '',
+    intent: '',
+    scope: 'once',
+    schedule: {kind: 'now', time_zone: 'Asia/Shanghai'},
+    participants: username ? [username] : [],
+    agents: [],
+    enabled: false,
+  };
+  // Only 每日工作简报 had recorded defaults: 意图=监测, 时间=立即运行, 范围=单次.
+  if (draft.template_id === 'daily_brief') draft.intent = 'monitor';
+  return draft;
+}
+
 export function listQuery(category, search) {
   const params = new URLSearchParams();
   const tab = tabCategory(category);
@@ -118,6 +148,7 @@ function fillEditor(form, item, templates, username) {
 
 function renderList(items, list, empty, onOpen) {
   list.textContent = '';
+  list.classList.remove('template-catalog');
   empty.hidden = items.length > 0;
   for (const item of items) {
     const row = document.createElement('li');
@@ -131,6 +162,29 @@ function renderList(items, list, empty, onOpen) {
     meta.textContent = `${item.schedule && item.schedule.kind ? item.schedule.kind : ''} ${item.enabled ? '已启用' : '未启用'}`;
     row.appendChild(open);
     row.appendChild(meta);
+    list.appendChild(row);
+  }
+}
+
+
+function renderCatalog(items, list, empty, onOpen) {
+  list.textContent = '';
+  list.classList.add('template-catalog');
+  empty.hidden = items.length > 0;
+  for (const item of items) {
+    const row = document.createElement('li');
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'catalog-card';
+    const title = document.createElement('strong');
+    title.textContent = item.title || '';
+    const summary = document.createElement('span');
+    summary.className = 'note';
+    summary.textContent = item.prompt || '';
+    open.appendChild(title);
+    open.appendChild(summary);
+    open.addEventListener('click', () => onOpen(item));
+    row.appendChild(open);
     list.appendChild(row);
   }
 }
@@ -300,20 +354,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillEditor(form, item, templates, currentUser && currentUser.username);
     document.getElementById('remove-automation').hidden = !item || !item.id;
     document.getElementById('tick-automation').hidden = !item || !item.id;
-    document.getElementById('life-note').hidden = category !== 'life';
     loadRuns();
   }
 
   async function loadList() {
     const id = workspaceId();
     if (!id) return;
+    const list = document.getElementById('automation-list');
+    const empty = document.getElementById('list-empty');
+    if (category === 'work' || category === 'life') {
+      empty.textContent = '没有匹配的模板。';
+      renderCatalog(
+        catalogItems(templates, category, search.value),
+        list,
+        empty,
+        item => openEditor(draftFromTemplate(item, currentUser && currentUser.username)),
+      );
+      return;
+    }
+    empty.textContent = '这个分类下还没有自动化。';
     const listed = await request('GET', `/v1/workspaces/${id}/automations${listQuery(category, search.value)}`);
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法读取自动化列表。'));
       return;
     }
-    renderList(listed.body.items || [], document.getElementById('automation-list'),
-               document.getElementById('list-empty'), item => openEditor(item));
+    renderList(listed.body.items || [], list, empty, item => openEditor(item));
   }
 
   async function load() {
@@ -399,16 +464,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   document.getElementById('new-automation').addEventListener('click', () => {
-    openEditor(null);
-    if (category === 'work') {
-      const firstWork = templates.find(item => item.category === 'work');
-      if (firstWork) {
-        form.elements.template_id.value = firstWork.id;
-        form.elements.title.value = firstWork.title;
-      }
-    }
-    form.elements.kind.value = 'now';
-    for (const option of form.querySelectorAll('[name="kind"]')) option.checked = option.value === 'now';
+    const selected = (category === 'work' || category === 'life')
+      ? templates.find(item => item.category === category)
+      : null;
+    openEditor(selected ? draftFromTemplate(selected, currentUser && currentUser.username) : null);
+    form.elements.kind.value = form.elements.kind.value || 'now';
+    const kind = (form.elements.kind.value) || 'now';
+    for (const option of form.querySelectorAll('[name="kind"]')) option.checked = option.value === kind;
   });
 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
