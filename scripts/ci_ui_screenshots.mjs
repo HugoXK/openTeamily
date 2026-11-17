@@ -86,6 +86,19 @@ async function waitForLocatorText(page, selector, expected, timeout = 15000) {
   );
 }
 
+async function selectWorkspace(page, name) {
+  const picker = page.locator('#workspace');
+  if (!(await picker.count())) return false;
+  await picker.waitFor({ state: 'visible', timeout: 15000 });
+  await page.waitForFunction(
+    (name) => [...document.querySelectorAll('#workspace option')].some((option) => option.textContent === name),
+    name,
+    { timeout: 15000 },
+  );
+  await picker.selectOption({ label: name });
+  return true;
+}
+
 async function main() {
   const metaPath = argValue('--meta');
   const outDir = argValue('--out');
@@ -200,6 +213,7 @@ async function main() {
 
     await page.goto(`${origin}/agents`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await selectWorkspace(page, ready.workspace_name);
     let agentsList = '';
     try {
       await waitForLocatorText(page, '#agent-list', ready.agent_name);
@@ -264,6 +278,7 @@ async function main() {
 
     await page.goto(`${origin}/automations`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await selectWorkspace(page, ready.workspace_name);
     let autoList = '';
     try {
       await waitForLocatorText(page, '#automation-list', ready.automation_title);
@@ -291,8 +306,9 @@ async function main() {
       record('automations_run_history', false, String(error), { soft: true });
     }
 
-    await page.goto(`${origin}/artifacts`, { waitUntil: 'load' });
+    await page.goto(`${origin}/space`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await selectWorkspace(page, ready.workspace_name);
     const artifactTitles = [ready.document_title, ready.media_title, ready.board_title, ready.website_title];
     let artifacts = '';
     try {
@@ -313,7 +329,7 @@ async function main() {
     record(
       'artifacts_catalog',
       top.includes('全部') && top.includes('我创建的') && top.includes('收藏') && top.includes('Memory')
-        && catalog.includes('全部作品') && catalog.includes('网站') && catalog.includes('文档')
+        && catalog.includes('全部作品') && catalog.includes('Websites') && catalog.includes('文档')
         && catalog.includes('媒体') && catalog.includes('消息') && catalog.includes('会议')
         && catalog.includes('新建') && !/积分|套餐|升级/.test(top + catalog),
       `${top} :: ${catalog || 'catalog empty'}`,
@@ -343,16 +359,111 @@ async function main() {
         meetings || 'meetings empty missing',
       );
       screenshots.push(path.basename(await shot(page, outDir, '31-artifacts-meetings-empty.png')));
+      const joined = await visibleText(page.locator('#meetings-chrome'));
+      record(
+        'artifacts_meetings_joined',
+        joined.includes('我参加的') && joined.includes('你参加或组织过的录音会议，最新的在前。') && !(await page.locator('#filter-button').isVisible()) && !(await page.locator('#layout-toggle').isVisible()),
+        joined || 'meetings chrome missing',
+      );
+      await page.locator('.meeting-scopes [data-meeting-scope="all"]').click();
+      await waitForLocatorText(page, '#meetings-caption', '你所在群里的录音会议');
+      const meetingsAll = await visibleText(page.locator('#meetings-chrome'));
+      record(
+        'artifacts_meetings_all',
+        meetingsAll.includes('全部') && meetingsAll.includes('你所在群里的录音会议'),
+        meetingsAll || 'meetings all caption missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '37-space-meetings-all.png')));
       await page.locator('.artifact-kinds [data-kind="all"]').click();
       await waitForLocatorText(page, '#artifact-list', ready.document_title);
     } catch (error) {
       record('artifacts_meetings_unimplemented', false, String(error));
     }
+    try {
+      await page.locator('#filter-button').click();
+      await page.locator('#filter-panel').waitFor({ state: 'visible', timeout: 8000 });
+      await page.locator('.filter-section[data-section="types"] .filter-accordion').click();
+      const types = await visibleText(page.locator('#filter-panel'));
+      record(
+        'artifacts_filter_file_types',
+        types.includes('文件类型') && types.includes('云文档') && types.includes('Markdown') && types.includes('DOCX') && types.includes('PDF') && types.includes('电子表格') && types.includes('幻灯片') && types.includes('Web 应用') && types.includes('网页') && types.includes('图片') && types.includes('视频') && types.includes('音频') && types.includes('白板') && types.includes('消息'),
+        types || 'filter types missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '32-space-filter-file-type.png')));
+      await page.locator('.filter-section[data-section="modified"] .filter-accordion').click();
+      const modified = await visibleText(page.locator('#filter-panel'));
+      record(
+        'artifacts_filter_modified',
+        modified.includes('修改时间') && modified.includes('不限时间') && modified.includes('今天') && modified.includes('最近 7 天') && modified.includes('最近 30 天') && modified.includes('最近 90 天') && modified.includes('自定义范围'),
+        modified || 'filter modified missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '33-space-filter-modified.png')));
+      await page.keyboard.press('Escape');
+    } catch (error) {
+      record('artifacts_filter_file_types', false, String(error));
+    }
+    try {
+      await page.goto(`${origin}/space?view=starred`, { waitUntil: 'load' });
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+      await selectWorkspace(page, ready.workspace_name);
+      await page.locator('#empty-starred').waitFor({ state: 'visible', timeout: 8000 });
+      const starred = await visibleText(page.locator('#empty-starred'));
+      record(
+        'artifacts_starred_empty',
+        starred.includes('暂无保存') && starred.includes('保存聊天中的消息') && starred.includes('保存聊天中的图片') && starred.includes('保存智能体成果') && starred.includes('未实现'),
+        starred || 'starred empty missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '34-space-starred-empty.png')));
+    } catch (error) {
+      record('artifacts_starred_empty', false, String(error));
+    }
+    try {
+      await page.goto(`${origin}/space?view=memory`, { waitUntil: 'load' });
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+      await selectWorkspace(page, ready.workspace_name);
+      await page.locator('#empty-memory').waitFor({ state: 'visible', timeout: 8000 });
+      const memoryView = await visibleText(page.locator('#empty-memory'));
+      record(
+        'artifacts_memory_empty',
+        memoryView.includes('没有匹配的作品') && memoryView.includes('智能体生成的作品将显示在此处。') && !memoryView.includes('新建云文档'),
+        memoryView || 'memory empty missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '35-space-memory-empty.png')));
+    } catch (error) {
+      record('artifacts_memory_empty', false, String(error));
+    }
+    try {
+      await page.goto(`${origin}/space`, { waitUntil: 'load' });
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+      await selectWorkspace(page, ready.empty_workspace_name);
+      await page.locator('#empty-all').waitFor({ state: 'visible', timeout: 8000 });
+      const emptyAll = await visibleText(page.locator('#empty-all'));
+      record(
+        'artifacts_empty_all',
+        emptyAll.includes('你的资料空间从这里开始') && emptyAll.includes('都会出现在这里。') && emptyAll.includes('新建云文档') && emptyAll.includes('让智能体搭建网站') && emptyAll.includes('保存聊天中的消息'),
+        emptyAll || 'empty all missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '38-space-empty-all.png')));
+      await page.locator('.artifact-scopes [data-scope="mine"]').click();
+      await page.locator('#empty-all').waitFor({ state: 'visible', timeout: 8000 });
+      const emptyMine = await visibleText(page.locator('#empty-all'));
+      record(
+        'artifacts_empty_created',
+        emptyMine.includes('你的资料空间从这里开始') && emptyMine.includes('新建云文档'),
+        emptyMine || 'empty created missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '39-space-empty-created.png')));
+      await selectWorkspace(page, ready.workspace_name);
+      await waitForLocatorText(page, '#artifact-list', ready.document_title);
+    } catch (error) {
+      record('artifacts_empty_all', false, String(error));
+    }
 
     const openArtifact = async (title, file, checkName, extra, { soft = true } = {}) => {
       try {
-        await page.goto(`${origin}/artifacts`, { waitUntil: 'load' });
+        await page.goto(`${origin}/space`, { waitUntil: 'load' });
         await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+        await selectWorkspace(page, ready.workspace_name);
         await page.locator('#artifact-list').waitFor({ state: 'visible', timeout: 15000 });
         await openListItem(page, title, '#artifact-list');
         await page.locator('#editor-form').waitFor({ state: 'visible', timeout: 15000 });
@@ -387,6 +498,7 @@ async function main() {
 
     await page.goto(`${origin}/members`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await selectWorkspace(page, ready.workspace_name);
     let members = '';
     let invites = '';
     try {
@@ -453,6 +565,7 @@ async function main() {
 
     await page.goto(`${origin}/memory`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await selectWorkspace(page, ready.workspace_name);
     await waitForLocatorText(page, '#memory-list', ready.memory_title);
     const memoryList = await visibleText(page.locator('#memory-list'));
     const overview = await visibleText(page.locator('#list-panel'));

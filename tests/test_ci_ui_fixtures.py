@@ -6,9 +6,9 @@ import unittest
 from openteamily.app import App, Config
 from openteamily.ci_ui_fixtures import (
     ACTION_DUE_AT, ACTION_NOTES, ACTION_TITLE, AGENT_NAME, AUTOMATION_TITLE, BOARD_TITLE,
-    CHAT_TITLE, CHAT_USER_TEXT, DOCUMENT_TITLE, MEDIA_TITLE, MEMBER_USERNAME, MEMORY_BODY,
-    MEMORY_TITLE, RUNTIME_KEY_NAME, TEAM_NAME, TEAM_SLUG, USERNAME, WEBSITE_TITLE,
-    seed_fixtures, solid_png,
+    CHAT_TITLE, CHAT_USER_TEXT, DOCUMENT_TITLE, EMPTY_WORKSPACE_NAME, MEDIA_TITLE,
+    MEMBER_USERNAME, MEMORY_BODY, MEMORY_TITLE, RUNTIME_KEY_NAME, TEAM_NAME, TEAM_SLUG,
+    USERNAME, WEBSITE_TITLE, seed_fixtures, solid_png,
 )
 from openteamily.store import Store
 from tests.test_management import Client, ORIGIN
@@ -41,9 +41,18 @@ class CiUiFixtureTests(unittest.TestCase):
         self.assertEqual(logged['status'], 200, logged)
         spaces = client.call('GET', '/v1/workspaces')
         self.assertEqual(spaces['status'], 200)
-        self.assertEqual(spaces['body']['items'][0]['name'], TEAM_NAME)
-        self.assertEqual(spaces['body']['items'][0]['slug'], TEAM_SLUG)
-        wid = spaces['body']['items'][0]['id']
+        names = {row['name'] for row in spaces['body']['items']}
+        self.assertEqual(names, {TEAM_NAME, EMPTY_WORKSPACE_NAME})
+        team = next(row for row in spaces['body']['items'] if row['name'] == TEAM_NAME)
+        empty = next(row for row in spaces['body']['items'] if row['name'] == EMPTY_WORKSPACE_NAME)
+        self.assertEqual(team['slug'], TEAM_SLUG)
+        self.assertEqual(seed['workspace_id'], team['id'])
+        self.assertEqual(seed['empty_workspace_id'], empty['id'])
+        self.assertEqual(seed['empty_workspace_name'], EMPTY_WORKSPACE_NAME)
+        empty_artifacts = client.call('GET', f'/v1/workspaces/{empty["id"]}/artifacts')
+        self.assertEqual(empty_artifacts['status'], 200)
+        self.assertEqual(empty_artifacts['body']['items'], [])
+        wid = team['id']
         members = client.call('GET', f'/v1/workspaces/{wid}/members')
         self.assertEqual({row['username'] for row in members['body']['items']}, {USERNAME, MEMBER_USERNAME})
         agents = client.call('GET', f'/v1/workspaces/{wid}/agents')

@@ -12,19 +12,84 @@ export function listQuery(search) {
   return needle ? ('?q=' + encodeURIComponent(needle)) : '';
 }
 
-export function visibleArtifacts(items, {kind = 'all', scope = 'all', username = ''} = {}) {
+export const FILE_TYPE_LABELS = ['云文档', 'Markdown', 'DOCX', 'PDF', '电子表格', '幻灯片',
+  'Web 应用', '网页', '图片', '视频', '音频', '白板', '消息'];
+
+export function artifactMatchesType(item, type) {
+  const mime = String((item && item.media && item.media.mime) || '');
+  if (type === '云文档') return item.kind === 'document' && !(item.source && item.source.kind === 'agent_message');
+  if (type === '网页') return item.kind === 'website';
+  if (type === '图片') return item.kind === 'media' && mime.startsWith('image/');
+  if (type === '视频') return item.kind === 'media' && mime.startsWith('video/');
+  if (type === '音频') return item.kind === 'media' && mime.startsWith('audio/');
+  if (type === '白板') return item.kind === 'whiteboard';
+  if (type === '消息') return !!(item.source && item.source.kind === 'agent_message');
+  return false;
+}
+
+export function artifactMatchesModified(item, window, now = Date.now()) {
+  if (!window || window === 'any' || window === 'custom') return true;
+  const updated = Number(item && item.updated ? item.updated : 0) * 1000;
+  if (!updated) return false;
+  const day = 24 * 60 * 60 * 1000;
+  if (window === 'today') {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    return updated >= start.getTime();
+  }
+  const days = {d7: 7, d30: 30, d90: 90};
+  if (days[window]) return updated >= now - days[window] * day;
+  return true;
+}
+
+export function visibleArtifacts(items, options = {}) {
+  const kind = options.kind || 'all';
+  const scope = options.scope || 'all';
+  const username = options.username || '';
+  const types = options.types || [];
+  const modified = options.modified || 'any';
+  const creators = options.creators || [];
+  const sessions = options.sessions || [];
+  const now = options.now == null ? Date.now() : options.now;
+  if (kind === 'meetings' || scope === 'favorites') return [];
   let rows = [...(items || [])];
   if (scope === 'mine' && username) {
     rows = rows.filter((item) => item.created_by === username);
   }
-  if (kind === 'meetings') return [];
-  if (kind === 'messages') {
-    return rows.filter((item) => item.source && item.source.kind === 'agent_message');
+  if (scope === 'memory') {
+    rows = rows.filter((item) => item.source && item.source.kind === 'agent_task');
   }
-  if (kind && kind !== 'all') {
-    return rows.filter((item) => item.kind === kind);
+  if (kind === 'messages') {
+    rows = rows.filter((item) => item.source && item.source.kind === 'agent_message');
+  } else if (kind && kind !== 'all') {
+    rows = rows.filter((item) => item.kind === kind);
+  }
+  if (types.length) {
+    rows = rows.filter((item) => types.some((type) => artifactMatchesType(item, type)));
+  }
+  rows = rows.filter((item) => artifactMatchesModified(item, modified, now));
+  if (creators.length) rows = rows.filter((item) => creators.includes(item.created_by));
+  if (sessions.length) {
+    rows = rows.filter((item) => item.source && sessions.includes(item.source.conversation_id));
   }
   return rows;
+}
+
+export function viewFromSearch(search) {
+  const value = new URLSearchParams(search || '').get('view');
+  if (value === 'created') return {kind: 'all', scope: 'mine'};
+  if (value === 'starred') return {kind: 'all', scope: 'favorites'};
+  if (value === 'memory') return {kind: 'all', scope: 'memory'};
+  if (value === 'meetings') return {kind: 'meetings', scope: 'all'};
+  return {kind: 'all', scope: 'all'};
+}
+
+export function queryForView(kind, scope) {
+  if (kind === 'meetings') return '?view=meetings';
+  if (scope === 'mine') return '?view=created';
+  if (scope === 'favorites') return '?view=starred';
+  if (scope === 'memory') return '?view=memory';
+  return '';
 }
 
 function messageFor(error, fallback) {
@@ -54,6 +119,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let draftKind = 'document';
   let catalogKind = 'all';
   let catalogScope = 'all';
+  let catalogLayout = 'grid';
+  let meetingScope = 'joined';
+  let filterTypes = [];
+  let filterModified = 'any';
+  let filterCreators = [];
+  let filterSessions = [];
   let allItems = [];
 
   function show(kind, text) {
@@ -223,25 +294,141 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (button) button.setAttribute('aria-expanded', 'false');
   }
 
+  function worksPath() {
+    const path = (document.defaultView && document.defaultView.location && document.defaultView.location.pathname) || '/space';
+    const trimmed = path.replace(/\/+$/, '') || '/space';
+    return trimmed === '/artifacts' ? '/artifacts' : '/space';
+  }
+
+  function syncViewUrl() {
+    const view = document.defaultView;
+    if (!view || !view.history || !view.history.replaceState) return;
+    const url = worksPath() + queryForView(catalogKind, catalogScope);
+    view.history.replaceState({}, '', url);
+  }
+
+  function applyView(kind, scope, {sync = true} = {}) {
+    catalogKind = kind || 'all';
+    catalogScope = scope || 'all';
+    if (catalogKind === 'meetings') catalogScope = 'all';
+    for (const item of document.querySelectorAll('.artifact-kinds [data-kind]')) {
+      if (item.getAttribute('data-kind') === catalogKind) item.setAttribute('aria-current', 'page');
+      else item.removeAttribute('aria-current');
+    }
+    for (const item of document.querySelectorAll('.artifact-scopes [data-scope]')) {
+      if (item.getAttribute('data-scope') === catalogScope) item.setAttribute('aria-current', 'page');
+      else item.removeAttribute('aria-current');
+    }
+    if (sync) syncViewUrl();
+    renderCatalog();
+  }
+
+  function closeFilterPanel() {
+    const panel = document.getElementById('filter-panel');
+    const button = document.getElementById('filter-button');
+    if (panel) panel.hidden = true;
+    if (button) button.setAttribute('aria-expanded', 'false');
+  }
+
+  function readFilters() {
+    filterTypes = [...document.querySelectorAll('input[name="file-type"]:checked')].map((input) => input.value);
+    const modified = document.querySelector('input[name="modified"]:checked');
+    filterModified = modified ? modified.value : 'any';
+    const customNote = document.getElementById('custom-range-note');
+    if (customNote) customNote.hidden = filterModified !== 'custom';
+    filterCreators = [...document.querySelectorAll('input[name="creator"]:checked')].map((input) => input.value);
+    filterSessions = [...document.querySelectorAll('input[name="session"]:checked')].map((input) => input.value);
+  }
+
+  function renderFilterChoices() {
+    const creatorBox = document.getElementById('filter-creator-list');
+    const creatorEmpty = document.getElementById('filter-creator-empty');
+    const sessionBox = document.getElementById('filter-session-list');
+    const sessionEmpty = document.getElementById('filter-session-empty');
+    const names = [...new Set((allItems || []).map((item) => item.created_by).filter(Boolean))].sort();
+    if (creatorBox) {
+      creatorBox.replaceChildren();
+      for (const name of names) {
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.name = 'creator';
+        input.value = name;
+        input.checked = filterCreators.includes(name);
+        input.addEventListener('change', () => { readFilters(); renderCatalog(); });
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(' ' + name));
+        creatorBox.appendChild(label);
+      }
+    }
+    if (creatorEmpty) creatorEmpty.hidden = names.length > 0;
+    const sessions = [];
+    const seen = new Set();
+    for (const item of allItems || []) {
+      const id = item.source && item.source.conversation_id;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      sessions.push(id);
+    }
+    if (sessionBox) {
+      sessionBox.replaceChildren();
+      for (const id of sessions) {
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.name = 'session';
+        input.value = id;
+        input.checked = filterSessions.includes(id);
+        input.addEventListener('change', () => { readFilters(); renderCatalog(); });
+        label.appendChild(input);
+        label.appendChild(document.createTextNode(' ' + id));
+        sessionBox.appendChild(label);
+      }
+    }
+    if (sessionEmpty) sessionEmpty.hidden = sessions.length > 0;
+  }
+
   function renderCatalog() {
     const username = currentUser && currentUser.username;
-    const items = visibleArtifacts(allItems, {kind: catalogKind, scope: catalogScope, username});
+    const items = visibleArtifacts(allItems, {
+      kind: catalogKind, scope: catalogScope, username,
+      types: filterTypes, modified: filterModified, creators: filterCreators, sessions: filterSessions,
+    });
     renderList(items, (item) => openEditor(item));
     const empty = document.getElementById('list-empty');
     const emptyAll = document.getElementById('empty-all');
+    const emptyStarred = document.getElementById('empty-starred');
+    const emptyMemory = document.getElementById('empty-memory');
     const emptyKind = document.getElementById('empty-kind');
     const emptyMeetings = document.getElementById('empty-meetings');
     const emptyMessage = document.getElementById('list-empty-message');
     const newWebsite = document.getElementById('new-website');
+    const meetingsChrome = document.getElementById('meetings-chrome');
+    if (mainPanel) mainPanel.classList.toggle('is-meetings', catalogKind === 'meetings');
+    if (meetingsChrome) meetingsChrome.hidden = catalogKind !== 'meetings';
+    const caption = document.getElementById('meetings-caption');
+    if (caption) {
+      caption.textContent = meetingScope === 'all'
+        ? '你参加或组织过的录音会议，以及你所在群里的录音会议，最新的在前。'
+        : '你参加或组织过的录音会议，最新的在前。';
+    }
+    const layoutNote = document.getElementById('layout-note');
+    if (layoutNote) layoutNote.hidden = !(items.length && catalogLayout === 'grid');
     if (!empty) return;
     const isEmpty = items.length === 0;
     empty.hidden = !isEmpty;
     if (!isEmpty) return;
     const noWorkspace = emptyMessage && emptyMessage.textContent === '还没有工作区。';
-    const showAllEmpty = catalogKind === 'all' && catalogScope === 'all' && !noWorkspace;
+    const showMeetings = catalogKind === 'meetings' && !noWorkspace;
+    const showStarred = catalogScope === 'favorites' && !showMeetings && !noWorkspace;
+    const showMemory = catalogScope === 'memory' && !showMeetings && !noWorkspace;
+    const showAllEmpty = (catalogKind === 'all' && (catalogScope === 'all' || catalogScope === 'mine')
+      && !showStarred && !showMemory && !noWorkspace);
     if (emptyAll) emptyAll.hidden = !showAllEmpty;
-    if (emptyMeetings) emptyMeetings.hidden = catalogKind !== 'meetings';
-    if (emptyKind) emptyKind.hidden = showAllEmpty || catalogKind === 'meetings' || noWorkspace;
+    if (emptyStarred) emptyStarred.hidden = !showStarred;
+    if (emptyMemory) emptyMemory.hidden = !showMemory;
+    if (emptyMeetings) emptyMeetings.hidden = !showMeetings;
+    if (emptyKind) emptyKind.hidden = showAllEmpty || showStarred || showMemory || showMeetings || noWorkspace;
     if (emptyMessage) emptyMessage.hidden = !noWorkspace;
     if (newWebsite) newWebsite.hidden = !(emptyKind && !emptyKind.hidden && catalogKind === 'website');
     if (emptyKind && !emptyKind.hidden) {
@@ -405,6 +592,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     allItems = listed.body.items || [];
+    renderFilterChoices();
     renderCatalog();
   }
 
@@ -527,30 +715,74 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (wrap && !wrap.contains(event.target)) closeNewMenu();
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') closeNewMenu();
+    if (event.key === 'Escape') {
+      closeNewMenu();
+      closeFilterPanel();
+    }
   });
 
   for (const button of document.querySelectorAll('.artifact-kinds [data-kind]')) {
     button.addEventListener('click', () => {
-      catalogKind = button.getAttribute('data-kind') || 'all';
-      for (const item of document.querySelectorAll('.artifact-kinds [data-kind]')) {
-        if (item.getAttribute('data-kind') === catalogKind) item.setAttribute('aria-current', 'page');
-        else item.removeAttribute('aria-current');
-      }
-      renderCatalog();
+      const kind = button.getAttribute('data-kind') || 'all';
+      const scope = kind === 'meetings' ? 'all' : (catalogScope === 'favorites' || catalogScope === 'memory' || catalogScope === 'mine' ? catalogScope : 'all');
+      applyView(kind, scope);
     });
   }
   for (const button of document.querySelectorAll('.artifact-scopes [data-scope]')) {
-    if (button.disabled) continue;
     button.addEventListener('click', () => {
-      catalogScope = button.getAttribute('data-scope') || 'all';
-      for (const item of document.querySelectorAll('.artifact-scopes [data-scope]')) {
-        if (item.getAttribute('data-scope') === catalogScope) item.setAttribute('aria-current', 'page');
+      applyView('all', button.getAttribute('data-scope') || 'all');
+    });
+  }
+  for (const button of document.querySelectorAll('.meeting-scopes [data-meeting-scope]')) {
+    button.addEventListener('click', () => {
+      meetingScope = button.getAttribute('data-meeting-scope') || 'joined';
+      for (const item of document.querySelectorAll('.meeting-scopes [data-meeting-scope]')) {
+        if (item.getAttribute('data-meeting-scope') === meetingScope) item.setAttribute('aria-current', 'page');
         else item.removeAttribute('aria-current');
       }
       renderCatalog();
     });
   }
+  for (const button of document.querySelectorAll('#layout-toggle [data-layout]')) {
+    button.addEventListener('click', () => {
+      catalogLayout = button.getAttribute('data-layout') || 'grid';
+      for (const item of document.querySelectorAll('#layout-toggle [data-layout]')) {
+        item.setAttribute('aria-pressed', item.getAttribute('data-layout') === catalogLayout ? 'true' : 'false');
+      }
+      renderCatalog();
+    });
+  }
+  const filterButton = document.getElementById('filter-button');
+  if (filterButton) {
+    filterButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const panel = document.getElementById('filter-panel');
+      if (!panel) return;
+      const open = panel.hidden;
+      panel.hidden = !open;
+      filterButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+  for (const button of document.querySelectorAll('.filter-accordion')) {
+    button.addEventListener('click', () => {
+      const section = button.closest('.filter-section');
+      const open = button.getAttribute('aria-expanded') !== 'true';
+      for (const other of document.querySelectorAll('.filter-section')) {
+        const accordion = other.querySelector('.filter-accordion');
+        const body = other.querySelector('.filter-body');
+        const expanded = open && other === section;
+        if (accordion) accordion.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        if (body) body.hidden = !expanded;
+      }
+    });
+  }
+  for (const input of document.querySelectorAll('#filter-panel input[name="file-type"], #filter-panel input[name="modified"]')) {
+    input.addEventListener('change', () => { readFilters(); renderCatalog(); });
+  }
+  document.addEventListener('click', (event) => {
+    const wrap = document.querySelector('.filter-wrap');
+    if (wrap && !wrap.contains(event.target)) closeFilterPanel();
+  });
 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
     current = null;
@@ -748,6 +980,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
+  const view = document.defaultView;
+  const initial = viewFromSearch(view && view.location && view.location.search);
+  applyView(initial.kind, initial.scope, {sync: false});
+  if (view) {
+    view.addEventListener('popstate', () => {
+      const next = viewFromSearch(view.location.search);
+      applyView(next.kind, next.scope, {sync: false});
+    });
+  }
   return load();
 }
 

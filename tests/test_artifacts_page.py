@@ -26,16 +26,24 @@ class ArtifactsPageTests(unittest.TestCase):
         self.assertEqual(page['status'], 200)
         html = page['body'].decode()
         self.assertIn('作品库', html)
-        self.assertIn('新建文档', html)
+        self.assertIn('新建云文档', html)
         self.assertIn('新建网站', html)
         self.assertIn('云文档', html)
         self.assertIn('白板', html)
         self.assertIn('上传', html)
         self.assertIn('全部作品', html)
         self.assertIn('我创建的', html)
-        self.assertIn('你的作品库从这里开始', html)
+        self.assertIn('你的资料空间从这里开始', html)
         self.assertIn('让智能体搭建网站', html)
         self.assertIn('保存聊天中的消息', html)
+        self.assertIn('暂无保存', html)
+        self.assertIn('没有匹配的作品', html)
+        self.assertIn('还没有录过音的会议', html)
+        self.assertIn('Websites', html)
+        self.assertIn('id="filter-panel"', html)
+        self.assertIn('自定义范围', html)
+        self.assertIn('暂无可筛选的创建人', html)
+        self.assertIn('没有匹配的会话', html)
         self.assertIn('未实现', html)
         self.assertIn('id="new-menu"', html)
         self.assertIn('创建只读分享链接', html)
@@ -55,10 +63,26 @@ class ArtifactsPageTests(unittest.TestCase):
         self.assertIn('text/javascript', script['headers']['Content-Type'])
         self.assertEqual(self.raw.call('GET', '/artifacts/missing')['status'], 404)
 
+    def test_space_alias_accepts_recorded_views_only(self):
+        for path in ('/space', '/artifacts'):
+            self.assertEqual(self.raw.call('GET', path)['status'], 200, path)
+            for view in ('created', 'starred', 'memory', 'meetings'):
+                page = self.raw.call('GET', path, query=f'view={view}')
+                self.assertEqual(page['status'], 200, f'{path}?view={view}')
+                self.assertIn('作品库', page['body'].decode())
+            self.assertEqual(self.raw.call('GET', path, query='q=1')['status'], 400)
+            self.assertEqual(self.raw.call('GET', path, query='view=created&x=1')['status'], 400)
+            self.assertEqual(self.raw.call('GET', path, query='view=unknown')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/artifacts/app.mjs', query='view=created')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/artifacts/app.css', query='view=created')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/settings', query='view=created')['status'], 400)
+
     def test_page_rejects_cross_origin_queries_and_writes(self):
         self.assertEqual(self.raw.call('GET', '/artifacts', origin='https://evil.test')['status'], 403)
+        self.assertEqual(self.raw.call('GET', '/space', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/artifacts', query='q=1')['status'], 400)
         self.assertEqual(self.raw.call('POST', '/artifacts')['status'], 405)
+        self.assertEqual(self.raw.call('POST', '/space')['status'], 405)
 
     def test_wrapper_still_exposes_the_artifacts_api(self):
         workspace = self.client.call('POST', '/v1/workspaces', {'name': 'Desk'},

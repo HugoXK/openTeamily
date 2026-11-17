@@ -246,3 +246,132 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   width: 100%;
   font: inherit;
 }
+
+.filter-wrap {
+  position: relative;
+}
+
+#filter-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  z-index: 25;
+  width: 18.5rem;
+  padding: 0.7rem 0.75rem 0.85rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  border: 1px solid var(--ot-line);
+  border-radius: 0.9rem;
+  box-shadow: var(--ot-shadow);
+}
+
+.filter-heading {
+  margin: 0 0 0.45rem;
+  font-weight: 650;
+}
+
+.filter-accordion {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 0.4rem 0.15rem;
+}
+
+.filter-accordion::after {
+  content: "›";
+  color: var(--ot-muted);
+}
+
+.filter-accordion[aria-expanded="true"]::after {
+  content: "⌄";
+}
+
+.filter-body {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.15rem 0 0.45rem 0.1rem;
+}
+
+.filter-body.type-grid {
+  grid-template-columns: 1fr 1fr;
+}
+
+.filter-body label {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+#meetings-chrome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem 0.85rem;
+  flex: 1;
+}
+
+#meetings-caption {
+  margin: 0;
+  color: var(--ot-muted);
+  font-size: 0.9rem;
+}
+
+.meeting-scopes {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.meeting-scopes button {
+  width: auto;
+  padding: 0.28rem 0.65rem;
+  border-radius: 999px;
+}
+
+.meeting-scopes button[aria-current="page"] {
+  background: var(--ot-accent);
+  color: var(--ot-surface);
+}
+
+#main-panel.is-meetings .artifact-scopes,
+#main-panel.is-meetings .filter-wrap,
+#main-panel.is-meetings #layout-toggle,
+#main-panel.is-meetings #layout-note {
+  display: none;
+}
+
+.dir-search {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+#empty-all,
+#empty-starred,
+#empty-memory,
+#empty-meetings {
+  display: grid;
+  gap: 0.25rem 0.5rem;
+  justify-items: start;
+}
+
+#empty-all h2,
+#empty-starred h2,
+#empty-memory h2,
+#empty-meetings h2 {
+  margin: 0 0 0.15rem;
+  font-size: 1.15rem;
+}
+
+#empty-all a,
+#empty-starred a,
+#empty-all button,
+#empty-starred button,
+#new-website {
+  width: auto;
+  padding: 0.55rem 0.8rem;
+  border-radius: 999px;
+  text-decoration: none;
+}

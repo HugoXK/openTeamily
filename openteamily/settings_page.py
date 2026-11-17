@@ -29,6 +29,7 @@ class SettingsPage:
         '/artifacts': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/artifacts/app.mjs': ('artifacts', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/app.css': ('artifacts', 'app.css', 'text/css; charset=utf-8'),
+        '/space': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/agents': ('agents', 'index.html', 'text/html; charset=utf-8'),
         '/agents/app.mjs': ('agents', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/agents/app.css': ('agents', 'app.css', 'text/css; charset=utf-8'),
@@ -48,7 +49,7 @@ class SettingsPage:
         '/download': ('download', 'index.html', 'text/html; charset=utf-8'),
         '/download/app.mjs': ('download', 'app.mjs', 'text/javascript; charset=utf-8'),
     }
-    PREFIXES = ('/settings', '/automations', '/team', '/members', '/runtimes', '/artifacts', '/agents', '/memory', '/install', '/shell', '/chat', '/discover', '/profile', '/download')
+    PREFIXES = ('/settings', '/automations', '/team', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/discover', '/profile', '/download')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")
@@ -120,6 +121,15 @@ class SettingsPage:
     def _unknown_page(self, path):
         return any(path == prefix or path.startswith(prefix + '/') for prefix in self.PREFIXES)
 
+    def _query_allowed(self, path, query):
+        # Only the works-library HTML pages may take the recorded view query.
+        # CSS/JS and every other management page still reject QUERY_STRING.
+        if not query:
+            return True
+        if path not in ('/space', '/artifacts'):
+            return False
+        return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings')
+
     def __call__(self, env, start_response):
         path = env.get('PATH_INFO', '')
         if path == '/install/flybot.pyz':
@@ -145,7 +155,7 @@ class SettingsPage:
         elif env.get('REQUEST_METHOD') not in ('GET', 'HEAD'):
             status, data = '405 Method Not Allowed', b'Use GET or HEAD'
             headers.append(('Allow', 'GET, HEAD'))
-        elif env.get('QUERY_STRING'):
+        elif not self._query_allowed(path, env.get('QUERY_STRING', '')):
             status, data = '400 Bad Request', b'Queries not supported'
         else:
             directory, name, content_type = self.ASSETS[path]

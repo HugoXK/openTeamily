@@ -18,7 +18,7 @@
     <a href="/agents" title="智能体">智能体</a>
     <a href="/automations" title="自动化">自动化</a>
     <a href="/memory" title="记忆">记忆</a>
-    <a href="/artifacts" title="作品">作品</a>
+    <a href="/space" title="作品">作品</a>
     <button type="button" class="rail-link" disabled title="未实现：发现动态">发现</button>
     <span class="rail-spacer"></span>
     <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
@@ -62,23 +62,80 @@
   <section id="main-panel" hidden>
     <header class="artifacts-top">
       <h1>作品库</h1>
-      <nav class="artifact-scopes" aria-label="作品范围">
+      <nav class="artifact-scopes" id="artifact-scopes" aria-label="作品范围">
         <button type="button" data-scope="all" aria-current="page">全部</button>
         <button type="button" data-scope="mine">我创建的</button>
-        <button type="button" data-scope="favorites" disabled title="未实现：还没有收藏接口">收藏</button>
-        <button type="button" data-scope="memory" disabled title="未实现：对照打开过 Memory 视图，但没有留下版式截图；静态页也不能使用 ?view=memory">Memory</button>
+        <button type="button" data-scope="favorites">收藏</button>
+        <button type="button" data-scope="memory">Memory</button>
       </nav>
+      <div id="meetings-chrome" hidden>
+        <p id="meetings-caption">你参加或组织过的录音会议，最新的在前。</p>
+        <div class="meeting-scopes" role="tablist" aria-label="会议范围">
+          <button type="button" data-meeting-scope="joined" aria-current="page">我参加的</button>
+          <button type="button" data-meeting-scope="all">全部</button>
+        </div>
+      </div>
       <label class="workspace-picker">工作区
         <select id="workspace"></select>
       </label>
-      <button type="button" id="filter-button" disabled title="未实现：对照里有筛选入口，但没有打开筛选面板，也没有记下选项">筛选</button>
-      <div class="layout-toggle" role="group" aria-label="排列方式">
-        <button type="button" data-layout="grid" disabled title="未实现：对照里可见网格和列表切换，但没有留下有作品时的网格版式">网格</button>
-        <button type="button" data-layout="list" aria-pressed="true">列表</button>
+      <div class="filter-wrap">
+        <button type="button" id="filter-button" aria-expanded="false" aria-haspopup="dialog" aria-controls="filter-panel">筛选</button>
+        <div id="filter-panel" role="dialog" aria-label="筛选" hidden>
+          <p class="filter-heading">筛选</p>
+          <div class="filter-section" data-section="types">
+            <button type="button" class="filter-accordion" aria-expanded="false">文件类型</button>
+            <div class="filter-body type-grid" hidden>
+              <label><input type="checkbox" name="file-type" value="云文档"> 云文档</label>
+              <label><input type="checkbox" name="file-type" value="Markdown"> Markdown</label>
+              <label><input type="checkbox" name="file-type" value="DOCX"> DOCX</label>
+              <label><input type="checkbox" name="file-type" value="PDF"> PDF</label>
+              <label><input type="checkbox" name="file-type" value="电子表格"> 电子表格</label>
+              <label><input type="checkbox" name="file-type" value="幻灯片"> 幻灯片</label>
+              <label><input type="checkbox" name="file-type" value="Web 应用"> Web 应用</label>
+              <label><input type="checkbox" name="file-type" value="网页"> 网页</label>
+              <label><input type="checkbox" name="file-type" value="图片"> 图片</label>
+              <label><input type="checkbox" name="file-type" value="视频"> 视频</label>
+              <label><input type="checkbox" name="file-type" value="音频"> 音频</label>
+              <label><input type="checkbox" name="file-type" value="白板"> 白板</label>
+              <label><input type="checkbox" name="file-type" value="消息"> 消息</label>
+            </div>
+          </div>
+          <div class="filter-section" data-section="modified">
+            <button type="button" class="filter-accordion" aria-expanded="false">修改时间</button>
+            <div class="filter-body" hidden>
+              <label><input type="radio" name="modified" value="any" checked> 不限时间</label>
+              <label><input type="radio" name="modified" value="today"> 今天</label>
+              <label><input type="radio" name="modified" value="d7"> 最近 7 天</label>
+              <label><input type="radio" name="modified" value="d30"> 最近 30 天</label>
+              <label><input type="radio" name="modified" value="d90"> 最近 90 天</label>
+              <label><input type="radio" name="modified" value="custom"> 自定义范围</label>
+              <p id="custom-range-note" class="note" hidden>对照里没有打开自定义范围的字段，这里不能按自定义日期筛选。</p>
+            </div>
+          </div>
+          <div class="filter-section" data-section="creators">
+            <button type="button" class="filter-accordion" aria-expanded="false">创建人</button>
+            <div class="filter-body" hidden>
+              <p id="filter-creator-empty" class="note">暂无可筛选的创建人</p>
+              <div id="filter-creator-list"></div>
+            </div>
+          </div>
+          <div class="filter-section" data-section="sessions">
+            <button type="button" class="filter-accordion" aria-expanded="false">来源会话</button>
+            <div class="filter-body" hidden>
+              <p id="filter-session-empty" class="note">没有匹配的会话</p>
+              <div id="filter-session-list"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="layout-toggle" id="layout-toggle" role="group" aria-label="排列方式">
+        <button type="button" data-layout="grid" aria-pressed="true">网格</button>
+        <button type="button" data-layout="list" aria-pressed="false">列表</button>
       </div>
       <button type="button" id="artifact-notify" disabled title="未实现：还没有作品通知接口">通知</button>
     </header>
-    <p class="note artifacts-disclaimer">对照里的作品库是左侧分类、顶部范围和空态操作。已有作品仍可打开、编辑、查看版本、导出和分享。收藏、Memory 视图、筛选面板、网格和通知尚未实现。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
+    <p class="note artifacts-disclaimer">对照里的作品库入口是 /space。已有作品仍可打开、编辑、查看版本、导出和分享。收藏还没有接口；有作品时的网格版式还没有对照，目前有作品时仍用列表展示。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
+    <p id="layout-note" class="note" hidden>有作品时的网格版式还没有对照证据，所以现在仍用已有的列表展示，不会发明卡片网格。</p>
     <p id="whoami" class="visually-hidden"></p>
     <section id="list-panel" class="artifacts-workspace">
       <aside class="artifact-dir" id="artifact-dir">
@@ -90,9 +147,12 @@
             <button type="button" id="new-media" role="menuitem">上传</button>
           </div>
         </div>
+        <label class="dir-search">搜索
+          <input id="search" type="text" maxlength="80" autocomplete="off" placeholder="搜索">
+        </label>
         <nav class="artifact-kinds" aria-label="作品分类">
           <button type="button" data-kind="all" aria-current="page">全部作品</button>
-          <button type="button" data-kind="website">网站</button>
+          <button type="button" data-kind="website">Websites</button>
           <button type="button" data-kind="document">文档</button>
           <button type="button" data-kind="media">媒体</button>
           <button type="button" data-kind="messages">消息</button>
@@ -100,25 +160,41 @@
         </nav>
       </aside>
       <section class="artifact-main">
-        <label>搜索 <input id="search" type="text" maxlength="80" autocomplete="off"></label>
         <ul id="artifact-list"></ul>
         <div id="list-empty" hidden>
           <div id="empty-all">
-            <h2>你的作品库从这里开始</h2>
-            <p>你创建或保存的内容都会到这里。</p>
-            <button type="button" id="empty-new-document">新建文档</button>
+            <h2>你的资料空间从这里开始</h2>
+            <p>你创建或保存的内容都会出现在这里。</p>
+            <button type="button" id="empty-new-document">新建云文档</button>
             <p class="hint">从空白页开始。</p>
             <button type="button" id="empty-agent-website" disabled title="未实现：还没有从作品库让智能体搭网站的接口">让智能体搭建网站</button>
             <p class="hint">未实现：对照里写的是描述需求后由智能体搭建，OpenTeamily 还没有这条入口。</p>
             <a href="/chat" id="empty-save-message">保存聊天中的消息</a>
             <p class="hint">在已完成的对话里保存到作品库。这一页不能右键保存，也还没有对照里的右键菜单。</p>
           </div>
+          <div id="empty-starred" hidden>
+            <h2>暂无保存</h2>
+            <p>你保存的内容会按时间倒序出现在这里。</p>
+            <a href="/chat" id="empty-starred-save-message">保存聊天中的消息</a>
+            <p class="hint">在已完成的对话里保存到作品库。OpenTeamily 还没有收藏接口。</p>
+            <button type="button" id="empty-save-image" disabled title="未实现：还没有从作品库保存聊天图片的接口">保存聊天中的图片</button>
+            <p class="hint">未实现：对照里是右键图片后保存，这里没有对应接口，不能做成可保存表单。</p>
+            <button type="button" id="empty-save-agent" disabled title="未实现：还没有从已完成任务保存智能体成果的接口">保存智能体成果</button>
+            <p class="hint">未实现：对照里是在已完成任务上保存，这里没有对应接口，不能做成可保存表单。</p>
+          </div>
+          <div id="empty-memory" hidden>
+            <h2>没有匹配的作品</h2>
+            <p>智能体生成的作品将显示在此处。</p>
+            <p>清除筛选条件或切换作品类型，以扩大结果范围。</p>
+          </div>
           <div id="empty-kind" hidden>
             <p id="empty-kind-note" class="note">这一类还没有作品。</p>
             <button type="button" id="new-website">新建网站</button>
           </div>
           <div id="empty-meetings" hidden>
-            <p class="note">未实现：对照里说明这是「你参加或组织过的录音会议」，但没有留下完整列表版式。OpenTeamily 还没有会议作品接口。</p>
+            <h2>还没有录过音的会议</h2>
+            <p>在会议中开启录音后，回放和纪要会出现在这里。</p>
+            <p class="note">未实现：OpenTeamily 还没有会议作品接口，这里不会列出假的会议。</p>
           </div>
           <p id="list-empty-message" class="note" hidden>这个工作区还没有作品。</p>
         </div>

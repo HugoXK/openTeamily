@@ -5,7 +5,7 @@ from tests import test_settings_page as settings_page_tests
 
 
 PAGES = (
-    '/settings', '/agents', '/chat', '/automations', '/artifacts',
+    '/settings', '/agents', '/chat', '/automations', '/artifacts', '/space',
     '/members', '/team', '/runtimes', '/memory', '/discover',
     '/profile', '/download',
 )
@@ -24,7 +24,14 @@ CAPTURE_IDS = {
                      'run-list', 'run-empty'),
     '/artifacts': ('artifact-list', 'editor-form', 'media-image',
                    'board-canvas', 'website-preview', 'new-menu',
-                   'new-artifact', 'list-empty'),
+                   'new-artifact', 'list-empty', 'filter-panel',
+                   'empty-starred', 'empty-memory', 'empty-meetings',
+                   'meetings-chrome'),
+    '/space': ('artifact-list', 'editor-form', 'media-image',
+               'board-canvas', 'website-preview', 'new-menu',
+               'new-artifact', 'list-empty', 'filter-panel',
+               'empty-starred', 'empty-memory', 'empty-meetings',
+               'meetings-chrome'),
     '/members': ('member-list', 'invite-list'),
     '/team': ('wizard-form', 'step-1', 'step-2', 'step-3', 'next'),
     '/runtimes': ('runtimes-panel', 'connect-panel', 'key-list',
@@ -111,8 +118,9 @@ class ShellPageTests(unittest.TestCase):
                 self.assertIn('连接远程机器', html)
             if path == '/agents':
                 self.assertIn('name="name"', html)
-            if path == '/artifacts':
+            if path in ('/artifacts', '/space'):
                 self.assertIn('textarea', html)
+                self.assertIn('href="/space"', html)
             if path == '/team':
                 self.assertIn('<h1>', html)
 
