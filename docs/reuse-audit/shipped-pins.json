@@ -31,8 +31,8 @@
     },
     "runtime/ds-bot-upstream/NOTICE": {
       "path": "runtime/ds-bot-upstream/NOTICE",
-      "sha256": "4c7d3e4e7607f02ed9e4fb940442be7d0d107b57beb54660e1526a7be07c2aad",
-      "bytes": 15557
+      "sha256": "9950f67d1743a33a420581e44e8f7473e6ab78b69c7e55ea8a84b476c3cf2a39",
+      "bytes": 15675
     },
     "runtime/ds-bot-upstream/ds-bot/LICENSE": {
       "path": "runtime/ds-bot-upstream/ds-bot/LICENSE",
