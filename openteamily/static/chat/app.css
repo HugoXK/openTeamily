@@ -245,7 +245,7 @@
 /* Original mobile supplement; not compared this round. */
 @media (max-width: 50rem) {
   body.app-workspace.chat-open {
-    grid-template-columns: 4.375rem minmax(0, 1fr);
+    grid-template-columns: 5rem minmax(0, 1fr);
   }
   body.app-workspace.chat-open > .session-pane {
     display: none;

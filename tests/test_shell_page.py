@@ -7,7 +7,7 @@ from tests import test_settings_page as settings_page_tests
 PAGES = (
     '/settings', '/agents', '/chat', '/automations', '/artifacts', '/space',
     '/members', '/team', '/runtimes', '/memory', '/discover',
-    '/profile', '/download',
+    '/profile', '/download', '/messenger',
 )
 
 CAPTURE_IDS = {
@@ -49,6 +49,8 @@ CAPTURE_IDS = {
     '/profile': ('main-panel', 'whoami', 'profile-username'),
     '/download': ('main-panel', 'download-web', 'download-runtime',
                   'download-unavailable', 'daemon-command'),
+    '/messenger': ('main-panel', 'conversation-list', 'create-conversation',
+                   'message-list', 'conversations-empty', 'message-form'),
 }
 
 
@@ -71,6 +73,9 @@ class ShellPageTests(unittest.TestCase):
         self.assertIn(b'[hidden]', css['body'])
         self.assertIn(b'display: none !important', css['body'])
         self.assertIn(b'.skip-link', css['body'])
+        self.assertIn(b'body.app-workspace > .app-rail > a', css['body'])
+        self.assertIn(b'font-size: 0.75rem', css['body'])
+        self.assertNotIn(b'font-size: 0.62rem', css['body'])
         self.assertNotIn(b'teamily.com', css['body'].lower())
         self.assertNotIn(b'teamily.com', script['body'].lower())
         self.assertIn(b'export function resolveTheme', script['body'])
@@ -116,6 +121,8 @@ class ShellPageTests(unittest.TestCase):
             self.assertIn('查看我的资料', html, path)
             self.assertIn('href="/download"', html, path)
             self.assertIn('id="appearance-toggle"', html, path)
+            self.assertIn('href="/discover"', html, path)
+            self.assertNotIn('未实现：发现动态', html, path)
             self.assertIn("default-src 'none'", page['headers']['Content-Security-Policy'])
             if path == '/runtimes':
                 self.assertIn('data-tab="connect"', html)

@@ -820,6 +820,10 @@ async function main() {
         'memory_todos_empty',
         todosEmpty.includes('下一步行动')
           && todosEmpty.includes('当前没有可预期的事项。')
+          && todosEmpty.includes('新建行动')
+          && await page.locator('#new-action-open').isVisible()
+          && await page.locator('#new-action-form').isHidden()
+          && !todosEmpty.includes('截止日期')
           && await page.locator('#dream-actions').isDisabled()
           && !todosEmpty.includes(ready.action_title)
           && !/积分|套餐|升级/.test(todosEmpty),
@@ -983,6 +987,46 @@ async function main() {
       screenshots.push(path.basename(await shot(page, outDir, '26-download.png')));
     } catch (error) {
       record('download_page', false, String(error));
+    }
+
+    try {
+      await page.goto(`${origin}/messenger`, { waitUntil: 'load' });
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const messengerText = `${await visibleText(page.locator('#main-panel'))}`;
+      const messengerWho = `${await visibleText(page.locator('#whoami'))}`;
+      const discoverInRail = await page.locator('body.app-workspace > .app-rail a[href="/discover"]').count();
+      record(
+        'messenger_page',
+        messengerWho === ready.username
+          && messengerText.includes('消息')
+          && discoverInRail > 0
+          && !messengerText.includes('未实现：发现动态')
+          && !/积分|套餐|升级/.test(messengerText),
+        `whoami=${messengerWho || '(empty)'}; railDiscover=${discoverInRail}; ${messengerText || 'messenger empty'}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '51-messenger.png')));
+    } catch (error) {
+      record('messenger_page', false, String(error));
+    }
+
+    try {
+      await page.goto(`${origin}/discover`, { waitUntil: 'load' });
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const discoverText = `${await visibleText(page.locator('#main-panel'))}`;
+      const discoverWho = `${await visibleText(page.locator('#whoami'))}`;
+      const discoverCurrent = await page.locator('body.app-workspace > .app-rail a[href="/discover"][aria-current="page"]').count();
+      record(
+        'discover_page',
+        discoverWho === ready.username
+          && discoverText.includes('发现')
+          && discoverCurrent > 0
+          && (discoverText.includes('还没有收录任何智能体。') || discoverText.includes(ready.agent_name))
+          && !/积分|套餐|升级/.test(discoverText),
+        `whoami=${discoverWho || '(empty)'}; current=${discoverCurrent}; ${discoverText || 'discover empty'}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '52-discover.png')));
+    } catch (error) {
+      record('discover_page', false, String(error));
     }
 
     await context.close();

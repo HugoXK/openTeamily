@@ -135,10 +135,11 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 }
 
 .memory-filters button[aria-pressed="true"],
+.memory-views a[aria-current="page"],
 .memory-views button[aria-current="page"],
 .side-tabs button[aria-selected="true"] {
   background: var(--ot-accent);
-  color: var(--ot-surface);
+  color: #fff;
 }
 
 .memory-views a,
@@ -157,7 +158,16 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 .memory-views button:hover,
 .memory-filters button:hover,
 .side-tabs button:hover {
-  background: var(--ot-bg-accent);
+  background: var(--ot-line);
+  color: var(--ot-ink);
+}
+
+.memory-views a[aria-current="page"]:hover,
+.memory-views button[aria-current="page"]:hover,
+.memory-filters button[aria-pressed="true"]:hover,
+.side-tabs button[aria-selected="true"]:hover {
+  background: var(--ot-accent);
+  color: #fff;
 }
 
 #memory-list,
@@ -356,4 +366,16 @@ textarea {
   margin: 0;
   color: var(--ot-muted);
   font-size: 0.9rem;
+}
+
+html[data-theme-resolved="dark"] .memory-views a[aria-current="page"],
+html[data-theme-resolved="dark"] .memory-views button[aria-current="page"],
+html[data-theme-resolved="dark"] .memory-filters button[aria-pressed="true"],
+html[data-theme-resolved="dark"] .side-tabs button[aria-selected="true"],
+html[data-theme-resolved="dark"] .memory-views a[aria-current="page"]:hover,
+html[data-theme-resolved="dark"] .memory-views button[aria-current="page"]:hover,
+html[data-theme-resolved="dark"] .memory-filters button[aria-pressed="true"]:hover,
+html[data-theme-resolved="dark"] .side-tabs button[aria-selected="true"]:hover {
+  background: var(--ot-accent);
+  color: #1c1917;
 }

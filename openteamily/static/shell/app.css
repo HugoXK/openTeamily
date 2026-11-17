@@ -584,7 +584,7 @@ pre {
    Structure follows the 2026-11-17 Teamily visit; colors stay FlyBot tokens. */
 body.app-workspace {
   display: grid;
-  grid-template-columns: 4.375rem minmax(0, 1fr);
+  grid-template-columns: 5rem minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 100vh;
   max-width: none;
@@ -630,15 +630,16 @@ body.app-workspace > .app-rail .account-trigger {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 2.4rem;
-  height: 2.4rem;
+  width: 3rem;
+  min-height: 2.6rem;
+  height: auto;
   border-radius: 0.65rem;
   color: var(--ot-surface);
   text-decoration: none;
-  font-size: 0.62rem;
-  line-height: 1.15;
+  font-size: 0.75rem;
+  line-height: 1.2;
   text-align: center;
-  padding: 0.15rem;
+  padding: 0.28rem 0.15rem;
 }
 
 body.app-workspace > .app-rail > a:hover,
@@ -691,7 +692,7 @@ body.app-workspace #login-panel {
 }
 
 body.app-workspace.chat-open {
-  grid-template-columns: 4.375rem 21.875rem minmax(0, 1fr);
+  grid-template-columns: 5rem 21.875rem minmax(0, 1fr);
 }
 
 body.app-workspace.chat-open > .session-pane {

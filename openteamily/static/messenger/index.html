@@ -20,9 +20,34 @@
     <a href="/automations" title="自动化">自动化</a>
     <a href="/memory" title="记忆">记忆</a>
     <a href="/space" title="作品">作品</a>
+    <a href="/discover" title="发现">发现</a>
     <span class="rail-spacer"></span>
     <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
+    <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
     <a href="/download" title="下载">下载</a>
+    <div class="account-slot" hidden>
+      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <div id="account-menu" class="account-menu" role="menu" hidden>
+        <p id="account-identity" class="account-identity"></p>
+        <a href="/profile" role="menuitem">查看我的资料</a>
+        <a href="/team" role="menuitem">创建团队</a>
+        <div class="account-sub">
+          <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
+          <div id="help-menu" hidden>
+            <button type="button" disabled title="未实现：OpenTeamily 还没有帮助中心">帮助中心</button>
+            <a href="/download" role="menuitem">下载</a>
+            <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
+            <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
+          </div>
+        </div>
+        <a href="/settings" role="menuitem">所有设置</a>
+        <form id="logout-form" method="post" action="/v1/auth/logout">
+          <button type="submit">退出登录</button>
+        </form>
+      </div>
+    </div>
   </nav>
   <p id="status" role="status"></p>
   <main id="main">

@@ -186,8 +186,112 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   color: var(--ot-muted);
 }
 
-#empty-all button,
-#empty-all a,
+#empty-all,
+#empty-starred,
+#empty-memory {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 0.35rem;
+  width: 100%;
+}
+
+#empty-all h2,
+#empty-starred h2,
+#empty-memory h2 {
+  margin: 0.2rem 0 0;
+  font-size: 1.15rem;
+}
+
+#empty-all > p,
+#empty-starred > p,
+#empty-memory > p {
+  margin: 0;
+  color: var(--ot-muted);
+}
+
+.empty-hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.2rem;
+  height: 3.2rem;
+  margin-bottom: 0.35rem;
+  border-radius: 999px;
+  background: var(--ot-bg-accent);
+  color: var(--ot-muted);
+}
+
+.empty-cta-list {
+  display: grid;
+  gap: 0.55rem;
+  width: min(26rem, 100%);
+  margin-top: 0.85rem;
+  text-align: start;
+}
+
+.empty-cta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 999px;
+  background: var(--ot-surface);
+  color: inherit;
+  text-decoration: none;
+  font: inherit;
+  box-shadow: var(--ot-shadow);
+}
+
+.empty-cta:hover,
+.empty-cta:focus-visible {
+  background: var(--ot-surface);
+}
+
+.empty-cta:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+}
+
+.empty-cta-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: var(--ot-bg-accent);
+  color: var(--ot-ink);
+}
+
+.empty-cta-copy {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.empty-cta-copy .hint {
+  margin: 0;
+  color: var(--ot-muted);
+  font-size: 0.85rem;
+}
+
+.empty-cta-go {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 999px;
+  background: var(--ot-accent);
+  color: #fff;
+  font-size: 0.95rem;
+}
+
 #new-website {
   width: auto;
   padding: 0.55rem 0.8rem;
