@@ -446,6 +446,114 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   display: none;
 }
 
+.dir-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.dir-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.dir-collapse,
+.dir-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  min-width: 1.85rem;
+  height: 1.85rem;
+  padding: 0;
+  border-radius: 0.45rem;
+  font: inherit;
+  line-height: 0;
+}
+
+.dir-expand {
+  width: auto;
+  min-width: 0;
+  height: auto;
+  padding: 0.28rem 0.65rem;
+  border-radius: 999px;
+}
+
+#new-menu-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.55rem 0.85rem;
+  background: var(--ot-accent);
+  color: var(--ot-surface);
+  border-color: transparent;
+}
+
+#new-menu-button[aria-expanded="true"] {
+  filter: brightness(0.96);
+}
+
+.new-menu-caret {
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.artifact-kinds button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  border-color: transparent;
+  border-radius: 0.65rem;
+}
+
+.kind-icon {
+  display: inline-flex;
+  color: var(--ot-muted);
+}
+
+.artifact-kinds button[aria-current="page"] .kind-icon {
+  color: inherit;
+}
+
+.layout-toggle {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 0;
+  padding: 0.15rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.7rem;
+  background: var(--ot-surface);
+}
+
+.layout-toggle button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  min-width: 1.85rem;
+  height: 1.85rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: var(--ot-muted);
+}
+
+.layout-toggle button[aria-selected="true"],
+.layout-toggle button[aria-pressed="true"] {
+  background: var(--ot-bg-accent);
+  color: var(--ot-text, inherit);
+}
+
+.artifacts-workspace.dir-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .dir-search {
   display: flex;
   flex-direction: column;

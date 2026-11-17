@@ -61,7 +61,8 @@
   </section>
   <section id="main-panel" hidden>
     <header class="artifacts-top">
-      <h1>作品库</h1>
+      <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏（收起后的版式未经对照核实）">展开侧边栏</button>
+      <h1 class="visually-hidden">作品库</h1>
       <nav class="artifact-scopes" id="artifact-scopes" aria-label="作品范围">
         <button type="button" data-scope="all" aria-current="page">全部</button>
         <button type="button" data-scope="mine">我创建的</button>
@@ -128,9 +129,15 @@
           </div>
         </div>
       </div>
-      <div class="layout-toggle" id="layout-toggle" role="group" aria-label="排列方式">
-        <button type="button" data-layout="grid" aria-pressed="true">网格</button>
-        <button type="button" data-layout="list" aria-pressed="false">列表</button>
+      <div class="layout-toggle" id="layout-toggle" role="tablist" aria-label="排列方式">
+        <button type="button" role="tab" data-layout="grid" aria-selected="true" aria-label="网格视图" title="网格视图">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 5h6v6H5V5zm8 0h6v6h-6V5zM5 13h6v6H5v-6zm8 0h6v6h-6v-6z"/></svg>
+          <span class="visually-hidden">网格视图</span>
+        </button>
+        <button type="button" role="tab" data-layout="list" aria-selected="false" aria-label="列表视图" title="列表视图">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 6h14v2H5V6zm0 5h14v2H5v-2zm0 5h14v2H5v-2z"/></svg>
+          <span class="visually-hidden">列表视图</span>
+        </button>
       </div>
       <button type="button" id="artifact-notify" disabled title="未实现：还没有作品通知接口">通知</button>
     </header>
@@ -138,24 +145,34 @@
     <p id="whoami" class="visually-hidden"></p>
     <section id="list-panel" class="artifacts-workspace">
       <aside class="artifact-dir" id="artifact-dir">
+        <div class="dir-header">
+          <h2 class="dir-title" id="dir-title">资料空间</h2>
+          <button type="button" id="dir-collapse" class="dir-collapse" aria-expanded="true" aria-controls="artifact-dir" aria-label="收起侧边栏" title="收起侧边栏">
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm4 1.5H5v11h4v-11z"/></svg>
+          </button>
+        </div>
         <div class="new-menu-wrap">
-          <button type="button" id="new-menu-button" aria-expanded="false" aria-haspopup="menu" aria-controls="new-menu">新建</button>
+          <button type="button" id="new-menu-button" aria-expanded="false" aria-haspopup="menu" aria-controls="new-menu">
+            <span class="new-menu-label">+ 新建</span>
+            <span class="new-menu-caret" aria-hidden="true">▾</span>
+          </button>
           <div id="new-menu" role="menu" hidden>
             <button type="button" id="new-artifact" role="menuitem">云文档</button>
             <button type="button" id="new-board" role="menuitem">白板</button>
             <button type="button" id="new-media" role="menuitem">上传</button>
           </div>
         </div>
-        <label class="dir-search">搜索
+        <label class="dir-search">
+          <span class="visually-hidden">搜索</span>
           <input id="search" type="text" maxlength="80" autocomplete="off" placeholder="搜索">
         </label>
         <nav class="artifact-kinds" aria-label="作品分类">
-          <button type="button" data-kind="all" aria-current="page">全部作品</button>
-          <button type="button" data-kind="website">Websites</button>
-          <button type="button" data-kind="document">文档</button>
-          <button type="button" data-kind="media">媒体</button>
-          <button type="button" data-kind="messages">消息</button>
-          <button type="button" data-kind="meetings">会议</button>
+          <button type="button" data-kind="all" aria-current="page"><span class="kind-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 8.5 12 5l8 3.5-8 3.5L4 8.5zm0 4.2 8 3.5 8-3.5v1.8L12 18 4 14.5v-1.8z"/></svg></span>全部作品</button>
+          <button type="button" data-kind="website"><span class="kind-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm0 1.6a7.4 7.4 0 0 0 0 14.8V4.6zm2.4 1.2c.9 1.3 1.5 3.3 1.6 5.6H20A7.4 7.4 0 0 0 14.4 5.8zM4 11.4h4c.1-2.3.7-4.3 1.6-5.6A7.4 7.4 0 0 0 4 11.4z"/></svg></span>Websites</button>
+          <button type="button" data-kind="document"><span class="kind-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zm7 1.6V9h4.4"/></svg></span>文档</button>
+          <button type="button" data-kind="media"><span class="kind-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2zm2 11 3.2-4 2.3 2.8L16 10l4 6H7zm1.8-7.2a1.4 1.4 0 1 0 0-2.8 1.4 1.4 0 0 0 0 2.8z"/></svg></span>媒体</button>
+          <button type="button" data-kind="messages"><span class="kind-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-6l-4 3v-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg></span>消息</button>
+          <button type="button" data-kind="meetings"><span class="kind-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 10h2.2v4H5v-4zm4-3h2.2v10H9V7zm4-3h2.2v16H13V4zm4 5h2.2v6H17V9z"/></svg></span>会议</button>
         </nav>
       </aside>
       <section class="artifact-main">
