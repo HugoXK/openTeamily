@@ -265,17 +265,28 @@ async function main() {
       await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
       const shortcuts = page.locator('[data-settings-page="shortcuts"]');
       await shortcuts.waitFor({ state: 'visible', timeout: 15000 });
+      const sendShortcut = page.locator('select[name="send_shortcut"]');
+      await sendShortcut.waitFor({ state: 'visible', timeout: 15000 });
+      await page.waitForFunction(() => {
+        const select = document.querySelector('select[name="send_shortcut"]');
+        const keys = document.getElementById('newline-keys');
+        return Boolean(select && select.value && keys && keys.textContent.trim());
+      }, { timeout: 15000 });
+      const sendValue = await sendShortcut.inputValue();
       const shortcutsText = `${await visibleText(shortcuts)}`;
+      const newlineText = `${await visibleText(page.locator('#newline-keys'))}`;
+      const sendShowsCtrl = sendValue === 'mod_enter';
       record(
         'settings_shortcuts',
         shortcutsText.includes('快捷键')
           && shortcutsText.includes('消息')
           && shortcutsText.includes('发送消息')
           && shortcutsText.includes('换行')
-          && shortcutsText.includes('Enter')
-          && shortcutsText.includes('Shift')
+          && (sendShowsCtrl ? shortcutsText.includes('Ctrl + Enter') : shortcutsText.includes('Enter'))
+          && newlineText.includes('Enter')
+          && (sendShowsCtrl ? !newlineText.includes('Shift') : newlineText.includes('Shift'))
           && !shortcutsText.includes('没有留下这一页的版式截图'),
-        shortcutsText || 'shortcuts page empty',
+        `send_shortcut=${sendValue}; newline=${newlineText}; ${shortcutsText || 'shortcuts page empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '50-settings-shortcuts.png')));
     } catch (error) {
