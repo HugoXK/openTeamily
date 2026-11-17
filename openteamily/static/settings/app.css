@@ -91,6 +91,77 @@
   margin: 0.75rem 0 0;
 }
 
+
+.settings-usage-card {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin: 0 0 1.5rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  background: var(--ot-surface);
+  box-shadow: var(--ot-shadow);
+}
+
+.usage-ring {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 2.6rem;
+  height: 2.6rem;
+  border: 3px solid var(--ot-line);
+  border-radius: 50%;
+  color: var(--ot-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.usage-copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.usage-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.usage-meta {
+  margin: 0;
+  color: var(--ot-muted);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+#settings-upgrade {
+  flex: 0 0 auto;
+  margin-left: 0.25rem;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 999px;
+  background: var(--ot-bg-accent);
+  color: inherit;
+  font: inherit;
+  font-weight: 650;
+}
+
+#settings-upgrade:disabled,
+button.settings-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+button.settings-row {
+  width: 100%;
+  text-align: left;
+}
+
 .settings-index {
   display: grid;
   gap: 1.15rem;

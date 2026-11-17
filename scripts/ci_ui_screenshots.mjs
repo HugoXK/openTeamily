@@ -210,6 +210,35 @@ async function main() {
     );
     screenshots.push(path.basename(await shot(page, outDir, '02-settings-signed-in.png')));
     try {
+      const hubText = `${await visibleText(page.locator('#settings-index'))}`;
+      const usageText = `${await visibleText(page.locator('#settings-usage-card'))}`;
+      const upgradeDisabled = await page.locator('#settings-upgrade').isDisabled();
+      record(
+        'settings_hub_recorded_groups',
+        usageText.includes('未接通')
+          && usageText.includes('升级')
+          && usageText.includes('5 小时窗口')
+          && upgradeDisabled
+          && hubText.includes('创作者与奖励')
+          && hubText.includes('套餐、账单与用量')
+          && hubText.includes('创作赚钱')
+          && hubText.includes('积分中心')
+          && hubText.includes('套餐与账单')
+          && hubText.includes('教育优惠认证')
+          && hubText.includes('兑换码')
+          && hubText.includes('技能配置')
+          && !usageText.includes('0m 后重置')
+          && !hubText.includes('已赚取')
+          && !hubText.includes('$CASH')
+          && !hubText.includes('CREDIT')
+          && !hubText.includes('剩余 100%'),
+        `upgradeDisabled=${upgradeDisabled}; usage=${usageText || 'usage empty'} | hub=${hubText || 'hub empty'}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '76-settings-hub-groups.png')));
+    } catch (error) {
+      record('settings_hub_recorded_groups', false, String(error));
+    }
+    try {
       await page.goto(`${origin}/settings/appearance`, { waitUntil: 'load' });
       await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
       const appearance = page.locator('#appearance');
