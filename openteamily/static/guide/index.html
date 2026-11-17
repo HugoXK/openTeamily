@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>功能指引 · OpenTeamily</title>
+  <link rel="stylesheet" href="/shell/app.css">
+  <link rel="stylesheet" href="/guide/app.css">
+  <script type="module" src="/shell/app.mjs"></script>
+  <script type="module" src="/guide/app.mjs"></script>
+</head>
+<body class="app-workspace">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <nav class="app-rail" aria-label="应用导航">
+    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
+    <a href="/chat" title="聊天">聊天</a>
+    <a href="/agents" title="智能体">智能体</a>
+    <a href="/automations" title="自动化">自动化</a>
+    <a href="/memory" title="记忆">记忆</a>
+    <a href="/space" title="作品">作品</a>
+    <a href="/discover" title="发现">发现</a>
+    <span class="rail-spacer"></span>
+    <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
+    <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
+    <a href="/download" title="下载">下载</a>
+    <div class="account-slot" hidden>
+      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <div id="account-menu" class="account-menu" role="menu" hidden>
+        <p id="account-identity" class="account-identity"></p>
+        <a href="/profile" role="menuitem">查看我的资料</a>
+        <a href="/team" role="menuitem">创建团队</a>
+        <div class="account-sub">
+          <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
+          <div id="help-menu" hidden>
+            <button type="button" disabled title="未实现：OpenTeamily 还没有帮助中心">帮助中心</button>
+            <a href="/download" role="menuitem">下载</a>
+            <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
+            <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
+          </div>
+        </div>
+        <a href="/settings" role="menuitem">所有设置</a>
+        <form id="logout-form" method="post" action="/v1/auth/logout">
+          <button type="submit">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </nav>
+  <p id="status" role="status"></p>
+  <main id="main">
+  <section id="login-panel" hidden>
+    <h2>登录</h2>
+    <form id="login-form" method="post" action="/v1/auth/login">
+      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
+      <button type="submit">登录</button>
+    </form>
+  </section>
+  <section id="main-panel" hidden>
+    <p id="whoami" hidden></p>
+    <header class="guide-top">
+      <h1>
+        <span class="guide-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 3.5h9.5A2.5 2.5 0 0 1 18 6v14.2l-6-2.3-6 2.3V6A2.5 2.5 0 0 1 8.5 3.5H6zm3 3v10.1l3-1.1 3 1.1V6.5H9z"/></svg></span>
+        功能指引
+      </h1>
+    </header>
+    <div class="guide-toolbar">
+      <label class="guide-search-label" for="guide-search">
+        <span class="visually-hidden">搜索功能</span>
+        <input id="guide-search" type="search" placeholder="搜索功能，例如：添加成员" autocomplete="off" maxlength="120">
+      </label>
+      <div class="guide-view-toggle" role="group" aria-label="列表或图谱">
+        <button type="button" id="view-list" aria-pressed="true" title="列表视图">列表</button>
+        <button type="button" id="view-graph" disabled title="未核实：对照只留下列表视图，没有图谱布局截图。">图谱</button>
+      </div>
+    </div>
+    <p class="note guide-note">这是 OpenTeamily 自己的功能目录，只收录本实例已经有的入口和已标明未接通的项，不复制 Teamily 的指引原文或条数。</p>
+    <div class="guide-body">
+      <nav id="guide-categories" class="guide-categories" aria-label="功能分类"></nav>
+      <div class="guide-results">
+        <p id="guide-count" class="guide-count"></p>
+        <div id="guide-list"></div>
+        <p id="guide-empty" class="note" hidden>没有匹配的功能。</p>
+      </div>
+    </div>
+    <div id="guide-dialog" class="guide-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="guide-dialog-title">
+      <div class="guide-dialog-card">
+        <header class="guide-dialog-head">
+          <h2 id="guide-dialog-title"></h2>
+          <button type="button" id="guide-dialog-close" aria-label="关闭">×</button>
+        </header>
+        <p id="guide-dialog-body"></p>
+        <div class="guide-dialog-path-wrap">
+          <p class="guide-dialog-path-label">操作路径</p>
+          <p id="guide-dialog-path"></p>
+        </div>
+      </div>
+    </div>
+  </section>
+  </main>
+</body>
+</html>

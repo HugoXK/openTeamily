@@ -1287,6 +1287,33 @@ async function main() {
     }
 
     try {
+      await page.goto(`${origin}/guide`, { waitUntil: 'load' });
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#guide-list').waitFor({ state: 'visible', timeout: 8000 });
+      await waitForLocatorText(page, '#guide-count', '个功能');
+      const guideText = await visibleText(page.locator('#main-panel'));
+      record(
+        'guide_page',
+        guideText.includes('功能指引') && guideText.includes('打开聊天') && guideText.includes('通话窗口') && guideText.includes('0') && !guideText.includes('折叠会话列表'),
+        guideText.slice(0, 240) || 'guide empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '70-guide.png')));
+      await page.getByRole('button', { name: '打开聊天', exact: true }).click();
+      await page.locator('#guide-dialog').waitFor({ state: 'visible', timeout: 8000 });
+      await waitForLocatorText(page, '#guide-dialog-title', '打开聊天');
+      await waitForLocatorText(page, '#guide-dialog-path', '应用栏 › 聊天');
+      const dialogText = await visibleText(page.locator('#guide-dialog'));
+      record(
+        'guide_dialog',
+        dialogText.includes('打开聊天') && dialogText.includes('操作路径') && dialogText.includes('应用栏 › 聊天'),
+        dialogText.slice(0, 240) || 'guide dialog empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '71-guide-item-dialog.png')));
+    } catch (error) {
+      record('guide_page', false, String(error));
+    }
+
+    try {
       await page.goto(`${origin}/messenger`, { waitUntil: 'load' });
       await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
       const redirected = page.url().replace(/#.*$/, '');
