@@ -51,6 +51,8 @@ Documents are escaped text. Websites and whiteboards are sanitized and served wi
 
 The `/space` left directory now follows the recorded empty-library layout: the heading is「资料空间」,「+ 新建」shows a dropdown caret, type rows include icons, and the top layout control is the recorded「网格视图」/「列表视图」tablist. 「收起侧边栏」hides the directory for the current page view only and leaves an「展开侧边栏」control; that collapsed layout was not recaptured, is not persisted, and is not a contrast claim. A populated grid is still not invented.
 
+The `/space?view=meetings` page now also exposes the recorded heading「我的会议」and a wave-form empty icon above the existing empty copy. Captions and「我参加的」/「全部」tabs are unchanged, still without a meetings API or invented recordings. The workspace picker stays visible for OpenTeamily multi-workspace use. The existing disabled「通知」control is an original bell icon with the accessible name「通知」; there is still no notifications API.
+
 ## Not claimed
 
 No public homepage, no scripted web apps, no meeting-notes ingest, no Teamily comparison, no browser E2E. This issue stays open until those are done and compared.

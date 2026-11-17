@@ -417,10 +417,36 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   flex: 1;
 }
 
+#meetings-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+#main-panel.is-meetings #space-title {
+  display: none;
+}
+
 #meetings-caption {
   margin: 0;
   color: var(--ot-muted);
   font-size: 0.9rem;
+}
+
+#artifact-notify {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 999px;
+  background: transparent;
+}
+
+#artifact-notify svg {
+  display: block;
 }
 
 .meeting-scopes {
@@ -575,6 +601,21 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 #empty-meetings h2 {
   margin: 0 0 0.15rem;
   font-size: 1.15rem;
+}
+
+#empty-meetings {
+  justify-items: center;
+  text-align: center;
+  width: 100%;
+}
+
+#empty-meetings h2 {
+  margin: 0.2rem 0 0;
+}
+
+#empty-meetings > p {
+  margin: 0;
+  color: var(--ot-muted);
 }
 
 #empty-all a,

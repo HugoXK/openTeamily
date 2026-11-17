@@ -742,6 +742,23 @@ async function main() {
         meetingsAll || 'meetings all caption missing',
       );
       screenshots.push(path.basename(await shot(page, outDir, '37-space-meetings-all.png')));
+      await page.locator('.meeting-scopes [data-meeting-scope="joined"]').click();
+      await waitForLocatorText(page, '#meetings-caption', '你参加或组织过的录音会议，最新的在前。');
+      const meetingsChromeView = await visibleText(page.locator('#main-panel'));
+      record(
+        'space_meetings_chrome',
+        meetingsChromeView.includes('我的会议')
+          && meetingsChromeView.includes('还没有录过音的会议')
+          && meetingsChromeView.includes('在会议中开启录音后，回放和纪要会出现在这里。')
+          && await page.locator('#empty-meetings .empty-hero svg').count() === 1
+          && await page.locator('#meetings-title').isVisible()
+          && await page.locator('#artifact-notify').getAttribute('aria-label') === '通知'
+          && await page.locator('#artifact-notify').isDisabled()
+          && await page.locator('#workspace').isVisible()
+          && !/积分|套餐|升级/.test(meetingsChromeView),
+        meetingsChromeView || 'meetings heading or icon missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '73-space-meetings-chrome.png')));
       await page.locator('.artifact-kinds [data-kind="all"]').click();
       await waitForLocatorText(page, '#artifact-list', ready.document_title);
     } catch (error) {
