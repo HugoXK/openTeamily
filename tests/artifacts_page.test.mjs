@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   csrfCookie, listQuery, visibleArtifacts, artifactMatchesType,
   artifactMatchesModified, viewFromSearch, queryForView, FILE_TYPE_LABELS,
-  sessionFilterChoices,
+  sessionFilterChoices, applyDirectoryCollapsed,
 } from '../openteamily/static/artifacts/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
@@ -88,4 +88,50 @@ test('viewFromSearch and queryForView stay on the recorded allowlist', () => {
   assert.equal(queryForView('all', 'favorites'), '?view=starred');
   assert.equal(queryForView('all', 'memory'), '?view=memory');
   assert.equal(queryForView('meetings', 'all'), '?view=meetings');
+});
+
+test('applyDirectoryCollapsed hides the directory in session only', () => {
+  const nodes = {};
+  const el = (id, extra = {}) => {
+    const node = {
+      id,
+      hidden: false,
+      className: '',
+      attributes: {},
+      classList: {
+        toggle(name, on) {
+          const parts = new Set((node.className || '').split(/\s+/).filter(Boolean));
+          if (on) parts.add(name);
+          else parts.delete(name);
+          node.className = [...parts].join(' ');
+        },
+      },
+      setAttribute(key, value) {
+        node.attributes[key] = value;
+      },
+      getAttribute(key) {
+        return node.attributes[key];
+      },
+    };
+    Object.assign(node, extra);
+    nodes[id] = node;
+    return node;
+  };
+  el('list-panel');
+  el('artifact-dir');
+  el('dir-collapse', {attributes: {'aria-expanded': 'true'}});
+  el('dir-expand', {hidden: true});
+  const root = {getElementById: (id) => nodes[id] || null};
+
+  assert.equal(applyDirectoryCollapsed(root, true), true);
+  assert.equal(nodes['artifact-dir'].hidden, true);
+  assert.equal(nodes['dir-expand'].hidden, false);
+  assert.equal(nodes['list-panel'].className.includes('dir-collapsed'), true);
+  assert.equal(nodes['dir-collapse'].getAttribute('aria-expanded'), 'false');
+
+  assert.equal(applyDirectoryCollapsed(root, false), false);
+  assert.equal(nodes['artifact-dir'].hidden, false);
+  assert.equal(nodes['dir-expand'].hidden, true);
+  assert.equal(nodes['list-panel'].className.includes('dir-collapsed'), false);
+  assert.equal(nodes['dir-collapse'].getAttribute('aria-expanded'), 'true');
 });

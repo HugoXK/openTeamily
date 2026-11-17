@@ -47,6 +47,10 @@ Workspace members may list, read and create items. The author, an owner or an ad
 
 Documents are escaped text. Websites and whiteboards are sanitized and served with a CSP `sandbox` that does not allow scripts. Media is served with the sniffed MIME type, `X-Content-Type-Options: nosniff`, and `Content-Disposition: inline`. The management page does not insert unsanitized HTML. This is a CSP/sandbox and MIME-sniffing boundary on the management host, not a separate browser origin.
 
+## Works-library directory chrome
+
+The `/space` left directory now follows the recorded empty-library layout: the heading is「资料空间」,「+ 新建」shows a dropdown caret, type rows include icons, and the top layout control is the recorded「网格视图」/「列表视图」tablist. 「收起侧边栏」hides the directory for the current page view only and leaves an「展开侧边栏」control; that collapsed layout was not recaptured, is not persisted, and is not a contrast claim. A populated grid is still not invented.
+
 ## Not claimed
 
 No public homepage, no scripted web apps, no meeting-notes ingest, no Teamily comparison, no browser E2E. This issue stays open until those are done and compared.

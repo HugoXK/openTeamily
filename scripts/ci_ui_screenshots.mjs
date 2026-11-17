@@ -697,7 +697,7 @@ async function main() {
     record(
       'artifacts_catalog',
       top.includes('全部') && top.includes('我创建的') && top.includes('收藏') && top.includes('Memory')
-        && catalog.includes('全部作品') && catalog.includes('Websites') && catalog.includes('文档')
+        && catalog.includes('资料空间') && catalog.includes('全部作品') && catalog.includes('Websites') && catalog.includes('文档')
         && catalog.includes('媒体') && catalog.includes('消息') && catalog.includes('会议')
         && catalog.includes('新建') && !/积分|套餐|升级/.test(top + catalog),
       `${top} :: ${catalog || 'catalog empty'}`,
@@ -834,6 +834,33 @@ async function main() {
         emptyAll || 'empty all missing',
       );
       screenshots.push(path.basename(await shot(page, outDir, '38-space-empty-all.png')));
+      try {
+        const dirText = await visibleText(page.locator('#artifact-dir'));
+        const newLabel = await visibleText(page.locator('#new-menu-button'));
+        record(
+          'artifacts_dir_chrome',
+          dirText.includes('资料空间') && dirText.includes('全部作品') && newLabel.includes('新建')
+            && await page.locator('#dir-collapse').getAttribute('aria-label') === '收起侧边栏'
+            && await page.locator('#layout-toggle [data-layout="grid"]').getAttribute('aria-label') === '网格视图',
+          `${dirText} :: ${newLabel}`,
+        );
+        await page.locator('#dir-collapse').click();
+        await page.locator('#dir-expand').waitFor({ state: 'visible', timeout: 8000 });
+        const collapsedHidden = await page.locator('#artifact-dir').isHidden();
+        const expandVisible = await page.locator('#dir-expand').isVisible();
+        const collapsedClass = (await page.locator('#list-panel').getAttribute('class') || '').includes('dir-collapsed');
+        record(
+          'artifacts_dir_collapsed',
+          collapsedHidden && expandVisible && collapsedClass,
+          `hidden=${collapsedHidden} expand=${expandVisible} class=${collapsedClass}`,
+        );
+        screenshots.push(path.basename(await shot(page, outDir, '68-space-dir-collapsed.png')));
+        await page.locator('#dir-expand').click();
+        await page.locator('#artifact-dir').waitFor({ state: 'visible', timeout: 8000 });
+      } catch (error) {
+        record('artifacts_dir_chrome', false, String(error));
+        try { await page.locator('#dir-expand').click({ timeout: 2000 }); } catch (_) {}
+      }
       await page.locator('#filter-button').click();
       await page.locator('#filter-panel').waitFor({ state: 'visible', timeout: 8000 });
       await page.locator('.filter-section[data-section="creators"] .filter-accordion').click();

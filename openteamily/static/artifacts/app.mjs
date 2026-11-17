@@ -106,6 +106,19 @@ export function queryForView(kind, scope) {
   return '';
 }
 
+export function applyDirectoryCollapsed(root, collapsed) {
+  const next = Boolean(collapsed);
+  const dir = root.getElementById('artifact-dir');
+  const workspace = root.getElementById('list-panel');
+  const collapse = root.getElementById('dir-collapse');
+  const expand = root.getElementById('dir-expand');
+  if (workspace) workspace.classList.toggle('dir-collapsed', next);
+  if (dir) dir.hidden = next;
+  if (collapse) collapse.setAttribute('aria-expanded', next ? 'false' : 'true');
+  if (expand) expand.hidden = !next;
+  return next;
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -754,9 +767,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     button.addEventListener('click', () => {
       catalogLayout = button.getAttribute('data-layout') || 'grid';
       for (const item of document.querySelectorAll('#layout-toggle [data-layout]')) {
-        item.setAttribute('aria-pressed', item.getAttribute('data-layout') === catalogLayout ? 'true' : 'false');
+        const selected = item.getAttribute('data-layout') === catalogLayout;
+        item.setAttribute('aria-selected', selected ? 'true' : 'false');
+        item.setAttribute('aria-pressed', selected ? 'true' : 'false');
       }
       renderCatalog();
+    });
+  }
+  const collapseButton = document.getElementById('dir-collapse');
+  const expandButton = document.getElementById('dir-expand');
+  if (collapseButton) {
+    collapseButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      applyDirectoryCollapsed(document, true);
+    });
+  }
+  if (expandButton) {
+    expandButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      applyDirectoryCollapsed(document, false);
     });
   }
   const filterButton = document.getElementById('filter-button');
