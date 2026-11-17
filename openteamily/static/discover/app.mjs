@@ -17,6 +17,13 @@ export function agentDiscoverPairs(agents, statuses) {
   }));
 }
 
+export function catalogQuery(text = '', cursor = '') {
+  const params = new URLSearchParams({limit: '12'});
+  if (text.trim()) params.set('q', text.trim());
+  if (cursor) params.set('cursor', cursor);
+  return '/v1/discover/agents?' + params.toString();
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -28,6 +35,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
   const mainPanel = document.getElementById('main-panel');
   const workspaceSelect = document.getElementById('workspace');
   let currentUser = null;
+  let catalog = [];
+  let cursor = '';
+  let activeQuery = '';
+  let catalogRequest = 0;
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -53,27 +64,74 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
     for (const item of items) {
       const li = document.createElement('li');
       const card = document.createElement('article');
+      const avatar = document.createElement('span');
+      avatar.className = 'catalog-avatar';
+      avatar.setAttribute('aria-hidden', 'true');
+      avatar.textContent = (item.name || item.slug || '?').slice(0, 1).toUpperCase();
+      const copy = document.createElement('div');
+      copy.className = 'catalog-copy';
       const name = document.createElement('h3');
       name.textContent = item.name || item.slug;
       const summary = document.createElement('p');
       summary.className = 'summary';
       summary.textContent = item.summary || '没有简介。';
-      const slug = document.createElement('p');
-      slug.className = 'slug';
-      slug.textContent = '/d/' + item.slug;
-      card.append(name, summary, slug);
+      const chat = document.createElement('button');
+      chat.type = 'button';
+      chat.disabled = true;
+      chat.textContent = '聊天';
+      chat.title = '未接通：公共目录没有发起聊天的接口';
+      chat.setAttribute('aria-label', (item.name || item.slug) + '：聊天未接通');
+      copy.append(name, summary);
+      card.append(avatar, copy, chat);
+      // Slugs are public identifiers, not links: no public detail route exists.
+      card.title = '/d/' + item.slug;
       li.append(card);
       list.append(li);
     }
   }
 
-  async function loadCatalog() {
-    const listed = await request('GET', '/v1/discover/agents?limit=50');
-    if (listed.status !== 200) {
-      show('error', messageFor(listed.body.error, '无法加载公共目录。'));
-      return;
+  async function loadCatalog(append = false) {
+    const seq = ++catalogRequest;
+    if (!append) {
+      activeQuery = document.getElementById('catalog-query').value.trim();
+      catalog = [];
+      cursor = '';
+      renderCatalog([]);
+      document.getElementById('discover-empty').hidden = true;
     }
-    renderCatalog(catalogItems(listed.body));
+    const more = document.getElementById('catalog-more');
+    const count = document.getElementById('catalog-count');
+    const error = document.getElementById('catalog-error');
+    error.hidden = true;
+    more.disabled = true;
+    count.textContent = append ? '正在加载更多…' : '正在加载…';
+    document.getElementById('catalog-panel').setAttribute('aria-busy', 'true');
+    try {
+      const listed = await request('GET', catalogQuery(activeQuery, cursor));
+      if (seq !== catalogRequest) return;
+      if (listed.status !== 200) throw new Error(messageFor(listed.body.error, '无法加载公共目录。'));
+      const incoming = catalogItems(listed.body);
+      const known = new Set(catalog.map(item => item.slug));
+      catalog.push(...incoming.filter(item => !known.has(item.slug)));
+      cursor = listed.body.cursor || '';
+      renderCatalog(catalog);
+      more.hidden = !cursor;
+      document.getElementById('discover-empty').textContent = activeQuery
+        ? '没有匹配的智能体。试试其他关键词。' : '还没有收录任何智能体。';
+      count.textContent = '已显示 ' + catalog.length + ' 个智能体' + (cursor ? '，还有更多' : '');
+    } catch (failure) {
+      if (seq !== catalogRequest) return;
+      error.hidden = false;
+      error.textContent = failure.message || '无法加载公共目录。';
+      count.textContent = '目录加载失败，请重试搜索。';
+      more.hidden = !cursor;
+      document.getElementById('discover-empty').hidden = true;
+    } finally {
+      if (seq === catalogRequest) {
+        more.disabled = false;
+        document.getElementById('catalog-panel').setAttribute('aria-busy', 'false');
+      }
+    }
   }
 
   function renderManage(pairs) {
@@ -157,13 +215,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
     if (session.status !== 200) {
       currentUser = null;
       loginPanel.hidden = false;
-      mainPanel.hidden = true;
+      mainPanel.hidden = false;
+      document.getElementById('catalog-manage').hidden = true;
       show('', '');
       return;
     }
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
+    document.getElementById('catalog-manage').hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
     const listed = await request('GET', '/v1/workspaces?limit=100');
     const workspaces = listed.status === 200 ? (listed.body.items || []) : [];
@@ -192,6 +252,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
   });
 
   workspaceSelect.addEventListener('change', loadManage);
+  document.getElementById('catalog-search').addEventListener('submit', event => {
+    event.preventDefault();
+    loadCatalog();
+  });
+  document.getElementById('catalog-clear').addEventListener('click', () => {
+    document.getElementById('catalog-query').value = '';
+    loadCatalog();
+  });
+  document.getElementById('catalog-more').addEventListener('click', () => loadCatalog(true));
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
     event.preventDefault();

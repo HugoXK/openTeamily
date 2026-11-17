@@ -59,25 +59,43 @@
     </form>
   </section>
   <section id="main-panel" hidden>
-    <header class="page-top">
-      <h1>发现</h1>
-      <p class="note">工作区所有者可以把自己的智能体选择性地收录到公共目录。目录只显示名称和简介，不显示指令、工作区或令牌。这不是 Teamily Discover 的推荐/信息流对等。</p>
-      <p id="whoami"></p>
+    <header class="catalog-toolbar">
+      <h1 class="visually-hidden">发现</h1>
+      <nav class="catalog-tabs" aria-label="目录类型">
+        <a href="/discover?tab=agents" aria-current="page">智能体</a>
+        <button type="button" disabled title="未接通：没有公共 AI 团队目录接口">AI 团队（未接通）</button>
+      </nav>
+      <form id="catalog-search" role="search">
+        <label class="visually-hidden" for="catalog-query">搜索智能体</label>
+        <input type="search" id="catalog-query" placeholder="搜索智能体…" maxlength="80" autocomplete="off">
+        <button type="submit">搜索</button>
+        <button type="button" id="catalog-clear">清除</button>
+      </form>
+      <a class="catalog-create" href="/agents">+ 创建我的智能体</a>
     </header>
-    <section aria-label="公共目录">
-      <h2>公共智能体</h2>
+    <div class="catalog-filters" aria-label="分类">
+      <span aria-current="true">全部</span>
+      <span class="note">分类和创建者筛选未接通：公共目录没有对应字段。</span>
+    </div>
+    <p id="whoami" class="visually-hidden"></p>
+    <section aria-label="公共目录" id="catalog-panel">
+      <h2 class="visually-hidden">公共智能体</h2>
+      <p id="catalog-count" role="status" aria-live="polite"></p>
+      <p id="catalog-error" role="alert" hidden></p>
       <p id="discover-empty" class="note" hidden>还没有收录任何智能体。</p>
       <ul id="discover-list" class="catalog"></ul>
+      <button type="button" id="catalog-more" hidden>加载更多</button>
     </section>
-    <section aria-label="收录管理">
-      <h2>收录管理</h2>
+    <details id="catalog-manage" hidden>
+      <summary>收录管理（OpenTeamily）</summary>
+      <p class="note">公共目录只显示自愿收录的名称和简介。没有推荐信息流或公共智能体聊天接口。</p>
       <label class="workspace-pick">工作区
         <select id="workspace"></select>
       </label>
       <p class="note">只有工作区所有者或管理员可以改动收录。slug 需为 3–30 个字符的小写字母、数字或连字符。</p>
       <p id="manage-empty" class="note" hidden>这个工作区还没有智能体。</p>
       <ul id="manage-list" class="manage-list"></ul>
-    </section>
+    </details>
   </section>
   </main>
 </body>

@@ -104,3 +104,24 @@ class DiscoverTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DiscoverCatalogPageTests(unittest.TestCase):
+    def test_recorded_agents_query_and_unknown_queries(self):
+        from tests.test_chat_page import ChatPageTests
+        case = ChatPageTests()
+        case.setUp()
+        try:
+            for query in ('', 'tab=agents'):
+                page = case.raw.call('GET', '/discover', query=query)
+                self.assertEqual(page['status'], 200)
+                text = page['body'].decode()
+                for marker in ('id="catalog-query"', 'id="catalog-more"', 'id="catalog-count"',
+                               'id="catalog-manage" hidden', 'AI 团队（未接通）'):
+                    self.assertIn(marker, text)
+                self.assertNotIn('href="/d/', text)
+            for query in ('tab=teams', 'tab=agents&x=1', 'q=test', 'tab=agents&tab=agents'):
+                self.assertEqual(case.raw.call('GET', '/discover', query=query)['status'], 400)
+            self.assertEqual(case.raw.call('GET', '/settings/not-a-page')['status'], 404)
+        finally:
+            case.doCleanups()

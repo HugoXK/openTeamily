@@ -28,7 +28,9 @@ Additive `agent_discover` table (`CREATE TABLE IF NOT EXISTS`) with a unique glo
 
 ## Page
 
-`/discover` is a same-origin management page that renders the public catalog and, for a selected workspace, lets an owner/admin publish or revoke a slug. The public API can be consumed without a session. This is not browser E2E evidence.
+`/discover` is a same-origin management page that renders the public catalog and, for a selected workspace, lets an owner/admin publish or revoke a slug. The public API can be consumed without a session. The recorded agents view is also available at `/discover?tab=agents` (other HTML queries remain rejected). The public cards stay visible without a session; authenticated listing management is collapsed below the directory. Search submits the existing name/summary `q` API, 12 results per cursor page, with clear, loading, empty and error states. The count says how many have been displayed, not a fabricated total. Card initials are generated locally, not third-party avatars. Card chat actions, AI teams, category and creator filters are explicitly unconnected: the public projection has no execution path or those metadata fields. No `/d/{slug}` route or secret homepage token is invented.
+
+CI uses synthetic opt-in listings to capture populated cards, matching/empty search, and cursor paging. This is not a Teamily or Impeccable acceptance.
 
 ## Explicitly not in this slice
 
