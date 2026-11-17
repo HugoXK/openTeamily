@@ -411,16 +411,25 @@ async function main() {
     await page.goto(`${origin}/memory`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
     await waitForLocatorText(page, '#memory-list', ready.memory_title);
-    await waitForLocatorText(page, '#action-list', ready.action_title);
     const memoryList = await visibleText(page.locator('#memory-list'));
-    const actionList = await visibleText(page.locator('#action-list'));
+    const overview = await visibleText(page.locator('#list-panel'));
     record('memory_list', memoryList.includes(ready.memory_title), memoryList || 'memory list empty');
+    record(
+      'memory_overview',
+      overview.includes('总览') && overview.includes('我的资料') && overview.includes('下一步行动') && overview.includes('我的作品') && overview.includes('我的会议') && overview.includes('话题亮点') && overview.includes('新建') && await page.locator('#graph-canvas').isVisible() && !/积分|套餐|升级/.test(overview),
+      overview || 'memory overview empty',
+    );
+    screenshots.push(path.basename(await shot(page, outDir, '18-memory-list.png')));
+    await page.locator('.memory-views [data-view="actions"]').click();
+    await page.locator('#actions-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await waitForLocatorText(page, '#action-list', ready.action_title);
+    const actionList = await visibleText(page.locator('#action-list'));
     record(
       'actions_list',
       actionList.includes(ready.action_title) && actionList.includes('未完成') && actionList.includes(ready.action_due),
       actionList || 'action list empty',
     );
-    screenshots.push(path.basename(await shot(page, outDir, '18-memory-list.png')));
+    screenshots.push(path.basename(await shot(page, outDir, '29-memory-actions.png')));
     try {
       const initials = String(ready.username || '').slice(0, 2).toUpperCase();
       await page.locator('#account-menu-button').click();
@@ -450,10 +459,10 @@ async function main() {
     }
 
     try {
-      await page.locator('#new-title').fill(ready.memory_create_title);
       await page.locator('#new-page').click();
-      await waitForInputValue(page, '#editor-form input[name="title"]', ready.memory_create_title);
+      await waitForInputValue(page, '#editor-form input[name="title"]', '未命名页面');
       await waitForLocatorText(page, '#status', '已创建记忆页');
+      await page.locator('#editor-form input[name="title"]').fill(ready.memory_create_title);
       await page.locator('#editor-form textarea[name="body"]').fill(ready.memory_create_body);
       await page.locator('#save-page').click();
       await waitForLocatorText(page, '#status', '已保存');

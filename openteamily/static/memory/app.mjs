@@ -96,6 +96,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentPage = null;
   let currentAction = null;
   let pageChoices = [];
+  let currentView = 'overview';
+  let listFilter = 'all';
+  let topicFilter = '';
+  let sideTab = 'topics';
+  let graphZoom = 1;
+  let topicQuery = '';
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -124,9 +130,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
   }
 
+  function visiblePages(items) {
+    const rows = [...(items || [])];
+    if (listFilter === 'updated') {
+      rows.sort((a, b) => Number(b.updated || 0) - Number(a.updated || 0) || String(a.id).localeCompare(String(b.id)));
+      return rows;
+    }
+    if (listFilter === 'topics' && topicFilter) {
+      const topic = (currentGraph.topics || []).find((item) => item.name === topicFilter);
+      const allowed = new Set((topic && topic.pages ? topic.pages : []).map((page) => page.id));
+      return rows.filter((item) => allowed.has(item.id));
+    }
+    return rows;
+  }
+
   function renderList(items) {
+    const rows = visiblePages(items);
     listEl.replaceChildren();
-    for (const item of items) {
+    for (const item of rows) {
       const li = document.createElement('li');
       const button = document.createElement('button');
       button.type = 'button';
@@ -136,7 +157,80 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       li.appendChild(button);
       listEl.appendChild(li);
     }
-    emptyEl.hidden = items.length > 0;
+    emptyEl.hidden = rows.length > 0;
+    const count = document.getElementById('filter-all-count');
+    if (count) count.textContent = String((items || []).length);
+  }
+
+  function renderRecent(items) {
+    const list = document.getElementById('recent-list');
+    const empty = document.getElementById('recent-empty');
+    if (!list || !empty) return;
+    const rows = [...(items || [])].sort((a, b) => Number(b.updated || 0) - Number(a.updated || 0) || String(a.id).localeCompare(String(b.id)));
+    list.replaceChildren();
+    for (const item of rows) {
+      const li = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      const updated = item.updated ? new Date(Number(item.updated) * 1000) : null;
+      const when = updated && !Number.isNaN(updated.getTime()) ? updated.toISOString().slice(0, 10) : '';
+      button.textContent = when ? `${item.title} · ${when}` : item.title;
+      button.addEventListener('click', () => openPage(item.id));
+      li.appendChild(button);
+      list.appendChild(li);
+    }
+    empty.hidden = rows.length > 0;
+  }
+
+  function renderTopicFilters() {
+    const box = document.getElementById('topic-filter-chips');
+    if (!box) return;
+    box.replaceChildren();
+    for (const topic of currentGraph.topics || []) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = `${topic.name} · ${topic.page_count}`;
+      button.setAttribute('aria-pressed', topic.name === topicFilter ? 'true' : 'false');
+      button.addEventListener('click', () => {
+        topicFilter = topicFilter === topic.name ? '' : topic.name;
+        renderTopicFilters();
+        renderList(pageChoices);
+      });
+      box.appendChild(button);
+    }
+  }
+
+  function showView(name) {
+    currentView = name || 'overview';
+    const workspace = document.getElementById('list-panel');
+    if (workspace) workspace.dataset.view = currentView;
+    const title = document.getElementById('view-title');
+    const labels = {overview: '总览', profile: '我的资料', actions: '下一步行动', meetings: '我的会议'};
+    if (title) title.textContent = labels[currentView] || '总览';
+    const overview = document.getElementById('overview-panel');
+    const side = document.getElementById('memory-side');
+    const actions = document.getElementById('actions-panel');
+    const profile = document.getElementById('profile-panel');
+    const meetings = document.getElementById('meetings-panel');
+    if (overview) overview.hidden = currentView !== 'overview';
+    if (side) side.hidden = currentView !== 'overview';
+    if (actions) actions.hidden = currentView !== 'actions';
+    if (profile) profile.hidden = currentView !== 'profile';
+    if (meetings) meetings.hidden = currentView !== 'meetings';
+    for (const button of document.querySelectorAll('.memory-views [data-view]')) {
+      if (button.getAttribute('data-view') === currentView) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    }
+  }
+
+  function unusedTitle(base) {
+    const taken = new Set((pageChoices || []).map((item) => String(item.title || '').toLocaleLowerCase()));
+    if (!taken.has(base.toLocaleLowerCase())) return base;
+    for (let index = 2; index < 100; index += 1) {
+      const title = `${base} ${index}`;
+      if (!taken.has(title.toLocaleLowerCase())) return title;
+    }
+    return `${base} ${Date.now()}`;
   }
 
   function fillPageSelect(select, selected) {
@@ -211,23 +305,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const topicEmpty = document.getElementById('topic-empty');
     const payload = graph || {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
     const stats = payload.counts || {nodes: 0, edges: 0, topics: 0};
-    if (counts) counts.textContent = `${stats.nodes} 个节点 · ${stats.edges} 条连接 · ${stats.topics} 个话题`;
+    if (counts) counts.textContent = `${stats.nodes} 节点 · ${stats.edges} 连接 · ${stats.topics} 话题`;
     if (canvas) {
       canvas.replaceChildren();
+      const world = svgNode('g', {id: 'graph-world', transform: `translate(320 200) scale(${graphZoom}) translate(-320 -200)`});
       const placed = graphLayout(payload.nodes);
       const byId = new Map(placed.map((node) => [node.id, node]));
+      const needle = topicQuery.trim().toLocaleLowerCase();
+      const matches = (node) => {
+        if (!needle) return true;
+        if (String(node.title || '').toLocaleLowerCase().includes(needle)) return true;
+        return (payload.topics || []).some((topic) => String(topic.name || '').toLocaleLowerCase().includes(needle)
+          && (topic.pages || []).some((page) => page.id === node.id));
+      };
       for (const edge of payload.edges || []) {
         const from = byId.get(edge.source);
         const to = byId.get(edge.target);
         if (!from || !to) continue;
-        canvas.appendChild(svgNode('line', {
+        world.appendChild(svgNode('line', {
           class: 'graph-edge', x1: from.x, y1: from.y, x2: to.x, y2: to.y,
         }));
       }
       for (const node of payload.nodes || []) {
         const point = byId.get(node.id);
         if (!point) continue;
-        const group = svgNode('g', {'data-id': node.id, class: 'graph-item'});
+        const group = svgNode('g', {'data-id': node.id, class: matches(node) ? 'graph-item' : 'graph-item is-muted'});
         const button = svgNode('circle', {class: 'graph-node', cx: point.x, cy: point.y, r: 8});
         const label = svgNode('text', {
           class: 'graph-label', x: point.x, y: point.y + 22, 'text-anchor': 'middle',
@@ -236,8 +338,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         group.appendChild(button);
         group.appendChild(label);
         group.addEventListener('click', () => openPage(node.id));
-        canvas.appendChild(group);
+        world.appendChild(group);
       }
+      canvas.appendChild(world);
     }
     if (topicList) {
       topicList.replaceChildren();
@@ -245,7 +348,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const item = document.createElement('li');
         const button = document.createElement('button');
         button.type = 'button';
-        button.textContent = `${topic.name} · ${topic.page_count}`;
+        const pages = (topic.pages || []).map((page) => page.title).filter(Boolean);
+        button.textContent = pages.length
+          ? `${topic.name} · ${topic.page_count} · ${pages.slice(0, 3).join('，')}`
+          : `${topic.name} · ${topic.page_count}`;
         button.addEventListener('click', () => {
           const first = topic.pages && topic.pages[0];
           if (first) openPage(first.id);
@@ -254,7 +360,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         topicList.appendChild(item);
       }
     }
-    if (topicEmpty) topicEmpty.hidden = !!(payload.topics && payload.topics.length);
+    if (topicEmpty) topicEmpty.hidden = sideTab !== 'topics' || !!(payload.topics && payload.topics.length);
+    renderTopicFilters();
   }
 
   let currentGraph = {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
@@ -395,9 +502,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!id) {
       pageChoices = [];
       renderList([]);
+      renderRecent([]);
       fillPageSelect(document.getElementById('new-action-page'), '');
       renderActions([]);
       renderGraph({nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}});
+      showView(currentView);
       return;
     }
     const needle = document.getElementById('search').value.trim();
@@ -412,9 +521,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     pageChoices = listed.body.items || [];
     renderList(pageChoices);
+    renderRecent(pageChoices);
     fillPageSelect(document.getElementById('new-action-page'), '');
     await loadActions();
     await loadGraph();
+    renderList(pageChoices);
+    renderRecent(pageChoices);
+    showView(currentView);
   }
 
   async function openPage(pageId) {
@@ -492,11 +605,65 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('search').addEventListener('input', () => loadWorkspace());
   document.getElementById('action-filter').addEventListener('change', () => loadActions());
 
-  document.getElementById('new-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
+  for (const button of document.querySelectorAll('.memory-views [data-view]')) {
+    button.addEventListener('click', () => showView(button.getAttribute('data-view')));
+  }
+  for (const button of document.querySelectorAll('.memory-filters [data-filter]')) {
+    button.addEventListener('click', () => {
+      listFilter = button.getAttribute('data-filter') || 'all';
+      const box = document.getElementById('topic-filter-box');
+      if (box) box.hidden = listFilter !== 'topics';
+      for (const item of document.querySelectorAll('.memory-filters [data-filter]')) {
+        item.setAttribute('aria-pressed', item.getAttribute('data-filter') === listFilter ? 'true' : 'false');
+      }
+      renderList(pageChoices);
+    });
+  }
+  for (const button of document.querySelectorAll('.side-tabs [data-side]')) {
+    button.addEventListener('click', () => {
+      sideTab = button.getAttribute('data-side') || 'topics';
+      for (const item of document.querySelectorAll('.side-tabs [data-side]')) {
+        item.setAttribute('aria-selected', item.getAttribute('data-side') === sideTab ? 'true' : 'false');
+      }
+      const topics = document.getElementById('topic-list');
+      const topicEmpty = document.getElementById('topic-empty');
+      const recent = document.getElementById('recent-list');
+      const recentEmpty = document.getElementById('recent-empty');
+      if (topics) topics.hidden = sideTab !== 'topics';
+      if (topicEmpty) topicEmpty.hidden = sideTab !== 'topics' || !!(currentGraph.topics && currentGraph.topics.length);
+      if (recent) recent.hidden = sideTab !== 'recent';
+      if (recentEmpty) recentEmpty.hidden = sideTab !== 'recent' || pageChoices.length > 0;
+    });
+  }
+  const dirToggle = document.getElementById('toggle-dir');
+  if (dirToggle) {
+    dirToggle.addEventListener('click', () => {
+      const workspace = document.getElementById('list-panel');
+      if (!workspace) return;
+      const collapsed = workspace.classList.toggle('dir-collapsed');
+      dirToggle.textContent = collapsed ? '展开目录' : '收起目录';
+    });
+  }
+  const topicSearch = document.getElementById('topic-search');
+  if (topicSearch) {
+    topicSearch.addEventListener('input', () => {
+      topicQuery = topicSearch.value;
+      renderGraph(currentGraph);
+    });
+  }
+  const zoomIn = document.getElementById('graph-zoom-in');
+  const zoomOut = document.getElementById('graph-zoom-out');
+  const zoomReset = document.getElementById('graph-zoom-reset');
+  if (zoomIn) zoomIn.addEventListener('click', () => { graphZoom = Math.min(2.4, graphZoom + 0.2); renderGraph(currentGraph); });
+  if (zoomOut) zoomOut.addEventListener('click', () => { graphZoom = Math.max(0.6, graphZoom - 0.2); renderGraph(currentGraph); });
+  if (zoomReset) zoomReset.addEventListener('click', () => { graphZoom = 1; renderGraph(currentGraph); });
+
+  showView('overview');
+
+  document.getElementById('new-page').addEventListener('click', async () => {
     const id = workspaceId();
     if (!id) return;
-    const title = document.getElementById('new-title').value.trim();
+    const title = unusedTitle('未命名页面');
     const created = await fetcher(`/v1/workspaces/${id}/memory`, {
       method: 'POST',
       headers: {
@@ -514,7 +681,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(parsed.error, '无法创建记忆页。'));
       return;
     }
-    document.getElementById('new-title').value = '';
     show('ok', '已创建记忆页。');
     await openPage(parsed.page.id);
   });
