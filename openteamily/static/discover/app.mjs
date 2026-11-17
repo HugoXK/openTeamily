@@ -35,6 +35,16 @@ export const CATALOG_CATEGORIES = [
   'Legal', 'Life', 'Marketing',
 ];
 
+export const TEAM_CATEGORIES = [
+  'Marketing', 'Engineering', 'IT & Security', 'Content Creation',
+  'Operations', 'Product', 'Data Analysis', 'Design', 'Research',
+  'Investment', 'Education', 'Life', 'Sales',
+];
+
+export const TEAMS_NOTE = '公开 AI 团队目录还没有接口，所以这里不会列出模板卡片。也不会复制对照里的团队名称或创建者品牌。';
+export const TEAMS_SEARCH_NOTE = '搜索 AI 团队尚未接通：没有对应的公开接口。';
+export const TEAMS_SEARCH_PLACEHOLDER = '搜索 AI 团队......';
+
 export const FEED_ACTIVITY_NOTE = '动态信息流还没有接口，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。';
 export const FEED_FOLLOWING_EMPTY_TITLE = '关注列表暂无动态';
 export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显示在这里。';
@@ -43,7 +53,60 @@ export const FEED_SEARCH_NOTE = '搜索动态和创作者尚未接通：没有�
 
 export function isAgentsCatalog(location) {
   const search = location && typeof location.search === 'string' ? location.search : '';
-  return new URLSearchParams(search).get('tab') === 'agents';
+  const params = new URLSearchParams(search);
+  return params.get('tab') === 'agents' && !params.has('section');
+}
+
+export function isTeamsCatalog(location) {
+  const search = location && typeof location.search === 'string' ? location.search : '';
+  const params = new URLSearchParams(search);
+  return params.get('tab') === 'agents' && params.get('section') === 'groups';
+}
+
+export function renderTeamCard(document, item) {
+  const card = document.createElement('article');
+  const category = document.createElement('p');
+  category.className = 'team-category';
+  category.textContent = item.category || '';
+  const name = document.createElement('h3');
+  name.textContent = item.name || item.slug || '';
+  const summary = document.createElement('p');
+  summary.className = 'summary';
+  summary.textContent = item.summary || '';
+  const tags = document.createElement('ul');
+  tags.className = 'team-tags';
+  for (const label of item.tags || []) {
+    const li = document.createElement('li');
+    li.textContent = label;
+    tags.append(li);
+  }
+  const foot = document.createElement('div');
+  foot.className = 'team-foot';
+  const avatars = document.createElement('div');
+  avatars.className = 'team-avatars';
+  avatars.setAttribute('aria-hidden', 'true');
+  for (const member of item.members || []) {
+    const mark = document.createElement('span');
+    mark.textContent = String(member).slice(0, 1).toUpperCase();
+    avatars.append(mark);
+  }
+  foot.append(avatars);
+  if (item.extra) {
+    const extra = document.createElement('span');
+    extra.className = 'team-extra';
+    extra.textContent = item.extra;
+    foot.append(extra);
+  }
+  const create = document.createElement('button');
+  create.type = 'button';
+  create.className = 'team-create';
+  create.disabled = true;
+  create.textContent = '创建';
+  create.title = '未接通：没有从目录创建 AI 团队的接口。';
+  create.setAttribute('aria-label', (item.name || item.slug || '团队') + '：创建未接通');
+  foot.append(create);
+  card.append(category, name, summary, tags, foot);
+  return card;
 }
 
 function messageFor(error, fallback) {
@@ -62,12 +125,69 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   let activeQuery = '';
   let catalogRequest = 0;
   const agentsView = isAgentsCatalog(location);
+  const teamsView = isTeamsCatalog(location);
+  const catalogView = agentsView || teamsView;
+
+  function setCurrent(id, on) {
+    const node = document.getElementById(id);
+    if (!node) return;
+    if (on) node.setAttribute('aria-current', 'page');
+    else if (typeof node.removeAttribute === 'function') node.removeAttribute('aria-current');
+    else if (node.attributes) delete node.attributes['aria-current'];
+  }
+
+  function applyCatalogChrome() {
+    setCurrent('catalog-tab-agents', agentsView);
+    setCurrent('catalog-tab-teams', teamsView);
+    const agentFilters = document.getElementById('catalog-filters');
+    const teamFilters = document.getElementById('teams-filters');
+    if (agentFilters) agentFilters.hidden = !agentsView;
+    if (teamFilters) teamFilters.hidden = !teamsView;
+    const createAgent = document.getElementById('catalog-create-agent');
+    const createTeam = document.getElementById('catalog-create-team');
+    if (createAgent) createAgent.hidden = !agentsView;
+    if (createTeam) createTeam.hidden = !teamsView;
+    const query = document.getElementById('catalog-query');
+    if (query) query.placeholder = teamsView ? TEAMS_SEARCH_PLACEHOLDER : '搜索智能体…';
+    if (typeof document.querySelector === 'function') {
+      const queryLabel = document.querySelector('label[for="catalog-query"]');
+      if (queryLabel) queryLabel.textContent = teamsView ? '搜索 AI 团队' : '搜索智能体';
+    }
+    const heading = document.getElementById('catalog-heading');
+    if (heading) heading.textContent = teamsView ? '公共 AI 团队' : '公共智能体';
+    const list = document.getElementById('discover-list');
+    if (list && list.classList) {
+      if (teamsView) list.classList.add('teams-catalog');
+      else list.classList.remove('teams-catalog');
+    }
+  }
+
+  function showTeamsUnconnected() {
+    const list = document.getElementById('discover-list');
+    if (list) list.replaceChildren();
+    const empty = document.getElementById('discover-empty');
+    if (empty) empty.hidden = true;
+    const more = document.getElementById('catalog-more');
+    if (more) more.hidden = true;
+    const count = document.getElementById('catalog-count');
+    if (count) count.textContent = '';
+    const error = document.getElementById('catalog-error');
+    if (error) error.hidden = true;
+    const note = document.getElementById('teams-note');
+    if (note) {
+      note.hidden = false;
+      note.textContent = TEAMS_NOTE;
+    }
+    const panel = document.getElementById('catalog-panel');
+    if (panel) panel.setAttribute('aria-busy', 'false');
+  }
 
   function showDiscoverView() {
     const feed = document.getElementById('feed-panel');
     const catalog = document.getElementById('catalog-view');
-    if (feed) feed.hidden = agentsView;
-    if (catalog) catalog.hidden = !agentsView;
+    if (feed) feed.hidden = catalogView;
+    if (catalog) catalog.hidden = !catalogView;
+    applyCatalogChrome();
   }
 
   function setFeedTab(tab) {
@@ -254,6 +374,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function load() {
     showDiscoverView();
     if (agentsView) await loadCatalog();
+    if (teamsView) showTeamsUnconnected();
     const session = await request('GET', '/v1/auth/session');
     if (session.status !== 200) {
       currentUser = null;
@@ -300,9 +421,18 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   document.getElementById('catalog-search').addEventListener('submit', event => {
     event.preventDefault();
     if (agentsView) return loadCatalog();
+    if (teamsView) {
+      const note = document.getElementById('teams-search-note');
+      if (note) {
+        note.hidden = false;
+        note.textContent = TEAMS_SEARCH_NOTE;
+      }
+    }
   });
   document.getElementById('catalog-clear').addEventListener('click', () => {
     document.getElementById('catalog-query').value = '';
+    const note = document.getElementById('teams-search-note');
+    if (note) note.hidden = true;
     if (agentsView) return loadCatalog();
   });
   document.getElementById('catalog-more').addEventListener('click', () => {

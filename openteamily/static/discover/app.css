@@ -4,8 +4,11 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 }
 .catalog-toolbar { background: transparent; border: 0; box-shadow: none; padding: 0; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
 .catalog-tabs { display: flex; gap: .7rem; align-items: center; margin-right: auto; }
+.catalog-tabs a { background: transparent; color: var(--ot-muted); text-decoration: none; padding: .45rem 0; }
 .catalog-toolbar .catalog-tabs a[aria-current="page"] { background: transparent; border-radius: 0; color: var(--ot-ink); font-weight: 650; text-decoration: none; border-bottom: 2px solid var(--ot-accent); padding: .45rem 0; }
-.catalog-tabs button { border: 0; background: transparent; color: var(--ot-muted); }
+button.catalog-create { border: 0; font: inherit; cursor: default; }
+button.catalog-create:disabled { opacity: 1; color: var(--ot-surface); }
+button.catalog-create[hidden], a.catalog-create[hidden] { display: none; }
 #catalog-search { display: flex; align-items: center; gap: .4rem; padding: 0; border: 0; margin: 0; background: transparent; }
 #catalog-query { min-width: 0; width: 15rem; border: 1px solid var(--ot-line); background: var(--ot-surface); color: var(--ot-ink); padding: .45rem .7rem; font: inherit; border-radius: 999px; }
 .catalog-create { background: var(--ot-accent); color: var(--ot-surface); border-radius: 999px; padding: .5rem .8rem; text-decoration: none; }
@@ -71,7 +74,8 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 
 /* Feed layout based on the recorded /discover 关注/动态 page; OpenTeamily tokens only. */
 #feed-panel { display: block; }
-#feed-panel[hidden], #catalog-view[hidden] { display: none; }
+#feed-panel[hidden], #catalog-view[hidden],
+#catalog-filters[hidden], #teams-filters[hidden] { display: none; }
 .feed-toolbar {
   display: flex;
   align-items: center;
@@ -177,3 +181,29 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   color: var(--ot-muted);
   font-size: 0.9rem;
 }
+
+/* Recorded AI team cards are taller than agent rows: category, tags, avatar cluster, create. */
+.teams-catalog { align-items: stretch; }
+.teams-catalog article {
+  display: flex; flex-direction: column; align-items: stretch; gap: .4rem;
+  min-height: 11.5rem; padding: 1rem .9rem .85rem;
+}
+.team-category { margin: 0; color: var(--ot-muted); font-size: .7rem; letter-spacing: .02em; }
+.teams-catalog h3 { margin: 0; font-size: .95rem; }
+.teams-catalog .summary { margin: 0; -webkit-line-clamp: 2; }
+.team-tags { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+.team-tags li {
+  border-radius: 999px; padding: .05rem .45rem; font-size: .7rem;
+  color: var(--ot-muted); border: 1px solid var(--ot-line);
+}
+.team-foot { display: flex; align-items: center; gap: .35rem; margin-top: auto; min-width: 0; }
+.team-avatars { display: flex; align-items: center; }
+.team-avatars span {
+  flex: 0 0 1.55rem; width: 1.55rem; height: 1.55rem; margin-left: -.35rem;
+  display: grid; place-items: center; border-radius: 50%;
+  background: var(--ot-accent-soft); color: var(--ot-ink); font-size: .65rem; font-weight: 650;
+  box-shadow: 0 0 0 2px var(--ot-surface);
+}
+.team-avatars span:first-child { margin-left: 0; }
+.team-extra { color: var(--ot-muted); font-size: .75rem; margin-left: .15rem; }
+.teams-catalog .team-create { margin-left: auto; flex: 0 0 auto; padding: .2rem .7rem; border-radius: 999px; font-size: .8rem; }

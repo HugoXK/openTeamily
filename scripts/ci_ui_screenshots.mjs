@@ -1419,14 +1419,14 @@ async function main() {
         `nonoverlap=${geometry}; panelWidth=${catalogWidth}`);
       const catalogChrome = `${await visibleText(page.locator('#catalog-view'))}`;
       const creatorText = `${await visibleText(page.locator('#catalog-creator'))}`;
-      const currentChip = `${(await page.locator('.catalog-filters [aria-current="true"]').textContent()) || ''}`;
+      const currentChip = `${(await page.locator('#catalog-filters [aria-current="true"]').textContent()) || ''}`;
       record(
         'discover_catalog_filters',
         currentChip.includes('全部')
           && catalogChrome.includes('Content Creation')
           && catalogChrome.includes('Marketing')
           && catalogChrome.includes('创建者')
-          && await page.locator('.catalog-filters button:disabled').count() >= 15
+          && await page.locator('#catalog-filters button:disabled').count() >= 15
           && await page.locator('#catalog-filter-search').isDisabled()
           && await page.locator('#catalog-filter-more').isDisabled()
           && await page.locator('#catalog-creator').isDisabled()
@@ -1458,6 +1458,35 @@ async function main() {
       await waitForLocatorText(page, '#catalog-count', '12 个智能体');
       record('discover_search_clear', await page.locator('#catalog-query').inputValue() === ''
         && await page.locator('#catalog-more').isVisible(), 'clear resets the first page');
+      await page.goto(`${origin}/discover?tab=agents&section=groups`, { waitUntil: 'load' });
+      await page.locator('#catalog-view').waitFor({ state: 'visible', timeout: 15000 });
+      await waitForLocatorText(page, '#teams-note', '公开 AI 团队目录还没有接口');
+      const teamsChrome = `${await visibleText(page.locator('#catalog-view'))}`;
+      const teamsCreator = `${await visibleText(page.locator('#catalog-creator'))}`;
+      const teamsChip = `${(await page.locator('#teams-filters [aria-current="true"]').textContent()) || ''}`;
+      record(
+        'discover_teams_chrome',
+        (await page.locator('#catalog-tab-teams').getAttribute('aria-current')) === 'page'
+          && (await page.locator('#catalog-tab-agents').getAttribute('aria-current')) !== 'page'
+          && await page.locator('#teams-filters').isVisible()
+          && await page.locator('#catalog-filters').isHidden()
+          && teamsChip.includes('All')
+          && teamsChrome.includes('Marketing')
+          && teamsChrome.includes('Sales')
+          && teamsChrome.includes('Operations')
+          && teamsChrome.includes('Research')
+          && teamsChrome.includes('+ 创建我的 AI 团队')
+          && (await page.locator('#catalog-query').getAttribute('placeholder') || '').includes('搜索 AI 团队')
+          && await page.locator('#catalog-create-team').isDisabled()
+          && await page.locator('#teams-note').isVisible()
+          && teamsChrome.includes('公开 AI 团队目录还没有接口')
+          && await page.locator('#discover-list article').count() === 0
+          && await page.locator('#catalog-manage').isHidden()
+          && teamsCreator.includes('创建者')
+          && !/Teamily AI|Full-Stack Delivery Guild|积分|CREDITS/i.test(teamsChrome + teamsCreator),
+        `${teamsCreator} | ${teamsChrome.slice(0, 280) || 'teams chrome empty'}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '74-discover-teams.png')));
 
     } catch (error) {
       record('discover_page', false, String(error));

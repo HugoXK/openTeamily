@@ -131,12 +131,12 @@ class DiscoverCatalogPageTests(unittest.TestCase):
             self.assertEqual(page['status'], 200)
             text = page['body'].decode()
             for marker in ('id="catalog-query"', 'id="catalog-more"', 'id="catalog-count"',
-                           'id="catalog-manage" hidden', 'AI 团队（未接通）', 'id="feed-panel"',
+                           'id="catalog-manage" hidden', 'id="catalog-tab-teams"', 'AI 团队', 'id="feed-panel"',
                            'id="catalog-filter-search"', 'id="catalog-filter-more"',
                            'id="catalog-creator"', 'aria-label="搜索分类"', 'aria-label="更多分类"',
                            '分类和创建者筛选未接通：公共目录没有对应字段。'):
                 self.assertIn(marker, text, marker)
-            filters = text.split('class="catalog-filters"', 1)[1].split('id="catalog-panel"', 1)[0]
+            filters = text.split('id="catalog-filters"', 1)[1].split('id="teams-filters"', 1)[0]
             categories = [
                 '全部', 'Content Creation', 'Customer Support', 'Data Analysis', 'Design',
                 'Education', 'Engineering', 'Finance', 'IT &amp; Security', 'Investment',
@@ -146,13 +146,32 @@ class DiscoverCatalogPageTests(unittest.TestCase):
             self.assertEqual(positions, sorted(positions))
             self.assertIn('aria-current="true"', filters.split('>全部<', 1)[0].rsplit('<button', 1)[1])
             self.assertGreaterEqual(filters.count(' disabled '), 15)
-            creator = filters.split('id="catalog-creator"', 1)[1].split('</button>', 1)[0]
+            creator = text.split('id="catalog-creator"', 1)[1].split('</button>', 1)[0]
             self.assertIn('disabled', creator)
             self.assertIn('创建者', creator)
             self.assertNotRegex(creator, r'(?i)teamily|积分|credits')
-            self.assertIn('class="visually-hidden"', filters.split('id="catalog-filter-note"', 1)[1].split('>', 1)[0])
+            self.assertIn('class="visually-hidden"', text.split('id="catalog-filter-note"', 1)[1].split('>', 1)[0])
             self.assertNotIn('href="/d/', text)
-            for query in ('tab=teams', 'tab=agents&x=1', 'q=test', 'tab=agents&tab=agents'):
+            self.assertNotIn('AI 团队（未接通）', text)
+            teams = case.raw.call('GET', '/discover', query='tab=agents&section=groups')
+            self.assertEqual(teams['status'], 200)
+            teams_text = teams['body'].decode()
+            team_filters = teams_text.split('id="teams-filters"', 1)[1].split('id="catalog-creator"', 1)[0]
+            team_categories = [
+                'All', 'Marketing', 'Engineering', 'IT &amp; Security', 'Content Creation',
+                'Operations', 'Product', 'Data Analysis', 'Design', 'Research',
+                'Investment', 'Education', 'Life', 'Sales',
+            ]
+            team_positions = [team_filters.index('>' + label + '<') for label in team_categories]
+            self.assertEqual(team_positions, sorted(team_positions))
+            self.assertIn('aria-current="true"', team_filters.split('>All<', 1)[0].rsplit('<button', 1)[1])
+            self.assertIn('+ 创建我的 AI 团队', teams_text)
+            self.assertIn('data-teams-placeholder="搜索 AI 团队......"', teams_text)
+            self.assertIn('公开 AI 团队目录还没有接口', teams_text)
+            self.assertNotRegex(teams_text, r'(?i)Teamily AI|Full-Stack Delivery Guild|积分|credits')
+            self.assertIn('hidden', teams_text.split('id="teams-filters"', 1)[1].split('>', 1)[0])
+            for query in ('tab=teams', 'tab=agents&x=1', 'q=test', 'tab=agents&tab=agents',
+                          'tab=agents&section=teams', 'section=groups'):
                 self.assertEqual(case.raw.call('GET', '/discover', query=query)['status'], 400)
             self.assertEqual(case.raw.call('GET', '/settings/not-a-page')['status'], 404)
         finally:

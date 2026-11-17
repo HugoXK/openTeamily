@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { validSlug, catalogItems, agentDiscoverPairs, isAgentsCatalog, FEED_CATEGORIES, CATALOG_CATEGORIES, FEED_ACTIVITY_NOTE, FEED_FOLLOWING_EMPTY_TITLE, FEED_FOLLOWING_EMPTY_BODY, FEED_FOLLOWING_NOTE, FEED_SEARCH_NOTE } from '../openteamily/static/discover/app.mjs';
+import { validSlug, catalogItems, agentDiscoverPairs, isAgentsCatalog, isTeamsCatalog, renderTeamCard, FEED_CATEGORIES, CATALOG_CATEGORIES, TEAM_CATEGORIES, FEED_ACTIVITY_NOTE, FEED_FOLLOWING_EMPTY_TITLE, FEED_FOLLOWING_EMPTY_BODY, FEED_FOLLOWING_NOTE, FEED_SEARCH_NOTE, TEAMS_NOTE, TEAMS_SEARCH_NOTE, TEAMS_SEARCH_PLACEHOLDER } from '../openteamily/static/discover/app.mjs';
 
 test('validSlug mirrors the server slug rule', () => {
   assert.equal(validSlug('on-call'), true);
@@ -18,7 +18,16 @@ test('isAgentsCatalog only matches the recorded tab=agents query', () => {
   assert.equal(isAgentsCatalog({search: ''}), false);
   assert.equal(isAgentsCatalog({search: '?tab=agents'}), true);
   assert.equal(isAgentsCatalog({search: '?tab=teams'}), false);
+  assert.equal(isAgentsCatalog({search: '?tab=agents&section=groups'}), false);
   assert.equal(isAgentsCatalog(undefined), false);
+});
+
+test('isTeamsCatalog only matches the recorded tab=agents&section=groups query', () => {
+  assert.equal(isTeamsCatalog({search: ''}), false);
+  assert.equal(isTeamsCatalog({search: '?tab=agents'}), false);
+  assert.equal(isTeamsCatalog({search: '?tab=agents&section=groups'}), true);
+  assert.equal(isTeamsCatalog({search: '?section=groups'}), false);
+  assert.equal(isTeamsCatalog(undefined), false);
 });
 
 test('recorded feed categories stay in the captured order', () => {
@@ -38,7 +47,7 @@ test('recorded catalog categories stay in the captured order', () => {
 
 test('catalog filter chrome is present, disabled, and does not copy Teamily branding', () => {
   const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
-  const block = html.split('class="catalog-filters"')[1].split('id="catalog-panel"')[0];
+  const block = html.split('id="catalog-filters"')[1].split('id="teams-filters"')[0];
   assert.match(block, /aria-current="true"[^>]*>全部</);
   for (const label of CATALOG_CATEGORIES) {
     const encoded = label.replaceAll('&', '&amp;');
@@ -52,12 +61,66 @@ test('catalog filter chrome is present, disabled, and does not copy Teamily bran
   assert.match(block, /id="catalog-filter-more"[^>]*disabled[^>]*aria-label="更多分类"/);
   assert.match(block, /对照里可以看到搜索分类控件，但没有打开面板，所以这里不发明搜索弹层。/);
   assert.match(block, /对照里未展开其余分类，所以这里不发明更多分类。/);
-  const creator = block.match(/id="catalog-creator"[\s\S]*?<\/button>/)[0];
+  const creator = html.match(/id="catalog-creator"[\s\S]*?<\/button>/)[0];
   assert.match(creator, /disabled/);
   assert.match(creator, /创建者/);
   assert.equal(/teamily|积分|credits/i.test(creator), false);
-  assert.match(block, /id="catalog-filter-note" class="visually-hidden"/);
-  assert.match(block, /分类和创建者筛选未接通：公共目录没有对应字段。/);
+  assert.match(html, /id="catalog-filter-note" class="visually-hidden"/);
+  assert.match(html, /分类和创建者筛选未接通：公共目录没有对应字段。/);
+});
+
+
+test('recorded team categories stay in the captured order', () => {
+  assert.deepEqual(TEAM_CATEGORIES, [
+    'Marketing', 'Engineering', 'IT & Security', 'Content Creation',
+    'Operations', 'Product', 'Data Analysis', 'Design', 'Research',
+    'Investment', 'Education', 'Life', 'Sales',
+  ]);
+});
+
+test('teams filter chrome is present, disabled, and does not copy Teamily branding', () => {
+  const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
+  assert.match(html, /id="catalog-tab-teams" href="\/discover\?tab=agents&amp;section=groups">AI 团队</);
+  assert.match(html, /id="catalog-create-team"[^>]*disabled[^>]*>\+ 创建我的 AI 团队</);
+  assert.equal(/AI 团队（未接通）/.test(html), false);
+  const block = html.split('id="teams-filters"')[1].split('id="catalog-creator"')[0];
+  assert.match(block, /aria-current="true"[^>]*>All</);
+  for (const label of TEAM_CATEGORIES) {
+    const encoded = label.replaceAll('&', '&amp;');
+    assert.match(block, new RegExp(`disabled title="未接通：没有公共 AI 团队目录接口。">${encoded}<`));
+  }
+  const order = ['All', ...TEAM_CATEGORIES.map((label) => label.replaceAll('&', '&amp;'))];
+  const positions = order.map((label) => block.indexOf(`>${label}<`));
+  assert.equal(positions.every((index) => index !== -1), true);
+  assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
+  assert.match(block, /id="teams-filter-more"[^>]*disabled[^>]*aria-label="更多分类"/);
+  assert.equal(/id="teams-filter-search"/.test(block), false);
+  assert.equal(/Teamily AI|Full-Stack Delivery Guild|积分|credits/i.test(html), false);
+  assert.match(html, /id="teams-filter-note" class="visually-hidden"/);
+  assert.match(html, /也不会复制对照里的团队名称或创建者品牌/);
+  assert.equal(TEAMS_SEARCH_PLACEHOLDER, '搜索 AI 团队......');
+});
+
+test('renderTeamCard lays out recorded fields and keeps create unconnected', () => {
+  const doc = fakeDocument();
+  const card = renderTeamCard(doc, {
+    category: 'engineering',
+    name: 'Fixture Delivery Room',
+    summary: 'An OpenTeamily fixture card, not a copied template.',
+    tags: ['fixture', 'delivery'],
+    members: ['alpha', 'beta'],
+    extra: '+1',
+  });
+  assert.equal(card.children[0].textContent, 'engineering');
+  assert.equal(card.children[1].textContent, 'Fixture Delivery Room');
+  assert.equal(card.children[2].textContent, 'An OpenTeamily fixture card, not a copied template.');
+  assert.equal(card.children[3].children[0].textContent, 'fixture');
+  assert.equal(card.children[4].children[0].children[0].textContent, 'A');
+  assert.equal(card.children[4].children[1].textContent, '+1');
+  const create = card.children[4].children[2];
+  assert.equal(create.disabled, true);
+  assert.equal(create.textContent, '创建');
+  assert.match(create.title, /未接通/);
 });
 
 test('catalogItems tolerates missing bodies', () => {
@@ -89,6 +152,7 @@ class Element {
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
   setAttribute(key, value) { this.attributes[key] = value; }
+  removeAttribute(key) { delete this.attributes[key]; }
   addEventListener(key, handler) { this.handlers[key] = handler; }
 }
 function fakeDocument() {
@@ -190,3 +254,40 @@ test('default discover view is the unconnected feed and does not load the catalo
   assert.equal(el('feed-following-empty').hidden, true);
   assert.equal(el('feed-note').textContent, FEED_ACTIVITY_NOTE);
 });
+
+test('teams catalog shows recorded chrome and does not load the agent catalog API', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const requests = [];
+  const fetcher = async (path, options) => {
+    requests.push([path, options.method]);
+    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location: {search: '?tab=agents&section=groups'}});
+  const el = id => doc.getElementById(id);
+  assert.equal(el('main-panel').hidden, false);
+  assert.equal(el('catalog-view').hidden, false);
+  assert.equal(el('feed-panel').hidden, true);
+  assert.equal(el('catalog-filters').hidden, true);
+  assert.equal(el('teams-filters').hidden, false);
+  assert.equal(el('catalog-create-agent').hidden, true);
+  assert.equal(el('catalog-create-team').hidden, false);
+  assert.equal(el('catalog-query').placeholder, TEAMS_SEARCH_PLACEHOLDER);
+  assert.equal(el('catalog-tab-teams').attributes['aria-current'], 'page');
+  assert.equal(el('catalog-tab-agents').attributes['aria-current'], undefined);
+  assert.equal(el('teams-note').hidden, false);
+  assert.equal(el('teams-note').textContent, TEAMS_NOTE);
+  assert.equal(el('catalog-manage').hidden, true);
+  assert.equal(el('discover-list').children.length, 0);
+  assert.equal(requests.some(([path]) => path.startsWith('/v1/discover/agents')), false);
+  el('catalog-query').value = 'anything';
+  el('catalog-search').handlers.submit({preventDefault() {}});
+  assert.equal(el('teams-search-note').hidden, false);
+  assert.equal(el('teams-search-note').textContent, TEAMS_SEARCH_NOTE);
+  el('catalog-clear').handlers.click();
+  assert.equal(el('catalog-query').value, '');
+  assert.equal(el('teams-search-note').hidden, true);
+  assert.equal(requests.every(([, method]) => method === 'GET'), true);
+});
+
