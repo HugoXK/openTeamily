@@ -27,6 +27,8 @@ AGENT_NAME = '[CI FIXTURE] Directory assistant'
 CHAT_TITLE = '[CI FIXTURE] Conversation'
 CHAT_USER_TEXT = '[CI FIXTURE] Please reply with one labeled sentence.'
 CHAT_LIVE_TEXT = '[CI FIXTURE] Live UI send from the screenshot script.'
+SOCIAL_GROUP_TITLE = '[CI FIXTURE] Group chat'
+SOCIAL_MESSAGE_TEXT = '[CI FIXTURE] Social message for search.'
 AUTOMATION_TITLE = '[CI FIXTURE] Sample briefing'
 AUTOMATION_PROMPT = 'Write one sentence of clearly labeled CI fixture text.'
 DOCUMENT_TITLE = '[CI FIXTURE] Document'
@@ -139,6 +141,25 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         {'body': CHAT_USER_TEXT},
         {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-msg-0001'},
     ), (201,), 'send the fixture conversation message')
+    roster = _require(owner.call('GET', '/v1/workspaces/%s/members' % wid), (200,), 'list fixture members')
+    member_id = next(item['user_id'] for item in roster['body']['items'] if item['username'] == MEMBER_USERNAME)
+    social_dm = _require(owner.call(
+        'POST', '/v1/workspaces/%s/social/conversations' % wid,
+        {'kind': 'dm', 'member_ids': [member_id]},
+        {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-social-dm-0001'},
+    ), (200, 201), 'create the fixture direct message')
+    social_dm_id = social_dm['body']['conversation']['id']
+    social_group = _require(owner.call(
+        'POST', '/v1/workspaces/%s/social/conversations' % wid,
+        {'kind': 'group', 'member_ids': [member_id], 'title': SOCIAL_GROUP_TITLE},
+        {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-social-group-0001'},
+    ), (200, 201), 'create the fixture group conversation')
+    social_group_id = social_group['body']['conversation']['id']
+    _require(owner.call(
+        'POST', '/v1/workspaces/%s/social/conversations/%s/messages' % (wid, social_group_id),
+        {'body': SOCIAL_MESSAGE_TEXT},
+        {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-social-msg-0001'},
+    ), (201,), 'send the fixture social message')
     automation = _require(owner.call('POST', '/v1/workspaces/%s/automations' % wid, {
         'title': AUTOMATION_TITLE,
         'prompt': AUTOMATION_PROMPT,
@@ -208,6 +229,10 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         'conversation_title': CHAT_TITLE,
         'chat_user_text': CHAT_USER_TEXT,
         'chat_live_text': CHAT_LIVE_TEXT,
+        'social_dm_id': social_dm_id,
+        'social_group_id': social_group_id,
+        'social_group_title': SOCIAL_GROUP_TITLE,
+        'social_message_text': SOCIAL_MESSAGE_TEXT,
         'document_body': DOCUMENT_BODY,
         'automation_id': aid,
         'automation_title': AUTOMATION_TITLE,

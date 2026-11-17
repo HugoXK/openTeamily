@@ -37,7 +37,7 @@ Additive `social_conversations`, `social_members` and `social_messages` tables (
 
 ## Page
 
-A same-origin page is served at `/messenger`. It lists your social conversations, opens one, sends messages, and can start a direct message or group with other workspace members. It is not browser E2E evidence.
+The management UI for these conversations lives on the unified `/chat` page, together with user↔agent conversations. `/messenger` redirects to `/chat`. Starting a direct message uses「添加联系人」; starting a group uses「新建群组」. It is not browser E2E evidence, and it is not Teamily messenger parity.
 
 ## Explicitly not in this slice
 

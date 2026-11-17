@@ -410,11 +410,20 @@ async function main() {
       await waitForLocatorText(page, '#message-list', ready.chat_user_text, 20000);
       await waitForLocatorText(page, '#message-list', ready.provider_text, 20000);
       const history = await visibleText(page.locator('#message-list'));
+      const listText = await visibleText(page.locator('#session-pane'));
       record(
         'agents_conversation_history',
         history.includes(ready.chat_user_text) && history.includes(ready.provider_text),
         history.slice(0, 240) || 'conversation history empty',
         { soft: ready.chat_status !== 'succeeded' },
+      );
+      record(
+        'chat_unified_list',
+        listText.includes(ready.agent_name)
+          && listText.includes(ready.member_username)
+          && listText.includes(ready.social_group_title)
+          && listText.includes('对话'),
+        listText || 'unified chat list empty',
       );
       screenshots.push(path.basename(await shot(page, outDir, '16-agents-conversation.png')));
       screenshots.push(path.basename(await shot(page, outDir, '22-chat-desktop.png')));
@@ -423,7 +432,6 @@ async function main() {
     }
 
     try {
-      await page.locator('#new-conversation').click();
       await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#chat-body').fill(ready.chat_live_text);
       await page.locator('#chat-form button[type="submit"]').click();
@@ -440,6 +448,80 @@ async function main() {
     } catch (error) {
       record('agents_conversation_send', false, String(error), { soft: ready.connection_status !== 'online' });
     }
+
+    try {
+      await page.locator('#new-conversation').click();
+      const menu = page.locator('#compose-menu');
+      await menu.waitFor({ state: 'visible', timeout: 8000 });
+      const menuText = `${await visibleText(menu)}`;
+      record(
+        'chat_new_menu',
+        menuText.includes('创建智能体')
+          && menuText.includes('新建群组')
+          && menuText.includes('添加联系人')
+          && menuText.includes('创建 Artifacts')
+          && menuText.includes('创建自动化')
+          && menuText.includes('创建第三方智能体')
+          && menuText.includes('发起视频会议')
+          && menuText.includes('加入视频会议')
+          && !menuText.includes('积分中心')
+          && await page.locator('#compose-new-group').isEnabled()
+          && await page.locator('#compose-menu button[disabled]').count() >= 3,
+        menuText || 'compose menu empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '53-chat-new-menu.png')));
+      await page.keyboard.press('Escape');
+      await menu.waitFor({ state: 'hidden', timeout: 5000 });
+    } catch (error) {
+      record('chat_new_menu', false, String(error));
+    }
+
+    try {
+      await page.locator('#session-search').click();
+      const panel = page.locator('#search-panel');
+      await panel.waitFor({ state: 'visible', timeout: 8000 });
+      const emptyText = `${await visibleText(panel)}`;
+      record(
+        'chat_search_empty',
+        emptyText.includes('全部')
+          && emptyText.includes('Artifacts')
+          && emptyText.includes('联系人')
+          && emptyText.includes('群组')
+          && emptyText.includes('智能体')
+          && emptyText.includes('消息')
+          && emptyText.includes('当前工作区')
+          && emptyText.includes(ready.agent_name)
+          && emptyText.includes(ready.social_group_title)
+          && !/积分|套餐|升级/.test(emptyText),
+        emptyText || 'empty search panel missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '54-chat-search-empty.png')));
+    } catch (error) {
+      record('chat_search_empty', false, String(error));
+    }
+
+    try {
+      await page.locator('#session-search').click();
+      const panel = page.locator('#search-panel');
+      await panel.waitFor({ state: 'visible', timeout: 8000 });
+      await page.locator('#session-search').fill(ready.social_message_text);
+      await page.locator('#search-panel [data-search-tab="messages"]').click();
+      await waitForLocatorText(page, '#search-results', ready.social_message_text, 15000);
+      const messageText = `${await visibleText(panel)}`;
+      record(
+        'chat_search_messages',
+        messageText.includes('消息')
+          && messageText.includes(ready.social_message_text)
+          && messageText.includes(ready.social_group_title),
+        messageText || 'message search empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '55-chat-search-messages.png')));
+      await page.locator('#search-close').click();
+      await panel.waitFor({ state: 'hidden', timeout: 5000 });
+    } catch (error) {
+      record('chat_search_messages', false, String(error));
+    }
+
     await page.setViewportSize({ width: 1280, height: 900 });
 
     await page.goto(`${origin}/automations`, { waitUntil: 'load' });
@@ -992,21 +1074,19 @@ async function main() {
     try {
       await page.goto(`${origin}/messenger`, { waitUntil: 'load' });
       await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
-      const messengerText = `${await visibleText(page.locator('#main-panel'))}`;
-      const messengerWho = `${await visibleText(page.locator('#whoami'))}`;
-      const discoverInRail = await page.locator('body.app-workspace > .app-rail a[href="/discover"]').count();
+      const redirected = page.url().replace(/#.*$/, '');
       record(
-        'messenger_page',
-        messengerWho === ready.username
-          && messengerText.includes('消息')
-          && discoverInRail > 0
-          && !messengerText.includes('未实现：发现动态')
-          && !/积分|套餐|升级/.test(messengerText),
-        `whoami=${messengerWho || '(empty)'}; railDiscover=${discoverInRail}; ${messengerText || 'messenger empty'}`,
+        'messenger_redirects_to_chat',
+        redirected.endsWith('/chat')
+          && await page.locator('#compose-menu').count() > 0
+          && await page.locator('#create-conversation').count() === 0
+          && await page.locator('body.app-workspace > .app-rail a[href="/chat"]').count() > 0
+          && await page.locator('body.app-workspace > .app-rail a[href="/messenger"]').count() === 0,
+        `url=${redirected || '(empty)'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '51-messenger.png')));
     } catch (error) {
-      record('messenger_page', false, String(error));
+      record('messenger_redirects_to_chat', false, String(error));
     }
 
     try {

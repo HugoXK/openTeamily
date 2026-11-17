@@ -257,3 +257,155 @@
     z-index: 6;
   }
 }
+
+.compose-menu { position: relative; }
+#new-conversation {
+  width: 1.85rem;
+  height: 1.85rem;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ot-accent);
+  color: #fff;
+  font: inherit;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+#compose-menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 8;
+  min-width: 12.5rem;
+  padding: 0.35rem 0;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.75rem;
+  background: var(--ot-surface);
+  box-shadow: var(--ot-shadow);
+}
+#compose-menu a,
+#compose-menu button {
+  display: flex;
+  width: 100%;
+  margin: 0;
+  padding: 0.45rem 0.85rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+#compose-menu a:hover,
+#compose-menu button:hover:not(:disabled) {
+  background: var(--ot-bg-accent);
+}
+#compose-menu button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#search-close {
+  flex: 0 0 auto;
+  width: 1.7rem;
+  height: 1.7rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+#search-close:hover { background: var(--ot-surface); }
+
+#search-panel { margin-top: 0.65rem; min-height: 0; }
+.search-tabs {
+  display: flex;
+  gap: 0.15rem;
+  overflow-x: auto;
+  padding: 0 0 0.45rem;
+}
+.search-tabs [role="tab"] {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0.2rem 0.55rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ot-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.search-tabs [role="tab"][aria-selected="true"] {
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  font-weight: 650;
+}
+#search-results { display: grid; gap: 0.7rem; }
+.search-section h3 {
+  margin: 0.35rem 0 0.2rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--ot-muted);
+}
+.search-section ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.search-section button,
+.search-section a {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0.35rem 0.45rem;
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.search-section button:hover,
+.search-section a:hover { background: var(--ot-surface); }
+.search-section .title { display: block; font-weight: 650; }
+.search-section .preview {
+  display: block;
+  color: var(--ot-muted);
+  font-size: 0.8rem;
+}
+
+#compose-dialog {
+  margin-top: 0.75rem;
+  padding: 0.75rem 0.8rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.85rem;
+  background: var(--ot-surface);
+}
+#compose-dialog h2 { margin: 0 0 0.55rem; font-size: 0.95rem; }
+.member-choices {
+  display: grid;
+  gap: 0.25rem;
+  max-height: 10rem;
+  overflow: auto;
+  margin: 0.35rem 0 0.55rem;
+}
+.member-choices label { display: flex; gap: 0.4rem; align-items: center; }
+.compose-dialog-actions {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+#message-list li.mine { align-self: flex-end; background: var(--ot-accent-soft); }
+#message-list li.other { align-self: flex-start; }
+#conversation-list .kind-tag {
+  color: var(--ot-muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
