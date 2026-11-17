@@ -157,6 +157,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     applyTheme(document, current);
     const appearanceStatus = document.getElementById('appearance-status');
     if (appearanceStatus) appearanceStatus.textContent = describeAppearance(current);
+    const languageCurrent = document.getElementById('language-current');
+    if (languageCurrent && form.elements.language) {
+      const option = form.elements.language.selectedOptions[0];
+      languageCurrent.textContent = option ? option.textContent : '';
+    }
     await renderSkillSecrets();
     if (modelForm) {
       const model = await request('GET', '/v1/model-api');

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>账号设置 · OpenTeamily</title>
+  <title>设置 · OpenTeamily</title>
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/settings/app.css">
   <script type="module" src="/shell/app.mjs"></script>
@@ -61,14 +61,36 @@
   </section>
   <section id="settings-panel" hidden>
     <header class="page-top">
-      <h1>账号设置</h1>
-      <p class="note">这里只编辑本仓已经提供的界面偏好。选项和默认值还没有和 Teamily 真实设置页逐项对比，不能当成功能对等。</p>
+      <h1>设置</h1>
+      <p class="note">按 2026-11-17 设置总览对照布置已有功能。没有用量摘要、升级按钮、积分或套餐。没有做成空壳的渠道、应用连接器或未见子页。外观、快捷键、消息显示和隐私仍在本页，并接到原来的接口。</p>
     </header>
+    <p id="whoami"></p>
     <nav class="workspace-links" aria-label="工作区">
       <a href="/members">成员</a>
-      <a href="/runtimes">运行时</a>
     </nav>
-    <p id="whoami"></p>
+    <nav id="settings-index" class="settings-index" aria-label="设置分组">
+      <section class="settings-group" aria-labelledby="group-account">
+        <h2 id="group-account">账户与资料</h2>
+        <a class="settings-row" href="/profile">账户与资料</a>
+      </section>
+      <section class="settings-group" aria-labelledby="group-ai">
+        <h2 id="group-ai">AI 与智能体设置</h2>
+        <a class="settings-row" href="#language">语言 <span id="language-current" class="settings-row-meta"></span></a>
+        <a class="settings-row" href="#model-api">模型 API <span class="settings-row-meta">平台默认或你自己的配置，不用积分</span></a>
+        <a class="settings-row" href="#skill-secrets">技能密钥</a>
+        <a class="settings-row" href="/runtimes">运行时</a>
+      </section>
+      <section class="settings-group" aria-labelledby="group-prefs">
+        <h2 id="group-prefs">偏好与安全</h2>
+        <label class="settings-row settings-toggle">显示链接预览
+          <input type="checkbox" name="link_previews" form="settings-form">
+        </label>
+        <a class="settings-row" href="#appearance">外观</a>
+        <a class="settings-row" href="#send-shortcut">发送快捷键</a>
+        <a class="settings-row" href="#message-display">消息显示</a>
+        <a class="settings-row" href="#privacy">隐私</a>
+      </section>
+    </nav>
     <form id="settings-form" method="post" action="/v1/settings">
       <fieldset id="appearance">
         <legend>外观</legend>
@@ -87,7 +109,7 @@
         </fieldset>
         <p id="appearance-status" class="note"></p>
       </fieldset>
-      <fieldset>
+      <fieldset id="language">
         <legend>语言</legend>
         <label>界面语言
           <select name="language">
@@ -140,7 +162,7 @@
         <label><input type="radio" name="send_shortcut" value="enter"> Enter 发送</label>
         <label><input type="radio" name="send_shortcut" value="mod_enter"> Ctrl + Enter 发送（换行用 Shift + Enter）</label>
       </fieldset>
-      <fieldset>
+      <fieldset id="message-display">
         <legend>消息显示</legend>
         <label>消息折叠
           <select name="message_folding">
@@ -150,10 +172,9 @@
           </select>
         </label>
         <label><input type="checkbox" name="document_cards"> 把长文档收成卡片</label>
-        <label><input type="checkbox" name="link_previews"> 显示链接预览</label>
         <label><input type="checkbox" name="task_completion_reminders"> 任务完成提醒</label>
       </fieldset>
-      <fieldset>
+      <fieldset id="privacy">
         <legend>隐私</legend>
         <p class="note">管理你的社交动态对他人是否可见。</p>
         <label><input type="checkbox" name="likes_visible"> 允许他人查看你点赞的内容</label>
@@ -162,7 +183,7 @@
       <button type="submit" id="save">保存</button>
     </form>
     <form id="model-api-form" method="post" action="/v1/model-api">
-      <fieldset>
+      <fieldset id="model-api">
         <legend>模型 API</legend>
         <p class="note">OpenTeamily 不用积分。默认使用平台管理员配置的模型 API；你可以在这里改成自己的。密钥只能写入，保存后不会再显示明文。</p>
         <p id="model-effective"></p>
@@ -183,7 +204,7 @@
       <button type="submit" id="save-model-api">保存模型 API</button>
     </form>
     <form id="skill-secrets-form" method="post" action="/v1/skill-secrets">
-      <fieldset>
+      <fieldset id="skill-secrets">
         <legend>技能密钥</legend>
         <p class="note">名称只能用大写字母、数字和下划线，并且必须以字母开头。值保存后不会回显。</p>
         <ul id="skill-secret-list"></ul>
