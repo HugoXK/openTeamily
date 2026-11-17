@@ -202,7 +202,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
       const name = document.createElement('span');
       name.textContent = item.hostname || 'flybot';
       const state = document.createElement('span');
-      state.textContent = item.status === 'online' ? '在线' : '离线';
+      const online = item.status === 'online';
+      state.className = 'runtime-badge ' + (online ? 'is-online' : 'is-offline');
+      state.textContent = online ? '在线' : '离线';
       row.appendChild(name);
       row.appendChild(state);
       list.appendChild(row);
@@ -216,6 +218,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     const detail = document.getElementById('local-status-detail');
     if (card) card.dataset.state = summary.kind;
     if (label) label.textContent = summary.label;
+    const badge = document.getElementById('local-status-badge');
+    if (badge) {
+      badge.className = 'runtime-badge ' + (summary.kind === 'online' ? 'is-online' : 'is-offline');
+      badge.textContent = summary.kind === 'online' ? '在线' : '离线';
+    }
     if (!detail) return;
     if (summary.kind === 'empty') {
       detail.textContent = '请在「连接」里生成密钥，下载 flybot.pyz，在自己的机器上启动守护进程并用同一账号登记。OpenTeamily 没有官方桌面应用。';

@@ -372,6 +372,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       list.appendChild(li);
     }
     empty.hidden = items.length > 0;
+    syncActionComposer(items.length > 0);
+  }
+
+  function syncActionComposer(hasItems) {
+    const form = document.getElementById('new-action-form');
+    const opener = document.getElementById('new-action-open');
+    const filter = document.getElementById('action-filter-label');
+    if (!form) return;
+    const keep = form.dataset.open === 'true';
+    form.hidden = !(hasItems || keep);
+    if (opener) opener.hidden = hasItems || keep;
+    if (filter) filter.hidden = !(hasItems || keep);
   }
 
   async function loadActions() {
@@ -872,6 +884,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('close-editor').addEventListener('click', () => loadWorkspace());
 
+  const newActionOpen = document.getElementById('new-action-open');
+  if (newActionOpen) {
+    newActionOpen.addEventListener('click', () => {
+      const form = document.getElementById('new-action-form');
+      if (form) form.dataset.open = 'true';
+      syncActionComposer(false);
+    });
+  }
   document.getElementById('new-action-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const id = workspaceId();

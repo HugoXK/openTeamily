@@ -3,7 +3,69 @@
 body.app-workspace #main-panel,
 body.app-workspace #runtimes-panel,
 body.app-workspace #connect-panel {
-  max-width: 56rem;
+  max-width: 45rem;
+  margin-inline: auto;
+  width: 100%;
+}
+
+.runtime-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.runtime-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.8rem;
+  height: 1.8rem;
+  color: inherit;
+  text-decoration: none;
+  font-size: 1.25rem;
+  border-radius: 999px;
+}
+
+.runtime-back:hover,
+.runtime-back:focus-visible {
+  background: var(--ot-bg-accent);
+}
+
+.runtime-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: 0.45rem;
+  padding: 0.1rem 0.5rem 0.1rem 0.35rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.runtime-badge::before {
+  content: "";
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.runtime-badge.is-online {
+  color: #0b6b4f;
+  background: #e3f5ec;
+}
+
+.runtime-badge.is-offline,
+.runtime-badge.is-unavailable,
+.runtime-badge.is-pending {
+  color: #8a5a16;
+  background: #f8edd9;
+}
+
+#detected-empty {
+  margin: 0.35rem 0 0;
+  padding: 0.75rem 0.15rem;
 }
 
 .runtime-section {

@@ -97,6 +97,8 @@ class SettingsPageTests(unittest.TestCase):
         self.assertTrue(-1 < light < dark < auto < system)
         self.assertLess(html.find('始终使用浅色主题。'), html.find('始终使用深色主题。'))
         self.assertIn('没有使用实际日出日落时刻', html)
+        self.assertIn('legend class="visually-hidden"', html)
+        self.assertIn('settings-card-title', html)
         self.assertNotIn('name="fold_long_messages"', html)
 
     def test_overview_maps_existing_settings_and_omits_billing_shells(self):
@@ -127,6 +129,11 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('选择长消息在对话里最先展示多少内容。', html)
         self.assertIn('保存更改', html)
         self.assertIn('name="link_previews"', html)
+        self.assertIn('role="switch"', html)
+        self.assertIn('settings-row-icon', html)
+        self.assertIn('settings-row-chevron', html)
+        self.assertNotIn('按对照把总览和已有设置子页分开', html)
+        self.assertIn('class="visually-hidden"', html)
         self.assertNotIn('创作赚钱', html)
         self.assertNotIn('积分中心', html)
         self.assertNotIn('套餐与账单', html)

@@ -20,7 +20,7 @@
     <a href="/automations" title="自动化">自动化</a>
     <a href="/memory" title="记忆">记忆</a>
     <a href="/space" title="作品">作品</a>
-    <button type="button" class="rail-link" disabled title="未实现：发现动态">发现</button>
+    <a href="/discover" title="发现">发现</a>
     <span class="rail-spacer"></span>
     <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
     <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
@@ -129,7 +129,8 @@
           <button type="button" id="dream-actions" disabled title="未实现：对照里未点开「做梦」。OpenTeamily 还没有整理记忆的接口。">做梦</button>
         </header>
         <p id="action-empty" class="note" hidden>当前没有可预期的事项。</p>
-        <label>筛选
+        <button type="button" id="new-action-open">新建行动</button>
+        <label id="action-filter-label">筛选
           <select id="action-filter">
             <option value="open" selected>未完成</option>
             <option value="done">已完成</option>
@@ -137,7 +138,7 @@
           </select>
         </label>
         <ul id="action-list"></ul>
-        <form id="new-action-form">
+        <form id="new-action-form" hidden>
           <label>标题 <input id="new-action-title" name="title" type="text" maxlength="80" required autocomplete="off"></label>
           <label>备注 <input id="new-action-notes" name="notes" type="text" maxlength="2000" autocomplete="off"></label>
           <label>截止日期 <input id="new-action-due" name="due" type="date"></label>
