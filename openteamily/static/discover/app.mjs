@@ -30,7 +30,9 @@ export const FEED_CATEGORIES = [
 ];
 
 export const FEED_ACTIVITY_NOTE = '动态信息流还没有接口，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。';
-export const FEED_FOLLOWING_NOTE = '关注页的内容结构没有对照截图，这个视图尚未接通。';
+export const FEED_FOLLOWING_EMPTY_TITLE = '关注列表暂无动态';
+export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显示在这里。';
+export const FEED_FOLLOWING_NOTE = '关注关系还没有接口，所以这里保持对照里的空态，不会列出动态，也不会展示奖励活动。';
 export const FEED_SEARCH_NOTE = '搜索动态和创作者尚未接通：没有对应的公开接口。';
 
 export function isAgentsCatalog(location) {
@@ -70,6 +72,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (activityBtn) activityBtn.setAttribute('aria-selected', following ? 'false' : 'true');
     const note = document.getElementById('feed-note');
     if (note) note.textContent = following ? FEED_FOLLOWING_NOTE : FEED_ACTIVITY_NOTE;
+    const empty = document.getElementById('feed-following-empty');
+    if (empty) empty.hidden = !following;
   }
 
   function show(kind, text) {
