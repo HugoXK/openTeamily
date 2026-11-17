@@ -211,28 +211,31 @@ async function main() {
     screenshots.push(path.basename(await shot(page, outDir, '02-settings-signed-in.png')));
     try {
       const hubText = `${await visibleText(page.locator('#settings-index'))}`;
-      const usageText = `${await visibleText(page.locator('#settings-usage-card'))}`;
-      const upgradeDisabled = await page.locator('#settings-upgrade').isDisabled();
+      const panelText = `${await visibleText(page.locator('#settings-panel'))}`;
       record(
         'settings_hub_recorded_groups',
-        usageText.includes('未接通')
-          && usageText.includes('升级')
-          && usageText.includes('5 小时窗口')
-          && upgradeDisabled
-          && hubText.includes('创作者与奖励')
-          && hubText.includes('套餐、账单与用量')
-          && hubText.includes('创作赚钱')
-          && hubText.includes('积分中心')
-          && hubText.includes('套餐与账单')
-          && hubText.includes('教育优惠认证')
-          && hubText.includes('兑换码')
+        hubText.includes('账户与资料')
+          && hubText.includes('AI 与智能体设置')
           && hubText.includes('技能配置')
-          && !usageText.includes('0m 后重置')
+          && (await page.locator('#model-api').textContent() || '').includes('OpenTeamily 不用积分')
+          && await page.locator('#whoami').isVisible()
+          && await page.locator('#settings-usage-card').count() === 0
+          && await page.locator('#settings-upgrade').count() === 0
+          && !panelText.includes('升级')
+          && !panelText.includes('创作者与奖励')
+          && !panelText.includes('套餐、账单与用量')
+          && !panelText.includes('创作赚钱')
+          && !panelText.includes('积分中心')
+          && !panelText.includes('套餐与账单')
+          && !panelText.includes('教育优惠认证')
+          && !panelText.includes('兑换码')
+          && !panelText.includes('5 小时窗口')
+          && !panelText.includes('0m 后重置')
           && !hubText.includes('已赚取')
           && !hubText.includes('$CASH')
           && !hubText.includes('CREDIT')
           && !hubText.includes('剩余 100%'),
-        `upgradeDisabled=${upgradeDisabled}; usage=${usageText || 'usage empty'} | hub=${hubText || 'hub empty'}`,
+        `panel=${panelText || 'panel empty'} | hub=${hubText || 'hub empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '76-settings-hub-groups.png')));
     } catch (error) {
