@@ -114,6 +114,9 @@ async function main() {
   if (username !== ready.username) {
     throw new Error('login username does not match ready.json');
   }
+  if (!ready.empty_workspace_name) {
+    throw new Error('ready.json is missing empty_workspace_name');
+  }
   fs.mkdirSync(outDir, { recursive: true });
 
   const checks = {};
@@ -355,7 +358,7 @@ async function main() {
       const meetings = await visibleText(page.locator('#empty-meetings'));
       record(
         'artifacts_meetings_unimplemented',
-        meetings.includes('未实现') && meetings.includes('录音会议'),
+        meetings.includes('未实现') && meetings.includes('还没有录过音的会议'),
         meetings || 'meetings empty missing',
       );
       screenshots.push(path.basename(await shot(page, outDir, '31-artifacts-meetings-empty.png')));
@@ -749,6 +752,7 @@ async function main() {
     ready: {
       username: ready.username,
       workspace_name: ready.workspace_name,
+      empty_workspace_name: ready.empty_workspace_name,
       team_slug: ready.team_slug,
       run_status: ready.run_status,
       connection_status: ready.connection_status,
