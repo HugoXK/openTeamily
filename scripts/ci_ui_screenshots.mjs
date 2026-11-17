@@ -160,6 +160,7 @@ async function main() {
 
     await page.goto(`${origin}/settings`, { waitUntil: 'load' });
     await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await waitForLocatorText(page, '#model-key-state', '密钥', 15000);
     const who = await visibleText(page.locator('#whoami'));
     const keyState = await visibleText(page.locator('#model-key-state'));
     const appearanceLight = await page.locator('input[name="appearance"][value="light"]').isChecked();

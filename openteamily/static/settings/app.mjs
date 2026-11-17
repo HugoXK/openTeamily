@@ -148,9 +148,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(settings.body.error, '无法读取设置。'));
       return;
     }
-    loginPanel.hidden = true;
-    settingsPanel.hidden = false;
-    whoami.textContent = session.body.user.username;
     current = settings.body.settings.values;
     revision = settings.body.settings.revision;
     fillForm(form, current);
@@ -162,7 +159,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const option = form.elements.language.selectedOptions[0];
       languageCurrent.textContent = option ? option.textContent : '';
     }
-    await renderSkillSecrets();
+    whoami.textContent = session.body.user.username;
     if (modelForm) {
       const model = await request('GET', '/v1/model-api');
       if (model.status === 200) {
@@ -176,6 +173,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         document.getElementById('model-key-state').textContent = model.body.model_api.api_key_set ? '已保存个人密钥（不会回显）。' : '未设置个人密钥。';
       }
     }
+    loginPanel.hidden = true;
+    settingsPanel.hidden = false;
+    await renderSkillSecrets();
   }
 
   async function renderProviders() {
