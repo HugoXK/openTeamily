@@ -34,6 +34,16 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('我的会议', html)
         self.assertIn('话题亮点', html)
         self.assertIn('未实现', html)
+        self.assertIn('未接通', html)
+        self.assertIn('做梦', html)
+        self.assertIn('Professional Profile', html)
+        self.assertIn('Work Style', html)
+        self.assertIn('Communication &amp; Writing Style', html)
+        self.assertIn('当前没有可预期的事项。', html)
+        self.assertIn('href="/memory?page=profile"', html)
+        self.assertIn('href="/memory?page=todos"', html)
+        self.assertNotIn('Develops and maintains software', html)
+        self.assertNotIn('Teamily Wiki', html)
         self.assertIn('id="graph-canvas"', html)
         self.assertIn('id="topic-list"', html)
         self.assertIn('id="memory-list"', html)
@@ -58,6 +68,13 @@ class MemoryPageServingTests(unittest.TestCase):
     def test_page_rejects_cross_origin_queries_and_writes(self):
         self.assertEqual(self.raw.call('GET', '/memory', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/memory', query='q=1')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/memory', query='page=overview')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/memory', query='page=profile&x=1')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/memory/app.mjs', query='page=profile')['status'], 400)
+        for query in ('page=profile', 'page=todos'):
+            page = self.raw.call('GET', '/memory', query=query)
+            self.assertEqual(page['status'], 200, query)
+            self.assertIn('我的资料', page['body'].decode())
         self.assertEqual(self.raw.call('POST', '/memory')['status'], 405)
 
     def test_wrapper_still_exposes_the_memory_api(self):

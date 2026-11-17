@@ -122,13 +122,15 @@ class SettingsPage:
         return any(path == prefix or path.startswith(prefix + '/') for prefix in self.PREFIXES)
 
     def _query_allowed(self, path, query):
-        # Only the works-library HTML pages may take the recorded view query.
-        # CSS/JS and every other management page still reject QUERY_STRING.
+        # Only recorded HTML query allowlists may pass. CSS/JS and every
+        # other management page still reject QUERY_STRING.
         if not query:
             return True
-        if path not in ('/space', '/artifacts'):
-            return False
-        return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings')
+        if path in ('/space', '/artifacts'):
+            return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings')
+        if path == '/memory':
+            return query in ('page=profile', 'page=todos')
+        return False
 
     def __call__(self, env, start_response):
         path = env.get('PATH_INFO', '')

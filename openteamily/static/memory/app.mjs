@@ -54,6 +54,19 @@ export function formatTopics(topics) {
   return (topics || []).join('，');
 }
 
+export function memoryPageFromSearch(search) {
+  const value = new URLSearchParams(search || '').get('page');
+  if (value === 'profile') return 'profile';
+  if (value === 'todos') return 'actions';
+  return 'overview';
+}
+
+export function queryForMemoryPage(view) {
+  if (view === 'profile') return '?page=profile';
+  if (view === 'actions') return '?page=todos';
+  return '';
+}
+
 export function graphLayout(nodes, width = 640, height = 400, padding = 56) {
   const list = [...(nodes || [])].sort((a, b) => String(a.id).localeCompare(String(b.id)));
   const cx = width / 2;
@@ -200,7 +213,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function showView(name) {
+  function syncPageUrl() {
+    const view = document.defaultView;
+    if (!view || !view.history || !view.history.replaceState) return;
+    const path = (view.location && view.location.pathname) || '/memory';
+    view.history.replaceState({}, '', path + queryForMemoryPage(currentView));
+  }
+
+  function showView(name, {sync = true} = {}) {
     currentView = name || 'overview';
     const workspace = document.getElementById('list-panel');
     if (workspace) workspace.dataset.view = currentView;
@@ -221,6 +241,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (button.getAttribute('data-view') === currentView) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     }
+    if (sync) syncPageUrl();
   }
 
   function unusedTitle(base) {
@@ -606,7 +627,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('action-filter').addEventListener('change', () => loadActions());
 
   for (const button of document.querySelectorAll('.memory-views [data-view]')) {
-    button.addEventListener('click', () => showView(button.getAttribute('data-view')));
+    button.addEventListener('click', (event) => {
+      if (button.tagName === 'A') event.preventDefault();
+      showView(button.getAttribute('data-view'));
+    });
+  }
+  const memoryWindow = document.defaultView;
+  if (memoryWindow && memoryWindow.addEventListener) {
+    memoryWindow.addEventListener('popstate', () => {
+      showView(memoryPageFromSearch(memoryWindow.location.search), {sync: false});
+    });
   }
   for (const button of document.querySelectorAll('.memory-filters [data-filter]')) {
     button.addEventListener('click', () => {
@@ -658,7 +688,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   if (zoomOut) zoomOut.addEventListener('click', () => { graphZoom = Math.max(0.6, graphZoom - 0.2); renderGraph(currentGraph); });
   if (zoomReset) zoomReset.addEventListener('click', () => { graphZoom = 1; renderGraph(currentGraph); });
 
-  showView('overview');
+  const initialSearch = document.defaultView && document.defaultView.location
+    ? document.defaultView.location.search
+    : '';
+  showView(memoryPageFromSearch(initialSearch), {sync: false});
 
   document.getElementById('new-page').addEventListener('click', async () => {
     const id = workspaceId();

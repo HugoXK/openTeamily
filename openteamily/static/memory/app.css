@@ -284,3 +284,38 @@ textarea {
 #page-links button {
   width: auto;
 }
+
+.memory-page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 0 0.85rem;
+}
+
+.memory-page-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.memory-page-head button[disabled] {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.memory-profile-section {
+  margin: 0 0 1.25rem;
+}
+
+.memory-profile-section h3 {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 650;
+}
+
+.memory-profile-empty {
+  margin: 0;
+  color: var(--ot-muted);
+  font-size: 0.9rem;
+}

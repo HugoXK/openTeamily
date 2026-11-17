@@ -89,9 +89,9 @@
           <div id="topic-filter-chips"></div>
         </div>
         <nav class="memory-views" aria-label="记忆视图">
-          <button type="button" data-view="overview" aria-current="page">总览</button>
-          <button type="button" data-view="profile">我的资料</button>
-          <button type="button" data-view="actions">下一步行动</button>
+          <a href="/memory" data-view="overview" aria-current="page">总览</a>
+          <a href="/memory?page=profile" data-view="profile">我的资料</a>
+          <a href="/memory?page=todos" data-view="actions">下一步行动</a>
           <a href="/space">我的作品</a>
           <button type="button" data-view="meetings">我的会议</button>
         </nav>
@@ -123,8 +123,11 @@
         <p id="recent-empty" class="note" hidden>还没有最近更新。</p>
       </aside>
       <section id="actions-panel" hidden>
-        <h2>下一步行动</h2>
-        <p class="note">对照里这一页当时只看到加载文案，没有完整版式。这里继续用已有的行动列表和编辑接口，不能当成版式对等。</p>
+        <header class="memory-page-head">
+          <h2>下一步行动</h2>
+          <button type="button" id="dream-actions" disabled title="未实现：对照里未点开「做梦」。OpenTeamily 还没有整理记忆的接口。">做梦</button>
+        </header>
+        <p id="action-empty" class="note" hidden>当前没有可预期的事项。</p>
         <label>筛选
           <select id="action-filter">
             <option value="open" selected>未完成</option>
@@ -133,7 +136,6 @@
           </select>
         </label>
         <ul id="action-list"></ul>
-        <p id="action-empty" class="note" hidden>这个工作区还没有符合筛选的下一步行动。</p>
         <form id="new-action-form">
           <label>标题 <input id="new-action-title" name="title" type="text" maxlength="80" required autocomplete="off"></label>
           <label>备注 <input id="new-action-notes" name="notes" type="text" maxlength="2000" autocomplete="off"></label>
@@ -147,8 +149,23 @@
         </form>
       </section>
       <section id="profile-panel" hidden>
-        <h2>我的资料</h2>
-        <p class="note">未实现：对照里这一页当时只看到「正在为你勾勒画像 / 正在个性化你的洞察」，没有完整版式。OpenTeamily 还没有画像接口，不能保存。</p>
+        <header class="memory-page-head">
+          <h2>我的资料</h2>
+          <button type="button" id="dream-profile" disabled title="未实现：对照里未点开「做梦」。OpenTeamily 还没有整理记忆的接口。">做梦</button>
+        </header>
+        <p class="note">未接通：对照里这一页是可编辑的画像正文，但 OpenTeamily 还没有画像接口，不能保存。下面只摆出已记录的三个小节标题，没有写入对照账户里的正文。</p>
+        <article class="memory-profile-section">
+          <h3>Professional Profile</h3>
+          <p class="memory-profile-empty">还没有这份画像。</p>
+        </article>
+        <article class="memory-profile-section">
+          <h3>Work Style</h3>
+          <p class="memory-profile-empty">还没有这份画像。</p>
+        </article>
+        <article class="memory-profile-section">
+          <h3>Communication &amp; Writing Style</h3>
+          <p class="memory-profile-empty">还没有这份画像。</p>
+        </article>
       </section>
       <section id="meetings-panel" hidden>
         <h2>我的会议</h2>

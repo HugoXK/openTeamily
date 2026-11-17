@@ -590,6 +590,53 @@ async function main() {
     );
     screenshots.push(path.basename(await shot(page, outDir, '29-memory-actions.png')));
     try {
+      await page.goto(`${origin}/memory?page=profile`, { waitUntil: 'load' });
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+      await selectWorkspace(page, ready.workspace_name);
+      await page.locator('#profile-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const profileView = await visibleText(page.locator('#profile-panel'));
+      record(
+        'memory_profile_layout',
+        profileView.includes('我的资料')
+          && profileView.includes('Professional Profile')
+          && profileView.includes('Work Style')
+          && profileView.includes('Communication & Writing Style')
+          && profileView.includes('还没有这份画像')
+          && profileView.includes('未接通')
+          && await page.locator('#dream-profile').isDisabled()
+          && !profileView.includes('Develops and maintains software')
+          && !/积分|套餐|升级/.test(profileView),
+        profileView || 'memory profile empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '42-memory-profile.png')));
+    } catch (error) {
+      record('memory_profile_layout', false, String(error));
+    }
+    try {
+      await page.goto(`${origin}/memory?page=todos`, { waitUntil: 'load' });
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+      await selectWorkspace(page, ready.empty_workspace_name);
+      await page.locator('#actions-panel').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#action-empty').waitFor({ state: 'visible', timeout: 8000 });
+      const todosEmpty = await visibleText(page.locator('#actions-panel'));
+      record(
+        'memory_todos_empty',
+        todosEmpty.includes('下一步行动')
+          && todosEmpty.includes('当前没有可预期的事项。')
+          && await page.locator('#dream-actions').isDisabled()
+          && !todosEmpty.includes(ready.action_title)
+          && !/积分|套餐|升级/.test(todosEmpty),
+        todosEmpty || 'memory todos empty missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '43-memory-todos-empty.png')));
+    } catch (error) {
+      record('memory_todos_empty', false, String(error));
+    }
+    await page.goto(`${origin}/memory`, { waitUntil: 'load' });
+    await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await selectWorkspace(page, ready.workspace_name);
+    await waitForLocatorText(page, '#memory-list', ready.memory_title);
+    try {
       const initials = String(ready.username || '').slice(0, 2).toUpperCase();
       await page.locator('#account-menu-button').click();
       await page.locator('#account-menu').waitFor({ state: 'visible', timeout: 8000 });
