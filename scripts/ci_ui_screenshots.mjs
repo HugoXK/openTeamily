@@ -86,6 +86,40 @@ async function waitForLocatorText(page, selector, expected, timeout = 15000) {
   );
 }
 
+
+async function writeSendShortcut(page, value) {
+  const result = await page.evaluate(async (value) => {
+    const token = document.cookie.split(/;\s*/).map((part) => part.split('=')).find((pair) => (
+      pair[0] === '__Host-ot_csrf' || pair[0] === 'ot_dev_csrf'
+    ));
+    const current = await (await fetch('/v1/settings', {
+      credentials: 'same-origin',
+      headers: {Accept: 'application/json'},
+    })).json();
+    const response = await fetch('/v1/settings', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': token ? token[1] : '',
+      },
+      body: JSON.stringify({
+        revision: current.settings && current.settings.revision,
+        changes: {send_shortcut: value},
+      }),
+    });
+    const body = await response.json();
+    return {
+      status: response.status,
+      value: body.settings && body.settings.values && body.settings.values.send_shortcut,
+    };
+  }, value);
+  if (result.status !== 200 || result.value !== value) {
+    throw new Error(`failed to store send_shortcut=${value}: ${JSON.stringify(result)}`);
+  }
+}
+
 async function selectWorkspace(page, name) {
   const picker = page.locator('#workspace');
   if (!(await picker.count())) return false;
@@ -456,9 +490,14 @@ async function main() {
       const enterText = '[CI FIXTURE] Enter shortcut send.';
       const socialUrl = `${origin}/chat#workspace=${ready.workspace_id}&social=${ready.social_group_id}`;
       await page.goto(`${origin}/space`, {waitUntil: 'load'});
+      await writeSendShortcut(page, 'enter');
       await page.goto(socialUrl, {waitUntil: 'load'});
       await waitForLocatorText(page, '#chat-title', ready.social_group_title, 20000);
       await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
+      const storedShortcut = await page.locator('#chat-body').getAttribute('data-send-shortcut');
+      if (storedShortcut !== 'enter') {
+        throw new Error(`chat composer did not load send_shortcut=enter: ${storedShortcut}`);
+      }
       await page.locator('#chat-body').click();
       await page.locator('#chat-body').fill(enterText);
       await page.keyboard.press('Enter');
@@ -486,6 +525,7 @@ async function main() {
       record('chat_send_enter_shortcut', false, String(error));
     } finally {
       try {
+        await writeSendShortcut(page, 'mod_enter');
         await page.goto(`${origin}/space`, {waitUntil: 'load'});
         await page.goto(chatUrl, {waitUntil: 'load'});
         await waitForLocatorText(page, '#chat-title', ready.agent_name, 20000);
