@@ -29,6 +29,12 @@ export const FEED_CATEGORIES = [
   '短剧', '文章', '教程', '看板', '行情', '小程序', '故事', '娱乐', 'AI 与科技', '美容',
 ];
 
+export const CATALOG_CATEGORIES = [
+  'Content Creation', 'Customer Support', 'Data Analysis', 'Design',
+  'Education', 'Engineering', 'Finance', 'IT & Security', 'Investment',
+  'Legal', 'Life', 'Marketing',
+];
+
 export const FEED_ACTIVITY_NOTE = '动态信息流还没有接口，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。';
 export const FEED_FOLLOWING_EMPTY_TITLE = '关注列表暂无动态';
 export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显示在这里。';

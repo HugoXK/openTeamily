@@ -1417,7 +1417,26 @@ async function main() {
       const catalogWidth = await page.locator('#main-panel').evaluate(node => node.getBoundingClientRect().width);
       record('discover_layout', geometry && catalogWidth > 900,
         `nonoverlap=${geometry}; panelWidth=${catalogWidth}`);
+      const catalogChrome = `${await visibleText(page.locator('#catalog-view'))}`;
+      const creatorText = `${await visibleText(page.locator('#catalog-creator'))}`;
+      const currentChip = `${(await page.locator('.catalog-filters [aria-current="true"]').textContent()) || ''}`;
+      record(
+        'discover_catalog_filters',
+        currentChip.includes('全部')
+          && catalogChrome.includes('Content Creation')
+          && catalogChrome.includes('Marketing')
+          && catalogChrome.includes('创建者')
+          && await page.locator('.catalog-filters button:disabled').count() >= 15
+          && await page.locator('#catalog-filter-search').isDisabled()
+          && await page.locator('#catalog-filter-more').isDisabled()
+          && await page.locator('#catalog-creator').isDisabled()
+          && creatorText.includes('创建者')
+          && !/Teamily AI|teamily\.ai|积分|CREDITS/i.test(creatorText)
+          && !/60 个智能体/.test(catalogChrome),
+        `${creatorText} | ${catalogChrome.slice(0, 280) || 'catalog filters empty'}`,
+      );
       screenshots.push(path.basename(await shot(page, outDir, '56-discover-catalog.png')));
+      screenshots.push(path.basename(await shot(page, outDir, '72-discover-catalog-filters.png')));
       await page.locator('#catalog-more').click();
       await waitForLocatorText(page, '#catalog-count', '13 个智能体');
       record('discover_pagination', await page.locator('#discover-list article').count() === 13

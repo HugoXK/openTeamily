@@ -131,8 +131,26 @@ class DiscoverCatalogPageTests(unittest.TestCase):
             self.assertEqual(page['status'], 200)
             text = page['body'].decode()
             for marker in ('id="catalog-query"', 'id="catalog-more"', 'id="catalog-count"',
-                           'id="catalog-manage" hidden', 'AI 团队（未接通）', 'id="feed-panel"'):
-                self.assertIn(marker, text)
+                           'id="catalog-manage" hidden', 'AI 团队（未接通）', 'id="feed-panel"',
+                           'id="catalog-filter-search"', 'id="catalog-filter-more"',
+                           'id="catalog-creator"', 'aria-label="搜索分类"', 'aria-label="更多分类"',
+                           '分类和创建者筛选未接通：公共目录没有对应字段。'):
+                self.assertIn(marker, text, marker)
+            filters = text.split('class="catalog-filters"', 1)[1].split('id="catalog-panel"', 1)[0]
+            categories = [
+                '全部', 'Content Creation', 'Customer Support', 'Data Analysis', 'Design',
+                'Education', 'Engineering', 'Finance', 'IT &amp; Security', 'Investment',
+                'Legal', 'Life', 'Marketing',
+            ]
+            positions = [filters.index('>' + label + '<') for label in categories]
+            self.assertEqual(positions, sorted(positions))
+            self.assertIn('aria-current="true"', filters.split('>全部<', 1)[0].rsplit('<button', 1)[1])
+            self.assertGreaterEqual(filters.count(' disabled '), 15)
+            creator = filters.split('id="catalog-creator"', 1)[1].split('</button>', 1)[0]
+            self.assertIn('disabled', creator)
+            self.assertIn('创建者', creator)
+            self.assertNotRegex(creator, r'(?i)teamily|积分|credits')
+            self.assertIn('class="visually-hidden"', filters.split('id="catalog-filter-note"', 1)[1].split('>', 1)[0])
             self.assertNotIn('href="/d/', text)
             for query in ('tab=teams', 'tab=agents&x=1', 'q=test', 'tab=agents&tab=agents'):
                 self.assertEqual(case.raw.call('GET', '/discover', query=query)['status'], 400)

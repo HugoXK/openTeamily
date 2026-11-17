@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { validSlug, catalogItems, agentDiscoverPairs, isAgentsCatalog, FEED_CATEGORIES, FEED_ACTIVITY_NOTE, FEED_FOLLOWING_EMPTY_TITLE, FEED_FOLLOWING_EMPTY_BODY, FEED_FOLLOWING_NOTE, FEED_SEARCH_NOTE } from '../openteamily/static/discover/app.mjs';
+import { readFileSync } from 'node:fs';
+import { validSlug, catalogItems, agentDiscoverPairs, isAgentsCatalog, FEED_CATEGORIES, CATALOG_CATEGORIES, FEED_ACTIVITY_NOTE, FEED_FOLLOWING_EMPTY_TITLE, FEED_FOLLOWING_EMPTY_BODY, FEED_FOLLOWING_NOTE, FEED_SEARCH_NOTE } from '../openteamily/static/discover/app.mjs';
 
 test('validSlug mirrors the server slug rule', () => {
   assert.equal(validSlug('on-call'), true);
@@ -25,6 +26,38 @@ test('recorded feed categories stay in the captured order', () => {
     '热门', '网页', '小游戏', '图片', '音乐', '幻灯片', '视频', '3D 作品',
     '短剧', '文章', '教程', '看板', '行情', '小程序', '故事', '娱乐', 'AI 与科技', '美容',
   ]);
+});
+
+test('recorded catalog categories stay in the captured order', () => {
+  assert.deepEqual(CATALOG_CATEGORIES, [
+    'Content Creation', 'Customer Support', 'Data Analysis', 'Design',
+    'Education', 'Engineering', 'Finance', 'IT & Security', 'Investment',
+    'Legal', 'Life', 'Marketing',
+  ]);
+});
+
+test('catalog filter chrome is present, disabled, and does not copy Teamily branding', () => {
+  const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
+  const block = html.split('class="catalog-filters"')[1].split('id="catalog-panel"')[0];
+  assert.match(block, /aria-current="true"[^>]*>全部</);
+  for (const label of CATALOG_CATEGORIES) {
+    const encoded = label.replaceAll('&', '&amp;');
+    assert.match(block, new RegExp(`disabled title="未接通：公共目录没有分类字段。">${encoded}<`));
+  }
+  const order = ['全部', ...CATALOG_CATEGORIES.map((label) => label.replaceAll('&', '&amp;'))];
+  const positions = order.map((label) => block.indexOf(`>${label}<`));
+  assert.equal(positions.every((index) => index !== -1), true);
+  assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
+  assert.match(block, /id="catalog-filter-search"[^>]*disabled[^>]*aria-label="搜索分类"/);
+  assert.match(block, /id="catalog-filter-more"[^>]*disabled[^>]*aria-label="更多分类"/);
+  assert.match(block, /对照里可以看到搜索分类控件，但没有打开面板，所以这里不发明搜索弹层。/);
+  assert.match(block, /对照里未展开其余分类，所以这里不发明更多分类。/);
+  const creator = block.match(/id="catalog-creator"[\s\S]*?<\/button>/)[0];
+  assert.match(creator, /disabled/);
+  assert.match(creator, /创建者/);
+  assert.equal(/teamily|积分|credits/i.test(creator), false);
+  assert.match(block, /id="catalog-filter-note" class="visually-hidden"/);
+  assert.match(block, /分类和创建者筛选未接通：公共目录没有对应字段。/);
 });
 
 test('catalogItems tolerates missing bodies', () => {
