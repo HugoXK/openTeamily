@@ -1,0 +1,50 @@
+"""Feature guide page serving tests. In-process WSGI only; not browser E2E."""
+from pathlib import Path
+import tempfile
+import unittest
+
+from openteamily.app import App, Config
+from openteamily.settings_page import SettingsPage
+from openteamily.store import Store
+from tests.test_management import Client, ORIGIN
+from tests.test_settings_page import RawClient
+
+
+class GuidePageTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        api = App(Store(Path(self.temp.name) / 'state'), Config(ORIGIN, allow_registration=True),
+                  clock=lambda: 1800000000)
+        self.app = SettingsPage(api)
+        self.raw = RawClient(self.app)
+        self.client = Client(self.app)
+        self.client.register('alice')
+
+    def test_guide_serves_recorded_chrome_and_keeps_an_honest_catalog(self):
+        page = self.raw.call('GET', '/guide')
+        self.assertEqual(page['status'], 200)
+        html = page['body'].decode()
+        self.assertIn('功能指引', html)
+        self.assertIn('id="guide-search"', html)
+        self.assertIn('搜索功能，例如：添加成员', html)
+        self.assertIn('id="view-list"', html)
+        self.assertIn('id="view-graph"', html)
+        self.assertIn('未核实：对照只留下列表视图，没有图谱布局截图。', html)
+        self.assertIn('id="guide-dialog"', html)
+        self.assertIn('操作路径', html)
+        self.assertIn('不复制 Teamily 的指引原文或条数', html)
+        self.assertNotIn('teamily.com', html.lower())
+        self.assertNotIn('折叠会话列表', html)
+        self.assertNotIn('295', html)
+        self.assertEqual(self.raw.call('GET', '/guide/app.mjs')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/guide/app.css')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/guide', query='x=1')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/guide', origin='https://evil.test')['status'], 403)
+        self.assertEqual(self.raw.call('POST', '/guide')['status'], 405)
+        script = self.raw.call('GET', '/guide/app.mjs')['body'].decode()
+        self.assertIn('export const CATALOG', script)
+        self.assertIn('打开聊天', script)
+        self.assertIn('通话窗口', script)
+        self.assertNotIn('折叠会话列表', script)
+        self.assertNotIn('innerHTML', script)
