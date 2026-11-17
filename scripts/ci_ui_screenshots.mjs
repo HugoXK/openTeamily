@@ -451,10 +451,13 @@ async function main() {
 
 
     try {
+      // Leave /chat first: a same-document hash change is not a reliable load.
       // Agent send stays 409 while a reply is queued, so this uses the social thread.
       const enterText = '[CI FIXTURE] Enter shortcut send.';
-      await page.goto(`${origin}/chat#workspace=${ready.workspace_id}&social=${ready.social_group_id}`, {waitUntil: 'load'});
-      await waitForLocatorText(page, '#chat-title', ready.social_group_title);
+      const socialUrl = `${origin}/chat#workspace=${ready.workspace_id}&social=${ready.social_group_id}`;
+      await page.goto(`${origin}/space`, {waitUntil: 'load'});
+      await page.goto(socialUrl, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#chat-title', ready.social_group_title, 20000);
       await page.locator('#chat-body').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#chat-body').click();
       await page.locator('#chat-body').fill(enterText);
@@ -471,14 +474,19 @@ async function main() {
       record(
         'chat_send_enter_shortcut',
         afterEnter.includes(enterText) && composerValue === '' && enterEvent.prevented === true,
-        `prevented=${enterEvent.prevented} composer=${JSON.stringify(composerValue)} ${afterEnter.slice(0, 240) || 'enter send empty'}`,
+        `title=${JSON.stringify(await visibleText(page.locator('#chat-title')))} prevented=${enterEvent.prevented} composer=${JSON.stringify(composerValue)} ${afterEnter.slice(0, 240) || 'enter send empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '61-chat-send-enter.png')));
     } catch (error) {
       record('chat_send_enter_shortcut', false, String(error));
     } finally {
-      await page.goto(chatUrl, {waitUntil: 'load'});
-      await waitForLocatorText(page, '#chat-title', ready.agent_name);
+      try {
+        await page.goto(`${origin}/space`, {waitUntil: 'load'});
+        await page.goto(chatUrl, {waitUntil: 'load'});
+        await waitForLocatorText(page, '#chat-title', ready.agent_name, 20000);
+      } catch (error) {
+        record('chat_send_enter_restore', false, String(error), {soft: true});
+      }
     }
 
     try {
