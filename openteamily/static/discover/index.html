@@ -118,10 +118,32 @@
       </form>
       <a class="catalog-create" href="/agents">+ 创建我的智能体</a>
     </header>
-    <div class="catalog-filters" aria-label="分类">
-      <span aria-current="true">全部</span>
-      <span class="note">分类和创建者筛选未接通：公共目录没有对应字段。</span>
+    <div class="catalog-filters" aria-label="分类" aria-describedby="catalog-filter-note">
+      <button type="button" class="catalog-filter-all" aria-current="true" disabled title="这是未筛选的完整目录。分类筛选未接通：公共目录没有分类字段。">全部</button>
+      <button type="button" disabled title="未接通：公共目录没有分类字段。">Content Creation</button>
+      <button type="button" disabled title="未接通：公共目录没有分类字段。">Customer Support</button>
+      <button type="button" disabled title="未接通：公共目录没有分类字段。">Data Analysis</button>
+      <button type="button" disabled title="未接通：公共目录没有分类字段。">Design</button>
+      <button type="button" disabled title="未接通：公共目录没有分类字段。">Education</button>
+      <button type="button" disabled title="未接通：公共目录没有分类字段。">Engineering</button>
+      <button type="button" disabled title="未接通：公共目录没有分类字段。">Finance</button>
+      <button type="button" disabled title="未接通：公共目录没有分类字段。">IT &amp; Security</button>
+      <button type="button" disabled title="未接通：公共目录没有分类字段。">Investment</button>
+      <button type="button" disabled title="未接通：公共目录没有分类字段。">Legal</button>
+      <button type="button" disabled title="未接通：公共目录没有分类字段。">Life</button>
+      <button type="button" disabled title="未接通：公共目录没有分类字段。">Marketing</button>
+      <button type="button" id="catalog-filter-search" class="catalog-filter-search" disabled aria-label="搜索分类" title="对照里可以看到搜索分类控件，但没有打开面板，所以这里不发明搜索弹层。">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+          <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M10.5 10.5 L14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <button type="button" id="catalog-filter-more" class="catalog-filter-more" disabled aria-label="更多分类" title="对照里未展开其余分类，所以这里不发明更多分类。">›</button>
     </div>
+    <div class="catalog-creator-row">
+      <button type="button" id="catalog-creator" class="catalog-creator" disabled aria-haspopup="listbox" title="未接通：公共目录没有创建者字段。">创建者 <span aria-hidden="true">▾</span></button>
+    </div>
+    <p id="catalog-filter-note" class="visually-hidden">分类和创建者筛选未接通：公共目录没有对应字段。</p>
     <section aria-label="公共目录" id="catalog-panel">
       <h2 class="visually-hidden">公共智能体</h2>
       <p id="catalog-count" role="status" aria-live="polite"></p>
