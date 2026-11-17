@@ -7,6 +7,7 @@ from openteamily.app import App, Config
 from openteamily.ci_ui_fixtures import (
     ACTION_DUE_AT, ACTION_NOTES, ACTION_TITLE, AGENT_NAME, AUTOMATION_TITLE, BOARD_TITLE,
     CHAT_TITLE, CHAT_USER_TEXT, DOCUMENT_TITLE, EMPTY_WORKSPACE_NAME, MEDIA_TITLE,
+    SAVED_MESSAGE_TITLE,
     MEMBER_USERNAME, MEMORY_BODY, MEMORY_TITLE, MEMORY_TOPIC, RUNTIME_KEY_NAME, TEAM_NAME, TEAM_SLUG,
     USERNAME, WEBSITE_TITLE, seed_fixtures, solid_png,
 )
@@ -75,7 +76,10 @@ class CiUiFixtureTests(unittest.TestCase):
         self.assertEqual([row['title'] for row in autos['body']['items']], [AUTOMATION_TITLE])
         artifacts = client.call('GET', f'/v1/workspaces/{wid}/artifacts')
         titles = {row['title'] for row in artifacts['body']['items']}
-        self.assertEqual(titles, {DOCUMENT_TITLE, WEBSITE_TITLE, MEDIA_TITLE, BOARD_TITLE})
+        self.assertEqual(titles, {DOCUMENT_TITLE, WEBSITE_TITLE, MEDIA_TITLE, BOARD_TITLE, SAVED_MESSAGE_TITLE})
+        saved = next(row for row in artifacts['body']['items'] if row['title'] == SAVED_MESSAGE_TITLE)
+        self.assertEqual(saved['source']['conversation_id'], seed['conversation_id'])
+        self.assertEqual(saved['source']['conversation_title'], CHAT_TITLE)
         pages = client.call('GET', f'/v1/workspaces/{wid}/memory')
         self.assertEqual(pages['status'], 200, pages)
         self.assertEqual([row['title'] for row in pages['body']['items']], [MEMORY_TITLE])

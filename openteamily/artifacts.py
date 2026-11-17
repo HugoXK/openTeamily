@@ -144,7 +144,8 @@ ROW_SELECT = (
     's.task_kind AS task_kind, md.mime AS media_mime, md.byte_count AS media_bytes, '
     'md.sha256 AS media_sha256, md.filename AS media_filename, b.board AS board_json, '
     'cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id, '
-    'cs.agent_id AS chat_agent_id '
+    'cs.agent_id AS chat_agent_id, ac.title AS chat_conversation_title, '
+    'sc.title AS social_conversation_title '
     'FROM artifacts a '
     'JOIN users cu ON cu.id=a.created_by '
     'JOIN users uu ON uu.id=a.updated_by '
@@ -153,6 +154,8 @@ ROW_SELECT = (
     'LEFT JOIN artifact_media md ON md.artifact_id=a.id '
     'LEFT JOIN artifact_boards b ON b.artifact_id=a.id '
     'LEFT JOIN artifact_chat_sources cs ON cs.artifact_id=a.id '
+    'LEFT JOIN agent_conversations ac ON ac.id=cs.conversation_id '
+    'LEFT JOIN social_conversations sc ON sc.id=cs.conversation_id '
 )
 
 
@@ -185,6 +188,14 @@ def source_view(row):
         }
         if row['chat_agent_id']:
             data['agent_id'] = row['chat_agent_id']
+        title = ''
+        try:
+            title = row['chat_conversation_title'] or row['social_conversation_title'] or ''
+        except (KeyError, IndexError):
+            pass
+        title = title.strip()
+        if title:
+            data['conversation_title'] = title
         return data
     if not row['source_kind']:
         return None
