@@ -551,12 +551,27 @@ async function main() {
     screenshots.push(path.basename(await shot(page, outDir, '14-runtimes.png')));
     await page.locator('[data-tab="connect"]').click();
     await page.locator('#connect-panel').waitFor({ state: 'visible', timeout: 15000 });
+    const connect = await visibleText(page.locator('#connect-panel'));
     const keys = await visibleText(page.locator('#key-list'));
     const connections = await visibleText(page.locator('#connection-list'));
+    const generateDisabled = await page.locator('#generate-key').isDisabled();
+    const daemonVisible = await page.locator('#daemon-script').isVisible();
+    const daemonText = await visibleText(page.locator('#daemon-command'));
+    const unixInstall = await visibleText(page.locator('#install-unix'));
+    record(
+      'runtimes_connect_layout',
+      connect.includes('连接一台机器') && connect.includes('生成 API key') && connect.includes('设备 ID') && connect.includes('macOS / Linux') && connect.includes('Windows') && connect.includes('Never') && generateDisabled && !/积分|套餐|升级/.test(connect) && !connect.toLowerCase().includes('teamily.com') && !unixInstall.includes('curl -fsSL'),
+      connect.slice(0, 400) || 'connect panel empty',
+    );
     record(
       'runtimes_connect_key_prefix_only',
       keys.includes(ready.runtime_key_name) && keys.includes('…') && !(await page.locator('#issued-token').isVisible()),
       keys || 'key list empty',
+    );
+    record(
+      'runtimes_connect_daemon_after_key',
+      daemonVisible && daemonText.includes('python3 flybot.pyz daemon start') && daemonText.includes(origin) && !(await page.locator('#daemon-pending').isVisible()),
+      daemonText || 'daemon command hidden',
     );
     record(
       'runtimes_connection',
@@ -565,6 +580,21 @@ async function main() {
       { soft: true },
     );
     screenshots.push(path.basename(await shot(page, outDir, '15-runtimes-connect.png')));
+    try {
+      await page.locator('.os-tabs [data-os="windows"]').click();
+      await page.locator('#install-windows').waitFor({ state: 'visible', timeout: 8000 });
+      const windowsInstall = await visibleText(page.locator('#install-windows'));
+      const lang = await visibleText(page.locator('#install-lang'));
+      record(
+        'runtimes_connect_windows_install',
+        lang.includes('powershell') && windowsInstall.includes('/install/flybot.pyz') && windowsInstall.includes('Invoke-WebRequest') && !windowsInstall.toLowerCase().includes('install.ps1') && !windowsInstall.toLowerCase().includes('teamily'),
+        windowsInstall || 'windows install missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '40-runtimes-connect-windows.png')));
+      await page.locator('.os-tabs [data-os="unix"]').click();
+    } catch (error) {
+      record('runtimes_connect_windows_install', false, String(error));
+    }
 
     await page.goto(`${origin}/memory`, { waitUntil: 'load' });
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });

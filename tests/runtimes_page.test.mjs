@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { installCommands, listItemHasSecret, readKeyForm, summarizeConnections } from '../openteamily/static/runtimes/app.mjs';
+import { canIssueKey, installCommands, listItemHasSecret, readKeyForm, summarizeConnections } from '../openteamily/static/runtimes/app.mjs';
 
 test('readKeyForm omits expiry when never is selected', () => {
   const values = {name: ' Laptop ', expires: 'never'};
@@ -14,6 +14,12 @@ test('readKeyForm omits expiry when never is selected', () => {
   } finally {
     globalThis.FormData = original;
   }
+});
+
+test('canIssueKey enables generate only when a name is present', () => {
+  assert.equal(canIssueKey(''), false);
+  assert.equal(canIssueKey('   '), false);
+  assert.equal(canIssueKey('MacBook CLI'), true);
 });
 
 test('install commands use the current origin and FlyBot names', () => {

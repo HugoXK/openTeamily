@@ -13,6 +13,10 @@ export function readKeyForm(form) {
   return body;
 }
 
+export function canIssueKey(name) {
+  return Boolean((name || '').trim());
+}
+
 export function installCommands(origin) {
   const base = (origin || '').replace(/\/$/, '');
   return {
@@ -124,13 +128,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     }
   }
 
+  function hasUsableKey(items) {
+    return (items || []).some((item) => item && !item.revoked && !listItemHasSecret(item));
+  }
+
+  function renderKeyDependent(items) {
+    const usable = hasUsableKey(items);
+    const pending = document.getElementById('daemon-pending');
+    const script = document.getElementById('daemon-script');
+    const apiBlock = document.getElementById('api-key-script-block');
+    if (pending) pending.hidden = usable;
+    if (script) script.hidden = !usable;
+    if (apiBlock) apiBlock.hidden = usable;
+  }
+
   function renderKeys(items) {
     const list = document.getElementById('key-list');
     const empty = document.getElementById('keys-empty');
+    const rows = (items || []).filter((item) => !listItemHasSecret(item));
     list.textContent = '';
-    empty.hidden = items.length > 0;
-    for (const item of items) {
-      if (listItemHasSecret(item)) continue;
+    if (empty) empty.hidden = rows.length > 0;
+    for (const item of rows) {
       const row = document.createElement('li');
       const meta = document.createElement('span');
       const state = item.revoked ? '已撤销' : formatExpiry(item.expires);
@@ -145,6 +163,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
       }
       list.appendChild(row);
     }
+    renderKeyDependent(rows);
   }
 
   async function revokeKey(item) {
@@ -224,7 +243,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
       show('error', messageFor(listed.body.error, '无法读取运行时密钥。'));
       return;
     }
-    document.getElementById('device-id').textContent = listed.body.device_id || '';
+    const device = document.getElementById('device-id');
+    if (device) {
+      const value = listed.body.device_id || '';
+      if ('value' in device) device.value = value;
+      else device.textContent = value;
+    }
     renderKeys(listed.body.items || []);
     const connections = await request('GET', '/v1/runtime/connections');
     if (connections.status === 200) renderConnections(connections.body.items || []);
@@ -274,10 +298,59 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     detectButton.addEventListener('click', () => detectRuntimes());
   }
 
+  function syncGenerateButton() {
+    const input = document.getElementById('key-name') || document.querySelector('#key-form [name="name"]');
+    const button = document.getElementById('generate-key');
+    if (button) button.disabled = !canIssueKey(input && input.value);
+  }
+  const keyName = document.getElementById('key-name') || document.querySelector('#key-form [name="name"]');
+  if (keyName) {
+    keyName.addEventListener('input', syncGenerateButton);
+    keyName.addEventListener('change', syncGenerateButton);
+  }
+  syncGenerateButton();
+
+  let installOs = 'unix';
+  function showInstallOs(name) {
+    installOs = name === 'windows' ? 'windows' : 'unix';
+    const unix = document.getElementById('install-unix');
+    const windows = document.getElementById('install-windows');
+    const lang = document.getElementById('install-lang');
+    if (unix) unix.hidden = installOs !== 'unix';
+    if (windows) windows.hidden = installOs !== 'windows';
+    if (lang) lang.textContent = installOs === 'windows' ? 'powershell' : 'shell';
+    for (const button of document.querySelectorAll('.os-tabs [data-os]')) {
+      button.setAttribute('aria-selected', button.getAttribute('data-os') === installOs ? 'true' : 'false');
+    }
+  }
+  for (const button of document.querySelectorAll('.os-tabs [data-os]')) {
+    button.addEventListener('click', () => showInstallOs(button.getAttribute('data-os')));
+  }
+  const copyInstall = document.getElementById('copy-install');
+  if (copyInstall) {
+    copyInstall.addEventListener('click', async () => {
+      const unix = document.getElementById('install-unix');
+      const windows = document.getElementById('install-windows');
+      const text = ((installOs === 'windows' ? windows : unix) && (installOs === 'windows' ? windows : unix).textContent) || '';
+      if (!text) return;
+      try {
+        if (!navigator.clipboard || !navigator.clipboard.writeText) {
+          show('error', '这个浏览器不能复制到剪贴板，请手动复制命令。');
+          return;
+        }
+        await navigator.clipboard.writeText(text);
+        show('ok', '已复制安装命令。');
+      } catch {
+        show('error', '无法复制，请手动复制命令。');
+      }
+    });
+  }
+
   document.getElementById('key-form').addEventListener('submit', async event => {
     event.preventDefault();
     const values = readKeyForm(event.currentTarget);
-    if (!values.name) {
+    if (!canIssueKey(values.name)) {
+      syncGenerateButton();
       show('error', '请填写密钥名称。');
       return;
     }
@@ -292,6 +365,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
       ? `密钥只显示一次：${result.body.token}`
       : '已生成密钥，但响应里没有令牌。';
     event.currentTarget.reset();
+    syncGenerateButton();
     show('ok', '已生成密钥。完整密钥只显示这一次，列表只保留前缀。');
     await loadKeys();
   });
