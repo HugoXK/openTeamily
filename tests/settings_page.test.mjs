@@ -63,6 +63,9 @@ test('settingsViewFromLocation maps recorded paths and leftover hashes', () => {
   assert.equal(settingsViewFromLocation('/settings/message-folding', ''), 'message-folding');
   assert.equal(settingsViewFromLocation('/settings/privacy', ''), 'privacy');
   assert.equal(settingsViewFromLocation('/settings/shortcuts', ''), 'shortcuts');
+  assert.equal(settingsViewFromLocation('/settings/channels', ''), 'channels');
+  assert.equal(settingsViewFromLocation('/settings/agent-access', ''), 'agent-access');
+  assert.equal(settingsViewFromLocation('/settings/connectors', ''), 'connectors');
   assert.equal(settingsViewFromLocation('/settings', '#appearance'), 'appearance');
   assert.equal(settingsViewFromLocation('/settings', '#language-section'), 'language');
   assert.equal(settingsViewFromLocation('/settings', '#send-shortcut'), 'shortcuts');
