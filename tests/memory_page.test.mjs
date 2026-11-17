@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {actionQuery, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, formatTopics, graphLayout, listQuery, memoryPageFromSearch, memoryUpdatedLabel, parseTopics, queryForMemoryPage} from '../openteamily/static/memory/app.mjs';
+import {actionQuery, applyDirectoryCollapsed, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, formatTopics, graphLayout, listQuery, memoryPageFromSearch, memoryUpdatedLabel, parseTopics, queryForMemoryPage} from '../openteamily/static/memory/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -89,4 +89,50 @@ test('directoryGroups still groups from page topics when the catalog is empty', 
   assert.deepEqual(grouped.groups.map((group) => [group.name, group.count, group.pages.map((page) => page.id)]), [
     ['Planning', 1, ['n1']],
   ]);
+});
+
+test('applyDirectoryCollapsed hides the directory in session only', () => {
+  const nodes = {};
+  const el = (id, extra = {}) => {
+    const node = {
+      id,
+      hidden: false,
+      className: '',
+      attributes: {},
+      classList: {
+        toggle(name, on) {
+          const parts = new Set((node.className || '').split(/\s+/).filter(Boolean));
+          if (on) parts.add(name);
+          else parts.delete(name);
+          node.className = [...parts].join(' ');
+        },
+      },
+      setAttribute(key, value) {
+        node.attributes[key] = value;
+      },
+      getAttribute(key) {
+        return node.attributes[key];
+      },
+    };
+    Object.assign(node, extra);
+    nodes[id] = node;
+    return node;
+  };
+  el('list-panel');
+  el('memory-dir');
+  el('dir-collapse', {attributes: {'aria-expanded': 'true'}});
+  el('dir-expand', {hidden: true});
+  const root = {getElementById: (id) => nodes[id] || null};
+
+  assert.equal(applyDirectoryCollapsed(root, true), true);
+  assert.equal(nodes['memory-dir'].hidden, true);
+  assert.equal(nodes['dir-expand'].hidden, false);
+  assert.equal(nodes['list-panel'].className.includes('dir-collapsed'), true);
+  assert.equal(nodes['dir-collapse'].getAttribute('aria-expanded'), 'false');
+
+  assert.equal(applyDirectoryCollapsed(root, false), false);
+  assert.equal(nodes['memory-dir'].hidden, false);
+  assert.equal(nodes['dir-expand'].hidden, true);
+  assert.equal(nodes['list-panel'].className.includes('dir-collapsed'), false);
+  assert.equal(nodes['dir-collapse'].getAttribute('aria-expanded'), 'true');
 });

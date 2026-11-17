@@ -106,6 +106,19 @@ export function directoryGroups(pages, topicCatalog) {
   return {groups, ungrouped: rows.filter((page) => !used.has(page.id))};
 }
 
+export function applyDirectoryCollapsed(root, collapsed) {
+  const next = Boolean(collapsed);
+  const dir = root.getElementById('memory-dir');
+  const workspace = root.getElementById('list-panel');
+  const collapse = root.getElementById('dir-collapse');
+  const expand = root.getElementById('dir-expand');
+  if (workspace) workspace.classList.toggle('dir-collapsed', next);
+  if (dir) dir.hidden = next;
+  if (collapse) collapse.setAttribute('aria-expanded', next ? 'false' : 'true');
+  if (expand) expand.hidden = !next;
+  return next;
+}
+
 export function memoryPageFromSearch(search) {
   const value = new URLSearchParams(search || '').get('page');
   if (value === 'profile') return 'profile';
@@ -763,13 +776,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (recentEmpty) recentEmpty.hidden = sideTab !== 'recent' || pageChoices.length > 0;
     });
   }
-  const dirToggle = document.getElementById('toggle-dir');
-  if (dirToggle) {
-    dirToggle.addEventListener('click', () => {
-      const workspace = document.getElementById('list-panel');
-      if (!workspace) return;
-      const collapsed = workspace.classList.toggle('dir-collapsed');
-      dirToggle.textContent = collapsed ? '展开目录' : '收起目录';
+  const collapseButton = document.getElementById('dir-collapse');
+  const expandButton = document.getElementById('dir-expand');
+  if (collapseButton) {
+    collapseButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      applyDirectoryCollapsed(document, true);
+    });
+  }
+  if (expandButton) {
+    expandButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      applyDirectoryCollapsed(document, false);
     });
   }
   const topicSearch = document.getElementById('topic-search');

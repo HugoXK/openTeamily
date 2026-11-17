@@ -30,30 +30,6 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   margin: 0 0 0.45rem;
 }
 
-.memory-top-start {
-  display: flex;
-  align-items: baseline;
-  gap: 0.7rem;
-  min-width: 0;
-}
-
-.memory-top h1,
-#view-title {
-  margin: 0;
-  font-size: 1.05rem;
-  font-weight: 650;
-}
-
-#view-title {
-  color: var(--ot-muted);
-  font-weight: 550;
-}
-
-#toggle-dir {
-  padding: 0.2rem 0.55rem;
-  font-size: 0.8rem;
-}
-
 .workspace-picker {
   margin-left: auto;
   display: flex;
@@ -86,19 +62,24 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 }
 
 .memory-workspace.dir-collapsed {
-  grid-template-columns: 0 minmax(0, 1fr) 16.5rem;
+  grid-template-columns: minmax(0, 1fr) 16.5rem;
 }
 
 .memory-workspace.dir-collapsed[data-view="actions"],
 .memory-workspace.dir-collapsed[data-view="profile"],
 .memory-workspace.dir-collapsed[data-view="meetings"] {
-  grid-template-columns: 0 minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 
-.memory-workspace.dir-collapsed .memory-dir {
-  overflow: hidden;
-  visibility: hidden;
-  pointer-events: none;
+.memory-workspace.dir-collapsed .memory-center,
+.memory-workspace.dir-collapsed #actions-panel,
+.memory-workspace.dir-collapsed #profile-panel,
+.memory-workspace.dir-collapsed #meetings-panel {
+  grid-column: 1;
+}
+
+.memory-workspace.dir-collapsed .memory-side {
+  grid-column: 2;
 }
 
 .memory-dir,
@@ -121,30 +102,163 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   gap: 0.65rem;
 }
 
-#new-page {
-  width: 100%;
-  justify-content: center;
+.dir-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
-.memory-filters,
-.memory-views,
+.dir-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.dir-collapse,
+.dir-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  min-width: 1.85rem;
+  height: 1.85rem;
+  padding: 0;
+  border-radius: 0.45rem;
+  font: inherit;
+  line-height: 0;
+}
+
+.dir-expand {
+  width: auto;
+  min-width: 0;
+  height: auto;
+  padding: 0.28rem 0.65rem;
+  border-radius: 999px;
+}
+
+#new-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 0.55rem 0.85rem;
+  background: var(--ot-accent);
+  color: var(--ot-surface);
+  border-color: transparent;
+}
+
+.dir-search {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.memory-filters {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.memory-filters button {
+  width: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  color: var(--ot-muted);
+  font: inherit;
+}
+
+.memory-filters button[aria-pressed="true"] {
+  color: var(--ot-ink);
+  font-weight: 650;
+}
+
+.memory-filters button:hover {
+  background: transparent;
+  color: var(--ot-ink);
+}
+
+.filter-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  margin-left: 0.15rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--ot-accent);
+  color: var(--ot-surface);
+  font-size: 0.7rem;
+  font-weight: 650;
+  line-height: 1;
+}
+
+.filter-caret {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.memory-views {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.15rem;
+}
+
+.memory-views a,
+.memory-views button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 0;
+  border-radius: 0.65rem;
+  background: transparent;
+  text-decoration: none;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+
+.view-icon {
+  display: inline-flex;
+  color: var(--ot-muted);
+}
+
+.memory-views a[aria-current="page"],
+.memory-views button[aria-current="page"] {
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+}
+
+.memory-views a[aria-current="page"] .view-icon,
+.memory-views button[aria-current="page"] .view-icon {
+  color: inherit;
+}
+
+.memory-views a:hover,
+.memory-views button:hover {
+  background: var(--ot-bg-accent);
+  color: var(--ot-ink);
+}
+
+.memory-views a[aria-current="page"]:hover,
+.memory-views button[aria-current="page"]:hover {
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+}
+
 .side-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
 }
 
-.memory-filters button[aria-pressed="true"],
-.memory-views a[aria-current="page"],
-.memory-views button[aria-current="page"],
-.side-tabs button[aria-selected="true"] {
-  background: var(--ot-accent);
-  color: #fff;
-}
-
-.memory-views a,
-.memory-views button,
-.memory-filters button,
 .side-tabs button {
   width: auto;
   padding: 0.28rem 0.55rem;
@@ -154,17 +268,16 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   font: inherit;
 }
 
-.memory-views a:hover,
-.memory-views button:hover,
-.memory-filters button:hover,
+.side-tabs button[aria-selected="true"] {
+  background: var(--ot-accent);
+  color: #fff;
+}
+
 .side-tabs button:hover {
   background: var(--ot-line);
   color: var(--ot-ink);
 }
 
-.memory-views a[aria-current="page"]:hover,
-.memory-views button[aria-current="page"]:hover,
-.memory-filters button[aria-pressed="true"]:hover,
 .side-tabs button[aria-selected="true"]:hover {
   background: var(--ot-accent);
   color: #fff;
@@ -370,12 +483,22 @@ textarea {
 
 html[data-theme-resolved="dark"] .memory-views a[aria-current="page"],
 html[data-theme-resolved="dark"] .memory-views button[aria-current="page"],
-html[data-theme-resolved="dark"] .memory-filters button[aria-pressed="true"],
-html[data-theme-resolved="dark"] .side-tabs button[aria-selected="true"],
 html[data-theme-resolved="dark"] .memory-views a[aria-current="page"]:hover,
-html[data-theme-resolved="dark"] .memory-views button[aria-current="page"]:hover,
-html[data-theme-resolved="dark"] .memory-filters button[aria-pressed="true"]:hover,
+html[data-theme-resolved="dark"] .memory-views button[aria-current="page"]:hover {
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+}
+
+html[data-theme-resolved="dark"] .side-tabs button[aria-selected="true"],
 html[data-theme-resolved="dark"] .side-tabs button[aria-selected="true"]:hover {
   background: var(--ot-accent);
+  color: #1c1917;
+}
+
+html[data-theme-resolved="dark"] #new-page {
+  color: #1c1917;
+}
+
+html[data-theme-resolved="dark"] .filter-count {
   color: #1c1917;
 }

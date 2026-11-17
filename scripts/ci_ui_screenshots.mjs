@@ -1041,7 +1041,34 @@ async function main() {
       overview.includes('总览') && overview.includes('我的资料') && overview.includes('下一步行动') && overview.includes('我的作品') && overview.includes('我的会议') && overview.includes('话题亮点') && overview.includes('新建') && await page.locator('#graph-canvas').isVisible() && !/积分|套餐|升级/.test(overview),
       overview || 'memory overview empty',
     );
+    const dirText = await visibleText(page.locator('#memory-dir'));
+    const newLabel = (await visibleText(page.locator('#new-page'))).trim();
+    record(
+      'memory_dir_chrome',
+      dirText.includes('记忆') && dirText.includes('全部') && dirText.includes('更新') && dirText.includes('标签')
+        && newLabel.includes('新建') && await page.locator('#dir-collapse').getAttribute('aria-label') === '收起侧边栏'
+        && await page.locator('.memory-views [data-view="overview"] .view-icon').count() === 1
+        && !/积分|套餐|升级/.test(dirText),
+      dirText || 'memory directory chrome missing',
+    );
     screenshots.push(path.basename(await shot(page, outDir, '18-memory-list.png')));
+    try {
+      await page.locator('#dir-collapse').click();
+      await page.locator('#dir-expand').waitFor({ state: 'visible', timeout: 8000 });
+      const collapsedClass = (await page.locator('#list-panel').getAttribute('class') || '').includes('dir-collapsed');
+      const expandVisible = await page.locator('#dir-expand').isVisible();
+      const dirHidden = await page.locator('#memory-dir').isHidden();
+      record(
+        'memory_dir_collapsed',
+        collapsedClass && expandVisible && dirHidden && (await page.locator('#dir-expand').getAttribute('aria-label')) === '展开侧边栏',
+        `collapsed=${collapsedClass} expand=${expandVisible} hidden=${dirHidden}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '69-memory-dir-collapsed.png')));
+      await page.locator('#dir-expand').click();
+      await page.locator('#memory-dir').waitFor({ state: 'visible', timeout: 8000 });
+    } catch (error) {
+      record('memory_dir_collapsed', false, String(error));
+    }
     await page.locator('.memory-views [data-view="actions"]').click();
     await page.locator('#actions-panel').waitFor({ state: 'visible', timeout: 15000 });
     await waitForLocatorText(page, '#action-list', ready.action_title);
