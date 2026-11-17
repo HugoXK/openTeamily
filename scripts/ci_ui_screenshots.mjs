@@ -1419,14 +1419,14 @@ async function main() {
         `nonoverlap=${geometry}; panelWidth=${catalogWidth}`);
       const catalogChrome = `${await visibleText(page.locator('#catalog-view'))}`;
       const creatorText = `${await visibleText(page.locator('#catalog-creator'))}`;
-      const currentChip = `${(await page.locator('.catalog-filters [aria-current="true"]').textContent()) || ''}`;
+      const currentChip = `${(await page.locator('#catalog-filters [aria-current="true"]').textContent()) || ''}`;
       record(
         'discover_catalog_filters',
         currentChip.includes('全部')
           && catalogChrome.includes('Content Creation')
           && catalogChrome.includes('Marketing')
           && catalogChrome.includes('创建者')
-          && await page.locator('.catalog-filters button:disabled').count() >= 15
+          && await page.locator('#catalog-filters button:disabled').count() >= 15
           && await page.locator('#catalog-filter-search').isDisabled()
           && await page.locator('#catalog-filter-more').isDisabled()
           && await page.locator('#catalog-creator').isDisabled()
