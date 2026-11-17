@@ -62,7 +62,7 @@
   <section id="main-panel" hidden>
     <header class="page-top">
       <h1>运行时</h1>
-      <p class="note">按 2026-11-16 对照记下的「运行时 / 连接」页来布置：托管云端 Agent、托管电脑，以及本地已检测运行时。OpenTeamily 不提供托管云端 Agent 或托管电脑，这两项只作标明未提供，不能保存。本地连接沿用已有的 FlyBot 代理：生成密钥、显式下载 flybot.pyz、启动守护进程。检测只会刷新已向本管理面登记的连接，不会扫描本机或局域网。这里没有 Teamily 的地址或桌面应用。</p>
+      <p class="note">运行时页按已有对照布置：托管云端 Agent、托管电脑只作标明未提供，不能保存。连接页按 2026-11-17 对照布置：先生成密钥，再显示守护进程命令。安装命令使用本服务的 flybot.pyz，不要把安装脚本管道给 shell。检测只会刷新已向本管理面登记的连接，不会扫描本机或局域网。这里没有 Teamily 的地址或桌面应用。</p>
     </header>
     <p id="whoami"></p>
     <div class="tabs" role="tablist">
@@ -124,53 +124,85 @@
       </section>
     </section>
     <section id="connect-panel" hidden>
-      <h2>连接一台机器</h2>
-      <p class="note">在本机或远程机器上运行 FlyBot，任务会发到那台机器。密钥只在生成时显示一次，列表只保留前缀。</p>
-      <p>设备 ID <code id="device-id"></code></p>
-      <form id="key-form" method="post" action="/v1/runtime-keys">
-        <fieldset>
-          <legend>生成 API 密钥</legend>
-          <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
-          <label>过期时间
-            <select name="expires">
-              <option value="never" selected>永不过期</option>
-              <option value="d7">7 天</option>
-              <option value="d30">30 天</option>
-              <option value="d90">90 天</option>
-            </select>
-          </label>
-          <button type="submit">生成</button>
+      <article class="connect-card" id="connect-machine">
+        <h2>连接一台机器</h2>
+        <p class="note">在本机或远程机器上运行 FlyBot，任务会发到那台机器。OpenTeamily 没有官方桌面应用，也不提供托管云端 Agent。</p>
+        <section class="connect-block" id="api-keys-block">
+          <h3>API keys</h3>
+          <p class="note">为 FlyBot CLI 创建密钥。完整密钥只在生成时显示一次，列表只保留前缀。</p>
+          <form id="key-form" method="post" action="/v1/runtime-keys">
+            <div class="key-row">
+              <label class="visually-hidden" for="key-name">Key name</label>
+              <input id="key-name" type="text" name="name" required maxlength="80" autocomplete="off" placeholder="Key name (e.g. MacBook CLI)">
+              <label class="visually-hidden" for="key-expires">过期时间</label>
+              <select id="key-expires" name="expires">
+                <option value="never" selected>Never</option>
+                <option value="d7">7 天</option>
+                <option value="d30">30 天</option>
+                <option value="d90">90 天</option>
+              </select>
+              <button type="submit" id="generate-key" disabled>生成 API key</button>
+            </div>
+          </form>
           <p id="issued-token" class="note" hidden></p>
-        </fieldset>
-      </form>
-      <h3>已生成的密钥</h3>
-      <ul id="key-list"></ul>
-      <p id="keys-empty" class="note" hidden>还没有密钥。</p>
-      <h3>已连接的机器</h3>
-      <ul id="connection-list"></ul>
-      <p id="connections-empty" class="note" hidden>还没有在线或登记过的机器。</p>
-      <form id="task-form" method="post" action="/v1/runtime/tasks">
-        <fieldset>
-          <legend>发送测试任务</legend>
-          <p class="note">可选 echo（传输自检）或 infer（用已配置的模型 API 做一次对话，密钥不会写进结果）。不会在那台机器上执行命令。</p>
-          <label>类型
-            <select name="kind">
-              <option value="echo">echo</option>
-              <option value="infer">infer</option>
-            </select>
+          <ul id="key-list"></ul>
+          <p id="keys-empty" class="note" hidden>No API keys yet</p>
+        </section>
+        <section class="connect-block" id="api-key-script-block">
+          <h3>API key</h3>
+          <p id="api-key-pending" class="note">请先生成上方的 API key，再显示连接脚本。</p>
+        </section>
+        <section class="connect-block" id="device-block">
+          <label for="device-id">设备 ID
+            <input id="device-id" type="text" readonly autocomplete="off" placeholder="例如 macbook-pro">
           </label>
-          <label>内容 <input type="text" name="prompt" required maxlength="4000" autocomplete="off"></label>
-          <button type="submit">发送</button>
-          <p id="task-result" class="note" hidden></p>
-        </fieldset>
-      </form>
-      <h3>步骤 1：下载 CLI</h3>
-      <p class="note">从本服务显式下载 zipapp，不要把安装脚本管道给 shell。密钥写入仅自己可读的文件。</p>
-      <pre id="install-unix">python3 -c 'from urllib.request import urlretrieve; urlretrieve("__ORIGIN__/install/flybot.pyz", "flybot.pyz")'</pre>
-      <pre id="install-windows">Invoke-WebRequest -Uri __ORIGIN__/install/flybot.pyz -OutFile flybot.pyz</pre>
-      <h3>步骤 2：启动守护进程</h3>
-      <p class="note">下载完成后显式启动。把密钥放在 --key-file 里，不要写进 shell 历史。</p>
-      <pre id="daemon-command">python3 flybot.pyz daemon start --origin __ORIGIN__ --key-file ./runtime-key</pre>
+          <p class="note">这是本账户已有接口返回的设备 ID，由管理面分配，不能在这里改成自定义主机名。</p>
+        </section>
+        <section class="connect-block" id="install-cli-block">
+          <div class="install-head">
+            <h3>1. 安装 CLI</h3>
+            <div class="os-tabs" role="tablist" aria-label="安装命令">
+              <button type="button" data-os="unix" aria-selected="true">macOS / Linux</button>
+              <button type="button" data-os="windows" aria-selected="false">Windows</button>
+            </div>
+          </div>
+          <div class="command-block">
+            <p class="command-lang" id="install-lang">shell</p>
+            <button type="button" id="copy-install">复制</button>
+            <pre id="install-unix">python3 -c 'from urllib.request import urlretrieve; urlretrieve("__ORIGIN__/install/flybot.pyz", "flybot.pyz")'</pre>
+            <pre id="install-windows" hidden>Invoke-WebRequest -Uri __ORIGIN__/install/flybot.pyz -OutFile flybot.pyz</pre>
+          </div>
+          <p class="note">在终端运行以下命令以下载 FlyBot CLI，不会启动守护进程。请直接下载 zipapp，不要把安装脚本管道给 shell。</p>
+        </section>
+        <section class="connect-block" id="daemon-block">
+          <h3>2. 启动 daemon</h3>
+          <p id="daemon-pending" class="note">请先生成上方的 API key，再显示连接脚本。</p>
+          <div id="daemon-script" hidden>
+            <pre id="daemon-command">python3 flybot.pyz daemon start --origin __ORIGIN__ --key-file ./runtime-key</pre>
+            <p class="note">把密钥放在 --key-file 里，不要写进 shell 历史。</p>
+          </div>
+        </section>
+      </article>
+      <section class="connect-existing" id="connect-existing">
+        <h2>已连接的机器</h2>
+        <ul id="connection-list"></ul>
+        <p id="connections-empty" class="note" hidden>还没有在线或登记过的机器。</p>
+        <form id="task-form" method="post" action="/v1/runtime/tasks">
+          <fieldset>
+            <legend>发送测试任务</legend>
+            <p class="note">可选 echo（传输自检）或 infer（用已配置的模型 API 做一次对话，密钥不会写进结果）。不会在那台机器上执行命令。对照里的连接页没有这一块，这是已有能力，保留在同一页。</p>
+            <label>类型
+              <select name="kind">
+                <option value="echo">echo</option>
+                <option value="infer">infer</option>
+              </select>
+            </label>
+            <label>内容 <input type="text" name="prompt" required maxlength="4000" autocomplete="off"></label>
+            <button type="submit">发送</button>
+            <p id="task-result" class="note" hidden></p>
+          </fieldset>
+        </form>
+      </section>
     </section>
   </section>
   </main>
