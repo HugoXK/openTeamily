@@ -1386,7 +1386,7 @@ async function main() {
       );
       record(
         'memory_graph_empty_narrow',
-        zoomVisible && hintBox && zoomBox && !overlaps,
+        zoomVisible && hintBox && zoomBox && hintBox.width >= 180 && !overlaps,
         `overlap=${overlaps}; hint=${JSON.stringify(hintBox)}; zoom=${JSON.stringify(zoomBox)}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '91-memory-graph-empty-390.png')));
