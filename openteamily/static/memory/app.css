@@ -426,6 +426,35 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   opacity: 0.25;
 }
 
+.graph-empty {
+  position: absolute;
+  inset: 0 3.2rem 3.2rem 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0.75rem;
+  text-align: center;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.graph-empty[hidden] {
+  display: none;
+}
+
+.graph-empty p {
+  margin: 0;
+  max-width: 18rem;
+  color: color-mix(in srgb, var(--ot-ink) 70%, var(--ot-bg));
+}
+
+.graph-empty button {
+  pointer-events: auto;
+}
+
 .graph-hint {
   position: absolute;
   left: 0;
@@ -476,6 +505,11 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 @media (max-width: 390px) {
   .graph-hover-card {
     display: none;
+  }
+
+  .graph-empty {
+    inset: 0 0 3.5rem 0;
+    padding: 0.75rem 0.75rem 0;
   }
 }
 

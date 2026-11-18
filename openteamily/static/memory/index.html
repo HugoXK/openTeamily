@@ -110,6 +110,10 @@
         </label>
         <div class="graph-stage">
           <svg id="graph-canvas" viewBox="0 0 640 400" role="img" aria-label="记忆图谱"></svg>
+          <div id="graph-empty" class="graph-empty" hidden>
+            <p>创建两个或更多记忆页后，这里会把它们连成图谱</p>
+            <button type="button" id="graph-empty-new">新建记忆页</button>
+          </div>
           <p class="graph-hint">单击查看 · 双击打开 · 悬停预览</p>
           <div id="graph-hover-card" class="graph-hover-card" hidden role="tooltip">
             <p class="graph-hover-title"></p>
