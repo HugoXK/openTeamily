@@ -46,7 +46,9 @@ CAPTURE_IDS = {
                 'search', 'new-page', 'graph-canvas', 'topic-list',
                 'overview-panel', 'actions-panel', 'action-list',
                 'profile-panel', 'dream-profile', 'dream-actions'),
-    '/profile': ('main-panel', 'whoami', 'profile-username'),
+    '/profile': ('main-panel', 'whoami', 'profile-username', 'profile-form',
+                 'profile-name', 'profile-handle', 'profile-bio', 'profile-save'),
+
     '/onboarding': ('main-panel', 'onboarding-form', 'industry', 'role-choices',
                     'onboarding-save', 'onboarding-skip'),
     '/download': ('main-panel', 'download-web', 'download-runtime',

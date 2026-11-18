@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, onboarding, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -451,6 +451,27 @@ class App:
             if method != 'GET' or query:
                 refuse(400, 'invalid', 'Invalid homepage request')
             return self.render_agent_homepage(homepage_path[1])
+        profile_path = re.fullmatch(r'/v1/profiles/([a-z0-9._]{3,30})', path)
+        if profile_path:
+            if method != 'GET' or query:
+                refuse(400, 'invalid', 'Invalid profile request')
+            with self.store.connect() as db:
+                row = profiles.load_handle(db, profile_path[1])
+            if row is None:
+                refuse(404, 'not_found', 'Profile not found')
+            return 200, {'profile': profiles.public_view(row)}, []
+        page_path = re.fullmatch(r'/p/([a-z0-9._]{3,30})', path)
+        if page_path:
+            if method != 'GET' or query:
+                refuse(400, 'invalid', 'Invalid profile page request')
+            with self.store.connect() as db:
+                row = profiles.load_handle(db, page_path[1])
+            if row is None:
+                refuse(404, 'not_found', 'Profile not found')
+            return 200, profiles.render_page(row).encode('utf-8'), [
+                ('Content-Type', 'text/html; charset=utf-8'),
+                ('Content-Security-Policy', profiles.PAGE_CSP),
+            ]
         if path == '/v1/discover/agents':
             if method != 'GET':
                 refuse(405, 'method', 'Only GET is supported')
@@ -536,6 +557,13 @@ class App:
                 self.body(env, [])
                 db.execute('DELETE FROM sessions WHERE token_hash=?', (session['token_hash'],))
                 return 200, {'logged_out': True}, self.session_headers('', '', expires=True)
+            if path == '/v1/profile':
+                if method == 'GET' and not query:
+                    row = profiles.load(db, session['user_id'])
+                    return 200, {'profile': profiles.view(row) if row is not None else None}, []
+                if method == 'POST' and not query:
+                    return self.save_profile(db, session, now, env)
+                refuse(400, 'invalid', 'Invalid profile request')
             if path == '/v1/onboarding':
                 if method == 'GET' and not query:
                     row = onboarding.load(db, session['user_id'])
@@ -544,6 +572,13 @@ class App:
                 if method == 'POST' and not query:
                     return self.save_onboarding(db, session, now, env)
                 refuse(400, 'invalid', 'Invalid onboarding request')
+
+            if path == '/v1/personal-agent':
+                if method == 'GET' and not query:
+                    return self.personal_agent_get(db, session)
+                if method == 'POST' and not query:
+                    return self.personal_agent_ensure(db, session, now)
+                refuse(400, 'invalid', 'Invalid personal agent request')
             if path == '/v1/settings' and method == 'GET' and not query:
                 row = db.execute('SELECT * FROM user_settings WHERE user_id=?', (session['user_id'],)).fetchone()
                 return 200, {'settings': settings.view(row)}, []
@@ -764,7 +799,7 @@ class App:
                 return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages|agent-replies))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -2228,7 +2263,7 @@ class App:
             refuse(400, 'invalid', 'Invalid agent request')
         if not agents.can_manage(actor):
             refuse(403, 'forbidden', 'Only owners and admins can change agents')
-        return self.update_workspace_agent(db, workspace, row, now, self.body(env, ['revision', 'name', 'summary', 'instructions']))
+        return self.update_workspace_agent(db, workspace, row, now, self.body(env, ['revision', 'name', 'summary', 'instructions', 'category']))
 
     def list_workspace_agents(self, db, workspace, actor, query):
         try:
@@ -2251,15 +2286,20 @@ class App:
                      'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
 
     def create_workspace_agent(self, db, workspace, session, now, env):
-        body = self.body(env, ['name', 'summary', 'instructions'])
+        body = self.body(env, ['name', 'summary', 'instructions', 'category'])
         name, summary, instructions = body.get('name'), body.get('summary', ''), body.get('instructions', '')
         if not agents.valid_name(name) or not agents.valid_summary(summary) or not agents.valid_instructions(instructions):
             refuse(400, 'invalid', 'Provide an agent name, summary, and instructions')
+        category = body.get('category')
+        if not agents.valid_category(category):
+            refuse(400, 'invalid', 'Choose one of the directory categories')
         name, summary = name.strip(), summary.strip()
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         payload = {'name': name, 'summary': summary, 'instructions': instructions}
+        if category is not None:
+            payload['category'] = category
         key_hash, request_hash = digest('agent:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         )
@@ -2285,6 +2325,8 @@ class App:
             (agent_id, workspace['id'], name, agents.name_hash(name), summary, instructions,
              now, now, session['user_id'], key_hash, request_hash),
         )
+        if category is not None:
+            agents.store_category(db, agent_id, category, now)
         return 201, {'agent': agents.snapshot(db, agents.load(db, workspace['id'], agent_id))}, []
 
     def update_workspace_agent(self, db, workspace, row, now, body):
@@ -2295,9 +2337,12 @@ class App:
         instructions = body.get('instructions', row['instructions'])
         if not agents.valid_name(name) or not agents.valid_summary(summary) or not agents.valid_instructions(instructions):
             refuse(400, 'invalid', 'Provide an agent name, summary, and instructions')
+        category = body.get('category', agents.load_category(db, row['id']))
+        if not agents.valid_category(category):
+            refuse(400, 'invalid', 'Choose one of the directory categories')
         name, summary = name.strip(), summary.strip()
         if set(body) == {'revision'}:
-            refuse(400, 'invalid', 'Provide a name, summary, or instructions change')
+            refuse(400, 'invalid', 'Provide a name, summary, instructions, or category change')
         other = db.execute(
             'SELECT id FROM workspace_agents WHERE workspace_id=? AND name_hash=? AND id!=?',
             (workspace['id'], agents.name_hash(name), row['id']),
@@ -2313,6 +2358,7 @@ class App:
         updated = agents.load(db, workspace['id'], row['id'])
         if updated is None or updated['revision'] != row['revision'] + 1:
             refuse(409, 'conflict', 'Agent was updated; reload and retry')
+        agents.store_category(db, row['id'], category, now)
         return 200, {'agent': agents.snapshot(db, updated)}, []
 
     def archive_workspace_agent(self, db, row, now, body):
@@ -2760,6 +2806,63 @@ class App:
             db, artifact_id, workspace['id'], now, row['id'], message['id'], row['agent_id'])
         return self.artifact_saved(db, workspace['id'], artifact_id, 201)
 
+    def save_profile(self, db, session, now, env):
+        body = self.body(env, ['revision', 'changes'])
+        revision, changes = body.get('revision'), body.get('changes')
+        if (type(revision) is not int or not 0 <= revision <= 2 ** 31
+                or not isinstance(changes, dict) or not changes):
+            refuse(400, 'invalid', 'Provide the current revision and non-empty changes')
+        normalized = profiles.normalize_changes(changes)
+        if normalized is None:
+            refuse(400, 'invalid', 'Invalid profile field')
+        row = profiles.load(db, session['user_id'])
+        if row is None:
+            if revision != 0:
+                refuse(409, 'conflict', 'Profile does not exist yet')
+            name = normalized.get('name') or session['username']
+            handle = normalized.get('handle') or profiles.default_handle(db, session['username'])
+            if handle is None or profiles.load_handle(db, handle) is not None:
+                refuse(409, 'conflict', 'Teamily ID is unavailable')
+            try:
+                db.execute(
+                    'INSERT INTO user_profiles VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)',
+                    (session['user_id'], handle, handle, name[:profiles.NAME_MAX],
+                     normalized.get('bio', ''), profiles.serialize_tags(normalized.get('tags', [])),
+                     normalized.get('gender', ''), normalized.get('location', ''),
+                     normalized.get('website', ''), profiles.serialize_goals(normalized.get('goals', {})),
+                     now, now))
+            except sqlite3.IntegrityError:
+                refuse(409, 'conflict', 'Teamily ID is unavailable')
+            return 201, {'profile': profiles.view(profiles.load(db, session['user_id']))}, []
+        if revision != row['revision']:
+            raise RuntimeFault(409, 'conflict', 'Profile changed elsewhere; reload and retry',
+                               profiles.view(row))
+        handle = normalized.get('handle', row['handle'])
+        if handle != row['handle']:
+            other = profiles.load_handle(db, handle)
+            if other is not None and other['user_id'] != session['user_id']:
+                refuse(409, 'conflict', 'Teamily ID is unavailable')
+        name = normalized.get('name', row['name'])
+        bio = normalized.get('bio', row['bio'])
+        tags = profiles.serialize_tags(normalized['tags']) if 'tags' in normalized else row['tags']
+        gender = normalized.get('gender', row['gender'])
+        location = normalized.get('location', row['location'])
+        website = normalized.get('website', row['website'])
+        goals = profiles.serialize_goals(normalized['goals']) if 'goals' in normalized else row['goals']
+        if (handle, name, bio, tags, gender, location, website, goals) == (
+                row['handle'], row['name'], row['bio'], row['tags'], row['gender'],
+                row['location'], row['website'], row['goals']):
+            return 200, {'profile': profiles.view(row)}, []
+        try:
+            db.execute(
+                'UPDATE user_profiles SET handle=?, handle_lower=?, name=?, bio=?, tags=?, '
+                'gender=?, location=?, website=?, goals=?, revision=?, updated=? WHERE user_id=?',
+                (handle, handle, name, bio, tags, gender, location, website, goals,
+                 row['revision'] + 1, now, session['user_id']))
+        except sqlite3.IntegrityError:
+            refuse(409, 'conflict', 'Teamily ID is unavailable')
+        return 200, {'profile': profiles.view(profiles.load(db, session['user_id']))}, []
+
     def save_onboarding(self, db, session, now, env):
         body = self.body(env, ['industry', 'role', 'completed'])
         industry = body.get('industry', '')
@@ -2782,6 +2885,36 @@ class App:
             created = False
         return (201 if created else 200), {'onboarding': onboarding.view(
             onboarding.load(db, session['user_id']))}, []
+
+    def personal_agent_get(self, db, session):
+        row = personal.load(db, session['user_id'])
+        if row is None:
+            return 200, {'personal_agent': None}, []
+        return 200, self.personal_payload(db, session, row), []
+
+    def personal_agent_ensure(self, db, session, now):
+        try:
+            row, created = personal.ensure(
+                db, {'id': session['user_id'], 'username': session['username']},
+                self.config.max_workspaces_per_user, self.config.max_workspaces,
+                self.config.max_agents_per_workspace, now)
+        except ValueError:
+            refuse(429, 'quota', 'Workspace capacity reached')
+        return (201 if created else 200), self.personal_payload(db, session, row), []
+
+    def personal_payload(self, db, session, row):
+        workspace = db.execute('SELECT * FROM workspaces WHERE id=?', (row['workspace_id'],)).fetchone()
+        agent = agents.load(db, row['workspace_id'], row['agent_id'])
+        return {
+            'personal_agent': {
+                'workspace': {'id': workspace['id'], 'name': workspace['name'], 'kind': 'personal'},
+                'agent': agents.snapshot(db, agent) if agent is not None else None,
+            },
+            'builtin_agents': [
+                {'key': item['builtin_key'], 'agent': agents.snapshot(db, item)}
+                for item in personal.builtins(db, row['workspace_id'])
+            ],
+        }
 
     def search_messages(self, db, session, method, query, workspace_id):
         if method != 'GET':
@@ -2899,6 +3032,10 @@ class App:
         row = social.load(db, workspace['id'], conversation_id)
         if row is None or not social.is_member(db, row['id'], workspace['id'], session['user_id']):
             refuse(404, 'not_found', 'Conversation not found')
+        if action and (action == 'agents' or action.startswith('agents/')):
+            if method != 'POST' or query:
+                refuse(400, 'invalid', 'Invalid group agent membership request')
+            return self.edit_group_agents(db, workspace, session, row, action, now, env)
         self.reconcile_group_replies(db, row, now)
         if action == 'agent-replies' and method == 'POST' and not query:
             return self.request_group_reply(db, workspace, session, row, now, env)
@@ -2919,50 +3056,118 @@ class App:
             return self.send_social_message(db, workspace, session, row, now, env)
         refuse(400, 'invalid', 'Invalid messenger request')
 
+    def edit_group_agents(self, db, workspace, session, row, action, now, env):
+        # Workspace administration alone never grants access to a private group:
+        # social_dispatch has already required actual human group membership.
+        if row['kind'] != 'group':
+            refuse(400, 'invalid', 'Agent membership edits require a group')
+        if not agents.can_manage(members.role_of(db, workspace, session['user_id'])):
+            refuse(403, 'forbidden', 'Only group members who are workspace owners or admins can edit agents')
+        removing = action != 'agents'
+        if removing:
+            self.body(env, [])
+            agent_ids = [action.split('/')[1]]
+        else:
+            agent_ids = self.body(env, ['agent_ids']).get('agent_ids')
+            if not social.valid_agent_ids(agent_ids) or not agent_ids:
+                refuse(400, 'invalid', 'Provide 1–49 unique agent ids')
+        # Validate the entire batch before any mutation. Removal may clear an
+        # archived member, but neither operation can address foreign agents.
+        for aid in agent_ids:
+            agent = agents.load(db, workspace['id'], aid)
+            if agent is None or (not removing and agent['archived']):
+                refuse(400, 'invalid', 'Select existing same-workspace agents; invitations require active agents')
+        existing = {item['agent_id'] for item in social.agent_member_rows(db, row['id'])}
+        if removing:
+            self.reconcile_group_replies(db, row, now)
+            if db.execute("SELECT 1 FROM social_agent_replies WHERE conversation_id=? AND agent_id=? "
+                          "AND status IN ('queued','running')", (row['id'], agent_ids[0])).fetchone():
+                refuse(409, 'conflict', 'Wait for the active agent request to finish before removal')
+            changed = agent_ids[0] in existing
+            db.execute('DELETE FROM social_agent_members WHERE conversation_id=? AND agent_id=?',
+                       (row['id'], agent_ids[0]))
+        else:
+            additions = set(agent_ids) - existing
+            if (len(social.member_rows(db, row['id'])) + len(existing) + len(additions)
+                    > self.config.max_social_members_per_conversation):
+                refuse(429, 'quota', 'Member capacity reached')
+            for aid in sorted(additions):
+                db.execute('INSERT INTO social_agent_members (conversation_id,agent_id,created) VALUES(?,?,?)',
+                           (row['id'], aid, now))
+            changed = bool(additions)
+        if changed:
+            db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, row['id']))
+        row = social.load(db, workspace['id'], row['id'])
+        return 200, {'conversation': social.conversation_item(db, row)}, []
+
     def request_group_reply(self, db, workspace, session, row, now, env):
-        body = self.body(env, ['agent_id', 'prompt'])
-        aid, text = body.get('agent_id'), body.get('prompt')
-        if row['kind'] != 'group' or not isinstance(aid, str) or not social.HEX32.fullmatch(aid):
+        body = self.body(env, ['agent_id', 'agent_ids', 'prompt'])
+        text = body.get('prompt')
+        agent_ids = body.get('agent_ids')
+        if agent_ids is None:
+            aid = body.get('agent_id')
+            if not isinstance(aid, str) or not social.HEX32.fullmatch(aid):
+                refuse(400, 'invalid', 'Select a saved group agent')
+            agent_ids = [aid]
+        elif (not social.valid_agent_ids(agent_ids) or not 1 <= len(agent_ids) <= 5):
+            refuse(400, 'invalid', 'Provide 1–5 unique saved group agent ids')
+        if row['kind'] != 'group':
             refuse(400, 'invalid', 'Select a saved group agent')
         if not social.valid_body(text):
             refuse(400, 'invalid', 'Provide a request of 1–4000 characters')
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
-        key_hash = digest('group-agent-reply:' + key)
-        request_hash = digest(json.dumps({'agent_id': aid, 'prompt': text,
-                                         'requested_by': session['user_id']}, sort_keys=True))
-        prior = db.execute('SELECT * FROM social_agent_replies WHERE conversation_id=? AND key_hash=?',
-                           (row['id'], key_hash)).fetchone()
-        if prior:
-            if prior['request_hash'] != request_hash:
-                refuse(409, 'conflict', 'Idempotency key was used for a different request')
-            return 200, {'reply': social.reply_view(prior)}, []
-        agent = db.execute(
-            'SELECT a.* FROM workspace_agents a JOIN social_agent_members m ON m.agent_id=a.id '
-            'WHERE m.conversation_id=? AND a.id=? AND a.workspace_id=? AND a.archived=0',
-            (row['id'], aid, workspace['id'])).fetchone()
-        if agent is None:
-            refuse(400, 'invalid', 'Select an active saved group agent')
+        single = body.get('agent_ids') is None
+        plans = []
+        for aid in agent_ids:
+            key_hash = digest('group-agent-reply:' + key + ('' if single else ':' + aid))
+            request_hash = digest(json.dumps({'agent_id': aid, 'prompt': text,
+                                              'requested_by': session['user_id']}, sort_keys=True))
+            prior = db.execute('SELECT * FROM social_agent_replies WHERE conversation_id=? AND key_hash=?',
+                               (row['id'], key_hash)).fetchone()
+            if prior is not None:
+                if prior['request_hash'] != request_hash:
+                    refuse(409, 'conflict', 'Idempotency key was used for a different request')
+                plans.append({'replay': prior, 'agent_id': aid})
+            else:
+                agent = db.execute(
+                    'SELECT a.* FROM workspace_agents a JOIN social_agent_members m ON m.agent_id=a.id '
+                    'WHERE m.conversation_id=? AND a.id=? AND a.workspace_id=? AND a.archived=0',
+                    (row['id'], aid, workspace['id'])).fetchone()
+                if agent is None:
+                    refuse(400, 'invalid', 'Select an active saved group agent')
+                plans.append({'agent': agent, 'agent_id': aid, 'key_hash': key_hash,
+                              'request_hash': request_hash})
+        new_plans = [plan for plan in plans if 'agent' in plan]
         requests = social.reply_requests(db, row['id'])
-        if any(item['status'] in ('queued', 'running') for item in requests):
-            refuse(409, 'conflict', 'A group reply is already in progress')
+        active = {item['agent_id'] for item in requests if item['status'] in ('queued', 'running')}
+        if any(plan['agent_id'] in active for plan in new_plans):
+            refuse(409, 'conflict', 'An agent reply is already in progress for a selected agent')
         cap = self.config.max_social_messages_per_conversation
-        if len(requests) >= cap or social.message_slots(db, row['id']) >= cap:
+        if len(requests) + len(new_plans) > cap or social.message_slots(db, row['id']) + len(new_plans) > cap:
             refuse(429, 'quota', 'Group reply capacity reached')
-        # Explicit prompt only: never forward group history or trigger from another agent.
-        prompt = conversations.compose_prompt(agent, [], text)
-        task_id, error, _dispatch = self.queue_infer_task(
-            db, session['user_id'], now, prompt, workspace['id'], aid)
-        rid = uuid4().hex
-        db.execute(
-            'INSERT INTO social_agent_replies '
-            '(id,conversation_id,workspace_id,agent_id,agent_name,requested_by,prompt,agent_revision,'
-            'status,task_id,error_code,created,updated,key_hash,request_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            (rid, row['id'], workspace['id'], aid, agent['name'], session['user_id'], text, agent['revision'],
-             'queued' if task_id else 'failed', task_id, error, now, now, key_hash, request_hash))
-        result = db.execute('SELECT * FROM social_agent_replies WHERE id=?', (rid,)).fetchone()
-        return 201, {'reply': social.reply_view(result)}, []
+        replies = []
+        for plan in plans:
+            if 'replay' in plan:
+                replies.append(plan['replay'])
+                continue
+            agent = plan['agent']
+            prompt = conversations.compose_prompt(agent, [], text)
+            task_id, error, _dispatch = self.queue_infer_task(
+                db, session['user_id'], now, prompt, workspace['id'], plan['agent_id'])
+            rid = uuid4().hex
+            db.execute(
+                'INSERT INTO social_agent_replies '
+                '(id,conversation_id,workspace_id,agent_id,agent_name,requested_by,prompt,agent_revision,'
+                'status,task_id,error_code,created,updated,key_hash,request_hash) '
+                'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                (rid, row['id'], workspace['id'], plan['agent_id'], agent['name'], session['user_id'],
+                 text, agent['revision'], 'queued' if task_id else 'failed', task_id, error,
+                 now, now, plan['key_hash'], plan['request_hash']))
+            replies.append(db.execute('SELECT * FROM social_agent_replies WHERE id=?', (rid,)).fetchone())
+        payload = [social.reply_view(item) for item in replies]
+        return (201 if new_plans else 200), {'reply': payload[0], 'replies': payload}, []
 
     def reconcile_group_replies(self, db, row, now):
         for reply in social.reply_requests(db, row['id']):

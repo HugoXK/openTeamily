@@ -9,7 +9,7 @@ The 2026-11-18 real-account walk captured the full four-step onboarding:
 3. **我们能帮你分担些什么？** — one-off tasks and routines derived from the role.
 4. **你的 Agent** — Personal Agent look (colour, expression, headwear, glasses, hand item).
 
-This slice implements **step 1 only** (industry and role) and stores it for later recommendations. Step 2 is intentionally out of scope because connectors/MCP are Birfy/Bot Social territory; steps 3 and 4 remain pending. There is no forced redirect: `/chat` shows a dismissible hint when the context is missing.
+This slice implements **step 1 only** (industry and role) and stores it for later recommendations (not currently consumed by recommendations). Step 2 is intentionally out of scope because account connection authorization remains unimplemented; steps 3 and 4 remain pending. There is no forced redirect: `/chat` shows a non-blocking hint when the context is missing.
 
 ## API
 
@@ -37,3 +37,15 @@ Additive `user_onboarding` table (`user_id` primary key, industry, role, complet
 - App connectors/OAuth (Birfy/Bot Social territory), automation selection from step 3, and the Personal Agent look from step 4.
 - A forced first-login redirect or blocking onboarding gate.
 - Teamily comparison acceptance. Tests are in-process WSGI + temporary SQLite.
+
+## Current-main integration
+
+The contributor branch incorporates main with an ordinary merge (no rebase or
+history rewrite), retaining both onboarding and personal-agent routes/tables and
+both chat startup calls. Every shell page, including onboarding, distinguishes
+the implemented 功能指引 link from the unimplemented 帮助中心 slot. Custom industry
+and role values are restored after reload. Integration tests cover repeatable v1
+initialization, personal mapping plus user context persistence, isolation and
+Origin/CSRF. App connections, recommendations and avatar steps remain unconnected.
+CI shot `86-onboarding-saved-context.png` and save/custom-reopen assertions exercise
+the real UI against a throwaway runner app, not a real vendor or Teamily acceptance.
