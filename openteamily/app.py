@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -564,6 +564,15 @@ class App:
                 if method == 'POST' and not query:
                     return self.save_profile(db, session, now, env)
                 refuse(400, 'invalid', 'Invalid profile request')
+            if path == '/v1/onboarding':
+                if method == 'GET' and not query:
+                    row = onboarding.load(db, session['user_id'])
+                    return 200, {'onboarding': onboarding.view(row) if row is not None else None,
+                                 'industries': onboarding.industries_view()}, []
+                if method == 'POST' and not query:
+                    return self.save_onboarding(db, session, now, env)
+                refuse(400, 'invalid', 'Invalid onboarding request')
+
             if path == '/v1/personal-agent':
                 if method == 'GET' and not query:
                     return self.personal_agent_get(db, session)
@@ -2842,6 +2851,29 @@ class App:
         except sqlite3.IntegrityError:
             refuse(409, 'conflict', 'Teamily ID is unavailable')
         return 200, {'profile': profiles.view(profiles.load(db, session['user_id']))}, []
+
+    def save_onboarding(self, db, session, now, env):
+        body = self.body(env, ['industry', 'role', 'completed'])
+        industry = body.get('industry', '')
+        role = body.get('role', '')
+        completed = body.get('completed')
+        if (not onboarding.valid_industry(industry) or not onboarding.valid_role(role)
+                or type(completed) is not bool):
+            refuse(400, 'invalid', 'Provide a valid industry, role and completed flag')
+        industry = industry.strip() if isinstance(industry, str) else ''
+        role = role.strip() if isinstance(role, str) else ''
+        row = onboarding.load(db, session['user_id'])
+        if row is None:
+            db.execute('INSERT INTO user_onboarding VALUES(?,?,?,?,1,?,?)',
+                       (session['user_id'], industry, role, 1 if completed else 0, now, now))
+            created = True
+        else:
+            db.execute('UPDATE user_onboarding SET industry=?, role=?, completed=?, revision=?, updated=? '
+                       'WHERE user_id=?',
+                       (industry, role, 1 if completed else 0, row['revision'] + 1, now, session['user_id']))
+            created = False
+        return (201 if created else 200), {'onboarding': onboarding.view(
+            onboarding.load(db, session['user_id']))}, []
 
     def personal_agent_get(self, db, session):
         row = personal.load(db, session['user_id'])

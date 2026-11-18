@@ -827,6 +827,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('session-pane').hidden = false;
     document.body.classList.add('chat-open');
     document.getElementById('whoami').textContent = currentUser.username;
+    const onboarding = await request('GET', '/v1/onboarding');
+    const banner = document.getElementById('onboarding-banner');
+    if (banner && onboarding.status === 200) {
+      banner.hidden = Boolean(onboarding.body.onboarding && onboarding.body.onboarding.completed);
+    }
+
     const personal = await request('POST', '/v1/personal-agent');
     const personalWorkspace = personal.status === 200 && personal.body.personal_agent
       ? personal.body.personal_agent.workspace.id : '';

@@ -34,6 +34,7 @@ class ChatPageTests(unittest.TestCase):
         self.assertIn('id="search-panel"', html)
         self.assertIn('id="chat-avatar"', html)
         self.assertIn('id="social-agent-members"', html)
+        self.assertIn('id="onboarding-banner"', html)
         self.assertIn('id="session-filter"', html)
         self.assertLess(html.find('id="session-filter"'), html.find('id="session-search"'))
         self.assertLess(html.find('id="session-search"'), html.find('id="new-conversation"'))
