@@ -125,26 +125,38 @@ function mount() {
     fill(result.body.profile, username);
   }
 
+  const save = document.getElementById('profile-save');
+  let saving = false;
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (saving) return;
     const changes = collect();
     if (!changes.name) {
       show('error', '请填写昵称。');
       return;
     }
-    const result = await request('POST', '/v1/profile', {revision, changes});
-    if (result.status === 409) {
-      const current = result.body && result.body.error && result.body.error.current;
-      if (current) fill(current, document.getElementById('profile-username').textContent);
-      show('error', messageFor(result.body.error, '资料已在别处更新，已重新加载。'));
-      return;
+    saving = true;
+    if (save) save.disabled = true;
+    try {
+      const result = await request('POST', '/v1/profile', {revision, changes});
+      if (result.status === 409) {
+        const current = result.body && result.body.error && result.body.error.current;
+        if (current) fill(current, document.getElementById('profile-username').textContent);
+        show('error', current
+          ? '资料已在别处更新，已重新加载。'
+          : '保存失败：资料已在别处更新或 Teamily ID 不可用，请刷新后重试。');
+        return;
+      }
+      if (result.status !== 200 && result.status !== 201) {
+        show('error', messageFor(result.body.error, '保存失败。'));
+        return;
+      }
+      fill(result.body.profile, document.getElementById('profile-username').textContent);
+      show('ok', '资料已保存。');
+    } finally {
+      saving = false;
+      if (save) save.disabled = false;
     }
-    if (result.status !== 200 && result.status !== 201) {
-      show('error', messageFor(result.body.error, '保存失败。'));
-      return;
-    }
-    fill(result.body.profile, document.getElementById('profile-username').textContent);
-    show('ok', '资料已保存。');
   });
 
   form.addEventListener('keydown', event => {
