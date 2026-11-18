@@ -75,7 +75,7 @@
     <p id="role-note" class="note"></p>
     <details class="gap-note">
       <summary>对照说明</summary>
-      <p class="note">工作区成员可以维护智能体目录，并从卡片进入独立的聊天页。所有者或管理员可以发布可撤销的公开主页链接（只展示名称和简介，不含说明）。没有嵌入对话，也没有 Auto / Instant / Agentic 模式。创建者筛选、AI 团队模板尚未实现，对应入口已禁用。分类按目标站的 17 个类目可选，选中会写进链接并缩小下面的工作区目录；类目由所有者或管理员在新建或编辑时选择（OpenTeamily 原创补充，未与目标站的类目设置流程对照），未分类的智能体只在「全部」里出现。还不能写成已经功能对等。</p>
+      <p class="note">工作区成员可以维护智能体目录，并从卡片进入独立的聊天页。所有者或管理员可以发布可撤销的公开主页链接（只展示名称和简介，不含说明）。没有嵌入对话，也没有 Auto / Instant / Agentic 模式。创建者下拉按创建人筛选智能体，可以和类目叠加使用；AI 团队模板尚未实现，对应入口已禁用。分类按目标站的 17 个类目可选，选中会写进链接并缩小下面的工作区目录；类目由所有者或管理员在新建或编辑时选择（OpenTeamily 原创补充，未与目标站的类目设置流程对照），未分类的智能体只在「全部」里出现。还不能写成已经功能对等。</p>
     </details>
     <div class="filter-row" aria-label="筛选">
       <button type="button" class="pill" data-category="all" aria-pressed="true">全部</button>
@@ -97,8 +97,8 @@
       <button type="button" class="pill" data-category="research" aria-pressed="false">Research</button>
       <button type="button" class="pill" data-category="sales" aria-pressed="false">Sales</button>
       <label>创建者
-        <select id="creator-filter" disabled title="未实现：创建者筛选">
-          <option>全部</option>
+        <select id="creator-filter">
+          <option value="">全部</option>
         </select>
       </label>
     </div>
