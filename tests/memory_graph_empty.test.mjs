@@ -57,6 +57,7 @@ class Element {
     return this.children.find((child) => child.attributes.class === selector || child.className === selector) || null;
   }
   focus() { this.focused = true; }
+  click() { return this.handlers.click && this.handlers.click({target: this}); }
 }
 
 function fakeDocument() {
@@ -188,4 +189,36 @@ test('a topic search miss keeps muted nodes and does not show the empty hint', a
   assert.ok(items.every((item) => classOf(item).includes('is-muted')));
   api.renderGraph(twoNodes);
   assert.equal(el('graph-empty').hidden, true);
+});
+
+
+test('the graph create entry posts through the existing flow and opens the created page', async () => {
+  const {doc, el} = fakeDocument();
+  doc.cookie = 'ot_dev_csrf=fixture-csrf';
+  const calls = [];
+  const baseFetcher = graphFetcher(emptyGraph);
+  const fetcher = async (path, options = {}) => {
+    calls.push({path, options});
+    if (path === '/v1/workspaces/ws-1/memory' && options.method === 'POST') {
+      return json(201, {page: {id: 'pg-created'}});
+    }
+    if (path === '/v1/workspaces/ws-1/memory/pg-created') {
+      return json(200, {page: {id: 'pg-created', title: '未命名页面', body: '', topics: [], revision: 1,
+        created_by: 'user-1', updated_by: 'user-1'}});
+    }
+    return baseFetcher(path, options);
+  };
+  mount(doc, {fetcher});
+  await tick();
+  assert.equal(el('graph-empty').hidden, false);
+  el('graph-empty-new').click();
+  await tick();
+  const writes = calls.filter(call => call.options.method === 'POST');
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].path, '/v1/workspaces/ws-1/memory');
+  assert.deepEqual(JSON.parse(writes[0].options.body), {title: '未命名页面', body: ''});
+  assert.equal(writes[0].options.headers['X-CSRF-Token'], 'fixture-csrf');
+  assert.ok(writes[0].options.headers['Idempotency-Key']);
+  assert.equal(el('editor-form').hidden, false);
+  assert.equal(el('editor-form').elements.title.value, '未命名页面');
 });

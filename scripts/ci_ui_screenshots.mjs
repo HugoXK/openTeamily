@@ -1370,7 +1370,7 @@ async function main() {
           && await page.locator('#graph-empty-new').isEnabled(),
         emptyText || 'memory graph empty hint missing',
       );
-      screenshots.push(path.basename(await shot(page, outDir, '89-memory-graph-empty.png')));
+      screenshots.push(path.basename(await shot(page, outDir, '90-memory-graph-empty.png')));
       const previous = page.viewportSize();
       await page.setViewportSize({ width: 390, height: 844 });
       await emptyHint.waitFor({ state: 'visible', timeout: 8000 });
@@ -1389,7 +1389,7 @@ async function main() {
         zoomVisible && hintBox && zoomBox && !overlaps,
         `overlap=${overlaps}; hint=${JSON.stringify(hintBox)}; zoom=${JSON.stringify(zoomBox)}`,
       );
-      screenshots.push(path.basename(await shot(page, outDir, '89-memory-graph-empty-390.png')));
+      screenshots.push(path.basename(await shot(page, outDir, '91-memory-graph-empty-390.png')));
       await page.setViewportSize(previous || { width: 1440, height: 900 });
     } catch (error) {
       record('memory_graph_empty', false, String(error));
