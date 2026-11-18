@@ -261,6 +261,12 @@ export function applyDirectoryCollapsed(root, collapsed) {
 
 export const MEMORY_EMPTY_WORKSPACE = '这个工作区还没有记忆页。';
 export const MEMORY_EMPTY_NO_MATCH = '没有匹配的记忆页。试试其他关键词。';
+export const GRAPH_EMPTY_MESSAGE = '创建两个或更多记忆页后，这里会把它们连成图谱';
+
+export function graphEmptyStateVisible({nodeCount = 0, query = ''} = {}) {
+  if (String(query || '').trim()) return false;
+  return Number(nodeCount) < 2;
+}
 
 export function matchingMemoryPages(items, needle) {
   const query = String(needle || '').trim().toLocaleLowerCase();
@@ -619,6 +625,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const payload = graph || {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
     const stats = payload.counts || {nodes: 0, edges: 0, topics: 0};
     if (counts) counts.textContent = `${stats.nodes} 节点 · ${stats.edges} 连接 · ${stats.topics} 话题`;
+    const empty = document.getElementById('graph-empty');
+    if (empty) {
+      empty.hidden = !graphEmptyStateVisible({
+        nodeCount: (payload.nodes || []).length,
+        query: topicQuery,
+      });
+    }
     if (canvas) {
       canvas.replaceChildren();
       const world = svgNode('g', {id: 'graph-world', transform: `translate(320 200) scale(${graphZoom}) translate(-320 -200)`});
@@ -1009,6 +1022,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     : '';
   showView(memoryPageFromSearch(initialSearch), {sync: false});
 
+  const graphEmptyNew = document.getElementById('graph-empty-new');
+  if (graphEmptyNew) {
+    graphEmptyNew.addEventListener('click', () => {
+      const create = document.getElementById('new-page');
+      if (create) create.click();
+    });
+  }
+
   document.getElementById('new-page').addEventListener('click', async () => {
     const id = workspaceId();
     if (!id) return;
@@ -1185,6 +1206,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('close-action-editor').addEventListener('click', () => loadWorkspace());
 
   loadSession();
+  return {renderGraph};
 }
 
 if (typeof document !== 'undefined' && document.getElementById('login-form')) {

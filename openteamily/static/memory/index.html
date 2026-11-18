@@ -71,7 +71,7 @@
       </label>
       <p id="graph-counts" class="memory-counts"></p>
     </header>
-    <p class="note memory-disclaimer">对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。画像、会议、分享和导出尚未实现。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
+    <p class="note memory-disclaimer">对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。空图谱说明、新建入口和窄屏图谱优先布局是 OpenTeamily 补充，未经目标站对照。画像、会议、分享和导出尚未实现。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
     <section id="list-panel" class="memory-workspace" data-view="overview">
       <aside class="memory-dir" id="memory-dir">
         <div class="dir-header">
@@ -110,6 +110,10 @@
         </label>
         <div class="graph-stage">
           <svg id="graph-canvas" viewBox="0 0 640 400" role="img" aria-label="记忆图谱"></svg>
+          <div id="graph-empty" class="graph-empty" hidden>
+            <p>创建两个或更多记忆页后，这里会把它们连成图谱</p>
+            <button type="button" id="graph-empty-new">新建记忆页</button>
+          </div>
           <p class="graph-hint">单击查看 · 双击打开 · 悬停预览</p>
           <div id="graph-hover-card" class="graph-hover-card" hidden role="tooltip">
             <p class="graph-hover-title"></p>

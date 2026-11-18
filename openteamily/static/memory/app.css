@@ -426,6 +426,42 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   opacity: 0.25;
 }
 
+.graph-empty {
+  position: absolute;
+  top: 0.85rem;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(18rem, calc(100vw - 2rem));
+  min-width: 11rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  text-align: center;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.graph-empty[hidden] {
+  display: none;
+}
+
+.graph-empty p {
+  margin: 0;
+  max-width: 18rem;
+  color: color-mix(in srgb, var(--ot-ink) 70%, var(--ot-bg));
+}
+
+.graph-empty button {
+  pointer-events: auto;
+}
+
 .graph-hint {
   position: absolute;
   left: 0;
@@ -476,6 +512,11 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 @media (max-width: 390px) {
   .graph-hover-card {
     display: none;
+  }
+
+  .graph-empty {
+    top: 0.6rem;
+    max-width: min(16rem, calc(100vw - 1.5rem));
   }
 }
 
@@ -608,4 +649,31 @@ html[data-theme-resolved="dark"] .filter-count {
 #topic-filter-chips button,
 .filter-count {
   border-radius: 999px;
+}
+
+/* Original narrow-screen adaptation: keep the graph usable instead of squeezing
+   it between two fixed-width columns. Not a compared Teamily mobile layout. */
+@media (max-width: 700px) {
+  /* Match the panel ID: shell's #list-panel { display: grid } otherwise wins. */
+  #list-panel.memory-workspace:not([hidden]) {
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+    min-width: 0;
+  }
+
+  .memory-workspace > .memory-center {
+    order: -1;
+    flex: 0 0 24rem;
+    min-height: 24rem;
+  }
+
+  .memory-workspace > .memory-dir {
+    flex: 0 0 auto;
+    max-height: 20rem;
+  }
+
+  .memory-workspace > .memory-side {
+    flex: 0 0 auto;
+  }
 }
