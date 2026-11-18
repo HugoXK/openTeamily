@@ -1,4 +1,4 @@
-import { resolveTheme } from '../shell/app.mjs';
+import { NIGHT_WINDOW, resolveTheme } from '../shell/app.mjs';
 
 const KEYS = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end', 'language',
               'chat_language', 'auto_translate', 'send_shortcut', 'message_folding', 'document_cards',
@@ -57,7 +57,8 @@ export function describeAppearance(values) {
     return '当前为' + look + '。自定义时段的字段尚未与对照完整核对。';
   }
   if (appearance === 'auto') {
-    return '当前为' + look + '。「日落到日出」目前按系统浅色或深色偏好估算，没有使用实际日出日落时刻。';
+    return '当前为' + look + '。「日落到日出」拿不到你所在的位置，没有使用实际日出日落时刻：暂按 '
+      + NIGHT_WINDOW.start + ' 至次日 ' + NIGHT_WINDOW.end + ' 为夜间。';
   }
   return '当前为' + look + '（跟随系统）。';
 }

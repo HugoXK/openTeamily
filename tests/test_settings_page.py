@@ -97,6 +97,8 @@ class SettingsPageTests(unittest.TestCase):
         self.assertTrue(-1 < light < dark < auto < system)
         self.assertLess(html.find('始终使用浅色主题。'), html.find('始终使用深色主题。'))
         self.assertIn('没有使用实际日出日落时刻', html)
+        self.assertIn('暂按 22:00 至次日 06:00 为夜间', html)
+        self.assertNotIn('会等你停止操作约 1 分钟再切换', html)
         self.assertIn('legend class="visually-hidden"', html)
         self.assertIn('settings-card-title', html)
         self.assertNotIn('name="fold_long_messages"', html)
@@ -213,13 +215,16 @@ class SettingsPageTests(unittest.TestCase):
     def test_preference_subpages_follow_recorded_copy(self):
         html = self.raw.call('GET', '/settings/appearance')['body'].decode()
         self.assertIn('settings-card-title">自动切换', html)
-        self.assertIn('可能偏差一小时以上', html)
+        self.assertIn('暂按 22:00 至次日 06:00 为夜间', html)
         self.assertIn('可选用「自定义时段」', html)
         self.assertIn('id="appearance-status"', html)
         self.assertLess(html.find('id="appearance-schedule-card"'), html.find('id="appearance-status"'))
         self.assertGreater(html.find('</fieldset>', html.find('id="appearance-status"')),
                            html.find('id="appearance-status"'))
         self.assertNotIn('可能相差一小时以上', html)
+        self.assertNotIn('可能偏差一小时以上', html)
+        self.assertNotIn('按系统浅色或深色偏好估算', html)
+        self.assertNotIn('按你所在地的日落和日出', html)
 
         language = self.raw.call('GET', '/settings/language')['body'].decode()
         self.assertIn('系统语言', language)
