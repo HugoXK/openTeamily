@@ -1,0 +1,43 @@
+.profile-form { display: block; }
+.profile-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+.profile-card {
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  padding: 1.1rem 1.2rem;
+}
+.profile-card h2 { margin: 0 0 0.8rem; font-size: 1rem; }
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+.profile-grid label,
+.profile-goals label {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--ot-muted);
+}
+.profile-grid .wide { grid-column: 1 / -1; }
+.profile-goals { display: grid; gap: 0.7rem; }
+.profile-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+.profile-actions a { font-size: 0.85rem; }
+@media (max-width: 900px) {
+  .profile-layout { grid-template-columns: 1fr; }
+  .profile-grid { grid-template-columns: 1fr; }
+}

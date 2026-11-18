@@ -6,6 +6,7 @@
   <meta name="referrer" content="no-referrer">
   <title>我的资料 · OpenTeamily</title>
   <link rel="stylesheet" href="/shell/app.css">
+  <link rel="stylesheet" href="/profile/app.css">
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/profile/app.mjs"></script>
 </head>
@@ -60,11 +61,64 @@
   <section id="main-panel" hidden>
     <header class="page-top">
       <h1>我的资料</h1>
-      <p class="note">目前只能显示登录用户名。头像、昵称、简介、标签、公开主页和删除账户还没有对应的接口，不能在这里编辑或保存。还不能写成已经功能对等。</p>
+      <p class="note">公开资料会显示昵称、Teamily ID、简介、标签、性别、所在地和网站；人生目标仅你自己可见。头像、帖子和关注/粉丝仍未实现。</p>
+      <p id="whoami"></p>
+      <p>用户名 <strong id="profile-username"></strong></p>
     </header>
-    <p id="whoami"></p>
-    <p>用户名 <strong id="profile-username"></strong></p>
-    <p class="note">未实现：更换头像、昵称、简介、标签、所在地、网站和删除账户。</p>
+    <form id="profile-form" class="profile-form">
+      <div class="profile-layout">
+        <section class="profile-card" aria-label="公开资料">
+          <h2>公开资料</h2>
+          <div class="profile-grid">
+            <label>昵称
+              <input id="profile-name" name="name" maxlength="40" required autocomplete="nickname">
+            </label>
+            <label>Teamily ID
+              <input id="profile-handle" name="handle" maxlength="30" placeholder="3–30 位小写字母、数字、点或下划线">
+            </label>
+            <label class="wide">个人简介
+              <textarea id="profile-bio" name="bio" maxlength="200" rows="3" placeholder="介绍一下你自己"></textarea>
+            </label>
+            <label class="wide">标签
+              <input id="profile-tags" name="tags" maxlength="200" placeholder="用逗号分隔，最多 8 个">
+            </label>
+            <label>性别
+              <select id="profile-gender" name="gender">
+                <option value="">未设置</option>
+                <option value="male">男</option>
+                <option value="female">女</option>
+                <option value="other">其他</option>
+              </select>
+            </label>
+            <label>所在地
+              <input id="profile-location" name="location" maxlength="80" placeholder="城市，国家">
+            </label>
+            <label class="wide">网站
+              <input id="profile-website" name="website" maxlength="200" placeholder="https://...">
+            </label>
+          </div>
+          <p id="profile-meta" class="note"></p>
+        </section>
+        <section class="profile-card" aria-label="人生目标">
+          <h2>人生目标</h2>
+          <p class="note">仅你自己可见。可以留空。</p>
+          <div class="profile-goals">
+            <label>健康与身心 <input id="goal-health" maxlength="200" placeholder="例如：每周跑两次"></label>
+            <label>财务目标 <input id="goal-finance" maxlength="200" placeholder="例如：存够 6 个月生活费"></label>
+            <label>职业发展 <input id="goal-career" maxlength="200" placeholder="例如：学习产品设计"></label>
+            <label>兴趣爱好 <input id="goal-hobbies" maxlength="200" placeholder="例如：今年读 20 本书"></label>
+            <label>家庭与关系 <input id="goal-family" maxlength="200" placeholder="例如：多给父母打电话"></label>
+            <label>效率 <input id="goal-productivity" maxlength="200" placeholder="例如：每天清空收件箱"></label>
+            <label>其他 <input id="goal-other" maxlength="200" placeholder="其他希望被帮助的事"></label>
+          </div>
+        </section>
+      </div>
+      <div class="profile-actions">
+        <button type="submit" id="profile-save">保存</button>
+        <button type="button" id="profile-reload" class="secondary">重新加载</button>
+        <a id="profile-public" href="/v1/profile" target="_blank" rel="noreferrer">公开资料 JSON</a>
+      </div>
+    </form>
   </section>
   </main>
 </body>

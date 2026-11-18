@@ -61,6 +61,7 @@ class SettingsPage:
         '/discover/app.css': ('discover', 'app.css', 'text/css; charset=utf-8'),
         '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/app.mjs': ('profile', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/profile/app.css': ('profile', 'app.css', 'text/css; charset=utf-8'),
         '/download': ('download', 'index.html', 'text/html; charset=utf-8'),
         '/download/app.mjs': ('download', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/guide': ('guide', 'index.html', 'text/html; charset=utf-8'),

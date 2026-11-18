@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -451,6 +451,15 @@ class App:
             if method != 'GET' or query:
                 refuse(400, 'invalid', 'Invalid homepage request')
             return self.render_agent_homepage(homepage_path[1])
+        profile_path = re.fullmatch(r'/v1/profiles/([a-z0-9._]{3,30})', path)
+        if profile_path:
+            if method != 'GET' or query:
+                refuse(400, 'invalid', 'Invalid profile request')
+            with self.store.connect() as db:
+                row = profiles.load_handle(db, profile_path[1])
+            if row is None:
+                refuse(404, 'not_found', 'Profile not found')
+            return 200, {'profile': profiles.public_view(row)}, []
         if path == '/v1/discover/agents':
             if method != 'GET':
                 refuse(405, 'method', 'Only GET is supported')
@@ -536,6 +545,13 @@ class App:
                 self.body(env, [])
                 db.execute('DELETE FROM sessions WHERE token_hash=?', (session['token_hash'],))
                 return 200, {'logged_out': True}, self.session_headers('', '', expires=True)
+            if path == '/v1/profile':
+                if method == 'GET' and not query:
+                    row = profiles.load(db, session['user_id'])
+                    return 200, {'profile': profiles.view(row) if row is not None else None}, []
+                if method == 'POST' and not query:
+                    return self.save_profile(db, session, now, env)
+                refuse(400, 'invalid', 'Invalid profile request')
             if path == '/v1/settings' and method == 'GET' and not query:
                 row = db.execute('SELECT * FROM user_settings WHERE user_id=?', (session['user_id'],)).fetchone()
                 return 200, {'settings': settings.view(row)}, []
@@ -2751,6 +2767,63 @@ class App:
         artifacts.attach_chat_source(
             db, artifact_id, workspace['id'], now, row['id'], message['id'], row['agent_id'])
         return self.artifact_saved(db, workspace['id'], artifact_id, 201)
+
+    def save_profile(self, db, session, now, env):
+        body = self.body(env, ['revision', 'changes'])
+        revision, changes = body.get('revision'), body.get('changes')
+        if (type(revision) is not int or not 0 <= revision <= 2 ** 31
+                or not isinstance(changes, dict) or not changes):
+            refuse(400, 'invalid', 'Provide the current revision and non-empty changes')
+        normalized = profiles.normalize_changes(changes)
+        if normalized is None:
+            refuse(400, 'invalid', 'Invalid profile field')
+        row = profiles.load(db, session['user_id'])
+        if row is None:
+            if revision != 0:
+                refuse(409, 'conflict', 'Profile does not exist yet')
+            name = normalized.get('name') or session['username']
+            handle = normalized.get('handle') or profiles.default_handle(db, session['username'])
+            if handle is None or profiles.load_handle(db, handle) is not None:
+                refuse(409, 'conflict', 'Teamily ID is unavailable')
+            try:
+                db.execute(
+                    'INSERT INTO user_profiles VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)',
+                    (session['user_id'], handle, handle, name[:profiles.NAME_MAX],
+                     normalized.get('bio', ''), profiles.serialize_tags(normalized.get('tags', [])),
+                     normalized.get('gender', ''), normalized.get('location', ''),
+                     normalized.get('website', ''), profiles.serialize_goals(normalized.get('goals', {})),
+                     now, now))
+            except sqlite3.IntegrityError:
+                refuse(409, 'conflict', 'Teamily ID is unavailable')
+            return 201, {'profile': profiles.view(profiles.load(db, session['user_id']))}, []
+        if revision != row['revision']:
+            raise RuntimeFault(409, 'conflict', 'Profile changed elsewhere; reload and retry',
+                               profiles.view(row))
+        handle = normalized.get('handle', row['handle'])
+        if handle != row['handle']:
+            other = profiles.load_handle(db, handle)
+            if other is not None and other['user_id'] != session['user_id']:
+                refuse(409, 'conflict', 'Teamily ID is unavailable')
+        name = normalized.get('name', row['name'])
+        bio = normalized.get('bio', row['bio'])
+        tags = profiles.serialize_tags(normalized['tags']) if 'tags' in normalized else row['tags']
+        gender = normalized.get('gender', row['gender'])
+        location = normalized.get('location', row['location'])
+        website = normalized.get('website', row['website'])
+        goals = profiles.serialize_goals(normalized['goals']) if 'goals' in normalized else row['goals']
+        if (handle, name, bio, tags, gender, location, website, goals) == (
+                row['handle'], row['name'], row['bio'], row['tags'], row['gender'],
+                row['location'], row['website'], row['goals']):
+            return 200, {'profile': profiles.view(row)}, []
+        try:
+            db.execute(
+                'UPDATE user_profiles SET handle=?, handle_lower=?, name=?, bio=?, tags=?, '
+                'gender=?, location=?, website=?, goals=?, revision=?, updated=? WHERE user_id=?',
+                (handle, handle, name, bio, tags, gender, location, website, goals,
+                 row['revision'] + 1, now, session['user_id']))
+        except sqlite3.IntegrityError:
+            refuse(409, 'conflict', 'Teamily ID is unavailable')
+        return 200, {'profile': profiles.view(profiles.load(db, session['user_id']))}, []
 
     def search_messages(self, db, session, method, query, workspace_id):
         if method != 'GET':
