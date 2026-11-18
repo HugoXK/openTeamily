@@ -1461,6 +1461,26 @@ async function main() {
     }
 
     try {
+      const search = page.locator('#search');
+      await search.fill('zz-no-such-memory');
+      await waitForLocatorText(page, '#list-empty', '没有匹配的记忆页。试试其他关键词。');
+      const emptyText = ((await page.locator('#list-empty').textContent()) || '').trim();
+      const listPanelVisible = await page.locator('#list-panel').isVisible();
+      const allCount = ((await page.locator('#filter-all-count').textContent()) || '').trim();
+      record(
+        'memory_search_filter',
+        emptyText === '没有匹配的记忆页。试试其他关键词。'
+          && listPanelVisible,
+        `empty=${emptyText}; count=${allCount}; listPanel=${listPanelVisible}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '88-memory-search-filter.png')));
+      await search.press('Escape');
+      await waitForLocatorText(page, '#memory-list', ready.memory_title);
+    } catch (error) {
+      record('memory_search_filter', false, String(error));
+    }
+
+    try {
       await page.locator('#memory-list button', { hasText: ready.memory_title }).first().click();
       await waitForInputValue(page, '#editor-form input[name="title"]', ready.memory_title);
       await waitForInputValue(page, '#editor-form textarea[name="body"]', ready.memory_body);
