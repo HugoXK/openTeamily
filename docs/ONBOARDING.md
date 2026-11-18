@@ -30,7 +30,7 @@ Additive `user_onboarding` table (`user_id` primary key, industry, role, complet
 
 ## Page
 
-`/onboarding` is a same-origin page with the industry select, role chips, custom industry/role inputs, 「保存并继续」 and 「暂时跳过」. After save or skip it goes to `/chat`. `/chat` shows a hint link when the context is not completed. `docs/screenshots/onboarding/` holds synthetic review captures; they are not browser acceptance.
+`/onboarding` is a same-origin page with the industry select, role chips, custom industry/role inputs, 「保存并继续」 and 「暂时跳过」. After save or skip it goes to `/chat`. `/chat` shows a hint link when the context is not completed. The shared account menu now includes a 「工作背景」 item that opens this page, placed after 「创建团队」 and before 「帮助」, which is the recorded slot for Teamily's 「新手引导」. The entry uses the destination name because steps 2–4 are still unconnected; it does not invent those steps or force a first-login redirect. `docs/screenshots/onboarding/` holds synthetic review captures; they are not browser acceptance.
 
 ## Explicitly not in this slice
 
@@ -43,7 +43,8 @@ Additive `user_onboarding` table (`user_id` primary key, industry, role, complet
 The contributor branch incorporates main with an ordinary merge (no rebase or
 history rewrite), retaining both onboarding and personal-agent routes/tables and
 both chat startup calls. Every shell page, including onboarding, distinguishes
-the implemented 功能指引 link from the unimplemented 帮助中心 slot. Custom industry
+the implemented 功能指引 link from the unimplemented 帮助中心 slot, and the account menu
+links 工作背景 to `/onboarding`. Custom industry
 and role values are restored after reload. Integration tests cover repeatable v1
 initialization, personal mapping plus user context persistence, isolation and
 Origin/CSRF. App connections, recommendations and avatar steps remain unconnected.

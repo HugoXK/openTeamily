@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyResolvedTheme, resolveTheme } from '../openteamily/static/shell/app.mjs';
+import { applyResolvedTheme, ensureOnboardingMenuItem, ONBOARDING_MENU_HREF, ONBOARDING_MENU_LABEL, resolveTheme } from '../openteamily/static/shell/app.mjs';
 
 function at(hours, minutes = 0) {
   return new Date(2026, 10, 16, hours, minutes, 0);
@@ -76,4 +76,102 @@ test('applyResolvedTheme records the resolved theme on the document', () => {
   assert.equal(applyResolvedTheme(doc, {appearance: 'dark'}), 'dark');
   assert.equal(doc.documentElement.dataset.themeResolved, 'dark');
   assert.equal(doc.body.dataset.themeResolved, 'dark');
+});
+
+
+class MenuNode {
+  constructor(tag = 'div', attrs = {}) {
+    this.tagName = String(tag).toUpperCase();
+    this.children = [];
+    this.parentNode = null;
+    this.attributes = {...attrs};
+    this.className = attrs.class || '';
+    this.href = attrs.href || '';
+    this.textContent = attrs.text || '';
+  }
+  getAttribute(key) { return this.attributes[key]; }
+  setAttribute(key, value) {
+    this.attributes[key] = value;
+    if (key === 'href') this.href = value;
+    if (key === 'class') this.className = value;
+  }
+  appendChild(node) {
+    if (node.parentNode) node.parentNode.removeChild(node);
+    node.parentNode = this;
+    this.children.push(node);
+    return node;
+  }
+  removeChild(node) {
+    this.children = this.children.filter((child) => child !== node);
+    node.parentNode = null;
+    return node;
+  }
+  insertBefore(node, reference) {
+    if (!reference) return this.appendChild(node);
+    if (node.parentNode) node.parentNode.removeChild(node);
+    const index = this.children.indexOf(reference);
+    if (index === -1) return this.appendChild(node);
+    node.parentNode = this;
+    this.children.splice(index, 0, node);
+    return node;
+  }
+}
+
+function accountMenu(items) {
+  const menu = new MenuNode('div', {id: 'account-menu'});
+  for (const item of items) {
+    if (item.kind === 'sub') {
+      const sub = new MenuNode('div', {class: 'account-sub'});
+      menu.appendChild(sub);
+    } else {
+      const link = new MenuNode('a', {href: item.href, role: 'menuitem', text: item.text});
+      link.textContent = item.text;
+      menu.appendChild(link);
+    }
+  }
+  const doc = {
+    getElementById(id) { return id === 'account-menu' ? menu : null; },
+    createElement(tag) { return new MenuNode(tag); },
+  };
+  return {doc, menu};
+}
+
+function labels(menu) {
+  return menu.children.map((node) => node.textContent || node.className);
+}
+
+test('ensureOnboardingMenuItem does nothing when the account menu is missing', () => {
+  assert.equal(ensureOnboardingMenuItem({getElementById() { return null; }}), null);
+});
+
+test('ensureOnboardingMenuItem inserts 工作背景 before help, after 创建团队', () => {
+  const {doc, menu} = accountMenu([
+    {href: '/profile', text: '查看我的资料'},
+    {href: '/team', text: '创建团队'},
+    {kind: 'sub'},
+    {href: '/settings', text: '所有设置'},
+  ]);
+  const link = ensureOnboardingMenuItem(doc);
+  assert.equal(link.getAttribute('href'), ONBOARDING_MENU_HREF);
+  assert.equal(link.getAttribute('role'), 'menuitem');
+  assert.equal(link.textContent, ONBOARDING_MENU_LABEL);
+  assert.match(link.getAttribute('title'), /新手引导/);
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', '工作背景', 'account-sub', '所有设置']);
+});
+
+test('ensureOnboardingMenuItem moves an existing link into the recorded slot and does not duplicate it', () => {
+  const {doc, menu} = accountMenu([
+    {href: '/profile', text: '查看我的资料'},
+    {href: '/onboarding', text: '新手引导'},
+    {href: '/team', text: '创建团队'},
+    {kind: 'sub'},
+    {href: '/settings', text: '所有设置'},
+  ]);
+  ensureOnboardingMenuItem(doc);
+  const again = ensureOnboardingMenuItem(doc);
+  const matches = menu.children.filter((node) => node.getAttribute && node.getAttribute('href') === '/onboarding');
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0], again);
+  assert.equal(again.textContent, '工作背景');
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', '工作背景', 'account-sub', '所有设置']);
 });
