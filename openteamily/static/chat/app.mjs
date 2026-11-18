@@ -827,6 +827,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('session-pane').hidden = false;
     document.body.classList.add('chat-open');
     document.getElementById('whoami').textContent = currentUser.username;
+    const onboarding = await request('GET', '/v1/onboarding');
+    const banner = document.getElementById('onboarding-banner');
+    if (banner && onboarding.status === 200) {
+      banner.hidden = Boolean(onboarding.body.onboarding && onboarding.body.onboarding.completed);
+    }
     const [listed, settings] = await Promise.all([
       request('GET', '/v1/workspaces?limit=100'),
       request('GET', '/v1/settings'),
