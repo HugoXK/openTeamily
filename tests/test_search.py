@@ -128,5 +128,103 @@ class SearchTests(unittest.TestCase):
         self.assertNotEqual(rest['body']['items'][0]['message_id'], page['body']['items'][0]['message_id'])
 
 
+
+class SearchOrderTests(unittest.TestCase):
+    """issue #185: hits come back in creation order, not uuid order.
+
+    Message ids are uuid4, so sorting by id scrambles a conversation in time.
+    Every message here is posted one minute after the previous one, and the
+    agent and social streams are interleaved so a merge by id cannot pass by
+    accident (8! orderings, one of them is chronological).
+    """
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.now = 1800000000
+        self.app = App(Store(Path(self.temp.name) / 'state'), Config(ORIGIN, allow_registration=True),
+                       clock=lambda: self.now)
+        self.alice = Client(self.app)
+        self.alice.register('alice')
+        self.bob = Client(self.app, peer='127.0.0.2')
+        self.bob.register('bob')
+        self.wid = self.alice.workspace()['body']['workspace']['id']
+        self.alice.call('POST', f'/v1/workspaces/{self.wid}/members',
+                        {'username': 'bob', 'role': 'member'})
+        bob_id = self.bob.call('GET', '/v1/auth/session')['body']['user']['id']
+        agent = self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/agents',
+            {'name': '财务助手', 'summary': '', 'instructions': ''},
+            {'HTTP_IDEMPOTENCY_KEY': 'order-agent-0000001'})
+        self.agent_id = agent['body']['agent']['id']
+        dm = self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/social/conversations',
+            {'kind': 'dm', 'member_ids': [bob_id]},
+            {'HTTP_IDEMPOTENCY_KEY': 'order-social-000001'})
+        self.dm_id = dm['body']['conversation']['id']
+
+    def post_agent(self, index, body):
+        conversation = self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/agents/{self.agent_id}/conversations',
+            {'title': f'排序 {index}'},
+            {'HTTP_IDEMPOTENCY_KEY': f'order-conv-{index:08d}'})
+        conversation_id = conversation['body']['conversation']['id']
+        sent = self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/agents/{self.agent_id}/conversations/{conversation_id}/messages',
+            {'body': body}, {'HTTP_IDEMPOTENCY_KEY': f'order-amsg-{index:08d}'})
+        self.assertEqual(sent['status'], 201, sent)
+        posted = sent['body']['message']
+        self.now += 60
+        return posted['id'], posted['created']
+
+    def post_social(self, index, body):
+        sent = self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/social/conversations/{self.dm_id}/messages',
+            {'body': body}, {'HTTP_IDEMPOTENCY_KEY': f'order-smsg-{index:08d}'})
+        self.assertEqual(sent['status'] in (200, 201), True, sent)
+        posted = sent['body']['message']
+        self.now += 60
+        return posted['id'], posted['created']
+
+    def search(self, query):
+        return self.alice.call('GET', f'/v1/workspaces/{self.wid}/search/messages?{query}')
+
+    def test_one_kind_keeps_creation_order(self):
+        posted = [self.post_social(index, f'排序探针 第{index}条') for index in range(1, 9)]
+        result = self.search('q=排序探针&kind=social&limit=50')
+        self.assertEqual(result['status'], 200, result)
+        items = result['body']['items']
+        self.assertEqual(len(items), 8, items)
+        created = [item['created'] for item in items]
+        self.assertEqual(created, [row[1] for row in posted])
+        self.assertEqual([item['message_id'] for item in items], [row[0] for row in posted])
+
+    def test_merged_kinds_and_cursor_keep_creation_order(self):
+        posted = []
+        for index in range(1, 9):
+            body = f'排序探针 第{index}条'
+            if index % 2:
+                posted.append(self.post_agent(index, body))
+            else:
+                posted.append(self.post_social(index, body))
+        result = self.search('q=排序探针&kind=all&limit=50')
+        self.assertEqual(result['status'], 200, result)
+        items = result['body']['items']
+        self.assertEqual(len(items), 8, items)
+        self.assertEqual([item['created'] for item in items], [row[1] for row in posted])
+
+        seen, cursor = [], None
+        while True:
+            url = 'q=排序探针&kind=all&limit=3' + (f'&cursor={cursor}' if cursor else '')
+            page = self.search(url)
+            self.assertEqual(page['status'], 200, page)
+            seen.extend((item['created'], item['message_id']) for item in page['body']['items'])
+            cursor = page['body']['cursor']
+            if not cursor:
+                break
+        self.assertEqual([created for created, _ in seen], [row[1] for row in posted])
+        self.assertEqual([message_id for _, message_id in seen], [row[0] for row in posted])
+
+
 if __name__ == '__main__':
     unittest.main()
