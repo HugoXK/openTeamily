@@ -655,7 +655,7 @@ html[data-theme-resolved="dark"] .filter-count {
    it between two fixed-width columns. Not a compared Teamily mobile layout. */
 @media (max-width: 700px) {
   /* Match the panel ID: shell's #list-panel { display: grid } otherwise wins. */
-  #list-panel.memory-workspace {
+  #list-panel.memory-workspace:not([hidden]) {
     display: flex;
     flex-direction: column;
     overflow: auto;

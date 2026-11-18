@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {readFileSync} from 'node:fs';
 import {
   GRAPH_EMPTY_MESSAGE,
   graphEmptyStateVisible,
@@ -221,4 +222,11 @@ test('the graph create entry posts through the existing flow and opens the creat
   assert.ok(writes[0].options.headers['Idempotency-Key']);
   assert.equal(el('editor-form').hidden, false);
   assert.equal(el('editor-form').elements.title.value, '未命名页面');
+});
+
+
+test('narrow stacking overrides the shell panel grid only while the list is visible', () => {
+  const css = readFileSync(new URL('../openteamily/static/memory/app.css', import.meta.url), 'utf8');
+  assert.match(css, /@media \(max-width: 700px\)[\s\S]*#list-panel\.memory-workspace:not\(\[hidden\]\)\s*\{\s*display: flex;/);
+  assert.doesNotMatch(css, /#list-panel\.memory-workspace\s*\{\s*display: flex;/);
 });
