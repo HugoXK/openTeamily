@@ -1250,21 +1250,33 @@ async function main() {
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
     const teamHeading = await visibleText(page.locator('h1'));
     const step1 = await page.locator('#wizard-form #step-1').isVisible();
-    record('team_wizard', teamHeading.includes('创建团队') && step1, `heading=${teamHeading}`);
+    const nameField = await page.locator('#wizard-form input[name="name"]').isVisible();
+    const slugField = await page.locator('#wizard-form input[name="slug"]').isVisible();
+    const nextDisabled = await page.locator('#next').isDisabled();
+    const step1Text = await visibleText(page.locator('#step-1'));
+    record(
+      'team_wizard',
+      teamHeading.includes('创建团队') && step1 && nameField && slugField && nextDisabled
+        && step1Text.includes('为团队命名')
+        && step1Text.includes('创建独立的团队工作区')
+        && step1Text.includes('转化我当前的工作区'),
+      `heading=${teamHeading}; nextDisabled=${nextDisabled}`,
+    );
     screenshots.push(path.basename(await shot(page, outDir, '13-team-wizard-step1.png')));
     try {
       await page.locator('#wizard-form input[name="name"]').fill('CI Fixture Preview Team');
-      await page.locator('#next').click();
-      await page.locator('#step-2').waitFor({ state: 'visible', timeout: 10000 });
-      record('team_wizard_step2', await page.locator('#step-2').isVisible(), 'name accepted; team ID step visible', { soft: true });
-      screenshots.push(path.basename(await shot(page, outDir, '13b-team-wizard-step2.png')));
       await page.locator('#wizard-form input[name="slug"]').fill('ci-preview-team');
       await page.locator('#next').click();
-      await page.locator('#step-3').waitFor({ state: 'visible', timeout: 10000 });
-      record('team_wizard_step3', await page.locator('#step-3').isVisible(), 'slug accepted; workspace step visible, not submitted', { soft: true });
-      screenshots.push(path.basename(await shot(page, outDir, '13c-team-wizard-step3.png')));
+      await page.locator('#step-later').waitFor({ state: 'visible', timeout: 10000 });
+      record(
+        'team_wizard_continuation',
+        await page.locator('#step-later').isVisible() && await page.locator('#submit').isVisible(),
+        'name and slug accepted; unverified continuation visible, not submitted',
+        { soft: true },
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '13b-team-wizard-continuation.png')));
     } catch (error) {
-      record('team_wizard_steps', false, String(error), { soft: true });
+      record('team_wizard_continuation', false, String(error), { soft: true });
     }
 
     await page.goto(`${origin}/runtimes`, { waitUntil: 'load' });

@@ -12,6 +12,10 @@ export function validSlug(value) {
   return /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(value || '');
 }
 
+export function step1Ready(values) {
+  return validName(values.name) && validSlug(values.slug);
+}
+
 export function readWizard(form) {
   const data = new FormData(form);
   const mode = data.get('mode') || 'new';
@@ -41,7 +45,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
   const form = document.getElementById('wizard-form');
-  let step = 1;
+  let onFirstStep = true;
   let owned = [];
 
   function show(kind, text) {
@@ -62,16 +66,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return {status: response.status, body: parsed};
   }
 
+  function syncContinue() {
+    document.getElementById('next').disabled = !step1Ready(readWizard(form));
+  }
+
+  function syncConvertPicker() {
+    const values = readWizard(form);
+    const converting = values.mode === 'convert';
+    const needsPicker = converting && owned.length > 1;
+    const note = document.getElementById('convert-workspace-note');
+    const field = document.getElementById('convert-workspace-field');
+    note.hidden = !converting;
+    field.hidden = !needsPicker;
+  }
+
   function renderStep() {
-    for (const marker of document.querySelectorAll('#steps [data-step]')) {
-      marker.setAttribute('aria-current', Number(marker.dataset.step) === step ? 'step' : 'false');
-    }
-    for (const index of [1, 2, 3]) {
-      document.getElementById('step-' + index).hidden = index !== step;
-    }
-    document.getElementById('back').hidden = step === 1;
-    document.getElementById('next').hidden = step === 3;
-    document.getElementById('submit').hidden = step !== 3;
+    document.getElementById('step-1').hidden = !onFirstStep;
+    document.getElementById('step-later').hidden = onFirstStep;
+    document.getElementById('back').hidden = onFirstStep;
+    document.getElementById('next').hidden = !onFirstStep;
+    document.getElementById('submit').hidden = onFirstStep;
+    syncContinue();
+    syncConvertPicker();
   }
 
   async function renderProviders() {
@@ -111,11 +127,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     loginPanel.hidden = true;
     mainPanel.hidden = false;
-    document.getElementById('whoami').textContent = session.body.user.username;
+    const whoami = document.getElementById('whoami');
+    if (whoami) whoami.textContent = session.body.user.username;
     const listed = await request('GET', '/v1/workspaces?limit=100');
     const items = listed.status === 200 ? (listed.body.items || []) : [];
     owned = items.filter(item => item.owner_id === session.body.user.id && item.kind !== 'team');
     const select = form.elements.workspace_id;
+    const previous = select.value;
     select.textContent = '';
     for (const item of owned) {
       const option = document.createElement('option');
@@ -123,6 +141,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       option.textContent = item.name;
       select.appendChild(option);
     }
+    if (previous && owned.some(item => item.id === previous)) select.value = previous;
     renderStep();
   }
 
@@ -140,35 +159,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
+  form.addEventListener('input', () => {
+    syncContinue();
+    syncConvertPicker();
+  });
+  form.addEventListener('change', () => {
+    syncContinue();
+    syncConvertPicker();
+  });
+
   document.getElementById('next').addEventListener('click', () => {
     const values = readWizard(form);
-    if (step === 1 && !validName(values.name)) {
-      show('error', '团队名称需要 1 到 60 个字。');
-      return;
-    }
-    if (step === 2 && !validSlug(values.slug)) {
-      show('error', '团队 ID 需要 3 到 30 个小写字母、数字或连字符。');
+    if (!step1Ready(values)) {
+      show('error', '请先填好团队名称和 Team ID。');
       return;
     }
     show('', '');
-    step += 1;
+    onFirstStep = false;
     renderStep();
   });
 
   document.getElementById('back').addEventListener('click', () => {
-    step = Math.max(1, step - 1);
+    onFirstStep = true;
     renderStep();
   });
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const values = readWizard(form);
-    if (!validName(values.name) || !validSlug(values.slug)) {
+    if (!step1Ready(values)) {
       show('error', '请先填好名称和团队 ID。');
       return;
     }
     if (values.mode === 'convert' && !values.workspace_id) {
-      show('error', '请选择要转换的工作区。');
+      show('error', '当前没有可转换的工作区。');
       return;
     }
     const body = {name: values.name, slug: values.slug, mode: values.mode};
@@ -179,6 +203,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     show('ok', values.mode === 'convert' ? '当前工作区已转成团队。' : '已创建独立团队工作区。');
+    onFirstStep = true;
+    form.reset();
+    form.elements.mode.value = 'new';
     await load();
   });
 
@@ -189,7 +216,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '退出失败。'));
       return;
     }
-    step = 1;
+    onFirstStep = true;
     await load();
   });
 
