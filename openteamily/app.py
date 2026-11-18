@@ -1303,10 +1303,11 @@ class App:
         content_type = env.get('CONTENT_TYPE', '')
         if content_type.split(';', 1)[0].strip().lower() == 'multipart/form-data':
             return self.create_media_artifact(db, workspace, session, now, env)
-        body = self.body(env, ['title', 'body', 'kind', 'board', 'slides'], limit=70000)
+        body = self.body(env, ['title', 'body', 'kind', 'board', 'slides', 'dashboard'], limit=70000)
         title, content, kind = body.get('title'), body.get('body', ''), body.get('kind', 'document')
         board = None
         slides = None
+        dashboard = None
         if kind == 'media':
             refuse(400, 'invalid', 'Upload media as multipart form data')
         if kind == 'whiteboard':
@@ -1320,6 +1321,12 @@ class App:
                     or (content and not artifacts.valid_body(content))):
                 refuse(400, 'invalid', 'Provide a slide title and at least one slide')
             content = content if artifacts.valid_body(content) else ''
+        elif kind == 'dashboard':
+            dashboard = artifacts.normalize_dashboard(body.get('dashboard') or artifacts.EMPTY_DASHBOARD)
+            if (dashboard is None or not dashboard['widgets'] or not artifacts.valid_title(title)
+                    or (content and not artifacts.valid_body(content))):
+                refuse(400, 'invalid', 'Provide a dashboard title and at least one widget')
+            content = content if artifacts.valid_body(content) else ''
         elif kind not in ('document', 'website') or not artifacts.valid_title(title) or not artifacts.valid_body(content):
             refuse(400, 'invalid', 'Provide a document or website title and body')
         title = title.strip()
@@ -1331,6 +1338,8 @@ class App:
             payload['board'] = board
         if slides is not None:
             payload['slides'] = slides
+        if dashboard is not None:
+            payload['dashboard'] = dashboard
         key_hash, request_hash = digest('artifact:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         )
@@ -1360,6 +1369,8 @@ class App:
             refuse(400, 'invalid', 'Provide a whiteboard title and board')
         if slides is not None and not artifacts.attach_slides(db, aid, slides):
             refuse(400, 'invalid', 'Provide valid slide content')
+        if dashboard is not None and not artifacts.attach_dashboard(db, aid, dashboard):
+            refuse(400, 'invalid', 'Provide valid dashboard content')
         return self.artifact_saved(db, workspace['id'], aid, 201)
 
     def update_artifact(self, db, workspace, session, actor, row, now, body):
@@ -1374,6 +1385,8 @@ class App:
             allowed = {'title', 'board', 'operations'}
         elif kind == 'slides':
             allowed = {'title', 'slides'}
+        elif kind == 'dashboard':
+            allowed = {'title', 'dashboard'}
         elif kind == 'media':
             allowed = {'title'}
         if set(changes) - allowed:
@@ -1385,6 +1398,7 @@ class App:
         content = row['body']
         board = artifacts.decode_board(row['board_json']) if kind == 'whiteboard' else None
         slides = artifacts.decode_slides(row['slides_json']) if kind == 'slides' else None
+        dashboard = artifacts.decode_dashboard(row['dashboard_json']) if kind == 'dashboard' else None
         if 'title' in changes:
             if not artifacts.valid_title(changes['title']):
                 refuse(400, 'invalid', 'Provide a document title and body')
@@ -1405,11 +1419,17 @@ class App:
             slides = artifacts.normalize_slides(changes['slides'])
             if slides is None or not slides['slides']:
                 refuse(400, 'invalid', 'Provide at least one valid slide')
+        if 'dashboard' in changes:
+            dashboard = artifacts.normalize_dashboard(changes['dashboard'])
+            if dashboard is None or not dashboard['widgets']:
+                refuse(400, 'invalid', 'Provide at least one valid dashboard widget')
         unchanged = title == row['title'] and content == row['body']
         if kind == 'whiteboard':
             unchanged = title == row['title'] and artifacts.board_json(board) == row['board_json']
         elif kind == 'slides':
             unchanged = title == row['title'] and artifacts.slides_json(slides) == row['slides_json']
+        elif kind == 'dashboard':
+            unchanged = title == row['title'] and artifacts.dashboard_json(dashboard) == row['dashboard_json']
         if unchanged:
             return 200, {'artifact': artifacts.view(row)}, []
         self.guard_artifact_versions(db, row['id'])
@@ -1427,6 +1447,8 @@ class App:
             refuse(400, 'invalid', 'Provide a valid board')
         if kind == 'slides' and not artifacts.attach_slides(db, row['id'], slides):
             refuse(400, 'invalid', 'Provide valid slide content')
+        if kind == 'dashboard' and not artifacts.attach_dashboard(db, row['id'], dashboard):
+            refuse(400, 'invalid', 'Provide valid dashboard content')
         return self.artifact_saved(db, workspace['id'], row['id'], 200)
 
 
@@ -1501,9 +1523,10 @@ class App:
         ).fetchone():
             refuse(409, 'conflict', 'A document with this title already exists')
         kind = snapshot['kind']
-        deck = artifacts.decode_slides(snapshot['body']) if kind == 'document' else None
-        if deck is not None:
-            kind = 'slides'
+        structured_kind, structured = (artifacts.decode_structured(snapshot['body'])
+                                        if kind == 'document' else (None, None))
+        if structured is not None:
+            kind = structured_kind
         content = snapshot['body'] if kind in ('document', 'website') else ''
         db.execute(
             'UPDATE artifacts SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
@@ -1511,25 +1534,35 @@ class App:
         )
         artifacts.set_render(db, row['id'], kind)
         if kind == 'slides':
-            if not artifacts.attach_slides(db, row['id'], deck):
+            if not artifacts.attach_slides(db, row['id'], structured):
                 refuse(400, 'invalid', 'Provide valid slide content')
             db.execute('DELETE FROM artifact_media WHERE artifact_id=?', (row['id'],))
             db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
+        elif kind == 'dashboard':
+            if not artifacts.attach_dashboard(db, row['id'], structured):
+                refuse(400, 'invalid', 'Provide valid dashboard content')
+            db.execute('DELETE FROM artifact_media WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
         elif kind == 'whiteboard':
             board = artifacts.decode_board(snapshot['board']) or dict(artifacts.EMPTY_BOARD)
             if not artifacts.attach_board(db, row['id'], board):
                 refuse(400, 'invalid', 'Provide a valid board')
             db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
         elif kind == 'media':
             artifacts.attach_media(
                 db, row['id'], snapshot['mime'], snapshot['byte_count'],
                 snapshot['sha256'], snapshot['filename'],
             )
             db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
         else:
             db.execute('DELETE FROM artifact_media WHERE artifact_id=?', (row['id'],))
             db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (row['id'],))
             db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
         return self.artifact_saved(db, row['workspace_id'], row['id'], 200)
 
     def artifact_share_dispatch(self, db, session, method, query, now, env, actor, row, share_id, share_revoking):

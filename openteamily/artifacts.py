@@ -72,6 +72,9 @@ CREATE TABLE IF NOT EXISTS artifact_boards (
 CREATE TABLE IF NOT EXISTS artifact_slides (
  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
  deck TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS artifact_dashboards (
+ artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+ dashboard TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS artifact_chat_sources (
  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -126,6 +129,14 @@ SLIDE_BULLETS_MAX = 10
 SLIDE_BULLET_MAX = 200
 EMPTY_SLIDES = {'schema': SLIDES_SCHEMA, 'slides': []}
 SLIDE_CONTROL = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
+DASHBOARD_SCHEMA = 'openteamily.dashboard.v1'
+DASHBOARD_MAX_WIDGETS = 20
+DASHBOARD_TABLE_COLUMNS_MAX = 6
+DASHBOARD_TABLE_ROWS_MAX = 50
+DASHBOARD_CELL_MAX = 200
+DASHBOARD_BARS_MAX = 12
+DASHBOARD_CONTROL = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
+EMPTY_DASHBOARD = {'schema': DASHBOARD_SCHEMA, 'widgets': []}
 SHARE_CSP = (
     "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox; "
     "base-uri 'none'; form-action 'none'; frame-ancestors 'self'; object-src 'none'"
@@ -156,6 +167,7 @@ ROW_SELECT = (
     'cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id, '
     'cs.agent_id AS chat_agent_id, ac.title AS chat_conversation_title, '
     'sl.deck AS slides_json, '
+    'db.dashboard AS dashboard_json, '
     'sc.title AS social_conversation_title '
     'FROM artifacts a '
     'JOIN users cu ON cu.id=a.created_by '
@@ -168,6 +180,7 @@ ROW_SELECT = (
     'LEFT JOIN agent_conversations ac ON ac.id=cs.conversation_id '
     'LEFT JOIN social_conversations sc ON sc.id=cs.conversation_id '
     'LEFT JOIN artifact_slides sl ON sl.artifact_id=a.id '
+    'LEFT JOIN artifact_dashboards db ON db.artifact_id=a.id '
 )
 
 
@@ -190,6 +203,8 @@ def public_kind(row):
         return 'whiteboard'
     if row['slides_json']:
         return 'slides'
+    if row['dashboard_json']:
+        return 'dashboard'
     return 'website' if row['render'] == 'website' else 'document'
 
 
@@ -251,6 +266,9 @@ def view(row, include_body=True):
     elif kind == 'slides':
         if include_body:
             data['slides'] = decode_slides(row['slides_json']) or dict(EMPTY_SLIDES)
+    elif kind == 'dashboard':
+        if include_body:
+            data['dashboard'] = decode_dashboard(row['dashboard_json']) or dict(EMPTY_DASHBOARD)
     elif include_body:
         data['body'] = row['body']
     return data
@@ -333,9 +351,11 @@ def version_count(db, artifact_id):
 
 def record_version(db, row):
     kind = public_kind(row)
-    stored_kind = 'document' if kind == 'slides' else kind
+    stored_kind = 'document' if kind in ('slides', 'dashboard') else kind
     if kind == 'slides':
         body = row['slides_json'] or slides_json(EMPTY_SLIDES) or ''
+    elif kind == 'dashboard':
+        body = row['dashboard_json'] or dashboard_json(EMPTY_DASHBOARD) or ''
     else:
         body = row['body'] if kind in ('document', 'website') else ''
     board = row['board_json'] if kind == 'whiteboard' else None
@@ -379,11 +399,11 @@ def version_view(row, include_body=True):
             'filename': row['filename'],
         }
     else:
-        deck = decode_slides(row['body']) if kind == 'document' else None
-        if deck is not None:
-            data['kind'] = 'slides'
+        structured_kind, structured = decode_structured(row['body']) if kind == 'document' else (None, None)
+        if structured is not None:
+            data['kind'] = structured_kind
             if include_body:
-                data['slides'] = deck
+                data[structured_kind] = structured
         elif include_body:
             if kind == 'whiteboard':
                 data['board'] = decode_board(row['board']) or dict(EMPTY_BOARD)
@@ -395,10 +415,16 @@ def version_view(row, include_body=True):
 def same_as_version(row, snapshot):
     if row['title'] != snapshot['title']:
         return False
-    if public_kind(row) == 'slides':
-        return snapshot['kind'] == 'document' and row['slides_json'] == slides_json(
-            decode_slides(snapshot['body']))
-    if public_kind(row) != snapshot['kind']:
+    current_kind = public_kind(row)
+    if current_kind in ('slides', 'dashboard'):
+        structured_kind, structured = (decode_structured(snapshot['body'])
+                                        if snapshot['kind'] == 'document' else (None, None))
+        if structured_kind != current_kind:
+            return False
+        if current_kind == 'slides':
+            return row['slides_json'] == slides_json(structured)
+        return row['dashboard_json'] == dashboard_json(structured)
+    if current_kind != snapshot['kind']:
         return False
     kind = snapshot['kind']
     if kind == 'media':
@@ -427,7 +453,7 @@ def export_filename(title, kind, revision=None, media_filename=None):
     if kind == 'media':
         name = clean_filename(media_filename or '')
         return name if name != 'file' or not media_filename else 'file'
-    suffix = {'document': '.txt', 'website': '.html', 'whiteboard': '.svg', 'slides': '.html'}.get(kind, '.txt')
+    suffix = {'document': '.txt', 'website': '.html', 'whiteboard': '.svg', 'slides': '.html', 'dashboard': '.html'}.get(kind, '.txt')
     tag = kind + (f'-{revision}' if revision else '')
     base = tag + suffix
     return base if SAFE_FILENAME.fullmatch(base) else 'artifact' + suffix
@@ -459,14 +485,19 @@ def export_bytes(row, data_dir, workspace_id, from_version=False):
         payload = read_media_bytes(data_dir, workspace_id, digest_hex, expected)
         name = export_filename(title, kind, revision, filename)
         return payload, mime, name
-    deck = None
+    structured_kind, structured = (None, None)
     if kind == 'slides':
-        deck = decode_slides(row['slides_json'])
+        structured_kind, structured = 'slides', decode_slides(row['slides_json'])
+    elif kind == 'dashboard':
+        structured_kind, structured = 'dashboard', decode_dashboard(row['dashboard_json'])
     elif from_version and kind == 'document':
-        deck = decode_slides(row['body'])
-    if deck is not None:
-        payload = render_slides_page(title, deck).encode('utf-8')
-        return payload, 'text/html; charset=utf-8', export_filename(title, 'slides', revision)
+        structured_kind, structured = decode_structured(row['body'])
+    if structured is not None:
+        if structured_kind == 'slides':
+            payload = render_slides_page(title, structured).encode('utf-8')
+        else:
+            payload = render_dashboard_page(title, structured).encode('utf-8')
+        return payload, 'text/html; charset=utf-8', export_filename(title, structured_kind, revision)
     if kind == 'website':
         payload = render_website_page(title, row['body']).encode('utf-8')
         return payload, 'text/html; charset=utf-8', export_filename(title, kind, revision)
@@ -727,10 +758,68 @@ def render_slides_page(title, deck):
     return ''.join(parts)
 
 
+def render_dashboard_page(title, dashboard):
+    heading = escape(title or '看板')
+    widgets = (dashboard or {}).get('widgets') or []
+    parts = [
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">',
+        '<meta name="referrer" content="no-referrer"><title>' + heading + '</title>',
+        '<style>body{font-family:system-ui,sans-serif;background:#f4f5f7;margin:0;padding:1.5rem}'
+        '.board{max-width:56rem;margin:0 auto;display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))}'
+        '.widget{background:#fff;border:1px solid #d8dde6;border-radius:14px;padding:1rem 1.2rem;'
+        'box-shadow:0 1px 2px rgba(0,0,0,.04);grid-column:span 1}'
+        '.widget.wide{grid-column:1/-1}'
+        '.widget h2{margin:0 0 .6rem;font-size:.95rem;color:#3a4350}'
+        '.metric{font-size:1.8rem;font-weight:700}'
+        '.note{color:#5b6472;font-size:.85rem;margin:.25rem 0 0}'
+        'table{width:100%;border-collapse:collapse;font-size:.9rem}'
+        'th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid #e6e9ef}'
+        '.bar{display:grid;gap:.45rem}'
+        '.bar-row{display:grid;grid-template-columns:6rem 1fr 4rem;gap:.5rem;align-items:center;font-size:.85rem}'
+        '.bar-track{background:#eef2f8;border-radius:999px;height:.7rem;overflow:hidden}'
+        '.bar-fill{background:#7aa2ff;height:100%}</style>',
+        '</head><body><main class="board">',
+    ]
+    if not widgets:
+        parts.append('<section class="widget wide"><h2>' + heading + '</h2>'
+                     '<p class="note">还没有看板组件。</p></section>')
+    for widget in widgets:
+        kind = widget.get('type')
+        wide = ' wide' if kind in ('table', 'bar') else ''
+        parts.append('<section class="widget' + wide + '"><h2>' + escape(widget.get('title') or '') + '</h2>')
+        if kind == 'metric':
+            parts.append('<p class="metric">' + escape(widget.get('value') or '—') + '</p>')
+            if widget.get('note'):
+                parts.append('<p class="note">' + escape(widget['note']) + '</p>')
+        elif kind == 'table':
+            parts.append('<table><thead><tr>' + ''.join(
+                '<th>' + escape(column) + '</th>' for column in widget.get('columns') or []) + '</tr></thead><tbody>')
+            for row in widget.get('rows') or []:
+                parts.append('<tr>' + ''.join('<td>' + escape(cell) + '</td>' for cell in row) + '</tr>')
+            parts.append('</tbody></table>')
+        elif kind == 'bar':
+            labels = widget.get('labels') or []
+            values = widget.get('values') or []
+            maximum = max(values) if values else 0
+            parts.append('<div class="bar">')
+            for label, number in zip(labels, values):
+                width = (number / maximum * 100) if maximum else 0
+                shown = ('%g' % number)
+                parts.append('<div class="bar-row"><span>' + escape(label) + '</span>'
+                             '<span class="bar-track"><span class="bar-fill" style="width:'
+                             + ('%.1f' % width) + '%"></span></span><span>' + escape(shown) + '</span></div>')
+            parts.append('</div>')
+        parts.append('</section>')
+    parts.append('</main></body></html>')
+    return ''.join(parts)
+
+
 def render_page(row):
     kind = public_kind(row)
     if kind == 'slides':
         return render_slides_page(row['title'], decode_slides(row['slides_json']) or EMPTY_SLIDES)
+    if kind == 'dashboard':
+        return render_dashboard_page(row['title'], decode_dashboard(row['dashboard_json']) or EMPTY_DASHBOARD)
     if kind == 'website':
         return render_website_page(row['title'], row['body'])
     if kind == 'whiteboard':
@@ -933,6 +1022,111 @@ def attach_slides(db, artifact_id, deck):
     db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (artifact_id,))
     db.execute('INSERT INTO artifact_slides VALUES(?,?)', (artifact_id, payload))
     return True
+
+
+def _dash_text(value, limit):
+    return (isinstance(value, str) and len(value.strip()) <= limit
+            and not DASHBOARD_CONTROL.search(value))
+
+
+def normalize_dashboard(value):
+    if not isinstance(value, dict) or value.get('schema', DASHBOARD_SCHEMA) != DASHBOARD_SCHEMA:
+        return None
+    widgets = value.get('widgets')
+    if not isinstance(widgets, list) or len(widgets) > DASHBOARD_MAX_WIDGETS:
+        return None
+    out = []
+    for widget in widgets:
+        if not isinstance(widget, dict):
+            return None
+        kind = widget.get('type')
+        title = widget.get('title', '')
+        if not _dash_text(title, SLIDE_TITLE_MAX) or not title.strip():
+            return None
+        if kind == 'metric':
+            metric_value = widget.get('value', '')
+            note = widget.get('note', '')
+            if not _dash_text(metric_value, SLIDE_TITLE_MAX) or not _dash_text(note, 200):
+                return None
+            out.append({'type': 'metric', 'title': title.strip(),
+                        'value': metric_value.strip(), 'note': note.strip()})
+        elif kind == 'table':
+            columns = widget.get('columns')
+            rows = widget.get('rows', [])
+            if (not isinstance(columns, list) or not 1 <= len(columns) <= DASHBOARD_TABLE_COLUMNS_MAX
+                    or any(not _dash_text(column, DASHBOARD_CELL_MAX) for column in columns)):
+                return None
+            if not isinstance(rows, list) or len(rows) > DASHBOARD_TABLE_ROWS_MAX:
+                return None
+            clean_rows = []
+            for row in rows:
+                if (not isinstance(row, list) or len(row) != len(columns)
+                        or any(not _dash_text(cell, DASHBOARD_CELL_MAX) for cell in row)):
+                    return None
+                clean_rows.append([cell.strip() for cell in row])
+            out.append({'type': 'table', 'title': title.strip(),
+                        'columns': [column.strip() for column in columns], 'rows': clean_rows})
+        elif kind == 'bar':
+            labels = widget.get('labels')
+            values = widget.get('values')
+            if (not isinstance(labels, list) or not 1 <= len(labels) <= DASHBOARD_BARS_MAX
+                    or any(not _dash_text(label, DASHBOARD_CELL_MAX) for label in labels)):
+                return None
+            if not isinstance(values, list) or len(values) != len(labels):
+                return None
+            clean_values = []
+            for number in values:
+                if type(number) is bool or not isinstance(number, (int, float)):
+                    return None
+                if not 0 <= number <= 10 ** 12 or number != number:
+                    return None
+                clean_values.append(number)
+            out.append({'type': 'bar', 'title': title.strip(),
+                        'labels': [label.strip() for label in labels], 'values': clean_values})
+        else:
+            return None
+    return {'schema': DASHBOARD_SCHEMA, 'widgets': out}
+
+
+def dashboard_json(value):
+    normalized = normalize_dashboard(value)
+    if normalized is None:
+        return None
+    text = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    if len(text) > 65536:
+        return None
+    return text
+
+
+def decode_dashboard(raw):
+    if not raw or not isinstance(raw, str) or not raw.lstrip().startswith('{'):
+        return None
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(value, dict) or value.get('schema') != DASHBOARD_SCHEMA:
+        return None
+    return normalize_dashboard(value)
+
+
+def attach_dashboard(db, artifact_id, dashboard):
+    payload = dashboard_json(dashboard)
+    if payload is None:
+        return False
+    db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (artifact_id,))
+    db.execute('INSERT INTO artifact_dashboards VALUES(?,?)', (artifact_id, payload))
+    return True
+
+
+def decode_structured(raw):
+    deck = decode_slides(raw)
+    if deck is not None:
+        return 'slides', deck
+    dashboard = decode_dashboard(raw)
+    if dashboard is not None:
+        return 'dashboard', dashboard
+    return None, None
 
 
 def render_board_svg(board):

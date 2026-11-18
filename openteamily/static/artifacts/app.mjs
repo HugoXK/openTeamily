@@ -204,6 +204,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (kind === 'media') return '媒体';
     if (kind === 'whiteboard') return '白板';
     if (kind === 'slides') return '幻灯片';
+    if (kind === 'dashboard') return '看板';
     return '文档';
   }
 
@@ -310,26 +311,151 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (add) add.disabled = slidesState.slides.length >= 30;
   }
 
+  let dashboardState = {schema: 'openteamily.dashboard.v1', widgets: []};
+
+  function widgetDefault(type) {
+    if (type === 'table') return {type: 'table', title: '', columns: ['列 1', '列 2'], rows: [['', '']]};
+    if (type === 'bar') return {type: 'bar', title: '', labels: ['A'], values: [0]};
+    return {type: 'metric', title: '', value: '', note: ''};
+  }
+
+  function splitList(text) {
+    return String(text || '').split(',').map(value => value.trim()).filter(Boolean);
+  }
+
+  function parseRows(text, width) {
+    return String(text || '').split('\n').map(line => line.split('|').map(cell => cell.trim()))
+      .filter(row => row.some(Boolean));
+  }
+
+  function dashboardValue() {
+    return {
+      schema: 'openteamily.dashboard.v1',
+      widgets: dashboardState.widgets.map(widget => {
+        if (widget.type === 'metric') {
+          return {type: 'metric', title: widget.title || '', value: widget.value || '', note: widget.note || ''};
+        }
+        if (widget.type === 'table') {
+          return {type: 'table', title: widget.title || '', columns: widget.columns || [], rows: widget.rows || []};
+        }
+        return {type: 'bar', title: widget.title || '', labels: widget.labels || [], values: widget.values || []};
+      }),
+    };
+  }
+
+  function renderDashboardEditor() {
+    const list = document.getElementById('widget-list');
+    if (!list) return;
+    list.replaceChildren();
+    dashboardState.widgets.forEach((widget, index) => {
+      const li = document.createElement('li');
+      li.className = 'slide-card';
+      const head = document.createElement('div');
+      head.className = 'slide-head';
+      const types = document.createElement('select');
+      for (const value of ['metric', 'table', 'bar']) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value === 'metric' ? '指标' : (value === 'table' ? '表格' : '条形图');
+        if (widget.type === value) option.selected = true;
+        types.append(option);
+      }
+      types.addEventListener('change', () => {
+        dashboardState.widgets[index] = widgetDefault(types.value);
+        renderDashboardEditor();
+      });
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '删除';
+      remove.addEventListener('click', () => {
+        dashboardState.widgets.splice(index, 1);
+        renderDashboardEditor();
+      });
+      head.append(types, remove);
+      const title = document.createElement('input');
+      title.type = 'text';
+      title.maxLength = 120;
+      title.placeholder = '组件标题';
+      title.value = widget.title || '';
+      title.addEventListener('input', () => { widget.title = title.value; });
+      li.append(head, title);
+      if (widget.type === 'metric') {
+        const value = document.createElement('input');
+        value.type = 'text';
+        value.maxLength = 120;
+        value.placeholder = '指标值，例如 2400 元';
+        value.value = widget.value || '';
+        value.addEventListener('input', () => { widget.value = value.value; });
+        const note = document.createElement('input');
+        note.type = 'text';
+        note.maxLength = 200;
+        note.placeholder = '备注（可选）';
+        note.value = widget.note || '';
+        note.addEventListener('input', () => { widget.note = note.value; });
+        li.append(value, note);
+      } else if (widget.type === 'table') {
+        const columns = document.createElement('input');
+        columns.type = 'text';
+        columns.placeholder = '列名，用逗号分隔';
+        columns.value = (widget.columns || []).join(', ');
+        columns.addEventListener('input', () => { widget.columns = splitList(columns.value); });
+        const rows = document.createElement('textarea');
+        rows.rows = 4;
+        rows.placeholder = '每行一条，单元格用 | 分隔';
+        rows.value = (widget.rows || []).map(row => row.join(' | ')).join('\n');
+        rows.addEventListener('input', () => { widget.rows = parseRows(rows.value); });
+        li.append(columns, rows);
+      } else {
+        const labels = document.createElement('input');
+        labels.type = 'text';
+        labels.placeholder = '标签，用逗号分隔';
+        labels.value = (widget.labels || []).join(', ');
+        labels.addEventListener('input', () => { widget.labels = splitList(labels.value); });
+        const values = document.createElement('input');
+        values.type = 'text';
+        values.placeholder = '数值，用逗号分隔';
+        values.value = (widget.values || []).join(', ');
+        values.addEventListener('input', () => {
+          widget.values = splitList(values.value).map(value => {
+            const number = Number(value);
+            return Number.isFinite(number) ? number : 0;
+          });
+        });
+        li.append(labels, values);
+      }
+      list.append(li);
+    });
+    const add = document.getElementById('add-widget');
+    if (add) add.disabled = dashboardState.widgets.length >= 20;
+  }
+
   function fillEditor(item) {
     form.elements.title.value = item && item.title ? item.title : '';
     form.elements.body.value = item && typeof item.body === 'string' ? item.body : '';
     const kind = (item && item.kind) || draftKind;
     const meta = document.getElementById('editor-meta');
-    const labels = {website: '新网站', media: '新媒体', whiteboard: '新白板', slides: '新幻灯片', document: '新文档'};
+    const labels = {website: '新网站', media: '新媒体', whiteboard: '新白板', slides: '新幻灯片', dashboard: '新看板', document: '新文档'};
     if (item && item.id) {
       meta.textContent = `${kindLabel(kind)} · 修订 ${item.revision} · 作者 ${item.created_by || ''}`;
     } else {
       meta.textContent = labels[kind] || '新文档';
     }
-    document.getElementById('body-label').hidden = kind === 'media' || kind === 'whiteboard' || kind === 'slides';
+    document.getElementById('body-label').hidden = kind === 'media' || kind === 'whiteboard' || kind === 'slides' || kind === 'dashboard';
     document.getElementById('media-editor').hidden = kind !== 'media';
     document.getElementById('board-editor').hidden = kind !== 'whiteboard';
     document.getElementById('slides-editor').hidden = kind !== 'slides';
+    document.getElementById('dashboard-editor').hidden = kind !== 'dashboard';
     if (kind === 'slides') {
       slidesState = item && item.slides ? item.slides : {schema: 'openteamily.slides.v1', slides: []};
       if (!Array.isArray(slidesState.slides)) slidesState = {schema: 'openteamily.slides.v1', slides: []};
       if (!slidesState.slides.length) slidesState.slides.push({title: '', bullets: []});
       renderSlidesEditor();
+    }
+    if (kind === 'dashboard') {
+      dashboardState = item && item.dashboard ? item.dashboard : {schema: 'openteamily.dashboard.v1', widgets: []};
+      if (!Array.isArray(dashboardState.widgets)) dashboardState = {schema: 'openteamily.dashboard.v1', widgets: []};
+      if (!dashboardState.widgets.length) dashboardState.widgets.push(widgetDefault('metric'));
+      renderDashboardEditor();
     }
     const image = document.getElementById('media-image');
     const audio = document.getElementById('media-audio');
@@ -764,6 +890,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     openEditor({kind: 'slides'});
   });
 
+  document.getElementById('new-dashboard').addEventListener('click', () => {
+    draftKind = 'dashboard';
+    dashboardState = {schema: 'openteamily.dashboard.v1', widgets: [widgetDefault('metric')]};
+    closeNewMenu();
+    openEditor({kind: 'dashboard'});
+  });
+
+  document.getElementById('add-widget').addEventListener('click', () => {
+    if (dashboardState.widgets.length >= 20) return;
+    dashboardState.widgets.push(widgetDefault('metric'));
+    renderDashboardEditor();
+  });
+
   document.getElementById('add-slide').addEventListener('click', () => {
     if (slidesState.slides.length >= 30) return;
     slidesState.slides.push({title: '', bullets: []});
@@ -964,6 +1103,36 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       } else {
         result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts`,
                                {title, kind: 'slides', slides},
+                               {'Idempotency-Key': idempotencyKey()});
+      }
+    } else if (kind === 'dashboard') {
+      const value = dashboardValue();
+      if (!value.widgets.length) {
+        show('error', '至少添加一个看板组件。');
+        return;
+      }
+      for (const widget of value.widgets) {
+        if (!widget.title.trim()) {
+          show('error', '每个看板组件都需要标题。');
+          return;
+        }
+        if (widget.type === 'table'
+            && (!widget.columns.length || widget.rows.some(row => row.length !== widget.columns.length))) {
+          show('error', '表格的列名和每行单元格数量需要一致。');
+          return;
+        }
+        if (widget.type === 'bar'
+            && (!widget.labels.length || widget.labels.length !== widget.values.length)) {
+          show('error', '条形图的标签和数值数量需要一致。');
+          return;
+        }
+      }
+      if (current && current.id) {
+        result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,
+                               {revision: current.revision, changes: {title, dashboard: value}});
+      } else {
+        result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts`,
+                               {title, kind: 'dashboard', dashboard: value},
                                {'Idempotency-Key': idempotencyKey()});
       }
     } else if (kind === 'whiteboard') {
