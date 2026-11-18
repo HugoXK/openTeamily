@@ -155,6 +155,49 @@ function syncAccountSlot(doc) {
   }
 }
 
+
+export const ONBOARDING_MENU_HREF = '/onboarding';
+export const ONBOARDING_MENU_LABEL = '工作背景';
+export const ONBOARDING_MENU_TITLE = '打开已有的工作背景页。对照账户菜单写的是「新手引导」，因为第 2 至 4 步尚未接通，入口名称与落点保持一致。';
+
+function menuChildByHref(menu, href) {
+  const children = menu && menu.children ? Array.from(menu.children) : [];
+  return children.find((node) => {
+    const tag = (node.tagName || '').toLowerCase();
+    const value = (node.getAttribute && node.getAttribute('href')) || node.href || '';
+    return tag === 'a' && value === href;
+  }) || null;
+}
+
+function menuChildByClass(menu, className) {
+  const children = menu && menu.children ? Array.from(menu.children) : [];
+  return children.find((node) => {
+    const current = ' ' + (node.className || node.getAttribute && node.getAttribute('class') || '') + ' ';
+    return current.includes(' ' + className + ' ');
+  }) || null;
+}
+
+/* Recorded Teamily account menu has「新手引导」after 创建团队 and before 帮助.
+   Only step 1 exists, so the item uses the destination name 工作背景 and opens /onboarding.
+   The function is also used to move an already-present link into that slot. */
+export function ensureOnboardingMenuItem(doc) {
+  const menu = doc.getElementById('account-menu');
+  if (!menu) return null;
+  let link = menuChildByHref(menu, ONBOARDING_MENU_HREF);
+  if (!link) {
+    link = doc.createElement('a');
+    menu.appendChild(link);
+  }
+  link.setAttribute('href', ONBOARDING_MENU_HREF);
+  link.setAttribute('role', 'menuitem');
+  link.setAttribute('title', ONBOARDING_MENU_TITLE);
+  link.textContent = ONBOARDING_MENU_LABEL;
+  const reference = menuChildByClass(menu, 'account-sub') || menuChildByHref(menu, '/settings');
+  if (reference && link !== reference) menu.insertBefore(link, reference);
+  else if (!reference) menu.appendChild(link);
+  return link;
+}
+
 function bindAccountMenu(doc) {
   const button = doc.getElementById('account-menu-button');
   const menu = doc.getElementById('account-menu');
@@ -187,6 +230,7 @@ function bindAccountMenu(doc) {
     if (who) new MutationObserver(sync).observe(who, { childList: true, characterData: true, subtree: true });
   }
   syncAccountSlot(doc);
+  ensureOnboardingMenuItem(doc);
   bindHelpMenu(doc);
   bindAppearanceToggle(doc);
 }
