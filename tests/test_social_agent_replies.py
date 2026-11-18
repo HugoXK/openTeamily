@@ -6,9 +6,11 @@ a live container or a Teamily comparison.
 from pathlib import Path
 import tempfile
 import unittest
+import json
 
 from openteamily.app import App, Config
 from openteamily.store import Store
+from openteamily.security import digest
 from tests.test_management import Client, ORIGIN
 from tests.test_runtime_connect import AgentClient
 from tests.test_runtime_infer import SECRET, start_fake_provider
@@ -127,6 +129,42 @@ class SocialAgentReplyTests(unittest.TestCase):
             {'HTTP_IDEMPOTENCY_KEY': 'social-reply-dm-0001'})['status'], 400)
         self.assertEqual(self.send('x', ['nope'], key='social-reply-msg-0003')['status'], 400)
         self.assertEqual(self.send('x', ['a' * 32], key='social-reply-msg-0004')['status'], 400)
+
+    def test_legacy_human_message_replay_is_compatible(self):
+        text = 'Human message originally saved on main'
+        sent = self.send(text, [], key='legacy-human-replay1')
+        self.assertEqual(sent['status'], 201, sent)
+        mid = sent['body']['message']['id']
+        # A pre-126 row has the real main request hash (no agent_ids field).
+        legacy_hash = digest(json.dumps({'body': text}, sort_keys=True,
+                                       separators=(',', ':'), ensure_ascii=False))
+        with self.app.store.connect() as db:
+            db.execute('UPDATE social_messages SET request_hash=? WHERE id=?', (legacy_hash, mid))
+            db.commit()
+        for payload in ({'body': text}, {'body': text, 'agent_ids': []}):
+            replay = self.alice.call('POST', self.conv() + '/messages', payload,
+                                      {'HTTP_IDEMPOTENCY_KEY': 'legacy-human-replay1'})
+            self.assertEqual(replay['status'], 200, replay)
+            self.assertEqual(replay['body']['message']['id'], mid)
+            self.assertEqual(replay['body']['agents'], [])
+        self.assertEqual(self.send(text, [self.agent['id']], key='legacy-human-replay1')['status'], 409)
+        # Preserve human-only hashes already written by the original 126 head too.
+        with self.app.store.connect() as db:
+            interim_hash = digest(json.dumps({'body': text, 'agent_ids': []}, sort_keys=True,
+                                              separators=(',', ':'), ensure_ascii=False))
+            db.execute('UPDATE social_messages SET request_hash=? WHERE id=?', (interim_hash, mid))
+            db.commit()
+        self.assertEqual(self.send(text, [], key='legacy-human-replay1')['status'], 200)
+
+    def test_falsey_non_list_mentions_and_archived_agents_are_rejected_atomically(self):
+        for value in (None, '', False, 0, {}, [self.agent['id'], self.agent['id']]):
+            result = self.alice.call('POST', self.conv() + '/messages', {'body': 'x', 'agent_ids': value},
+                                     {'HTTP_IDEMPOTENCY_KEY': 'invalid-agent-input1'})
+            self.assertEqual(result['status'], 400, result)
+            self.assertEqual(result['body']['error']['code'], 'invalid')
+        self.alice.call('POST', f'/v1/workspaces/{self.wid}/agents/{self.agent["id"]}/archive', {'revision': 1})
+        self.assertEqual(self.send('Do not silently drop the agent', [self.agent['id']])['status'], 400)
+        self.assertEqual(self.alice.call('GET', self.conv())['body']['items'], [])
 
 
 if __name__ == '__main__':

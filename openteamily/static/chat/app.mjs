@@ -88,7 +88,7 @@ export function groupPickerChoices(members, currentUserId, agents = []) {
       id: member.user_id, kind: 'human', label: member.username + ' · 成员',
     })),
     ...agents.filter(agent => !agent.archived).map(agent => ({
-      id: agent.id, kind: 'agent', label: agent.name + ' · AI 智能体',
+      id: agent.id, kind: 'agent', label: agent.name + ' · AI 智能体（自动回复未接通）',
     })),
   ];
 }
@@ -96,7 +96,7 @@ export function groupPickerChoices(members, currentUserId, agents = []) {
 export function groupAgentSummary(conversation) {
   const list = conversation && conversation.agent_members || [];
   return list.length ? '群内智能体：' + list.map(agent => agent.name).join('、')
-    + '。发送时可勾选让智能体回复；任务委派与团队目标未接通。' : '';
+    + '。发送时可勾选让智能体回复。未接通：群内自动回复、@Agent 和任务委派；团队目标也未接通。' : '';
 }
 
 export function socialMentionChoices(conversation) {

@@ -31,7 +31,7 @@ One additive table, `social_agent_messages` (`CREATE TABLE IF NOT EXISTS`). Sche
 
 ## UI
 
-On `/chat`, opening a social group with agent members shows a "让智能体回复" checkbox tray above the composer. Sending with a checked agent shows the reply with its status (排队中 / 生成中 / 等待已连接的运行时 / 回复失败), and the page polls while a reply is pending. The custom-group picker no longer labels agents "自动回复未接通". `docs/screenshots/` holds synthetic Playwright captures for review; they are not browser E2E acceptance.
+On `/chat`, opening a social group with agent members shows a "让智能体回复" checkbox tray above the composer. Sending with a checked agent shows the reply with its status (排队中 / 生成中 / 等待已连接的运行时 / 回复失败), and the page polls while a reply is pending. The custom-group picker retains "自动回复未接通": explicit selection can request a reply, but automatic replies are still unconnected. `docs/screenshots/` holds synthetic Playwright captures for review; they are not browser E2E acceptance.
 
 ## Explicitly not in this slice
 
@@ -39,3 +39,13 @@ On `/chat`, opening a social group with agent members shows a "让智能体回�
 - `@Name` text parsing; mentions are explicit checkboxes/`agent_ids`.
 - Auto-retry of `no_agent`, unread counts, notifications, attachments, reactions, editing/retraction.
 - Real vendor/container acceptance beyond the existing labeled fake-provider path; no Teamily comparison.
+
+## Compatibility follow-up
+
+Human-only messages keep main's request hash (omitting empty `agent_ids`). Replays
+also recognize the empty-list hash written by this branch's original head. This
+never permits changing a human-only replay into agent dispatch. `agent_ids` must
+be a list even when empty; falsey scalars, null and objects return `400 invalid`.
+New requests reject archived agents before storing a human message, instead of
+silently dropping the selected agent. Already accepted request replays still
+return their stored result and never dispatch again.

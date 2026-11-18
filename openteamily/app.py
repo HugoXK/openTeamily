@@ -2897,6 +2897,8 @@ class App:
         if not social.valid_body(text):
             refuse(400, 'invalid', 'Provide a message')
         agent_ids = body.get('agent_ids', [])
+        if not isinstance(agent_ids, list):
+            refuse(400, 'invalid', 'Agent ids must be a list')
         if agent_ids:
             if row['kind'] != 'group' or not social_agent_replies.valid_mentions(agent_ids):
                 refuse(400, 'invalid', 'Agent replies require a group and 1–5 unique agent ids')
@@ -2906,12 +2908,19 @@ class App:
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        payload = {'body': text}
+        if agent_ids:
+            payload['agent_ids'] = sorted(agent_ids)
         key_hash, request_hash = digest('social-message:' + key), digest(
-            json.dumps({'body': text, 'agent_ids': sorted(agent_ids)}, sort_keys=True,
-                       separators=(',', ':'), ensure_ascii=False))
+            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False))
+        compatible_hashes = {request_hash}
+        if not agent_ids:
+            # Also accept human-only rows written by this PR's original head.
+            compatible_hashes.add(digest(json.dumps({'body': text, 'agent_ids': []},
+                sort_keys=True, separators=(',', ':'), ensure_ascii=False)))
         prior = social.load_message_by_key(db, row['id'], key_hash)
         if prior:
-            if prior['request_hash'] != request_hash:
+            if prior['request_hash'] not in compatible_hashes:
                 refuse(409, 'conflict', 'Idempotency key was used for a different request')
             replies = []
             for agent_id in sorted(agent_ids):
@@ -2920,6 +2929,10 @@ class App:
                 if reply is not None:
                     replies.append(social_agent_replies.message_view(reply))
             return 200, {'message': social.message_view(prior), 'agents': replies}, []
+        for agent_id in agent_ids:
+            agent = agents.load(db, workspace['id'], agent_id)
+            if agent is None or agent['archived'] == 1:
+                refuse(400, 'invalid', 'Every mentioned agent must be active in this workspace')
         total = (db.execute('SELECT COUNT(*) FROM social_messages WHERE conversation_id=?',
                             (row['id'],)).fetchone()[0]
                  + db.execute('SELECT COUNT(*) FROM social_agent_messages WHERE conversation_id=?',
