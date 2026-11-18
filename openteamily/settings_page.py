@@ -6,7 +6,7 @@ does not interpret /v1 routes. Self-written; no upstream or Teamily source.
 import os
 from pathlib import Path
 import stat
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from . import discover
 
@@ -154,6 +154,12 @@ class SettingsPage:
             return slug in discover.AGENT_CATEGORY_SLUGS
         if path == '/memory':
             return query in ('page=profile', 'page=todos')
+        if path == '/guide':
+            # Deep link only: /guide?q=<keyword>, one non-empty keyword and
+            # nothing else. Every other /guide query, and every query on the
+            # guide CSS/JS, still answers 400.
+            pairs = parse_qsl(query, keep_blank_values=True)
+            return len(pairs) == 1 and pairs[0][0] == 'q' and bool(pairs[0][1])
         return False
 
     def __call__(self, env, start_response):

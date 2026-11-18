@@ -68,8 +68,8 @@
     </header>
     <div class="guide-toolbar">
       <label class="guide-search-label" for="guide-search">
-        <span class="visually-hidden">搜索功能</span>
-        <input id="guide-search" type="search" placeholder="搜索功能，例如：添加成员" autocomplete="off" maxlength="120">
+        <span class="visually-hidden">搜索功能指引</span>
+        <input id="guide-search" type="search" aria-label="搜索功能指引" placeholder="搜索功能，例如：添加成员" autocomplete="off" maxlength="120">
       </label>
       <div class="guide-view-toggle" role="group" aria-label="列表或图谱">
         <button type="button" id="view-list" aria-pressed="true" title="列表视图">列表</button>
@@ -82,7 +82,7 @@
       <div class="guide-results">
         <p id="guide-count" class="guide-count"></p>
         <div id="guide-list"></div>
-        <p id="guide-empty" class="note" hidden>没有匹配的功能。</p>
+        <p id="guide-empty" class="note" hidden>没有匹配的指引。</p>
       </div>
     </div>
     <div id="guide-dialog" class="guide-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="guide-dialog-title">
