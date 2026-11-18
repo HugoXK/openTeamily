@@ -1,5 +1,6 @@
 """Memory page serving tests. In-process WSGI only; not browser E2E."""
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
@@ -141,6 +142,26 @@ class MemoryPageServingTests(unittest.TestCase):
         listed = self.client.call('GET', f'/v1/workspaces/{wid}/memory')
         self.assertEqual(listed['status'], 200)
         self.assertEqual([item['title'] for item in listed['body']['items']], ['Brief'])
+
+    def test_directory_search_filters_in_place_and_keeps_open_editor(self):
+        page = self.raw.call('GET', '/memory')
+        html = page['body'].decode()
+        self.assertIn('id="search"', html)
+        self.assertIn('placeholder="搜索主题……"', html)
+        self.assertIn('这个工作区还没有记忆页。', html)
+        script = self.raw.call('GET', '/memory/app.mjs')
+        source = script['body'].decode()
+        self.assertNotIn("addEventListener('input', () => loadWorkspace())", source)
+        self.assertIn("addEventListener('input', () => renderDirectory())", source)
+        self.assertIn('没有匹配的记忆页。试试其他关键词。', source)
+        self.assertIn("event.key !== 'Escape'", source)
+        self.assertIn('matchingMemoryPages', source)
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            ['node', '--test', 'tests/memory_search.test.mjs'],
+            cwd=root, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 
 if __name__ == '__main__':

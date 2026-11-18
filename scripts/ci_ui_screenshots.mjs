@@ -1465,6 +1465,23 @@ async function main() {
       await waitForInputValue(page, '#editor-form input[name="title"]', ready.memory_title);
       await waitForInputValue(page, '#editor-form textarea[name="body"]', ready.memory_body);
       record('memory_editor_seeded', true, await visibleText(page.locator('#editor-meta')));
+      const search = page.locator('#search');
+      await search.fill('zz-no-such-memory');
+      await waitForLocatorText(page, '#list-empty', '没有匹配的记忆页。试试其他关键词。');
+      const emptyText = ((await page.locator('#list-empty').textContent()) || '').trim();
+      const allCount = ((await page.locator('#filter-all-count').textContent()) || '').trim();
+      const editorVisible = await page.locator('#editor-form').isVisible();
+      const titleValue = await page.locator('#editor-form input[name="title"]').inputValue();
+      record(
+        'memory_search_filter',
+        emptyText === '没有匹配的记忆页。试试其他关键词。'
+          && editorVisible
+          && titleValue === ready.memory_title,
+        `empty=${emptyText}; count=${allCount}; editor=${editorVisible}; title=${titleValue}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '88-memory-search-filter.png')));
+      await search.press('Escape');
+      await waitForLocatorText(page, '#memory-list', ready.memory_title);
       await page.locator('#close-editor').click();
       await page.locator('#list-panel').waitFor({ state: 'visible', timeout: 15000 });
     } catch (error) {
