@@ -637,6 +637,39 @@ async function main() {
     }
 
     try {
+      await page.locator('#new-conversation').click();
+      await page.locator('#compose-new-group').click();
+      const dialog = page.locator('#compose-dialog');
+      await dialog.waitFor({ state: 'visible', timeout: 8000 });
+      const dialogText = `${await visibleText(dialog)}`;
+      const namePlaceholder = await page.locator('#compose-title').getAttribute('placeholder');
+      const searchPlaceholder = await page.locator('#compose-member-search').getAttribute('placeholder');
+      record(
+        'chat_group_create_chrome',
+        dialogText.includes('新建群组')
+          && dialogText.includes('添加名称，然后邀请好友并添加 AI 智能体。')
+          && dialogText.includes('自定义群组')
+          && dialogText.includes('AI 智能体团队')
+          && dialogText.includes('群组名称')
+          && dialogText.includes('已选 0')
+          && namePlaceholder === '输入群组名称（可选）'
+          && searchPlaceholder === '搜索'
+          && await page.locator('#compose-dialog-submit').isDisabled()
+          && await page.locator('#compose-mode-custom').getAttribute('aria-selected') === 'true'
+          && !dialogText.includes('积分')
+          && !dialogText.includes('成员付费')
+          && !dialogText.includes('群主付费')
+          && !/套餐|升级/.test(dialogText),
+        dialogText || 'group create dialog empty',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '78-chat-group-create.png')));
+      await page.locator('#compose-dialog-cancel').click();
+      await dialog.waitFor({ state: 'hidden', timeout: 5000 });
+    } catch (error) {
+      record('chat_group_create_chrome', false, String(error));
+    }
+
+    try {
       await page.locator('#session-search').click();
       const panel = page.locator('#search-panel');
       await panel.waitFor({ state: 'visible', timeout: 8000 });
