@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import * as guideModule from '../openteamily/static/guide/app.mjs';
 import {CATALOG, CATEGORIES, countByCategory, filterCatalog, formatPath, groupCatalog, guideHref, guideInitialQuery} from '../openteamily/static/guide/app.mjs';
 
 test('catalog only contains known categories and no Teamily guide prose', () => {
@@ -51,4 +52,17 @@ test('the guide deep link round-trips the keyword through the query string', () 
   assert.equal(guideInitialQuery(''), '');
   assert.deepEqual(filterCatalog(CATALOG, {category: 'settings', query: '外观'}).map((item) => item.id), ['settings-hub', 'settings-appearance']);
   assert.deepEqual(filterCatalog(CATALOG, {query: '日出日落'}).map((item) => item.id), ['settings-appearance']);
+});
+
+test('the empty state names an empty category instead of blaming a search', () => {
+  const {emptyGuideMessage} = guideModule;
+  assert.equal(typeof emptyGuideMessage, 'function', 'the guide page cannot tell an empty category from a fruitless search');
+  const emptyCategory = filterCatalog(CATALOG, {category: 'calls'});
+  assert.deepEqual(emptyCategory, []);
+  assert.equal(emptyGuideMessage(emptyCategory, ''), '这一类还没有指引。');
+  assert.equal(emptyGuideMessage(emptyCategory, '   '), '这一类还没有指引。');
+  const noHits = filterCatalog(CATALOG, {category: 'memory', query: 'xyz-not-a-feature'});
+  assert.deepEqual(noHits, []);
+  assert.equal(emptyGuideMessage(noHits, 'xyz-not-a-feature'), '没有匹配的指引。');
+  assert.equal(emptyGuideMessage(filterCatalog(CATALOG, {category: 'chat'}), ''), '');
 });
