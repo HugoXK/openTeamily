@@ -16,6 +16,27 @@ RESERVED = {
     'login', 'logout', 'search',
 }
 
+AGENT_CATEGORIES = (
+    ('content-creation', 'Content Creation'),
+    ('customer-support', 'Customer Support'),
+    ('data-analysis', 'Data Analysis'),
+    ('design', 'Design'),
+    ('education', 'Education'),
+    ('engineering', 'Engineering'),
+    ('finance', 'Finance'),
+    ('it-security', 'IT & Security'),
+    ('investment', 'Investment'),
+    ('legal', 'Legal'),
+    ('life', 'Life'),
+    ('marketing', 'Marketing'),
+    ('operations', 'Operations'),
+    ('product', 'Product'),
+    ('recruiting', 'Recruiting'),
+    ('research', 'Research'),
+    ('sales', 'Sales'),
+)
+AGENT_CATEGORY_SLUGS = frozenset(slug for slug, _label in AGENT_CATEGORIES)
+
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS agent_discover (
  agent_id TEXT PRIMARY KEY REFERENCES workspace_agents(id) ON DELETE CASCADE,

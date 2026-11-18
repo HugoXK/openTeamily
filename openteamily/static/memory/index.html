@@ -33,7 +33,7 @@
         <div class="account-sub">
           <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
           <div id="help-menu" hidden>
-            <button type="button" disabled title="未实现：OpenTeamily 还没有帮助中心">帮助中心</button>
+            <a href="/guide" role="menuitem">帮助中心</a>
             <a href="/download" role="menuitem">下载</a>
             <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
@@ -109,13 +109,19 @@
         </label>
         <div class="graph-stage">
           <svg id="graph-canvas" viewBox="0 0 640 400" role="img" aria-label="记忆图谱"></svg>
+          <p class="graph-hint">单击查看 · 双击打开 · 悬停预览</p>
+          <div id="graph-hover-card" class="graph-hover-card" hidden role="tooltip">
+            <p class="graph-hover-title"></p>
+            <p class="graph-hover-summary"></p>
+            <p class="graph-hover-tags"></p>
+          </div>
           <div class="graph-zoom">
             <button type="button" id="graph-zoom-in" title="放大">+</button>
             <button type="button" id="graph-zoom-out" title="缩小">−</button>
             <button type="button" id="graph-zoom-reset" title="重置缩放">重置</button>
           </div>
         </div>
-        <p class="note">单击节点打开记忆页。正文里的 [[标题]] 会连到同工作区已有页面，也可以手动添加连接。对照里还写了双击打开和悬停预览，本页尚未实现这些手势。</p>
+        <p class="note">正文里的 [[标题]] 会连到同工作区已有页面，也可以手动添加连接。悬停预览卡的版式未经核实。</p>
       </section>
       <aside class="memory-side" id="memory-side">
         <div class="side-tabs" role="tablist">

@@ -720,6 +720,29 @@ async function main() {
     }
 
     try {
+      await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
+      await page.locator('#group-agent-action').waitFor({state: 'visible', timeout: 8000});
+      await page.locator('#group-agent-select').selectOption(ready.agent_id);
+      await page.locator('#group-agent-prompt').fill('[CI FIXTURE] Explicit one-shot group request to the labeled fake provider');
+      screenshots.push(path.basename(await shot(page, outDir, '81-group-agent-request.png')));
+      await page.locator('#group-agent-submit').click();
+      await page.locator('#group-agent-requests [data-reply-status="succeeded"]').waitFor({state: 'visible', timeout: 30000});
+      await page.reload({waitUntil: 'load'});
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 20000);
+      const transcript = await visibleText(page.locator('#message-list'));
+      record('group_agent_explicit_reply',
+        transcript.includes('AI 智能体 · 运行时回复') && transcript.includes(ready.provider_text)
+          && await page.locator('#group-agent-requests [data-reply-status="succeeded"]').count() === 1,
+        'Explicit request completed through the runtime fixture and persisted after reload: ' + transcript);
+      screenshots.push(path.basename(await shot(page, outDir, '82-group-agent-reply.png')));
+    } catch (error) {
+      record('group_agent_explicit_reply', false, String(error));
+    } finally {
+      await page.goto(chatUrl, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#chat-title', ready.agent_name, 20000);
+    }
+
+    try {
       await page.locator('#session-search').click();
       const panel = page.locator('#search-panel');
       await panel.waitFor({ state: 'visible', timeout: 8000 });
@@ -1234,6 +1257,33 @@ async function main() {
     );
     screenshots.push(path.basename(await shot(page, outDir, '70-memory-dir-previews.png')));
     try {
+      const graphNode = page.locator('#graph-canvas .graph-item').first();
+      await graphNode.waitFor({ state: 'visible', timeout: 8000 });
+      await graphNode.locator('.graph-node').hover();
+      await page.waitForTimeout(400);
+      const hoverCard = page.locator('#graph-hover-card');
+      const hoverText = await visibleText(hoverCard);
+      record(
+        'memory_graph_hover',
+        await hoverCard.isVisible()
+          && hoverText.includes(ready.memory_title)
+          && hoverText.includes(ready.memory_body)
+          && hoverText.includes(`#${ready.memory_topic}`)
+          && (await visibleText(page.locator('.graph-hint'))).includes('单击查看 · 双击打开 · 悬停预览'),
+        hoverText || 'graph hover card missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '83-memory-graph-hover.png')));
+      await graphNode.dblclick();
+      await page.locator('#editor-form').waitFor({ state: 'visible', timeout: 8000 });
+      const openedTitle = await page.locator('#editor-form [name="title"]').inputValue();
+      record('memory_graph_open', openedTitle === ready.memory_title, openedTitle || 'graph double-click did not open the page');
+      screenshots.push(path.basename(await shot(page, outDir, '84-memory-graph-open.png')));
+      await page.locator('#close-editor').click();
+      await page.locator('#overview-panel').waitFor({ state: 'visible', timeout: 8000 });
+    } catch (error) {
+      record('memory_graph_hover', false, String(error));
+    }
+    try {
       await page.locator('#dir-collapse').click();
       await page.locator('#dir-expand').waitFor({ state: 'visible', timeout: 8000 });
       const collapsedClass = (await page.locator('#list-panel').getAttribute('class') || '').includes('dir-collapsed');
@@ -1652,6 +1702,10 @@ async function main() {
       }
       await page.goto(`${origin}${homepagePath}`, {waitUntil: 'load'});
       const homeText = await visibleText(page.locator('body'));
+      // textContent keeps source casing; innerText follows text-transform once
+      // the homepage CSP is the only policy and the inline stylesheet applies.
+      const statusLabel = ((await page.locator('p.status').textContent()) || '').trim();
+      const talkHeading = ((await page.locator('.section h2').first().textContent()) || '').trim();
       const sendDisabled = await page.locator('.composer button').isDisabled();
       const createDisabled = await page.locator('.create-agent').isDisabled();
       const composerDisabled = await page.locator('#public-composer').isDisabled();
@@ -1660,10 +1714,10 @@ async function main() {
         'agent_public_homepage',
         homeText.includes('OpenTeamily / FlyBot')
           && homeText.includes('Agent profile')
-          && homeText.includes('Public page')
+          && statusLabel === 'Public page'
           && homeText.includes(ready.agent_name)
           && homeText.includes('Synthetic CI directory entry.')
-          && homeText.includes('Talk via')
+          && talkHeading === 'Talk via'
           && homeText.includes('Web conversation')
           && homeText.includes('Built with FlyBot')
           && homeText.includes('Create your own Agent')

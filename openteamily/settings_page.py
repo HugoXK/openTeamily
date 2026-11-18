@@ -8,6 +8,8 @@ from pathlib import Path
 import stat
 from urllib.parse import urlsplit
 
+from . import discover
+
 
 class SettingsPage:
     ASSETS = {
@@ -146,6 +148,9 @@ class SettingsPage:
             return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings')
         if path == '/discover':
             return query in ('tab=agents', 'tab=agents&section=groups')
+        if path == '/agents':
+            slug = query[len('category='):] if query.startswith('category=') else ''
+            return slug in discover.AGENT_CATEGORY_SLUGS
         if path == '/memory':
             return query in ('page=profile', 'page=todos')
         return False
