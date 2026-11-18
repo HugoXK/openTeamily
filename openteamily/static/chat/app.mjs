@@ -59,10 +59,90 @@ export function shouldSendOnShortcut(event, sendShortcut = 'enter') {
   return !modifier && !event.shiftKey && !event.altKey;
 }
 
-export function messageSearchQuery(query, conversationId = '') {
+export function messageSearchQuery(query, conversationId = '', cursor = '') {
   const params = new URLSearchParams({q: query, limit: '20'});
   if (conversationId) params.set('conversation_id', conversationId);
+  if (cursor) params.set('cursor', cursor);
   return params.toString();
+}
+
+function searchHitKey(hit) {
+  return [hit.kind || '', hit.conversationId || '', hit.messageId || hit.id || '', hit.preview || '']
+    .join('\u0000');
+}
+
+export function searchHitFromItem(item) {
+  return {
+    type: item.kind === 'social' ? 'social' : 'agent-message',
+    id: item.conversation_id,
+    messageId: item.message_id || '',
+    title: item.title || '消息',
+    preview: item.snippet || '',
+    conversationId: item.conversation_id,
+    kind: item.kind,
+  };
+}
+
+export function mergeSearchHits(existing, incoming) {
+  const merged = [];
+  const seen = new Set();
+  for (const hit of [...(existing || []), ...(incoming || [])]) {
+    const key = searchHitKey(hit);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(hit);
+  }
+  return merged;
+}
+
+// The server pages message hits by keyset cursor. This controller keeps the
+// rows already shown and appends the next page, so a failed or repeated page
+// never drops what the user is already reading.
+export function createMessageSearch(loadPage) {
+  const state = {hits: [], cursor: '', loading: false, error: ''};
+  async function load(query, conversationId = '', {append = false} = {}) {
+    const text = String(query || '').trim();
+    if (!text) {
+      state.hits = [];
+      state.cursor = '';
+      state.error = '';
+      state.loading = false;
+      return state;
+    }
+    if (state.loading) return state;
+    if (!append) {
+      state.hits = [];
+      state.cursor = '';
+    }
+    state.loading = true;
+    try {
+      const page = await loadPage(text, conversationId, append ? state.cursor : '');
+      const incoming = ((page && page.items) || []).map(searchHitFromItem);
+      state.hits = mergeSearchHits(append ? state.hits : [], incoming);
+      state.cursor = (page && page.cursor) || '';
+      state.error = '';
+    } catch (failure) {
+      state.error = (failure && failure.message) || '无法搜索消息。';
+      if (!append) {
+        state.hits = [];
+        state.cursor = '';
+      }
+    } finally {
+      state.loading = false;
+    }
+    return state;
+  }
+  return {state, load};
+}
+
+export function searchMoreVisible(state) {
+  return Boolean(state && state.cursor && !state.loading);
+}
+
+export function applySearchMore(node, state) {
+  if (!node) return;
+  node.hidden = !searchMoreVisible(state);
+  node.disabled = Boolean(state && state.loading);
 }
 
 export const GROUP_CREATE_INTRO = '添加名称，然后邀请好友并添加 AI 智能体。';
@@ -245,6 +325,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function socialBase() {
     return `/v1/workspaces/${workspaceId()}/social/conversations`;
   }
+
+  const messageSearch = createMessageSearch(async (query, conversationId, cursor) => {
+    const result = await request(
+      'GET',
+      `/v1/workspaces/${workspaceId()}/search/messages?${messageSearchQuery(query, conversationId, cursor)}`,
+    );
+    if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法搜索消息。'));
+    return {items: result.body.items || [], cursor: result.body.cursor || ''};
+  });
 
   function renderGroupReplyAction(requests) {
     const panel = document.getElementById('group-agent-action');
@@ -731,7 +820,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }));
   }
 
-  async function renderSearch() {
+  async function renderSearch({reuseMessages = false} = {}) {
     const query = (document.getElementById('session-search').value || '').trim();
     const results = document.getElementById('search-results');
     const empty = document.getElementById('search-empty');
@@ -763,25 +852,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
     let messageItems = [];
     if ((searchTab === 'messages' || searchTab === 'all') && query) {
-      const result = await request(
-        'GET',
-        `/v1/workspaces/${workspaceId()}/search/messages?${messageSearchQuery(query, searchConversation)}`,
-      );
+      if (!reuseMessages) await messageSearch.load(query, searchConversation);
       if (seq !== searchSeq) return;
-      if (result.status === 200) {
-        messageItems = (result.body.items || []).map(item => ({
-          type: item.kind === 'social' ? 'social' : 'agent-message',
-          id: item.conversation_id,
-          title: item.title || '消息',
-          preview: item.snippet || '',
-          conversationId: item.conversation_id,
-          kind: item.kind,
-        }));
-      } else if (searchTab === 'messages') {
+      const state = messageSearch.state;
+      if (state.error && searchTab === 'messages' && !state.hits.length) {
         empty.hidden = false;
-        empty.textContent = messageFor(result.body.error, '无法搜索消息。');
+        empty.textContent = state.error;
+        applySearchMore(document.getElementById('search-more'), {cursor: '', loading: false});
         return;
       }
+      messageItems = state.hits;
     }
 
     const filtered = (items) => items.filter(item => matchesQuery(item, query));
@@ -841,6 +921,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       empty.hidden = false;
       empty.textContent = query ? '当前工作区里没有匹配的结果。' : '当前工作区里还没有可列出的内容。';
     }
+    const paged = searchTab === 'messages' || searchTab === 'all';
+    if (paged && query && messageSearch.state.error) {
+      empty.hidden = false;
+      empty.textContent = messageSearch.state.error;
+    }
+    applySearchMore(
+      document.getElementById('search-more'),
+      paged && query ? messageSearch.state : {cursor: '', loading: false},
+    );
   }
 
   async function load() {
@@ -955,6 +1044,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else renderSearch();
   });
   document.getElementById('search-close').addEventListener('click', closeSearchPanel);
+  document.getElementById('search-more').addEventListener('click', async () => {
+    const query = (document.getElementById('session-search').value || '').trim();
+    if (!query || messageSearch.state.loading || !messageSearch.state.cursor) return;
+    await messageSearch.load(query, searchConversation, {append: true});
+    await renderSearch({reuseMessages: true});
+  });
   document.getElementById('message-search').addEventListener('click', () => {
     if (!currentConversation) {
       show('error', '请先打开一个对话再搜索。');
