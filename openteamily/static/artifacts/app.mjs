@@ -23,6 +23,7 @@ export function artifactMatchesType(item, type) {
   if (type === '视频') return item.kind === 'media' && mime.startsWith('video/');
   if (type === '音频') return item.kind === 'media' && mime.startsWith('audio/');
   if (type === '白板') return item.kind === 'whiteboard';
+  if (type === '幻灯片') return item.kind === 'slides';
   if (type === '消息') return !!(item.source && item.source.kind === 'agent_message');
   return false;
 }
@@ -202,6 +203,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (kind === 'website') return '网站';
     if (kind === 'media') return '媒体';
     if (kind === 'whiteboard') return '白板';
+    if (kind === 'slides') return '幻灯片';
     return '文档';
   }
 
@@ -255,20 +257,80 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return [Math.max(0, Math.min(800, x)), Math.max(0, Math.min(600, y))];
   }
 
+  let slidesState = {schema: 'openteamily.slides.v1', slides: []};
+
+  function slidesDeck() {
+    return {
+      schema: 'openteamily.slides.v1',
+      slides: slidesState.slides.map(slide => ({
+        title: String(slide.title || '').trim(),
+        bullets: (slide.bullets || []).map(value => String(value).trim()).filter(Boolean).slice(0, 10),
+      })),
+    };
+  }
+
+  function renderSlidesEditor() {
+    const list = document.getElementById('slide-list');
+    if (!list) return;
+    list.replaceChildren();
+    slidesState.slides.forEach((slide, index) => {
+      const li = document.createElement('li');
+      li.className = 'slide-card';
+      const head = document.createElement('div');
+      head.className = 'slide-head';
+      const label = document.createElement('span');
+      label.className = 'slide-index';
+      label.textContent = '第 ' + (index + 1) + ' 页';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '删除';
+      remove.addEventListener('click', () => {
+        slidesState.slides.splice(index, 1);
+        renderSlidesEditor();
+      });
+      head.append(label, remove);
+      const title = document.createElement('input');
+      title.type = 'text';
+      title.maxLength = 120;
+      title.placeholder = '页标题';
+      title.value = slide.title || '';
+      title.addEventListener('input', () => { slide.title = title.value; });
+      const bullets = document.createElement('textarea');
+      bullets.rows = 4;
+      bullets.maxLength = 4000;
+      bullets.placeholder = '每行一条要点（最多 10 条）';
+      bullets.value = (slide.bullets || []).join('\n');
+      bullets.addEventListener('input', () => {
+        slide.bullets = bullets.value.split('\n').map(value => value.trim()).filter(Boolean).slice(0, 10);
+      });
+      li.append(head, title, bullets);
+      list.append(li);
+    });
+    const add = document.getElementById('add-slide');
+    if (add) add.disabled = slidesState.slides.length >= 30;
+  }
+
   function fillEditor(item) {
     form.elements.title.value = item && item.title ? item.title : '';
     form.elements.body.value = item && typeof item.body === 'string' ? item.body : '';
     const kind = (item && item.kind) || draftKind;
     const meta = document.getElementById('editor-meta');
-    const labels = {website: '新网站', media: '新媒体', whiteboard: '新白板', document: '新文档'};
+    const labels = {website: '新网站', media: '新媒体', whiteboard: '新白板', slides: '新幻灯片', document: '新文档'};
     if (item && item.id) {
       meta.textContent = `${kindLabel(kind)} · 修订 ${item.revision} · 作者 ${item.created_by || ''}`;
     } else {
       meta.textContent = labels[kind] || '新文档';
     }
-    document.getElementById('body-label').hidden = kind === 'media' || kind === 'whiteboard';
+    document.getElementById('body-label').hidden = kind === 'media' || kind === 'whiteboard' || kind === 'slides';
     document.getElementById('media-editor').hidden = kind !== 'media';
     document.getElementById('board-editor').hidden = kind !== 'whiteboard';
+    document.getElementById('slides-editor').hidden = kind !== 'slides';
+    if (kind === 'slides') {
+      slidesState = item && item.slides ? item.slides : {schema: 'openteamily.slides.v1', slides: []};
+      if (!Array.isArray(slidesState.slides)) slidesState = {schema: 'openteamily.slides.v1', slides: []};
+      if (!slidesState.slides.length) slidesState.slides.push({title: '', bullets: []});
+      renderSlidesEditor();
+    }
     const image = document.getElementById('media-image');
     const audio = document.getElementById('media-audio');
     const video = document.getElementById('media-video');
@@ -695,6 +757,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     openEditor({kind: 'website'});
   });
 
+  document.getElementById('new-slides').addEventListener('click', () => {
+    draftKind = 'slides';
+    slidesState = {schema: 'openteamily.slides.v1', slides: [{title: '', bullets: []}]};
+    closeNewMenu();
+    openEditor({kind: 'slides'});
+  });
+
+  document.getElementById('add-slide').addEventListener('click', () => {
+    if (slidesState.slides.length >= 30) return;
+    slidesState.slides.push({title: '', bullets: []});
+    renderSlidesEditor();
+  });
+
   document.getElementById('new-media').addEventListener('click', () => {
     draftKind = 'media';
     document.getElementById('media-file').value = '';
@@ -877,6 +952,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         current && current.id ? {revision: String(current.revision)} : null,
       );
       if (!result) return;
+    } else if (kind === 'slides') {
+      const slides = slidesDeck();
+      if (!slides.slides.length) {
+        show('error', '至少添加一页幻灯片。');
+        return;
+      }
+      if (current && current.id) {
+        result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,
+                               {revision: current.revision, changes: {title, slides}});
+      } else {
+        result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts`,
+                               {title, kind: 'slides', slides},
+                               {'Idempotency-Key': idempotencyKey()});
+      }
     } else if (kind === 'whiteboard') {
       if (current && current.id) {
         result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,

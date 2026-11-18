@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS artifact_media (
 CREATE TABLE IF NOT EXISTS artifact_boards (
  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
  board TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS artifact_slides (
+ artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+ deck TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS artifact_chat_sources (
  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -116,6 +119,13 @@ MEDIA_MIMES = {
 }
 IMAGE_MIMES = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
 EMPTY_BOARD = {'schema': 'openteamily.whiteboard.v1', 'width': 800, 'height': 600, 'strokes': []}
+SLIDES_SCHEMA = 'openteamily.slides.v1'
+SLIDES_MAX = 30
+SLIDE_TITLE_MAX = 120
+SLIDE_BULLETS_MAX = 10
+SLIDE_BULLET_MAX = 200
+EMPTY_SLIDES = {'schema': SLIDES_SCHEMA, 'slides': []}
+SLIDE_CONTROL = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
 SHARE_CSP = (
     "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox; "
     "base-uri 'none'; form-action 'none'; frame-ancestors 'self'; object-src 'none'"
@@ -145,6 +155,7 @@ ROW_SELECT = (
     'md.sha256 AS media_sha256, md.filename AS media_filename, b.board AS board_json, '
     'cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id, '
     'cs.agent_id AS chat_agent_id, ac.title AS chat_conversation_title, '
+    'sl.deck AS slides_json, '
     'sc.title AS social_conversation_title '
     'FROM artifacts a '
     'JOIN users cu ON cu.id=a.created_by '
@@ -156,6 +167,7 @@ ROW_SELECT = (
     'LEFT JOIN artifact_chat_sources cs ON cs.artifact_id=a.id '
     'LEFT JOIN agent_conversations ac ON ac.id=cs.conversation_id '
     'LEFT JOIN social_conversations sc ON sc.id=cs.conversation_id '
+    'LEFT JOIN artifact_slides sl ON sl.artifact_id=a.id '
 )
 
 
@@ -176,6 +188,8 @@ def public_kind(row):
         return 'media'
     if row['board_json']:
         return 'whiteboard'
+    if row['slides_json']:
+        return 'slides'
     return 'website' if row['render'] == 'website' else 'document'
 
 
@@ -234,6 +248,9 @@ def view(row, include_body=True):
     elif kind == 'whiteboard':
         if include_body:
             data['board'] = decode_board(row['board_json']) or dict(EMPTY_BOARD)
+    elif kind == 'slides':
+        if include_body:
+            data['slides'] = decode_slides(row['slides_json']) or dict(EMPTY_SLIDES)
     elif include_body:
         data['body'] = row['body']
     return data
@@ -316,7 +333,11 @@ def version_count(db, artifact_id):
 
 def record_version(db, row):
     kind = public_kind(row)
-    body = row['body'] if kind in ('document', 'website') else ''
+    stored_kind = 'document' if kind == 'slides' else kind
+    if kind == 'slides':
+        body = row['slides_json'] or slides_json(EMPTY_SLIDES) or ''
+    else:
+        body = row['body'] if kind in ('document', 'website') else ''
     board = row['board_json'] if kind == 'whiteboard' else None
     mime = row['media_mime'] if kind == 'media' else None
     byte_count = row['media_bytes'] if kind == 'media' else None
@@ -325,7 +346,7 @@ def record_version(db, row):
     db.execute(
         'INSERT OR IGNORE INTO artifact_versions '
         'VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-        (row['id'], row['revision'], row['title'], kind, body, board, mime, byte_count,
+        (row['id'], row['revision'], row['title'], stored_kind, body, board, mime, byte_count,
          digest_hex, filename, row['updated'], row['updated_by']),
     )
 
@@ -357,16 +378,27 @@ def version_view(row, include_body=True):
             'bytes': row['byte_count'],
             'filename': row['filename'],
         }
-    elif include_body:
-        if kind == 'whiteboard':
-            data['board'] = decode_board(row['board']) or dict(EMPTY_BOARD)
-        else:
-            data['body'] = row['body']
+    else:
+        deck = decode_slides(row['body']) if kind == 'document' else None
+        if deck is not None:
+            data['kind'] = 'slides'
+            if include_body:
+                data['slides'] = deck
+        elif include_body:
+            if kind == 'whiteboard':
+                data['board'] = decode_board(row['board']) or dict(EMPTY_BOARD)
+            else:
+                data['body'] = row['body']
     return data
 
 
 def same_as_version(row, snapshot):
-    if public_kind(row) != snapshot['kind'] or row['title'] != snapshot['title']:
+    if row['title'] != snapshot['title']:
+        return False
+    if public_kind(row) == 'slides':
+        return snapshot['kind'] == 'document' and row['slides_json'] == slides_json(
+            decode_slides(snapshot['body']))
+    if public_kind(row) != snapshot['kind']:
         return False
     kind = snapshot['kind']
     if kind == 'media':
@@ -395,7 +427,7 @@ def export_filename(title, kind, revision=None, media_filename=None):
     if kind == 'media':
         name = clean_filename(media_filename or '')
         return name if name != 'file' or not media_filename else 'file'
-    suffix = {'document': '.txt', 'website': '.html', 'whiteboard': '.svg'}.get(kind, '.txt')
+    suffix = {'document': '.txt', 'website': '.html', 'whiteboard': '.svg', 'slides': '.html'}.get(kind, '.txt')
     tag = kind + (f'-{revision}' if revision else '')
     base = tag + suffix
     return base if SAFE_FILENAME.fullmatch(base) else 'artifact' + suffix
@@ -427,6 +459,14 @@ def export_bytes(row, data_dir, workspace_id, from_version=False):
         payload = read_media_bytes(data_dir, workspace_id, digest_hex, expected)
         name = export_filename(title, kind, revision, filename)
         return payload, mime, name
+    deck = None
+    if kind == 'slides':
+        deck = decode_slides(row['slides_json'])
+    elif from_version and kind == 'document':
+        deck = decode_slides(row['body'])
+    if deck is not None:
+        payload = render_slides_page(title, deck).encode('utf-8')
+        return payload, 'text/html; charset=utf-8', export_filename(title, 'slides', revision)
     if kind == 'website':
         payload = render_website_page(title, row['body']).encode('utf-8')
         return payload, 'text/html; charset=utf-8', export_filename(title, kind, revision)
@@ -656,8 +696,41 @@ def render_website_page(title, body):
     )
 
 
+def render_slides_page(title, deck):
+    heading = escape(title or '幻灯片')
+    slides = (deck or {}).get('slides') or []
+    parts = [
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">',
+        '<meta name="referrer" content="no-referrer"><title>' + heading + '</title>',
+        '<style>body{font-family:system-ui,sans-serif;background:#f4f5f7;margin:0;padding:1.5rem}'
+        '.deck{display:grid;gap:1rem;max-width:52rem;margin:0 auto}'
+        '.slide{background:#fff;border:1px solid #d8dde6;border-radius:14px;padding:1.2rem 1.4rem;'
+        'box-shadow:0 1px 2px rgba(0,0,0,.04)}'
+        '.slide h2{margin:.2rem 0 .6rem;font-size:1.35rem}'
+        '.slide .n{font-size:.75rem;color:#5b6472;letter-spacing:.08em}'
+        '.slide ul{margin:0;padding-left:1.2rem;line-height:1.7}'
+        '.slide li{margin:.15rem 0}'
+        '.slide.empty .hint{color:#5b6472;font-size:.85rem}</style>',
+        '</head><body><main class="deck">',
+    ]
+    if not slides:
+        parts.append('<section class="slide empty"><span class="n">1</span>'
+                     '<h2>' + heading + '</h2><p class="hint">还没有幻灯片内容。</p></section>')
+    for index, slide in enumerate(slides, 1):
+        parts.append('<section class="slide"><span class="n">' + str(index) + '</span>'
+                     '<h2>' + escape(slide.get('title') or '') + '</h2>')
+        bullets = slide.get('bullets') or []
+        if bullets:
+            parts.append('<ul>' + ''.join('<li>' + escape(item) + '</li>' for item in bullets) + '</ul>')
+        parts.append('</section>')
+    parts.append('</main></body></html>')
+    return ''.join(parts)
+
+
 def render_page(row):
     kind = public_kind(row)
+    if kind == 'slides':
+        return render_slides_page(row['title'], decode_slides(row['slides_json']) or EMPTY_SLIDES)
     if kind == 'website':
         return render_website_page(row['title'], row['body'])
     if kind == 'whiteboard':
@@ -800,6 +873,66 @@ def board_json(board):
     if len(text) > BOARD_JSON_MAX:
         return None
     return text
+
+
+def normalize_slides(value):
+    if not isinstance(value, dict) or value.get('schema', SLIDES_SCHEMA) != SLIDES_SCHEMA:
+        return None
+    slides = value.get('slides')
+    if not isinstance(slides, list) or len(slides) > SLIDES_MAX:
+        return None
+    out = []
+    for slide in slides:
+        if not isinstance(slide, dict):
+            return None
+        title = slide.get('title', '')
+        bullets = slide.get('bullets', [])
+        if not isinstance(title, str) or len(title.strip()) > SLIDE_TITLE_MAX or SLIDE_CONTROL.search(title):
+            return None
+        if not isinstance(bullets, list) or len(bullets) > SLIDE_BULLETS_MAX:
+            return None
+        clean = []
+        for bullet in bullets:
+            if (not isinstance(bullet, str) or len(bullet.strip()) > SLIDE_BULLET_MAX
+                    or SLIDE_CONTROL.search(bullet)):
+                return None
+            if bullet.strip():
+                clean.append(bullet.strip())
+        if not title.strip() and not clean:
+            return None
+        out.append({'title': title.strip(), 'bullets': clean})
+    return {'schema': SLIDES_SCHEMA, 'slides': out}
+
+
+def slides_json(deck):
+    normalized = normalize_slides(deck)
+    if normalized is None:
+        return None
+    text = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    if len(text) > 65536:
+        return None
+    return text
+
+
+def decode_slides(raw):
+    if not raw or not isinstance(raw, str) or not raw.lstrip().startswith('{'):
+        return None
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(value, dict) or value.get('schema') != SLIDES_SCHEMA:
+        return None
+    return normalize_slides(value)
+
+
+def attach_slides(db, artifact_id, deck):
+    payload = slides_json(deck)
+    if payload is None:
+        return False
+    db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (artifact_id,))
+    db.execute('INSERT INTO artifact_slides VALUES(?,?)', (artifact_id, payload))
+    return True
 
 
 def render_board_svg(board):

@@ -1675,6 +1675,10 @@ async function main() {
       }
       await page.goto(`${origin}${homepagePath}`, {waitUntil: 'load'});
       const homeText = await visibleText(page.locator('body'));
+      // textContent keeps source casing; innerText follows text-transform once
+      // the homepage CSP is the only policy and the inline stylesheet applies.
+      const statusLabel = ((await page.locator('p.status').textContent()) || '').trim();
+      const talkHeading = ((await page.locator('.section h2').first().textContent()) || '').trim();
       const sendDisabled = await page.locator('.composer button').isDisabled();
       const createDisabled = await page.locator('.create-agent').isDisabled();
       const composerDisabled = await page.locator('#public-composer').isDisabled();
@@ -1683,10 +1687,10 @@ async function main() {
         'agent_public_homepage',
         homeText.includes('OpenTeamily / FlyBot')
           && homeText.includes('Agent profile')
-          && homeText.includes('Public page')
+          && statusLabel === 'Public page'
           && homeText.includes(ready.agent_name)
           && homeText.includes('Synthetic CI directory entry.')
-          && homeText.includes('Talk via')
+          && talkHeading === 'Talk via'
           && homeText.includes('Web conversation')
           && homeText.includes('Built with FlyBot')
           && homeText.includes('Create your own Agent')
