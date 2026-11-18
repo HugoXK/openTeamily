@@ -177,9 +177,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       workspaceSelect.value = previous;
     }
     if (!workspaces.length) {
+      directoryAgents = [];
       document.getElementById('role-note').textContent = '还没有可访问的工作区。';
       document.getElementById('agent-list').replaceChildren();
-      document.getElementById('agents-empty').hidden = false;
+      const empty = document.getElementById('agents-empty');
+      empty.hidden = false;
+      empty.textContent = '这个工作区还没有智能体。';
+      const count = document.getElementById('agents-count');
+      if (count) count.textContent = '显示 0 个智能体';
       createForm.hidden = true;
       editForm.hidden = true;
       chatPanel.hidden = true;
@@ -188,6 +193,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     await loadWorkspace();
+  }
+
+  let directoryAgents = [];
+
+  function matchesDirectoryQuery(item, query) {
+    if (!query) return true;
+    const hay = (item.name + ' ' + (item.summary || '')).toLowerCase();
+    return hay.includes(query);
+  }
+
+  function renderDirectory() {
+    const id = workspaceId();
+    const list = document.getElementById('agent-list');
+    const empty = document.getElementById('agents-empty');
+    const count = document.getElementById('agents-count');
+    const query = ((document.getElementById('agent-search') || {}).value || '').trim().toLowerCase();
+    list.replaceChildren();
+    let shown = 0;
+    for (const item of directoryAgents) {
+      if (!matchesDirectoryQuery(item, query)) continue;
+      shown += 1;
+      const li = document.createElement('li');
+      li.className = 'agent-card';
+      const avatar = document.createElement('span');
+      avatar.className = 'avatar';
+      avatar.textContent = (item.name || '?').slice(0, 1);
+      const copy = document.createElement('div');
+      copy.className = 'copy';
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'link';
+      button.dataset.id = item.id;
+      button.textContent = item.name;
+      copy.append(button);
+      const note = document.createElement('p');
+      note.className = 'summary';
+      note.textContent = item.summary || '暂无简介';
+      copy.append(note);
+      const chat = document.createElement('a');
+      chat.className = 'chat-cta';
+      chat.href = '/chat#workspace=' + encodeURIComponent(id) + '&agent=' + encodeURIComponent(item.id);
+      chat.textContent = '聊天';
+      li.append(avatar, copy, chat);
+      list.append(li);
+    }
+    if (empty) {
+      empty.hidden = shown > 0;
+      empty.textContent = query
+        ? '没有匹配的智能体。试试其他关键词。'
+        : '这个工作区还没有智能体。';
+    }
+    if (count) count.textContent = '显示 ' + shown + ' 个智能体';
   }
 
   async function loadWorkspace() {
@@ -220,40 +277,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
       return;
     }
-    const items = listed.body.items || [];
-    const list = document.getElementById('agent-list');
-    list.replaceChildren();
-    const query = ((document.getElementById('agent-search') || {}).value || '').trim().toLowerCase();
-    let shown = 0;
-    for (const item of items) {
-      const hay = (item.name + ' ' + (item.summary || '')).toLowerCase();
-      if (query && !hay.includes(query)) continue;
-      shown += 1;
-      const li = document.createElement('li');
-      li.className = 'agent-card';
-      const avatar = document.createElement('span');
-      avatar.className = 'avatar';
-      avatar.textContent = (item.name || '?').slice(0, 1);
-      const copy = document.createElement('div');
-      copy.className = 'copy';
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'link';
-      button.dataset.id = item.id;
-      button.textContent = item.name;
-      copy.append(button);
-      const note = document.createElement('p');
-      note.className = 'summary';
-      note.textContent = item.summary || '暂无简介';
-      copy.append(note);
-      const chat = document.createElement('a');
-      chat.className = 'chat-cta';
-      chat.href = '/chat#workspace=' + encodeURIComponent(id) + '&agent=' + encodeURIComponent(item.id);
-      chat.textContent = '聊天';
-      li.append(avatar, copy, chat);
-      list.append(li);
-    }
-    document.getElementById('agents-empty').hidden = shown > 0;
+    directoryAgents = listed.body.items || [];
+    renderDirectory();
     show('', '');
   }
 
@@ -675,7 +700,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (canManage(actor)) createForm.hidden = false;
   });
   const search = document.getElementById('agent-search');
-  if (search) search.addEventListener('input', () => loadWorkspace());
+  if (search) {
+    search.addEventListener('input', () => renderDirectory());
+    search.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      search.value = '';
+      renderDirectory();
+      if (typeof search.focus === 'function') search.focus();
+    });
+  }
   const tabAgents = document.getElementById('tab-agents');
   const tabTeams = document.getElementById('tab-teams');
   if (tabAgents && tabTeams) {

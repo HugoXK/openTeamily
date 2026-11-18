@@ -500,6 +500,27 @@ async function main() {
     } catch (error) {
       record('agents_editor', false, String(error));
     }
+    try {
+      await page.locator('#chat-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const search = page.locator('#agent-search');
+      await search.fill('zz-no-such-agent');
+      await waitForLocatorText(page, '#agents-empty', '没有匹配的智能体。试试其他关键词。');
+      const countText = ((await page.locator('#agents-count').textContent()) || '').trim();
+      const emptyText = ((await page.locator('#agents-empty').textContent()) || '').trim();
+      const chatVisible = await page.locator('#chat-panel').isVisible();
+      record(
+        'agents_search_filter',
+        countText === '显示 0 个智能体'
+          && emptyText === '没有匹配的智能体。试试其他关键词。'
+          && chatVisible,
+        `count=${countText}; empty=${emptyText}; chat=${chatVisible}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '87-agents-search-filter.png')));
+      await search.press('Escape');
+      await waitForLocatorText(page, '#agent-list', ready.agent_name);
+    } catch (error) {
+      record('agents_search_filter', false, String(error));
+    }
 
     await page.setViewportSize({ width: 1440, height: 900 });
     const chatUrl = `${origin}/chat#workspace=${ready.workspace_id}&agent=${ready.agent_id}&conversation=${ready.conversation_id}`;
