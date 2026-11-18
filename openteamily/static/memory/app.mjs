@@ -77,6 +77,129 @@ export function memoryPagePreview(item) {
   return String((item && item.preview) || '').trim();
 }
 
+export const GRAPH_HOVER_DELAY_MS = 300;
+export const GRAPH_HOVER_NARROW_MAX = 390;
+
+export function graphPreviewModel(node) {
+  const title = String((node && node.title) || '').trim();
+  const summary = memoryPagePreview(node);
+  const tags = ((node && node.topics) || []).map(topicTag).filter(Boolean);
+  return {title, summary, tags};
+}
+
+export function graphHoverAllowed({pointerCoarse = false, viewportWidth = 1440} = {}) {
+  if (pointerCoarse) return false;
+  if (Number(viewportWidth) <= GRAPH_HOVER_NARROW_MAX) return false;
+  return true;
+}
+
+export function fillGraphHoverCard(card, model) {
+  if (!card) return card;
+  const titleEl = card.querySelector('.graph-hover-title');
+  const summaryEl = card.querySelector('.graph-hover-summary');
+  const tagsEl = card.querySelector('.graph-hover-tags');
+  if (titleEl) titleEl.textContent = (model && model.title) || '';
+  if (summaryEl) {
+    summaryEl.textContent = (model && model.summary) || '';
+    summaryEl.hidden = !(model && model.summary);
+  }
+  if (tagsEl) {
+    tagsEl.textContent = ((model && model.tags) || []).join(' ');
+    tagsEl.hidden = !((model && model.tags && model.tags.length));
+  }
+  return card;
+}
+
+export function hideGraphHoverCard(card) {
+  if (!card) return card;
+  card.hidden = true;
+  if (card.removeAttribute) card.removeAttribute('data-id');
+  return card;
+}
+
+export function showGraphHoverCard(card, model, position, id) {
+  fillGraphHoverCard(card, model);
+  if (id && card.setAttribute) card.setAttribute('data-id', id);
+  if (position && Number.isFinite(position.left) && Number.isFinite(position.top) && card.style) {
+    card.style.left = `${position.left}px`;
+    card.style.top = `${position.top}px`;
+  }
+  card.hidden = false;
+  return card;
+}
+
+export function bindGraphNodeGestures(target, node, options = {}) {
+  if (!target || !target.addEventListener) return () => {};
+  const openPage = options.openPage || (() => {});
+  const card = options.card;
+  const delay = options.delayMs == null ? GRAPH_HOVER_DELAY_MS : options.delayMs;
+  const allowed = options.hoverAllowed != null
+    ? Boolean(options.hoverAllowed)
+    : graphHoverAllowed({
+      pointerCoarse: options.pointerCoarse,
+      viewportWidth: options.viewportWidth,
+    });
+  const model = graphPreviewModel(node);
+  let timer = 0;
+  if (target.setAttribute) {
+    target.setAttribute('tabindex', '0');
+    target.setAttribute('role', 'button');
+    if (model.title) target.setAttribute('aria-label', model.title);
+  }
+  const open = () => openPage(node && node.id);
+  const hide = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = 0;
+    }
+    hideGraphHoverCard(card);
+  };
+  const startHover = () => {
+    if (!allowed || !card) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = 0;
+      const position = options.positionFor ? options.positionFor(target, node) : options.position;
+      showGraphHoverCard(card, model, position, node && node.id);
+    }, delay);
+  };
+  target.addEventListener('click', open);
+  target.addEventListener('dblclick', open);
+  target.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      if (event.preventDefault) event.preventDefault();
+      open();
+      return;
+    }
+    if (event.key === 'Escape') hide();
+  });
+  target.addEventListener('pointerenter', startHover);
+  target.addEventListener('pointerleave', hide);
+  return hide;
+}
+
+function currentPointerIsCoarse() {
+  return Boolean(typeof window !== 'undefined' && window.matchMedia
+    && window.matchMedia('(pointer: coarse)').matches);
+}
+
+function currentViewportWidth() {
+  return (typeof window !== 'undefined' && window.innerWidth) || 1440;
+}
+
+function graphHoverCardPosition(stage, target) {
+  if (!stage || !stage.getBoundingClientRect || !target || !target.getBoundingClientRect) {
+    return {left: 16, top: 16};
+  }
+  const stageBox = stage.getBoundingClientRect();
+  const box = (target.querySelector && target.querySelector('.graph-node') || target).getBoundingClientRect();
+  return {
+    left: Math.max(8, box.left - stageBox.left + (box.width / 2) - 16),
+    top: Math.max(8, box.top - stageBox.top + box.height + 10),
+  };
+}
+
+
 function topicKey(name) {
   return String(name || '').trim().toLocaleLowerCase();
 }
@@ -469,6 +592,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function renderGraph(graph) {
+    hideGraphHoverCard(document.getElementById('graph-hover-card'));
     const canvas = document.getElementById('graph-canvas');
     const counts = document.getElementById('graph-counts');
     const topicList = document.getElementById('topic-list');
@@ -507,7 +631,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         label.textContent = truncateLabel(node.title);
         group.appendChild(button);
         group.appendChild(label);
-        group.addEventListener('click', () => openPage(node.id));
+        const stage = canvas.parentElement;
+        const card = document.getElementById('graph-hover-card');
+        bindGraphNodeGestures(group, node, {
+          openPage,
+          card,
+          pointerCoarse: currentPointerIsCoarse(),
+          viewportWidth: currentViewportWidth(),
+          positionFor: () => graphHoverCardPosition(stage, group),
+        });
         world.appendChild(group);
       }
       canvas.appendChild(world);
@@ -701,6 +833,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openPage(pageId) {
+    hideGraphHoverCard(document.getElementById('graph-hover-card'));
     const id = workspaceId();
     if (!id) return;
     const seen = await request('GET', `/v1/workspaces/${id}/memory/${pageId}`);
@@ -838,6 +971,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const zoomIn = document.getElementById('graph-zoom-in');
   const zoomOut = document.getElementById('graph-zoom-out');
   const zoomReset = document.getElementById('graph-zoom-reset');
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') hideGraphHoverCard(document.getElementById('graph-hover-card'));
+  });
   if (zoomIn) zoomIn.addEventListener('click', () => { graphZoom = Math.min(2.4, graphZoom + 0.2); renderGraph(currentGraph); });
   if (zoomOut) zoomOut.addEventListener('click', () => { graphZoom = Math.max(0.6, graphZoom - 0.2); renderGraph(currentGraph); });
   if (zoomReset) zoomReset.addEventListener('click', () => { graphZoom = 1; renderGraph(currentGraph); });
