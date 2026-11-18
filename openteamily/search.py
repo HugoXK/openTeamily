@@ -40,10 +40,16 @@ def agent_rows(db, workspace_id, user_id, text, cursor, limit, conversation_id='
 
 
 def social_rows(db, workspace_id, user_id, text, cursor, limit, conversation_id=''):
+    # Import at call time: social already uses search.snippet for previews.
+    # Reuse exactly the authorized message stream's success-only projection,
+    # never task output, pending/error bodies or the original request prompt.
+    from .social import MESSAGE_ROWS
     return db.execute(
-        'SELECT m.id, m.conversation_id, m.body, m.created, c.title, c.kind AS conversation_kind '
-        'FROM social_messages m JOIN social_conversations c ON c.id=m.conversation_id '
-        'JOIN social_members s ON s.conversation_id=c.id AND s.user_id=? '
+        'SELECT m.id, m.conversation_id, m.body, m.created, m.agent_id, m.agent_name, '
+        'c.title, c.kind AS conversation_kind '
+        f'FROM ({MESSAGE_ROWS}) m JOIN social_conversations c ON c.id=m.conversation_id '
+        'AND c.workspace_id=m.workspace_id '
+        'JOIN social_members s ON s.conversation_id=c.id AND s.workspace_id=c.workspace_id AND s.user_id=? '
         'WHERE m.workspace_id=? AND m.id>? '
         "AND (?='' OR m.conversation_id=?) "
         'AND instr(lower(m.body), lower(?))>0 ORDER BY m.id LIMIT ?',
@@ -56,7 +62,7 @@ def item(kind, row):
         title = row['agent_name'] or row['title'] or '对话'
     else:
         title = row['title'] or ('群聊' if row['conversation_kind'] == 'group' else '单聊')
-    return {
+    data = {
         'kind': kind,
         'conversation_id': row['conversation_id'],
         'message_id': row['id'],
@@ -64,6 +70,10 @@ def item(kind, row):
         'snippet': snippet(row['body']),
         'created': row['created'],
     }
+    if kind == 'social' and row['agent_id']:
+        data.update(role='agent', agent_id=row['agent_id'], agent_name=row['agent_name'],
+                    source='runtime_infer')
+    return data
 
 
 def messages(db, workspace_id, user_id, text, kind, cursor, limit, conversation_id=''):

@@ -1,11 +1,25 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {actionQuery, applyDirectoryCollapsed, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, formatTopics, graphLayout, listQuery, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, topicTag} from '../openteamily/static/memory/app.mjs';
+import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, fillGraphHoverCard, formatTopics, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, listQuery, matchingMemoryPages, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
   assert.equal(csrfCookie('ot_dev_session=x; ot_dev_csrf=token-b'), 'token-b');
   assert.equal(csrfCookie('csrf=nope; other=1'), '');
+});
+
+test('matchingMemoryPages filters titles in place without inventing body search', () => {
+  const rows = [
+    {id: 'a', title: '项目简报'},
+    {id: 'b', title: '运维手册'},
+    {id: 'c', title: 'Project Brief'},
+  ];
+  assert.deepEqual(matchingMemoryPages(rows, '').map((row) => row.id), ['a', 'b', 'c']);
+  assert.deepEqual(matchingMemoryPages(rows, '运维').map((row) => row.title), ['运维手册']);
+  assert.deepEqual(matchingMemoryPages(rows, '简报').map((row) => row.title), ['项目简报']);
+  assert.deepEqual(matchingMemoryPages(rows, 'BRIEF').map((row) => row.title), ['Project Brief']);
+  assert.equal(MEMORY_EMPTY_WORKSPACE, '这个工作区还没有记忆页。');
+  assert.equal(MEMORY_EMPTY_NO_MATCH, '没有匹配的记忆页。试试其他关键词。');
 });
 
 test('listQuery and actionQuery encode filters and omit empty values', () => {
@@ -148,4 +162,129 @@ test('applyDirectoryCollapsed hides the directory in session only', () => {
   assert.equal(nodes['dir-expand'].hidden, true);
   assert.equal(nodes['list-panel'].className.includes('dir-collapsed'), false);
   assert.equal(nodes['dir-collapse'].getAttribute('aria-expanded'), 'true');
+});
+
+test('graphPreviewModel uses title, existing preview and topic tags', () => {
+  assert.deepEqual(graphPreviewModel({}), {title: '', summary: '', tags: []});
+  assert.deepEqual(
+    graphPreviewModel({title: ' Welcome ', preview: '  First line.  ', topics: ['CI fixture', '#keep']}),
+    {title: 'Welcome', summary: 'First line.', tags: ['#CI fixture', '#keep']},
+  );
+});
+
+test('graphHoverAllowed hides the card on coarse pointers and 390-wide viewports', () => {
+  assert.equal(graphHoverAllowed({pointerCoarse: false, viewportWidth: 1440}), true);
+  assert.equal(graphHoverAllowed({pointerCoarse: true, viewportWidth: 1440}), false);
+  assert.equal(graphHoverAllowed({pointerCoarse: false, viewportWidth: 390}), false);
+  assert.equal(graphHoverAllowed({pointerCoarse: false, viewportWidth: 389}), false);
+});
+
+function hoverCard() {
+  const child = (className) => {
+    const node = {className, textContent: '', hidden: false};
+    return node;
+  };
+  const title = child('graph-hover-title');
+  const summary = child('graph-hover-summary');
+  const tags = child('graph-hover-tags');
+  const map = {
+    '.graph-hover-title': title,
+    '.graph-hover-summary': summary,
+    '.graph-hover-tags': tags,
+  };
+  return {
+    hidden: true,
+    style: {},
+    attributes: {},
+    title,
+    summary,
+    tags,
+    querySelector(sel) { return map[sel] || null; },
+    setAttribute(key, value) { this.attributes[key] = value; },
+    getAttribute(key) { return this.attributes[key]; },
+    removeAttribute(key) { delete this.attributes[key]; },
+  };
+}
+
+function gestureTarget() {
+  const listeners = {};
+  return {
+    attributes: {},
+    listeners,
+    setAttribute(key, value) { this.attributes[key] = value; },
+    getAttribute(key) { return this.attributes[key]; },
+    addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+    dispatch(type, event = {}) {
+      const payload = {key: event.key, preventDefault() {}, ...event};
+      for (const fn of listeners[type] || []) fn(payload);
+    },
+  };
+}
+
+test('fillGraphHoverCard writes title, summary and tags and can hide empty rows', () => {
+  const card = hoverCard();
+  fillGraphHoverCard(card, {title: 'Alpha', summary: 'Hello', tags: ['#wiki']});
+  assert.equal(card.title.textContent, 'Alpha');
+  assert.equal(card.summary.textContent, 'Hello');
+  assert.equal(card.summary.hidden, false);
+  assert.equal(card.tags.textContent, '#wiki');
+  fillGraphHoverCard(card, {title: 'Alpha', summary: '', tags: []});
+  assert.equal(card.summary.hidden, true);
+  assert.equal(card.tags.hidden, true);
+});
+
+test('bindGraphNodeGestures keeps click-to-open and adds dblclick and Enter', () => {
+  const opened = [];
+  const target = gestureTarget();
+  bindGraphNodeGestures(target, {id: 'p1', title: 'Alpha'}, {openPage: (id) => opened.push(id), hoverAllowed: false});
+  assert.equal(target.getAttribute('tabindex'), '0');
+  assert.equal(target.getAttribute('role'), 'button');
+  assert.equal(target.getAttribute('aria-label'), 'Alpha');
+  target.dispatch('click');
+  target.dispatch('dblclick');
+  target.dispatch('keydown', {key: 'Enter'});
+  assert.deepEqual(opened, ['p1', 'p1', 'p1']);
+});
+
+test('bindGraphNodeGestures shows a hover card after the delay and hides it on leave or Escape', async () => {
+  const card = hoverCard();
+  const target = gestureTarget();
+  bindGraphNodeGestures(target, {id: 'p2', title: 'Beta', preview: 'Summary text', topics: ['wiki']}, {
+    openPage() {},
+    card,
+    hoverAllowed: true,
+    delayMs: 0,
+    position: {left: 12, top: 24},
+  });
+  target.dispatch('pointerenter');
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(card.hidden, false);
+  assert.equal(card.getAttribute('data-id'), 'p2');
+  assert.equal(card.title.textContent, 'Beta');
+  assert.equal(card.summary.textContent, 'Summary text');
+  assert.equal(card.tags.textContent, '#wiki');
+  assert.equal(card.style.left, '12px');
+  assert.equal(card.style.top, '24px');
+  target.dispatch('pointerleave');
+  assert.equal(card.hidden, true);
+  target.dispatch('pointerenter');
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(card.hidden, false);
+  target.dispatch('keydown', {key: 'Escape'});
+  assert.equal(card.hidden, true);
+});
+
+test('bindGraphNodeGestures does not open a hover card when hover is not allowed', async () => {
+  const card = hoverCard();
+  const target = gestureTarget();
+  bindGraphNodeGestures(target, {id: 'p3', title: 'Gamma', preview: 'Nope'}, {
+    openPage() {},
+    card,
+    hoverAllowed: false,
+    delayMs: 0,
+  });
+  target.dispatch('pointerenter');
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(card.hidden, true);
+  assert.equal(card.getAttribute('data-id'), undefined);
 });

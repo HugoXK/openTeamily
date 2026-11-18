@@ -248,28 +248,61 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderGroupReplyAction(requests) {
     const panel = document.getElementById('group-agent-action');
-    const saved = currentConversation && currentConversation.agent_members || [];
-    panel.hidden = currentSource !== 'social' || !saved.length;
-    const select = document.getElementById('group-agent-select');
-    const selected = select.value;
-    select.replaceChildren();
-    for (const agent of saved.filter(item => !item.archived)) {
-      const option = document.createElement('option');
-      option.value = agent.agent_id;
-      option.textContent = agent.name;
-      select.append(option);
+    const isGroup = currentSource === 'social' && currentConversation
+      && currentConversation.kind === 'group';
+    panel.hidden = !isGroup;
+    if (!isGroup) return;
+    const saved = currentConversation.agent_members || [];
+    const active = new Set((requests || []).filter(item =>
+      ['queued', 'running'].includes(item.status)).map(item => item.agent_id));
+    const chips = document.getElementById('group-agent-chips');
+    chips.replaceChildren();
+    for (const agent of saved) {
+      const li = document.createElement('li');
+      li.className = 'agent-chip';
+      const name = document.createElement('span');
+      name.textContent = agent.name + (agent.archived ? '（已归档）' : '');
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '移除';
+      remove.dataset.removeAgent = agent.agent_id;
+      li.append(name, remove);
+      chips.append(li);
     }
-    if ([...select.options].some(option => option.value === selected)) select.value = selected;
+    const add = document.getElementById('group-agent-add');
+    add.replaceChildren();
+    const joined = new Set(saved.map(agent => agent.agent_id));
+    const available = agents.filter(agent => !agent.archived && !joined.has(agent.id));
+    for (const agent of available) {
+      const option = document.createElement('option');
+      option.value = agent.id;
+      option.textContent = agent.name;
+      add.append(option);
+    }
+    add.disabled = !available.length;
+    document.getElementById('group-agent-add-submit').disabled = !available.length;
+    const holder = document.getElementById('group-agent-choices');
+    holder.replaceChildren();
+    for (const agent of saved.filter(item => !item.archived)) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.name = 'group-agent';
+      box.value = agent.agent_id;
+      box.disabled = active.has(agent.agent_id);
+      label.append(box, document.createTextNode(agent.name + (active.has(agent.agent_id) ? '（回复中）' : '')));
+      holder.append(label);
+    }
     const list = document.getElementById('group-agent-requests');
     list.replaceChildren();
-    for (const request of requests) {
+    for (const request of requests || []) {
       const item = document.createElement('li');
       item.textContent = request.agent_name + ' · ' + request.prompt + ' · ' + groupReplyStatus(request);
       item.dataset.replyStatus = request.status;
       list.append(item);
     }
-    document.getElementById('group-agent-submit').disabled = groupReplyBusy || !select.options.length
-      || requests.some(item => ['queued', 'running'].includes(item.status));
+    document.getElementById('group-agent-submit').disabled = groupReplyBusy
+      || !holder.querySelector('input:not(:disabled)');
   }
 
   function stopPolling() {
@@ -827,6 +860,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('session-pane').hidden = false;
     document.body.classList.add('chat-open');
     document.getElementById('whoami').textContent = currentUser.username;
+    const onboarding = await request('GET', '/v1/onboarding');
+    const banner = document.getElementById('onboarding-banner');
+    if (banner && onboarding.status === 200) {
+      banner.hidden = Boolean(onboarding.body.onboarding && onboarding.body.onboarding.completed);
+    }
+
+    const personal = await request('POST', '/v1/personal-agent');
+    const personalWorkspace = personal.status === 200 && personal.body.personal_agent
+      ? personal.body.personal_agent.workspace.id : '';
     const [listed, settings] = await Promise.all([
       request('GET', '/v1/workspaces?limit=100'),
       request('GET', '/v1/settings'),
@@ -836,7 +878,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     sendShortcut = stored === 'mod_enter' ? 'mod_enter' : 'enter';
     document.getElementById('chat-body').dataset.sendShortcut = sendShortcut;
     workspaces = listed.status === 200 ? (listed.body.items || []) : [];
-    const wanted = hashParams().workspace || workspaceSelect.value;
+    const wanted = hashParams().workspace || personalWorkspace || workspaceSelect.value;
     workspaceSelect.replaceChildren();
     for (const space of workspaces) {
       const option = document.createElement('option');
@@ -948,18 +990,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     event.preventDefault();
     if (groupReplyBusy || currentSource !== 'social' || !currentConversation) return;
     const cid = currentConversation.id;
-    const payload = {agent_id: document.getElementById('group-agent-select').value,
-      prompt: document.getElementById('group-agent-prompt').value};
-    if (!payload.agent_id || !payload.prompt.trim()) return;
-    const fingerprint = JSON.stringify([workspaceId(), cid, payload]);
+    const agentIds = [...document.querySelectorAll('#group-agent-choices input[name="group-agent"]:checked')]
+      .map(box => box.value);
+    const prompt = document.getElementById('group-agent-prompt').value;
+    if (!agentIds.length) {
+      show('error', '请选择至少一个群内智能体。');
+      return;
+    }
+    if (!prompt.trim()) return;
+    const fingerprint = JSON.stringify([workspaceId(), cid, agentIds.slice().sort(), prompt]);
     if (!groupReplyAttempt || groupReplyAttempt.fingerprint !== fingerprint) {
       groupReplyAttempt = {fingerprint, key: idempotencyKey('group-reply-')};
     }
     groupReplyBusy = true;
     document.getElementById('group-agent-submit').disabled = true;
     try {
-      const result = await request('POST', `${socialBase()}/${cid}/agent-replies`, payload,
-        {'Idempotency-Key': groupReplyAttempt.key});
+      const result = await request('POST', `${socialBase()}/${cid}/agent-replies`,
+        {agent_ids: agentIds, prompt}, {'Idempotency-Key': groupReplyAttempt.key});
       if (![200, 201].includes(result.status)) {
         show('error', messageFor(result.body.error, '请求未确认；重试相同内容将复用请求标识。'));
         return;
@@ -967,12 +1014,46 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       groupReplyAttempt = null;
       if (currentSource === 'social' && currentConversation && currentConversation.id === cid) {
         await openSocialConversation(cid);
-        show(result.body.reply.status === 'failed' ? 'error' : 'ok', groupReplyStatus(result.body.reply));
+        const replies = result.body.replies || (result.body.reply ? [result.body.reply] : []);
+        const failed = replies.filter(item => item.status === 'failed').length;
+        show(failed ? 'error' : 'ok', failed
+          ? (replies.length - failed) + ' 个已提交，' + failed + ' 个失败。'
+          : '已请求 ' + replies.length + ' 个智能体回复。');
       }
     } finally {
       groupReplyBusy = false;
-      if (currentSource === 'social' && currentConversation && currentConversation.id === cid) await openSocialConversation(cid);
+      if (currentSource === 'social' && currentConversation && currentConversation.id === cid) {
+        await openSocialConversation(cid);
+      }
     }
+  });
+
+  document.getElementById('group-agent-chips').addEventListener('click', async event => {
+    const button = event.target.closest('button[data-remove-agent]');
+    if (!button || currentSource !== 'social' || !currentConversation) return;
+    const cid = currentConversation.id;
+    const result = await request('POST',
+      `${socialBase()}/${cid}/agents/${button.dataset.removeAgent}/remove`, {});
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法移除智能体。'));
+      return;
+    }
+    await openSocialConversation(cid);
+    show('ok', '已移除智能体。');
+  });
+
+  document.getElementById('group-agent-add-submit').addEventListener('click', async () => {
+    if (currentSource !== 'social' || !currentConversation) return;
+    const select = document.getElementById('group-agent-add');
+    if (!select.value) return;
+    const cid = currentConversation.id;
+    const result = await request('POST', `${socialBase()}/${cid}/agents`, {agent_ids: [select.value]});
+    if (result.status !== 201 && result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法添加智能体。'));
+      return;
+    }
+    await openSocialConversation(cid);
+    show('ok', '已添加智能体。');
   });
 
   document.getElementById('compose-new-group').addEventListener('click', () => openComposeDialog('group'));

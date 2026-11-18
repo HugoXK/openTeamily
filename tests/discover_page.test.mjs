@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { validSlug, catalogItems, agentDiscoverPairs, isAgentsCatalog, isTeamsCatalog, renderTeamCard, FEED_CATEGORIES, CATALOG_CATEGORIES, TEAM_CATEGORIES, FEED_ACTIVITY_NOTE, FEED_FOLLOWING_EMPTY_TITLE, FEED_FOLLOWING_EMPTY_BODY, FEED_FOLLOWING_NOTE, FEED_SEARCH_NOTE, TEAMS_NOTE, TEAMS_SEARCH_NOTE, TEAMS_SEARCH_PLACEHOLDER } from '../openteamily/static/discover/app.mjs';
+import { validSlug, catalogInitial, catalogItems, agentDiscoverPairs, isAgentsCatalog, isTeamsCatalog, renderTeamCard, FEED_CATEGORIES, CATALOG_CATEGORIES, TEAM_CATEGORIES, FEED_ACTIVITY_NOTE, FEED_FOLLOWING_EMPTY_TITLE, FEED_FOLLOWING_EMPTY_BODY, FEED_FOLLOWING_NOTE, FEED_SEARCH_NOTE, TEAMS_NOTE, TEAMS_SEARCH_NOTE, TEAMS_SEARCH_PLACEHOLDER } from '../openteamily/static/discover/app.mjs';
+
+
+test('catalogInitial skips leading punctuation like the public homepage initial', () => {
+  assert.equal(catalogInitial('[CI FIXTURE] Directory assistant'), 'C');
+  assert.equal(catalogInitial('Directory assistant'), 'D');
+  assert.equal(catalogInitial('  智能体'), '智');
+  assert.equal(catalogInitial('42-helper'), '4');
+  assert.equal(catalogInitial('---'), '?');
+  assert.equal(catalogInitial(''), '?');
+  assert.equal(catalogInitial(undefined), '?');
+});
 
 test('validSlug mirrors the server slug rule', () => {
   assert.equal(validSlug('on-call'), true);
@@ -37,6 +48,25 @@ test('recorded feed categories stay in the captured order', () => {
   ]);
 });
 
+test('feed all-filter shows the recorded 全部 label and keeps an empty canvas', () => {
+  const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
+  const block = html.split('class="feed-filters"')[1].split('id="feed-following-empty"')[0];
+  assert.match(block, /class="feed-filter-all"[^>]*aria-current="true"[^>]*>全部</);
+  assert.equal(/class="feed-filter-all"[^>]*><\/button>/.test(block), false);
+  assert.equal(/aria-label="全部"/.test(block), false);
+  assert.equal(/没有单独标出文字|圆形按钮/.test(block), false);
+  const order = ['全部', ...FEED_CATEGORIES];
+  const positions = order.map((label) => block.indexOf(`>${label}<`));
+  assert.equal(positions.every((index) => index !== -1), true);
+  assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
+  assert.match(html, /id="feed-activity-empty"/);
+  assert.match(html, /id="feed-grid"[^>]*data-empty="true"/);
+  const activity = html.split('id="feed-activity-empty"')[1].split('id="feed-note"')[0];
+  assert.equal(/\bhidden\b/.test(activity.split('>')[0]), false);
+  assert.equal(activity.includes('id="feed-note"'), false);
+  assert.equal(/最多领取|CREDITS|积分中心/.test(html.split('id="feed-panel"')[1].split('id="catalog-view"')[0]), false);
+});
+
 test('recorded catalog categories stay in the captured order', () => {
   assert.deepEqual(CATALOG_CATEGORIES, [
     'Content Creation', 'Customer Support', 'Data Analysis', 'Design',
@@ -67,6 +97,11 @@ test('catalog filter chrome is present, disabled, and does not copy Teamily bran
   assert.equal(/teamily|积分|credits/i.test(creator), false);
   assert.match(html, /id="catalog-filter-note" class="visually-hidden"/);
   assert.match(html, /分类和创建者筛选未接通：公共目录没有对应字段。/);
+  const scroll = block.split('class="catalog-filter-scroll"')[1].split('</div>')[0];
+  assert.match(scroll, />Marketing</);
+  assert.equal(/id="catalog-filter-search"/.test(scroll), false);
+  assert.equal(/id="catalog-filter-more"/.test(scroll), false);
+  assert.match(block, /<\/div>\s*<button type="button" id="catalog-filter-search"/);
 });
 
 
@@ -94,6 +129,10 @@ test('teams filter chrome is present, disabled, and does not copy Teamily brandi
   assert.equal(positions.every((index) => index !== -1), true);
   assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
   assert.match(block, /id="teams-filter-more"[^>]*disabled[^>]*aria-label="更多分类"/);
+  const teamScroll = block.split('class="catalog-filter-scroll"')[1].split('</div>')[0];
+  assert.match(teamScroll, />Sales</);
+  assert.equal(/id="teams-filter-more"/.test(teamScroll), false);
+  assert.match(block, /<\/div>\s*<button type="button" id="teams-filter-more"/);
   assert.equal(/id="teams-filter-search"/.test(block), false);
   assert.equal(/Teamily AI|Full-Stack Delivery Guild|积分|credits/i.test(html), false);
   assert.match(html, /id="teams-filter-note" class="visually-hidden"/);
@@ -122,6 +161,26 @@ test('renderTeamCard lays out recorded fields and keeps create unconnected', () 
   assert.equal(create.textContent, '创建');
   assert.match(create.title, /未接通/);
 });
+
+test('renderTeamCard initials skip leading punctuation', () => {
+  const doc = fakeDocument();
+  const card = renderTeamCard(doc, {
+    name: 'Fixture Delivery Room',
+    members: ['[CI] alpha', 'beta'],
+  });
+  assert.equal(card.children[4].children[0].children[0].textContent, 'C');
+  assert.equal(card.children[4].children[0].children[1].textContent, 'B');
+});
+
+test('catalog filter rows do not wrap chips onto a second line', () => {
+  const css = readFileSync(new URL('../openteamily/static/discover/app.css', import.meta.url), 'utf8');
+  const block = css.split('.catalog-filters {')[1].split('.catalog-creator-row')[0];
+  assert.match(block, /flex-wrap:\s*nowrap/);
+  assert.match(block, /\.catalog-filter-scroll[^}]*overflow-x:\s*auto/s);
+  assert.match(block, /\.catalog-filter-search, \.catalog-filter-more[^}]*flex:\s*0 0 auto/s);
+  assert.equal(/\.catalog-filters \{[^}]*flex-wrap:\s*wrap/.test(css.split('/* Design refresh */')[0]), false);
+});
+
 
 test('catalogItems tolerates missing bodies', () => {
   assert.deepEqual(catalogItems({items: [{slug: 'a'}]}), [{slug: 'a'}]);
@@ -237,11 +296,13 @@ test('default discover view is the unconnected feed and does not load the catalo
   assert.equal(el('catalog-view').hidden, true);
   assert.equal(el('feed-note').textContent, FEED_ACTIVITY_NOTE);
   assert.equal(el('feed-following-empty').hidden, true);
+  assert.equal(el('feed-activity-empty').hidden, false);
   assert.equal(el('feed-tab-activity').attributes['aria-selected'], 'true');
   assert.equal(requests.some(([path]) => path.startsWith('/v1/discover/agents')), false);
   el('feed-tab-following').handlers.click();
   assert.equal(el('feed-note').textContent, FEED_FOLLOWING_NOTE);
   assert.equal(el('feed-following-empty').hidden, false);
+  assert.equal(el('feed-activity-empty').hidden, true);
   assert.equal(el('feed-tab-following').attributes['aria-selected'], 'true');
   assert.equal(FEED_FOLLOWING_EMPTY_TITLE, '关注列表暂无动态');
   assert.equal(FEED_FOLLOWING_EMPTY_BODY, '你关注的人发布动态后会显示在这里。');
@@ -252,6 +313,7 @@ test('default discover view is the unconnected feed and does not load the catalo
   assert.equal(el('feed-search-note').textContent, FEED_SEARCH_NOTE);
   el('feed-tab-activity').handlers.click();
   assert.equal(el('feed-following-empty').hidden, true);
+  assert.equal(el('feed-activity-empty').hidden, false);
   assert.equal(el('feed-note').textContent, FEED_ACTIVITY_NOTE);
 });
 

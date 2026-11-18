@@ -253,17 +253,19 @@ async function main() {
       await page.locator('#appearance input[value="auto"]').check();
       await page.locator('#appearance-schedule-card').waitFor({ state: 'visible', timeout: 15000 });
       await waitForLocatorText(page, '#appearance-status', '当前为');
+      const statusText = `${await visibleText(page.locator('#appearance-status'))}`;
       const autoText = `${await visibleText(page.locator('#appearance-schedule-card'))}`;
       record(
         'settings_appearance',
         values.join(',') === 'light,dark,auto,system'
           && appearanceText.includes('始终使用浅色主题。')
           && appearanceText.includes('选择应用在此设备上的显示外观。')
-          && autoText.includes('当前为')
+          && /当前为(浅色|深色)，直到 (22:00|06:00)。/.test(statusText)
+          && !autoText.includes('当前为')
           && autoText.includes('没有使用实际日出日落时刻')
           && autoText.includes('可选用「自定义时段」')
           && autoText.includes('自动切换'),
-        `values=${values.join(',')}; ${appearanceText || 'appearance page empty'} | auto=${autoText || 'schedule card empty'}`,
+        `values=${values.join(',')}; ${appearanceText || 'appearance page empty'} | status=${statusText || 'missing'} | auto=${autoText || 'schedule card empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '27-settings-appearance.png')));
     } catch (error) {
@@ -407,18 +409,35 @@ async function main() {
       await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
       const connectors = page.locator('[data-settings-page="connectors"]');
       await connectors.waitFor({ state: 'visible', timeout: 15000 });
+      const catalogRows = page.locator('#connectors-catalog .connector-row');
+      await catalogRows.first().waitFor({ state: 'visible', timeout: 15000 });
+      const rowCount = await catalogRows.count();
+      const connectButtons = page.locator('#connectors-catalog button');
+      const connectCount = await connectButtons.count();
+      const allConnectDisabled = connectCount === 39
+        && await connectButtons.evaluateAll((nodes) => nodes.every((node) => node.disabled));
+      const statuses = await page.locator('#connectors-catalog .connector-status').allTextContents();
+      const allDisconnected = statuses.length === 39
+        && statuses.every((text) => text.includes('未连接') && !text.includes('已连接'));
       const connectorsText = `${await visibleText(connectors)}`;
       const addMcp = page.locator('#add-mcp-server');
       const addMcpDisabled = await addMcp.isDisabled();
       record(
         'settings_connectors',
         !addMcpDisabled
+          && rowCount === 39
+          && allConnectDisabled
+          && allDisconnected
           && connectorsText.includes('应用连接器')
           && connectorsText.includes('添加 MCP 服务器')
-          && connectorsText.includes('还没有可连接的应用目录。')
+          && connectorsText.includes('GitHub')
+          && connectorsText.includes('Mailbox')
+          && connectorsText.includes('未连接')
+          && connectorsText.includes('还没有连接器后端或账号授权接口')
+          && !connectorsText.includes('还没有可连接的应用目录。')
           && !connectorsText.includes('已连接')
           && !/积分|套餐|升级/.test(connectorsText),
-        `addDisabled=${addMcpDisabled}; ${connectorsText || 'connectors page empty'}`,
+        `rows=${rowCount}; connect=${connectCount}; addDisabled=${addMcpDisabled}; ${connectorsText || 'connectors page empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '46-settings-connectors.png')));
       await addMcp.click();
@@ -482,6 +501,55 @@ async function main() {
       screenshots.push(path.basename(await shot(page, outDir, '04-agents-editor.png')));
     } catch (error) {
       record('agents_editor', false, String(error));
+    }
+    try {
+      await page.locator('#chat-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const search = page.locator('#agent-search');
+      await search.fill('zz-no-such-agent');
+      await waitForLocatorText(page, '#agents-empty', '没有匹配的智能体。试试其他关键词。');
+      const countText = ((await page.locator('#agents-count').textContent()) || '').trim();
+      const emptyText = ((await page.locator('#agents-empty').textContent()) || '').trim();
+      const chatVisible = await page.locator('#chat-panel').isVisible();
+      record(
+        'agents_search_filter',
+        countText === '显示 0 个智能体'
+          && emptyText === '没有匹配的智能体。试试其他关键词。'
+          && chatVisible,
+        `count=${countText}; empty=${emptyText}; chat=${chatVisible}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '87-agents-search-filter.png')));
+      await search.press('Escape');
+      await waitForLocatorText(page, '#agent-list', ready.agent_name);
+    } catch (error) {
+      record('agents_search_filter', false, String(error));
+    }
+    try {
+      await page.locator('#edit-form').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#edit-form select[name="category"]').selectOption('operations');
+      await page.locator('#edit-form button[type="submit"]').click();
+      // The save reloads the directory (which clears #status), so wait for the card tag instead.
+      await waitForLocatorText(page, '#agent-list', 'Operations');
+      await page.locator('.filter-row .pill[data-category="operations"]').click();
+      const filteredList = await visibleText(page.locator('#agent-list'));
+      const filteredUrl = page.url();
+      const chatStillOpen = await page.locator('#chat-panel').isVisible();
+      await page.locator('.filter-row .pill[data-category="sales"]').click();
+      await waitForLocatorText(page, '#agents-empty', '「Sales」类目下还没有智能体。');
+      const salesEmpty = ((await page.locator('#agents-empty').textContent()) || '').trim();
+      await page.locator('.filter-row .pill[data-category="operations"]').click();
+      await waitForLocatorText(page, '#agent-list', ready.agent_name);
+      record(
+        'agents_category_filter',
+        filteredList.includes(ready.agent_name)
+          && filteredUrl.includes('category=operations')
+          && chatStillOpen
+          && salesEmpty === '「Sales」类目下还没有智能体。选「全部」查看其余智能体。',
+        `list=${filteredList}; url=${filteredUrl}; chat=${chatStillOpen}; sales=${salesEmpty}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '89-agents-category-filter.png')));
+      await page.locator('.filter-row .pill[data-category="all"]').click();
+    } catch (error) {
+      record('agents_category_filter', false, String(error));
     }
 
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -722,7 +790,9 @@ async function main() {
     try {
       await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
       await page.locator('#group-agent-action').waitFor({state: 'visible', timeout: 8000});
-      await page.locator('#group-agent-select').selectOption(ready.agent_id);
+      const groupAgentChoice = page.locator(`#group-agent-choices input[name="group-agent"][value="${ready.agent_id}"]`);
+      await groupAgentChoice.waitFor({state: 'visible', timeout: 8000});
+      await groupAgentChoice.check();
       await page.locator('#group-agent-prompt').fill('[CI FIXTURE] Explicit one-shot group request to the labeled fake provider');
       screenshots.push(path.basename(await shot(page, outDir, '81-group-agent-request.png')));
       await page.locator('#group-agent-submit').click();
@@ -819,6 +889,35 @@ async function main() {
     } catch (error) {
       record('chat_search_conversation_scope', false, String(error));
     }
+
+    // Appended backend-search integration; keep previous capture blocks intact.
+    try {
+      await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 15000);
+      await page.locator('#message-search').click();
+      await waitForLocatorText(page, '#search-source-note', '仅搜索当前对话');
+      await page.locator('#session-search').fill(ready.provider_text);
+      await waitForLocatorText(page, '#search-results', ready.provider_text, 15000);
+      const hits = await visibleText(page.locator('#search-results'));
+      record('chat_search_group_agent_reply', hits.includes('[CI FIXTURE] Agent members group')
+        && hits.includes(ready.provider_text), 'Persisted fake-provider group reply found: ' + hits);
+      screenshots.push(path.basename(await shot(page, outDir, '85-chat-group-agent-search.png')));
+      const groupId = await page.evaluate(() => new URLSearchParams(location.hash.slice(1)).get('social'));
+      const reopened = page.waitForResponse(response => response.request().method() === 'GET'
+        && new URL(response.url()).pathname === `/v1/workspaces/${ready.workspace_id}/social/conversations/${groupId}`);
+      await page.locator('#search-results button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
+      const response = await reopened;
+      const saved = await response.json();
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 15000);
+      record('chat_search_group_agent_open', response.status() === 200 && saved.conversation.id === groupId
+        && saved.items.some(item => item.role === 'agent' && item.body === ready.provider_text)
+        && (await visibleText(page.locator('#message-list'))).includes('AI 智能体 · 运行时回复'),
+        'Search result fetched the same saved group and runtime-authored reply');
+    } catch (error) {
+      record('chat_search_group_agent_reply', false, String(error));
+    }
+    // The next existing step navigates to /automations (a new document), avoiding
+    // a fragment-only cleanup navigation racing the async result-open handler.
 
     await page.setViewportSize({ width: 1280, height: 900 });
 
@@ -1257,6 +1356,33 @@ async function main() {
     );
     screenshots.push(path.basename(await shot(page, outDir, '70-memory-dir-previews.png')));
     try {
+      const graphNode = page.locator('#graph-canvas .graph-item').first();
+      await graphNode.waitFor({ state: 'visible', timeout: 8000 });
+      await graphNode.locator('.graph-node').hover();
+      await page.waitForTimeout(400);
+      const hoverCard = page.locator('#graph-hover-card');
+      const hoverText = await visibleText(hoverCard);
+      record(
+        'memory_graph_hover',
+        await hoverCard.isVisible()
+          && hoverText.includes(ready.memory_title)
+          && hoverText.includes(ready.memory_body)
+          && hoverText.includes(`#${ready.memory_topic}`)
+          && (await visibleText(page.locator('.graph-hint'))).includes('单击查看 · 双击打开 · 悬停预览'),
+        hoverText || 'graph hover card missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '83-memory-graph-hover.png')));
+      await graphNode.dblclick();
+      await page.locator('#editor-form').waitFor({ state: 'visible', timeout: 8000 });
+      const openedTitle = await page.locator('#editor-form [name="title"]').inputValue();
+      record('memory_graph_open', openedTitle === ready.memory_title, openedTitle || 'graph double-click did not open the page');
+      screenshots.push(path.basename(await shot(page, outDir, '84-memory-graph-open.png')));
+      await page.locator('#close-editor').click();
+      await page.locator('#overview-panel').waitFor({ state: 'visible', timeout: 8000 });
+    } catch (error) {
+      record('memory_graph_hover', false, String(error));
+    }
+    try {
       await page.locator('#dir-collapse').click();
       await page.locator('#dir-expand').waitFor({ state: 'visible', timeout: 8000 });
       const collapsedClass = (await page.locator('#list-panel').getAttribute('class') || '').includes('dir-collapsed');
@@ -1360,6 +1486,26 @@ async function main() {
       await page.keyboard.press('Escape');
     } catch (error) {
       record('memory_account_button', false, String(error));
+    }
+
+    try {
+      const search = page.locator('#search');
+      await search.fill('zz-no-such-memory');
+      await waitForLocatorText(page, '#list-empty', '没有匹配的记忆页。试试其他关键词。');
+      const emptyText = ((await page.locator('#list-empty').textContent()) || '').trim();
+      const listPanelVisible = await page.locator('#list-panel').isVisible();
+      const allCount = ((await page.locator('#filter-all-count').textContent()) || '').trim();
+      record(
+        'memory_search_filter',
+        emptyText === '没有匹配的记忆页。试试其他关键词。'
+          && listPanelVisible,
+        `empty=${emptyText}; count=${allCount}; listPanel=${listPanelVisible}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '88-memory-search-filter.png')));
+      await search.press('Escape');
+      await waitForLocatorText(page, '#memory-list', ready.memory_title);
+    } catch (error) {
+      record('memory_search_filter', false, String(error));
     }
 
     try {
@@ -1496,7 +1642,7 @@ async function main() {
       await page.goto(`${origin}/guide`, { waitUntil: 'load' });
       await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#guide-list').waitFor({ state: 'visible', timeout: 8000 });
-      await waitForLocatorText(page, '#guide-count', '个功能');
+      await waitForLocatorText(page, '#guide-count', '当前显示');
       const guideText = await visibleText(page.locator('#main-panel'));
       record(
         'guide_page',
@@ -1707,6 +1853,40 @@ async function main() {
       screenshots.push(path.basename(await shot(page, outDir, '77-agent-public-homepage.png')));
     } catch (error) {
       record('agent_public_homepage', false, String(error).replace(/\/a\/[A-Za-z0-9_-]{20,}/g, '/a/<redacted>'));
+    }
+
+    // PR151 integration: real UI save/reopen, with current personal-agent startup retained.
+    try {
+      await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
+      await page.locator('#industry option[value="科技与软件"]').waitFor({state: 'attached'});
+      await page.locator('#industry').selectOption('科技与软件');
+      await page.locator('#role-choices input[value="产品经理"]').check();
+      await page.locator('#onboarding-save').click();
+      await page.waitForURL(url => url.pathname === '/chat');
+      await page.locator('#main-panel').waitFor({state: 'visible'});
+      await page.waitForFunction(() => document.getElementById('onboarding-banner').hidden);
+      const personalResponse = await page.request.get(`${origin}/v1/personal-agent`);
+      const personalState = await personalResponse.json();
+      await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#onboarding-meta', '科技与软件');
+      record('onboarding_save_reopen', await page.locator('#industry').inputValue() === '科技与软件'
+        && await page.locator('#role-choices input[value="产品经理"]').isChecked()
+        && Boolean(personalState.personal_agent && personalState.personal_agent.agent),
+        'Saved work context survives reload alongside the personal agent; no recommendations or connector claims');
+      screenshots.push(path.basename(await shot(page, outDir, '86-onboarding-saved-context.png')));
+      await page.locator('#industry').selectOption('其他');
+      await page.locator('#custom-industry').fill('[CI FIXTURE] Independent research');
+      await page.locator('#custom-role').fill('[CI FIXTURE] Analyst');
+      await page.locator('#onboarding-save').click();
+      await page.waitForURL(url => url.pathname === '/chat');
+      await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#onboarding-meta', '[CI FIXTURE] Independent research');
+      record('onboarding_custom_reopen',
+        await page.locator('#custom-industry').inputValue() === '[CI FIXTURE] Independent research'
+        && await page.locator('#custom-role').inputValue() === '[CI FIXTURE] Analyst',
+        'Custom industry and role are both restored, not lost on the Other form');
+    } catch (error) {
+      record('onboarding_save_reopen', false, String(error));
     }
 
     await context.close();

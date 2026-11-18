@@ -21,15 +21,21 @@ class ProfileDownloadPageTests(unittest.TestCase):
         self.client = Client(self.app)
         self.client.register('alice')
 
-    def test_profile_shows_username_only_and_marks_missing_fields(self):
+    def test_profile_editor_fields_and_assets(self):
         page = self.raw.call('GET', '/profile')
         self.assertEqual(page['status'], 200)
         html = page['body'].decode()
-        self.assertIn('id="profile-username"', html)
-        self.assertIn('未实现', html)
-        self.assertIn('不能在这里编辑或保存', html)
+        for ident in ('profile-username', 'profile-form', 'profile-name', 'profile-handle',
+                      'profile-bio', 'profile-tags', 'profile-gender', 'profile-location',
+                      'profile-website', 'goal-health', 'goal-career', 'profile-save'):
+            self.assertIn('id="%s"' % ident, html)
+        self.assertIn('Teamily ID', html)
+        self.assertIn('人生目标', html)
+        self.assertIn('仅你自己可见', html)
+        self.assertIn('href="/profile/app.css"', html)
         self.assertNotIn('teamily.com', html.lower())
         self.assertEqual(self.raw.call('GET', '/profile/app.mjs')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/profile/app.css')['status'], 200)
         self.assertEqual(self.raw.call('GET', '/profile', query='x=1')['status'], 400)
         self.assertEqual(self.raw.call('POST', '/profile')['status'], 405)
 
