@@ -170,12 +170,22 @@
     <p id="social-agent-members" class="gap-note" hidden></p>
     <p id="onboarding-banner" class="note" hidden>完善<strong>工作背景</strong>，让自动化推荐更贴合你。<a href="/onboarding">去设置</a></p>
     <section id="group-agent-action" class="gap-note" hidden>
-      <h2>请群内智能体回复一次</h2>
-      <p class="note">原创补充，未经对照。仅发送本次请求，不附带群历史；不会自动回复或互相委派。</p>
+      <h2>群内智能体</h2>
+      <p class="note">原创补充，未经对照。名册编辑只影响本群；请求只发送本次输入，不附带群历史，不会自动回复或互相委派。</p>
+      <div id="group-agent-roster">
+        <ul id="group-agent-chips" class="agent-chips"></ul>
+        <div class="agent-add">
+          <select id="group-agent-add" aria-label="添加群内智能体"></select>
+          <button type="button" id="group-agent-add-submit">添加</button>
+        </div>
+      </div>
       <form id="group-agent-form">
-        <label>群内智能体 <select id="group-agent-select" required></select></label>
+        <fieldset>
+          <legend>请求哪些智能体回复</legend>
+          <div id="group-agent-choices" class="agent-choices"></div>
+        </fieldset>
         <label>本次请求 <textarea id="group-agent-prompt" maxlength="4000" required rows="2"></textarea></label>
-        <button id="group-agent-submit" type="submit">请求一次回复</button>
+        <button id="group-agent-submit" type="submit">请求回复</button>
       </form>
       <ul id="group-agent-requests" aria-live="polite"></ul>
     </section>

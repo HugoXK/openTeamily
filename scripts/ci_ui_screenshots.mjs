@@ -739,7 +739,9 @@ async function main() {
     try {
       await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
       await page.locator('#group-agent-action').waitFor({state: 'visible', timeout: 8000});
-      await page.locator('#group-agent-select').selectOption(ready.agent_id);
+      const groupAgentChoice = page.locator(`#group-agent-choices input[name="group-agent"][value="${ready.agent_id}"]`);
+      await groupAgentChoice.waitFor({state: 'visible', timeout: 8000});
+      await groupAgentChoice.check();
       await page.locator('#group-agent-prompt').fill('[CI FIXTURE] Explicit one-shot group request to the labeled fake provider');
       screenshots.push(path.basename(await shot(page, outDir, '81-group-agent-request.png')));
       await page.locator('#group-agent-submit').click();

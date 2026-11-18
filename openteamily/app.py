@@ -3090,49 +3090,73 @@ class App:
         return 200, {'conversation': social.conversation_item(db, row)}, []
 
     def request_group_reply(self, db, workspace, session, row, now, env):
-        body = self.body(env, ['agent_id', 'prompt'])
-        aid, text = body.get('agent_id'), body.get('prompt')
-        if row['kind'] != 'group' or not isinstance(aid, str) or not social.HEX32.fullmatch(aid):
+        body = self.body(env, ['agent_id', 'agent_ids', 'prompt'])
+        text = body.get('prompt')
+        agent_ids = body.get('agent_ids')
+        if agent_ids is None:
+            aid = body.get('agent_id')
+            if not isinstance(aid, str) or not social.HEX32.fullmatch(aid):
+                refuse(400, 'invalid', 'Select a saved group agent')
+            agent_ids = [aid]
+        elif (not social.valid_agent_ids(agent_ids) or not 1 <= len(agent_ids) <= 5):
+            refuse(400, 'invalid', 'Provide 1–5 unique saved group agent ids')
+        if row['kind'] != 'group':
             refuse(400, 'invalid', 'Select a saved group agent')
         if not social.valid_body(text):
             refuse(400, 'invalid', 'Provide a request of 1–4000 characters')
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
-        key_hash = digest('group-agent-reply:' + key)
-        request_hash = digest(json.dumps({'agent_id': aid, 'prompt': text,
-                                         'requested_by': session['user_id']}, sort_keys=True))
-        prior = db.execute('SELECT * FROM social_agent_replies WHERE conversation_id=? AND key_hash=?',
-                           (row['id'], key_hash)).fetchone()
-        if prior:
-            if prior['request_hash'] != request_hash:
-                refuse(409, 'conflict', 'Idempotency key was used for a different request')
-            return 200, {'reply': social.reply_view(prior)}, []
-        agent = db.execute(
-            'SELECT a.* FROM workspace_agents a JOIN social_agent_members m ON m.agent_id=a.id '
-            'WHERE m.conversation_id=? AND a.id=? AND a.workspace_id=? AND a.archived=0',
-            (row['id'], aid, workspace['id'])).fetchone()
-        if agent is None:
-            refuse(400, 'invalid', 'Select an active saved group agent')
+        single = body.get('agent_ids') is None
+        plans = []
+        for aid in agent_ids:
+            key_hash = digest('group-agent-reply:' + key + ('' if single else ':' + aid))
+            request_hash = digest(json.dumps({'agent_id': aid, 'prompt': text,
+                                              'requested_by': session['user_id']}, sort_keys=True))
+            prior = db.execute('SELECT * FROM social_agent_replies WHERE conversation_id=? AND key_hash=?',
+                               (row['id'], key_hash)).fetchone()
+            if prior is not None:
+                if prior['request_hash'] != request_hash:
+                    refuse(409, 'conflict', 'Idempotency key was used for a different request')
+                plans.append({'replay': prior, 'agent_id': aid})
+            else:
+                agent = db.execute(
+                    'SELECT a.* FROM workspace_agents a JOIN social_agent_members m ON m.agent_id=a.id '
+                    'WHERE m.conversation_id=? AND a.id=? AND a.workspace_id=? AND a.archived=0',
+                    (row['id'], aid, workspace['id'])).fetchone()
+                if agent is None:
+                    refuse(400, 'invalid', 'Select an active saved group agent')
+                plans.append({'agent': agent, 'agent_id': aid, 'key_hash': key_hash,
+                              'request_hash': request_hash})
+        new_plans = [plan for plan in plans if 'agent' in plan]
         requests = social.reply_requests(db, row['id'])
-        if any(item['status'] in ('queued', 'running') for item in requests):
-            refuse(409, 'conflict', 'A group reply is already in progress')
+        active = {item['agent_id'] for item in requests if item['status'] in ('queued', 'running')}
+        if any(plan['agent_id'] in active for plan in new_plans):
+            refuse(409, 'conflict', 'An agent reply is already in progress for a selected agent')
         cap = self.config.max_social_messages_per_conversation
-        if len(requests) >= cap or social.message_slots(db, row['id']) >= cap:
+        if len(requests) + len(new_plans) > cap or social.message_slots(db, row['id']) + len(new_plans) > cap:
             refuse(429, 'quota', 'Group reply capacity reached')
-        # Explicit prompt only: never forward group history or trigger from another agent.
-        prompt = conversations.compose_prompt(agent, [], text)
-        task_id, error, _dispatch = self.queue_infer_task(
-            db, session['user_id'], now, prompt, workspace['id'], aid)
-        rid = uuid4().hex
-        db.execute(
-            'INSERT INTO social_agent_replies '
-            '(id,conversation_id,workspace_id,agent_id,agent_name,requested_by,prompt,agent_revision,'
-            'status,task_id,error_code,created,updated,key_hash,request_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            (rid, row['id'], workspace['id'], aid, agent['name'], session['user_id'], text, agent['revision'],
-             'queued' if task_id else 'failed', task_id, error, now, now, key_hash, request_hash))
-        result = db.execute('SELECT * FROM social_agent_replies WHERE id=?', (rid,)).fetchone()
-        return 201, {'reply': social.reply_view(result)}, []
+        replies = []
+        for plan in plans:
+            if 'replay' in plan:
+                replies.append(plan['replay'])
+                continue
+            agent = plan['agent']
+            prompt = conversations.compose_prompt(agent, [], text)
+            task_id, error, _dispatch = self.queue_infer_task(
+                db, session['user_id'], now, prompt, workspace['id'], plan['agent_id'])
+            rid = uuid4().hex
+            db.execute(
+                'INSERT INTO social_agent_replies '
+                '(id,conversation_id,workspace_id,agent_id,agent_name,requested_by,prompt,agent_revision,'
+                'status,task_id,error_code,created,updated,key_hash,request_hash) '
+                'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                (rid, row['id'], workspace['id'], plan['agent_id'], agent['name'], session['user_id'],
+                 text, agent['revision'], 'queued' if task_id else 'failed', task_id, error,
+                 now, now, plan['key_hash'], plan['request_hash']))
+            replies.append(db.execute('SELECT * FROM social_agent_replies WHERE id=?', (rid,)).fetchone())
+        payload = [social.reply_view(item) for item in replies]
+        return (201 if new_plans else 200), {'reply': payload[0], 'replies': payload}, []
 
     def reconcile_group_replies(self, db, row, now):
         for reply in social.reply_requests(db, row['id']):
