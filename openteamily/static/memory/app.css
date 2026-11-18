@@ -585,3 +585,27 @@ html[data-theme-resolved="dark"] #new-page {
 html[data-theme-resolved="dark"] .filter-count {
   color: #1c1917;
 }
+
+/* Design refresh */
+.memory-dir,
+.memory-side,
+.overview-panel,
+.actions-panel,
+#meetings-panel,
+.memory-top {
+  border-radius: var(--ot-radius-lg);
+}
+.memory-views button,
+.side-tabs button,
+.memory-filters button {
+  border-radius: 999px;
+}
+.memory-views button[aria-current="page"],
+.side-tabs button[aria-selected="true"] {
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+}
+#topic-filter-chips button,
+.filter-count {
+  border-radius: 999px;
+}

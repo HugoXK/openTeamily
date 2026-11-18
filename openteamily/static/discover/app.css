@@ -217,3 +217,39 @@ button.catalog-create[hidden], a.catalog-create[hidden] { display: none; }
 .team-avatars span:first-child { margin-left: 0; }
 .team-extra { color: var(--ot-muted); font-size: .75rem; margin-left: .15rem; }
 .teams-catalog .team-create { margin-left: auto; flex: 0 0 auto; padding: .2rem .7rem; border-radius: 999px; font-size: .8rem; }
+
+/* Design refresh */
+.catalog article {
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.catalog article:hover {
+  transform: translateY(-2px);
+  border-color: var(--ot-line-strong);
+  box-shadow: var(--ot-shadow);
+}
+.catalog-avatar {
+  background: linear-gradient(135deg, var(--ot-accent), #7c3aed);
+  color: #ffffff;
+}
+.catalog-create {
+  background: var(--ot-accent);
+  color: var(--ot-on-accent);
+  box-shadow: var(--ot-shadow-sm);
+}
+.catalog-create:hover { background: var(--ot-accent-hover); }
+#catalog-query { background: var(--ot-surface); }
+.catalog-filters [aria-current="true"] {
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+}
+.manage-row {
+  border-radius: var(--ot-radius);
+  background: var(--ot-surface);
+  box-shadow: var(--ot-shadow-sm);
+}
+.feed-toolbar,
+.feed-filters {
+  border-radius: var(--ot-radius-lg);
+}
