@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>工作背景 · OpenTeamily</title>
+  <link rel="stylesheet" href="/shell/app.css">
+  <link rel="stylesheet" href="/onboarding/app.css">
+  <script type="module" src="/shell/app.mjs"></script>
+  <script type="module" src="/onboarding/app.mjs"></script>
+</head>
+<body class="app-workspace">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <nav class="app-rail" aria-label="应用导航">
+    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
+    <a href="/chat" title="聊天">聊天</a>
+    <a href="/agents" title="智能体">智能体</a>
+    <a href="/automations" title="自动化">自动化</a>
+    <a href="/memory" title="记忆">记忆</a>
+    <a href="/space" title="作品">作品</a>
+    <a href="/discover" title="发现">发现</a>
+    <span class="rail-spacer"></span>
+    <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
+    <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
+    <a href="/download" title="下载">下载</a>
+    <div class="account-slot" hidden>
+      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <div id="account-menu" class="account-menu" role="menu" hidden>
+        <p id="account-identity" class="account-identity"></p>
+        <a href="/profile" role="menuitem">查看我的资料</a>
+        <a href="/onboarding" role="menuitem">工作背景</a>
+        <a href="/team" role="menuitem">创建团队</a>
+        <div class="account-sub">
+          <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
+          <div id="help-menu" hidden>
+            <a href="/guide" role="menuitem">帮助中心</a>
+            <a href="/download" role="menuitem">下载</a>
+            <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
+            <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
+          </div>
+        </div>
+        <a href="/settings" role="menuitem">所有设置</a>
+        <form id="logout-form" method="post" action="/v1/auth/logout">
+          <button type="submit">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </nav>
+  <p id="status" role="status"></p>
+  <main id="main">
+  <section id="login-panel" hidden>
+    <h2>登录</h2>
+    <form id="login-form" method="post" action="/v1/auth/login">
+      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
+      <button type="submit">登录</button>
+    </form>
+  </section>
+  <section id="main-panel" hidden>
+    <header class="page-top">
+      <h1>工作背景</h1>
+      <p class="note">用于自动化推荐。真实产品的连接应用、自动化选择和 Agent 形象步骤尚未实现；连接第三方应用不在本仓范围。</p>
+      <p id="whoami"></p>
+    </header>
+    <form id="onboarding-form" class="onboarding-card">
+      <h2>聊聊你的工作</h2>
+      <p class="note">选择你的行业和角色，让工作区从一开始就有合适的背景。</p>
+      <label>你的行业
+        <select id="industry"></select>
+      </label>
+      <label id="custom-industry-label" hidden>你的行业
+        <input id="custom-industry" maxlength="40" placeholder="输入你的行业">
+      </label>
+      <fieldset id="role-field">
+        <legend>你的角色</legend>
+        <div id="role-choices" class="role-choices"></div>
+        <label id="custom-role-label" hidden>你的角色
+          <input id="custom-role" maxlength="40" placeholder="输入你的角色">
+        </label>
+        <p id="role-locked" class="note" hidden>请先选择行业</p>
+      </fieldset>
+      <div class="onboarding-actions">
+        <button type="submit" id="onboarding-save">保存并继续</button>
+        <button type="button" id="onboarding-skip" class="secondary">暂时跳过</button>
+      </div>
+      <p id="onboarding-meta" class="note"></p>
+    </form>
+  </section>
+  </main>
+</body>
+</html>

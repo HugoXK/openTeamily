@@ -2,7 +2,7 @@
 
 Every shell page's account menu carries a Help submenu. Its first item used to be a disabled
 `button` ("帮助中心", tooltip "未实现：OpenTeamily 还没有帮助中心") while `/guide` already existed with
-its own search, categories and articles: a dead entry in fourteen pages next to a page with no way in.
+its own search, categories and articles: a dead entry in the shell pages next to a page with no way in.
 
 These tests read the static pages as markup, not through a browser: the entry must be a link to
 `/guide` with `role="menuitem"`, the old disabled button must be gone, and a page added later must
@@ -63,7 +63,7 @@ def help_entries(page):
 
 class ShellHelpEntryTests(unittest.TestCase):
     def test_every_shell_page_links_the_guide_from_its_help_menu(self):
-        self.assertEqual(len(PAGES), 14, f'expected the 14 shell pages, found {[str(p) for p in PAGES]}')
+        self.assertEqual(len(PAGES), 15, f'expected the 15 shell pages, found {[str(p) for p in PAGES]}')
         for page in PAGES:
             with self.subTest(page=page):
                 entries = help_entries(page)
