@@ -73,14 +73,27 @@ async function mountProfile(options = {}) {
   const doc = fakeDocument();
   const calls = [];
   let release = () => {};
+  let releasePost = () => {};
   const gate = new Promise(resolve => { release = resolve; });
+  const postGate = new Promise(resolve => { releasePost = resolve; });
   const profileCalls = () => calls.filter(([path]) => path === '/v1/profile').length;
+  const postCalls = () => calls.filter(([path, method]) => path === '/v1/profile' && method === 'POST').length;
   const fetcher = async (path, init) => {
     calls.push([path, init && init.method]);
     if (path === '/v1/auth/session') {
       return {status: 200, json: async () => ({user: {username: 'alice'}})};
     }
     if (path !== '/v1/profile') throw new Error('unexpected ' + path);
+    if (init && init.method === 'POST') {
+      if (options.holdPost) await postGate;
+      if (options.post409) {
+        return {status: 409, json: async () => ({error: {
+          message: 'Profile changed elsewhere; reload and retry',
+          current: {name: 'Alicia', handle: 'alice', revision: 4},
+        }})};
+      }
+      return {status: 200, json: async () => ({profile: {name: 'Alice', handle: 'alice', revision: 4}})};
+    }
     if (profileCalls() > 1) {
       if (options.holdRepeat) await gate;
       if (options.failRepeat) return {status: 500, json: async () => ({error: {message: options.failRepeat}})};
@@ -91,7 +104,7 @@ async function mountProfile(options = {}) {
   const restore = installGlobals(doc, fetcher);
   await import('../openteamily/static/profile/app.mjs?dom=' + (options.tag || 'profile'));
   await flush();
-  return {doc, calls, profileCalls, release, restore};
+  return {doc, calls, profileCalls, postCalls, release, releasePost, restore};
 }
 
 function clickHandler(doc) {
@@ -140,5 +153,43 @@ test('a failed 重新加载 keeps the page status and re-enables the button', as
     assert.equal(doc.getElementById('status').dataset.kind, 'error');
     assert.equal(doc.getElementById('status').textContent, '无法读取资料。');
     assert.equal(button.disabled, false);
+  } finally { restore(); }
+});
+
+function submitHandler(doc) {
+  const form = doc.getElementById('profile-form');
+  assert.ok(Array.isArray(form.handlers.submit) && form.handlers.submit.length >= 1,
+    'the profile form has no submit handler');
+  return form.handlers.submit[0];
+}
+
+test('连点两次保存只发一次 POST /v1/profile 且按钮在飞时 disabled', async () => {
+  const {doc, postCalls, releasePost, restore} = await mountProfile({tag: 'save-double', holdPost: true});
+  try {
+    const submit = submitHandler(doc);
+    const save = doc.getElementById('profile-save');
+    const first = submit({preventDefault() {}});
+    await flush();
+    const second = submit({preventDefault() {}});
+    await flush();
+    try {
+      assert.equal(postCalls(), 1, 'a second click while the first POST is in flight must not send another request');
+      assert.equal(save.disabled, true, 'the save button should be disabled while the POST is in flight');
+    } finally { releasePost(); }
+    await Promise.all([first, second]);
+    assert.equal(save.disabled, false, 'the save button should be enabled again after the POST settles');
+    assert.equal(postCalls(), 1);
+  } finally { restore(); }
+});
+
+test('a 409 save shows a Chinese status line instead of the server English text', async () => {
+  const {doc, restore} = await mountProfile({tag: 'save-409', post409: true});
+  try {
+    await submitHandler(doc)({preventDefault() {}});
+    const status = doc.getElementById('status');
+    assert.equal(status.dataset.kind, 'error');
+    assert.equal(status.textContent, '资料已在别处更新，已重新加载。');
+    assert.equal(doc.getElementById('profile-form').elements.name.value, 'Alicia',
+      'the 409 payload should still refill the form with the current profile');
   } finally { restore(); }
 });
