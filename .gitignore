@@ -20,3 +20,8 @@ __pycache__/
 *.tgz
 .pnpm-store/
 .npm/
+
+# Screenshot harness output (local evidence, not committed)
+.shots/
+.shots-servers/
+.shots-state/
