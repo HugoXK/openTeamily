@@ -168,14 +168,18 @@ test('group create chrome keeps the recorded labels and no billing copy', () => 
   ]);
 });
 
-import {groupPickerChoices, groupAgentSummary} from '../openteamily/static/chat/app.mjs';
+import {
+  groupPickerChoices, groupAgentSummary,
+  socialMentionChoices, socialMessageLabel, socialMessageStatus,
+} from '../openteamily/static/chat/app.mjs';
 
 test('group picker distinguishes stored agents and people; contact picker omits agents', () => {
   const humans = [{user_id: alice, username: 'alice'}, {user_id: bob, username: 'bob'}];
   const agents = [{id: 'helper', name: 'Helper'}, {id: 'old', name: 'Archived', archived: 1}];
   const choices = groupPickerChoices(humans, alice, agents);
   assert.deepEqual(choices.map(row => [row.id, row.kind]), [[bob, 'human'], ['helper', 'agent']]);
-  assert.ok(choices[1].label.includes('AI 智能体（自动回复未接通）'));
+  assert.ok(choices[1].label.includes('AI 智能体'));
+  assert.ok(!choices[1].label.includes('未接通'));
   assert.deepEqual(groupPickerChoices(humans, alice).map(row => row.id), [bob]);
   assert.equal(composeCreateEnabled({composeMode: 'group', selectedCount: 1, selectedHumanCount: 0}), false);
   assert.equal(composeCreateEnabled({composeMode: 'group', selectedCount: 2, selectedHumanCount: 1}), true);
@@ -184,5 +188,22 @@ test('group picker distinguishes stored agents and people; contact picker omits 
     kind: 'group', member_ids: [bob], agent_ids: ['helper'],
   });
   assert.equal(groupAgentSummary({agent_members: []}), '');
-  assert.ok(groupAgentSummary({agent_members: [{name: 'Helper'}]}).includes('Helper。未接通'));
+  assert.ok(groupAgentSummary({agent_members: [{name: 'Helper'}]}).includes('Helper。'));
+  assert.ok(groupAgentSummary({agent_members: [{name: 'Helper'}]}).includes('智能体回复'));
+});
+
+test('social mention and agent reply helpers describe group agents', () => {
+  const conversation = {agent_members: [
+    {agent_id: 'a', name: 'Helper', archived: 0},
+    {agent_id: 'b', name: 'Retired', archived: 1},
+  ]};
+  assert.deepEqual(socialMentionChoices(conversation).map(row => row.name), ['Helper']);
+  assert.deepEqual(socialMentionChoices(null), []);
+  assert.equal(socialMessageLabel({author_type: 'user', user_id: 'u'}), '成员');
+  assert.equal(socialMessageLabel({author_type: 'agent', agent_name: 'Helper'}), 'Helper');
+  assert.equal(socialMessageStatus({author_type: 'agent', status: 'succeeded', body: '你好'}), '你好');
+  assert.equal(socialMessageStatus({author_type: 'agent', status: 'queued', error_code: 'no_agent'}),
+               '等待已连接的运行时。');
+  assert.equal(socialMessageStatus({author_type: 'agent', status: 'running'}), '生成中。');
+  assert.equal(socialMessageStatus({author_type: 'user', body: 'hi'}), 'hi');
 });

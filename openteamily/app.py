@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, runtime_connect, runtime_keys, search, settings, skill_secrets, social, social_agent_replies, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -2800,16 +2800,18 @@ class App:
         if row is None or not social.is_member(db, row['id'], workspace['id'], session['user_id']):
             refuse(404, 'not_found', 'Conversation not found')
         if action is None and method == 'GET' and not query:
-            items = social.messages(db, row['id'], '', 101) or []
+            self.reconcile_social_agents(db, row, now)
+            items = social_agent_replies.combined(db, row['id'], '', 101) or []
             return 200, {'conversation': social.conversation_item(db, row),
-                         'items': [social.message_view(item) for item in items[:100]],
+                         'items': items[:100],
                          'cursor': items[99]['id'] if len(items) > 100 else None}, []
         if action == 'messages' and method == 'GET':
             limit, cursor, _ = self.pagination(query)
-            rows = social.messages(db, row['id'], cursor, limit + 1)
+            self.reconcile_social_agents(db, row, now)
+            rows = social_agent_replies.combined(db, row['id'], cursor, limit + 1)
             if rows is None:
                 refuse(400, 'invalid', 'Invalid pagination parameters')
-            return 200, {'items': [social.message_view(item) for item in rows[:limit]],
+            return 200, {'items': rows[:limit],
                          'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
         if action == 'messages' and method == 'POST' and not query:
             return self.send_social_message(db, workspace, session, row, now, env)
@@ -2890,32 +2892,79 @@ class App:
         return 201, {'conversation': social.conversation_item(db, row)}, []
 
     def send_social_message(self, db, workspace, session, row, now, env):
-        body = self.body(env, ['body'])
+        body = self.body(env, ['body', 'agent_ids'])
         text = body.get('body')
         if not social.valid_body(text):
             refuse(400, 'invalid', 'Provide a message')
+        agent_ids = body.get('agent_ids', [])
+        if agent_ids:
+            if row['kind'] != 'group' or not social_agent_replies.valid_mentions(agent_ids):
+                refuse(400, 'invalid', 'Agent replies require a group and 1–5 unique agent ids')
+            for agent_id in agent_ids:
+                if not social_agent_replies.is_agent_member(db, row['id'], agent_id):
+                    refuse(400, 'invalid', 'Every mentioned agent must already be in the group')
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         key_hash, request_hash = digest('social-message:' + key), digest(
-            json.dumps({'body': text}, sort_keys=True, separators=(',', ':'), ensure_ascii=False))
+            json.dumps({'body': text, 'agent_ids': sorted(agent_ids)}, sort_keys=True,
+                       separators=(',', ':'), ensure_ascii=False))
         prior = social.load_message_by_key(db, row['id'], key_hash)
         if prior:
             if prior['request_hash'] != request_hash:
                 refuse(409, 'conflict', 'Idempotency key was used for a different request')
-            return 200, {'message': social.message_view(prior)}, []
-        if (db.execute('SELECT COUNT(*) FROM social_messages WHERE conversation_id=?',
-                       (row['id'],)).fetchone()[0]
-                >= self.config.max_social_messages_per_conversation):
+            replies = []
+            for agent_id in sorted(agent_ids):
+                reply = social_agent_replies.load_message_by_key(
+                    db, row['id'], social_agent_replies.mention_key(key, agent_id))
+                if reply is not None:
+                    replies.append(social_agent_replies.message_view(reply))
+            return 200, {'message': social.message_view(prior), 'agents': replies}, []
+        total = (db.execute('SELECT COUNT(*) FROM social_messages WHERE conversation_id=?',
+                            (row['id'],)).fetchone()[0]
+                 + db.execute('SELECT COUNT(*) FROM social_agent_messages WHERE conversation_id=?',
+                              (row['id'],)).fetchone()[0])
+        if total + 1 + len(agent_ids) > self.config.max_social_messages_per_conversation:
             refuse(429, 'quota', 'Message capacity reached')
+        history = social_agent_replies.history_for_prompt(db, row['id'])
+        seq = social_agent_replies.next_seq(db, row['id'])
         message_id = uuid4().hex
         db.execute(
             'INSERT INTO social_messages VALUES(?,?,?,?,?,?,?,?,?)',
             (message_id, row['id'], workspace['id'], session['user_id'], text,
-             social.next_seq(db, row['id']), now, key_hash, request_hash))
+             seq, now, key_hash, request_hash))
+        replies = []
+        for agent_id in sorted(agent_ids):
+            agent = agents.load(db, workspace['id'], agent_id)
+            if agent is None or agent['archived'] == 1:
+                continue
+            prompt = conversations.compose_prompt(agent, history, text)
+            seq += 1
+            task_id, error_code, _dispatch = self.queue_infer_task(
+                db, session['user_id'], now, prompt, workspace['id'], agent_id)
+            reply_id = uuid4().hex
+            db.execute(
+                'INSERT INTO social_agent_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                (reply_id, row['id'], workspace['id'], agent_id, '', 'queued', task_id,
+                 error_code, seq, now, now,
+                 social_agent_replies.mention_key(key, agent_id),
+                 social_agent_replies.mention_request(text, agent_id)))
+            replies.append(social_agent_replies.message_view(
+                social_agent_replies.load_message(db, row['id'], reply_id)))
         db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, row['id']))
         message = db.execute('SELECT * FROM social_messages WHERE id=?', (message_id,)).fetchone()
-        return 201, {'message': social.message_view(message)}, []
+        return 201, {'message': social.message_view(message), 'agents': replies}, []
+
+    def reconcile_social_agents(self, db, row, now):
+        for message in social_agent_replies.pending(db, row['id']):
+            if not message['task_id']:
+                continue
+            task = runtime_connect.load_task(db, message['task_id'])
+            if task is None:
+                continue
+            task = runtime_connect.expire_task(db, task, now)
+            if task['status'] in ('succeeded', 'failed'):
+                social_agent_replies.apply_task(db, message, task, now)
 
     def invite_dispatch(self, db, session, method, query, now, env, workspace_id, invite_id, revoking):
         workspace = members.load(db, workspace_id, session['user_id'])

@@ -587,3 +587,30 @@
   font-size: 0.72rem;
   font-weight: 500;
 }
+
+#message-list li.agent {
+  align-self: flex-start;
+  background: var(--ot-accent-soft);
+  border-style: dashed;
+}
+
+.social-mentions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.35rem 0.9rem 0;
+  font-size: 0.82rem;
+}
+
+.social-mentions[hidden] { display: none; }
+.social-mentions .mentions-label { color: var(--ot-muted); }
+.mention-chip {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  border: 1px solid var(--ot-line);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  background: var(--ot-surface);
+}

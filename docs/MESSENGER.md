@@ -2,7 +2,7 @@
 
 Related: [#86](https://github.com/openTeamily/openTeamily/issues/86), [#1](https://github.com/openTeamily/openTeamily/issues/1), [#7](https://github.com/openTeamily/openTeamily/issues/7).
 
-This is a first **human-to-human** messaging slice in the management plane, written for OpenTeamily. It adds workspace-scoped direct messages and named group chats next to the existing user↔agent conversations ([AGENT_CONVERSATIONS.md](AGENT_CONVERSATIONS.md)). It is **not** Teamily messenger parity: there are no agent participants, unread counts, notifications, attachments, reactions, edits, retractions, typing indicators or cross-workspace delivery. Those remain the follow-up issues noted below.
+This is a first **human-to-human** messaging slice in the management plane, written for OpenTeamily. It adds workspace-scoped direct messages and named group chats next to the existing user↔agent conversations ([AGENT_CONVERSATIONS.md](AGENT_CONVERSATIONS.md)). It is **not** Teamily messenger parity: unread counts, notifications, attachments, reactions, edits, retractions, typing indicators and cross-workspace delivery remain missing. Groups can store agent participants, and [SOCIAL_AGENTS.md](SOCIAL_AGENTS.md) adds explicit agent replies; autonomous delegation is not implemented.
 
 The management process only stores messages. It does not call a model provider or a runtime.
 
@@ -41,7 +41,7 @@ The management UI for these conversations lives on the unified `/chat` page, tog
 
 ## Explicitly not in this slice
 
-- `@Agent` mentions, agent-run replies and task delegation in a group ([#89](https://github.com/openTeamily/openTeamily/issues/89)).
+- Task delegation, team goals and autonomous agent-to-agent orchestration in a group ([#89](https://github.com/openTeamily/openTeamily/issues/89)); explicit agent replies are in [SOCIAL_AGENTS.md](SOCIAL_AGENTS.md).
 - Workspace-wide authorized message search ([#88](https://github.com/openTeamily/openTeamily/issues/88)).
 - Unread counts, read receipts, notifications, attachments, reactions, editing, retraction, typing indicators.
 - Cross-workspace or federated delivery, Bot Social transport, and any Teamily comparison.
@@ -65,8 +65,9 @@ groups, but cannot be newly invited. No new membership-edit endpoint is added.
 
 The custom-group picker labels people and existing workspace agents separately;
 search and the selected count include both. Contact creation remains human-only.
-After creation/reload the saved agent names appear above the conversation with an
-explicit unconnected notice. Membership is storage only: no group auto-reply,
-`@Agent`, infer dispatch, task handoff or team-template flow is implemented.
-The AI-team switch remains unconnected; no billing or credits are introduced.
-This is not Teamily/Impeccable acceptance. All related tracking issues stay open.
+After creation/reload the saved agent names appear above the conversation. Explicit
+agent replies, infer dispatch and mention selection are documented in
+[SOCIAL_AGENTS.md](SOCIAL_AGENTS.md); task handoff and the team-template flow are
+still not implemented. The AI-team switch remains unconnected; no billing or
+credits are introduced. This is not Teamily/Impeccable acceptance. All related
+tracking issues stay open.

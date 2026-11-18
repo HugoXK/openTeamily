@@ -88,7 +88,7 @@ export function groupPickerChoices(members, currentUserId, agents = []) {
       id: member.user_id, kind: 'human', label: member.username + ' · 成员',
     })),
     ...agents.filter(agent => !agent.archived).map(agent => ({
-      id: agent.id, kind: 'agent', label: agent.name + ' · AI 智能体（自动回复未接通）',
+      id: agent.id, kind: 'agent', label: agent.name + ' · AI 智能体',
     })),
   ];
 }
@@ -96,7 +96,27 @@ export function groupPickerChoices(members, currentUserId, agents = []) {
 export function groupAgentSummary(conversation) {
   const list = conversation && conversation.agent_members || [];
   return list.length ? '群内智能体：' + list.map(agent => agent.name).join('、')
-    + '。未接通：群内自动回复、@Agent 和任务委派。' : '';
+    + '。发送时可勾选让智能体回复；任务委派与团队目标未接通。' : '';
+}
+
+export function socialMentionChoices(conversation) {
+  return (conversation && conversation.agent_members || []).filter(agent => !agent.archived);
+}
+
+export function socialMessageLabel(item) {
+  if (!item) return '';
+  if (item.author_type !== 'agent') return item.user_id ? '成员' : '';
+  return item.agent_name || '智能体';
+}
+
+export function socialMessageStatus(item) {
+  if (!item || item.author_type !== 'agent') return (item && item.body) || '';
+  if (item.status === 'succeeded') return item.body || '';
+  if (item.status === 'queued') return item.error_code === 'no_agent' ? '等待已连接的运行时。' : '排队中。';
+  if (item.status === 'running') return '生成中。';
+  if (item.status === 'failed') return '回复失败' + (item.error_code ? '（' + item.error_code + '）' : '') + '。';
+  if (item.status === 'cancelled') return '已取消。';
+  return item.body || '';
 }
 
 export function composeCreateEnabled(options) {
@@ -317,22 +337,54 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return pending;
   }
 
+  function renderSocialMentions() {
+    const holder = document.getElementById('social-mentions');
+    holder.replaceChildren();
+    const choices = currentSource === 'social' ? socialMentionChoices(currentConversation) : [];
+    holder.hidden = choices.length === 0;
+    if (!choices.length) return;
+    const label = document.createElement('span');
+    label.className = 'mentions-label';
+    label.textContent = '让智能体回复：';
+    holder.append(label);
+    for (const agent of choices) {
+      const box = document.createElement('label');
+      box.className = 'mention-chip';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.name = 'mention';
+      input.value = agent.agent_id;
+      box.append(input, document.createTextNode(agent.name));
+      holder.append(box);
+    }
+  }
+
   function renderSocialMessages(items) {
     const list = document.getElementById('message-list');
     list.replaceChildren();
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
     const people = currentConversation && currentConversation.members || members;
+    let pendingReply = false;
     for (const item of items || []) {
       const li = document.createElement('li');
-      const mine = item.user_id === (currentUser && currentUser.id);
-      li.className = mine ? 'mine' : 'other';
+      const isAgent = item.author_type === 'agent';
+      const mine = !isAgent && item.user_id === (currentUser && currentUser.id);
+      li.className = isAgent ? 'agent' : (mine ? 'mine' : 'other');
       const role = document.createElement('p');
       role.className = 'role';
-      const member = people.find(entry => entry.user_id === item.user_id);
-      role.textContent = mine ? '我' : ((member && member.username) || '成员');
+      if (isAgent) {
+        role.textContent = item.agent_name || '智能体';
+      } else {
+        const member = people.find(entry => entry.user_id === item.user_id);
+        role.textContent = mine ? '我' : ((member && member.username) || '成员');
+      }
       const body = document.createElement('p');
       body.className = 'body';
-      body.textContent = item.body || '';
+      body.textContent = isAgent ? socialMessageStatus(item) : (item.body || '');
+      if (isAgent && (item.status === 'queued' || item.status === 'running')) {
+        body.classList.add('pending');
+        pendingReply = true;
+      }
       const time = document.createElement('p');
       time.className = 'time';
       time.textContent = formatTime(item.created);
@@ -341,7 +393,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const scroller = document.getElementById('message-scroller');
     scroller.scrollTop = scroller.scrollHeight;
-    return false;
+    return pendingReply;
   }
 
   function setDirectoryLink(session) {
@@ -401,6 +453,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentAgent = agent;
     currentSource = 'agent';
     document.getElementById('social-agent-members').hidden = true;
+    renderSocialMentions();
     applyChatIdentity(document, agent.name);
     setDirectoryLink({source: 'agent'});
     const result = await request('GET', `/v1/workspaces/${workspaceId()}/agents/${agentId}/conversations/${conversationId}`);
@@ -433,14 +486,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       currentConversation, currentUser && currentUser.id));
     setDirectoryLink({source: 'social'});
     writeHash({workspace: workspaceId(), social: conversationId});
-    renderSocialMessages(result.body.items);
+    const pending = renderSocialMessages(result.body.items);
+    renderSocialMentions();
     renderSessions();
+    if (pending) schedulePoll();
   }
 
   function schedulePoll() {
     stopPolling();
     pollTimer = globalThis.setTimeout(() => {
-      if (currentConversation && currentAgent && currentSource === 'agent') {
+      if (!currentConversation) return;
+      if (currentSource === 'social') {
+        openSocialConversation(currentConversation.id);
+      } else if (currentAgent) {
         openAgentConversation(currentAgent.id, currentConversation.id);
       }
     }, 2000);
@@ -960,7 +1018,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         show('error', '请先打开或创建一个会话。');
         return;
       }
-      const result = await request('POST', `${socialBase()}/${currentConversation.id}/messages`, {body: text}, {
+      const mentionIds = [...document.querySelectorAll('#social-mentions input[name="mention"]:checked')]
+        .map(box => box.value);
+      const payload = {body: text};
+      if (mentionIds.length) payload.agent_ids = mentionIds;
+      const result = await request('POST', `${socialBase()}/${currentConversation.id}/messages`, payload, {
         'Idempotency-Key': idempotencyKey('socialmsg-'),
       });
       if (result.status !== 201 && result.status !== 200) {
@@ -969,7 +1031,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       document.getElementById('chat-body').value = '';
       await openSocialConversation(currentConversation.id);
-      show('ok', '已发送。');
+      show('ok', result.body.agents && result.body.agents.length ? '已发送，等待智能体回复。' : '已发送。');
       return;
     }
     if (!currentAgent) {
