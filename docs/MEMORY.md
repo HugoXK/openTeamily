@@ -36,6 +36,6 @@ Workspace members may list, read and create pages and actions, read the graph, a
 
 ## Not in this slice
 
-The profile page has no save API yet. 「做梦」 was not opened in the recapture and is not implemented. Versions beyond the revision number, share or export links, and in-app "我的会议" artifact browse remain later slices on issue 8 and issue 9. "我的作品" already links to `/space`. Timeline and Project are not used as a memory implementation.
+The profile page has no save API yet. 「做梦」 was not opened in the recapture and is not implemented. Versions beyond the revision number and share or export links remain later slices on issue 8 and issue 9. "我的作品" already links to `/space`. "我的会议" now follows the same pattern and opens the existing `/space?view=meetings` empty chrome; there is still no meeting-artifact API, and this is not a Teamily/Impeccable comparison. Timeline and Project are not used as a memory implementation.
 
 No Teamily comparison and no browser E2E are claimed. Issue 8 stays open.

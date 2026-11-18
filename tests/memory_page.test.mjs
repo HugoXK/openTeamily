@@ -64,6 +64,7 @@ test('memoryPageFromSearch and queryForMemoryPage stay on the recorded allowlist
   assert.equal(queryForMemoryPage('overview'), '');
   assert.equal(queryForMemoryPage('profile'), '?page=profile');
   assert.equal(queryForMemoryPage('actions'), '?page=todos');
+  assert.equal(memoryPageFromSearch('?page=meetings'), 'overview');
   assert.equal(queryForMemoryPage('meetings'), '');
 });
 
