@@ -7,6 +7,41 @@ export function canManage(actor) {
   return actor === 'owner' || actor === 'admin';
 }
 
+export const AGENT_CATEGORIES = [
+  {slug: 'content-creation', label: 'Content Creation'},
+  {slug: 'customer-support', label: 'Customer Support'},
+  {slug: 'data-analysis', label: 'Data Analysis'},
+  {slug: 'design', label: 'Design'},
+  {slug: 'education', label: 'Education'},
+  {slug: 'engineering', label: 'Engineering'},
+  {slug: 'finance', label: 'Finance'},
+  {slug: 'it-security', label: 'IT & Security'},
+  {slug: 'investment', label: 'Investment'},
+  {slug: 'legal', label: 'Legal'},
+  {slug: 'life', label: 'Life'},
+  {slug: 'marketing', label: 'Marketing'},
+  {slug: 'operations', label: 'Operations'},
+  {slug: 'product', label: 'Product'},
+  {slug: 'recruiting', label: 'Recruiting'},
+  {slug: 'research', label: 'Research'},
+  {slug: 'sales', label: 'Sales'},
+];
+
+const AGENT_CATEGORY_SLUGS = new Set(AGENT_CATEGORIES.map((entry) => entry.slug));
+
+export function categoryFromSearch(search) {
+  const slug = new URLSearchParams((search || '').replace(/^\?/, '')).get('category') || '';
+  return AGENT_CATEGORY_SLUGS.has(slug) ? slug : 'all';
+}
+
+export function searchWithCategory(search, slug) {
+  const params = new URLSearchParams((search || '').replace(/^\?/, ''));
+  if (!slug || slug === 'all') params.delete('category');
+  else params.set('category', slug);
+  const next = params.toString();
+  return next ? '?' + next : '';
+}
+
 export function readAgentForm(form) {
   const data = new FormData(form);
   return {
@@ -51,6 +86,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentAgent = null;
   let currentConversation = null;
   let pollTimer = 0;
+  const categoryButtons = [...document.querySelectorAll('.filter-row .pill[data-category]')];
+  let selectedCategory = categoryFromSearch(globalThis.location && globalThis.location.search);
+
+  function renderCategoryFilter() {
+    for (const button of categoryButtons) {
+      button.setAttribute('aria-pressed', button.dataset.category === selectedCategory ? 'true' : 'false');
+    }
+  }
+
+  function selectCategory(slug, push) {
+    selectedCategory = AGENT_CATEGORY_SLUGS.has(slug) ? slug : 'all';
+    renderCategoryFilter();
+    if (!globalThis.location || !globalThis.history) return;
+    const next = searchWithCategory(globalThis.location.search, selectedCategory);
+    const url = globalThis.location.pathname + next + globalThis.location.hash;
+    if (push && globalThis.history.pushState) globalThis.history.pushState(null, '', url);
+    else if (globalThis.history.replaceState) globalThis.history.replaceState(null, '', url);
+  }
+
+  renderCategoryFilter();
+  for (const button of categoryButtons) {
+    button.addEventListener('click', () => selectCategory(button.dataset.category, true));
+  }
+  if (globalThis.addEventListener) {
+    globalThis.addEventListener('popstate', () => {
+      selectedCategory = categoryFromSearch(globalThis.location.search);
+      renderCategoryFilter();
+    });
+  }
 
   function show(kind, text) {
     status.dataset.kind = kind;

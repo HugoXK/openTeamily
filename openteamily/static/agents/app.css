@@ -57,6 +57,12 @@ button.pill {
   font-weight: 500;
 }
 
+button.pill[aria-pressed="true"] {
+  background: var(--ot-accent);
+  border-color: var(--ot-accent);
+  color: var(--ot-surface);
+}
+
 .card-grid {
   list-style: none;
   margin: 0;
