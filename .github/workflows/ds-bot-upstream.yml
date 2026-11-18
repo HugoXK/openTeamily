@@ -73,7 +73,13 @@ jobs:
             exit 1
           fi
           npm run harness -- --no-save "@deepseek-ai/dsh@${DSH_VERSION}" "@deepseek-ai/dsh-agent-loop-testkit@${DSH_VERSION}"
-      - run: npm test
+      # The pinned vendor test for Ctrl+Enter annotated-quote send uses a 5ms
+      # settle and a module-level React hook mock. Default node:test parallelism
+      # has been flaking that case on Node 24 (AssertionError 0 !== 1 on
+      # send/dismiss) while the same SHA can pass the other event. The vendor
+      # tree must stay unmodified (Pin and vendor tree), so this job runs the
+      # suite serially instead of skipping, retrying, or patching upstream.
+      - run: npm test -- --test-concurrency=1
       - run: node scripts/build-client.mjs --check
       - run: npm run lint
 
