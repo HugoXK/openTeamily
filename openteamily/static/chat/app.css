@@ -715,3 +715,46 @@
   body.app-workspace.chat-open { grid-template-columns: 4.75rem minmax(0, 1fr); }
   body.app-workspace.chat-open > .session-pane { display: none; }
 }
+
+/* Group agent roster and multi-agent request */
+.agent-chips {
+  list-style: none;
+  margin: 0.45rem 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.55rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 999px;
+  background: var(--ot-surface);
+  font-size: 0.8rem;
+}
+.agent-chip button {
+  padding: 0 0.35rem;
+  font-size: 0.72rem;
+  box-shadow: none;
+}
+.agent-add {
+  display: flex;
+  gap: 0.5rem;
+  align-items: end;
+  margin: 0.5rem 0;
+}
+.agent-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+.agent-choices label {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  font-size: 0.85rem;
+}
