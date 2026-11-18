@@ -22,6 +22,11 @@ function markNavigation() {
   }
 }
 
+/* The account stores no location, so「日落到日出」has no sunrise to read. Until one exists, the
+   automatic look falls back to a fixed night window: 22:00 inclusive to 06:00 exclusive is dark.
+   A `custom` window keeps the times the account chose and stays ahead of this fallback. */
+export const NIGHT_WINDOW = {start: '22:00', end: '06:00'};
+
 function minutes(value) {
   const match = /^([01]?\d|2[0-3]):([0-5]\d)/.exec(String(value || ''));
   if (!match) return null;
@@ -31,9 +36,10 @@ function minutes(value) {
 export function resolveTheme(values, now = new Date(), media) {
   const appearance = values && values.appearance ? values.appearance : 'system';
   if (appearance === 'light' || appearance === 'dark') return appearance;
-  if (appearance === 'auto' && values && values.appearance_schedule === 'custom') {
-    const start = minutes(values.appearance_start);
-    const end = minutes(values.appearance_end);
+  if (appearance === 'auto') {
+    const custom = values.appearance_schedule === 'custom';
+    const start = minutes(custom ? values.appearance_start : NIGHT_WINDOW.start);
+    const end = minutes(custom ? values.appearance_end : NIGHT_WINDOW.end);
     if (start != null && end != null && start !== end) {
       const current = now.getHours() * 60 + now.getMinutes();
       const inRange = start < end ? current >= start && current < end : current >= start || current < end;
