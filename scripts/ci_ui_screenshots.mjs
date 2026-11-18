@@ -1569,7 +1569,7 @@ async function main() {
       await page.goto(`${origin}/guide`, { waitUntil: 'load' });
       await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#guide-list').waitFor({ state: 'visible', timeout: 8000 });
-      await waitForLocatorText(page, '#guide-count', '个功能');
+      await waitForLocatorText(page, '#guide-count', '当前显示');
       const guideText = await visibleText(page.locator('#main-panel'));
       record(
         'guide_page',

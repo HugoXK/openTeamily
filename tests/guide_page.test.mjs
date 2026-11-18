@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {CATALOG, CATEGORIES, countByCategory, filterCatalog, formatPath, groupCatalog} from '../openteamily/static/guide/app.mjs';
+import {CATALOG, CATEGORIES, countByCategory, filterCatalog, formatPath, groupCatalog, guideHref, guideInitialQuery} from '../openteamily/static/guide/app.mjs';
 
 test('catalog only contains known categories and no Teamily guide prose', () => {
   const ids = new Set(CATEGORIES.map((item) => item.id));
@@ -40,4 +40,15 @@ test('groupCatalog preserves category order and formatPath joins crumbs', () => 
   assert.ok(grouped.every((group) => group.items.length > 0));
   assert.equal(formatPath(['设置', '外观']), '设置 › 外观');
   assert.equal(formatPath([]), '');
+});
+
+test('the guide deep link round-trips the keyword through the query string', () => {
+  assert.equal(guideHref('外观'), '/guide?q=%E5%A4%96%E8%A7%82');
+  assert.equal(guideHref('  '), '/guide');
+  assert.equal(guideHref(''), '/guide');
+  assert.equal(guideInitialQuery('?q=%E5%A4%96%E8%A7%82'), '外观');
+  assert.equal(guideInitialQuery('?x=1'), '');
+  assert.equal(guideInitialQuery(''), '');
+  assert.deepEqual(filterCatalog(CATALOG, {category: 'settings', query: '外观'}).map((item) => item.id), ['settings-hub', 'settings-appearance']);
+  assert.deepEqual(filterCatalog(CATALOG, {query: '日出日落'}).map((item) => item.id), ['settings-appearance']);
 });
