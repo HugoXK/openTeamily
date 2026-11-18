@@ -654,7 +654,8 @@ html[data-theme-resolved="dark"] .filter-count {
 /* Original narrow-screen adaptation: keep the graph usable instead of squeezing
    it between two fixed-width columns. Not a compared Teamily mobile layout. */
 @media (max-width: 700px) {
-  .memory-workspace {
+  /* Match the panel ID: shell's #list-panel { display: grid } otherwise wins. */
+  #list-panel.memory-workspace {
     display: flex;
     flex-direction: column;
     overflow: auto;

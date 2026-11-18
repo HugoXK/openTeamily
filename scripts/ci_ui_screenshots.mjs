@@ -1374,6 +1374,10 @@ async function main() {
       const previous = page.viewportSize();
       await page.setViewportSize({ width: 390, height: 844 });
       await emptyHint.waitFor({ state: 'visible', timeout: 8000 });
+      await emptyHint.scrollIntoViewIfNeeded();
+      const viewport = page.viewportSize();
+      const inViewport = (box) => Boolean(box && viewport && box.x >= 0 && box.y >= 0
+        && box.x + box.width <= viewport.width && box.y + box.height <= viewport.height);
       const hintBox = await emptyHint.boundingBox();
       const zoomBox = await page.locator('.graph-zoom').boundingBox();
       const zoomVisible = await page.locator('.graph-zoom').isVisible();
@@ -1386,8 +1390,9 @@ async function main() {
       );
       record(
         'memory_graph_empty_narrow',
-        zoomVisible && hintBox && zoomBox && hintBox.width >= 180 && !overlaps,
-        `overlap=${overlaps}; hint=${JSON.stringify(hintBox)}; zoom=${JSON.stringify(zoomBox)}`,
+        zoomVisible && hintBox && zoomBox && hintBox.width >= 180
+          && inViewport(hintBox) && inViewport(zoomBox) && !overlaps,
+        `overlap=${overlaps}; hintInViewport=${inViewport(hintBox)}; zoomInViewport=${inViewport(zoomBox)}; hint=${JSON.stringify(hintBox)}; zoom=${JSON.stringify(zoomBox)}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '91-memory-graph-empty-390.png')));
       await page.setViewportSize(previous || { width: 1440, height: 900 });
