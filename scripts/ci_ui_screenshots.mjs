@@ -720,6 +720,29 @@ async function main() {
     }
 
     try {
+      await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
+      await page.locator('#group-agent-action').waitFor({state: 'visible', timeout: 8000});
+      await page.locator('#group-agent-select').selectOption(ready.agent_id);
+      await page.locator('#group-agent-prompt').fill('[CI FIXTURE] Explicit one-shot group request to the labeled fake provider');
+      screenshots.push(path.basename(await shot(page, outDir, '81-group-agent-request.png')));
+      await page.locator('#group-agent-submit').click();
+      await page.locator('#group-agent-requests [data-reply-status="succeeded"]').waitFor({state: 'visible', timeout: 30000});
+      await page.reload({waitUntil: 'load'});
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 20000);
+      const transcript = await visibleText(page.locator('#message-list'));
+      record('group_agent_explicit_reply',
+        transcript.includes('AI 智能体 · 运行时回复') && transcript.includes(ready.provider_text)
+          && await page.locator('#group-agent-requests [data-reply-status="succeeded"]').count() === 1,
+        'Explicit request completed through the runtime fixture and persisted after reload: ' + transcript);
+      screenshots.push(path.basename(await shot(page, outDir, '82-group-agent-reply.png')));
+    } catch (error) {
+      record('group_agent_explicit_reply', false, String(error));
+    } finally {
+      await page.goto(chatUrl, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#chat-title', ready.agent_name, 20000);
+    }
+
+    try {
       await page.locator('#session-search').click();
       const panel = page.locator('#search-panel');
       await panel.waitFor({ state: 'visible', timeout: 8000 });

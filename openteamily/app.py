@@ -755,7 +755,7 @@ class App:
                 return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages|agent-replies))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -2788,6 +2788,8 @@ class App:
             if method == 'GET':
                 limit, cursor, _ = self.pagination(query)
                 rows = social.listing(db, workspace['id'], session['user_id'], cursor, limit + 1)
+                for conversation in rows[:limit]:
+                    self.reconcile_group_replies(db, conversation, now)
                 items = social.conversation_items(db, rows[:limit])
                 return 200, {'items': items,
                              'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
@@ -2799,9 +2801,13 @@ class App:
         row = social.load(db, workspace['id'], conversation_id)
         if row is None or not social.is_member(db, row['id'], workspace['id'], session['user_id']):
             refuse(404, 'not_found', 'Conversation not found')
+        self.reconcile_group_replies(db, row, now)
+        if action == 'agent-replies' and method == 'POST' and not query:
+            return self.request_group_reply(db, workspace, session, row, now, env)
         if action is None and method == 'GET' and not query:
             items = social.messages(db, row['id'], '', 101) or []
             return 200, {'conversation': social.conversation_item(db, row),
+                         'agent_replies': [social.reply_view(item) for item in social.reply_requests(db, row['id'])],
                          'items': [social.message_view(item) for item in items[:100]],
                          'cursor': items[99]['id'] if len(items) > 100 else None}, []
         if action == 'messages' and method == 'GET':
@@ -2814,6 +2820,73 @@ class App:
         if action == 'messages' and method == 'POST' and not query:
             return self.send_social_message(db, workspace, session, row, now, env)
         refuse(400, 'invalid', 'Invalid messenger request')
+
+    def request_group_reply(self, db, workspace, session, row, now, env):
+        body = self.body(env, ['agent_id', 'prompt'])
+        aid, text = body.get('agent_id'), body.get('prompt')
+        if row['kind'] != 'group' or not isinstance(aid, str) or not social.HEX32.fullmatch(aid):
+            refuse(400, 'invalid', 'Select a saved group agent')
+        if not social.valid_body(text):
+            refuse(400, 'invalid', 'Provide a request of 1–4000 characters')
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        key_hash = digest('group-agent-reply:' + key)
+        request_hash = digest(json.dumps({'agent_id': aid, 'prompt': text,
+                                         'requested_by': session['user_id']}, sort_keys=True))
+        prior = db.execute('SELECT * FROM social_agent_replies WHERE conversation_id=? AND key_hash=?',
+                           (row['id'], key_hash)).fetchone()
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'reply': social.reply_view(prior)}, []
+        agent = db.execute(
+            'SELECT a.* FROM workspace_agents a JOIN social_agent_members m ON m.agent_id=a.id '
+            'WHERE m.conversation_id=? AND a.id=? AND a.workspace_id=? AND a.archived=0',
+            (row['id'], aid, workspace['id'])).fetchone()
+        if agent is None:
+            refuse(400, 'invalid', 'Select an active saved group agent')
+        requests = social.reply_requests(db, row['id'])
+        if any(item['status'] in ('queued', 'running') for item in requests):
+            refuse(409, 'conflict', 'A group reply is already in progress')
+        cap = self.config.max_social_messages_per_conversation
+        if len(requests) >= cap or social.message_slots(db, row['id']) >= cap:
+            refuse(429, 'quota', 'Group reply capacity reached')
+        # Explicit prompt only: never forward group history or trigger from another agent.
+        prompt = conversations.compose_prompt(agent, [], text)
+        task_id, error, _dispatch = self.queue_infer_task(
+            db, session['user_id'], now, prompt, workspace['id'], aid)
+        rid = uuid4().hex
+        db.execute(
+            'INSERT INTO social_agent_replies '
+            '(id,conversation_id,workspace_id,agent_id,agent_name,requested_by,prompt,agent_revision,'
+            'status,task_id,error_code,created,updated,key_hash,request_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (rid, row['id'], workspace['id'], aid, agent['name'], session['user_id'], text, agent['revision'],
+             'queued' if task_id else 'failed', task_id, error, now, now, key_hash, request_hash))
+        result = db.execute('SELECT * FROM social_agent_replies WHERE id=?', (rid,)).fetchone()
+        return 201, {'reply': social.reply_view(result)}, []
+
+    def reconcile_group_replies(self, db, row, now):
+        for reply in social.reply_requests(db, row['id']):
+            if reply['status'] not in ('queued', 'running'):
+                continue
+            task = runtime_connect.load_task(db, reply['task_id']) if reply['task_id'] else None
+            if task is None:
+                status, error, text = 'failed', 'task_missing', ''
+            else:
+                task = runtime_connect.expire_task(db, task, now)
+                status, error, text = conversations.map_task_status(task)
+                if status == 'succeeded' and not text.strip():
+                    status, error, text = 'failed', 'empty_reply', ''
+                # Expose only fixed error codes, never arbitrary runtime diagnostics.
+                if status in ('failed', 'cancelled'):
+                    error = error if error in ('timeout', 'cancelled', 'empty_reply') else 'runtime_failed'
+                    text = ''
+            seq = social.next_seq(db, row['id']) if status == 'succeeded' else None
+            db.execute('UPDATE social_agent_replies SET status=?,error_code=?,body=?,seq=?,updated=? WHERE id=?',
+                       (status, error, text if status == 'succeeded' else '', seq, now, reply['id']))
+            if status == 'succeeded':
+                db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, row['id']))
 
     def create_social_conversation(self, db, workspace, session, now, env):
         body = self.body(env, ['kind', 'member_ids', 'title', 'agent_ids'])
@@ -2904,8 +2977,7 @@ class App:
             if prior['request_hash'] != request_hash:
                 refuse(409, 'conflict', 'Idempotency key was used for a different request')
             return 200, {'message': social.message_view(prior)}, []
-        if (db.execute('SELECT COUNT(*) FROM social_messages WHERE conversation_id=?',
-                       (row['id'],)).fetchone()[0]
+        if (social.message_slots(db, row['id'])
                 >= self.config.max_social_messages_per_conversation):
             refuse(429, 'quota', 'Message capacity reached')
         message_id = uuid4().hex

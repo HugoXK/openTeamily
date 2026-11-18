@@ -587,3 +587,11 @@
   font-size: 0.72rem;
   font-weight: 500;
 }
+
+#group-agent-action { padding: .6rem 1rem; border-bottom: 1px solid var(--ot-line); }
+#group-agent-action[hidden] { display: none; }
+#group-agent-action h2 { font-size: .9rem; margin: 0 0 .3rem; }
+#group-agent-form { display: flex; align-items: end; gap: .5rem; flex-wrap: wrap; }
+#group-agent-form label { flex: 1; min-width: 10rem; }
+#group-agent-form textarea { width: 100%; }
+#group-agent-requests { max-height: 7rem; overflow: auto; padding-left: 1rem; }

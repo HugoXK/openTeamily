@@ -184,5 +184,15 @@ test('group picker distinguishes stored agents and people; contact picker omits 
     kind: 'group', member_ids: [bob], agent_ids: ['helper'],
   });
   assert.equal(groupAgentSummary({agent_members: []}), '');
-  assert.ok(groupAgentSummary({agent_members: [{name: 'Helper'}]}).includes('Helper。未接通'));
+  assert.ok(groupAgentSummary({agent_members: [{name: 'Helper'}]}).includes('Helper。可明确请求一次回复'));
+});
+
+import {groupReplyStatus} from '../openteamily/static/chat/app.mjs';
+test('explicit group reply statuses distinguish pending, success and fixed errors', () => {
+  assert.equal(groupReplyStatus({status: 'queued'}), '等待执行');
+  assert.equal(groupReplyStatus({status: 'running'}), '执行中');
+  assert.equal(groupReplyStatus({status: 'succeeded'}), '已完成');
+  assert.equal(groupReplyStatus({status: 'failed', error_code: 'no_agent'}), '失败：没有可用运行时连接');
+  assert.equal(groupReplyStatus({status: 'failed', error_code: 'timeout'}), '失败：执行超时');
+  assert.equal(groupReplyStatus({status: 'failed', error_code: 'private diagnostic'}), '失败：请求失败');
 });
