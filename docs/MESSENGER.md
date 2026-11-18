@@ -98,7 +98,7 @@ GET/list/message reads reconcile task results/deadlines. A successful nonempty
 response becomes an agent-authored item in the same paginated message stream with
 `role=agent`, `agent_id`, snapshotted `agent_name`, `source=runtime_infer`, and no
 human `user_id`. It contributes to the group preview. Human messages are unchanged.
-Agent reply bodies are not yet indexed by workspace message search.
+Persisted successful agent reply bodies are included in authorized workspace/current-conversation message search (see [SEARCH.md](SEARCH.md)); request prompts and non-success bodies are excluded.
 
 Timeouts, cancelled/failed/missing tasks and empty results never become successful
 messages. There is no automatic retry or redispatch on read; after failure a human

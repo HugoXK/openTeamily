@@ -54,3 +54,32 @@ inaccessible conversation produces no results, not a permission bypass.
 This is a functional scope correction based on the recorded conversation-header
 search action, not a claim about an uncaptured separate search-dialog layout.
 No separate panel is invented and no Teamily writes were performed.
+
+## Persisted group-agent replies (Related #88 #89 #7 #1)
+
+`kind=social` (and `kind=all`) now searches the same success-only message projection
+used by group GET/pagination: human messages plus persisted `succeeded` group-agent
+replies from the owner-selected one-shot protocol. It does not search prompts,
+tasks, pending/running/failed/cancelled request bodies or diagnostics. Search is
+read-only: it never dispatches, retries or reconciles runtime tasks; a successful
+task becomes searchable after an authorized group/list read has persisted its
+reply, as in the existing reply lifecycle.
+
+Agent-authored group hits remain `kind=social`, so the existing `/chat` workspace
+and current-conversation message searches open the same group without a new UI.
+Those hits add `role:"agent"`, `agent_id`, snapshotted `agent_name` and
+`source:"runtime_infer"`; human and private-agent hit shapes remain unchanged.
+The optional conversation restriction, UUID cursor ordering, mixed-source
+pagination, literal substring matching and 160-character snippet bound apply
+before the page is returned. The author metadata is a stored reply identity,
+not a new provider execution or verification claim.
+
+Actual human group membership and workspace scope remain mandatory, including
+for workspace admins. Removing/archiving an agent does not erase the group's
+already readable history. This extends the existing scan; it is not a full-text
+index, new search-dialog layout or Teamily/Impeccable acceptance. The new CI shot
+`85-chat-group-agent-search.png` shows an existing scoped search finding a labeled
+fake-provider reply and opening its saved group. Tests include actual HTTP
+claim/model-access/result plus a separate-process local fake-provider call before
+search/reopen, and negative isolation/state, literal matching and mixed pagination
+coverage. No real vendor credentials or Teamily write operations are involved.

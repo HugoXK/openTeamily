@@ -837,6 +837,35 @@ async function main() {
       record('chat_search_conversation_scope', false, String(error));
     }
 
+    // Appended backend-search integration; keep previous capture blocks intact.
+    try {
+      await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 15000);
+      await page.locator('#message-search').click();
+      await waitForLocatorText(page, '#search-source-note', '仅搜索当前对话');
+      await page.locator('#session-search').fill(ready.provider_text);
+      await waitForLocatorText(page, '#search-results', ready.provider_text, 15000);
+      const hits = await visibleText(page.locator('#search-results'));
+      record('chat_search_group_agent_reply', hits.includes('[CI FIXTURE] Agent members group')
+        && hits.includes(ready.provider_text), 'Persisted fake-provider group reply found: ' + hits);
+      screenshots.push(path.basename(await shot(page, outDir, '85-chat-group-agent-search.png')));
+      const groupId = await page.evaluate(() => new URLSearchParams(location.hash.slice(1)).get('social'));
+      const reopened = page.waitForResponse(response => response.request().method() === 'GET'
+        && new URL(response.url()).pathname === `/v1/workspaces/${ready.workspace_id}/social/conversations/${groupId}`);
+      await page.locator('#search-results button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
+      const response = await reopened;
+      const saved = await response.json();
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 15000);
+      record('chat_search_group_agent_open', response.status() === 200 && saved.conversation.id === groupId
+        && saved.items.some(item => item.role === 'agent' && item.body === ready.provider_text)
+        && (await visibleText(page.locator('#message-list'))).includes('AI 智能体 · 运行时回复'),
+        'Search result fetched the same saved group and runtime-authored reply');
+    } catch (error) {
+      record('chat_search_group_agent_reply', false, String(error));
+    }
+    // The next existing step navigates to /automations (a new document), avoiding
+    // a fragment-only cleanup navigation racing the async result-open handler.
+
     await page.setViewportSize({ width: 1280, height: 900 });
 
     await page.goto(`${origin}/automations`, { waitUntil: 'load' });
