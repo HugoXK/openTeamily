@@ -47,6 +47,7 @@ class AgentHomepageTests(unittest.TestCase):
     def test_default_is_restricted_and_unknown_tokens_are_404(self):
         item = self.create()
         self.assertEqual(item['homepage'], {'visibility': 'restricted'})
+        self.assertEqual(item['quick_starts'], [])
         self.assertNotIn('token', item)
         self.assertNotIn('token', item['homepage'])
         listed = self.alice.call('GET', f'/v1/workspaces/{self.wid}/agents')
@@ -87,8 +88,13 @@ class AgentHomepageTests(unittest.TestCase):
         self.assertIn('Create your own Agent', html)
         self.assertIn('disabled', html)
         self.assertIn('未接通：公开主页不会发送消息。', html)
-        self.assertIn('未接通：公开主页不会创建智能体。', html)
+        self.assertIn('未接通：还没有开场提示。', html)
+        self.assertIn('href="/agents"', html)
+        self.assertIn('打开工作区智能体页。公开主页不会直接创建智能体。', html)
         self.assertIn('does not run a conversation', html)
+        self.assertNotIn('Help me organize today\'s priorities', html)
+        self.assertNotIn('Create something with my team', html)
+        self.assertNotIn('Connect a messaging channel', html)
         self.assertNotIn('AVAILABLE NOW', html)
         self.assertNotIn('LIVE', html)
         self.assertIsNone(re.search(r'(?<!Open)Teamily', html))
@@ -171,17 +177,92 @@ class AgentHomepageTests(unittest.TestCase):
         self.assertNotIn('AVAILABLE NOW', html)
         self.assertIn('placeholder="Message &lt;Script&gt;Bot on the web…"', html)
         self.assertIn('disabled', html)
+        self.assertIn('未接通：还没有开场提示。', html)
+        self.assertNotIn('Help me organize today\'s priorities', html)
+        self.assertIn('href="/agents"', html)
+        filled = render_homepage({
+            'name': '<Script>Bot',
+            'summary': 'Hello & goodbye',
+        }, ['Ask & <script>alert(1)</script>', 'List what this assistant covers'])
+        self.assertIn('Ask &amp; &lt;script&gt;alert(1)&lt;/script&gt;', filled)
+        self.assertNotIn('<script>alert(1)</script>', filled)
+        self.assertIn('List what this assistant covers', filled)
+        self.assertIn('Quick starts', filled)
+        self.assertIn('未接通：这些开场提示只作展示。', filled)
+        self.assertNotIn('Help me organize today\'s priorities', filled)
+
+    def test_quick_starts_are_optional_public_strings_and_never_leak_instructions(self):
+        item = self.create()
+        url = f'/v1/workspaces/{self.wid}/agents/{item["id"]}'
+        too_many = self.alice.call('POST', url, {
+            'revision': 1,
+            'quick_starts': ['one', 'two', 'three', 'four', 'five', 'six'],
+        })
+        self.assertEqual(too_many['status'], 400, too_many)
+        invalid = self.alice.call('POST', url, {'revision': 1, 'quick_starts': 'not-a-list'})
+        self.assertEqual(invalid['status'], 400, invalid)
+        control = self.alice.call('POST', url, {'revision': 1, 'quick_starts': ['ok\x07']})
+        # actual control char below
+        control = self.alice.call('POST', url, {'revision': 1, 'quick_starts': ['ok' + chr(7)]})
+        self.assertEqual(control['status'], 400, control)
+        set_ = self.alice.call('POST', url, {
+            'revision': 1,
+            'quick_starts': [
+                '  Ask how this fixture agent is organized  ',
+                'Request a walkthrough of the directory',
+            ],
+        })
+        self.assertEqual(set_['status'], 200, set_)
+        self.assertEqual(set_['body']['agent']['quick_starts'], [
+            'Ask how this fixture agent is organized',
+            'Request a walkthrough of the directory',
+        ])
+        self.assertEqual(set_['body']['agent']['revision'], 2)
+        kept = self.alice.call('POST', url, {'revision': 2, 'summary': '整理笔记，并说明范围'})
+        self.assertEqual(kept['status'], 200, kept)
+        self.assertEqual(kept['body']['agent']['quick_starts'], [
+            'Ask how this fixture agent is organized',
+            'Request a walkthrough of the directory',
+        ])
+        published = self.publish(self.alice, item['id'])
+        self.assertEqual(published['status'], 201, published)
+        token = published['body']['agent']['homepage']['token']
+        page = self.guest.call('GET', '/a/' + token, origin=None)
+        self.assertEqual(page['status'], 200, page)
+        html = page['body'].decode()
+        self.assertIn('Ask how this fixture agent is organized', html)
+        self.assertIn('Request a walkthrough of the directory', html)
+        self.assertIn('Quick starts', html)
+        self.assertIn('Start a conversation', html)
+        self.assertNotIn('系统提示请保密。', html)
+        self.assertNotIn('Help me organize today\'s priorities', html)
+        cleared = self.alice.call('POST', url, {'revision': 3, 'quick_starts': []})
+        self.assertEqual(cleared['status'], 200, cleared)
+        self.assertEqual(cleared['body']['agent']['quick_starts'], [])
+        empty = self.guest.call('GET', '/a/' + token, origin=None)
+        self.assertIn('未接通：还没有开场提示。', empty['body'].decode())
+        self.assertNotIn('Ask how this fixture agent is organized', empty['body'].decode())
+        self.alice.call('POST', f'/v1/workspaces/{self.wid}/members',
+                        {'username': 'bob', 'role': 'member'})
+        member = self.bob.call('POST', url, {'revision': 4, 'quick_starts': ['Nope']})
+        self.assertEqual(member['status'], 403, member)
 
     def test_existing_v1_database_gains_the_homepage_table(self):
         self.create()
         with sqlite3.connect(self.path / 'management.sqlite3') as db:
             db.execute('DROP TABLE workspace_agent_homepages')
+            db.execute('DROP TABLE workspace_agent_quick_starts')
             db.commit()
         Store(self.path)
         with sqlite3.connect(self.path / 'management.sqlite3') as db:
             self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 1)
-            self.assertIsNotNone(
-                db.execute("SELECT name FROM sqlite_master WHERE name='workspace_agent_homepages'").fetchone())
+            names = {
+                row[0] for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE name IN "
+                    "('workspace_agent_homepages','workspace_agent_quick_starts')"
+                )
+            }
+            self.assertEqual(names, {'workspace_agent_homepages', 'workspace_agent_quick_starts'})
 
 
 if __name__ == '__main__':

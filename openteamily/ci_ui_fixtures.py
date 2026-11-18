@@ -132,6 +132,14 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         'instructions': 'Keep replies short. This agent is fixture data only.',
     }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-agent-0001'}), (201,), 'create the fixture agent')
     agent_id = agent['body']['agent']['id']
+    _require(owner.call('POST', '/v1/workspaces/%s/agents/%s' % (wid, agent_id), {
+        'revision': agent['body']['agent']['revision'],
+        'quick_starts': [
+            'Ask how this fixture agent is organized',
+            'Request a walkthrough of the directory',
+            'List what this fixture assistant covers',
+        ],
+    }), (200,), 'set fixture homepage quick starts')
     published = _require(owner.call(
         'POST', '/v1/workspaces/%s/agents/%s/homepage' % (wid, agent_id), {},
     ), (200, 201), 'publish the fixture agent homepage')
