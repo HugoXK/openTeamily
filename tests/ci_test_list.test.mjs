@@ -13,7 +13,10 @@ const WORKFLOW = path.join(root, '.github', 'workflows', 'tests.yml');
 
 export function listedTestFiles(source) {
   const listed = [];
-  for (const match of source.matchAll(/node --test (tests\/[\w.-]+\.test\.mjs)/g)) {
+  // A step line only: an indented `- run: node --test tests/x.test.mjs`. A commented
+  // out step (`# - run: ...`) must NOT count as listed, or the guard goes green while
+  // CI never runs the file.
+  for (const match of source.matchAll(/^[ \t]*-[ \t]+run:[ \t]+node --test (tests\/[\w.-]+\.test\.mjs)/gm)) {
     listed.push(match[1]);
   }
   return listed;
