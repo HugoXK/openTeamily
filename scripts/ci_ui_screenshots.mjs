@@ -837,6 +837,30 @@ async function main() {
       record('chat_search_conversation_scope', false, String(error));
     }
 
+    // Appended backend-search integration; keep previous capture blocks intact.
+    try {
+      await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 15000);
+      await page.locator('#message-search').click();
+      await waitForLocatorText(page, '#search-source-note', '仅搜索当前对话');
+      await page.locator('#session-search').fill(ready.provider_text);
+      await waitForLocatorText(page, '#search-results', ready.provider_text, 15000);
+      const hits = await visibleText(page.locator('#search-results'));
+      record('chat_search_group_agent_reply', hits.includes('[CI FIXTURE] Agent members group')
+        && hits.includes(ready.provider_text), 'Persisted fake-provider group reply found: ' + hits);
+      screenshots.push(path.basename(await shot(page, outDir, '85-chat-group-agent-search.png')));
+      await page.locator('#search-results button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 15000);
+      record('chat_search_group_agent_open',
+        (await visibleText(page.locator('#message-list'))).includes('AI 智能体 · 运行时回复'),
+        'Existing search result opens the same saved group and runtime-authored reply');
+    } catch (error) {
+      record('chat_search_group_agent_reply', false, String(error));
+    } finally {
+      await page.goto(chatUrl, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#chat-title', ready.agent_name, 20000);
+    }
+
     await page.setViewportSize({ width: 1280, height: 900 });
 
     await page.goto(`${origin}/automations`, { waitUntil: 'load' });
