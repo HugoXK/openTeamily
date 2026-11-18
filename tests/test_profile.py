@@ -102,6 +102,31 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(self.alice.call('GET', '/v1/profiles/nobody')['status'], 404)
         self.assertEqual(self.alice.call('GET', '/v1/profiles/a')['status'], 404)
 
+    def test_public_profile_page_escapes_and_hides_private_goals(self):
+        created = self.create(name='<b>Alice</b>', bio='<script>alert(1)</script>',
+                             tags=['<x>', '产品'])
+        self.assertEqual(created['status'], 201)
+        page = self.alice.call('GET', '/p/alice', parse='raw', csrf=False, origin=None)
+        self.assertEqual(page['status'], 200)
+        html = page['body'].decode()
+        self.assertIn('&lt;b&gt;Alice&lt;/b&gt;', html)
+        self.assertIn('&lt;script&gt;alert(1)&lt;/script&gt;', html)
+        self.assertNotIn('<script>', html)
+        self.assertIn('&lt;x&gt;', html)
+        self.assertIn('产品', html)
+        self.assertNotIn('每周跑两次', html)
+        csp = dict(page['headers'])['Content-Security-Policy']
+        self.assertIn("frame-ancestors 'none'", csp)
+        self.assertIn("default-src 'none'", csp)
+        self.assertEqual(self.alice.call('GET', '/p/nobody', parse='raw', csrf=False, origin=None)['status'], 404)
+        self.assertEqual(self.alice.call('POST', '/p/alice', parse='raw', csrf=False, origin=None)['status'], 400)
+        self.assertEqual(self.alice.call('GET', '/p/alice?x=1', parse='raw', csrf=False, origin=None)['status'], 400)
+        self.alice.call('POST', '/v1/profile', {'revision': 1, 'changes': {'handle': 'alice.dev'}})
+        self.assertEqual(self.alice.call('GET', '/p/alice', parse='raw', csrf=False, origin=None)['status'], 404)
+        self.assertEqual(self.alice.call('GET', '/p/alice.dev', parse='raw', csrf=False, origin=None)['status'], 200)
+        self.assertEqual(self.alice.call('GET', '/v1/profiles/alice.dev')['status'], 200)
+
+
 
 if __name__ == '__main__':
     unittest.main()

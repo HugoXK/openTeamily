@@ -8,6 +8,7 @@ included. The public projection never returns goals, email, or account ids.
 """
 import json
 import re
+from html import escape
 from urllib.parse import urlsplit
 
 SCHEMA = '''
@@ -159,6 +160,51 @@ def public_view(row):
         'website': row['website'],
         'created': row['created'],
     }
+
+
+PAGE_CSP = ("default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; "
+            "form-action 'none'; frame-ancestors 'none'; object-src 'none'")
+GENDER_LABELS = {'male': '男', 'female': '女', 'other': '其他', '': '未设置'}
+
+
+def render_page(row):
+    name = escape(row['name'] or row['handle'])
+    handle = escape(row['handle'])
+    bio = escape(row['bio'] or '')
+    location = escape(row['location'] or '')
+    website = row['website'] or ''
+    website_html = ''
+    if website:
+        href = escape(website, quote=True)
+        website_html = '<p class="meta">网站：<a href="' + href + '" rel="nofollow noopener noreferrer">' + href + '</a></p>'
+    tags = _tags(row['tags'])
+    tags_html = ''
+    if tags:
+        tags_html = '<ul class="tags">' + ''.join('<li>' + escape(tag) + '</li>' for tag in tags) + '</ul>'
+    location_html = '<p class="meta">所在地：' + location + '</p>' if location else ''
+    gender = GENDER_LABELS.get(row['gender'], '未设置')
+    return (
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="referrer" content="no-referrer">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<title>' + name + ' · OpenTeamily</title>'
+        '<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",'
+        '"Noto Sans SC",sans-serif;background:#f6f7f9;color:#0f172a;margin:0;padding:2rem 1rem}'
+        '.card{max-width:44rem;margin:0 auto;background:#fff;border:1px solid #e2e6ec;'
+        'border-radius:1.25rem;box-shadow:0 12px 32px rgba(15,23,42,.08);padding:1.5rem 1.75rem}'
+        '.avatar{width:3.5rem;height:3.5rem;border-radius:999px;display:grid;place-items:center;'
+        'background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;font-weight:700;font-size:1.4rem}'
+        'h1{margin:.75rem 0 .15rem;font-size:1.6rem}.handle{color:#5b6675;margin:0 0 1rem}'
+        '.bio{white-space:pre-wrap;line-height:1.6}.meta{color:#5b6675;margin:.35rem 0}'
+        '.tags{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:.4rem;margin:1rem 0 0}'
+        '.tags li{background:#eef1ff;color:#4338ca;border-radius:999px;padding:.15rem .6rem;font-size:.8rem}'
+        'a{color:#4f46e5}</style></head><body><main class="card">'
+        '<div class="avatar">' + escape((row['name'] or row['handle'])[:2].upper()) + '</div>'
+        '<h1>' + name + '</h1><p class="handle">@' + handle + '</p>'
+        '<p class="bio">' + bio + '</p>' + location_html +
+        '<p class="meta">性别：' + escape(gender) + '</p>' + website_html + tags_html +
+        '</main></body></html>'
+    )
 
 
 def load(db, user_id):
