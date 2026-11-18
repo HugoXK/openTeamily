@@ -82,19 +82,38 @@ export function filterMemberChoices(members, currentUserId, query) {
   return list.filter(member => String(member.username || '').toLocaleLowerCase().includes(needle));
 }
 
+export function groupPickerChoices(members, currentUserId, agents = []) {
+  return [
+    ...memberChoices(members, currentUserId).map(member => ({
+      id: member.user_id, kind: 'human', label: member.username + ' · 成员',
+    })),
+    ...agents.filter(agent => !agent.archived).map(agent => ({
+      id: agent.id, kind: 'agent', label: agent.name + ' · AI 智能体（自动回复未接通）',
+    })),
+  ];
+}
+
+export function groupAgentSummary(conversation) {
+  const list = conversation && conversation.agent_members || [];
+  return list.length ? '群内智能体：' + list.map(agent => agent.name).join('、')
+    + '。未接通：群内自动回复、@Agent 和任务委派。' : '';
+}
+
 export function composeCreateEnabled(options) {
   const mode = options && options.composeMode;
   const groupMode = (options && options.groupMode) || 'custom';
   const selectedCount = Number((options && options.selectedCount) || 0);
   if (mode === 'contact') return selectedCount === 1;
-  if (mode === 'group') return groupMode === 'custom' && selectedCount >= 1;
+  if (mode === 'group') return groupMode === 'custom'
+    && selectedCount <= 49 && Number(options.selectedHumanCount ?? selectedCount) >= 1;
   return false;
 }
 
-export function composeGroupPayload(memberIds, title) {
+export function composeGroupPayload(memberIds, title, agentIds = []) {
   const body = {kind: 'group', member_ids: memberIds};
   const name = String(title || '').trim();
   if (name) body.title = name;
+  if (agentIds.length) body.agent_ids = agentIds;
   return body;
 }
 
@@ -326,6 +345,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function setDirectoryLink(session) {
+    if (!session || session.source !== 'social') document.getElementById('social-agent-members').hidden = true;
     const link = document.getElementById('open-agent-dir');
     if (session && session.source === 'social') {
       link.href = '/members';
@@ -380,6 +400,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentAgent = agent;
     currentSource = 'agent';
+    document.getElementById('social-agent-members').hidden = true;
     applyChatIdentity(document, agent.name);
     setDirectoryLink({source: 'agent'});
     const result = await request('GET', `/v1/workspaces/${workspaceId()}/agents/${agentId}/conversations/${conversationId}`);
@@ -405,6 +426,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     currentConversation = result.body.conversation;
+    const agentNote = document.getElementById('social-agent-members');
+    agentNote.textContent = groupAgentSummary(currentConversation);
+    agentNote.hidden = !agentNote.textContent;
     applyChatIdentity(document, conversationLabel(
       currentConversation, currentUser && currentUser.id));
     setDirectoryLink({source: 'social'});
@@ -430,7 +454,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function selectedMemberCount() {
-    return document.querySelectorAll('#member-choices input[name="member"]:checked').length;
+    return document.querySelectorAll('#member-choices input:checked').length;
   }
 
   function syncComposeCreate() {
@@ -439,6 +463,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       composeMode,
       groupMode,
       selectedCount: selectedMemberCount(),
+      selectedHumanCount: document.querySelectorAll('#member-choices input[name="member"]:checked').length,
     });
   }
 
@@ -494,13 +519,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function renderMemberChoices(single) {
     const holder = document.getElementById('member-choices');
     holder.replaceChildren();
-    for (const member of memberChoices(members, currentUser && currentUser.id)) {
+    const choices = groupPickerChoices(members, currentUser && currentUser.id, single ? [] : agents);
+    for (const member of choices) {
       const label = document.createElement('label');
       const box = document.createElement('input');
       box.type = single ? 'radio' : 'checkbox';
-      box.name = 'member';
-      box.value = member.user_id;
-      label.append(box, document.createTextNode(member.username));
+      box.name = member.kind === 'agent' ? 'agent-member' : 'member';
+      box.value = member.id;
+      label.append(box, document.createTextNode(member.label));
       holder.append(label);
     }
     applyMemberFilter();
@@ -905,7 +931,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const body = composeMode === 'contact'
       ? {kind: 'dm', member_ids: memberIds.slice(0, 1)}
-      : composeGroupPayload(memberIds, title);
+      : composeGroupPayload(memberIds, title,
+        [...document.querySelectorAll('#member-choices input[name="agent-member"]:checked')].map(box => box.value));
     const result = await request('POST', socialBase(), body, {'Idempotency-Key': idempotencyKey('social-')});
     if (result.status !== 201 && result.status !== 200) {
       show('error', messageFor(result.body.error, '无法创建会话。'));

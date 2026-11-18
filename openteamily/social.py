@@ -2,7 +2,7 @@
 
 Self-written for OpenTeamily; no upstream or Teamily source. This slice adds
 direct messages and named group conversations between members of the same
-workspace. It deliberately does not add agent participants in replies, unread
+workspace. Groups may persist agent members (not speakers). It does not add unread
 counts, notifications, attachments or cross-workspace delivery. Those remain
 separate issues; do not describe this as Teamily messenger parity.
 """
@@ -34,6 +34,11 @@ CREATE TABLE IF NOT EXISTS social_members (
  PRIMARY KEY(conversation_id, user_id));
 CREATE INDEX IF NOT EXISTS social_member_user
  ON social_members(workspace_id, user_id, conversation_id);
+CREATE TABLE IF NOT EXISTS social_agent_members (
+ conversation_id TEXT NOT NULL REFERENCES social_conversations(id) ON DELETE CASCADE,
+ agent_id TEXT NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+ created INTEGER NOT NULL,
+ PRIMARY KEY(conversation_id, agent_id));
 CREATE TABLE IF NOT EXISTS social_messages (
  id TEXT PRIMARY KEY,
  conversation_id TEXT NOT NULL REFERENCES social_conversations(id) ON DELETE CASCADE,
@@ -74,14 +79,29 @@ def valid_member_ids(value):
     return len(set(value)) == len(value)
 
 
+def valid_agent_ids(value):
+    return isinstance(value, list) and len(value) <= 49 and (
+        not value or valid_member_ids(value))
+
+
+def agent_member_rows(db, conversation_id):
+    rows = db.execute(
+        'SELECT m.agent_id, a.name, a.archived, m.created FROM social_agent_members m '
+        'JOIN workspace_agents a ON a.id=m.agent_id '
+        'JOIN social_conversations c ON c.id=m.conversation_id AND c.workspace_id=a.workspace_id '
+        'WHERE m.conversation_id=? ORDER BY a.name, m.agent_id', (conversation_id,))
+    return [dict(row) for row in rows]
+
+
 def dm_key(first, second):
     return digest('social-dm:' + ':'.join(sorted((first, second))))
 
 
-def conversation_view(row, members=None, preview=''):
+def conversation_view(row, members=None, preview='', agent_members=None):
     data = {key: row[key] for key in (
         'id', 'workspace_id', 'kind', 'title', 'created', 'updated')}
     data['preview'] = preview or ''
+    data['agent_members'] = agent_members or []
     if members is not None:
         data['members'] = members
     return data
@@ -153,14 +173,15 @@ def conversation_item(db, row, members=None):
     preview = last_previews(db, row['workspace_id'], [row['id']]).get(row['id'], '')
     if members is None:
         members = member_rows(db, row['id'])
-    return conversation_view(row, members, preview)
+    return conversation_view(row, members, preview, agent_member_rows(db, row['id']))
 
 
 def conversation_items(db, rows):
     if not rows:
         return []
     previews = last_previews(db, rows[0]['workspace_id'], [row['id'] for row in rows])
-    return [conversation_view(row, member_rows(db, row['id']), previews.get(row['id'], ''))
+    return [conversation_view(row, member_rows(db, row['id']), previews.get(row['id'], ''),
+                              agent_member_rows(db, row['id']))
             for row in rows]
 
 

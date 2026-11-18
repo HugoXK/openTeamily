@@ -670,6 +670,56 @@ async function main() {
     }
 
     try {
+      await page.locator('#new-conversation').click();
+      await page.locator('#compose-new-group').click();
+      const agent = page.locator('#member-choices input[name="agent-member"]').first();
+      const human = page.locator('#member-choices input[name="member"]').first();
+      await agent.check();
+      record('chat_group_agent_only_disabled',
+        await page.locator('#compose-dialog-submit').isDisabled()
+          && (await visibleText(page.locator('#compose-selected-count'))).includes('已选 1'),
+        'Selecting an agent alone does not satisfy the two-human rule');
+      await page.locator('#compose-member-search').fill('no-matching-member-fixture');
+      record('chat_group_agent_search', await agent.isHidden() && await human.isHidden(),
+        'Search filters human and agent choices without discarding selections');
+      await page.locator('#compose-member-search').fill('');
+      await human.check();
+      await page.locator('#compose-title').fill('[CI FIXTURE] Agent members group');
+      record('chat_group_agent_picker',
+        await page.locator('#compose-dialog-submit').isEnabled()
+          && (await visibleText(page.locator('#compose-selected-count'))).includes('已选 2')
+          && (await visibleText(page.locator('#member-choices'))).includes('AI 智能体（自动回复未接通）'),
+        'An existing human and agent are selected; custom group create is enabled');
+      await page.locator('#compose-mode-team').click();
+      record('chat_group_agent_team_unconnected', await page.locator('#compose-dialog-submit').isDisabled(),
+        'Agent selections do not enable the unconnected AI-team mode');
+      await page.locator('#compose-mode-custom').click();
+      screenshots.push(path.basename(await shot(page, outDir, '79-chat-group-agent-picker.png')));
+      await page.locator('#compose-dialog-submit').click();
+      await page.locator('#compose-dialog').waitFor({state: 'hidden', timeout: 8000});
+      await waitForLocatorText(page, '#chat-title', '[CI FIXTURE] Agent members group', 8000);
+      await page.reload({waitUntil: 'load'});
+      await waitForLocatorText(page, '#chat-title', '[CI FIXTURE] Agent members group', 8000);
+      const summary = await visibleText(page.locator('#social-agent-members'));
+      record('chat_group_agent_saved',
+        summary.includes(ready.agent_name) && summary.includes('未接通：群内自动回复'),
+        summary || 'Saved agent participants missing after reload');
+      screenshots.push(path.basename(await shot(page, outDir, '80-chat-group-agent-members.png')));
+      await page.locator('#new-conversation').click();
+      await page.locator('#compose-add-contact').click();
+      record('chat_group_agent_contact_separate',
+        await page.locator('#member-choices input[name="agent-member"]').count() === 0
+          && await page.locator('#member-choices input[type="radio"]').count() > 0,
+        'Adding a contact still offers human-only single selection');
+      await page.locator('#compose-dialog-cancel').click();
+    } catch (error) {
+      record('chat_group_agent_members', false, String(error));
+    } finally {
+      await page.goto(chatUrl, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#chat-title', ready.agent_name, 20000);
+    }
+
+    try {
       await page.locator('#session-search').click();
       const panel = page.locator('#search-panel');
       await panel.waitFor({ state: 'visible', timeout: 8000 });

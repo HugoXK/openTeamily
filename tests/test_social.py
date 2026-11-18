@@ -1,4 +1,5 @@
 """Human-to-human workspace messenger (issue #86). No agent or vendor is contacted."""
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
@@ -109,6 +110,85 @@ class SocialMessengerTests(unittest.TestCase):
         self.assertEqual(self.create(self.alice, 'dm', [self.bob_id])['status'], 201)
         # A DM is deduplicated per workspace even under a different idempotency key.
         self.assertEqual(self.create(self.alice, 'dm', [self.bob_id], key='social-create-0003')['status'], 200)
+
+    def make_agent(self, client=None, wid=None, name='Group helper'):
+        return (client or self.alice).call(
+            'POST', f'/v1/workspaces/{wid or self.wid}/agents', {'name': name},
+            {'HTTP_IDEMPOTENCY_KEY': 'social-agent-create1'})['body']['agent']['id']
+
+    def test_group_agent_members_persist_snapshot_list_and_idempotency(self):
+        agent_id = self.make_agent()
+        body = {'kind': 'group', 'member_ids': [self.bob_id], 'agent_ids': [agent_id]}
+        headers = {'HTTP_IDEMPOTENCY_KEY': 'social-group-agent01'}
+        created = self.alice.call('POST', self.base(), body, headers)
+        self.assertEqual(created['status'], 201, created)
+        conv = created['body']['conversation']
+        self.assertEqual({m['user_id'] for m in conv['members']}, {self.alice_id, self.bob_id})
+        self.assertEqual(conv['agent_members'], [
+            {'agent_id': agent_id, 'name': 'Group helper', 'archived': 0, 'created': self.now}])
+        # Reopen the same store; migration is repeatable and version stays 1.
+        reopened = App(Store(Path(self.temp.name) / 'state'), Config(ORIGIN, allow_registration=True),
+                       clock=lambda: self.now)
+        self.bob.app = reopened
+        snapshot = self.bob.call('GET', self.base() + '/' + conv['id'])
+        self.assertEqual(snapshot['body']['conversation']['agent_members'], conv['agent_members'])
+        self.assertEqual(self.bob.call('GET', self.base())['body']['items'][0]['agent_members'],
+                         conv['agent_members'])
+        replay = self.alice.call('POST', self.base(), body, headers)
+        self.assertEqual(replay['status'], 200)
+        self.assertEqual(replay['body']['conversation']['id'], conv['id'])
+        self.assertEqual(self.alice.call('POST', self.base(), {**body, 'agent_ids': []}, headers)['status'], 409)
+        self.assertEqual(self.eve.call('GET', self.base() + '/' + conv['id'])['status'], 404)
+        # Human messages still work, without triggering an agent task or reply.
+        sent = self.bob.call('POST', self.base() + '/' + conv['id'] + '/messages', {'body': 'Hello'},
+                             {'HTTP_IDEMPOTENCY_KEY': 'social-group-agent-msg1'})
+        self.assertEqual(sent['status'], 201)
+        self.assertEqual(len(self.bob.call('GET', self.base() + '/' + conv['id'])['body']['items']), 1)
+        self.alice.call('POST', f'/v1/workspaces/{self.wid}/agents/{agent_id}/archive', {'revision': 1})
+        archived = self.bob.call('GET', self.base() + '/' + conv['id'])
+        self.assertEqual(archived['body']['conversation']['agent_members'][0]['archived'], 1)
+        with self.app.store.connect() as db:
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 1)
+
+    def test_existing_v1_store_adds_agent_table_without_changing_human_groups(self):
+        old = self.create(self.alice, 'group', [self.bob_id])['body']['conversation']
+        with self.app.store.connect() as db:
+            db.execute('DROP TABLE social_agent_members')
+            db.commit()
+        Store(Path(self.temp.name) / 'state')
+        snapshot = self.alice.call('GET', self.base() + '/' + old['id'])
+        self.assertEqual(snapshot['status'], 200)
+        self.assertEqual(snapshot['body']['conversation']['agent_members'], [])
+        self.assertEqual(snapshot['body']['conversation']['members'], old['members'])
+        # Legacy human-only idempotency hashes are not altered by an empty agent list.
+        replay = self.alice.call('POST', self.base(), {
+            'kind': 'group', 'member_ids': [self.bob_id], 'agent_ids': []},
+            {'HTTP_IDEMPOTENCY_KEY': 'social-create-0001'})
+        self.assertEqual(replay['status'], 200)
+        self.assertEqual(replay['body']['conversation']['id'], old['id'])
+
+    def test_agent_validation_preserves_human_and_dm_rules(self):
+        agent_id = self.make_agent()
+        other = self.eve.workspace()['body']['workspace']['id']
+        foreign = self.make_agent(self.eve, other)
+        base = {'kind': 'group', 'member_ids': [self.bob_id], 'agent_ids': [agent_id]}
+        headers = {'HTTP_IDEMPOTENCY_KEY': 'social-group-agent02'}
+        bad = [None, 'invalid', [agent_id, agent_id], ['z' * 32], ['f' * 32], [foreign]]
+        for ids in bad:
+            result = self.alice.call('POST', self.base(), {**base, 'agent_ids': ids}, headers)
+            self.assertEqual(result['status'], 400, result)
+            self.assertEqual(result['body']['error']['code'], 'invalid')
+        for change in [{'member_ids': []}, {'member_ids': [self.alice_id]}, {'kind': 'dm'}]:
+            self.assertEqual(self.alice.call('POST', self.base(), {**base, **change}, headers)['status'], 400)
+        # Member capacity counts human and agent participants together.
+        old = self.app.config
+        self.app.config = replace(old, max_social_members_per_conversation=2)
+        try:
+            self.assertEqual(self.alice.call('POST', self.base(), base, headers)['status'], 429)
+        finally:
+            self.app.config = old
+        self.alice.call('POST', f'/v1/workspaces/{self.wid}/agents/{agent_id}/archive', {'revision': 1})
+        self.assertEqual(self.alice.call('POST', self.base(), base, headers)['status'], 400)
 
     def test_listing_preview_is_last_authorized_snippet(self):
         created = self.create(self.alice, 'dm', [self.bob_id], key='social-preview-0001')

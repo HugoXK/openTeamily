@@ -2816,10 +2816,19 @@ class App:
         refuse(400, 'invalid', 'Invalid messenger request')
 
     def create_social_conversation(self, db, workspace, session, now, env):
-        body = self.body(env, ['kind', 'member_ids', 'title'])
+        body = self.body(env, ['kind', 'member_ids', 'title', 'agent_ids'])
         kind, member_ids = body.get('kind'), body.get('member_ids')
         if kind not in social.KINDS or not social.valid_member_ids(member_ids):
             refuse(400, 'invalid', 'Provide a kind and 1–49 member ids')
+        agent_ids = body.get('agent_ids', [])
+        if not social.valid_agent_ids(agent_ids) or (kind == 'dm' and agent_ids):
+            refuse(400, 'invalid', 'Agent members require a group and 0–49 unique agent ids')
+        for agent_id in agent_ids:
+            agent = db.execute(
+                'SELECT id FROM workspace_agents WHERE id=? AND workspace_id=? AND archived=0',
+                (agent_id, workspace['id'])).fetchone()
+            if agent is None:
+                refuse(400, 'invalid', 'Every agent must be an active workspace agent')
         title = body.get('title')
         if title is not None and not social.valid_title(title):
             refuse(400, 'invalid', 'Provide a valid conversation title')
@@ -2836,9 +2845,11 @@ class App:
         allowed = social.workspace_member_ids(db, workspace)
         if not members_set.issubset(allowed):
             refuse(400, 'invalid', 'Every member must belong to the workspace')
-        if len(members_set) > self.config.max_social_members_per_conversation:
+        if len(members_set) + len(agent_ids) > self.config.max_social_members_per_conversation:
             refuse(429, 'quota', 'Conversation member limit reached')
         payload = {'kind': kind, 'member_ids': sorted(member_ids), 'title': title}
+        if agent_ids:
+            payload['agent_ids'] = sorted(agent_ids)
         key_hash, request_hash = digest('social-conversation:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False))
         prior = social.load_by_key(db, workspace['id'], key_hash)
@@ -2872,6 +2883,9 @@ class App:
             db.execute(
                 'INSERT INTO social_members VALUES(?,?,?,?)',
                 (conversation_id, workspace['id'], user_id, now))
+        for agent_id in sorted(agent_ids):
+            db.execute('INSERT INTO social_agent_members VALUES(?,?,?)',
+                       (conversation_id, agent_id, now))
         row = social.load(db, workspace['id'], conversation_id)
         return 201, {'conversation': social.conversation_item(db, row)}, []
 
