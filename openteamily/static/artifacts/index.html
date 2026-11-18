@@ -163,6 +163,7 @@
           <div id="new-menu" role="menu" hidden>
             <button type="button" id="new-artifact" role="menuitem">云文档</button>
             <button type="button" id="new-slides" role="menuitem">幻灯片</button>
+            <button type="button" id="new-dashboard" role="menuitem">看板</button>
             <button type="button" id="new-board" role="menuitem">白板</button>
             <button type="button" id="new-media" role="menuitem">上传</button>
           </div>
@@ -265,6 +266,13 @@
           <span class="note">最多 30 页；每页最多 10 条要点。</span>
         </div>
         <ol id="slide-list" class="slide-list"></ol>
+      </div>
+      <div id="dashboard-editor" hidden>
+        <div class="slides-toolbar">
+          <button type="button" id="add-widget">添加组件</button>
+          <span class="note">最多 20 个组件：指标、表格、条形图。</span>
+        </div>
+        <ol id="widget-list" class="slide-list"></ol>
       </div>
       <div id="board-editor" hidden>
         <div id="board-tools">
