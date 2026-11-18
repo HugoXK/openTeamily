@@ -22,6 +22,7 @@ jobs:
       - run: node --version
       - run: node --test manager/compose-planner/compose-command-planner.test.js
       - run: node --test tests/settings_page.test.mjs
+      - run: node --test tests/runtimes_copy_feedback.test.mjs
       - run: node --test tests/shell_page.test.mjs
       - run: node --test tests/agent_loop.test.mjs
       - run: node --test tests/memory_page.test.mjs

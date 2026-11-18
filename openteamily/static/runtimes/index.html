@@ -169,7 +169,10 @@
           </div>
           <div class="command-block">
             <p class="command-lang" id="install-lang">shell</p>
-            <button type="button" id="copy-install">复制</button>
+            <div class="copy-row">
+              <span id="copy-install-feedback" class="copy-feedback" role="status" aria-live="polite" hidden></span>
+              <button type="button" id="copy-install">复制</button>
+            </div>
             <pre id="install-unix">python3 -c 'from urllib.request import urlretrieve; urlretrieve("__ORIGIN__/install/flybot.pyz", "flybot.pyz")'</pre>
             <pre id="install-windows" hidden>Invoke-WebRequest -Uri __ORIGIN__/install/flybot.pyz -OutFile flybot.pyz</pre>
           </div>
