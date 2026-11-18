@@ -1,8 +1,10 @@
 """Agents page serving tests. In-process WSGI only; not browser E2E."""
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
+from openteamily import discover
 from openteamily.app import App, Config
 from openteamily.settings_page import SettingsPage
 from openteamily.store import Store
@@ -46,6 +48,16 @@ class AgentsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/agents', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/agents', query='x=1')['status'], 400)
         self.assertEqual(self.raw.call('POST', '/agents')['status'], 405)
+
+    def test_category_deep_link_is_the_only_accepted_query(self):
+        page = self.raw.call('GET', '/agents', query='category=design')
+        self.assertEqual(page['status'], 200)
+        html = page['body'].decode()
+        slugs = re.findall(r'data-category="([a-z-]+)"', html)
+        self.assertEqual(slugs, ['all', *[slug for slug, _label in discover.AGENT_CATEGORIES]])
+        for bad in ('category=not-a-category', 'category=', 'category=design&x=1',
+                    'x=1', 'category=Design', 'category=design&category=sales'):
+            self.assertEqual(self.raw.call('GET', '/agents', query=bad)['status'], 400, bad)
 
     def test_wrapper_still_exposes_agent_directory(self):
         space = self.client.call('POST', '/v1/workspaces', {'name': 'Desk'},

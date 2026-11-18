@@ -279,7 +279,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       renderCatalog(catalog);
       more.hidden = !cursor;
       document.getElementById('discover-empty').textContent = activeQuery
-        ? '没有匹配的智能体。试试其他关键词。' : '还没有收录任何智能体。';
+        ? '没有匹配的智能体。试试其他关键词。' : '暂无公开智能体。';
       count.textContent = '已显示 ' + catalog.length + ' 个智能体' + (cursor ? '，还有更多' : '');
     } catch (failure) {
       if (seq !== catalogRequest) return;
