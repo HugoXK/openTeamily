@@ -6,3 +6,4 @@ Teamily comparison.
 
 - `profile-editor.png`: `/profile` with the public-information card and the
   private life-goals card.
+- `public-profile.png`: the public `/p/{handle}` card.

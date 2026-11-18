@@ -15,7 +15,8 @@ Avatar upload and account deletion are separate slices.
 |---|---|---|---|
 | GET | `/v1/profile` | session | `{profile}` for the caller, or `{profile:null}`. Never creates. |
 | POST | `/v1/profile` | session + Origin + CSRF | `{revision, changes}`. `revision:0` creates; `200` on update, `201` on create, `409` with `error.current` on a stale revision. |
-| GET | `/v1/profiles/{handle}` | none | Read-only public projection. Unknown handles are `404`. |
+| GET | `/v1/profiles/{handle}` | none | Read-only public JSON projection. Unknown handles are `404`. |
+| GET | `/p/{handle}` | none | Read-only public HTML page with the same fields, escaped and sandboxed. |
 
 `changes` fields: `handle`, `name`, `bio`, `tags` (list), `gender` (`""|male|female|other`),
 `location`, `website`, `goals` (`{health,finance,career,hobbies,family,productivity,other}`).
@@ -23,7 +24,8 @@ Unknown keys, wrong types, unsupported values and an empty changes object are re
 and nothing is written.
 
 The public projection contains `handle,name,bio,tags,gender,location,website,created`. It never
-contains `goals`, `revision`, email, account id or other users' data.
+contains `goals`, `revision`, email, account id or other users' data. The `/p/{handle}` HTML page
+uses the same projection, `default-src 'none'`, inline styles only, and no scripts.
 
 ## Handle rules
 
@@ -46,16 +48,16 @@ contains `goals`, `revision`, email, account id or other users' data.
 Additive `user_profiles` table (`CREATE TABLE IF NOT EXISTS`) keyed by `user_id` with a unique
 `handle_lower` index. Tags and goals are JSON text. Schema `user_version` stays 1.
 
-## Page
+## Pages
 
-`/profile` is a same-origin editor with a public-information card and a private life-goals card.
+`/p/{handle}` is a public read-only HTML card (name, handle, bio, location, gender, website, tags)
+with no posts, follows or private goals. `/profile` is a same-origin editor with a public-information card and a private life-goals card.
 It keeps the existing shell/nav/account IDs, shows the signed-in username, and links to the public
-JSON projection. `docs/screenshots/profile/profile-editor.png` is synthetic review material; it is not
+HTML page. `docs/screenshots/profile/profile-editor.png` is synthetic review material; it is not
 browser acceptance.
 
 ## Explicitly not in this slice
 
 - Posts, follows, followers, likes, comments, feeds or remix (Birfy/Bot Social overlap).
 - Avatar/photo upload, account deletion, email change, and Teamily ID cooldown.
-- A rendered public profile page; only the JSON projection exists.
 - Teamily comparison acceptance. Tests are in-process WSGI + temporary SQLite plus pure Node helpers.

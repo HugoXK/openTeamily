@@ -460,6 +460,18 @@ class App:
             if row is None:
                 refuse(404, 'not_found', 'Profile not found')
             return 200, {'profile': profiles.public_view(row)}, []
+        page_path = re.fullmatch(r'/p/([a-z0-9._]{3,30})', path)
+        if page_path:
+            if method != 'GET' or query:
+                refuse(400, 'invalid', 'Invalid profile page request')
+            with self.store.connect() as db:
+                row = profiles.load_handle(db, page_path[1])
+            if row is None:
+                refuse(404, 'not_found', 'Profile not found')
+            return 200, profiles.render_page(row).encode('utf-8'), [
+                ('Content-Type', 'text/html; charset=utf-8'),
+                ('Content-Security-Policy', profiles.PAGE_CSP),
+            ]
         if path == '/v1/discover/agents':
             if method != 'GET':
                 refuse(405, 'method', 'Only GET is supported')
