@@ -252,8 +252,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       chat.setAttribute('aria-label', (item.name || item.slug) + '：聊天未接通');
       copy.append(name, summary);
       card.append(avatar, copy, chat);
-      // Slugs are public identifiers, not links: no public detail route exists.
-      card.title = '/d/' + item.slug;
+      // Slugs identify records, but no public detail route exists, so the card
+      // carries no hover text: a "/d/<slug>" tooltip would promise a 404.
       li.append(card);
       list.append(li);
     }
