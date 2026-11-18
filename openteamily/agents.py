@@ -3,11 +3,14 @@
 Self-written for OpenTeamily; no upstream or Teamily source. Teamily's
 create flow and Auto / Instant / Agentic mode differences were not fully
 observed, so this slice does not invent modes or embeddable conversations.
-Public homepages are unlisted share links: name and summary only, never
-instructions. The public HTML follows the recorded profile typography
-(identity, talk-via, a web-conversation panel, and a create footer) but
-does not copy Teamily marks, a verified badge, LIVE state, or invented
-quick starts. Conversation and create controls stay disabled. These
+Public homepages are unlisted share links: name, summary, and optional
+owner-set quick starts only, never instructions. The public HTML follows
+the recorded profile typography (identity, talk-via, start-a-conversation
+list, a web-conversation panel with typography-only quick-start cards,
+and a create footer that links to the existing /agents page) but does
+not copy Teamily marks, a verified badge, LIVE state, or the recorded
+official Teamily Agent prompts. The public page still does not run a
+conversation, send a starter, or call a model. These
 records live in the management database only: the management process
 does not run agents. Container execution, embed routes, and Teamily
 comparison remain later slices and must not be claimed from these tests.
@@ -51,6 +54,11 @@ CREATE TABLE IF NOT EXISTS workspace_agent_homepages (
  revoked_at INTEGER);
 CREATE INDEX IF NOT EXISTS workspace_agent_homepage_agent
  ON workspace_agent_homepages(agent_id, revoked, created, id);
+CREATE TABLE IF NOT EXISTS workspace_agent_quick_starts (
+ agent_id TEXT NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+ position INTEGER NOT NULL CHECK(position >= 0 AND position < 5),
+ text TEXT NOT NULL,
+ PRIMARY KEY(agent_id, position));
 '''
 
 NAME_MAX = 80
@@ -64,6 +72,8 @@ CATEGORIES = (
 )
 SUMMARY_MAX = 500
 INSTRUCTIONS_MAX = 16000
+QUICK_START_MAX = 5
+QUICK_START_TEXT_MAX = 80
 CONTROL = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
 TOKEN = re.compile(r'[A-Za-z0-9_-]{43}')
 PREFIX_LEN = 8
@@ -132,9 +142,42 @@ def store_category(db, agent_id, category, now):
         )
 
 
+def valid_quick_starts(value):
+    if not isinstance(value, list) or len(value) > QUICK_START_MAX:
+        return False
+    for item in value:
+        if not isinstance(item, str) or not 1 <= len(item.strip()) <= QUICK_START_TEXT_MAX:
+            return False
+        if CONTROL.search(item):
+            return False
+    return True
+
+
+def normalize_quick_starts(value):
+    return [item.strip() for item in value]
+
+
+def load_quick_starts(db, agent_id):
+    rows = db.execute(
+        'SELECT text FROM workspace_agent_quick_starts WHERE agent_id=? ORDER BY position',
+        (agent_id,),
+    ).fetchall()
+    return [row['text'] for row in rows]
+
+
+def store_quick_starts(db, agent_id, starts):
+    db.execute('DELETE FROM workspace_agent_quick_starts WHERE agent_id=?', (agent_id,))
+    for position, text in enumerate(starts or ()):
+        db.execute(
+            'INSERT INTO workspace_agent_quick_starts VALUES(?,?,?)',
+            (agent_id, position, text),
+        )
+
+
 def snapshot(db, row, include_token=False, token=None):
     data = view(row)
     data['category'] = load_category(db, row['id'])
+    data['quick_starts'] = load_quick_starts(db, row['id'])
     data['homepage'] = homepage_view(load_active_homepage(db, row['id']), include_token, token)
     return data
 
@@ -213,13 +256,22 @@ body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--
 .summary{margin:.75rem 0 1.25rem;white-space:pre-wrap;word-break:break-word}
 .summary.empty,.note{color:var(--muted)}
 .section h2{margin:1.25rem 0 .5rem;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
-.talk-list,.start-list{display:flex;flex-wrap:wrap;gap:.5rem;margin:0;padding:0;list-style:none}
-.talk-chip,.start-list li,.create-agent{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:.35rem .8rem;font:inherit;color:var(--ink)}
-.talk-chip[disabled],.create-agent[disabled],.composer button[disabled],.composer textarea[disabled]{opacity:.65;cursor:not-allowed}
+.talk-list{display:flex;flex-wrap:wrap;gap:.5rem;margin:0;padding:0;list-style:none}
+.talk-chip,.create-agent{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:.35rem .8rem;font:inherit;color:var(--ink)}
+a.create-agent{text-decoration:none;display:inline-block}
+.talk-chip[disabled],.composer button[disabled],.composer textarea[disabled]{opacity:.65;cursor:not-allowed}
+.start-list{margin:0;padding:0;list-style:none}
+.start-list li{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.55rem 0;border-bottom:1px solid var(--line);color:var(--ink)}
+.start-list .chevron{color:var(--muted)}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:1.25rem;padding:1.25rem;min-height:28rem;display:flex;flex-direction:column;gap:1rem}
 .panel h2{margin:0;font-size:1rem}
 .panel .lead{margin:0;color:var(--muted);font-size:.9rem}
-.panel-body{flex:1;display:flex;align-items:center}
+.panel-body{flex:1;display:flex;flex-direction:column;align-items:stretch;gap:1rem}
+.intro-bubble{align-self:flex-start;max-width:22rem;margin:0;background:var(--bg);border-radius:1rem;padding:.75rem 1rem}
+.quick-starts h3{margin:0 0 .5rem;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.quick-start-cards{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:.5rem}
+.quick-start-cards li{display:flex;align-items:center;justify-content:space-between;gap:.75rem;border:1px solid var(--line);border-radius:.9rem;padding:.7rem .9rem;background:var(--bg)}
+.quick-start-cards .chevron{color:var(--muted)}
 .composer{display:flex;gap:.5rem;align-items:flex-end}
 .composer textarea{flex:1;min-height:3.5rem;resize:none;border:1px solid var(--line);border-radius:.9rem;padding:.75rem .9rem;font:inherit;background:var(--bg)}
 .composer button{flex:0 0 auto;border:1px solid var(--line);border-radius:999px;padding:.55rem .9rem;font:inherit;background:var(--card)}
@@ -227,7 +279,7 @@ body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--
 """
 
 
-def render_homepage(row):
+def render_homepage(row, quick_starts=None):
     heading = escape(row['name'] or '智能体')
     raw_summary = (row['summary'] or '').strip()
     summary = escape(raw_summary)
@@ -237,6 +289,29 @@ def render_homepage(row):
         else '<p class="summary empty">还没有简介。</p>'
     )
     placeholder = escape('Message ' + (row['name'] or '智能体') + ' on the web…')
+    starts = list(quick_starts if quick_starts is not None else row.get('quick_starts') or ())
+    start_items = ''.join(
+        '<li><span>' + escape(item) + '</span><span class="chevron" aria-hidden="true">→</span></li>'
+        for item in starts
+    )
+    if starts:
+        start_block = (
+            '<ul class="start-list">' + start_items + '</ul>'
+            '<p class="note">未接通：这些开场提示只作展示。公开主页不会发送消息，也不会调用模型。</p>'
+        )
+        cards = (
+            '<div class="quick-starts"><h3>Quick starts</h3>'
+            '<ul class="quick-start-cards">' + start_items + '</ul></div>'
+        )
+    else:
+        start_block = (
+            '<p class="note">未接通：还没有开场提示。公开主页不会发送消息，也不会调用模型。</p>'
+        )
+        cards = ''
+    intro = (
+        '<p class="intro-bubble">Start a conversation with ' + heading
+        + '. This panel is typography only and does not run a conversation or call a model.</p>'
+    )
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -247,29 +322,29 @@ def render_homepage(row):
         '<header class="topbar"><span class="brand">OpenTeamily / FlyBot</span>'
         '<span class="crumb">Agent profile</span></header>'
         '<main class="page">'
-        '<section class="profile">'
+        '<section>'
         '<p class="status">Public page</p>'
         '<div class="identity"><div class="avatar" aria-hidden="true">' + initial + '</div>'
         '<div><h1>' + heading + '</h1>' + body + '</div></div>'
         '<div class="section"><h2>Talk via</h2>'
         '<ul class="talk-list">'
-        '<li><span class="talk-chip">Web</span></li>'
+        '<li><button type="button" class="talk-chip" disabled>Web</button></li>'
         '<li><button type="button" class="talk-chip" disabled title="未接通：公开主页还不能连接即时通讯渠道。">Channels</button></li>'
         '</ul></div>'
         '<div class="section"><h2>Start a conversation</h2>'
-        '<p class="note">快捷开场未接通。OpenTeamily 的公开主页没有可展示的开场提示，也没有对照里的三条官方示例。</p>'
+        + start_block +
         '</div></section>'
         '<section class="panel" aria-labelledby="web-conversation-title">'
         '<div><h2 id="web-conversation-title">Web conversation</h2>'
         '<p class="lead">Talk directly with ' + heading + '.</p></div>'
-        '<div class="panel-body"><p class="note">This panel is typography only. The public page still does not run a conversation or call a model.</p></div>'
+        '<div class="panel-body">' + intro + cards + '</div>'
         '<div class="composer">'
         '<label class="visually-hidden" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)" for="public-composer">Message</label>'
         '<textarea id="public-composer" disabled placeholder="' + placeholder + '"></textarea>'
         '<button type="button" disabled title="未接通：公开主页不会发送消息。">Send</button>'
         '</div></section>'
         '<footer class="footer"><span>Built with FlyBot</span>'
-        '<button type="button" class="create-agent" disabled title="未接通：公开主页不会创建智能体。">Create your own Agent</button>'
+        '<a class="create-agent" href="/agents" title="打开工作区智能体页。公开主页不会直接创建智能体。">Create your own Agent</a>'
         '</footer></main></body></html>'
     )
 

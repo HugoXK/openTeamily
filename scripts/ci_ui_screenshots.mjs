@@ -1884,8 +1884,9 @@ async function main() {
       const statusLabel = ((await page.locator('p.status').textContent()) || '').trim();
       const talkHeading = ((await page.locator('.section h2').first().textContent()) || '').trim();
       const sendDisabled = await page.locator('.composer button').isDisabled();
-      const createDisabled = await page.locator('.create-agent').isDisabled();
+      const createHref = await page.locator('.create-agent').getAttribute('href');
       const composerDisabled = await page.locator('#public-composer').isDisabled();
+      const quickStartsHeading = ((await page.locator('.quick-starts h3').textContent()) || '').trim();
       const token = homepagePath.slice(3);
       record(
         'agent_public_homepage',
@@ -1895,13 +1896,21 @@ async function main() {
           && homeText.includes(ready.agent_name)
           && homeText.includes('Synthetic CI directory entry.')
           && talkHeading === 'Talk via'
+          && homeText.includes('Start a conversation')
           && homeText.includes('Web conversation')
+          && homeText.includes('Ask how this fixture agent is organized')
+          && homeText.includes('Request a walkthrough of the directory')
+          && homeText.includes('List what this fixture assistant covers')
+          && quickStartsHeading === 'Quick starts'
           && homeText.includes('Built with FlyBot')
           && homeText.includes('Create your own Agent')
           && homeText.includes('未接通')
           && sendDisabled
-          && createDisabled
+          && createHref === '/agents'
           && composerDisabled
+          && !homeText.includes("Help me organize today's priorities")
+          && !homeText.includes('Create something with my team')
+          && !homeText.includes('Connect a messaging channel')
           && !/(?<!Open)Teamily|AVAILABLE NOW|\bLIVE\b/.test(homeText)
           && !homeText.includes(ready.workspace_id)
           && !homeText.includes(ready.agent_id)
