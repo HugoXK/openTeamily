@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -564,6 +564,12 @@ class App:
                 if method == 'POST' and not query:
                     return self.save_profile(db, session, now, env)
                 refuse(400, 'invalid', 'Invalid profile request')
+            if path == '/v1/personal-agent':
+                if method == 'GET' and not query:
+                    return self.personal_agent_get(db, session)
+                if method == 'POST' and not query:
+                    return self.personal_agent_ensure(db, session, now)
+                refuse(400, 'invalid', 'Invalid personal agent request')
             if path == '/v1/settings' and method == 'GET' and not query:
                 row = db.execute('SELECT * FROM user_settings WHERE user_id=?', (session['user_id'],)).fetchone()
                 return 200, {'settings': settings.view(row)}, []
@@ -2836,6 +2842,36 @@ class App:
         except sqlite3.IntegrityError:
             refuse(409, 'conflict', 'Teamily ID is unavailable')
         return 200, {'profile': profiles.view(profiles.load(db, session['user_id']))}, []
+
+    def personal_agent_get(self, db, session):
+        row = personal.load(db, session['user_id'])
+        if row is None:
+            return 200, {'personal_agent': None}, []
+        return 200, self.personal_payload(db, session, row), []
+
+    def personal_agent_ensure(self, db, session, now):
+        try:
+            row, created = personal.ensure(
+                db, {'id': session['user_id'], 'username': session['username']},
+                self.config.max_workspaces_per_user, self.config.max_workspaces,
+                self.config.max_agents_per_workspace, now)
+        except ValueError:
+            refuse(429, 'quota', 'Workspace capacity reached')
+        return (201 if created else 200), self.personal_payload(db, session, row), []
+
+    def personal_payload(self, db, session, row):
+        workspace = db.execute('SELECT * FROM workspaces WHERE id=?', (row['workspace_id'],)).fetchone()
+        agent = agents.load(db, row['workspace_id'], row['agent_id'])
+        return {
+            'personal_agent': {
+                'workspace': {'id': workspace['id'], 'name': workspace['name'], 'kind': 'personal'},
+                'agent': agents.snapshot(db, agent) if agent is not None else None,
+            },
+            'builtin_agents': [
+                {'key': item['builtin_key'], 'agent': agents.snapshot(db, item)}
+                for item in personal.builtins(db, row['workspace_id'])
+            ],
+        }
 
     def search_messages(self, db, session, method, query, workspace_id):
         if method != 'GET':

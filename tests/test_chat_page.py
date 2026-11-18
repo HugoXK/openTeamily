@@ -69,6 +69,7 @@ class ChatPageTests(unittest.TestCase):
         self.assertEqual(script['status'], 200)
         self.assertIn(b'/conversations', script['body'])
         self.assertIn(b'/social/conversations', script['body'])
+        self.assertIn(b'/v1/personal-agent', script['body'])
         self.assertIn(b'/search/messages', script['body'])
         self.assertIn(b'mergeSessions', script['body'])
         self.assertIn(b'composeCreateEnabled', script['body'])

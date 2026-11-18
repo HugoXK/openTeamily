@@ -827,6 +827,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('session-pane').hidden = false;
     document.body.classList.add('chat-open');
     document.getElementById('whoami').textContent = currentUser.username;
+    const personal = await request('POST', '/v1/personal-agent');
+    const personalWorkspace = personal.status === 200 && personal.body.personal_agent
+      ? personal.body.personal_agent.workspace.id : '';
     const [listed, settings] = await Promise.all([
       request('GET', '/v1/workspaces?limit=100'),
       request('GET', '/v1/settings'),
@@ -836,7 +839,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     sendShortcut = stored === 'mod_enter' ? 'mod_enter' : 'enter';
     document.getElementById('chat-body').dataset.sendShortcut = sendShortcut;
     workspaces = listed.status === 200 ? (listed.body.items || []) : [];
-    const wanted = hashParams().workspace || workspaceSelect.value;
+    const wanted = hashParams().workspace || personalWorkspace || workspaceSelect.value;
     workspaceSelect.replaceChildren();
     for (const space of workspaces) {
       const option = document.createElement('option');
