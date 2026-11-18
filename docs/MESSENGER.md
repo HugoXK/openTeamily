@@ -2,7 +2,7 @@
 
 Related: [#86](https://github.com/openTeamily/openTeamily/issues/86), [#1](https://github.com/openTeamily/openTeamily/issues/1), [#7](https://github.com/openTeamily/openTeamily/issues/7).
 
-This is a first **human-to-human** messaging slice in the management plane, written for OpenTeamily. It adds workspace-scoped direct messages and named group chats next to the existing user↔agent conversations ([AGENT_CONVERSATIONS.md](AGENT_CONVERSATIONS.md)). It is **not** Teamily messenger parity: there are no agent participants, unread counts, notifications, attachments, reactions, edits, retractions, typing indicators or cross-workspace delivery. Those remain the follow-up issues noted below.
+This is a first **human-to-human** messaging slice in the management plane, written for OpenTeamily. It adds workspace-scoped direct messages and named group chats next to the existing user↔agent conversations ([AGENT_CONVERSATIONS.md](AGENT_CONVERSATIONS.md)). It is **not** Teamily messenger parity: unread counts, notifications, attachments, reactions, message edits, retractions, typing indicators and cross-workspace delivery are not implemented. Stored agent participants and one-shot explicit runtime replies are described below. Those remain the follow-up issues noted below.
 
 The management process only stores messages. It does not call a model provider or a runtime.
 
@@ -61,7 +61,7 @@ request hashes. Agents grant no extra human access to conversations.
 An additive `social_agent_members` table keeps schema `user_version` 1. Create,
 GET and list return `agent_members` with `agent_id`, `name`, `archived`, `created`;
 existing `members` remains human-only. Archived agents remain visible on existing
-groups, but cannot be newly invited. No new membership-edit endpoint is added.
+groups, but cannot be newly invited. Existing-group membership-edit endpoints are described below.
 
 The custom-group picker labels people and existing workspace agents separately;
 search and the selected count include both. Contact creation remains human-only.
@@ -113,3 +113,54 @@ a labeled local fake OpenAI-compatible provider outside the Web process, followe
 by group persistence/read/pagination and idempotent replay. CI Playwright uses the
 same fake-provider runtime fixture for shots 81/82. This is not real-vendor,
 production/container deployment, or Teamily/Impeccable acceptance.
+
+## Edit agent participants of an existing group (Related #89 #86 #7 #1)
+
+This backend-only slice adapts the unique existing-group membership capability
+proposed in PR #125 to the owner-selected PR #124 reply protocol. It does **not**
+import PR #125/#126's competing message tables or multi-recipient dispatch.
+There is no new management UI; use the authenticated same-origin API with the
+normal session cookie, Origin and CSRF headers. The existing `/chat` header and
+one-shot agent selector reflect saved membership on reload.
+
+| Method | Relative to `/v1/workspaces/{workspace_id}/social/conversations/{id}` | Body |
+| --- | --- | --- |
+| POST | `/agents` | `{agent_ids:[...]}`: 1–49 unique active same-workspace agent ids. Adds to the saved roster. |
+| POST | `/agents/{agent_id}/remove` | `{}`: removes this same-workspace agent, including an archived one. |
+
+Both operations require **both** actual human group membership and workspace
+owner/admin role, following workspace-agent management permissions. A workspace
+admin cannot discover or edit a private group they have not joined (`404`). An
+ordinary group member receives `403 forbidden`. DMs reject edits (`400 invalid`);
+unknown/foreign ids, invalid bodies, duplicate ids and archived invitations
+return `400 invalid`. All ids are validated before any batch mutation. Existing
+human membership and the minimum two-human creation rule remain unchanged.
+
+Both return `200 {conversation: ...}` with the current saved snapshot, including
+`agent_members`. These are idempotent **set operations**, not queued commands;
+repeating an add/remove without an intervening opposite edit is a no-op. No
+Idempotency-Key is required, no infer task or success message is created, and no
+new schema/table is needed (`user_version` remains 1). The existing total-member
+structural capacity counts humans plus agents, including archived roster entries;
+a batch exceeding it returns `429 quota` without partial writes. No billing,
+credits or model-usage limits are introduced.
+
+Removing an agent with a queued/running request returns `409 conflict`. Finish or
+wait for that existing task to fail/expire, then remove; this endpoint does not
+pretend to cancel a runtime already executing. Authorized removal reconciles
+terminal results first. Completed messages, agent identity and request history
+are retained, and original conversation-create replays never re-add a removed
+member. New explicit reply requests for an uninvited agent are rejected; replays
+of already accepted requests retain their existing semantics. Re-adding an agent
+does not erase history. Requests still use only PR #124's one-agent explicit
+`/agent-replies` endpoint; no group history, automatic replies, @mentions, handoff,
+AI-team mode or multi-agent orchestration is connected.
+
+Tests exercise persist/reopen/list, owner/admin plus group membership, isolation,
+CSRF/Origin, batch atomicity, archive, repeat/no-op, capacity, active-task removal
+and retained messages. An actual HTTP claim → model-access → result integration
+starts with an empty group, invites the agent via this API, invokes a labeled
+local fake provider in a separate process, and verifies persisted reply/history
+through removal and re-addition. This is not a real-vendor/container or
+Teamily/Impeccable acceptance. Existing CI screenshots only show the unchanged
+UI baseline; they are not evidence of a new membership-edit UI.
