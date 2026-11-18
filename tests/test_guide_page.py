@@ -63,3 +63,15 @@ class GuidePageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/guide', query='q=')['status'], 400)
         self.assertEqual(self.raw.call('GET', '/guide', query='q=a&x=1')['status'], 400)
         self.assertEqual(self.raw.call('GET', '/guide/app.mjs', query='q=a')['status'], 400)
+
+    def test_guide_accepts_a_category_deep_link(self):
+        for slug in ('calls', 'settings', 'chat'):
+            page = self.raw.call('GET', '/guide', query=f'category={slug}')
+            self.assertEqual(page['status'], 200, (slug, page['status'], page['body'][:40]))
+        combined = self.raw.call('GET', '/guide', query='category=calls&q=%E5%A4%96%E8%A7%82')
+        self.assertEqual(combined['status'], 200, combined['body'][:40])
+
+    def test_guide_unknown_category_falls_back_instead_of_failing(self):
+        self.assertEqual(self.raw.call('GET', '/guide', query='category=not-a-category')['status'], 200)
+        for query in ('category=', 'category=a&category=b', 'category=a&x=1', 'q=a&x=1', 'x=1'):
+            self.assertEqual(self.raw.call('GET', '/guide', query=query)['status'], 400, query)

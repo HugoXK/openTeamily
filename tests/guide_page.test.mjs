@@ -66,3 +66,127 @@ test('the empty state names an empty category instead of blaming a search', () =
   assert.equal(emptyGuideMessage(noHits, 'xyz-not-a-feature'), '没有匹配的指引。');
   assert.equal(emptyGuideMessage(filterCatalog(CATALOG, {category: 'chat'}), ''), '');
 });
+
+test('the guide deep link carries the category as well as the keyword', () => {
+  assert.equal(typeof guideModule.guideInitialCategory, 'function',
+    'the guide page never reads ?category= back from the URL');
+  const initial = guideModule.guideInitialCategory;
+  assert.equal(initial('?category=calls'), 'calls');
+  assert.equal(initial('?category=settings&q=%E5%A4%96%E8%A7%82'), 'settings');
+  assert.equal(initial('?category=not-a-category'), 'all');
+  assert.equal(initial('?category='), 'all');
+  assert.equal(initial('?q=%E5%A4%96%E8%A7%82'), 'all');
+  assert.equal(initial(''), 'all');
+  assert.equal(guideHref('', 'calls'), '/guide?category=calls');
+  assert.equal(guideHref('', 'all'), '/guide');
+  assert.equal(guideHref('外观', 'settings'), '/guide?category=settings&q=%E5%A4%96%E8%A7%82');
+  assert.equal(guideHref('外观', 'all'), '/guide?q=%E5%A4%96%E8%A7%82');
+  assert.equal(guideHref('', 'not-a-category'), '/guide');
+});
+
+class FakeElement {
+  constructor(tag = 'div') {
+    this.tagName = String(tag).toUpperCase();
+    this.children = [];
+    this.attributes = {};
+    this.handlers = {};
+    this.dataset = {};
+    this.hidden = false;
+    this.value = '';
+    this.textContent = '';
+    this.className = '';
+    this.elements = undefined;
+  }
+
+  append(...nodes) {
+    this.children.push(...nodes);
+  }
+
+  appendChild(node) {
+    this.append(node);
+    return node;
+  }
+
+  replaceChildren(...nodes) {
+    this.children = [];
+    this.append(...nodes);
+  }
+
+  setAttribute(key, value) {
+    this.attributes[key] = value;
+  }
+
+  removeAttribute(key) {
+    delete this.attributes[key];
+  }
+
+  addEventListener(key, handler) {
+    this.handlers[key] = handler;
+  }
+
+  querySelectorAll() {
+    return [];
+  }
+
+  focus() {}
+
+  reset() {}
+}
+
+function fakeGuideDocument() {
+  const elements = new Map();
+  const doc = {
+    cookie: '',
+    readyState: 'complete',
+    body: new FakeElement('body'),
+    getElementById(id) {
+      if (!elements.has(id)) {
+        const el = new FakeElement(id.endsWith('-form') ? 'form' : 'div');
+        if (id.endsWith('-form')) {
+          el.elements = {username: new FakeElement('input'), password: new FakeElement('input')};
+        }
+        elements.set(id, el);
+      }
+      return elements.get(id);
+    },
+    createElement(tag) { return new FakeElement(tag); },
+    createElementNS(_namespace, tag) { return new FakeElement(tag); },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+  };
+  return {doc, el: (id) => doc.getElementById(id)};
+}
+
+test('a category deep link selects its chip and narrows the list', async () => {
+  const {doc, el} = fakeGuideDocument();
+  const replaced = [];
+  const previous = {
+    document: globalThis.document,
+    location: globalThis.location,
+    history: globalThis.history,
+    fetch: globalThis.fetch,
+  };
+  globalThis.document = doc;
+  globalThis.location = {pathname: '/guide', search: '?category=calls'};
+  globalThis.history = {replaceState: (...args) => replaced.push(args)};
+  globalThis.fetch = async (path) => (path === '/v1/auth/session'
+    ? {status: 200, json: async () => ({user: {id: 'user-1', username: 'alice'}})}
+    : {status: 404, json: async () => ({error: {message: 'missing'}})});
+  try {
+    await import('../openteamily/static/guide/app.mjs?category=calls');
+    for (let i = 0; i < 8; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    const chips = el('guide-categories').children;
+    const selected = chips.filter((chip) => chip.attributes['aria-current'] === 'true')
+      .map((chip) => chip.dataset.category);
+    assert.deepEqual(selected, ['calls'], 'the calls chip is not the current category');
+    assert.equal(el('guide-list').children.length, 0, 'the list still shows other categories');
+    assert.equal(el('guide-count').textContent, '当前显示 0 条');
+    assert.equal(el('guide-empty').hidden, false);
+    assert.equal(el('guide-empty').textContent, '这一类还没有指引。');
+  } finally {
+    globalThis.document = previous.document;
+    globalThis.location = previous.location;
+    globalThis.history = previous.history;
+    globalThis.fetch = previous.fetch;
+  }
+});
