@@ -167,3 +167,22 @@ test('group create chrome keeps the recorded labels and no billing copy', () => 
     ['team', 'AI 智能体团队'],
   ]);
 });
+
+import {groupPickerChoices, groupAgentSummary} from '../openteamily/static/chat/app.mjs';
+
+test('group picker distinguishes stored agents and people; contact picker omits agents', () => {
+  const humans = [{user_id: alice, username: 'alice'}, {user_id: bob, username: 'bob'}];
+  const agents = [{id: 'helper', name: 'Helper'}, {id: 'old', name: 'Archived', archived: 1}];
+  const choices = groupPickerChoices(humans, alice, agents);
+  assert.deepEqual(choices.map(row => [row.id, row.kind]), [[bob, 'human'], ['helper', 'agent']]);
+  assert.ok(choices[1].label.includes('AI 智能体（自动回复未接通）'));
+  assert.deepEqual(groupPickerChoices(humans, alice).map(row => row.id), [bob]);
+  assert.equal(composeCreateEnabled({composeMode: 'group', selectedCount: 1, selectedHumanCount: 0}), false);
+  assert.equal(composeCreateEnabled({composeMode: 'group', selectedCount: 2, selectedHumanCount: 1}), true);
+  assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', selectedCount: 2, selectedHumanCount: 1}), false);
+  assert.deepEqual(composeGroupPayload([bob], '', ['helper']), {
+    kind: 'group', member_ids: [bob], agent_ids: ['helper'],
+  });
+  assert.equal(groupAgentSummary({agent_members: []}), '');
+  assert.ok(groupAgentSummary({agent_members: [{name: 'Helper'}]}).includes('Helper。未接通'));
+});

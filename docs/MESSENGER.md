@@ -41,8 +41,32 @@ The management UI for these conversations lives on the unified `/chat` page, tog
 
 ## Explicitly not in this slice
 
-- Agent participants, `@Agent` mentions, agent-run replies in a group ([#89](https://github.com/openTeamily/openTeamily/issues/89)).
+- `@Agent` mentions, agent-run replies and task delegation in a group ([#89](https://github.com/openTeamily/openTeamily/issues/89)).
 - Workspace-wide authorized message search ([#88](https://github.com/openTeamily/openTeamily/issues/88)).
 - Unread counts, read receipts, notifications, attachments, reactions, editing, retraction, typing indicators.
 - Cross-workspace or federated delivery, Bot Social transport, and any Teamily comparison.
 - Browser acceptance. Tests are in-process WSGI with a temporary SQLite file and are not a live server or vendor run.
+
+## Stored agent participants (Related #89 #86 #7 #1)
+
+Custom groups accept optional `agent_ids` (0–49 unique UUID-hex ids) on the existing
+social-conversation create endpoint. Every selected agent must be active and belong
+to the same workspace; unknown, archived and foreign ids return `400 invalid`.
+DMs cannot have agent participants. The creator is still a human participant and
+at least one other workspace human is required; agent-only selections do not
+satisfy that rule. The configured total member cap counts humans and agents.
+Idempotency includes sorted agent ids when nonempty, preserving prior human-only
+request hashes. Agents grant no extra human access to conversations.
+
+An additive `social_agent_members` table keeps schema `user_version` 1. Create,
+GET and list return `agent_members` with `agent_id`, `name`, `archived`, `created`;
+existing `members` remains human-only. Archived agents remain visible on existing
+groups, but cannot be newly invited. No new membership-edit endpoint is added.
+
+The custom-group picker labels people and existing workspace agents separately;
+search and the selected count include both. Contact creation remains human-only.
+After creation/reload the saved agent names appear above the conversation with an
+explicit unconnected notice. Membership is storage only: no group auto-reply,
+`@Agent`, infer dispatch, task handoff or team-template flow is implemented.
+The AI-team switch remains unconnected; no billing or credits are introduced.
+This is not Teamily/Impeccable acceptance. All related tracking issues stay open.
