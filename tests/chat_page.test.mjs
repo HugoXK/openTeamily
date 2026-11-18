@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES } from '../openteamily/static/chat/app.mjs';
 
@@ -195,4 +196,14 @@ test('explicit group reply statuses distinguish pending, success and fixed error
   assert.equal(groupReplyStatus({status: 'failed', error_code: 'no_agent'}), '失败：没有可用运行时连接');
   assert.equal(groupReplyStatus({status: 'failed', error_code: 'timeout'}), '失败：执行超时');
   assert.equal(groupReplyStatus({status: 'failed', error_code: 'private diagnostic'}), '失败：请求失败');
+});
+
+test('the chat empty state offers two native links to /agents and /guide', () => {
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  const start = html.indexOf('id="chat-empty"');
+  assert.ok(start > -1, 'the chat page has an empty state');
+  const block = html.slice(start, html.indexOf('id="message-list"', start));
+  assert.match(block, /<a href="\/agents">浏览智能体<\/a>/);
+  assert.match(block, /<a href="\/guide">查看功能指引<\/a>/);
+  assert.doesNotMatch(block, /<button[^>]*>帮助中心/, 'the next steps are links, not disabled buttons');
 });
