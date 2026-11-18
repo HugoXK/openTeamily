@@ -87,8 +87,11 @@
   margin: 0.5rem 0;
 }
 
-#appearance-status {
-  margin: 0.75rem 0 0;
+#appearance-status,
+.settings-appearance-status {
+  margin: 0.65rem 0 1rem;
+  color: var(--ot-text);
+  font-size: 0.95rem;
 }
 
 

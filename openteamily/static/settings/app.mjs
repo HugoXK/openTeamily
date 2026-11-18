@@ -47,18 +47,38 @@ export function applyTheme(document, values) {
   }
 }
 
-export function describeAppearance(values) {
-  const theme = resolveTheme(values || { appearance: 'system' });
+function clockMinutes(value) {
+  const match = /^([01]?\d|2[0-3]):([0-5]\d)/.exec(String(value || ''));
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+function clockLabel(value) {
+  const total = clockMinutes(value);
+  if (total == null) return '';
+  const hours = String(Math.floor(total / 60)).padStart(2, '0');
+  const minutes = String(total % 60).padStart(2, '0');
+  return hours + ':' + minutes;
+}
+
+function nextSwitchLabel(values, theme) {
+  const custom = values && values.appearance_schedule === 'custom';
+  const start = custom ? values.appearance_start : NIGHT_WINDOW.start;
+  const end = custom ? values.appearance_end : NIGHT_WINDOW.end;
+  if (clockMinutes(start) == null || clockMinutes(end) == null || clockMinutes(start) === clockMinutes(end)) {
+    return '';
+  }
+  return clockLabel(theme === 'dark' ? end : start);
+}
+
+export function describeAppearance(values, now = new Date(), media) {
+  const theme = resolveTheme(values || { appearance: 'system' }, now, media);
   const look = theme === 'dark' ? '深色' : '浅色';
   const appearance = values && values.appearance;
   if (appearance === 'light') return '当前为浅色。';
   if (appearance === 'dark') return '当前为深色。';
-  if (appearance === 'auto' && values.appearance_schedule === 'custom') {
-    return '当前为' + look + '。自定义时段的字段尚未与对照完整核对。';
-  }
   if (appearance === 'auto') {
-    return '当前为' + look + '。「日落到日出」拿不到你所在的位置，没有使用实际日出日落时刻：暂按 '
-      + NIGHT_WINDOW.start + ' 至次日 ' + NIGHT_WINDOW.end + ' 为夜间。';
+    const until = nextSwitchLabel(values, theme);
+    return until ? '当前为' + look + '，直到 ' + until + '。' : '当前为' + look + '。';
   }
   return '当前为' + look + '（跟随系统）。';
 }
