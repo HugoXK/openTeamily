@@ -41,7 +41,7 @@ The management UI for these conversations lives on the unified `/chat` page, tog
 
 ## Explicitly not in this slice
 
-- `@Agent` mentions, agent-run replies and task delegation in a group ([#89](https://github.com/openTeamily/openTeamily/issues/89)).
+- `@Agent` mentions, automatic agent replies and task delegation in a group ([#89](https://github.com/openTeamily/openTeamily/issues/89)).
 - Workspace-wide authorized message search ([#88](https://github.com/openTeamily/openTeamily/issues/88)).
 - Unread counts, read receipts, notifications, attachments, reactions, editing, retraction, typing indicators.
 - Cross-workspace or federated delivery, Bot Social transport, and any Teamily comparison.
@@ -66,7 +66,50 @@ groups, but cannot be newly invited. No new membership-edit endpoint is added.
 The custom-group picker labels people and existing workspace agents separately;
 search and the selected count include both. Contact creation remains human-only.
 After creation/reload the saved agent names appear above the conversation with an
-explicit unconnected notice. Membership is storage only: no group auto-reply,
-`@Agent`, infer dispatch, task handoff or team-template flow is implemented.
+explicit unconnected notice. Stored membership does not imply automatic execution. The explicit one-shot reply
+path below is separate; no group auto-reply, `@Agent`, task handoff or team-template
+flow is implemented.
 The AI-team switch remains unconnected; no billing or credits are introduced.
 This is not Teamily/Impeccable acceptance. All related tracking issues stay open.
+
+## Explicit one-shot group agent reply (Related #89 #86 #7 #6 #1)
+
+This original UI supplement has not been compared with Teamily. A human group
+member may select an active, saved same-workspace agent and submit `agent_id` and
+`prompt` (1–4000 characters) to `POST .../social/conversations/{id}/agent-replies`.
+Session, Origin, CSRF and a 16–64 character Idempotency-Key are required. Outsiders,
+including workspace members who are not group members, get 404. DMs reject this
+action. At most one group request runs at a time; a different concurrent request
+returns 409. A replay reuses the same request/task, and a changed payload or requester
+under that key returns 409. Capacity counts pending and completed replies as messages;
+request history is also bounded by the configured social-message cap.
+
+Only this explicit prompt and the selected agent's configuration are composed; group
+history is not forwarded. The Web process uses `queue_infer_task`, never a model
+HTTP call. Existing routing uses a usable bound container connection, otherwise the
+requesting human's personal connection. Model access follows existing workspace /
+workspace-owner account / platform resolution and one-use runtime model-access.
+No connection is a persisted `failed/no_agent` request, not a queued success.
+
+The additive `social_agent_replies` table keeps schema user_version 1. Group GET
+returns `agent_replies` with request identity, agent identity, prompt, task id,
+queued/running/succeeded/failed/cancelled status and fixed errors. Authorized group
+GET/list/message reads reconcile task results/deadlines. A successful nonempty
+response becomes an agent-authored item in the same paginated message stream with
+`role=agent`, `agent_id`, snapshotted `agent_name`, `source=runtime_infer`, and no
+human `user_id`. It contributes to the group preview. Human messages are unchanged.
+Agent reply bodies are not yet indexed by workspace message search.
+
+Timeouts, cancelled/failed/missing tasks and empty results never become successful
+messages. There is no automatic retry or redispatch on read; after failure a human
+must explicitly submit a new request/key. Existing dispatched tasks use their
+captured configuration even if the agent is subsequently archived. The UI polls
+pending requests, shows fixed errors, and labels runtime-authored replies. It never
+triggers on human messages, agent messages or GET, and does not implement recursive
+agents, @mentions, handoff, automatic group replies or AI-team templates.
+
+Tests exercise actual loopback HTTP claim → one-use model-access → result, calling
+a labeled local fake OpenAI-compatible provider outside the Web process, followed
+by group persistence/read/pagination and idempotent replay. CI Playwright uses the
+same fake-provider runtime fixture for shots 81/82. This is not real-vendor,
+production/container deployment, or Teamily/Impeccable acceptance.

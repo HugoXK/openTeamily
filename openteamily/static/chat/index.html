@@ -167,6 +167,16 @@
       </div>
     </header>
     <p id="social-agent-members" class="gap-note" hidden></p>
+    <section id="group-agent-action" class="gap-note" hidden>
+      <h2>请群内智能体回复一次</h2>
+      <p class="note">原创补充，未经对照。仅发送本次请求，不附带群历史；不会自动回复或互相委派。</p>
+      <form id="group-agent-form">
+        <label>群内智能体 <select id="group-agent-select" required></select></label>
+        <label>本次请求 <textarea id="group-agent-prompt" maxlength="4000" required rows="2"></textarea></label>
+        <button id="group-agent-submit" type="submit">请求一次回复</button>
+      </form>
+      <ul id="group-agent-requests" aria-live="polite"></ul>
+    </section>
     <details class="gap-note">
       <summary>对照说明</summary>
       <p class="note">聊天页同时列出当前工作区的智能体会话和人↔人单聊、群聊。会话置顶还没有接口，所以没有置顶分组。技能、连接器、会议、语音、第三方智能体、邀请和通话尚未实现，对应按钮已禁用，不能使用。非空消息气泡和移动端布局是原创补充，未经 Teamily 对照。还不能写成已经功能对等。</p>
