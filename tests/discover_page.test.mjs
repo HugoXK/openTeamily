@@ -50,8 +50,9 @@ test('feed all-filter shows the recorded 全部 label and keeps an empty canvas'
   assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
   assert.match(html, /id="feed-activity-empty"/);
   assert.match(html, /id="feed-grid"[^>]*data-empty="true"/);
-  const activity = html.split('id="feed-activity-empty"')[1].split('id="feed-search-note"')[0];
+  const activity = html.split('id="feed-activity-empty"')[1].split('id="feed-note"')[0];
   assert.equal(/\bhidden\b/.test(activity.split('>')[0]), false);
+  assert.equal(activity.includes('id="feed-note"'), false);
   assert.equal(/最多领取|CREDITS|积分中心/.test(html.split('id="feed-panel"')[1].split('id="catalog-view"')[0]), false);
 });
 

@@ -130,9 +130,10 @@ class DiscoverCatalogPageTests(unittest.TestCase):
             self.assertNotIn('aria-label="全部"', feed_filters.split('class="feed-filter-all"', 1)[1].split('>', 1)[0])
             self.assertNotIn('没有单独标出文字', feed_filters)
             self.assertNotRegex(feed_filters, r'class="feed-filter-all"[^>]*></button>')
-            activity_empty = feed_text.split('id="feed-activity-empty"', 1)[1].split('id="feed-search-note"', 1)[0]
+            activity_empty = feed_text.split('id="feed-activity-empty"', 1)[1].split('id="feed-note"', 1)[0]
             self.assertNotIn('hidden', activity_empty.split('>', 1)[0])
             self.assertIn('data-empty="true"', activity_empty)
+            self.assertNotIn('id="feed-note"', activity_empty)
             self.assertNotIn('积分中心', feed_text)
             self.assertNotIn('最多领取', feed_text)
             self.assertNotIn('CREDITS', feed_text)
