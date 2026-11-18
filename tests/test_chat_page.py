@@ -80,6 +80,15 @@ class ChatPageTests(unittest.TestCase):
         self.assertEqual(discover['status'], 200)
         self.assertIn('id="discover-list"', discover['body'].decode())
 
+    def test_empty_state_offers_the_two_recorded_next_steps(self):
+        page = self.raw.call('GET', '/chat')
+        self.assertEqual(page['status'], 200)
+        html = page['body'].decode()
+        start = html.index('id="chat-empty"')
+        block = html[start:html.index('id="message-list"', start)]
+        self.assertIn('<a href="/agents">浏览智能体</a>', block)
+        self.assertIn('<a href="/guide">查看功能指引</a>', block)
+
     def test_page_rejects_cross_origin_queries_and_writes(self):
         self.assertEqual(self.raw.call('GET', '/chat', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/chat', query='x=1')['status'], 400)

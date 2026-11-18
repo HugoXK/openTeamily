@@ -710,6 +710,24 @@
   box-shadow: var(--ot-shadow-sm);
 }
 #chat-empty:not([hidden]) { color: var(--ot-muted); }
+#chat-empty p { margin: 0; }
+#chat-empty .empty-next {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin: 0.85rem 0 0;
+}
+#chat-empty .empty-next a {
+  padding: 0.4rem 0.95rem;
+  border: 1px solid var(--ot-line-strong);
+  border-radius: 999px;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  text-decoration: none;
+}
+#chat-empty .empty-next a:hover { border-color: var(--ot-accent); color: var(--ot-accent); }
+#chat-empty .empty-next a:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 2px; }
 
 @media (max-width: 900px) {
   body.app-workspace.chat-open { grid-template-columns: 4.75rem minmax(0, 1fr); }

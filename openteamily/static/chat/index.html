@@ -182,7 +182,13 @@
       <p class="note">聊天页同时列出当前工作区的智能体会话和人↔人单聊、群聊。会话置顶还没有接口，所以没有置顶分组。技能、连接器、会议、语音、第三方智能体、邀请和通话尚未实现，对应按钮已禁用，不能使用。非空消息气泡和移动端布局是原创补充，未经 Teamily 对照。还不能写成已经功能对等。</p>
     </details>
     <div id="message-scroller">
-      <p id="chat-empty" class="note">选择左侧的对话，或从智能体目录开始聊天。</p>
+      <div id="chat-empty" class="note">
+        <p>选择左侧的对话，或从这里开始。</p>
+        <p class="empty-next">
+          <a href="/agents">浏览智能体</a>
+          <a href="/guide">查看功能指引</a>
+        </p>
+      </div>
       <ol id="message-list"></ol>
     </div>
     <form id="chat-form" method="post" action="/v1/workspaces">
