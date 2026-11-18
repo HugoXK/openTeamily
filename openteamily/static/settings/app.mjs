@@ -1,4 +1,4 @@
-import { resolveTheme } from '../shell/app.mjs';
+import { NIGHT_WINDOW, resolveTheme } from '../shell/app.mjs';
 
 const KEYS = ['appearance', 'appearance_schedule', 'appearance_start', 'appearance_end', 'language',
               'chat_language', 'auto_translate', 'send_shortcut', 'message_folding', 'document_cards',
@@ -47,17 +47,38 @@ export function applyTheme(document, values) {
   }
 }
 
-export function describeAppearance(values) {
-  const theme = resolveTheme(values || { appearance: 'system' });
+function clockMinutes(value) {
+  const match = /^([01]?\d|2[0-3]):([0-5]\d)/.exec(String(value || ''));
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+function clockLabel(value) {
+  const total = clockMinutes(value);
+  if (total == null) return '';
+  const hours = String(Math.floor(total / 60)).padStart(2, '0');
+  const minutes = String(total % 60).padStart(2, '0');
+  return hours + ':' + minutes;
+}
+
+function nextSwitchLabel(values, theme) {
+  const custom = values && values.appearance_schedule === 'custom';
+  const start = custom ? values.appearance_start : NIGHT_WINDOW.start;
+  const end = custom ? values.appearance_end : NIGHT_WINDOW.end;
+  if (clockMinutes(start) == null || clockMinutes(end) == null || clockMinutes(start) === clockMinutes(end)) {
+    return '';
+  }
+  return clockLabel(theme === 'dark' ? end : start);
+}
+
+export function describeAppearance(values, now = new Date(), media) {
+  const theme = resolveTheme(values || { appearance: 'system' }, now, media);
   const look = theme === 'dark' ? '深色' : '浅色';
   const appearance = values && values.appearance;
   if (appearance === 'light') return '当前为浅色。';
   if (appearance === 'dark') return '当前为深色。';
-  if (appearance === 'auto' && values.appearance_schedule === 'custom') {
-    return '当前为' + look + '。自定义时段的字段尚未与对照完整核对。';
-  }
   if (appearance === 'auto') {
-    return '当前为' + look + '。「日落到日出」目前按系统浅色或深色偏好估算，没有使用实际日出日落时刻。';
+    const until = nextSwitchLabel(values, theme);
+    return until ? '当前为' + look + '，直到 ' + until + '。' : '当前为' + look + '。';
   }
   return '当前为' + look + '（跟随系统）。';
 }
@@ -125,6 +146,80 @@ export function syncMcpDialog(document, open) {
   } else if (wasOpen && trigger && typeof trigger.focus === 'function') {
     trigger.focus();
   }
+}
+
+
+// Public fields only, copied from the in-repo DS-Bot baseline
+// runtime/ds-bot-upstream/ds-bot/src/host/connectors/catalog.js CATALOG.
+// Do not put OAuth client ids, MCP URLs, tokens, headers, or whoami
+// endpoints in this frontend module.
+export const CONNECTOR_CATALOG = [
+  {id: 'github', name: 'GitHub', category: 'dev', about: 'Repositories, issues, and pull requests'},
+  {id: 'notion', name: 'Notion', category: 'docs', about: 'Pages, databases, and wiki content'},
+  {id: 'linear', name: 'Linear', category: 'work', about: 'Issues, projects, and cycles'},
+  {id: 'atlassian', name: 'Atlassian', category: 'work', about: 'Jira issues and Confluence pages'},
+  {id: 'sentry', name: 'Sentry', category: 'dev', about: 'Errors, traces, and releases'},
+  {id: 'stripe', name: 'Stripe', category: 'commerce', about: 'Payments, invoices, and customers'},
+  {id: 'paypal', name: 'PayPal', category: 'commerce', about: 'Orders, payments, and invoices'},
+  {id: 'square', name: 'Square', category: 'commerce', about: 'Payments, orders, and catalog'},
+  {id: 'cloudflare', name: 'Cloudflare', category: 'dev', about: 'Workers, DNS, and account resources'},
+  {id: 'vercel', name: 'Vercel', category: 'dev', about: 'Projects, deployments, and logs'},
+  {id: 'supabase', name: 'Supabase', category: 'data', about: 'Databases, tables, and project settings'},
+  {id: 'neon', name: 'Neon', category: 'data', about: 'Postgres databases and branches'},
+  {id: 'figma', name: 'Figma', category: 'design', about: 'Design files, components, and comments'},
+  {id: 'canva', name: 'Canva', category: 'design', about: 'Designs, folders, and exports'},
+  {id: 'intercom', name: 'Intercom', category: 'work', about: 'Conversations, contacts, and articles'},
+  {id: 'monday', name: 'monday.com', category: 'work', about: 'Boards, items, and workflows'},
+  {id: 'webflow', name: 'Webflow', category: 'design', about: 'Sites, pages, and CMS content'},
+  {id: 'wix', name: 'Wix', category: 'design', about: 'Sites, pages, and site content'},
+  {id: 'netlify', name: 'Netlify', category: 'dev', about: 'Sites, deploys, and forms'},
+  {id: 'airtable', name: 'Airtable', category: 'data', about: 'Bases, tables, and records'},
+  {id: 'dropbox', name: 'Dropbox', category: 'docs', about: 'Files and folders'},
+  {id: 'zapier', name: 'Zapier', category: 'work', about: 'Zaps and app actions'},
+  {id: 'clickup', name: 'ClickUp', category: 'work', about: 'Tasks, lists, and docs'},
+  {id: 'todoist', name: 'Todoist', category: 'work', about: 'Tasks and projects'},
+  {id: 'miro', name: 'Miro', category: 'design', about: 'Boards and whiteboard items'},
+  {id: 'attio', name: 'Attio', category: 'work', about: 'CRM records, lists, and notes'},
+  {id: 'postman', name: 'Postman', category: 'dev', about: 'Collections, requests, and workspaces'},
+  {id: 'asana', name: 'Asana', category: 'work', about: 'Tasks, projects, and workspaces'},
+  {id: 'box', name: 'Box', category: 'docs', about: 'Files, folders, and metadata'},
+  {id: 'hubspot', name: 'HubSpot', category: 'work', about: 'Contacts, deals, and tickets'},
+  {id: 'slack', name: 'Slack', category: 'work', about: 'Channels and messages'},
+  {id: 'huggingface', name: 'Hugging Face', category: 'data', about: 'Models, datasets, and Spaces'},
+  {id: 'exa', name: 'Exa', category: 'search', about: 'Web search for agents'},
+  {id: 'deepwiki', name: 'DeepWiki', category: 'docs', about: 'Documentation for public code repositories'},
+  {id: 'context7', name: 'Context7', category: 'docs', about: 'Library documentation and code examples'},
+  {id: 'mslearn', name: 'Microsoft Learn', category: 'docs', about: 'Microsoft product documentation'},
+  {id: 'cloudflare-docs', name: 'Cloudflare Docs', category: 'docs', about: 'Cloudflare product documentation'},
+  {id: 'amap', name: 'Amap', category: 'search', about: 'Maps, places, and routes in China'},
+  {id: 'mail', name: 'Mailbox', category: 'mail', about: 'Read and send email over IMAP and SMTP'},
+];
+
+export function filterConnectorCatalog(query, catalog = CONNECTOR_CATALOG) {
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return catalog.slice();
+  return catalog.filter((item) => (
+    item.id.toLowerCase().includes(needle)
+    || item.name.toLowerCase().includes(needle)
+    || item.about.toLowerCase().includes(needle)
+  ));
+}
+
+export function applyConnectorSearch(document, query) {
+  const list = document.getElementById('connectors-catalog');
+  const empty = document.getElementById('connectors-empty');
+  const visible = filterConnectorCatalog(query);
+  if (!list) {
+    if (empty) empty.hidden = visible.length > 0;
+    return visible;
+  }
+  const allowed = new Set(visible.map((item) => item.id));
+  for (const row of list.querySelectorAll('[data-connector-id]')) {
+    const id = row.getAttribute('data-connector-id');
+    row.hidden = !allowed.has(id);
+  }
+  if (empty) empty.hidden = visible.length > 0;
+  return visible;
 }
 
 export function syncAppearanceExtras(document, values) {
@@ -515,6 +610,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     revision = 0;
     await load();
   });
+
+  const connectorSearch = document.getElementById('connector-search');
+  if (connectorSearch) {
+    const applySearch = () => applyConnectorSearch(document, connectorSearch.value);
+    connectorSearch.addEventListener('input', applySearch);
+    connectorSearch.addEventListener('search', applySearch);
+    applySearch();
+  }
 
   const addMcp = document.getElementById('add-mcp-server');
   const mcpAck = document.getElementById('mcp-dialog-ack');

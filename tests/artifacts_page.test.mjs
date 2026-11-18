@@ -48,6 +48,8 @@ test('visibleArtifacts maps recorded filters onto existing fields', () => {
   assert.equal(artifactMatchesType(items[5], '云文档'), false);
   assert.equal(artifactMatchesType(items[2], '图片'), true);
   assert.equal(artifactMatchesType(items[0], 'Markdown'), false);
+  assert.equal(artifactMatchesType({kind: 'slides'}, '幻灯片'), true);
+  assert.equal(artifactMatchesType({kind: 'document'}, '幻灯片'), false);
   assert.deepEqual(visibleArtifacts(items, {types: ['网页']}).map((item) => item.title), ['Site']);
   assert.deepEqual(visibleArtifacts(items, {types: ['消息']}).map((item) => item.title), ['Clip']);
   assert.deepEqual(visibleArtifacts(items, {types: ['Markdown']}).map((item) => item.title), []);

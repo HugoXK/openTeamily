@@ -65,6 +65,65 @@ export function messageSearchQuery(query, conversationId = '') {
   return params.toString();
 }
 
+export const GROUP_CREATE_INTRO = '添加名称，然后邀请好友并添加 AI 智能体。';
+export const GROUP_CREATE_MODES = [
+  ['custom', '自定义群组'],
+  ['team', 'AI 智能体团队'],
+];
+
+export function composeSelectedLabel(count) {
+  return '已选 ' + Number(count || 0);
+}
+
+export function filterMemberChoices(members, currentUserId, query) {
+  const needle = String(query || '').trim().toLocaleLowerCase();
+  const list = memberChoices(members, currentUserId);
+  if (!needle) return list;
+  return list.filter(member => String(member.username || '').toLocaleLowerCase().includes(needle));
+}
+
+export function groupPickerChoices(members, currentUserId, agents = []) {
+  return [
+    ...memberChoices(members, currentUserId).map(member => ({
+      id: member.user_id, kind: 'human', label: member.username + ' · 成员',
+    })),
+    ...agents.filter(agent => !agent.archived).map(agent => ({
+      id: agent.id, kind: 'agent', label: agent.name + ' · AI 智能体（自动回复未接通）',
+    })),
+  ];
+}
+
+export function groupAgentSummary(conversation) {
+  const list = conversation && conversation.agent_members || [];
+  return list.length ? '群内智能体：' + list.map(agent => agent.name).join('、')
+    + '。可明确请求一次回复。未接通：群内自动回复、@Agent 和任务委派。' : '';
+}
+
+export function groupReplyStatus(reply) {
+  const labels = {queued: '等待执行', running: '执行中', succeeded: '已完成', failed: '失败', cancelled: '已取消'};
+  const errors = {no_agent: '没有可用运行时连接', quota: '运行时任务容量已满', timeout: '执行超时',
+    runtime_failed: '运行时执行失败', empty_reply: '运行时未返回正文', task_missing: '运行时任务丢失', cancelled: '已取消'};
+  return (labels[reply.status] || '未知状态') + (reply.error_code ? '：' + (errors[reply.error_code] || '请求失败') : '');
+}
+
+export function composeCreateEnabled(options) {
+  const mode = options && options.composeMode;
+  const groupMode = (options && options.groupMode) || 'custom';
+  const selectedCount = Number((options && options.selectedCount) || 0);
+  if (mode === 'contact') return selectedCount === 1;
+  if (mode === 'group') return groupMode === 'custom'
+    && selectedCount <= 49 && Number(options.selectedHumanCount ?? selectedCount) >= 1;
+  return false;
+}
+
+export function composeGroupPayload(memberIds, title, agentIds = []) {
+  const body = {kind: 'group', member_ids: memberIds};
+  const name = String(title || '').trim();
+  if (name) body.title = name;
+  if (agentIds.length) body.agent_ids = agentIds;
+  return body;
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -152,6 +211,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let searchConversation = '';
   let searchConversationTitle = '';
   let composeMode = 'group';
+  let groupMode = 'custom';
+  let groupReplyAttempt = null;
+  let groupReplyBusy = false;
   let searchSeq = 0;
   let sendShortcut = 'enter';
 
@@ -182,6 +244,65 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function socialBase() {
     return `/v1/workspaces/${workspaceId()}/social/conversations`;
+  }
+
+  function renderGroupReplyAction(requests) {
+    const panel = document.getElementById('group-agent-action');
+    const isGroup = currentSource === 'social' && currentConversation
+      && currentConversation.kind === 'group';
+    panel.hidden = !isGroup;
+    if (!isGroup) return;
+    const saved = currentConversation.agent_members || [];
+    const active = new Set((requests || []).filter(item =>
+      ['queued', 'running'].includes(item.status)).map(item => item.agent_id));
+    const chips = document.getElementById('group-agent-chips');
+    chips.replaceChildren();
+    for (const agent of saved) {
+      const li = document.createElement('li');
+      li.className = 'agent-chip';
+      const name = document.createElement('span');
+      name.textContent = agent.name + (agent.archived ? '（已归档）' : '');
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '移除';
+      remove.dataset.removeAgent = agent.agent_id;
+      li.append(name, remove);
+      chips.append(li);
+    }
+    const add = document.getElementById('group-agent-add');
+    add.replaceChildren();
+    const joined = new Set(saved.map(agent => agent.agent_id));
+    const available = agents.filter(agent => !agent.archived && !joined.has(agent.id));
+    for (const agent of available) {
+      const option = document.createElement('option');
+      option.value = agent.id;
+      option.textContent = agent.name;
+      add.append(option);
+    }
+    add.disabled = !available.length;
+    document.getElementById('group-agent-add-submit').disabled = !available.length;
+    const holder = document.getElementById('group-agent-choices');
+    holder.replaceChildren();
+    for (const agent of saved.filter(item => !item.archived)) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.name = 'group-agent';
+      box.value = agent.agent_id;
+      box.disabled = active.has(agent.agent_id);
+      label.append(box, document.createTextNode(agent.name + (active.has(agent.agent_id) ? '（回复中）' : '')));
+      holder.append(label);
+    }
+    const list = document.getElementById('group-agent-requests');
+    list.replaceChildren();
+    for (const request of requests || []) {
+      const item = document.createElement('li');
+      item.textContent = request.agent_name + ' · ' + request.prompt + ' · ' + groupReplyStatus(request);
+      item.dataset.replyStatus = request.status;
+      list.append(item);
+    }
+    document.getElementById('group-agent-submit').disabled = groupReplyBusy
+      || !holder.querySelector('input:not(:disabled)');
   }
 
   function stopPolling() {
@@ -276,7 +397,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const role = document.createElement('p');
       role.className = 'role';
       const member = people.find(entry => entry.user_id === item.user_id);
-      role.textContent = mine ? '我' : ((member && member.username) || '成员');
+      role.textContent = item.role === 'agent' ? (item.agent_name + ' · AI 智能体 · 运行时回复')
+        : (mine ? '我' : ((member && member.username) || '成员'));
       const body = document.createElement('p');
       body.className = 'body';
       body.textContent = item.body || '';
@@ -292,6 +414,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function setDirectoryLink(session) {
+    if (!session || session.source !== 'social') {
+      document.getElementById('social-agent-members').hidden = true;
+      document.getElementById('group-agent-action').hidden = true;
+    }
     const link = document.getElementById('open-agent-dir');
     if (session && session.source === 'social') {
       link.href = '/members';
@@ -346,6 +472,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentAgent = agent;
     currentSource = 'agent';
+    document.getElementById('social-agent-members').hidden = true;
     applyChatIdentity(document, agent.name);
     setDirectoryLink({source: 'agent'});
     const result = await request('GET', `/v1/workspaces/${workspaceId()}/agents/${agentId}/conversations/${conversationId}`);
@@ -371,12 +498,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     currentConversation = result.body.conversation;
+    const agentNote = document.getElementById('social-agent-members');
+    agentNote.textContent = groupAgentSummary(currentConversation);
+    agentNote.hidden = !agentNote.textContent;
     applyChatIdentity(document, conversationLabel(
       currentConversation, currentUser && currentUser.id));
     setDirectoryLink({source: 'social'});
     writeHash({workspace: workspaceId(), social: conversationId});
     renderSocialMessages(result.body.items);
+    renderGroupReplyAction(result.body.agent_replies || []);
     renderSessions();
+    if ((result.body.agent_replies || []).some(item => ['queued', 'running'].includes(item.status))) schedulePoll();
   }
 
   function schedulePoll() {
@@ -384,6 +516,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     pollTimer = globalThis.setTimeout(() => {
       if (currentConversation && currentAgent && currentSource === 'agent') {
         openAgentConversation(currentAgent.id, currentConversation.id);
+      } else if (currentConversation && currentSource === 'social') {
+        openSocialConversation(currentConversation.id);
       }
     }, 2000);
   }
@@ -395,23 +529,84 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     button.setAttribute('aria-expanded', 'false');
   }
 
+  function selectedMemberCount() {
+    return document.querySelectorAll('#member-choices input:checked').length;
+  }
+
+  function syncComposeCreate() {
+    const button = document.getElementById('compose-dialog-submit');
+    button.disabled = !composeCreateEnabled({
+      composeMode,
+      groupMode,
+      selectedCount: selectedMemberCount(),
+      selectedHumanCount: document.querySelectorAll('#member-choices input[name="member"]:checked').length,
+    });
+  }
+
+  function applyMemberFilter() {
+    const input = document.getElementById('compose-member-search');
+    const needle = (input.value || '').trim().toLocaleLowerCase();
+    const labels = [...document.querySelectorAll('#member-choices label')];
+    let visible = 0;
+    for (const label of labels) {
+      const show = !needle || label.textContent.trim().toLocaleLowerCase().includes(needle);
+      label.hidden = !show;
+      if (show) visible += 1;
+    }
+    const empty = document.getElementById('compose-members-empty');
+    if (!labels.length) {
+      empty.hidden = false;
+      empty.textContent = '没有可邀请的工作区成员。';
+    } else if (!visible) {
+      empty.hidden = false;
+      empty.textContent = '没有匹配的成员。';
+    } else {
+      empty.hidden = true;
+    }
+  }
+
+  function syncSelectedCount() {
+    document.getElementById('compose-selected-count').textContent = composeSelectedLabel(selectedMemberCount());
+    syncComposeCreate();
+  }
+
+  function setGroupMode(mode) {
+    groupMode = mode === 'team' ? 'team' : 'custom';
+    for (const button of document.querySelectorAll('#compose-mode-switch [data-group-mode]')) {
+      button.setAttribute('aria-selected', button.dataset.groupMode === groupMode ? 'true' : 'false');
+    }
+    const team = composeMode === 'group' && groupMode === 'team';
+    document.getElementById('compose-team-note').hidden = !team;
+    document.getElementById('compose-member-picker').hidden = team;
+    if (composeMode === 'group') {
+      document.getElementById('compose-title-label').hidden = team;
+    }
+    syncComposeCreate();
+  }
+
   function closeComposeDialog() {
     document.getElementById('compose-dialog').hidden = true;
     document.getElementById('compose-social-form').reset();
+    setGroupMode('custom');
+    applyMemberFilter();
+    syncSelectedCount();
   }
 
   function renderMemberChoices(single) {
     const holder = document.getElementById('member-choices');
     holder.replaceChildren();
-    for (const member of memberChoices(members, currentUser && currentUser.id)) {
+    const choices = groupPickerChoices(members, currentUser && currentUser.id, single ? [] : agents);
+    for (const member of choices) {
       const label = document.createElement('label');
       const box = document.createElement('input');
       box.type = single ? 'radio' : 'checkbox';
-      box.name = 'member';
-      box.value = member.user_id;
-      label.append(box, document.createTextNode(member.username));
+      box.name = member.kind === 'agent' ? 'agent-member' : 'member';
+      box.value = member.id;
+      label.append(box, document.createTextNode(member.label));
       holder.append(label);
     }
+    applyMemberFilter();
+    syncSelectedCount();
   }
 
   function openComposeDialog(mode) {
@@ -419,19 +614,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     composeMode = mode;
     const dialog = document.getElementById('compose-dialog');
     dialog.hidden = false;
-    const titleLabel = document.getElementById('compose-title-label');
-    const titleInput = document.getElementById('compose-title');
-    if (mode === 'group') {
-      document.getElementById('compose-dialog-title').textContent = '新建群组';
-      document.getElementById('compose-members-legend').textContent = '成员';
-      titleLabel.hidden = false;
-      titleInput.required = false;
-    } else {
-      document.getElementById('compose-dialog-title').textContent = '添加联系人';
-      document.getElementById('compose-members-legend').textContent = '选择一位成员，开始单聊';
-      titleLabel.hidden = true;
-      titleInput.value = '';
-    }
+    const isGroup = mode === 'group';
+    document.getElementById('compose-dialog-title').textContent = isGroup ? '新建群组' : '添加联系人';
+    document.getElementById('compose-members-legend').textContent = isGroup ? '成员' : '选择一位成员，开始单聊';
+    document.getElementById('compose-intro').hidden = !isGroup;
+    document.getElementById('compose-mode-switch').hidden = !isGroup;
+    document.getElementById('compose-title-label').hidden = !isGroup;
+    document.getElementById('compose-member-tools').hidden = !isGroup;
+    document.getElementById('compose-team-note').hidden = true;
+    document.getElementById('compose-member-picker').hidden = false;
+    if (!isGroup) document.getElementById('compose-title').value = '';
+    document.getElementById('compose-member-search').value = '';
+    setGroupMode('custom');
     renderMemberChoices(mode === 'contact');
   }
 
@@ -666,6 +860,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('session-pane').hidden = false;
     document.body.classList.add('chat-open');
     document.getElementById('whoami').textContent = currentUser.username;
+    const onboarding = await request('GET', '/v1/onboarding');
+    const banner = document.getElementById('onboarding-banner');
+    if (banner && onboarding.status === 200) {
+      banner.hidden = Boolean(onboarding.body.onboarding && onboarding.body.onboarding.completed);
+    }
+
+    const personal = await request('POST', '/v1/personal-agent');
+    const personalWorkspace = personal.status === 200 && personal.body.personal_agent
+      ? personal.body.personal_agent.workspace.id : '';
     const [listed, settings] = await Promise.all([
       request('GET', '/v1/workspaces?limit=100'),
       request('GET', '/v1/settings'),
@@ -675,7 +878,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     sendShortcut = stored === 'mod_enter' ? 'mod_enter' : 'enter';
     document.getElementById('chat-body').dataset.sendShortcut = sendShortcut;
     workspaces = listed.status === 200 ? (listed.body.items || []) : [];
-    const wanted = hashParams().workspace || workspaceSelect.value;
+    const wanted = hashParams().workspace || personalWorkspace || workspaceSelect.value;
     workspaceSelect.replaceChildren();
     for (const space of workspaces) {
       const option = document.createElement('option');
@@ -783,12 +986,93 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     menu.hidden = !open;
     button.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
+  document.getElementById('group-agent-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (groupReplyBusy || currentSource !== 'social' || !currentConversation) return;
+    const cid = currentConversation.id;
+    const agentIds = [...document.querySelectorAll('#group-agent-choices input[name="group-agent"]:checked')]
+      .map(box => box.value);
+    const prompt = document.getElementById('group-agent-prompt').value;
+    if (!agentIds.length) {
+      show('error', '请选择至少一个群内智能体。');
+      return;
+    }
+    if (!prompt.trim()) return;
+    const fingerprint = JSON.stringify([workspaceId(), cid, agentIds.slice().sort(), prompt]);
+    if (!groupReplyAttempt || groupReplyAttempt.fingerprint !== fingerprint) {
+      groupReplyAttempt = {fingerprint, key: idempotencyKey('group-reply-')};
+    }
+    groupReplyBusy = true;
+    document.getElementById('group-agent-submit').disabled = true;
+    try {
+      const result = await request('POST', `${socialBase()}/${cid}/agent-replies`,
+        {agent_ids: agentIds, prompt}, {'Idempotency-Key': groupReplyAttempt.key});
+      if (![200, 201].includes(result.status)) {
+        show('error', messageFor(result.body.error, '请求未确认；重试相同内容将复用请求标识。'));
+        return;
+      }
+      groupReplyAttempt = null;
+      if (currentSource === 'social' && currentConversation && currentConversation.id === cid) {
+        await openSocialConversation(cid);
+        const replies = result.body.replies || (result.body.reply ? [result.body.reply] : []);
+        const failed = replies.filter(item => item.status === 'failed').length;
+        show(failed ? 'error' : 'ok', failed
+          ? (replies.length - failed) + ' 个已提交，' + failed + ' 个失败。'
+          : '已请求 ' + replies.length + ' 个智能体回复。');
+      }
+    } finally {
+      groupReplyBusy = false;
+      if (currentSource === 'social' && currentConversation && currentConversation.id === cid) {
+        await openSocialConversation(cid);
+      }
+    }
+  });
+
+  document.getElementById('group-agent-chips').addEventListener('click', async event => {
+    const button = event.target.closest('button[data-remove-agent]');
+    if (!button || currentSource !== 'social' || !currentConversation) return;
+    const cid = currentConversation.id;
+    const result = await request('POST',
+      `${socialBase()}/${cid}/agents/${button.dataset.removeAgent}/remove`, {});
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法移除智能体。'));
+      return;
+    }
+    await openSocialConversation(cid);
+    show('ok', '已移除智能体。');
+  });
+
+  document.getElementById('group-agent-add-submit').addEventListener('click', async () => {
+    if (currentSource !== 'social' || !currentConversation) return;
+    const select = document.getElementById('group-agent-add');
+    if (!select.value) return;
+    const cid = currentConversation.id;
+    const result = await request('POST', `${socialBase()}/${cid}/agents`, {agent_ids: [select.value]});
+    if (result.status !== 201 && result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法添加智能体。'));
+      return;
+    }
+    await openSocialConversation(cid);
+    show('ok', '已添加智能体。');
+  });
+
   document.getElementById('compose-new-group').addEventListener('click', () => openComposeDialog('group'));
   document.getElementById('compose-add-contact').addEventListener('click', () => openComposeDialog('contact'));
   document.getElementById('compose-dialog-cancel').addEventListener('click', closeComposeDialog);
+  document.getElementById('compose-mode-switch').addEventListener('click', event => {
+    const button = event.target.closest('[data-group-mode]');
+    if (!button || composeMode !== 'group') return;
+    setGroupMode(button.dataset.groupMode);
+  });
+  document.getElementById('compose-member-search').addEventListener('input', applyMemberFilter);
+  document.getElementById('member-choices').addEventListener('change', syncSelectedCount);
 
   document.getElementById('compose-social-form').addEventListener('submit', async event => {
     event.preventDefault();
+    if (composeMode === 'group' && groupMode !== 'custom') {
+      show('error', '未接通：还不能从这里创建 AI 智能体团队。');
+      return;
+    }
     const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')]
       .map(box => box.value);
     if (!memberIds.length) {
@@ -800,13 +1084,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', '请选择一位成员。');
       return;
     }
-    if (composeMode === 'group' && !title) {
-      show('error', '请填写群名称。');
-      return;
-    }
     const body = composeMode === 'contact'
       ? {kind: 'dm', member_ids: memberIds.slice(0, 1)}
-      : {kind: 'group', member_ids: memberIds, title};
+      : composeGroupPayload(memberIds, title,
+        [...document.querySelectorAll('#member-choices input[name="agent-member"]:checked')].map(box => box.value));
     const result = await request('POST', socialBase(), body, {'Idempotency-Key': idempotencyKey('social-')});
     if (result.status !== 201 && result.status !== 200) {
       show('error', messageFor(result.body.error, '无法创建会话。'));

@@ -48,3 +48,18 @@ class GuidePageTests(unittest.TestCase):
         self.assertIn('通话窗口', script)
         self.assertNotIn('折叠会话列表', script)
         self.assertNotIn('innerHTML', script)
+
+    def test_guide_search_box_names_itself_and_states_the_empty_copy(self):
+        page = self.raw.call('GET', '/guide')
+        self.assertEqual(page['status'], 200)
+        html = page['body'].decode()
+        self.assertIn('type="search"', html)
+        self.assertIn('aria-label="搜索功能指引"', html)
+        self.assertIn('没有匹配的指引。', html)
+
+    def test_guide_accepts_only_the_q_deep_link_query(self):
+        self.assertEqual(self.raw.call('GET', '/guide', query='q=%E5%A4%96%E8%A7%82')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/guide', query='q=flybot.pyz')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/guide', query='q=')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/guide', query='q=a&x=1')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/guide/app.mjs', query='q=a')['status'], 400)

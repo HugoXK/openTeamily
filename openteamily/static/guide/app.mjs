@@ -97,6 +97,17 @@ export function formatPath(path) {
   return (path || []).join(' › ');
 }
 
+// Deep link only: /guide?q=<keyword>. An empty keyword goes back to /guide,
+// which is also the only query the server lets through.
+export function guideHref(value) {
+  const keyword = String(value || '').trim();
+  return keyword ? `/guide?q=${encodeURIComponent(keyword)}` : '/guide';
+}
+
+export function guideInitialQuery(search) {
+  return new URLSearchParams(search || '').get('q') || '';
+}
+
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -212,7 +223,7 @@ function mount() {
       category: currentCategory,
       query: searchEl ? searchEl.value : '',
     });
-    if (countEl) countEl.textContent = `${items.length} 个功能`;
+    if (countEl) countEl.textContent = `当前显示 ${items.length} 条`;
     if (emptyEl) emptyEl.hidden = items.length > 0;
     listEl.replaceChildren();
     for (const group of groupCatalog(items)) {
@@ -246,17 +257,37 @@ function mount() {
     renderList();
   }
 
+  function syncQuery(value) {
+    const location = globalThis.location;
+    const history = globalThis.history;
+    if (!location || !history || typeof history.replaceState !== 'function') return;
+    const href = guideHref(value);
+    if (location.pathname + location.search === href) return;
+    history.replaceState(null, '', href);
+  }
+
   if (searchEl) {
+    searchEl.value = guideInitialQuery(globalThis.location ? globalThis.location.search : '');
     searchEl.addEventListener('input', () => {
       closeDialog();
       renderList();
+      syncQuery(searchEl.value);
     });
   }
   if (dialogClose) dialogClose.addEventListener('click', closeDialog);
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && dialog && !dialog.hidden) {
+    if (event.key !== 'Escape') return;
+    if (dialog && !dialog.hidden) {
       event.preventDefault();
       closeDialog();
+      return;
+    }
+    if (searchEl && searchEl.value) {
+      event.preventDefault();
+      searchEl.value = '';
+      renderList();
+      syncQuery('');
+      searchEl.focus();
     }
   });
 

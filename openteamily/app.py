@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -106,8 +106,7 @@ class App:
 
     def __call__(self, env, start_response):
         headers = [('Cache-Control', 'no-store'),
-                   ('X-Content-Type-Options', 'nosniff'), ('Referrer-Policy', 'no-referrer'),
-                   ('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'")]
+                   ('X-Content-Type-Options', 'nosniff'), ('Referrer-Policy', 'no-referrer')]
         try:
             status, body, extra = self.dispatch(env)
             headers += extra
@@ -121,6 +120,8 @@ class App:
             status, body = 503, {'error': {'code': 'unavailable', 'message': 'Storage is temporarily unavailable'}}
         except Exception:
             status, body = 500, {'error': {'code': 'internal', 'message': 'Internal service error'}}
+        if not any(key.lower() == 'content-security-policy' for key, _value in headers):
+            headers.append(('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'"))
         if isinstance(body, (bytes, bytearray)):
             data = bytes(body)
             if not any(key.lower() == 'content-type' for key, _value in headers):
@@ -450,6 +451,27 @@ class App:
             if method != 'GET' or query:
                 refuse(400, 'invalid', 'Invalid homepage request')
             return self.render_agent_homepage(homepage_path[1])
+        profile_path = re.fullmatch(r'/v1/profiles/([a-z0-9._]{3,30})', path)
+        if profile_path:
+            if method != 'GET' or query:
+                refuse(400, 'invalid', 'Invalid profile request')
+            with self.store.connect() as db:
+                row = profiles.load_handle(db, profile_path[1])
+            if row is None:
+                refuse(404, 'not_found', 'Profile not found')
+            return 200, {'profile': profiles.public_view(row)}, []
+        page_path = re.fullmatch(r'/p/([a-z0-9._]{3,30})', path)
+        if page_path:
+            if method != 'GET' or query:
+                refuse(400, 'invalid', 'Invalid profile page request')
+            with self.store.connect() as db:
+                row = profiles.load_handle(db, page_path[1])
+            if row is None:
+                refuse(404, 'not_found', 'Profile not found')
+            return 200, profiles.render_page(row).encode('utf-8'), [
+                ('Content-Type', 'text/html; charset=utf-8'),
+                ('Content-Security-Policy', profiles.PAGE_CSP),
+            ]
         if path == '/v1/discover/agents':
             if method != 'GET':
                 refuse(405, 'method', 'Only GET is supported')
@@ -535,6 +557,28 @@ class App:
                 self.body(env, [])
                 db.execute('DELETE FROM sessions WHERE token_hash=?', (session['token_hash'],))
                 return 200, {'logged_out': True}, self.session_headers('', '', expires=True)
+            if path == '/v1/profile':
+                if method == 'GET' and not query:
+                    row = profiles.load(db, session['user_id'])
+                    return 200, {'profile': profiles.view(row) if row is not None else None}, []
+                if method == 'POST' and not query:
+                    return self.save_profile(db, session, now, env)
+                refuse(400, 'invalid', 'Invalid profile request')
+            if path == '/v1/onboarding':
+                if method == 'GET' and not query:
+                    row = onboarding.load(db, session['user_id'])
+                    return 200, {'onboarding': onboarding.view(row) if row is not None else None,
+                                 'industries': onboarding.industries_view()}, []
+                if method == 'POST' and not query:
+                    return self.save_onboarding(db, session, now, env)
+                refuse(400, 'invalid', 'Invalid onboarding request')
+
+            if path == '/v1/personal-agent':
+                if method == 'GET' and not query:
+                    return self.personal_agent_get(db, session)
+                if method == 'POST' and not query:
+                    return self.personal_agent_ensure(db, session, now)
+                refuse(400, 'invalid', 'Invalid personal agent request')
             if path == '/v1/settings' and method == 'GET' and not query:
                 row = db.execute('SELECT * FROM user_settings WHERE user_id=?', (session['user_id'],)).fetchone()
                 return 200, {'settings': settings.view(row)}, []
@@ -755,7 +799,7 @@ class App:
                 return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -1302,15 +1346,29 @@ class App:
         content_type = env.get('CONTENT_TYPE', '')
         if content_type.split(';', 1)[0].strip().lower() == 'multipart/form-data':
             return self.create_media_artifact(db, workspace, session, now, env)
-        body = self.body(env, ['title', 'body', 'kind', 'board'], limit=70000)
+        body = self.body(env, ['title', 'body', 'kind', 'board', 'slides', 'dashboard'], limit=70000)
         title, content, kind = body.get('title'), body.get('body', ''), body.get('kind', 'document')
         board = None
+        slides = None
+        dashboard = None
         if kind == 'media':
             refuse(400, 'invalid', 'Upload media as multipart form data')
         if kind == 'whiteboard':
             board = artifacts.normalize_board(body.get('board') or artifacts.EMPTY_BOARD)
             if board is None or not artifacts.valid_title(title) or (content and not artifacts.valid_body(content)):
                 refuse(400, 'invalid', 'Provide a whiteboard title and board')
+            content = content if artifacts.valid_body(content) else ''
+        elif kind == 'slides':
+            slides = artifacts.normalize_slides(body.get('slides') or artifacts.EMPTY_SLIDES)
+            if (slides is None or not slides['slides'] or not artifacts.valid_title(title)
+                    or (content and not artifacts.valid_body(content))):
+                refuse(400, 'invalid', 'Provide a slide title and at least one slide')
+            content = content if artifacts.valid_body(content) else ''
+        elif kind == 'dashboard':
+            dashboard = artifacts.normalize_dashboard(body.get('dashboard') or artifacts.EMPTY_DASHBOARD)
+            if (dashboard is None or not dashboard['widgets'] or not artifacts.valid_title(title)
+                    or (content and not artifacts.valid_body(content))):
+                refuse(400, 'invalid', 'Provide a dashboard title and at least one widget')
             content = content if artifacts.valid_body(content) else ''
         elif kind not in ('document', 'website') or not artifacts.valid_title(title) or not artifacts.valid_body(content):
             refuse(400, 'invalid', 'Provide a document or website title and body')
@@ -1321,6 +1379,10 @@ class App:
         payload = {'title': title, 'body': content, 'kind': kind}
         if board is not None:
             payload['board'] = board
+        if slides is not None:
+            payload['slides'] = slides
+        if dashboard is not None:
+            payload['dashboard'] = dashboard
         key_hash, request_hash = digest('artifact:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         )
@@ -1348,6 +1410,10 @@ class App:
         artifacts.set_render(db, aid, kind)
         if board is not None and not artifacts.attach_board(db, aid, board):
             refuse(400, 'invalid', 'Provide a whiteboard title and board')
+        if slides is not None and not artifacts.attach_slides(db, aid, slides):
+            refuse(400, 'invalid', 'Provide valid slide content')
+        if dashboard is not None and not artifacts.attach_dashboard(db, aid, dashboard):
+            refuse(400, 'invalid', 'Provide valid dashboard content')
         return self.artifact_saved(db, workspace['id'], aid, 201)
 
     def update_artifact(self, db, workspace, session, actor, row, now, body):
@@ -1360,6 +1426,10 @@ class App:
         allowed = {'title', 'body'}
         if kind == 'whiteboard':
             allowed = {'title', 'board', 'operations'}
+        elif kind == 'slides':
+            allowed = {'title', 'slides'}
+        elif kind == 'dashboard':
+            allowed = {'title', 'dashboard'}
         elif kind == 'media':
             allowed = {'title'}
         if set(changes) - allowed:
@@ -1370,6 +1440,8 @@ class App:
         title = row['title']
         content = row['body']
         board = artifacts.decode_board(row['board_json']) if kind == 'whiteboard' else None
+        slides = artifacts.decode_slides(row['slides_json']) if kind == 'slides' else None
+        dashboard = artifacts.decode_dashboard(row['dashboard_json']) if kind == 'dashboard' else None
         if 'title' in changes:
             if not artifacts.valid_title(changes['title']):
                 refuse(400, 'invalid', 'Provide a document title and body')
@@ -1386,9 +1458,21 @@ class App:
             board = artifacts.apply_board_operations(board or artifacts.EMPTY_BOARD, changes['operations'])
             if board is None:
                 refuse(400, 'invalid', 'Provide valid board operations')
+        if 'slides' in changes:
+            slides = artifacts.normalize_slides(changes['slides'])
+            if slides is None or not slides['slides']:
+                refuse(400, 'invalid', 'Provide at least one valid slide')
+        if 'dashboard' in changes:
+            dashboard = artifacts.normalize_dashboard(changes['dashboard'])
+            if dashboard is None or not dashboard['widgets']:
+                refuse(400, 'invalid', 'Provide at least one valid dashboard widget')
         unchanged = title == row['title'] and content == row['body']
         if kind == 'whiteboard':
             unchanged = title == row['title'] and artifacts.board_json(board) == row['board_json']
+        elif kind == 'slides':
+            unchanged = title == row['title'] and artifacts.slides_json(slides) == row['slides_json']
+        elif kind == 'dashboard':
+            unchanged = title == row['title'] and artifacts.dashboard_json(dashboard) == row['dashboard_json']
         if unchanged:
             return 200, {'artifact': artifacts.view(row)}, []
         self.guard_artifact_versions(db, row['id'])
@@ -1404,6 +1488,10 @@ class App:
         )
         if kind == 'whiteboard' and not artifacts.attach_board(db, row['id'], board):
             refuse(400, 'invalid', 'Provide a valid board')
+        if kind == 'slides' and not artifacts.attach_slides(db, row['id'], slides):
+            refuse(400, 'invalid', 'Provide valid slide content')
+        if kind == 'dashboard' and not artifacts.attach_dashboard(db, row['id'], dashboard):
+            refuse(400, 'invalid', 'Provide valid dashboard content')
         return self.artifact_saved(db, workspace['id'], row['id'], 200)
 
 
@@ -1478,24 +1566,46 @@ class App:
         ).fetchone():
             refuse(409, 'conflict', 'A document with this title already exists')
         kind = snapshot['kind']
+        structured_kind, structured = (artifacts.decode_structured(snapshot['body'])
+                                        if kind == 'document' else (None, None))
+        if structured is not None:
+            kind = structured_kind
         content = snapshot['body'] if kind in ('document', 'website') else ''
         db.execute(
             'UPDATE artifacts SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
             (title, title_digest, content, row['revision'] + 1, now, session['user_id'], row['id']),
         )
         artifacts.set_render(db, row['id'], kind)
-        if kind == 'whiteboard':
+        if kind == 'slides':
+            if not artifacts.attach_slides(db, row['id'], structured):
+                refuse(400, 'invalid', 'Provide valid slide content')
+            db.execute('DELETE FROM artifact_media WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
+        elif kind == 'dashboard':
+            if not artifacts.attach_dashboard(db, row['id'], structured):
+                refuse(400, 'invalid', 'Provide valid dashboard content')
+            db.execute('DELETE FROM artifact_media WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
+        elif kind == 'whiteboard':
             board = artifacts.decode_board(snapshot['board']) or dict(artifacts.EMPTY_BOARD)
             if not artifacts.attach_board(db, row['id'], board):
                 refuse(400, 'invalid', 'Provide a valid board')
+            db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
         elif kind == 'media':
             artifacts.attach_media(
                 db, row['id'], snapshot['mime'], snapshot['byte_count'],
                 snapshot['sha256'], snapshot['filename'],
             )
+            db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
         else:
             db.execute('DELETE FROM artifact_media WHERE artifact_id=?', (row['id'],))
             db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
         return self.artifact_saved(db, row['workspace_id'], row['id'], 200)
 
     def artifact_share_dispatch(self, db, session, method, query, now, env, actor, row, share_id, share_revoking):
@@ -2153,7 +2263,7 @@ class App:
             refuse(400, 'invalid', 'Invalid agent request')
         if not agents.can_manage(actor):
             refuse(403, 'forbidden', 'Only owners and admins can change agents')
-        return self.update_workspace_agent(db, workspace, row, now, self.body(env, ['revision', 'name', 'summary', 'instructions']))
+        return self.update_workspace_agent(db, workspace, row, now, self.body(env, ['revision', 'name', 'summary', 'instructions', 'category']))
 
     def list_workspace_agents(self, db, workspace, actor, query):
         try:
@@ -2176,15 +2286,20 @@ class App:
                      'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
 
     def create_workspace_agent(self, db, workspace, session, now, env):
-        body = self.body(env, ['name', 'summary', 'instructions'])
+        body = self.body(env, ['name', 'summary', 'instructions', 'category'])
         name, summary, instructions = body.get('name'), body.get('summary', ''), body.get('instructions', '')
         if not agents.valid_name(name) or not agents.valid_summary(summary) or not agents.valid_instructions(instructions):
             refuse(400, 'invalid', 'Provide an agent name, summary, and instructions')
+        category = body.get('category')
+        if not agents.valid_category(category):
+            refuse(400, 'invalid', 'Choose one of the directory categories')
         name, summary = name.strip(), summary.strip()
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         payload = {'name': name, 'summary': summary, 'instructions': instructions}
+        if category is not None:
+            payload['category'] = category
         key_hash, request_hash = digest('agent:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         )
@@ -2210,6 +2325,8 @@ class App:
             (agent_id, workspace['id'], name, agents.name_hash(name), summary, instructions,
              now, now, session['user_id'], key_hash, request_hash),
         )
+        if category is not None:
+            agents.store_category(db, agent_id, category, now)
         return 201, {'agent': agents.snapshot(db, agents.load(db, workspace['id'], agent_id))}, []
 
     def update_workspace_agent(self, db, workspace, row, now, body):
@@ -2220,9 +2337,12 @@ class App:
         instructions = body.get('instructions', row['instructions'])
         if not agents.valid_name(name) or not agents.valid_summary(summary) or not agents.valid_instructions(instructions):
             refuse(400, 'invalid', 'Provide an agent name, summary, and instructions')
+        category = body.get('category', agents.load_category(db, row['id']))
+        if not agents.valid_category(category):
+            refuse(400, 'invalid', 'Choose one of the directory categories')
         name, summary = name.strip(), summary.strip()
         if set(body) == {'revision'}:
-            refuse(400, 'invalid', 'Provide a name, summary, or instructions change')
+            refuse(400, 'invalid', 'Provide a name, summary, instructions, or category change')
         other = db.execute(
             'SELECT id FROM workspace_agents WHERE workspace_id=? AND name_hash=? AND id!=?',
             (workspace['id'], agents.name_hash(name), row['id']),
@@ -2238,6 +2358,7 @@ class App:
         updated = agents.load(db, workspace['id'], row['id'])
         if updated is None or updated['revision'] != row['revision'] + 1:
             refuse(409, 'conflict', 'Agent was updated; reload and retry')
+        agents.store_category(db, row['id'], category, now)
         return 200, {'agent': agents.snapshot(db, updated)}, []
 
     def archive_workspace_agent(self, db, row, now, body):
@@ -2685,6 +2806,116 @@ class App:
             db, artifact_id, workspace['id'], now, row['id'], message['id'], row['agent_id'])
         return self.artifact_saved(db, workspace['id'], artifact_id, 201)
 
+    def save_profile(self, db, session, now, env):
+        body = self.body(env, ['revision', 'changes'])
+        revision, changes = body.get('revision'), body.get('changes')
+        if (type(revision) is not int or not 0 <= revision <= 2 ** 31
+                or not isinstance(changes, dict) or not changes):
+            refuse(400, 'invalid', 'Provide the current revision and non-empty changes')
+        normalized = profiles.normalize_changes(changes)
+        if normalized is None:
+            refuse(400, 'invalid', 'Invalid profile field')
+        row = profiles.load(db, session['user_id'])
+        if row is None:
+            if revision != 0:
+                refuse(409, 'conflict', 'Profile does not exist yet')
+            name = normalized.get('name') or session['username']
+            handle = normalized.get('handle') or profiles.default_handle(db, session['username'])
+            if handle is None or profiles.load_handle(db, handle) is not None:
+                refuse(409, 'conflict', 'Teamily ID is unavailable')
+            try:
+                db.execute(
+                    'INSERT INTO user_profiles VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)',
+                    (session['user_id'], handle, handle, name[:profiles.NAME_MAX],
+                     normalized.get('bio', ''), profiles.serialize_tags(normalized.get('tags', [])),
+                     normalized.get('gender', ''), normalized.get('location', ''),
+                     normalized.get('website', ''), profiles.serialize_goals(normalized.get('goals', {})),
+                     now, now))
+            except sqlite3.IntegrityError:
+                refuse(409, 'conflict', 'Teamily ID is unavailable')
+            return 201, {'profile': profiles.view(profiles.load(db, session['user_id']))}, []
+        if revision != row['revision']:
+            raise RuntimeFault(409, 'conflict', 'Profile changed elsewhere; reload and retry',
+                               profiles.view(row))
+        handle = normalized.get('handle', row['handle'])
+        if handle != row['handle']:
+            other = profiles.load_handle(db, handle)
+            if other is not None and other['user_id'] != session['user_id']:
+                refuse(409, 'conflict', 'Teamily ID is unavailable')
+        name = normalized.get('name', row['name'])
+        bio = normalized.get('bio', row['bio'])
+        tags = profiles.serialize_tags(normalized['tags']) if 'tags' in normalized else row['tags']
+        gender = normalized.get('gender', row['gender'])
+        location = normalized.get('location', row['location'])
+        website = normalized.get('website', row['website'])
+        goals = profiles.serialize_goals(normalized['goals']) if 'goals' in normalized else row['goals']
+        if (handle, name, bio, tags, gender, location, website, goals) == (
+                row['handle'], row['name'], row['bio'], row['tags'], row['gender'],
+                row['location'], row['website'], row['goals']):
+            return 200, {'profile': profiles.view(row)}, []
+        try:
+            db.execute(
+                'UPDATE user_profiles SET handle=?, handle_lower=?, name=?, bio=?, tags=?, '
+                'gender=?, location=?, website=?, goals=?, revision=?, updated=? WHERE user_id=?',
+                (handle, handle, name, bio, tags, gender, location, website, goals,
+                 row['revision'] + 1, now, session['user_id']))
+        except sqlite3.IntegrityError:
+            refuse(409, 'conflict', 'Teamily ID is unavailable')
+        return 200, {'profile': profiles.view(profiles.load(db, session['user_id']))}, []
+
+    def save_onboarding(self, db, session, now, env):
+        body = self.body(env, ['industry', 'role', 'completed'])
+        industry = body.get('industry', '')
+        role = body.get('role', '')
+        completed = body.get('completed')
+        if (not onboarding.valid_industry(industry) or not onboarding.valid_role(role)
+                or type(completed) is not bool):
+            refuse(400, 'invalid', 'Provide a valid industry, role and completed flag')
+        industry = industry.strip() if isinstance(industry, str) else ''
+        role = role.strip() if isinstance(role, str) else ''
+        row = onboarding.load(db, session['user_id'])
+        if row is None:
+            db.execute('INSERT INTO user_onboarding VALUES(?,?,?,?,1,?,?)',
+                       (session['user_id'], industry, role, 1 if completed else 0, now, now))
+            created = True
+        else:
+            db.execute('UPDATE user_onboarding SET industry=?, role=?, completed=?, revision=?, updated=? '
+                       'WHERE user_id=?',
+                       (industry, role, 1 if completed else 0, row['revision'] + 1, now, session['user_id']))
+            created = False
+        return (201 if created else 200), {'onboarding': onboarding.view(
+            onboarding.load(db, session['user_id']))}, []
+
+    def personal_agent_get(self, db, session):
+        row = personal.load(db, session['user_id'])
+        if row is None:
+            return 200, {'personal_agent': None}, []
+        return 200, self.personal_payload(db, session, row), []
+
+    def personal_agent_ensure(self, db, session, now):
+        try:
+            row, created = personal.ensure(
+                db, {'id': session['user_id'], 'username': session['username']},
+                self.config.max_workspaces_per_user, self.config.max_workspaces,
+                self.config.max_agents_per_workspace, now)
+        except ValueError:
+            refuse(429, 'quota', 'Workspace capacity reached')
+        return (201 if created else 200), self.personal_payload(db, session, row), []
+
+    def personal_payload(self, db, session, row):
+        workspace = db.execute('SELECT * FROM workspaces WHERE id=?', (row['workspace_id'],)).fetchone()
+        agent = agents.load(db, row['workspace_id'], row['agent_id'])
+        return {
+            'personal_agent': {
+                'workspace': {'id': workspace['id'], 'name': workspace['name'], 'kind': 'personal'},
+                'agent': agents.snapshot(db, agent) if agent is not None else None,
+            },
+            'builtin_agents': [
+                {'key': item['builtin_key'], 'agent': agents.snapshot(db, item)}
+                for item in personal.builtins(db, row['workspace_id'])
+            ],
+        }
+
     def search_messages(self, db, session, method, query, workspace_id):
         if method != 'GET':
             refuse(405, 'method', 'Only GET is supported')
@@ -2788,6 +3019,8 @@ class App:
             if method == 'GET':
                 limit, cursor, _ = self.pagination(query)
                 rows = social.listing(db, workspace['id'], session['user_id'], cursor, limit + 1)
+                for conversation in rows[:limit]:
+                    self.reconcile_group_replies(db, conversation, now)
                 items = social.conversation_items(db, rows[:limit])
                 return 200, {'items': items,
                              'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
@@ -2799,9 +3032,17 @@ class App:
         row = social.load(db, workspace['id'], conversation_id)
         if row is None or not social.is_member(db, row['id'], workspace['id'], session['user_id']):
             refuse(404, 'not_found', 'Conversation not found')
+        if action and (action == 'agents' or action.startswith('agents/')):
+            if method != 'POST' or query:
+                refuse(400, 'invalid', 'Invalid group agent membership request')
+            return self.edit_group_agents(db, workspace, session, row, action, now, env)
+        self.reconcile_group_replies(db, row, now)
+        if action == 'agent-replies' and method == 'POST' and not query:
+            return self.request_group_reply(db, workspace, session, row, now, env)
         if action is None and method == 'GET' and not query:
             items = social.messages(db, row['id'], '', 101) or []
             return 200, {'conversation': social.conversation_item(db, row),
+                         'agent_replies': [social.reply_view(item) for item in social.reply_requests(db, row['id'])],
                          'items': [social.message_view(item) for item in items[:100]],
                          'cursor': items[99]['id'] if len(items) > 100 else None}, []
         if action == 'messages' and method == 'GET':
@@ -2815,11 +3056,155 @@ class App:
             return self.send_social_message(db, workspace, session, row, now, env)
         refuse(400, 'invalid', 'Invalid messenger request')
 
+    def edit_group_agents(self, db, workspace, session, row, action, now, env):
+        # Workspace administration alone never grants access to a private group:
+        # social_dispatch has already required actual human group membership.
+        if row['kind'] != 'group':
+            refuse(400, 'invalid', 'Agent membership edits require a group')
+        if not agents.can_manage(members.role_of(db, workspace, session['user_id'])):
+            refuse(403, 'forbidden', 'Only group members who are workspace owners or admins can edit agents')
+        removing = action != 'agents'
+        if removing:
+            self.body(env, [])
+            agent_ids = [action.split('/')[1]]
+        else:
+            agent_ids = self.body(env, ['agent_ids']).get('agent_ids')
+            if not social.valid_agent_ids(agent_ids) or not agent_ids:
+                refuse(400, 'invalid', 'Provide 1–49 unique agent ids')
+        # Validate the entire batch before any mutation. Removal may clear an
+        # archived member, but neither operation can address foreign agents.
+        for aid in agent_ids:
+            agent = agents.load(db, workspace['id'], aid)
+            if agent is None or (not removing and agent['archived']):
+                refuse(400, 'invalid', 'Select existing same-workspace agents; invitations require active agents')
+        existing = {item['agent_id'] for item in social.agent_member_rows(db, row['id'])}
+        if removing:
+            self.reconcile_group_replies(db, row, now)
+            if db.execute("SELECT 1 FROM social_agent_replies WHERE conversation_id=? AND agent_id=? "
+                          "AND status IN ('queued','running')", (row['id'], agent_ids[0])).fetchone():
+                refuse(409, 'conflict', 'Wait for the active agent request to finish before removal')
+            changed = agent_ids[0] in existing
+            db.execute('DELETE FROM social_agent_members WHERE conversation_id=? AND agent_id=?',
+                       (row['id'], agent_ids[0]))
+        else:
+            additions = set(agent_ids) - existing
+            if (len(social.member_rows(db, row['id'])) + len(existing) + len(additions)
+                    > self.config.max_social_members_per_conversation):
+                refuse(429, 'quota', 'Member capacity reached')
+            for aid in sorted(additions):
+                db.execute('INSERT INTO social_agent_members (conversation_id,agent_id,created) VALUES(?,?,?)',
+                           (row['id'], aid, now))
+            changed = bool(additions)
+        if changed:
+            db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, row['id']))
+        row = social.load(db, workspace['id'], row['id'])
+        return 200, {'conversation': social.conversation_item(db, row)}, []
+
+    def request_group_reply(self, db, workspace, session, row, now, env):
+        body = self.body(env, ['agent_id', 'agent_ids', 'prompt'])
+        text = body.get('prompt')
+        agent_ids = body.get('agent_ids')
+        if agent_ids is None:
+            aid = body.get('agent_id')
+            if not isinstance(aid, str) or not social.HEX32.fullmatch(aid):
+                refuse(400, 'invalid', 'Select a saved group agent')
+            agent_ids = [aid]
+        elif (not social.valid_agent_ids(agent_ids) or not 1 <= len(agent_ids) <= 5):
+            refuse(400, 'invalid', 'Provide 1–5 unique saved group agent ids')
+        if row['kind'] != 'group':
+            refuse(400, 'invalid', 'Select a saved group agent')
+        if not social.valid_body(text):
+            refuse(400, 'invalid', 'Provide a request of 1–4000 characters')
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        single = body.get('agent_ids') is None
+        plans = []
+        for aid in agent_ids:
+            key_hash = digest('group-agent-reply:' + key + ('' if single else ':' + aid))
+            request_hash = digest(json.dumps({'agent_id': aid, 'prompt': text,
+                                              'requested_by': session['user_id']}, sort_keys=True))
+            prior = db.execute('SELECT * FROM social_agent_replies WHERE conversation_id=? AND key_hash=?',
+                               (row['id'], key_hash)).fetchone()
+            if prior is not None:
+                if prior['request_hash'] != request_hash:
+                    refuse(409, 'conflict', 'Idempotency key was used for a different request')
+                plans.append({'replay': prior, 'agent_id': aid})
+            else:
+                agent = db.execute(
+                    'SELECT a.* FROM workspace_agents a JOIN social_agent_members m ON m.agent_id=a.id '
+                    'WHERE m.conversation_id=? AND a.id=? AND a.workspace_id=? AND a.archived=0',
+                    (row['id'], aid, workspace['id'])).fetchone()
+                if agent is None:
+                    refuse(400, 'invalid', 'Select an active saved group agent')
+                plans.append({'agent': agent, 'agent_id': aid, 'key_hash': key_hash,
+                              'request_hash': request_hash})
+        new_plans = [plan for plan in plans if 'agent' in plan]
+        requests = social.reply_requests(db, row['id'])
+        active = {item['agent_id'] for item in requests if item['status'] in ('queued', 'running')}
+        if any(plan['agent_id'] in active for plan in new_plans):
+            refuse(409, 'conflict', 'An agent reply is already in progress for a selected agent')
+        cap = self.config.max_social_messages_per_conversation
+        if len(requests) + len(new_plans) > cap or social.message_slots(db, row['id']) + len(new_plans) > cap:
+            refuse(429, 'quota', 'Group reply capacity reached')
+        replies = []
+        for plan in plans:
+            if 'replay' in plan:
+                replies.append(plan['replay'])
+                continue
+            agent = plan['agent']
+            prompt = conversations.compose_prompt(agent, [], text)
+            task_id, error, _dispatch = self.queue_infer_task(
+                db, session['user_id'], now, prompt, workspace['id'], plan['agent_id'])
+            rid = uuid4().hex
+            db.execute(
+                'INSERT INTO social_agent_replies '
+                '(id,conversation_id,workspace_id,agent_id,agent_name,requested_by,prompt,agent_revision,'
+                'status,task_id,error_code,created,updated,key_hash,request_hash) '
+                'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                (rid, row['id'], workspace['id'], plan['agent_id'], agent['name'], session['user_id'],
+                 text, agent['revision'], 'queued' if task_id else 'failed', task_id, error,
+                 now, now, plan['key_hash'], plan['request_hash']))
+            replies.append(db.execute('SELECT * FROM social_agent_replies WHERE id=?', (rid,)).fetchone())
+        payload = [social.reply_view(item) for item in replies]
+        return (201 if new_plans else 200), {'reply': payload[0], 'replies': payload}, []
+
+    def reconcile_group_replies(self, db, row, now):
+        for reply in social.reply_requests(db, row['id']):
+            if reply['status'] not in ('queued', 'running'):
+                continue
+            task = runtime_connect.load_task(db, reply['task_id']) if reply['task_id'] else None
+            if task is None:
+                status, error, text = 'failed', 'task_missing', ''
+            else:
+                task = runtime_connect.expire_task(db, task, now)
+                status, error, text = conversations.map_task_status(task)
+                if status == 'succeeded' and not text.strip():
+                    status, error, text = 'failed', 'empty_reply', ''
+                # Expose only fixed error codes, never arbitrary runtime diagnostics.
+                if status in ('failed', 'cancelled'):
+                    error = error if error in ('timeout', 'cancelled', 'empty_reply') else 'runtime_failed'
+                    text = ''
+            seq = social.next_seq(db, row['id']) if status == 'succeeded' else None
+            db.execute('UPDATE social_agent_replies SET status=?,error_code=?,body=?,seq=?,updated=? WHERE id=?',
+                       (status, error, text if status == 'succeeded' else '', seq, now, reply['id']))
+            if status == 'succeeded':
+                db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, row['id']))
+
     def create_social_conversation(self, db, workspace, session, now, env):
-        body = self.body(env, ['kind', 'member_ids', 'title'])
+        body = self.body(env, ['kind', 'member_ids', 'title', 'agent_ids'])
         kind, member_ids = body.get('kind'), body.get('member_ids')
         if kind not in social.KINDS or not social.valid_member_ids(member_ids):
             refuse(400, 'invalid', 'Provide a kind and 1–49 member ids')
+        agent_ids = body.get('agent_ids', [])
+        if not social.valid_agent_ids(agent_ids) or (kind == 'dm' and agent_ids):
+            refuse(400, 'invalid', 'Agent members require a group and 0–49 unique agent ids')
+        for agent_id in agent_ids:
+            agent = db.execute(
+                'SELECT id FROM workspace_agents WHERE id=? AND workspace_id=? AND archived=0',
+                (agent_id, workspace['id'])).fetchone()
+            if agent is None:
+                refuse(400, 'invalid', 'Every agent must be an active workspace agent')
         title = body.get('title')
         if title is not None and not social.valid_title(title):
             refuse(400, 'invalid', 'Provide a valid conversation title')
@@ -2836,9 +3221,11 @@ class App:
         allowed = social.workspace_member_ids(db, workspace)
         if not members_set.issubset(allowed):
             refuse(400, 'invalid', 'Every member must belong to the workspace')
-        if len(members_set) > self.config.max_social_members_per_conversation:
+        if len(members_set) + len(agent_ids) > self.config.max_social_members_per_conversation:
             refuse(429, 'quota', 'Conversation member limit reached')
         payload = {'kind': kind, 'member_ids': sorted(member_ids), 'title': title}
+        if agent_ids:
+            payload['agent_ids'] = sorted(agent_ids)
         key_hash, request_hash = digest('social-conversation:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False))
         prior = social.load_by_key(db, workspace['id'], key_hash)
@@ -2872,6 +3259,9 @@ class App:
             db.execute(
                 'INSERT INTO social_members VALUES(?,?,?,?)',
                 (conversation_id, workspace['id'], user_id, now))
+        for agent_id in sorted(agent_ids):
+            db.execute('INSERT INTO social_agent_members VALUES(?,?,?)',
+                       (conversation_id, agent_id, now))
         row = social.load(db, workspace['id'], conversation_id)
         return 201, {'conversation': social.conversation_item(db, row)}, []
 
@@ -2890,8 +3280,7 @@ class App:
             if prior['request_hash'] != request_hash:
                 refuse(409, 'conflict', 'Idempotency key was used for a different request')
             return 200, {'message': social.message_view(prior)}, []
-        if (db.execute('SELECT COUNT(*) FROM social_messages WHERE conversation_id=?',
-                       (row['id'],)).fetchone()[0]
+        if (social.message_slots(db, row['id'])
                 >= self.config.max_social_messages_per_conversation):
             refuse(429, 'quota', 'Message capacity reached')
         message_id = uuid4().hex

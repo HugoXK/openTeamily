@@ -2,7 +2,7 @@
 
 Self-written for OpenTeamily; no upstream or Teamily source. This slice adds
 direct messages and named group conversations between members of the same
-workspace. It deliberately does not add agent participants in replies, unread
+workspace. Groups may persist agent members (not speakers). It does not add unread
 counts, notifications, attachments or cross-workspace delivery. Those remain
 separate issues; do not describe this as Teamily messenger parity.
 """
@@ -34,6 +34,33 @@ CREATE TABLE IF NOT EXISTS social_members (
  PRIMARY KEY(conversation_id, user_id));
 CREATE INDEX IF NOT EXISTS social_member_user
  ON social_members(workspace_id, user_id, conversation_id);
+CREATE TABLE IF NOT EXISTS social_agent_members (
+ conversation_id TEXT NOT NULL REFERENCES social_conversations(id) ON DELETE CASCADE,
+ agent_id TEXT NOT NULL REFERENCES workspace_agents(id) ON DELETE CASCADE,
+ created INTEGER NOT NULL,
+ PRIMARY KEY(conversation_id, agent_id));
+CREATE TABLE IF NOT EXISTS social_agent_replies (
+ id TEXT PRIMARY KEY,
+ conversation_id TEXT NOT NULL REFERENCES social_conversations(id) ON DELETE CASCADE,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ agent_id TEXT NOT NULL REFERENCES workspace_agents(id),
+ agent_name TEXT NOT NULL,
+ requested_by TEXT NOT NULL REFERENCES users(id),
+ prompt TEXT NOT NULL,
+ agent_revision INTEGER NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('queued','running','succeeded','failed','cancelled')),
+ task_id TEXT,
+ error_code TEXT,
+ body TEXT NOT NULL DEFAULT '',
+ seq INTEGER,
+ created INTEGER NOT NULL,
+ updated INTEGER NOT NULL,
+ key_hash TEXT NOT NULL,
+ request_hash TEXT NOT NULL,
+ UNIQUE(conversation_id, key_hash),
+ UNIQUE(conversation_id, seq));
+CREATE INDEX IF NOT EXISTS social_agent_reply_pending
+ ON social_agent_replies(conversation_id, status);
 CREATE TABLE IF NOT EXISTS social_messages (
  id TEXT PRIMARY KEY,
  conversation_id TEXT NOT NULL REFERENCES social_conversations(id) ON DELETE CASCADE,
@@ -74,22 +101,70 @@ def valid_member_ids(value):
     return len(set(value)) == len(value)
 
 
+def valid_agent_ids(value):
+    return isinstance(value, list) and len(value) <= 49 and (
+        not value or valid_member_ids(value))
+
+
+def agent_member_rows(db, conversation_id):
+    rows = db.execute(
+        'SELECT m.agent_id, a.name, a.archived, m.created FROM social_agent_members m '
+        'JOIN workspace_agents a ON a.id=m.agent_id '
+        'JOIN social_conversations c ON c.id=m.conversation_id AND c.workspace_id=a.workspace_id '
+        'WHERE m.conversation_id=? ORDER BY a.name, m.agent_id', (conversation_id,))
+    return [dict(row) for row in rows]
+
+
 def dm_key(first, second):
     return digest('social-dm:' + ':'.join(sorted((first, second))))
 
 
-def conversation_view(row, members=None, preview=''):
+def conversation_view(row, members=None, preview='', agent_members=None):
     data = {key: row[key] for key in (
         'id', 'workspace_id', 'kind', 'title', 'created', 'updated')}
     data['preview'] = preview or ''
+    data['agent_members'] = agent_members or []
     if members is not None:
         data['members'] = members
     return data
 
 
 def message_view(row):
-    return {key: row[key] for key in (
+    data = {key: row[key] for key in (
         'id', 'conversation_id', 'workspace_id', 'user_id', 'body', 'created')}
+    if 'agent_id' in row.keys() and row['agent_id']:
+        data.update(role='agent', agent_id=row['agent_id'], agent_name=row['agent_name'],
+                    source='runtime_infer')
+    return data
+
+
+# Success-only union: agent output has no human author and shares the group sequence.
+MESSAGE_ROWS = """
+ SELECT id, conversation_id, workspace_id, user_id, body, seq, created,
+        NULL AS agent_id, NULL AS agent_name FROM social_messages
+ UNION ALL
+ SELECT id, conversation_id, workspace_id, NULL, body, seq, updated,
+        agent_id, agent_name FROM social_agent_replies WHERE status='succeeded'
+"""
+
+
+def reply_view(row):
+    return {key: row[key] for key in (
+        'id', 'agent_id', 'agent_name', 'requested_by', 'prompt', 'status',
+        'task_id', 'error_code', 'created', 'updated')}
+
+
+def reply_requests(db, conversation_id):
+    return db.execute('SELECT * FROM social_agent_replies WHERE conversation_id=? ORDER BY created, id',
+                      (conversation_id,)).fetchall()
+
+
+def message_slots(db, conversation_id):
+    human = db.execute('SELECT COUNT(*) FROM social_messages WHERE conversation_id=?',
+                       (conversation_id,)).fetchone()[0]
+    replies = db.execute("SELECT COUNT(*) FROM social_agent_replies WHERE conversation_id=? "
+                         "AND status IN ('queued','running','succeeded')", (conversation_id,)).fetchone()[0]
+    return human + replies
 
 
 def member_view(row):
@@ -142,7 +217,7 @@ def last_previews(db, workspace_id, conversation_ids):
         'SELECT conversation_id, body FROM ('
         ' SELECT conversation_id, body,'
         ' ROW_NUMBER() OVER (PARTITION BY conversation_id ORDER BY seq DESC, id DESC) AS rn'
-        f' FROM social_messages WHERE workspace_id=? AND conversation_id IN ({placeholders})'
+        f' FROM ({MESSAGE_ROWS}) WHERE workspace_id=? AND conversation_id IN ({placeholders})'
         " AND trim(body) != '') ranked WHERE rn=1",
         (workspace_id, *ids),
     ).fetchall()
@@ -153,14 +228,15 @@ def conversation_item(db, row, members=None):
     preview = last_previews(db, row['workspace_id'], [row['id']]).get(row['id'], '')
     if members is None:
         members = member_rows(db, row['id'])
-    return conversation_view(row, members, preview)
+    return conversation_view(row, members, preview, agent_member_rows(db, row['id']))
 
 
 def conversation_items(db, rows):
     if not rows:
         return []
     previews = last_previews(db, rows[0]['workspace_id'], [row['id'] for row in rows])
-    return [conversation_view(row, member_rows(db, row['id']), previews.get(row['id'], ''))
+    return [conversation_view(row, member_rows(db, row['id']), previews.get(row['id'], ''),
+                              agent_member_rows(db, row['id']))
             for row in rows]
 
 
@@ -177,14 +253,14 @@ def messages(db, conversation_id, cursor, limit):
     start = 0
     if cursor:
         current = db.execute(
-            'SELECT seq FROM social_messages WHERE conversation_id=? AND id=?',
+            f'SELECT seq FROM ({MESSAGE_ROWS}) WHERE conversation_id=? AND id=?',
             (conversation_id, cursor),
         ).fetchone()
         if current is None:
             return None
         start = current['seq']
     return db.execute(
-        'SELECT * FROM social_messages WHERE conversation_id=? AND seq>? ORDER BY seq LIMIT ?',
+        f'SELECT * FROM ({MESSAGE_ROWS}) WHERE conversation_id=? AND seq>? ORDER BY seq LIMIT ?',
         (conversation_id, start, limit),
     ).fetchall()
 
@@ -198,7 +274,7 @@ def load_message_by_key(db, conversation_id, key_hash):
 
 def next_seq(db, conversation_id):
     row = db.execute(
-        'SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM social_messages WHERE conversation_id=?',
+        f'SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM ({MESSAGE_ROWS}) WHERE conversation_id=?',
         (conversation_id,),
     ).fetchone()
     return row['seq']

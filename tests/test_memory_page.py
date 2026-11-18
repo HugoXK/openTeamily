@@ -1,5 +1,6 @@
 """Memory page serving tests. In-process WSGI only; not browser E2E."""
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
@@ -66,6 +67,12 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('已读状态接口', html)
         self.assertIn('data-filter="updated"', html)
         self.assertIn('id="graph-canvas"', html)
+        self.assertIn('class="graph-hint"', html)
+        self.assertIn('单击查看 · 双击打开 · 悬停预览', html)
+        self.assertIn('id="graph-hover-card"', html)
+        self.assertIn('class="graph-hover-title"', html)
+        self.assertIn('悬停预览卡的版式未经核实', html)
+        self.assertNotIn('尚未实现这些手势', html)
         self.assertIn('id="topic-list"', html)
         self.assertIn('id="memory-list"', html)
         self.assertIn('id="action-list"', html)
@@ -90,6 +97,9 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('export function applyDirectoryCollapsed', js)
         self.assertIn('export function topicTag', js)
         self.assertIn('export function memoryPageMeta', js)
+        self.assertIn('export function graphPreviewModel', js)
+        self.assertIn('export function bindGraphNodeGestures', js)
+        self.assertIn('GRAPH_HOVER_DELAY_MS', js)
         self.assertIn('dir-collapse', js)
         self.assertIn('memory-page-link', js)
         self.assertIn('memory-page-preview', js)
@@ -102,6 +112,8 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('memory-page-meta', css)
         self.assertIn('memory-page-preview', css)
         self.assertIn('memory-page-icon', css)
+        self.assertIn('.graph-hint', css)
+        self.assertIn('.graph-hover-card', css)
         self.assertEqual(self.raw.call('GET', '/memory/missing')['status'], 404)
 
     def test_page_rejects_cross_origin_queries_and_writes(self):
@@ -130,6 +142,26 @@ class MemoryPageServingTests(unittest.TestCase):
         listed = self.client.call('GET', f'/v1/workspaces/{wid}/memory')
         self.assertEqual(listed['status'], 200)
         self.assertEqual([item['title'] for item in listed['body']['items']], ['Brief'])
+
+    def test_directory_search_filters_in_place_and_keeps_open_editor(self):
+        page = self.raw.call('GET', '/memory')
+        html = page['body'].decode()
+        self.assertIn('id="search"', html)
+        self.assertIn('placeholder="搜索主题……"', html)
+        self.assertIn('这个工作区还没有记忆页。', html)
+        script = self.raw.call('GET', '/memory/app.mjs')
+        source = script['body'].decode()
+        self.assertNotIn("addEventListener('input', () => loadWorkspace())", source)
+        self.assertIn("addEventListener('input', () => renderDirectory())", source)
+        self.assertIn('没有匹配的记忆页。试试其他关键词。', source)
+        self.assertIn("event.key !== 'Escape'", source)
+        self.assertIn('matchingMemoryPages', source)
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            ['node', '--test', 'tests/memory_search.test.mjs'],
+            cwd=root, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 
 if __name__ == '__main__':

@@ -1,8 +1,11 @@
 """Agents page serving tests. In-process WSGI only; not browser E2E."""
 from pathlib import Path
+import re
+import subprocess
 import tempfile
 import unittest
 
+from openteamily import discover
 from openteamily.app import App, Config
 from openteamily.settings_page import SettingsPage
 from openteamily.store import Store
@@ -47,6 +50,16 @@ class AgentsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/agents', query='x=1')['status'], 400)
         self.assertEqual(self.raw.call('POST', '/agents')['status'], 405)
 
+    def test_category_deep_link_is_the_only_accepted_query(self):
+        page = self.raw.call('GET', '/agents', query='category=design')
+        self.assertEqual(page['status'], 200)
+        html = page['body'].decode()
+        slugs = re.findall(r'data-category="([a-z-]+)"', html)
+        self.assertEqual(slugs, ['all', *[slug for slug, _label in discover.AGENT_CATEGORIES]])
+        for bad in ('category=not-a-category', 'category=', 'category=design&x=1',
+                    'x=1', 'category=Design', 'category=design&category=sales'):
+            self.assertEqual(self.raw.call('GET', '/agents', query=bad)['status'], 400, bad)
+
     def test_wrapper_still_exposes_agent_directory(self):
         space = self.client.call('POST', '/v1/workspaces', {'name': 'Desk'},
                                  {'HTTP_IDEMPOTENCY_KEY': 'agents-page-space-01'})
@@ -60,6 +73,25 @@ class AgentsPageTests(unittest.TestCase):
         listed = self.client.call('GET', f'/v1/workspaces/{wid}/agents')
         self.assertEqual(listed['status'], 200)
         self.assertEqual([row['name'] for row in listed['body']['items']], ['目录助手'])
+
+    def test_directory_search_filters_in_place_and_keeps_open_chat(self):
+        page = self.raw.call('GET', '/agents')
+        html = page['body'].decode()
+        self.assertIn('id="agent-search"', html)
+        self.assertIn('id="agents-count"', html)
+        self.assertIn('这个工作区还没有智能体。', html)
+        script = self.raw.call('GET', '/agents/app.mjs')
+        source = script['body'].decode()
+        self.assertNotIn("addEventListener('input', () => loadWorkspace())", source)
+        self.assertIn("addEventListener('input', () => renderDirectory())", source)
+        self.assertIn('没有匹配的智能体。试试其他关键词。', source)
+        self.assertIn("event.key !== 'Escape'", source)
+        self.assertIn("'显示 ' + shown + ' 个智能体'", source)
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            ['node', '--test', 'tests/agents_search.test.mjs'],
+            cwd=root, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == '__main__':

@@ -7,7 +7,7 @@ from tests import test_settings_page as settings_page_tests
 PAGES = (
     '/settings', '/agents', '/chat', '/automations', '/artifacts', '/space',
     '/members', '/team', '/runtimes', '/memory', '/discover',
-    '/profile', '/download', '/guide',
+    '/profile', '/onboarding', '/download', '/guide',
 )
 
 CAPTURE_IDS = {
@@ -46,7 +46,11 @@ CAPTURE_IDS = {
                 'search', 'new-page', 'graph-canvas', 'topic-list',
                 'overview-panel', 'actions-panel', 'action-list',
                 'profile-panel', 'dream-profile', 'dream-actions'),
-    '/profile': ('main-panel', 'whoami', 'profile-username'),
+    '/profile': ('main-panel', 'whoami', 'profile-username', 'profile-form',
+                 'profile-name', 'profile-handle', 'profile-bio', 'profile-save'),
+
+    '/onboarding': ('main-panel', 'onboarding-form', 'industry', 'role-choices',
+                    'onboarding-save', 'onboarding-skip'),
     '/download': ('main-panel', 'download-web', 'download-runtime',
                   'download-unavailable', 'daemon-command'),
     '/guide': ('main-panel', 'whoami', 'guide-search', 'guide-categories',
@@ -116,14 +120,8 @@ class ShellPageTests(unittest.TestCase):
             self.assertIn('id="logout-form"', html, path)
             self.assertIn('所有设置', html, path)
             self.assertIn('href="/settings"', html, path)
-            if path == '/settings':
-                self.assertIn('积分中心', html)
-                self.assertIn('套餐与账单', html)
-                self.assertIn('id="settings-upgrade"', html)
-                self.assertRegex(html, r'<button[^>]*id="settings-upgrade"[^>]*disabled')
-            else:
-                self.assertNotIn('积分中心', html, path)
-                self.assertNotIn('套餐与账单', html, path)
+            self.assertNotIn('积分中心', html, path)
+            self.assertNotIn('套餐与账单', html, path)
             self.assertNotIn('contact@teamily.ai', html.lower(), path)
             self.assertIn('id="help-menu"', html, path)
             self.assertIn('查看我的资料', html, path)
