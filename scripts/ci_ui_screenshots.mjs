@@ -523,6 +523,34 @@ async function main() {
     } catch (error) {
       record('agents_search_filter', false, String(error));
     }
+    try {
+      await page.locator('#edit-form').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#edit-form select[name="category"]').selectOption('operations');
+      await page.locator('#edit-form button[type="submit"]').click();
+      await waitForLocatorText(page, '#status', '已更新');
+      await page.locator('.filter-row .pill[data-category="operations"]').click();
+      await waitForLocatorText(page, '#agent-list', 'Operations');
+      const filteredList = await visibleText(page.locator('#agent-list'));
+      const filteredUrl = page.url();
+      const chatStillOpen = await page.locator('#chat-panel').isVisible();
+      await page.locator('.filter-row .pill[data-category="sales"]').click();
+      await waitForLocatorText(page, '#agents-empty', '「Sales」类目下还没有智能体。');
+      const salesEmpty = ((await page.locator('#agents-empty').textContent()) || '').trim();
+      await page.locator('.filter-row .pill[data-category="operations"]').click();
+      await waitForLocatorText(page, '#agent-list', ready.agent_name);
+      record(
+        'agents_category_filter',
+        filteredList.includes(ready.agent_name)
+          && filteredUrl.includes('category=operations')
+          && chatStillOpen
+          && salesEmpty === '「Sales」类目下还没有智能体。选「全部」查看其余智能体。',
+        `list=${filteredList}; url=${filteredUrl}; chat=${chatStillOpen}; sales=${salesEmpty}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '89-agents-category-filter.png')));
+      await page.locator('.filter-row .pill[data-category="all"]').click();
+    } catch (error) {
+      record('agents_category_filter', false, String(error));
+    }
 
     await page.setViewportSize({ width: 1440, height: 900 });
     const chatUrl = `${origin}/chat#workspace=${ready.workspace_id}&agent=${ready.agent_id}&conversation=${ready.conversation_id}`;

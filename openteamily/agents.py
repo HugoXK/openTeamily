@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS workspace_agents (
  UNIQUE(workspace_id, key_hash),
  UNIQUE(workspace_id, name_hash));
 CREATE INDEX IF NOT EXISTS workspace_agent_list ON workspace_agents(workspace_id, archived, id);
+CREATE TABLE IF NOT EXISTS workspace_agent_categories (
+ agent_id TEXT PRIMARY KEY REFERENCES workspace_agents(id) ON DELETE CASCADE,
+ category TEXT NOT NULL,
+ updated INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS workspace_agent_homepages (
  id TEXT PRIMARY KEY,
  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -50,6 +54,14 @@ CREATE INDEX IF NOT EXISTS workspace_agent_homepage_agent
 '''
 
 NAME_MAX = 80
+# The 17 directory categories recorded on the target agents page, as slugs.
+# Kept in step with AGENT_CATEGORIES in openteamily/static/agents/app.mjs.
+CATEGORIES = (
+    'content-creation', 'customer-support', 'data-analysis', 'design',
+    'education', 'engineering', 'finance', 'it-security', 'investment',
+    'legal', 'life', 'marketing', 'operations', 'product', 'recruiting',
+    'research', 'sales',
+)
 SUMMARY_MAX = 500
 INSTRUCTIONS_MAX = 16000
 CONTROL = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
@@ -98,8 +110,31 @@ def homepage_view(row, include_token=False, token=None):
     return data
 
 
+def valid_category(value):
+    return value is None or (isinstance(value, str) and value in CATEGORIES)
+
+
+def load_category(db, agent_id):
+    found = db.execute(
+        'SELECT category FROM workspace_agent_categories WHERE agent_id=?', (agent_id,)
+    ).fetchone()
+    return found['category'] if found else None
+
+
+def store_category(db, agent_id, category, now):
+    if category is None:
+        db.execute('DELETE FROM workspace_agent_categories WHERE agent_id=?', (agent_id,))
+    else:
+        db.execute(
+            'INSERT INTO workspace_agent_categories VALUES(?,?,?) '
+            'ON CONFLICT(agent_id) DO UPDATE SET category=excluded.category, updated=excluded.updated',
+            (agent_id, category, now),
+        )
+
+
 def snapshot(db, row, include_token=False, token=None):
     data = view(row)
+    data['category'] = load_category(db, row['id'])
     data['homepage'] = homepage_view(load_active_homepage(db, row['id']), include_token, token)
     return data
 
