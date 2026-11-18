@@ -83,6 +83,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentUser = null;
   let actor = null;
   let workspaces = [];
+  let agentItems = [];
   let currentAgent = null;
   let currentConversation = null;
   let pollTimer = 0;
@@ -220,12 +221,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
       return;
     }
-    const items = listed.body.items || [];
+    agentItems = listed.body.items || [];
+    renderAgentList();
+    show('', '');
+  }
+
+  function renderAgentList() {
+    const id = workspaceId();
     const list = document.getElementById('agent-list');
     list.replaceChildren();
     const query = ((document.getElementById('agent-search') || {}).value || '').trim().toLowerCase();
     let shown = 0;
-    for (const item of items) {
+    for (const item of agentItems) {
       const hay = (item.name + ' ' + (item.summary || '')).toLowerCase();
       if (query && !hay.includes(query)) continue;
       shown += 1;
@@ -253,8 +260,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       li.append(avatar, copy, chat);
       list.append(li);
     }
-    document.getElementById('agents-empty').hidden = shown > 0;
-    show('', '');
+    const empty = document.getElementById('agents-empty');
+    empty.hidden = shown > 0;
+    empty.textContent = agentItems.length
+      ? '没有匹配的智能体。试试其他关键词。'
+      : '这个工作区还没有智能体。';
+    document.getElementById('agents-count').textContent = '显示 ' + shown + ' 个智能体';
   }
 
   function fillEdit(agent) {
@@ -675,7 +686,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (canManage(actor)) createForm.hidden = false;
   });
   const search = document.getElementById('agent-search');
-  if (search) search.addEventListener('input', () => loadWorkspace());
+  if (search) {
+    search.addEventListener('input', () => renderAgentList());
+    search.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      search.value = '';
+      renderAgentList();
+      search.focus();
+    });
+  }
   const tabAgents = document.getElementById('tab-agents');
   const tabTeams = document.getElementById('tab-teams');
   if (tabAgents && tabTeams) {
