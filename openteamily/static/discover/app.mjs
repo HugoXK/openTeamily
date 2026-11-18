@@ -6,6 +6,11 @@ export function validSlug(value) {
   return typeof value === 'string' && SLUG.test(value);
 }
 
+export function catalogInitial(name) {
+  const match = String(name || '').match(/\p{L}|\p{N}/u);
+  return match ? match[0].toUpperCase() : '?';
+}
+
 export function catalogItems(body) {
   return Array.isArray(body && body.items) ? body.items : [];
 }
@@ -87,7 +92,7 @@ export function renderTeamCard(document, item) {
   avatars.setAttribute('aria-hidden', 'true');
   for (const member of item.members || []) {
     const mark = document.createElement('span');
-    mark.textContent = String(member).slice(0, 1).toUpperCase();
+    mark.textContent = catalogInitial(member);
     avatars.append(mark);
   }
   foot.append(avatars);
@@ -231,7 +236,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       const avatar = document.createElement('span');
       avatar.className = 'catalog-avatar';
       avatar.setAttribute('aria-hidden', 'true');
-      avatar.textContent = (item.name || item.slug || '?').slice(0, 1).toUpperCase();
+      avatar.textContent = catalogInitial(item.name || item.slug);
       const copy = document.createElement('div');
       copy.className = 'catalog-copy';
       const name = document.createElement('h3');

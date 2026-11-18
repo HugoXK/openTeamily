@@ -158,6 +158,11 @@ class DiscoverCatalogPageTests(unittest.TestCase):
             self.assertEqual(positions, sorted(positions))
             self.assertIn('aria-current="true"', filters.split('>全部<', 1)[0].rsplit('<button', 1)[1])
             self.assertGreaterEqual(filters.count(' disabled '), 15)
+            scroll = filters.split('class="catalog-filter-scroll"', 1)[1].split('</div>', 1)[0]
+            self.assertIn('>Marketing<', scroll)
+            self.assertNotIn('id="catalog-filter-search"', scroll)
+            self.assertNotIn('id="catalog-filter-more"', scroll)
+            self.assertIn('id="catalog-filter-search"', filters.split('</div>', 1)[1])
             creator = text.split('id="catalog-creator"', 1)[1].split('</button>', 1)[0]
             self.assertIn('disabled', creator)
             self.assertIn('创建者', creator)
@@ -176,6 +181,10 @@ class DiscoverCatalogPageTests(unittest.TestCase):
             ]
             team_positions = [team_filters.index('>' + label + '<') for label in team_categories]
             self.assertEqual(team_positions, sorted(team_positions))
+            team_scroll = team_filters.split('class="catalog-filter-scroll"', 1)[1].split('</div>', 1)[0]
+            self.assertIn('>Sales<', team_scroll)
+            self.assertNotIn('id="teams-filter-more"', team_scroll)
+            self.assertIn('id="teams-filter-more"', team_filters.split('</div>', 1)[1])
             self.assertIn('aria-current="true"', team_filters.split('>All<', 1)[0].rsplit('<button', 1)[1])
             self.assertIn('+ 创建我的 AI 团队', teams_text)
             self.assertIn('data-teams-placeholder="搜索 AI 团队......"', teams_text)
