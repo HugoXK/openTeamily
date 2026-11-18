@@ -62,7 +62,7 @@ export function matchesCategory(item, slug) {
 }
 
 export function fillCategoryOptions(select, doc) {
-  if (!select || select.options.length > 1) return;
+  if (!select || !select.options || select.options.length > 1) return;
   for (const entry of AGENT_CATEGORIES) {
     const option = (doc || select.ownerDocument).createElement('option');
     option.value = entry.slug;
@@ -271,7 +271,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (empty) {
       empty.hidden = shown > 0;
-      empty.textContent = query
+      empty.textContent = !directoryAgents.length
+        ? '这个工作区还没有智能体。'
+        : query
         ? '没有匹配的智能体。试试其他关键词。'
         : selectedCategory !== 'all' && directoryAgents.length
           ? '「' + categoryLabel(selectedCategory) + '」类目下还没有智能体。选「全部」查看其余智能体。'
