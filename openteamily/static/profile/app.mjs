@@ -77,7 +77,7 @@ function mount() {
       ? '修订 ' + revision + ' · Teamily ID 可用于公开资料地址'
       : '还没有保存过资料。保存后会生成 Teamily ID。';
     const link = document.getElementById('profile-public');
-    if (link) link.href = value.handle ? '/v1/profiles/' + encodeURIComponent(value.handle) : '/v1/profile';
+    if (link) link.href = value.handle ? '/p/' + encodeURIComponent(value.handle) : '/v1/profile';
   }
 
   function collect() {

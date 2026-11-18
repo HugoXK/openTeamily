@@ -837,6 +837,35 @@ async function main() {
       record('chat_search_conversation_scope', false, String(error));
     }
 
+    // Appended backend-search integration; keep previous capture blocks intact.
+    try {
+      await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 15000);
+      await page.locator('#message-search').click();
+      await waitForLocatorText(page, '#search-source-note', '仅搜索当前对话');
+      await page.locator('#session-search').fill(ready.provider_text);
+      await waitForLocatorText(page, '#search-results', ready.provider_text, 15000);
+      const hits = await visibleText(page.locator('#search-results'));
+      record('chat_search_group_agent_reply', hits.includes('[CI FIXTURE] Agent members group')
+        && hits.includes(ready.provider_text), 'Persisted fake-provider group reply found: ' + hits);
+      screenshots.push(path.basename(await shot(page, outDir, '85-chat-group-agent-search.png')));
+      const groupId = await page.evaluate(() => new URLSearchParams(location.hash.slice(1)).get('social'));
+      const reopened = page.waitForResponse(response => response.request().method() === 'GET'
+        && new URL(response.url()).pathname === `/v1/workspaces/${ready.workspace_id}/social/conversations/${groupId}`);
+      await page.locator('#search-results button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
+      const response = await reopened;
+      const saved = await response.json();
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 15000);
+      record('chat_search_group_agent_open', response.status() === 200 && saved.conversation.id === groupId
+        && saved.items.some(item => item.role === 'agent' && item.body === ready.provider_text)
+        && (await visibleText(page.locator('#message-list'))).includes('AI 智能体 · 运行时回复'),
+        'Search result fetched the same saved group and runtime-authored reply');
+    } catch (error) {
+      record('chat_search_group_agent_reply', false, String(error));
+    }
+    // The next existing step navigates to /automations (a new document), avoiding
+    // a fragment-only cleanup navigation racing the async result-open handler.
+
     await page.setViewportSize({ width: 1280, height: 900 });
 
     await page.goto(`${origin}/automations`, { waitUntil: 'load' });
@@ -1751,6 +1780,40 @@ async function main() {
       screenshots.push(path.basename(await shot(page, outDir, '77-agent-public-homepage.png')));
     } catch (error) {
       record('agent_public_homepage', false, String(error).replace(/\/a\/[A-Za-z0-9_-]{20,}/g, '/a/<redacted>'));
+    }
+
+    // PR151 integration: real UI save/reopen, with current personal-agent startup retained.
+    try {
+      await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
+      await page.locator('#industry option[value="科技与软件"]').waitFor({state: 'attached'});
+      await page.locator('#industry').selectOption('科技与软件');
+      await page.locator('#role-choices input[value="产品经理"]').check();
+      await page.locator('#onboarding-save').click();
+      await page.waitForURL(url => url.pathname === '/chat');
+      await page.locator('#main-panel').waitFor({state: 'visible'});
+      await page.waitForFunction(() => document.getElementById('onboarding-banner').hidden);
+      const personalResponse = await page.request.get(`${origin}/v1/personal-agent`);
+      const personalState = await personalResponse.json();
+      await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#onboarding-meta', '科技与软件');
+      record('onboarding_save_reopen', await page.locator('#industry').inputValue() === '科技与软件'
+        && await page.locator('#role-choices input[value="产品经理"]').isChecked()
+        && Boolean(personalState.personal_agent && personalState.personal_agent.agent),
+        'Saved work context survives reload alongside the personal agent; no recommendations or connector claims');
+      screenshots.push(path.basename(await shot(page, outDir, '86-onboarding-saved-context.png')));
+      await page.locator('#industry').selectOption('其他');
+      await page.locator('#custom-industry').fill('[CI FIXTURE] Independent research');
+      await page.locator('#custom-role').fill('[CI FIXTURE] Analyst');
+      await page.locator('#onboarding-save').click();
+      await page.waitForURL(url => url.pathname === '/chat');
+      await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#onboarding-meta', '[CI FIXTURE] Independent research');
+      record('onboarding_custom_reopen',
+        await page.locator('#custom-industry').inputValue() === '[CI FIXTURE] Independent research'
+        && await page.locator('#custom-role').inputValue() === '[CI FIXTURE] Analyst',
+        'Custom industry and role are both restored, not lost on the Other form');
+    } catch (error) {
+      record('onboarding_save_reopen', false, String(error));
     }
 
     await context.close();

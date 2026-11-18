@@ -60,5 +60,31 @@ class OnboardingTests(unittest.TestCase):
         self.assertIsNone(self.bob.call('GET', '/v1/onboarding')['body']['onboarding'])
 
 
+    def test_personal_agent_and_onboarding_coexist_across_v1_reopen(self):
+        self.assertIsNone(self.alice.call('GET', '/v1/personal-agent')['body']['personal_agent'])
+        self.assertIsNone(self.alice.call('GET', '/v1/onboarding')['body']['onboarding'])
+        personal = self.alice.call('POST', '/v1/personal-agent', {})
+        self.assertEqual(personal['status'], 201, personal)
+        saved = self.alice.call('POST', '/v1/onboarding', {
+            'industry': '独立研究', 'role': '分析顾问', 'completed': True})
+        self.assertEqual(saved['status'], 201, saved)
+        reopened = App(Store(Path(self.temp.name) / 'state'), Config(ORIGIN, allow_registration=True))
+        self.alice.app = reopened
+        self.assertEqual(self.alice.call('GET', '/v1/onboarding')['body']['onboarding'], saved['body']['onboarding'])
+        self.assertEqual(self.alice.call('GET', '/v1/personal-agent')['body'], personal['body'])
+        self.assertEqual(self.alice.call('POST', '/v1/personal-agent', {})['status'], 200)
+        with reopened.store.connect() as db:
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 1)
+        self.assertIsNone(self.bob.call('GET', '/v1/onboarding')['body']['onboarding'])
+
+    def test_origin_unknown_fields_and_read_only_get(self):
+        valid = {'industry': '科技与软件', 'role': '产品经理', 'completed': True}
+        self.assertEqual(self.alice.call('POST', '/v1/onboarding', valid,
+                                         {'HTTP_ORIGIN': 'https://evil.invalid'})['status'], 403)
+        self.assertEqual(self.alice.call('POST', '/v1/onboarding', {**valid, 'user_id': 'another'})['status'], 400)
+        self.assertEqual(Client(self.app).call('GET', '/v1/onboarding')['status'], 401)
+        self.assertIsNone(self.alice.call('GET', '/v1/onboarding')['body']['onboarding'])
+
+
 if __name__ == '__main__':
     unittest.main()

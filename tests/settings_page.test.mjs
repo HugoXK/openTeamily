@@ -47,13 +47,13 @@ test('readForm maps radios, select and checkboxes', () => {
   }
 });
 
-test('describeAppearance states the resolved look without inventing sunrise times', () => {
+test('describeAppearance names the night window instead of inventing sunrise times', () => {
   assert.equal(describeAppearance({appearance: 'light'}), '当前为浅色。');
   assert.equal(describeAppearance({appearance: 'dark'}), '当前为深色。');
-  assert.match(describeAppearance({appearance: 'auto', appearance_schedule: 'sunset_sunrise'}),
-               /按系统浅色或深色偏好估算/);
-  assert.doesNotMatch(describeAppearance({appearance: 'auto', appearance_schedule: 'sunset_sunrise'}),
-                      /直到|\d{1,2}:\d{2}/);
+  const auto = describeAppearance({appearance: 'auto', appearance_schedule: 'sunset_sunrise'});
+  assert.match(auto, /^当前为(浅色|深色)。/);
+  assert.match(auto, /暂按 22:00 至次日 06:00 为夜间/);
+  assert.doesNotMatch(auto, /按系统浅色或深色偏好估算/);
   assert.match(describeAppearance({appearance: 'system'}), /跟随系统/);
 });
 

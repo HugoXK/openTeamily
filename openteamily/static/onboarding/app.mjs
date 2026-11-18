@@ -109,6 +109,7 @@ function mount() {
     if (select.value === '其他' && state && state.industry && state.industry !== '其他') {
       customIndustry.value = state.industry;
     }
+    customRole.value = state && state.role || '';
     renderRoles();
     const meta = document.getElementById('onboarding-meta');
     if (state && state.completed) {
