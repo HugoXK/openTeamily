@@ -76,6 +76,25 @@ class AgentsPageTests(unittest.TestCase):
         self.assertEqual(listed['status'], 200)
         self.assertEqual([row['name'] for row in listed['body']['items']], ['目录助手'])
 
+    def test_directory_search_filters_in_place_and_keeps_open_chat(self):
+        page = self.raw.call('GET', '/agents')
+        html = page['body'].decode()
+        self.assertIn('id="agent-search"', html)
+        self.assertIn('id="agents-count"', html)
+        self.assertIn('这个工作区还没有智能体。', html)
+        script = self.raw.call('GET', '/agents/app.mjs')
+        source = script['body'].decode()
+        self.assertNotIn("addEventListener('input', () => loadWorkspace())", source)
+        self.assertIn("addEventListener('input', () => renderDirectory())", source)
+        self.assertIn('没有匹配的智能体。试试其他关键词。', source)
+        self.assertIn("event.key !== 'Escape'", source)
+        self.assertIn("'显示 ' + shown + ' 个智能体'", source)
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            ['node', '--test', 'tests/agents_search.test.mjs'],
+            cwd=root, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

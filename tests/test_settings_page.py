@@ -239,9 +239,10 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('暂按 22:00 至次日 06:00 为夜间', html)
         self.assertIn('可选用「自定义时段」', html)
         self.assertIn('id="appearance-status"', html)
-        self.assertLess(html.find('id="appearance-schedule-card"'), html.find('id="appearance-status"'))
-        self.assertGreater(html.find('</fieldset>', html.find('id="appearance-status"')),
-                           html.find('id="appearance-status"'))
+        self.assertIn('class="settings-appearance-status"', html)
+        self.assertLess(html.find('id="appearance"'), html.find('id="appearance-status"'))
+        self.assertLess(html.find('id="appearance-status"'), html.find('id="appearance-schedule-card"'))
+        self.assertLess(html.find('</fieldset>', html.find('id="appearance"')), html.find('id="appearance-status"'))
         self.assertNotIn('可能相差一小时以上', html)
         self.assertNotIn('可能偏差一小时以上', html)
         self.assertNotIn('按系统浅色或深色偏好估算', html)

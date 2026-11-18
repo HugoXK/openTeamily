@@ -258,6 +258,17 @@ export function applyDirectoryCollapsed(root, collapsed) {
   return next;
 }
 
+
+export const MEMORY_EMPTY_WORKSPACE = '这个工作区还没有记忆页。';
+export const MEMORY_EMPTY_NO_MATCH = '没有匹配的记忆页。试试其他关键词。';
+
+export function matchingMemoryPages(items, needle) {
+  const query = String(needle || '').trim().toLocaleLowerCase();
+  const rows = [...(items || [])];
+  if (!query) return rows;
+  return rows.filter((item) => String(item.title || '').toLocaleLowerCase().includes(query));
+}
+
 export function memoryPageFromSearch(search) {
   const value = new URLSearchParams(search || '').get('page');
   if (value === 'profile') return 'profile';
@@ -430,9 +441,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else {
       for (const item of rows) appendPage(listEl, item);
     }
+    const needle = document.getElementById('search') ? document.getElementById('search').value : '';
     emptyEl.hidden = rows.length > 0;
+    emptyEl.textContent = rows.length > 0
+      ? emptyEl.textContent
+      : (String(needle || '').trim() ? MEMORY_EMPTY_NO_MATCH : MEMORY_EMPTY_WORKSPACE);
     const count = document.getElementById('filter-all-count');
-    if (count) count.textContent = String((items || []).length);
+    if (count) count.textContent = String((pageChoices || []).length);
+  }
+
+  function renderDirectory() {
+    renderList(matchingMemoryPages(pageChoices, document.getElementById('search') ? document.getElementById('search').value : ''));
   }
 
   function renderRecent(items) {
@@ -467,7 +486,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       button.addEventListener('click', () => {
         topicFilter = topicFilter === topic.name ? '' : topic.name;
         renderTopicFilters();
-        renderList(pageChoices);
+        renderDirectory();
       });
       box.appendChild(button);
     }
@@ -803,7 +822,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     listPanel.hidden = false;
     if (!id) {
       pageChoices = [];
-      renderList([]);
+      renderDirectory();
       renderRecent([]);
       fillPageSelect(document.getElementById('new-action-page'), '');
       renderActions([]);
@@ -811,23 +830,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       showView(currentView);
       return;
     }
-    const needle = document.getElementById('search').value.trim();
-    const listed = await request('GET', `/v1/workspaces/${id}/memory${listQuery(needle)}`);
+    const listed = await request('GET', `/v1/workspaces/${id}/memory`);
     if (listed.status !== 200) {
       pageChoices = [];
-      renderList([]);
+      renderDirectory();
       renderActions([]);
       renderGraph({nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}});
       show('error', messageFor(listed.body.error, '无法加载记忆页。'));
       return;
     }
     pageChoices = listed.body.items || [];
-    renderList(pageChoices);
+    renderDirectory();
     renderRecent(pageChoices);
     fillPageSelect(document.getElementById('new-action-page'), '');
     await loadActions();
     await loadGraph();
-    renderList(pageChoices);
+    renderDirectory();
     renderRecent(pageChoices);
     showView(currentView);
   }
@@ -905,7 +923,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   workspaceSelect.addEventListener('change', () => loadWorkspace());
-  document.getElementById('search').addEventListener('input', () => loadWorkspace());
+  document.getElementById('search').addEventListener('input', () => renderDirectory());
+  document.getElementById('search').addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    const box = document.getElementById('search');
+    box.value = '';
+    renderDirectory();
+    if (box.focus) box.focus();
+  });
   document.getElementById('action-filter').addEventListener('change', () => loadActions());
 
   for (const button of document.querySelectorAll('.memory-views [data-view]')) {
@@ -928,7 +954,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       for (const item of document.querySelectorAll('.memory-filters [data-filter]')) {
         item.setAttribute('aria-pressed', item.getAttribute('data-filter') === listFilter ? 'true' : 'false');
       }
-      renderList(pageChoices);
+      renderDirectory();
     });
   }
   for (const button of document.querySelectorAll('.side-tabs [data-side]')) {

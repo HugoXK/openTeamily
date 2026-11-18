@@ -47,14 +47,39 @@ test('readForm maps radios, select and checkboxes', () => {
   }
 });
 
-test('describeAppearance names the night window instead of inventing sunrise times', () => {
+test('describeAppearance names the current look and next switch without inventing sunrise times', () => {
   assert.equal(describeAppearance({appearance: 'light'}), '当前为浅色。');
   assert.equal(describeAppearance({appearance: 'dark'}), '当前为深色。');
-  const auto = describeAppearance({appearance: 'auto', appearance_schedule: 'sunset_sunrise'});
-  assert.match(auto, /^当前为(浅色|深色)。/);
-  assert.match(auto, /暂按 22:00 至次日 06:00 为夜间/);
+  const afternoon = new Date(2026, 10, 18, 15, 0, 0);
+  const night = new Date(2026, 10, 18, 23, 0, 0);
+  assert.equal(
+    describeAppearance({appearance: 'auto', appearance_schedule: 'sunset_sunrise'}, afternoon),
+    '当前为浅色，直到 22:00。',
+  );
+  assert.equal(
+    describeAppearance({appearance: 'auto', appearance_schedule: 'sunset_sunrise'}, night),
+    '当前为深色，直到 06:00。',
+  );
+  assert.equal(
+    describeAppearance({
+      appearance: 'auto', appearance_schedule: 'custom',
+      appearance_start: '18:00', appearance_end: '07:00',
+    }, afternoon),
+    '当前为浅色，直到 18:00。',
+  );
+  assert.equal(
+    describeAppearance({
+      appearance: 'auto', appearance_schedule: 'custom',
+      appearance_start: '18:00', appearance_end: '07:00',
+    }, new Date(2026, 10, 18, 20, 0, 0)),
+    '当前为深色，直到 07:00。',
+  );
+  const auto = describeAppearance({appearance: 'auto', appearance_schedule: 'sunset_sunrise'}, afternoon);
+  assert.doesNotMatch(auto, /日落|日出/);
   assert.doesNotMatch(auto, /按系统浅色或深色偏好估算/);
-  assert.match(describeAppearance({appearance: 'system'}), /跟随系统/);
+  assert.doesNotMatch(auto, /拿不到你所在的位置/);
+  assert.match(describeAppearance({appearance: 'system'}, afternoon, {matches: false}), /当前为浅色（跟随系统）。/);
+  assert.match(describeAppearance({appearance: 'system'}, afternoon, {matches: true}), /当前为深色（跟随系统）。/);
 });
 
 test('settingsViewFromLocation maps recorded paths and leftover hashes', () => {

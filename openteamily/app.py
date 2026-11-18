@@ -2263,7 +2263,7 @@ class App:
             refuse(400, 'invalid', 'Invalid agent request')
         if not agents.can_manage(actor):
             refuse(403, 'forbidden', 'Only owners and admins can change agents')
-        return self.update_workspace_agent(db, workspace, row, now, self.body(env, ['revision', 'name', 'summary', 'instructions']))
+        return self.update_workspace_agent(db, workspace, row, now, self.body(env, ['revision', 'name', 'summary', 'instructions', 'category']))
 
     def list_workspace_agents(self, db, workspace, actor, query):
         try:
@@ -2286,15 +2286,20 @@ class App:
                      'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
 
     def create_workspace_agent(self, db, workspace, session, now, env):
-        body = self.body(env, ['name', 'summary', 'instructions'])
+        body = self.body(env, ['name', 'summary', 'instructions', 'category'])
         name, summary, instructions = body.get('name'), body.get('summary', ''), body.get('instructions', '')
         if not agents.valid_name(name) or not agents.valid_summary(summary) or not agents.valid_instructions(instructions):
             refuse(400, 'invalid', 'Provide an agent name, summary, and instructions')
+        category = body.get('category')
+        if not agents.valid_category(category):
+            refuse(400, 'invalid', 'Choose one of the directory categories')
         name, summary = name.strip(), summary.strip()
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         payload = {'name': name, 'summary': summary, 'instructions': instructions}
+        if category is not None:
+            payload['category'] = category
         key_hash, request_hash = digest('agent:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         )
@@ -2320,6 +2325,8 @@ class App:
             (agent_id, workspace['id'], name, agents.name_hash(name), summary, instructions,
              now, now, session['user_id'], key_hash, request_hash),
         )
+        if category is not None:
+            agents.store_category(db, agent_id, category, now)
         return 201, {'agent': agents.snapshot(db, agents.load(db, workspace['id'], agent_id))}, []
 
     def update_workspace_agent(self, db, workspace, row, now, body):
@@ -2330,9 +2337,12 @@ class App:
         instructions = body.get('instructions', row['instructions'])
         if not agents.valid_name(name) or not agents.valid_summary(summary) or not agents.valid_instructions(instructions):
             refuse(400, 'invalid', 'Provide an agent name, summary, and instructions')
+        category = body.get('category', agents.load_category(db, row['id']))
+        if not agents.valid_category(category):
+            refuse(400, 'invalid', 'Choose one of the directory categories')
         name, summary = name.strip(), summary.strip()
         if set(body) == {'revision'}:
-            refuse(400, 'invalid', 'Provide a name, summary, or instructions change')
+            refuse(400, 'invalid', 'Provide a name, summary, instructions, or category change')
         other = db.execute(
             'SELECT id FROM workspace_agents WHERE workspace_id=? AND name_hash=? AND id!=?',
             (workspace['id'], agents.name_hash(name), row['id']),
@@ -2348,6 +2358,7 @@ class App:
         updated = agents.load(db, workspace['id'], row['id'])
         if updated is None or updated['revision'] != row['revision'] + 1:
             refuse(409, 'conflict', 'Agent was updated; reload and retry')
+        agents.store_category(db, row['id'], category, now)
         return 200, {'agent': agents.snapshot(db, updated)}, []
 
     def archive_workspace_agent(self, db, row, now, body):

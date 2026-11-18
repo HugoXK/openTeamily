@@ -154,6 +154,19 @@ function mount() {
     }
   });
 
+  const reload = document.getElementById('profile-reload');
+  if (reload) {
+    reload.addEventListener('click', async () => {
+      if (reload.disabled) return;
+      reload.disabled = true;
+      try {
+        await load();
+      } finally {
+        reload.disabled = false;
+      }
+    });
+  }
+
   const login = document.getElementById('login-form');
   if (login) {
     login.addEventListener('submit', async event => {

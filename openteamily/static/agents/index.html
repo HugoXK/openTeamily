@@ -75,7 +75,7 @@
     <p id="role-note" class="note"></p>
     <details class="gap-note">
       <summary>对照说明</summary>
-      <p class="note">工作区成员可以维护智能体目录，并从卡片进入独立的聊天页。所有者或管理员可以发布可撤销的公开主页链接（只展示名称和简介，不含说明）。没有嵌入对话，也没有 Auto / Instant / Agentic 模式。创建者筛选、AI 团队模板尚未实现，对应入口已禁用。分类按目标站的 17 个类目可选，选中会写进链接；智能体记录还没有分类字段，所以选中不会缩小下面的工作区目录。还不能写成已经功能对等。</p>
+      <p class="note">工作区成员可以维护智能体目录，并从卡片进入独立的聊天页。所有者或管理员可以发布可撤销的公开主页链接（只展示名称和简介，不含说明）。没有嵌入对话，也没有 Auto / Instant / Agentic 模式。创建者筛选、AI 团队模板尚未实现，对应入口已禁用。分类按目标站的 17 个类目可选，选中会写进链接并缩小下面的工作区目录；类目由所有者或管理员在新建或编辑时选择（OpenTeamily 原创补充，未与目标站的类目设置流程对照），未分类的智能体只在「全部」里出现。还不能写成已经功能对等。</p>
     </details>
     <div class="filter-row" aria-label="筛选">
       <button type="button" class="pill" data-category="all" aria-pressed="true">全部</button>
@@ -103,7 +103,7 @@
       </label>
     </div>
     <section id="list-panel">
-      <p id="agents-count" class="note"></p>
+      <p id="agents-count" class="directory-count" role="status" aria-live="polite"></p>
       <ul id="agent-list" class="card-grid"></ul>
       <p id="agents-empty" class="note" hidden>这个工作区还没有智能体。</p>
     </section>
@@ -117,6 +117,7 @@
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+          <label>类目 <select name="category"><option value="">未分类</option></select></label>
           <button type="submit">创建</button>
         </fieldset>
       </form>
@@ -128,6 +129,7 @@
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+          <label>类目 <select name="category"><option value="">未分类</option></select></label>
           <div class="actions">
             <button type="submit">保存</button>
             <button type="button" id="archive-button">归档</button>

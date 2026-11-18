@@ -253,17 +253,19 @@ async function main() {
       await page.locator('#appearance input[value="auto"]').check();
       await page.locator('#appearance-schedule-card').waitFor({ state: 'visible', timeout: 15000 });
       await waitForLocatorText(page, '#appearance-status', '当前为');
+      const statusText = `${await visibleText(page.locator('#appearance-status'))}`;
       const autoText = `${await visibleText(page.locator('#appearance-schedule-card'))}`;
       record(
         'settings_appearance',
         values.join(',') === 'light,dark,auto,system'
           && appearanceText.includes('始终使用浅色主题。')
           && appearanceText.includes('选择应用在此设备上的显示外观。')
-          && autoText.includes('当前为')
+          && /当前为(浅色|深色)，直到 (22:00|06:00)。/.test(statusText)
+          && !autoText.includes('当前为')
           && autoText.includes('没有使用实际日出日落时刻')
           && autoText.includes('可选用「自定义时段」')
           && autoText.includes('自动切换'),
-        `values=${values.join(',')}; ${appearanceText || 'appearance page empty'} | auto=${autoText || 'schedule card empty'}`,
+        `values=${values.join(',')}; ${appearanceText || 'appearance page empty'} | status=${statusText || 'missing'} | auto=${autoText || 'schedule card empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '27-settings-appearance.png')));
     } catch (error) {
@@ -499,6 +501,55 @@ async function main() {
       screenshots.push(path.basename(await shot(page, outDir, '04-agents-editor.png')));
     } catch (error) {
       record('agents_editor', false, String(error));
+    }
+    try {
+      await page.locator('#chat-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const search = page.locator('#agent-search');
+      await search.fill('zz-no-such-agent');
+      await waitForLocatorText(page, '#agents-empty', '没有匹配的智能体。试试其他关键词。');
+      const countText = ((await page.locator('#agents-count').textContent()) || '').trim();
+      const emptyText = ((await page.locator('#agents-empty').textContent()) || '').trim();
+      const chatVisible = await page.locator('#chat-panel').isVisible();
+      record(
+        'agents_search_filter',
+        countText === '显示 0 个智能体'
+          && emptyText === '没有匹配的智能体。试试其他关键词。'
+          && chatVisible,
+        `count=${countText}; empty=${emptyText}; chat=${chatVisible}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '87-agents-search-filter.png')));
+      await search.press('Escape');
+      await waitForLocatorText(page, '#agent-list', ready.agent_name);
+    } catch (error) {
+      record('agents_search_filter', false, String(error));
+    }
+    try {
+      await page.locator('#edit-form').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#edit-form select[name="category"]').selectOption('operations');
+      await page.locator('#edit-form button[type="submit"]').click();
+      // The save reloads the directory (which clears #status), so wait for the card tag instead.
+      await waitForLocatorText(page, '#agent-list', 'Operations');
+      await page.locator('.filter-row .pill[data-category="operations"]').click();
+      const filteredList = await visibleText(page.locator('#agent-list'));
+      const filteredUrl = page.url();
+      const chatStillOpen = await page.locator('#chat-panel').isVisible();
+      await page.locator('.filter-row .pill[data-category="sales"]').click();
+      await waitForLocatorText(page, '#agents-empty', '「Sales」类目下还没有智能体。');
+      const salesEmpty = ((await page.locator('#agents-empty').textContent()) || '').trim();
+      await page.locator('.filter-row .pill[data-category="operations"]').click();
+      await waitForLocatorText(page, '#agent-list', ready.agent_name);
+      record(
+        'agents_category_filter',
+        filteredList.includes(ready.agent_name)
+          && filteredUrl.includes('category=operations')
+          && chatStillOpen
+          && salesEmpty === '「Sales」类目下还没有智能体。选「全部」查看其余智能体。',
+        `list=${filteredList}; url=${filteredUrl}; chat=${chatStillOpen}; sales=${salesEmpty}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '89-agents-category-filter.png')));
+      await page.locator('.filter-row .pill[data-category="all"]').click();
+    } catch (error) {
+      record('agents_category_filter', false, String(error));
     }
 
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -1435,6 +1486,26 @@ async function main() {
       await page.keyboard.press('Escape');
     } catch (error) {
       record('memory_account_button', false, String(error));
+    }
+
+    try {
+      const search = page.locator('#search');
+      await search.fill('zz-no-such-memory');
+      await waitForLocatorText(page, '#list-empty', '没有匹配的记忆页。试试其他关键词。');
+      const emptyText = ((await page.locator('#list-empty').textContent()) || '').trim();
+      const listPanelVisible = await page.locator('#list-panel').isVisible();
+      const allCount = ((await page.locator('#filter-all-count').textContent()) || '').trim();
+      record(
+        'memory_search_filter',
+        emptyText === '没有匹配的记忆页。试试其他关键词。'
+          && listPanelVisible,
+        `empty=${emptyText}; count=${allCount}; listPanel=${listPanelVisible}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '88-memory-search-filter.png')));
+      await search.press('Escape');
+      await waitForLocatorText(page, '#memory-list', ready.memory_title);
+    } catch (error) {
+      record('memory_search_filter', false, String(error));
     }
 
     try {
