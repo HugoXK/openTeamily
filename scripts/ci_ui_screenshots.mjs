@@ -407,18 +407,35 @@ async function main() {
       await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
       const connectors = page.locator('[data-settings-page="connectors"]');
       await connectors.waitFor({ state: 'visible', timeout: 15000 });
+      const catalogRows = page.locator('#connectors-catalog .connector-row');
+      await catalogRows.first().waitFor({ state: 'visible', timeout: 15000 });
+      const rowCount = await catalogRows.count();
+      const connectButtons = page.locator('#connectors-catalog button');
+      const connectCount = await connectButtons.count();
+      const allConnectDisabled = connectCount === 39
+        && await connectButtons.evaluateAll((nodes) => nodes.every((node) => node.disabled));
+      const statuses = await page.locator('#connectors-catalog .connector-status').allTextContents();
+      const allDisconnected = statuses.length === 39
+        && statuses.every((text) => text.includes('未连接') && !text.includes('已连接'));
       const connectorsText = `${await visibleText(connectors)}`;
       const addMcp = page.locator('#add-mcp-server');
       const addMcpDisabled = await addMcp.isDisabled();
       record(
         'settings_connectors',
         !addMcpDisabled
+          && rowCount === 39
+          && allConnectDisabled
+          && allDisconnected
           && connectorsText.includes('应用连接器')
           && connectorsText.includes('添加 MCP 服务器')
-          && connectorsText.includes('还没有可连接的应用目录。')
+          && connectorsText.includes('GitHub')
+          && connectorsText.includes('Mailbox')
+          && connectorsText.includes('未连接')
+          && connectorsText.includes('还没有连接器后端或账号授权接口')
+          && !connectorsText.includes('还没有可连接的应用目录。')
           && !connectorsText.includes('已连接')
           && !/积分|套餐|升级/.test(connectorsText),
-        `addDisabled=${addMcpDisabled}; ${connectorsText || 'connectors page empty'}`,
+        `rows=${rowCount}; connect=${connectCount}; addDisabled=${addMcpDisabled}; ${connectorsText || 'connectors page empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '46-settings-connectors.png')));
       await addMcp.click();

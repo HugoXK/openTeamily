@@ -185,7 +185,8 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('Apple iMessage', html)
         self.assertIn('Slack', html)
         self.assertIn('WhatsApp', html)
-        self.assertEqual(html.count('+ 连接'), 4)
+        channels = html[html.find('data-settings-page="channels"'):html.find('data-settings-page="agent-access"')]
+        self.assertEqual(channels.count('+ 连接'), 4)
         self.assertEqual(html.count('title="未实现：OpenTeamily 还没有接入'), 4)
         self.assertIn('disabled', html)
         self.assertNotIn('Teamily Agent', html)
@@ -196,7 +197,6 @@ class SettingsPageTests(unittest.TestCase):
         connectors = self.raw.call('GET', '/settings/connectors')['body'].decode()
         self.assertIn('placeholder="搜索应用…"', connectors)
         self.assertIn('+ 添加 MCP 服务器', connectors)
-        self.assertIn('还没有可连接的应用目录。', connectors)
         self.assertIn('id="add-mcp-server"', connectors)
         self.assertIn('id="mcp-dialog"', connectors)
         self.assertIn('在智能体里添加自定义 MCP 服务器', connectors)
@@ -209,6 +209,27 @@ class SettingsPageTests(unittest.TestCase):
         self.assertNotIn('disabled title="未实现：对照里「添加 MCP 服务器」', connectors)
         self.assertNotIn('已连接', connectors)
         self.assertIn('不会添加或连接服务器', connectors)
+        self.assertIn('class="connector-search-icon"', connectors)
+        self.assertEqual(connectors.count('class="connector-row"'), 39)
+        self.assertEqual(connectors.count('>未连接<'), 39)
+        self.assertEqual(connectors.count('不会真连。">+ 连接'), 39)
+        self.assertEqual(connectors.count('disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。"'), 39)
+        self.assertIn('id="connectors-catalog"', connectors)
+        self.assertIn('没有匹配的应用。', connectors)
+        self.assertIn('id="connectors-empty"', connectors)
+        self.assertNotIn('还没有可连接的应用目录。', connectors)
+        for name in ('GitHub', 'Notion', 'monday.com', 'Hugging Face', 'Microsoft Learn',
+                     'Cloudflare Docs', 'Mailbox', 'Slack', 'Amap'):
+            self.assertIn(f'>{name}<', connectors)
+        script = self.raw.call('GET', '/settings/app.mjs')['body'].decode()
+        css = self.raw.call('GET', '/settings/app.css')['body'].decode()
+        for blob in (connectors, script, css):
+            for marker in ('Ov23liin4waZGLSJJgn5', 'DS_BOT_GITHUB_OAUTH_CLIENT_ID',
+                           'githubcopilot.com', 'mcp.notion.com', 'mcp.slack.com',
+                           'api.github.com/user', 'X-MCP-Toolsets', 'lbs.amap.com',
+                           'huggingface.co/mcp', 'learn.microsoft.com/api/mcp',
+                           'docs.mcp.cloudflare.com', 'mcp.amap.com', 'GITHUB_TOKEN'):
+                self.assertNotIn(marker, blob)
 
     def test_preference_subpages_follow_recorded_copy(self):
         html = self.raw.call('GET', '/settings/appearance')['body'].decode()
