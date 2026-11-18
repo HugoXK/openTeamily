@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applySettingsView, csrfCookie, describeAppearance, diff, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { applyConnectorSearch, applySettingsView, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -188,4 +190,140 @@ test('applySettingsView closes the MCP dialog when leaving connectors', () => {
   applySettingsView(document, 'hub');
   assert.equal(dialog.hidden, true);
   assert.equal(trigger.attrs['aria-expanded'], 'false');
+});
+
+
+const SETTINGS_FRONTEND = [
+  new URL('../openteamily/static/settings/index.html', import.meta.url),
+  new URL('../openteamily/static/settings/app.mjs', import.meta.url),
+  new URL('../openteamily/static/settings/app.css', import.meta.url),
+  new URL('../docs/SETTINGS.md', import.meta.url),
+];
+
+const SECRET_MARKERS = [
+  'Ov23liin4waZGLSJJgn5',
+  'DS_BOT_GITHUB_OAUTH_CLIENT_ID',
+  'githubcopilot.com',
+  'mcp.notion.com',
+  'mcp.linear.app',
+  'mcp.atlassian.com',
+  'mcp.sentry.dev',
+  'mcp.stripe.com',
+  'mcp.paypal.com',
+  'mcp.squareup.com',
+  'bindings.mcp.cloudflare.com',
+  'mcp.vercel.com',
+  'mcp.supabase.com',
+  'mcp.neon.tech',
+  'mcp.figma.com',
+  'mcp.canva.com',
+  'mcp.intercom.com',
+  'mcp.monday.com',
+  'mcp.webflow.com',
+  'mcp.wix.com',
+  'netlify-mcp.netlify.app',
+  'mcp.airtable.com',
+  'mcp.dropbox.com',
+  'mcp.zapier.com',
+  'mcp.clickup.com',
+  'ai.todoist.net',
+  'mcp.miro.com',
+  'mcp.attio.com',
+  'mcp.postman.com',
+  'mcp.asana.com',
+  'mcp.box.com',
+  'mcp.hubspot.com',
+  'mcp.slack.com',
+  'huggingface.co/mcp',
+  'mcp.exa.ai',
+  'mcp.deepwiki.com',
+  'mcp.context7.com',
+  'learn.microsoft.com/api/mcp',
+  'docs.mcp.cloudflare.com',
+  'mcp.amap.com',
+  'api.github.com/user',
+  'X-MCP-Toolsets',
+  'lbs.amap.com',
+  'GITHUB_TOKEN',
+];
+
+test('CONNECTOR_CATALOG is the 39 public DS-Bot entries', () => {
+  assert.equal(CONNECTOR_CATALOG.length, 39);
+  assert.deepEqual(CONNECTOR_CATALOG.map((item) => item.id), [
+    'github', 'notion', 'linear', 'atlassian', 'sentry', 'stripe', 'paypal', 'square',
+    'cloudflare', 'vercel', 'supabase', 'neon', 'figma', 'canva', 'intercom', 'monday',
+    'webflow', 'wix', 'netlify', 'airtable', 'dropbox', 'zapier', 'clickup', 'todoist',
+    'miro', 'attio', 'postman', 'asana', 'box', 'hubspot', 'slack', 'huggingface', 'exa',
+    'deepwiki', 'context7', 'mslearn', 'cloudflare-docs', 'amap', 'mail',
+  ]);
+  for (const item of CONNECTOR_CATALOG) {
+    assert.deepEqual(Object.keys(item).sort(), ['about', 'category', 'id', 'name']);
+    assert.equal(typeof item.about, 'string');
+    assert.ok(item.about.length > 0);
+  }
+});
+
+test('filterConnectorCatalog matches name, about, or id and is empty when nothing matches', () => {
+  assert.equal(filterConnectorCatalog('').length, 39);
+  assert.equal(filterConnectorCatalog('   ').length, 39);
+  const github = filterConnectorCatalog('GitHub');
+  assert.deepEqual(github.map((item) => item.id), ['github']);
+  const byAbout = filterConnectorCatalog('pull requests');
+  assert.deepEqual(byAbout.map((item) => item.id), ['github']);
+  const byId = filterConnectorCatalog('cloudflare-docs');
+  assert.deepEqual(byId.map((item) => item.id), ['cloudflare-docs']);
+  const payments = filterConnectorCatalog('payments');
+  assert.deepEqual(payments.map((item) => item.id), ['stripe', 'paypal', 'square']);
+  assert.deepEqual(filterConnectorCatalog('no-such-connector-xyz'), []);
+});
+
+test('applyConnectorSearch hides unmatched rows and shows the empty state', () => {
+  const rows = CONNECTOR_CATALOG.map((item) => ({
+    id: item.id,
+    hidden: false,
+    getAttribute(name) { return name === 'data-connector-id' ? this.id : null; },
+  }));
+  const empty = {hidden: true};
+  const document = {
+    getElementById(id) {
+      if (id === 'connectors-catalog') {
+        return {querySelectorAll() { return rows; }};
+      }
+      if (id === 'connectors-empty') return empty;
+      return null;
+    },
+  };
+  const visible = applyConnectorSearch(document, 'mailbox');
+  assert.deepEqual(visible.map((item) => item.id), ['mail']);
+  assert.equal(rows.find((row) => row.id === 'mail').hidden, false);
+  assert.equal(rows.filter((row) => !row.hidden).length, 1);
+  assert.equal(empty.hidden, true);
+  applyConnectorSearch(document, 'no-such-connector-xyz');
+  assert.equal(rows.every((row) => row.hidden), true);
+  assert.equal(empty.hidden, false);
+  applyConnectorSearch(document, '');
+  assert.equal(rows.every((row) => !row.hidden), true);
+  assert.equal(empty.hidden, true);
+});
+
+test('settings connectors markup lists the catalog as disconnected without leaking secrets', () => {
+  const html = readFileSync(fileURLToPath(new URL('../openteamily/static/settings/index.html', import.meta.url)), 'utf8');
+  const ids = [...html.matchAll(/data-connector-id="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(ids, CONNECTOR_CATALOG.map((item) => item.id));
+  assert.equal((html.match(/class="connector-row"/g) || []).length, 39);
+  assert.equal((html.match(/<span class="connector-status">未连接<\/span>/g) || []).length, 39);
+  assert.equal((html.match(/不会真连。">\+ 连接<\/button>/g) || []).length, 39);
+  assert.equal((html.match(/disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。"/g) || []).length, 39);
+  assert.match(html, /class="connector-search-icon"/);
+  assert.match(html, /id="connectors-empty"[^>]*hidden[^>]*>没有匹配的应用。/);
+  assert.doesNotMatch(html, /还没有可连接的应用目录/);
+  assert.doesNotMatch(html, /已连接/);
+  for (const item of CONNECTOR_CATALOG) {
+    assert.ok(html.includes(`>${item.name}<`), item.name);
+    assert.ok(html.includes(item.about), item.id);
+  }
+  const sources = SETTINGS_FRONTEND.map((url) => readFileSync(fileURLToPath(url), 'utf8')).join('\n');
+  for (const marker of SECRET_MARKERS) {
+    assert.equal(sources.includes(marker), false, marker);
+  }
 });
