@@ -510,18 +510,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const workspace = document.getElementById('list-panel');
     if (workspace) workspace.dataset.view = currentView;
     const title = document.getElementById('view-title');
-    const labels = {overview: '总览', profile: '我的资料', actions: '下一步行动', meetings: '我的会议'};
+    const labels = {overview: '总览', profile: '我的资料', actions: '下一步行动'};
     if (title) title.textContent = labels[currentView] || '总览';
     const overview = document.getElementById('overview-panel');
     const side = document.getElementById('memory-side');
     const actions = document.getElementById('actions-panel');
     const profile = document.getElementById('profile-panel');
-    const meetings = document.getElementById('meetings-panel');
     if (overview) overview.hidden = currentView !== 'overview';
     if (side) side.hidden = currentView !== 'overview';
     if (actions) actions.hidden = currentView !== 'actions';
     if (profile) profile.hidden = currentView !== 'profile';
-    if (meetings) meetings.hidden = currentView !== 'meetings';
     for (const button of document.querySelectorAll('.memory-views [data-view]')) {
       if (button.getAttribute('data-view') === currentView) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
