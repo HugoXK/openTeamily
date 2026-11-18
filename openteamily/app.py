@@ -756,7 +756,7 @@ class App:
                 return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages|agent-replies))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -2868,6 +2868,10 @@ class App:
         row = social.load(db, workspace['id'], conversation_id)
         if row is None or not social.is_member(db, row['id'], workspace['id'], session['user_id']):
             refuse(404, 'not_found', 'Conversation not found')
+        if action and (action == 'agents' or action.startswith('agents/')):
+            if method != 'POST' or query:
+                refuse(400, 'invalid', 'Invalid group agent membership request')
+            return self.edit_group_agents(db, workspace, session, row, action, now, env)
         self.reconcile_group_replies(db, row, now)
         if action == 'agent-replies' and method == 'POST' and not query:
             return self.request_group_reply(db, workspace, session, row, now, env)
@@ -2887,6 +2891,50 @@ class App:
         if action == 'messages' and method == 'POST' and not query:
             return self.send_social_message(db, workspace, session, row, now, env)
         refuse(400, 'invalid', 'Invalid messenger request')
+
+    def edit_group_agents(self, db, workspace, session, row, action, now, env):
+        # Workspace administration alone never grants access to a private group:
+        # social_dispatch has already required actual human group membership.
+        if row['kind'] != 'group':
+            refuse(400, 'invalid', 'Agent membership edits require a group')
+        if not agents.can_manage(members.role_of(db, workspace, session['user_id'])):
+            refuse(403, 'forbidden', 'Only group members who are workspace owners or admins can edit agents')
+        removing = action != 'agents'
+        if removing:
+            self.body(env, [])
+            agent_ids = [action.split('/')[1]]
+        else:
+            agent_ids = self.body(env, ['agent_ids']).get('agent_ids')
+            if not social.valid_agent_ids(agent_ids) or not agent_ids:
+                refuse(400, 'invalid', 'Provide 1–49 unique agent ids')
+        # Validate the entire batch before any mutation. Removal may clear an
+        # archived member, but neither operation can address foreign agents.
+        for aid in agent_ids:
+            agent = agents.load(db, workspace['id'], aid)
+            if agent is None or (not removing and agent['archived']):
+                refuse(400, 'invalid', 'Select existing same-workspace agents; invitations require active agents')
+        existing = {item['agent_id'] for item in social.agent_member_rows(db, row['id'])}
+        if removing:
+            self.reconcile_group_replies(db, row, now)
+            if db.execute("SELECT 1 FROM social_agent_replies WHERE conversation_id=? AND agent_id=? "
+                          "AND status IN ('queued','running')", (row['id'], agent_ids[0])).fetchone():
+                refuse(409, 'conflict', 'Wait for the active agent request to finish before removal')
+            changed = agent_ids[0] in existing
+            db.execute('DELETE FROM social_agent_members WHERE conversation_id=? AND agent_id=?',
+                       (row['id'], agent_ids[0]))
+        else:
+            additions = set(agent_ids) - existing
+            if (len(social.member_rows(db, row['id'])) + len(existing) + len(additions)
+                    > self.config.max_social_members_per_conversation):
+                refuse(429, 'quota', 'Member capacity reached')
+            for aid in sorted(additions):
+                db.execute('INSERT INTO social_agent_members (conversation_id,agent_id,created) VALUES(?,?,?)',
+                           (row['id'], aid, now))
+            changed = bool(additions)
+        if changed:
+            db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, row['id']))
+        row = social.load(db, workspace['id'], row['id'])
+        return 200, {'conversation': social.conversation_item(db, row)}, []
 
     def request_group_reply(self, db, workspace, session, row, now, env):
         body = self.body(env, ['agent_id', 'prompt'])
