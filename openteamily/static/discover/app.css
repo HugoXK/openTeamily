@@ -135,18 +135,28 @@ button.catalog-create[hidden], a.catalog-create[hidden] { display: none; }
   font: inherit;
 }
 .feed-filter-all[aria-current="true"] {
-  width: 1.7rem;
-  height: 1.7rem;
-  padding: 0;
-  border-radius: 50%;
+  padding: .2rem .75rem;
+  border-radius: 999px;
   background: var(--ot-accent-soft);
   color: var(--ot-ink);
+  font-weight: 650;
 }
+.feed-activity-empty {
+  display: grid;
+  gap: .75rem;
+  margin: 0 0 1rem;
+}
+.feed-activity-empty[hidden] { display: none; }
 .feed-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1rem;
   min-height: 0;
+}
+.feed-grid[data-empty="true"] {
+  min-height: 22rem;
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--ot-surface) 92%, var(--ot-line) 8%);
 }
 @media (max-width: 65rem) {
   .feed-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

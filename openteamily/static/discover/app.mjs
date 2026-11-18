@@ -200,6 +200,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (note) note.textContent = following ? FEED_FOLLOWING_NOTE : FEED_ACTIVITY_NOTE;
     const empty = document.getElementById('feed-following-empty');
     if (empty) empty.hidden = !following;
+    const activityEmpty = document.getElementById('feed-activity-empty');
+    if (activityEmpty) activityEmpty.hidden = following;
   }
 
   function show(kind, text) {

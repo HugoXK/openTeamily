@@ -37,6 +37,25 @@ test('recorded feed categories stay in the captured order', () => {
   ]);
 });
 
+test('feed all-filter shows the recorded 全部 label and keeps an empty canvas', () => {
+  const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
+  const block = html.split('class="feed-filters"')[1].split('id="feed-following-empty"')[0];
+  assert.match(block, /class="feed-filter-all"[^>]*aria-current="true"[^>]*>全部</);
+  assert.equal(/class="feed-filter-all"[^>]*><\/button>/.test(block), false);
+  assert.equal(/aria-label="全部"/.test(block), false);
+  assert.equal(/没有单独标出文字|圆形按钮/.test(block), false);
+  const order = ['全部', ...FEED_CATEGORIES];
+  const positions = order.map((label) => block.indexOf(`>${label}<`));
+  assert.equal(positions.every((index) => index !== -1), true);
+  assert.deepEqual(positions, [...positions].sort((a, b) => a - b));
+  assert.match(html, /id="feed-activity-empty"/);
+  assert.match(html, /id="feed-grid"[^>]*data-empty="true"/);
+  const activity = html.split('id="feed-activity-empty"')[1].split('id="feed-note"')[0];
+  assert.equal(/\bhidden\b/.test(activity.split('>')[0]), false);
+  assert.equal(activity.includes('id="feed-note"'), false);
+  assert.equal(/最多领取|CREDITS|积分中心/.test(html.split('id="feed-panel"')[1].split('id="catalog-view"')[0]), false);
+});
+
 test('recorded catalog categories stay in the captured order', () => {
   assert.deepEqual(CATALOG_CATEGORIES, [
     'Content Creation', 'Customer Support', 'Data Analysis', 'Design',
@@ -237,11 +256,13 @@ test('default discover view is the unconnected feed and does not load the catalo
   assert.equal(el('catalog-view').hidden, true);
   assert.equal(el('feed-note').textContent, FEED_ACTIVITY_NOTE);
   assert.equal(el('feed-following-empty').hidden, true);
+  assert.equal(el('feed-activity-empty').hidden, false);
   assert.equal(el('feed-tab-activity').attributes['aria-selected'], 'true');
   assert.equal(requests.some(([path]) => path.startsWith('/v1/discover/agents')), false);
   el('feed-tab-following').handlers.click();
   assert.equal(el('feed-note').textContent, FEED_FOLLOWING_NOTE);
   assert.equal(el('feed-following-empty').hidden, false);
+  assert.equal(el('feed-activity-empty').hidden, true);
   assert.equal(el('feed-tab-following').attributes['aria-selected'], 'true');
   assert.equal(FEED_FOLLOWING_EMPTY_TITLE, '关注列表暂无动态');
   assert.equal(FEED_FOLLOWING_EMPTY_BODY, '你关注的人发布动态后会显示在这里。');
@@ -252,6 +273,7 @@ test('default discover view is the unconnected feed and does not load the catalo
   assert.equal(el('feed-search-note').textContent, FEED_SEARCH_NOTE);
   el('feed-tab-activity').handlers.click();
   assert.equal(el('feed-following-empty').hidden, true);
+  assert.equal(el('feed-activity-empty').hidden, false);
   assert.equal(el('feed-note').textContent, FEED_ACTIVITY_NOTE);
 });
 

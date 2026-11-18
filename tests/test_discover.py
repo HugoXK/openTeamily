@@ -118,10 +118,22 @@ class DiscoverCatalogPageTests(unittest.TestCase):
             for marker in ('id="feed-panel"', 'id="feed-query"', '搜索动态、创作者…', '关注', '动态',
                            'id="feed-following-empty"', '关注列表暂无动态',
                            '你关注的人发布动态后会显示在这里。',
+                           'id="feed-activity-empty"', 'id="feed-grid"',
                            'id="feed-note"', '也不会展示奖励活动或推荐内容', 'id="catalog-view" hidden',
                            'href="/discover?tab=agents"', '热门', '3D 作品', 'AI 与科技', '美容'):
                 self.assertIn(marker, feed_text, marker)
             self.assertIn('hidden', feed_text.split('id="feed-following-empty"', 1)[1].split('>', 1)[0])
+            feed_filters = feed_text.split('class="feed-filters"', 1)[1].split('id="feed-following-empty"', 1)[0]
+            self.assertIn('class="feed-filter-all"', feed_filters)
+            self.assertIn('>全部<', feed_filters)
+            self.assertIn('aria-current="true"', feed_filters.split('>全部<', 1)[0].rsplit('<button', 1)[1])
+            self.assertNotIn('aria-label="全部"', feed_filters.split('class="feed-filter-all"', 1)[1].split('>', 1)[0])
+            self.assertNotIn('没有单独标出文字', feed_filters)
+            self.assertNotRegex(feed_filters, r'class="feed-filter-all"[^>]*></button>')
+            activity_empty = feed_text.split('id="feed-activity-empty"', 1)[1].split('id="feed-note"', 1)[0]
+            self.assertNotIn('hidden', activity_empty.split('>', 1)[0])
+            self.assertIn('data-empty="true"', activity_empty)
+            self.assertNotIn('id="feed-note"', activity_empty)
             self.assertNotIn('积分中心', feed_text)
             self.assertNotIn('最多领取', feed_text)
             self.assertNotIn('CREDITS', feed_text)

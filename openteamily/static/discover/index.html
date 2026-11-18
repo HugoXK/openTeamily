@@ -74,7 +74,7 @@
         </nav>
       </header>
       <div class="feed-filters" aria-label="内容分类">
-        <button type="button" class="feed-filter-all" aria-current="true" aria-label="全部" disabled title="对照里这项是选中的圆形按钮，没有单独标出文字。分类筛选未接通：没有动态分类接口。"></button>
+        <button type="button" class="feed-filter-all" aria-current="true" disabled title="分类筛选未接通：没有动态分类接口。对照里选中项是带「全部」文字的胶囊，不是无标签圆点。">全部</button>
         <button type="button" disabled title="未接通：没有动态分类接口">热门</button>
         <button type="button" disabled title="未接通：没有动态分类接口">网页</button>
         <button type="button" disabled title="未接通：没有动态分类接口">小游戏</button>
@@ -98,6 +98,9 @@
       <section id="feed-following-empty" class="feed-following-empty" hidden>
         <h2>关注列表暂无动态</h2>
         <p>你关注的人发布动态后会显示在这里。</p>
+      </section>
+      <section id="feed-activity-empty" class="feed-activity-empty" aria-label="动态信息流">
+        <div class="feed-grid" id="feed-grid" data-empty="true"></div>
       </section>
       <p id="feed-note" class="note">动态信息流还没有接口，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。</p>
       <p id="feed-search-note" class="note" hidden>搜索动态和创作者尚未接通：没有对应的公开接口。</p>
