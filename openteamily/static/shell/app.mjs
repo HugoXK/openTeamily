@@ -160,6 +160,14 @@ export const ONBOARDING_MENU_HREF = '/onboarding';
 export const ONBOARDING_MENU_LABEL = '工作背景';
 export const ONBOARDING_MENU_TITLE = '打开已有的工作背景页。对照账户菜单写的是「新手引导」，因为第 2 至 4 步尚未接通，入口名称与落点保持一致。';
 
+export const CHANNELS_MENU_HREF = '/settings/channels';
+export const CHANNELS_MENU_LABEL = 'Agent 渠道';
+export const CHANNELS_MENU_TITLE = '打开已有的 Agent 渠道设置页。对照账户菜单写的是「Teamily Agent 渠道」，这里用本仓已有名称，不复制商标。';
+
+export const CONNECTORS_MENU_HREF = '/settings/connectors';
+export const CONNECTORS_MENU_LABEL = '应用连接器';
+export const CONNECTORS_MENU_TITLE = '打开已有的应用连接器设置页。连接第三方账号仍未接通，本入口只负责导航。';
+
 function menuChildByHref(menu, href) {
   const children = menu && menu.children ? Array.from(menu.children) : [];
   return children.find((node) => {
@@ -177,25 +185,50 @@ function menuChildByClass(menu, className) {
   }) || null;
 }
 
+function ensureMenuLink(doc, menu, href, label, title) {
+  let link = menuChildByHref(menu, href);
+  if (!link) {
+    link = doc.createElement('a');
+    menu.appendChild(link);
+  }
+  link.setAttribute('href', href);
+  link.setAttribute('role', 'menuitem');
+  link.setAttribute('title', title);
+  link.textContent = label;
+  return link;
+}
+
+function placeMenuLink(menu, link, reference) {
+  if (reference && link !== reference) menu.insertBefore(link, reference);
+  else menu.appendChild(link);
+  return link;
+}
+
 /* Recorded Teamily account menu has「新手引导」after 创建团队 and before 帮助.
    Only step 1 exists, so the item uses the destination name 工作背景 and opens /onboarding.
    The function is also used to move an already-present link into that slot. */
 export function ensureOnboardingMenuItem(doc) {
   const menu = doc.getElementById('account-menu');
   if (!menu) return null;
-  let link = menuChildByHref(menu, ONBOARDING_MENU_HREF);
-  if (!link) {
-    link = doc.createElement('a');
-    menu.appendChild(link);
-  }
-  link.setAttribute('href', ONBOARDING_MENU_HREF);
-  link.setAttribute('role', 'menuitem');
-  link.setAttribute('title', ONBOARDING_MENU_TITLE);
-  link.textContent = ONBOARDING_MENU_LABEL;
+  const link = ensureMenuLink(doc, menu, ONBOARDING_MENU_HREF, ONBOARDING_MENU_LABEL, ONBOARDING_MENU_TITLE);
   const reference = menuChildByClass(menu, 'account-sub') || menuChildByHref(menu, '/settings');
-  if (reference && link !== reference) menu.insertBefore(link, reference);
-  else if (!reference) menu.appendChild(link);
-  return link;
+  return placeMenuLink(menu, link, reference);
+}
+
+/* Recorded Teamily account menu has Agent 渠道 and 应用连接器 after 创建团队
+   (and the skipped credit/plan rows) and before 新手引导/帮助. Both pages already
+   exist; this only adds navigation. Connector account linking stays unconnected. */
+export function ensureChannelsAndConnectorsMenuItems(doc) {
+  const menu = doc.getElementById('account-menu');
+  if (!menu) return null;
+  const channels = ensureMenuLink(doc, menu, CHANNELS_MENU_HREF, CHANNELS_MENU_LABEL, CHANNELS_MENU_TITLE);
+  const connectors = ensureMenuLink(doc, menu, CONNECTORS_MENU_HREF, CONNECTORS_MENU_LABEL, CONNECTORS_MENU_TITLE);
+  const before = menuChildByHref(menu, ONBOARDING_MENU_HREF)
+    || menuChildByClass(menu, 'account-sub')
+    || menuChildByHref(menu, '/settings');
+  placeMenuLink(menu, connectors, before);
+  placeMenuLink(menu, channels, connectors);
+  return {channels, connectors};
 }
 
 function bindAccountMenu(doc) {
@@ -231,6 +264,7 @@ function bindAccountMenu(doc) {
   }
   syncAccountSlot(doc);
   ensureOnboardingMenuItem(doc);
+  ensureChannelsAndConnectorsMenuItems(doc);
   bindHelpMenu(doc);
   bindAppearanceToggle(doc);
 }

@@ -468,11 +468,13 @@ async function main() {
       const menuText = await visibleText(page.locator('#account-menu'));
       const settingsHref = await page.locator('#account-menu a[href="/settings"]').getAttribute('href');
       const onboardingHref = await page.locator('#account-menu a[href="/onboarding"]').getAttribute('href');
+      const channelsHref = await page.locator('#account-menu a[href="/settings/channels"]').getAttribute('href');
+      const connectorsHref = await page.locator('#account-menu a[href="/settings/connectors"]').getAttribute('href');
       const initials = String(ready.username || '').slice(0, 2).toUpperCase();
       const settingsButton = (await visibleText(page.locator('#account-menu-button'))).trim();
       record(
         'account_menu',
-        menuText.includes('所有设置') && menuText.includes('退出登录') && menuText.includes('创建团队') && menuText.includes('查看我的资料') && menuText.includes('帮助中心') && menuText.includes('下载') && menuText.includes('工作背景') && settingsHref === '/settings' && onboardingHref === '/onboarding' && settingsButton === initials && !/积分|套餐|升级/.test(menuText) && !/contact@teamily\.ai/.test(menuText),
+        menuText.includes('所有设置') && menuText.includes('退出登录') && menuText.includes('创建团队') && menuText.includes('查看我的资料') && menuText.includes('帮助中心') && menuText.includes('下载') && menuText.includes('工作背景') && menuText.includes('Agent 渠道') && menuText.includes('应用连接器') && settingsHref === '/settings' && onboardingHref === '/onboarding' && channelsHref === '/settings/channels' && connectorsHref === '/settings/connectors' && settingsButton === initials && !/积分|套餐|升级/.test(menuText) && !/contact@teamily\.ai/.test(menuText),
         `button=${settingsButton}; ${menuText || 'account menu empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '23-account-menu.png')));
