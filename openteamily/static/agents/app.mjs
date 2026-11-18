@@ -48,7 +48,27 @@ export function readAgentForm(form) {
     name: (data.get('name') || '').trim(),
     summary: (data.get('summary') || '').trim(),
     instructions: data.get('instructions') || '',
+    category: AGENT_CATEGORY_SLUGS.has(data.get('category')) ? data.get('category') : null,
   };
+}
+
+export function categoryLabel(slug) {
+  const found = AGENT_CATEGORIES.find((entry) => entry.slug === slug);
+  return found ? found.label : '';
+}
+
+export function matchesCategory(item, slug) {
+  return !slug || slug === 'all' || (item && item.category === slug);
+}
+
+export function fillCategoryOptions(select, doc) {
+  if (!select || select.options.length > 1) return;
+  for (const entry of AGENT_CATEGORIES) {
+    const option = (doc || select.ownerDocument).createElement('option');
+    option.value = entry.slug;
+    option.textContent = entry.label;
+    select.append(option);
+  }
 }
 
 export function idempotencyKey(prefix) {
@@ -86,6 +106,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentAgent = null;
   let currentConversation = null;
   let pollTimer = 0;
+  let directoryLoaded = false;
+  fillCategoryOptions(createForm.elements.category, document);
+  fillCategoryOptions(editForm.elements.category, document);
   const categoryButtons = [...document.querySelectorAll('.filter-row .pill[data-category]')];
   let selectedCategory = categoryFromSearch(globalThis.location && globalThis.location.search);
 
@@ -98,6 +121,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function selectCategory(slug, push) {
     selectedCategory = AGENT_CATEGORY_SLUGS.has(slug) ? slug : 'all';
     renderCategoryFilter();
+    if (directoryLoaded) renderDirectory();
     if (!globalThis.location || !globalThis.history) return;
     const next = searchWithCategory(globalThis.location.search, selectedCategory);
     const url = globalThis.location.pathname + next + globalThis.location.hash;
@@ -113,6 +137,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     globalThis.addEventListener('popstate', () => {
       selectedCategory = categoryFromSearch(globalThis.location.search);
       renderCategoryFilter();
+      if (directoryLoaded) renderDirectory();
     });
   }
 
@@ -212,7 +237,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     list.replaceChildren();
     let shown = 0;
     for (const item of directoryAgents) {
-      if (!matchesDirectoryQuery(item, query)) continue;
+      if (!matchesDirectoryQuery(item, query) || !matchesCategory(item, selectedCategory)) continue;
       shown += 1;
       const li = document.createElement('li');
       li.className = 'agent-card';
@@ -231,6 +256,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       note.className = 'summary';
       note.textContent = item.summary || '暂无简介';
       copy.append(note);
+      if (item.category && categoryLabel(item.category)) {
+        const tag = document.createElement('span');
+        tag.className = 'category-tag';
+        tag.textContent = categoryLabel(item.category);
+        copy.append(tag);
+      }
       const chat = document.createElement('a');
       chat.className = 'chat-cta';
       chat.href = '/chat#workspace=' + encodeURIComponent(id) + '&agent=' + encodeURIComponent(item.id);
@@ -242,7 +273,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       empty.hidden = shown > 0;
       empty.textContent = query
         ? '没有匹配的智能体。试试其他关键词。'
-        : '这个工作区还没有智能体。';
+        : selectedCategory !== 'all' && directoryAgents.length
+          ? '「' + categoryLabel(selectedCategory) + '」类目下还没有智能体。选「全部」查看其余智能体。'
+          : '这个工作区还没有智能体。';
     }
     if (count) count.textContent = '显示 ' + shown + ' 个智能体';
   }
@@ -278,6 +311,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     directoryAgents = listed.body.items || [];
+    directoryLoaded = true;
     renderDirectory();
     show('', '');
   }
@@ -290,9 +324,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editForm.elements.name.value = agent.name;
     editForm.elements.summary.value = agent.summary || '';
     editForm.elements.instructions.value = agent.instructions || '';
+    if (editForm.elements.category) {
+      editForm.elements.category.value = AGENT_CATEGORY_SLUGS.has(agent.category) ? agent.category : '';
+    }
     const writable = canManage(actor);
-    for (const field of ['name', 'summary', 'instructions']) {
-      editForm.elements[field].disabled = !writable;
+    for (const field of ['name', 'summary', 'instructions', 'category']) {
+      if (editForm.elements[field]) editForm.elements[field].disabled = !writable;
     }
     document.getElementById('archive-button').hidden = !writable;
     editForm.querySelector('button[type="submit"]').hidden = !writable;

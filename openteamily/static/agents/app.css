@@ -178,3 +178,14 @@ button.pill[aria-pressed="true"] {
   color: var(--ot-muted);
   font-size: 0.9rem;
 }
+
+.agent-card .category-tag {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ot-muted);
+  background: rgba(127, 127, 127, 0.14);
+}
