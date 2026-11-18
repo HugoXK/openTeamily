@@ -104,15 +104,30 @@ export function formatPath(path) {
   return (path || []).join(' › ');
 }
 
-// Deep link only: /guide?q=<keyword>. An empty keyword goes back to /guide,
-// which is also the only query the server lets through.
-export function guideHref(value) {
+// Deep link only: /guide?q=<keyword>, /guide?category=<id>, or both. An empty
+// keyword and the 全部 category both go back to a bare /guide, and an unknown
+// category id reads as 全部 instead of inventing an empty category.
+export function categorySlug(value) {
+  const id = String(value || '');
+  return CATEGORIES.some((category) => category.id === id) ? id : 'all';
+}
+
+export function guideHref(value, category = 'all') {
   const keyword = String(value || '').trim();
-  return keyword ? `/guide?q=${encodeURIComponent(keyword)}` : '/guide';
+  const slug = categorySlug(category);
+  const params = new URLSearchParams();
+  if (slug !== 'all') params.set('category', slug);
+  if (keyword) params.set('q', keyword);
+  const search = params.toString();
+  return search ? `/guide?${search}` : '/guide';
 }
 
 export function guideInitialQuery(search) {
   return new URLSearchParams(search || '').get('q') || '';
+}
+
+export function guideInitialCategory(search) {
+  return categorySlug(new URLSearchParams(search || '').get('category'));
 }
 
 function csrfCookie(source) {
@@ -169,7 +184,7 @@ function mount() {
   const dialogClose = document.getElementById('guide-dialog-close');
   if (!status || !loginPanel || !mainPanel || !form || !categoriesEl || !listEl) return;
 
-  let currentCategory = 'all';
+  let currentCategory = guideInitialCategory(globalThis.location ? globalThis.location.search : '');
   let currentItemId = '';
 
   function show(kind, text) {
@@ -220,6 +235,7 @@ function mount() {
         currentCategory = category.id;
         closeDialog();
         render();
+        syncQuery(searchEl ? searchEl.value : '');
       });
       categoriesEl.append(button);
     }
@@ -272,7 +288,7 @@ function mount() {
     const location = globalThis.location;
     const history = globalThis.history;
     if (!location || !history || typeof history.replaceState !== 'function') return;
-    const href = guideHref(value);
+    const href = guideHref(value, currentCategory);
     if (location.pathname + location.search === href) return;
     history.replaceState(null, '', href);
   }

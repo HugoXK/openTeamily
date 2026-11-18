@@ -159,11 +159,17 @@ class SettingsPage:
         if path == '/memory':
             return query in ('page=profile', 'page=todos')
         if path == '/guide':
-            # Deep link only: /guide?q=<keyword>, one non-empty keyword and
-            # nothing else. Every other /guide query, and every query on the
-            # guide CSS/JS, still answers 400.
+            # Deep links: one non-empty q, one non-empty category, or both, each
+            # named at most once. An unknown category id is served anyway and the
+            # page falls back to 全部, so a stale link is not a 400. Every other
+            # /guide query, and every query on the guide CSS/JS, still answers 400.
             pairs = parse_qsl(query, keep_blank_values=True)
-            return len(pairs) == 1 and pairs[0][0] == 'q' and bool(pairs[0][1])
+            seen = set()
+            for key, value in pairs:
+                if key not in ('q', 'category') or not value or key in seen:
+                    return False
+                seen.add(key)
+            return bool(seen)
         return False
 
     def __call__(self, env, start_response):
