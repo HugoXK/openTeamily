@@ -1257,6 +1257,33 @@ async function main() {
     );
     screenshots.push(path.basename(await shot(page, outDir, '70-memory-dir-previews.png')));
     try {
+      const graphNode = page.locator('#graph-canvas .graph-item').first();
+      await graphNode.waitFor({ state: 'visible', timeout: 8000 });
+      await graphNode.locator('.graph-node').hover();
+      await page.waitForTimeout(400);
+      const hoverCard = page.locator('#graph-hover-card');
+      const hoverText = await visibleText(hoverCard);
+      record(
+        'memory_graph_hover',
+        await hoverCard.isVisible()
+          && hoverText.includes(ready.memory_title)
+          && hoverText.includes(ready.memory_body)
+          && hoverText.includes(`#${ready.memory_topic}`)
+          && (await visibleText(page.locator('.graph-hint'))).includes('单击查看 · 双击打开 · 悬停预览'),
+        hoverText || 'graph hover card missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '83-memory-graph-hover.png')));
+      await graphNode.dblclick();
+      await page.locator('#editor-form').waitFor({ state: 'visible', timeout: 8000 });
+      const openedTitle = await page.locator('#editor-form [name="title"]').inputValue();
+      record('memory_graph_open', openedTitle === ready.memory_title, openedTitle || 'graph double-click did not open the page');
+      screenshots.push(path.basename(await shot(page, outDir, '84-memory-graph-open.png')));
+      await page.locator('#close-editor').click();
+      await page.locator('#overview-panel').waitFor({ state: 'visible', timeout: 8000 });
+    } catch (error) {
+      record('memory_graph_hover', false, String(error));
+    }
+    try {
       await page.locator('#dir-collapse').click();
       await page.locator('#dir-expand').waitFor({ state: 'visible', timeout: 8000 });
       const collapsedClass = (await page.locator('#list-panel').getAttribute('class') || '').includes('dir-collapsed');
