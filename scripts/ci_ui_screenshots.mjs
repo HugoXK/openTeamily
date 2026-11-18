@@ -527,9 +527,9 @@ async function main() {
       await page.locator('#edit-form').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#edit-form select[name="category"]').selectOption('operations');
       await page.locator('#edit-form button[type="submit"]').click();
-      await waitForLocatorText(page, '#status', '已更新');
-      await page.locator('.filter-row .pill[data-category="operations"]').click();
+      // The save reloads the directory (which clears #status), so wait for the card tag instead.
       await waitForLocatorText(page, '#agent-list', 'Operations');
+      await page.locator('.filter-row .pill[data-category="operations"]').click();
       const filteredList = await visibleText(page.locator('#agent-list'));
       const filteredUrl = page.url();
       const chatStillOpen = await page.locator('#chat-panel').isVisible();
