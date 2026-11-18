@@ -672,7 +672,7 @@ async function main() {
     try {
       await page.locator('#new-conversation').click();
       await page.locator('#compose-new-group').click();
-      const agent = page.locator('#member-choices input[name="agent-member"]').first();
+      const agent = page.locator(`#member-choices input[name="agent-member"][value="${ready.agent_id}"]`);
       const human = page.locator('#member-choices input[name="member"]').first();
       await agent.check();
       record('chat_group_agent_only_disabled',
