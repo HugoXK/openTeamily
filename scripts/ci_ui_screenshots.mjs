@@ -253,17 +253,19 @@ async function main() {
       await page.locator('#appearance input[value="auto"]').check();
       await page.locator('#appearance-schedule-card').waitFor({ state: 'visible', timeout: 15000 });
       await waitForLocatorText(page, '#appearance-status', '当前为');
+      const statusText = `${await visibleText(page.locator('#appearance-status'))}`;
       const autoText = `${await visibleText(page.locator('#appearance-schedule-card'))}`;
       record(
         'settings_appearance',
         values.join(',') === 'light,dark,auto,system'
           && appearanceText.includes('始终使用浅色主题。')
           && appearanceText.includes('选择应用在此设备上的显示外观。')
-          && autoText.includes('当前为')
+          && /当前为(浅色|深色)，直到 (22:00|06:00)。/.test(statusText)
+          && !autoText.includes('当前为')
           && autoText.includes('没有使用实际日出日落时刻')
           && autoText.includes('可选用「自定义时段」')
           && autoText.includes('自动切换'),
-        `values=${values.join(',')}; ${appearanceText || 'appearance page empty'} | auto=${autoText || 'schedule card empty'}`,
+        `values=${values.join(',')}; ${appearanceText || 'appearance page empty'} | status=${statusText || 'missing'} | auto=${autoText || 'schedule card empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '27-settings-appearance.png')));
     } catch (error) {
