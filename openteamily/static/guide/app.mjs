@@ -78,6 +78,13 @@ export function filterCatalog(items, {category = 'all', query = ''} = {}) {
   });
 }
 
+// An empty category is not a failed search: name whichever one the user is
+// looking at, and say nothing when there is something to list.
+export function emptyGuideMessage(items, query) {
+  if (items.length > 0) return '';
+  return normalize(query) ? '没有匹配的指引。' : '这一类还没有指引。';
+}
+
 export function groupCatalog(items) {
   const groups = [];
   const index = new Map();
@@ -219,12 +226,16 @@ function mount() {
   }
 
   function renderList() {
+    const query = searchEl ? searchEl.value : '';
     const items = filterCatalog(CATALOG, {
       category: currentCategory,
-      query: searchEl ? searchEl.value : '',
+      query,
     });
     if (countEl) countEl.textContent = `当前显示 ${items.length} 条`;
-    if (emptyEl) emptyEl.hidden = items.length > 0;
+    if (emptyEl) {
+      emptyEl.hidden = items.length > 0;
+      emptyEl.textContent = emptyGuideMessage(items, query);
+    }
     listEl.replaceChildren();
     for (const group of groupCatalog(items)) {
       const section = document.createElement('section');

@@ -280,6 +280,20 @@ test('catalog failure displays an error and leaves loading state', async () => {
   assert.equal(doc.getElementById('discover-empty').hidden, true);
 });
 
+test('catalog cards do not promise a /d/ detail route the server does not serve', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const fetcher = async path => {
+    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    return {status: 200, json: async () => ({items: [{name: 'Fixture', slug: 'fixture-one', summary: '简介'}], cursor: null})};
+  };
+  await mount(doc, {fetcher, location: {search: '?tab=agents'}});
+  const card = doc.getElementById('discover-list').children[0].children[0];
+  const title = card.title || '';
+  assert.equal(title.includes('/d/'), false, 'hover text must not name /d/<slug>: no public detail route exists');
+  assert.equal(title.includes('fixture-one'), false);
+});
+
 test('default discover view is the unconnected feed and does not load the catalog API', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();
