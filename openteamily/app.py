@@ -106,8 +106,7 @@ class App:
 
     def __call__(self, env, start_response):
         headers = [('Cache-Control', 'no-store'),
-                   ('X-Content-Type-Options', 'nosniff'), ('Referrer-Policy', 'no-referrer'),
-                   ('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'")]
+                   ('X-Content-Type-Options', 'nosniff'), ('Referrer-Policy', 'no-referrer')]
         try:
             status, body, extra = self.dispatch(env)
             headers += extra
@@ -121,6 +120,8 @@ class App:
             status, body = 503, {'error': {'code': 'unavailable', 'message': 'Storage is temporarily unavailable'}}
         except Exception:
             status, body = 500, {'error': {'code': 'internal', 'message': 'Internal service error'}}
+        if not any(key.lower() == 'content-security-policy' for key, _value in headers):
+            headers.append(('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'"))
         if isinstance(body, (bytes, bytearray)):
             data = bytes(body)
             if not any(key.lower() == 'content-type' for key, _value in headers):
@@ -755,7 +756,7 @@ class App:
                 return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages|agent-replies))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -1302,15 +1303,29 @@ class App:
         content_type = env.get('CONTENT_TYPE', '')
         if content_type.split(';', 1)[0].strip().lower() == 'multipart/form-data':
             return self.create_media_artifact(db, workspace, session, now, env)
-        body = self.body(env, ['title', 'body', 'kind', 'board'], limit=70000)
+        body = self.body(env, ['title', 'body', 'kind', 'board', 'slides', 'dashboard'], limit=70000)
         title, content, kind = body.get('title'), body.get('body', ''), body.get('kind', 'document')
         board = None
+        slides = None
+        dashboard = None
         if kind == 'media':
             refuse(400, 'invalid', 'Upload media as multipart form data')
         if kind == 'whiteboard':
             board = artifacts.normalize_board(body.get('board') or artifacts.EMPTY_BOARD)
             if board is None or not artifacts.valid_title(title) or (content and not artifacts.valid_body(content)):
                 refuse(400, 'invalid', 'Provide a whiteboard title and board')
+            content = content if artifacts.valid_body(content) else ''
+        elif kind == 'slides':
+            slides = artifacts.normalize_slides(body.get('slides') or artifacts.EMPTY_SLIDES)
+            if (slides is None or not slides['slides'] or not artifacts.valid_title(title)
+                    or (content and not artifacts.valid_body(content))):
+                refuse(400, 'invalid', 'Provide a slide title and at least one slide')
+            content = content if artifacts.valid_body(content) else ''
+        elif kind == 'dashboard':
+            dashboard = artifacts.normalize_dashboard(body.get('dashboard') or artifacts.EMPTY_DASHBOARD)
+            if (dashboard is None or not dashboard['widgets'] or not artifacts.valid_title(title)
+                    or (content and not artifacts.valid_body(content))):
+                refuse(400, 'invalid', 'Provide a dashboard title and at least one widget')
             content = content if artifacts.valid_body(content) else ''
         elif kind not in ('document', 'website') or not artifacts.valid_title(title) or not artifacts.valid_body(content):
             refuse(400, 'invalid', 'Provide a document or website title and body')
@@ -1321,6 +1336,10 @@ class App:
         payload = {'title': title, 'body': content, 'kind': kind}
         if board is not None:
             payload['board'] = board
+        if slides is not None:
+            payload['slides'] = slides
+        if dashboard is not None:
+            payload['dashboard'] = dashboard
         key_hash, request_hash = digest('artifact:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         )
@@ -1348,6 +1367,10 @@ class App:
         artifacts.set_render(db, aid, kind)
         if board is not None and not artifacts.attach_board(db, aid, board):
             refuse(400, 'invalid', 'Provide a whiteboard title and board')
+        if slides is not None and not artifacts.attach_slides(db, aid, slides):
+            refuse(400, 'invalid', 'Provide valid slide content')
+        if dashboard is not None and not artifacts.attach_dashboard(db, aid, dashboard):
+            refuse(400, 'invalid', 'Provide valid dashboard content')
         return self.artifact_saved(db, workspace['id'], aid, 201)
 
     def update_artifact(self, db, workspace, session, actor, row, now, body):
@@ -1360,6 +1383,10 @@ class App:
         allowed = {'title', 'body'}
         if kind == 'whiteboard':
             allowed = {'title', 'board', 'operations'}
+        elif kind == 'slides':
+            allowed = {'title', 'slides'}
+        elif kind == 'dashboard':
+            allowed = {'title', 'dashboard'}
         elif kind == 'media':
             allowed = {'title'}
         if set(changes) - allowed:
@@ -1370,6 +1397,8 @@ class App:
         title = row['title']
         content = row['body']
         board = artifacts.decode_board(row['board_json']) if kind == 'whiteboard' else None
+        slides = artifacts.decode_slides(row['slides_json']) if kind == 'slides' else None
+        dashboard = artifacts.decode_dashboard(row['dashboard_json']) if kind == 'dashboard' else None
         if 'title' in changes:
             if not artifacts.valid_title(changes['title']):
                 refuse(400, 'invalid', 'Provide a document title and body')
@@ -1386,9 +1415,21 @@ class App:
             board = artifacts.apply_board_operations(board or artifacts.EMPTY_BOARD, changes['operations'])
             if board is None:
                 refuse(400, 'invalid', 'Provide valid board operations')
+        if 'slides' in changes:
+            slides = artifacts.normalize_slides(changes['slides'])
+            if slides is None or not slides['slides']:
+                refuse(400, 'invalid', 'Provide at least one valid slide')
+        if 'dashboard' in changes:
+            dashboard = artifacts.normalize_dashboard(changes['dashboard'])
+            if dashboard is None or not dashboard['widgets']:
+                refuse(400, 'invalid', 'Provide at least one valid dashboard widget')
         unchanged = title == row['title'] and content == row['body']
         if kind == 'whiteboard':
             unchanged = title == row['title'] and artifacts.board_json(board) == row['board_json']
+        elif kind == 'slides':
+            unchanged = title == row['title'] and artifacts.slides_json(slides) == row['slides_json']
+        elif kind == 'dashboard':
+            unchanged = title == row['title'] and artifacts.dashboard_json(dashboard) == row['dashboard_json']
         if unchanged:
             return 200, {'artifact': artifacts.view(row)}, []
         self.guard_artifact_versions(db, row['id'])
@@ -1404,6 +1445,10 @@ class App:
         )
         if kind == 'whiteboard' and not artifacts.attach_board(db, row['id'], board):
             refuse(400, 'invalid', 'Provide a valid board')
+        if kind == 'slides' and not artifacts.attach_slides(db, row['id'], slides):
+            refuse(400, 'invalid', 'Provide valid slide content')
+        if kind == 'dashboard' and not artifacts.attach_dashboard(db, row['id'], dashboard):
+            refuse(400, 'invalid', 'Provide valid dashboard content')
         return self.artifact_saved(db, workspace['id'], row['id'], 200)
 
 
@@ -1478,24 +1523,46 @@ class App:
         ).fetchone():
             refuse(409, 'conflict', 'A document with this title already exists')
         kind = snapshot['kind']
+        structured_kind, structured = (artifacts.decode_structured(snapshot['body'])
+                                        if kind == 'document' else (None, None))
+        if structured is not None:
+            kind = structured_kind
         content = snapshot['body'] if kind in ('document', 'website') else ''
         db.execute(
             'UPDATE artifacts SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
             (title, title_digest, content, row['revision'] + 1, now, session['user_id'], row['id']),
         )
         artifacts.set_render(db, row['id'], kind)
-        if kind == 'whiteboard':
+        if kind == 'slides':
+            if not artifacts.attach_slides(db, row['id'], structured):
+                refuse(400, 'invalid', 'Provide valid slide content')
+            db.execute('DELETE FROM artifact_media WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
+        elif kind == 'dashboard':
+            if not artifacts.attach_dashboard(db, row['id'], structured):
+                refuse(400, 'invalid', 'Provide valid dashboard content')
+            db.execute('DELETE FROM artifact_media WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
+        elif kind == 'whiteboard':
             board = artifacts.decode_board(snapshot['board']) or dict(artifacts.EMPTY_BOARD)
             if not artifacts.attach_board(db, row['id'], board):
                 refuse(400, 'invalid', 'Provide a valid board')
+            db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
         elif kind == 'media':
             artifacts.attach_media(
                 db, row['id'], snapshot['mime'], snapshot['byte_count'],
                 snapshot['sha256'], snapshot['filename'],
             )
+            db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
         else:
             db.execute('DELETE FROM artifact_media WHERE artifact_id=?', (row['id'],))
             db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
+            db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
         return self.artifact_saved(db, row['workspace_id'], row['id'], 200)
 
     def artifact_share_dispatch(self, db, session, method, query, now, env, actor, row, share_id, share_revoking):
@@ -2788,6 +2855,8 @@ class App:
             if method == 'GET':
                 limit, cursor, _ = self.pagination(query)
                 rows = social.listing(db, workspace['id'], session['user_id'], cursor, limit + 1)
+                for conversation in rows[:limit]:
+                    self.reconcile_group_replies(db, conversation, now)
                 items = social.conversation_items(db, rows[:limit])
                 return 200, {'items': items,
                              'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
@@ -2799,9 +2868,13 @@ class App:
         row = social.load(db, workspace['id'], conversation_id)
         if row is None or not social.is_member(db, row['id'], workspace['id'], session['user_id']):
             refuse(404, 'not_found', 'Conversation not found')
+        self.reconcile_group_replies(db, row, now)
+        if action == 'agent-replies' and method == 'POST' and not query:
+            return self.request_group_reply(db, workspace, session, row, now, env)
         if action is None and method == 'GET' and not query:
             items = social.messages(db, row['id'], '', 101) or []
             return 200, {'conversation': social.conversation_item(db, row),
+                         'agent_replies': [social.reply_view(item) for item in social.reply_requests(db, row['id'])],
                          'items': [social.message_view(item) for item in items[:100]],
                          'cursor': items[99]['id'] if len(items) > 100 else None}, []
         if action == 'messages' and method == 'GET':
@@ -2814,6 +2887,73 @@ class App:
         if action == 'messages' and method == 'POST' and not query:
             return self.send_social_message(db, workspace, session, row, now, env)
         refuse(400, 'invalid', 'Invalid messenger request')
+
+    def request_group_reply(self, db, workspace, session, row, now, env):
+        body = self.body(env, ['agent_id', 'prompt'])
+        aid, text = body.get('agent_id'), body.get('prompt')
+        if row['kind'] != 'group' or not isinstance(aid, str) or not social.HEX32.fullmatch(aid):
+            refuse(400, 'invalid', 'Select a saved group agent')
+        if not social.valid_body(text):
+            refuse(400, 'invalid', 'Provide a request of 1–4000 characters')
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        key_hash = digest('group-agent-reply:' + key)
+        request_hash = digest(json.dumps({'agent_id': aid, 'prompt': text,
+                                         'requested_by': session['user_id']}, sort_keys=True))
+        prior = db.execute('SELECT * FROM social_agent_replies WHERE conversation_id=? AND key_hash=?',
+                           (row['id'], key_hash)).fetchone()
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'reply': social.reply_view(prior)}, []
+        agent = db.execute(
+            'SELECT a.* FROM workspace_agents a JOIN social_agent_members m ON m.agent_id=a.id '
+            'WHERE m.conversation_id=? AND a.id=? AND a.workspace_id=? AND a.archived=0',
+            (row['id'], aid, workspace['id'])).fetchone()
+        if agent is None:
+            refuse(400, 'invalid', 'Select an active saved group agent')
+        requests = social.reply_requests(db, row['id'])
+        if any(item['status'] in ('queued', 'running') for item in requests):
+            refuse(409, 'conflict', 'A group reply is already in progress')
+        cap = self.config.max_social_messages_per_conversation
+        if len(requests) >= cap or social.message_slots(db, row['id']) >= cap:
+            refuse(429, 'quota', 'Group reply capacity reached')
+        # Explicit prompt only: never forward group history or trigger from another agent.
+        prompt = conversations.compose_prompt(agent, [], text)
+        task_id, error, _dispatch = self.queue_infer_task(
+            db, session['user_id'], now, prompt, workspace['id'], aid)
+        rid = uuid4().hex
+        db.execute(
+            'INSERT INTO social_agent_replies '
+            '(id,conversation_id,workspace_id,agent_id,agent_name,requested_by,prompt,agent_revision,'
+            'status,task_id,error_code,created,updated,key_hash,request_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (rid, row['id'], workspace['id'], aid, agent['name'], session['user_id'], text, agent['revision'],
+             'queued' if task_id else 'failed', task_id, error, now, now, key_hash, request_hash))
+        result = db.execute('SELECT * FROM social_agent_replies WHERE id=?', (rid,)).fetchone()
+        return 201, {'reply': social.reply_view(result)}, []
+
+    def reconcile_group_replies(self, db, row, now):
+        for reply in social.reply_requests(db, row['id']):
+            if reply['status'] not in ('queued', 'running'):
+                continue
+            task = runtime_connect.load_task(db, reply['task_id']) if reply['task_id'] else None
+            if task is None:
+                status, error, text = 'failed', 'task_missing', ''
+            else:
+                task = runtime_connect.expire_task(db, task, now)
+                status, error, text = conversations.map_task_status(task)
+                if status == 'succeeded' and not text.strip():
+                    status, error, text = 'failed', 'empty_reply', ''
+                # Expose only fixed error codes, never arbitrary runtime diagnostics.
+                if status in ('failed', 'cancelled'):
+                    error = error if error in ('timeout', 'cancelled', 'empty_reply') else 'runtime_failed'
+                    text = ''
+            seq = social.next_seq(db, row['id']) if status == 'succeeded' else None
+            db.execute('UPDATE social_agent_replies SET status=?,error_code=?,body=?,seq=?,updated=? WHERE id=?',
+                       (status, error, text if status == 'succeeded' else '', seq, now, reply['id']))
+            if status == 'succeeded':
+                db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, row['id']))
 
     def create_social_conversation(self, db, workspace, session, now, env):
         body = self.body(env, ['kind', 'member_ids', 'title', 'agent_ids'])
@@ -2904,8 +3044,7 @@ class App:
             if prior['request_hash'] != request_hash:
                 refuse(409, 'conflict', 'Idempotency key was used for a different request')
             return 200, {'message': social.message_view(prior)}, []
-        if (db.execute('SELECT COUNT(*) FROM social_messages WHERE conversation_id=?',
-                       (row['id'],)).fetchone()[0]
+        if (social.message_slots(db, row['id'])
                 >= self.config.max_social_messages_per_conversation):
             refuse(429, 'quota', 'Message capacity reached')
         message_id = uuid4().hex
