@@ -966,7 +966,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (result.status !== 200) { status.textContent = result.status === 409 ? '画像已在别处更新，请重新打开后重试。' : '画像未保存。'; return; }
     profileRevision = result.body.profile.revision; status.textContent = '画像已保存。';
   });
-  workspaceSelect.addEventListener('change', async () => { await loadWorkspace(); if (currentView === 'profile') await loadMemoryProfile(); });
+  function invalidateMemoryProfile() {
+    // A workspace switch must not leave the previous workspace's revision or
+    // an enabled Save button while the new workspace profile is still loading.
+    profileRevision = null;
+    profileRequest += 1;
+    const save = document.getElementById('save-memory-profile'); if (save) save.disabled = true;
+  }
+  workspaceSelect.addEventListener('change', async () => {
+    invalidateMemoryProfile();
+    await loadWorkspace();
+    if (currentView === 'profile') await loadMemoryProfile();
+  });
   document.getElementById('search').addEventListener('input', () => renderDirectory());
   document.getElementById('search').addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;

@@ -1503,8 +1503,15 @@ async function main() {
       await page.locator('#save-memory-profile').click();
       await waitForLocatorText(page, '#memory-profile-status', '画像已保存');
       await page.reload({waitUntil: 'load'});
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+      // The profile is private per workspace; reopen the same fixture workspace after reload.
+      await selectWorkspace(page, ready.workspace_name);
       await page.locator('#profile-panel').waitFor({state: 'visible'});
-      await page.waitForFunction(() => !document.getElementById('save-memory-profile').disabled);
+      await page.waitForFunction(
+        () => !document.getElementById('save-memory-profile').disabled
+          && document.getElementById('profile-professional').value === '[CI FIXTURE] Personal professional context',
+        null, {timeout: 15000},
+      ).catch(() => {});
       record('memory_profile_persists', (await page.locator('#profile-professional').inputValue()) === '[CI FIXTURE] Personal professional context'
         && (await page.locator('#profile-work_style').inputValue()) === '[CI FIXTURE] Async work style',
         'synthetic personal profile persisted after reload; no model injection');
