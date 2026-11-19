@@ -1,0 +1,74 @@
+[
+  {
+    "shot": "en__light__1440x900/01-secret-row.png",
+    "dom": {
+      "url": "/settings#skill-secrets",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": null,
+      "listRows": [],
+      "secretRows": [
+        "CI_FIXTURE_KEY 删除"
+      ],
+      "title": "设置 · OpenTeamily",
+      "scrollWidth": 1440,
+      "viewport": 1440,
+      "searchPanel": null,
+      "sessionPane": null
+    }
+  },
+  {
+    "shot": "en__light__1440x900/02-deleted-on-one-click.png",
+    "dom": {
+      "url": "/settings#skill-secrets",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": null,
+      "listRows": [],
+      "secretRows": [],
+      "title": "设置 · OpenTeamily",
+      "scrollWidth": 1440,
+      "viewport": 1440,
+      "searchPanel": null,
+      "sessionPane": null
+    }
+  },
+  {
+    "shot": "en__light__390x844/01-secret-row.png",
+    "dom": {
+      "url": "/settings#skill-secrets",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": null,
+      "listRows": [],
+      "secretRows": [
+        "CI_FIXTURE_KEY 删除"
+      ],
+      "title": "设置 · OpenTeamily",
+      "scrollWidth": 390,
+      "viewport": 390,
+      "searchPanel": null,
+      "sessionPane": null
+    }
+  },
+  {
+    "shot": "en__light__390x844/02-deleted-on-one-click.png",
+    "dom": {
+      "url": "/settings#skill-secrets",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": null,
+      "listRows": [],
+      "secretRows": [],
+      "title": "设置 · OpenTeamily",
+      "scrollWidth": 390,
+      "viewport": 390,
+      "searchPanel": null,
+      "sessionPane": null
+    }
+  }
+]

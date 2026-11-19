@@ -1,0 +1,150 @@
+[
+  {
+    "shot": "en__light__1440x900/01-secret-row.png",
+    "dom": {
+      "url": "/settings#skill-secrets",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": null,
+      "listRows": [],
+      "secretRows": [
+        "CI_FIXTURE_KEY 删除"
+      ],
+      "title": "设置 · OpenTeamily",
+      "scrollWidth": 1440,
+      "viewport": 1440,
+      "searchPanel": null,
+      "sessionPane": null
+    }
+  },
+  {
+    "shot": "en__light__1440x900/02-confirm-open.png",
+    "dom": {
+      "url": "/settings#skill-secrets",
+      "dialog": "删除技能密钥「CI_FIXTURE_KEY」？取消确认删除",
+      "dialogLabel": "skill-secret-confirm-1",
+      "focused": "BUTTON",
+      "editorHidden": null,
+      "listRows": [],
+      "secretRows": [
+        "CI_FIXTURE_KEY 删除技能密钥「CI_FIXTURE_KEY」？取消确认删除"
+      ],
+      "title": "设置 · OpenTeamily",
+      "scrollWidth": 1440,
+      "viewport": 1440,
+      "searchPanel": null,
+      "sessionPane": null
+    }
+  },
+  {
+    "shot": "en__light__1440x900/03-cancelled.png",
+    "dom": {
+      "url": "/settings#skill-secrets",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BUTTON",
+      "editorHidden": null,
+      "listRows": [],
+      "secretRows": [
+        "CI_FIXTURE_KEY 删除"
+      ],
+      "title": "设置 · OpenTeamily",
+      "scrollWidth": 1440,
+      "viewport": 1440,
+      "searchPanel": null,
+      "sessionPane": null
+    }
+  },
+  {
+    "shot": "en__light__1440x900/04-deleted.png",
+    "dom": {
+      "url": "/settings#skill-secrets",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": null,
+      "listRows": [],
+      "secretRows": [],
+      "title": "设置 · OpenTeamily",
+      "scrollWidth": 1440,
+      "viewport": 1440,
+      "searchPanel": null,
+      "sessionPane": null
+    }
+  },
+  {
+    "shot": "en__light__390x844/01-secret-row.png",
+    "dom": {
+      "url": "/settings#skill-secrets",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": null,
+      "listRows": [],
+      "secretRows": [
+        "CI_FIXTURE_KEY 删除"
+      ],
+      "title": "设置 · OpenTeamily",
+      "scrollWidth": 390,
+      "viewport": 390,
+      "searchPanel": null,
+      "sessionPane": null
+    }
+  },
+  {
+    "shot": "en__light__390x844/02-confirm-open.png",
+    "dom": {
+      "url": "/settings#skill-secrets",
+      "dialog": "删除技能密钥「CI_FIXTURE_KEY」？取消确认删除",
+      "dialogLabel": "skill-secret-confirm-1",
+      "focused": "BUTTON",
+      "editorHidden": null,
+      "listRows": [],
+      "secretRows": [
+        "CI_FIXTURE_KEY 删除技能密钥「CI_FIXTURE_KEY」？取消确认删除"
+      ],
+      "title": "设置 · OpenTeamily",
+      "scrollWidth": 390,
+      "viewport": 390,
+      "searchPanel": null,
+      "sessionPane": null
+    }
+  },
+  {
+    "shot": "en__light__390x844/03-cancelled.png",
+    "dom": {
+      "url": "/settings#skill-secrets",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BUTTON",
+      "editorHidden": null,
+      "listRows": [],
+      "secretRows": [
+        "CI_FIXTURE_KEY 删除"
+      ],
+      "title": "设置 · OpenTeamily",
+      "scrollWidth": 390,
+      "viewport": 390,
+      "searchPanel": null,
+      "sessionPane": null
+    }
+  },
+  {
+    "shot": "en__light__390x844/04-deleted.png",
+    "dom": {
+      "url": "/settings#skill-secrets",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": null,
+      "listRows": [],
+      "secretRows": [],
+      "title": "设置 · OpenTeamily",
+      "scrollWidth": 390,
+      "viewport": 390,
+      "searchPanel": null,
+      "sessionPane": null
+    }
+  }
+]
