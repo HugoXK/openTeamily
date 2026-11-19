@@ -783,3 +783,215 @@ details.memory-disclaimer p { margin: .25rem 0 0; }
   body #main-panel > details.memory-disclaimer:not(.x) { grid-column: 1 / -1; }
 }
 #overview-panel .graph-stage { background-image: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ot-line-strong) 28%, transparent) 1px, transparent 0); }
+
+/* Page parity follow-up: number-column stats and wiki-like editor. */
+.memory-view-title {
+  margin: 0 auto 0 0;
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--ot-ink);
+}
+.memory-top .memory-counts {
+  display: flex;
+  align-items: stretch;
+  gap: 0.15rem 1.1rem;
+  margin: 0;
+  color: var(--ot-muted);
+  font-size: 0.7rem;
+}
+.memory-count {
+  display: grid;
+  justify-items: center;
+  gap: 0.1rem;
+  min-width: 2rem;
+}
+.memory-count strong {
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--ot-ink);
+  line-height: 1.1;
+}
+#overview-panel .graph-stage {
+  background: var(--ot-surface);
+  box-shadow: 0 0 0 1px var(--ot-line);
+}
+.memory-editor {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem 2rem;
+  background: var(--ot-surface);
+  border-radius: 0;
+}
+.memory-editor .editor-title-field input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 1.85rem;
+  font-weight: 650;
+  padding: 0.15rem 0;
+  box-shadow: none;
+}
+.memory-editor .editor-topics-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--ot-muted);
+}
+.memory-editor .editor-topics-field input {
+  flex: 1;
+  border: 1px dashed var(--ot-line);
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  background: transparent;
+}
+.memory-editor .editor-body-field textarea {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  padding: 0.25rem 0;
+  box-shadow: none;
+  resize: vertical;
+  min-height: 18rem;
+}
+.memory-editor .actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--ot-line);
+}
+
+.memory-center { background: var(--ot-surface); }
+.memory-center .graph-stage,
+body.app-workspace #overview-panel .graph-stage,
+#overview-panel .graph-stage {
+  background-color: #ffffff !important;
+  background-image: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ot-line-strong) 28%, transparent) 1px, transparent 0) !important;
+  background-size: 22px 22px !important;
+}
+@media (prefers-color-scheme: dark) {
+  .memory-center .graph-stage,
+  #overview-panel .graph-stage { background-color: var(--ot-surface) !important; }
+}
+#editor-form.memory-editor .editor-title-field input {
+  font-size: 1.85rem !important; font-weight: 650; border: 0 !important; box-shadow: none !important;
+  background: transparent !important; padding: 0.15rem 0 !important;
+}
+#editor-form.memory-editor .editor-body-field textarea {
+  font-size: 0.95rem !important; line-height: 1.65; border: 0 !important; box-shadow: none !important;
+  background: transparent !important;
+}
+
+#graph-canvas {
+  background-color: #ffffff !important;
+  background-image: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ot-line-strong) 28%, transparent) 1px, transparent 0) !important;
+  background-size: 22px 22px !important;
+}
+
+.memory-editor { position: relative; padding-top: 0.5rem; }
+.editor-topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.75rem; margin-bottom: 0.25rem;
+}
+.editor-saved { margin: 0; font-size: 0.75rem; color: var(--ot-muted); }
+.editor-top-actions { display: flex; gap: 0.35rem; margin-left: auto; }
+.editor-top-actions button {
+  height: 1.85rem; padding: 0 0.65rem; border-radius: 999px;
+  border: 1px solid var(--ot-line); background: var(--ot-surface);
+  color: var(--ot-muted); font-size: 0.75rem;
+}
+.editor-top-actions button:disabled { opacity: 0.7; cursor: not-allowed; }
+.editor-toolbar {
+  display: flex; flex-wrap: wrap; gap: 0.2rem;
+  padding: 0.25rem 0; border-top: 1px solid var(--ot-line);
+  border-bottom: 1px solid var(--ot-line);
+}
+.editor-toolbar button {
+  min-width: 1.85rem; height: 1.85rem; padding: 0 0.4rem;
+  border: 0; border-radius: 0.35rem; background: transparent;
+  color: var(--ot-ink); font-size: 0.75rem; font-weight: 650;
+}
+.editor-toolbar button:hover { background: var(--ot-bg-accent); }
+.memory-editor .editor-title-field input { font-size: 2rem; font-weight: 700; letter-spacing: -0.03em; }
+#editor-form.memory-editor .editor-title-field input { font-size: 2rem !important; font-weight: 700; }
+
+/* Page editor (polish 5): the directory column stays visible while a page or
+   action is open, like the recorded wiki editor; the editor takes the centre
+   and right columns and scrolls on its own. */
+#list-panel[data-view="page"] > .memory-center,
+#list-panel[data-view="page"] > .memory-side { display: none; }
+@media (min-width: 701px) {
+  #main-panel:has(> #list-panel[data-view="page"]:not([hidden])) > .memory-top,
+  #main-panel:has(> #list-panel[data-view="page"]:not([hidden])) > .memory-disclaimer { display: none; }
+  #main-panel > #list-panel[data-view="page"] > #editor-form,
+  #main-panel > #list-panel[data-view="page"] > #action-editor-form {
+    grid-column: 2 / 4; grid-row: 1 / -1; min-height: 0; overflow: auto;
+    margin: 0; max-width: none; padding: 1.5rem 2.5rem 3rem;
+    grid-template-columns: minmax(0, 50rem); justify-content: center; align-content: start;
+  }
+  #main-panel > #list-panel[data-view="page"] > #action-editor-form { display: grid; gap: .75rem; }
+  #main-panel > #list-panel[data-view="page"] > :is(#editor-form, #action-editor-form)[hidden] { display: none; }
+}
+@media (max-width: 700px) {
+  #list-panel[data-view="page"] > :is(#editor-form, #action-editor-form) { order: -1; padding: 1rem; }
+}
+#editor-form.memory-editor { gap: .625rem; }
+.editor-topbar { min-height: 2rem; }
+.editor-top-actions button { border: 0; background: var(--ot-bg-accent); color: var(--ot-ink); }
+.editor-top-actions button:disabled { color: var(--ot-muted); opacity: 1; }
+#editor-form.memory-editor .editor-title-field input { font-size: 2rem !important; line-height: 1.2; letter-spacing: -0.02em; }
+.memory-editor .editor-topics-field { font-size: .75rem; }
+.memory-editor .editor-topics-field input { height: 1.75rem; min-height: 0; font-size: .75rem; border-color: var(--ot-line-strong); }
+.editor-toolbar {
+  position: sticky; top: -1.5rem; z-index: 2; align-items: center; gap: .125rem;
+  padding: .3rem 0; background: var(--ot-surface); border-top: 0; border-bottom: 1px solid var(--ot-line);
+}
+.editor-toolbar button { display: inline-grid; place-items: center; min-width: 1.875rem; height: 1.875rem; padding: 0 .35rem; color: var(--ot-muted); font-size: .75rem; font-weight: 650; }
+.editor-toolbar button:hover { color: var(--ot-ink); }
+.editor-toolbar button:focus-visible { outline: 2px solid var(--ot-focus); outline-offset: -2px; }
+.editor-tool-sep { width: 1px; height: 1rem; margin: 0 .3rem; background: var(--ot-line-strong); }
+.editor-source-toggle { margin-left: auto; font-weight: 600 !important; }
+.editor-source-toggle[aria-pressed="true"] { background: var(--ot-accent-soft) !important; color: var(--ot-accent-hover) !important; }
+.editor-rich {
+  min-height: 22rem; padding: .5rem 0 1rem; outline: none;
+  font-size: .9375rem; line-height: 1.75; color: var(--ot-ink); overflow-wrap: anywhere;
+}
+.editor-rich:empty::before, .editor-rich > p:only-child:has(> br:only-child)::before { content: attr(data-placeholder); color: var(--ot-muted); pointer-events: none; }
+.editor-rich > :first-child { margin-top: 0; }
+.editor-rich p { margin: 0 0 .75rem; }
+.editor-rich h1 { margin: 1.5rem 0 .6rem; font-size: 1.5rem; line-height: 1.3; font-weight: 700; }
+.editor-rich h2 { margin: 1.4rem 0 .5rem; font-size: 1.25rem; line-height: 1.35; font-weight: 700; }
+.editor-rich h3 { margin: 1.2rem 0 .45rem; font-size: 1.0625rem; line-height: 1.4; font-weight: 650; }
+.editor-rich ul, .editor-rich ol { margin: 0 0 .75rem; padding-left: 1.4rem; }
+.editor-rich li { margin: .25rem 0; }
+.editor-rich li::marker { color: var(--ot-muted); }
+.editor-rich blockquote { margin: 0 0 .75rem; padding: .5rem .85rem; border-radius: .5rem; background: var(--ot-surface-2); color: var(--ot-muted); }
+.editor-rich pre { margin: 0 0 .75rem; padding: .75rem .9rem; border-radius: .5rem; background: var(--ot-surface-2); box-shadow: inset 0 0 0 1px var(--ot-line); font-family: var(--ot-mono); font-size: .8125rem; line-height: 1.6; white-space: pre-wrap; }
+.editor-rich code { padding: .05rem .3rem; border-radius: .3rem; background: var(--ot-bg-accent); font-family: var(--ot-mono); font-size: .85em; }
+.editor-rich pre code { padding: 0; background: transparent; font-size: inherit; }
+.editor-rich a { color: var(--ot-accent); text-decoration: underline; text-underline-offset: 2px; }
+.editor-rich hr { margin: 1.25rem 0; border: 0; border-top: 1px solid var(--ot-line); }
+.editor-length { color: var(--ot-danger) !important; }
+.editor-rich:focus, .editor-rich:focus-visible { outline: none; box-shadow: none; }
+/* The overview column sits on the white canvas: no second white box, and a
+   small inset so the search and graph do not touch the canvas edge. */
+.memory-center, #overview-panel.memory-center { background: transparent; padding: .5rem 0 .75rem; }
+/* Polish 5: the rich surface is borderless like the recorded editor (focus shows
+   on the toolbar row instead), headings keep editor sizes over shell h-rules, and
+   "添加连接" is one compact row. */
+body.app-workspace #editor-rich:focus-visible, #editor-rich:focus { outline: none; box-shadow: none; }
+#editor-form:focus-within .editor-toolbar { border-bottom-color: var(--ot-accent); }
+#editor-rich h1 { font-size: 1.5rem; }
+#editor-rich h2 { font-size: 1.25rem; }
+#editor-rich h3 { font-size: 1.0625rem; }
+#editor-form .editor-link-row { display: flex; align-items: center; gap: .5rem; margin: .5rem 0; }
+#editor-form .editor-link-row label { display: flex; align-items: center; gap: .5rem; flex: 1 1 auto; min-width: 0; margin: 0; font-size: .8125rem; color: var(--ot-muted); white-space: nowrap; }
+#editor-form .editor-link-row select { flex: 1 1 auto; min-width: 0; height: 2rem; min-height: 0; padding: 0 .625rem; line-height: 2rem; font-size: .8125rem; }
+#editor-form .editor-link-row button { flex: none; height: 2rem; min-height: 0; padding: 0 .875rem; border-radius: 999px; font-size: .8125rem; }

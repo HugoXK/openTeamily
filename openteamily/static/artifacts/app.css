@@ -826,7 +826,7 @@ html[data-theme-resolved="dark"] #list-empty .empty-cta-icon[data-tone] { backgr
 
 /* Parity (2026-11-19) populated library: grid cards with a kind badge and ⋯ menu above a
    soft cover; list view with 名称/来源/创建时间/最近动态 columns; item menus
-   (grid and list share one menu: 发送到聊天 is disabled until a send API exists). */
+   (grid and list share one menu: 发送到聊天 is enabled for media artifacts via the social attachment API). */
 #artifact-list { list-style: none; margin: 0; padding: 0; }
 #artifact-list .artifact-list-head { display: none; }
 #artifact-list[data-layout="grid"] { grid-template-columns: repeat(auto-fill, minmax(min(100%, 13.5rem), 15rem)); gap: .875rem; }
@@ -903,3 +903,124 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
   font-size: .9375rem; line-height: 1.7; color: var(--ot-ink);
 }
 #editor-form > label:first-of-type input[name="title"]:focus-visible, #editor-form > #body-label textarea:focus-visible { outline: none; box-shadow: inset 0 -2px 0 var(--ot-accent); }
+
+/* Page parity follow-up: typography and a disabled bookmark on grid covers. */
+#artifact-list[data-layout="grid"] .artifact-item .link,
+#artifact-list[data-layout="grid"] .artifact-title,
+#artifact-list[data-layout="grid"] button.link {
+  font-size: 0.875rem;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--ot-ink);
+}
+#artifact-list[data-layout="grid"] .note,
+#artifact-list[data-layout="grid"] .artifact-meta {
+  font-size: 0.75rem;
+  color: var(--ot-muted);
+}
+#artifact-list[data-layout="grid"] .artifact-bookmark {
+  position: absolute;
+  right: 0.55rem;
+  bottom: 4.15rem;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 92%);
+  color: var(--ot-muted);
+  box-shadow: 0 0 0 1px var(--ot-line);
+  cursor: not-allowed;
+  z-index: 1;
+}
+#artifact-list[data-layout="list"] .artifact-bookmark { display: none; }
+#artifact-list[data-layout="list"] .artifact-item .link,
+#artifact-list[data-layout="list"] button.link {
+  font-size: 0.875rem;
+  font-weight: 650;
+  color: var(--ot-ink);
+}
+#artifact-list[data-layout="list"] .note { font-size: 0.75rem; color: var(--ot-muted); }
+#artifact-list[data-layout="list"] .artifact-created,
+#artifact-list[data-layout="list"] .artifact-updated { font-size: 0.75rem; color: var(--ot-muted); }
+
+
+/* Kind-tint cover typography: fallback lettering when a work has no preview (audio, video). */
+#artifact-list[data-layout="grid"] .artifact-cover {
+  font-size: 0.8125rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+}
+
+.send-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgb(15 23 42 / 32%);
+}
+
+.send-dialog[hidden] { display: none; }
+
+.send-dialog-card {
+  width: min(26rem, 100%);
+  max-height: min(32rem, 90vh);
+  overflow: auto;
+  padding: 1.1rem 1.15rem 1rem;
+  border-radius: 1.1rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  box-shadow: var(--ot-shadow-lg);
+}
+
+.send-dialog-card h2 {
+  margin: 0 0 0.4rem;
+  font-size: 1.05rem;
+}
+
+#send-to-chat-list {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.85rem;
+  overflow: hidden;
+}
+
+#send-to-chat-list li { margin: 0; }
+
+#send-to-chat-list button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.7rem 0.9rem;
+  border: 0;
+  border-bottom: 1px solid var(--ot-line);
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#send-to-chat-list li:last-child button { border-bottom: 0; }
+#send-to-chat-list button:hover { background: var(--ot-surface-2); }
+
+#send-to-chat-empty {
+  margin: 0.75rem 0;
+  padding: 0.85rem 0.9rem;
+  text-align: center;
+  color: var(--ot-muted);
+  font-size: 0.875rem;
+  background: var(--ot-surface-2);
+  border-radius: 0.75rem;
+}
+
+#send-to-chat-cancel {
+  border-radius: 999px;
+  padding: 0.4rem 0.95rem;
+}

@@ -93,6 +93,8 @@ test('settingsViewFromLocation maps recorded paths and leftover hashes', () => {
   assert.equal(settingsViewFromLocation('/settings/channels', ''), 'channels');
   assert.equal(settingsViewFromLocation('/settings/agent-access', ''), 'agent-access');
   assert.equal(settingsViewFromLocation('/settings/connectors', ''), 'connectors');
+  assert.equal(settingsViewFromLocation('/settings/skill-configuration', ''), 'skill-configuration');
+  assert.equal(settingsViewFromLocation('/settings', '#skill-secrets'), 'skill-configuration');
   assert.equal(settingsViewFromLocation('/settings', '#appearance'), 'appearance');
   assert.equal(settingsViewFromLocation('/settings', '#language-section'), 'language');
   assert.equal(settingsViewFromLocation('/settings', '#send-shortcut'), 'shortcuts');
@@ -339,6 +341,9 @@ test('settings connectors markup lists the catalog as disconnected without leaki
   assert.equal((html.match(/<span class="connector-status">未连接<\/span>/g) || []).length, 39);
   assert.equal((html.match(/不会真连。">\+ 连接<\/button>/g) || []).length, 39);
   assert.equal((html.match(/disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。"/g) || []).length, 39);
+  assert.equal((html.match(/class="connector-mark"/g) || []).length, 39);
+  assert.match(html, /data-mark="github"/);
+  assert.match(html, /class="channel-mark" data-mark="slack"/);
   assert.match(html, /class="connector-search-icon"/);
   assert.match(html, /id="connectors-empty"[^>]*hidden[^>]*>没有匹配的应用。/);
   assert.doesNotMatch(html, /还没有可连接的应用目录/);

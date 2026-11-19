@@ -1084,7 +1084,8 @@ body.app-workspace > main {
   border: 0;
   border-radius: .875rem;
   background: var(--ot-surface);
-  box-shadow: 0 0 0 1px var(--ot-line), 0 1px 3px rgb(16 32 24 / 4%);
+  box-shadow: none;
+  outline: 1px solid var(--ot-line);
 }
 body.app-workspace :is(input[type="text"], input[type="search"], input[type="password"], input[type="url"], input[type="number"], select, textarea) {
   font: inherit;
@@ -1112,3 +1113,92 @@ body.app-workspace > .app-rail #appearance-toggle { font-size: .6875rem; }
 .avatar[data-tone="6"], #conversation-list .avatar[data-tone="6"] { background: #e6f3f4; color: #1f6168; }
 html[data-theme-resolved="dark"] .avatar[data-tone], html[data-theme-resolved="dark"] #conversation-list .avatar[data-tone] { background: var(--ot-accent-soft); color: var(--ot-ink); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+/* OpenTeamily original mark (not a Teamily or vendor logo).
+   An open ring with a companion node, used on the rail at the
+   same size and top alignment as the captured shell mark. */
+body.app-workspace > .app-rail .brand-mark {
+  width: 2.15rem;
+  min-width: 2.15rem;
+  min-height: 2.15rem;
+  height: 2.15rem;
+  margin: 0 0 0.7rem;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--ot-accent);
+  color: var(--ot-on-accent);
+  box-shadow: none;
+  overflow: hidden;
+}
+body.app-workspace > .app-rail .brand-mark .brand-glyph {
+  display: block;
+  width: 1.35rem;
+  height: 1.35rem;
+}
+html[data-theme-resolved="dark"] body.app-workspace > .app-rail > a.brand-mark:hover {
+  background: #1f6b4a;
+  color: #ffffff;
+}
+body.app-workspace > .app-rail > a.brand-mark:hover {
+  background: var(--ot-accent);
+  color: var(--ot-on-accent);
+}
+.brand-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: inherit;
+  text-decoration: none;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+.brand-wordmark .brand-mark,
+.about-wordmark .about-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  background: #097845;
+  color: #ffffff;
+}
+.brand-wordmark-text { font-size: 1rem; font-weight: 700; letter-spacing: -0.03em; }
+
+/* Work thumbnails (shell/thumb.mjs): a scaled-down page drawn from the work's
+   own text, slides, board strokes or dashboard widgets. Original CSS only. */
+.has-thumb { position: relative; overflow: hidden; font-size: 0; color: transparent; }
+.has-thumb > .thumb, .has-thumb > .artifact-cover-img { position: absolute; inset: 0; }
+.artifact-cover-img { width: 100%; height: 100%; object-fit: cover; }
+.thumb { letter-spacing: normal; font-weight: 400; display: flex; align-items: flex-start; justify-content: center; padding: 10% 9% 0; color: #2b3530; font-size: 10px; line-height: 1.45; text-align: left; pointer-events: none; }
+.thumb p { margin: 0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.thumb-page { width: 100%; height: 100%; padding: 9% 9% 0; background: #fff; border-radius: 6px 6px 0 0; box-shadow: 0 1px 2px rgb(15 23 42 / 8%), 0 6px 18px rgb(15 23 42 / 8%); overflow: hidden; }
+.thumb-heading { font-size: 12px; font-weight: 700; color: #1f2a24; margin-bottom: 5px !important; }
+.thumb-line { color: #4b5852; margin-bottom: 3px !important; }
+.thumb-browser { display: flex; gap: 3px; margin: -4% 0 7%; }
+.thumb-browser i { width: 5px; height: 5px; border-radius: 50%; background: #cfd8d3; }
+.thumb-slides { align-items: center; padding: 8%; }
+.thumb-slide { width: 100%; aspect-ratio: 16 / 9; padding: 7% 8%; background: #fff; border-radius: 6px; box-shadow: 0 1px 2px rgb(15 23 42 / 8%), 0 6px 18px rgb(15 23 42 / 10%); overflow: hidden; }
+.thumb-slide-title { font-size: 12px; font-weight: 700; color: #1f2a24; margin-bottom: 4px !important; -webkit-line-clamp: 1 !important; }
+.thumb-slide-bullets { margin: 0; padding-left: 12px; color: #4b5852; }
+.thumb-slide-bullets li { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.thumb-count { position: absolute; right: 8px; bottom: 6px; padding: 1px 6px; border-radius: 999px; background: rgb(31 42 36 / 72%); color: #fff; font-size: 10px; }
+.thumb-board { align-items: center; padding: 6%; background: #f7f9f8; background-image: radial-gradient(circle, #dfe6e2 1px, transparent 1.2px); background-size: 12px 12px; }
+.thumb-board-svg { width: 100%; height: 100%; }
+.thumb-dashboard { padding: 7%; }
+.thumb-dash { width: 100%; height: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.thumb-widget { min-width: 0; padding: 6px 7px; background: #fff; border-radius: 6px; box-shadow: 0 1px 2px rgb(15 23 42 / 8%); overflow: hidden; }
+.thumb-widget-title { font-size: 9px; color: #5a6861; -webkit-line-clamp: 1 !important; }
+.thumb-widget-value { font-size: 15px; font-weight: 700; color: #1f2a24; -webkit-line-clamp: 1 !important; }
+.thumb-bars { display: flex; align-items: flex-end; gap: 2px; height: 26px; margin-top: 3px; }
+.thumb-bars i { flex: 1; min-height: 2px; background: #3f9c6f; border-radius: 2px 2px 0 0; height: 10%; }
+.thumb-bars i[data-h="0"] { height: 4%; } .thumb-bars i[data-h="20"] { height: 20%; } .thumb-bars i[data-h="30"] { height: 30%; }
+.thumb-bars i[data-h="40"] { height: 40%; } .thumb-bars i[data-h="50"] { height: 50%; } .thumb-bars i[data-h="60"] { height: 60%; }
+.thumb-bars i[data-h="70"] { height: 70%; } .thumb-bars i[data-h="80"] { height: 80%; } .thumb-bars i[data-h="90"] { height: 90%; }
+.thumb-bars i[data-h="100"] { height: 100%; }
+.thumb-table-head { display: flex; gap: 4px; margin-top: 4px; font-size: 8px; font-weight: 650; color: #4b5852; }
+.thumb-table-head span { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.thumb-table-rows { display: grid; gap: 4px; margin-top: 4px; }
+.thumb-table-rows i { display: block; height: 2px; border-radius: 1px; background: #e3e9e5; }
+.thumb-empty { align-items: center; }
+.thumb-empty-label { font-size: 11px; color: #5a6861; }

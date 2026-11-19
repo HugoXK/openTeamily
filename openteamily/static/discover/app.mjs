@@ -1,4 +1,5 @@
 import { csrfCookie } from '../agents/app.mjs';
+import { renderThumb } from '../shell/thumb.mjs';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 
@@ -94,31 +95,67 @@ export function formatFeedTime(value) {
   }).format(date);
 }
 
+export function coverPattern(title) {
+  let hash = 0;
+  for (const ch of String(title || '')) hash = (hash * 33 + ch.charCodeAt(0)) >>> 0;
+  return String(hash % 8);
+}
+
+const KIND_LABELS = {document:'文档',website:'网页',slides:'幻灯片',audio:'音频',video:'视频',whiteboard:'白板',dashboard:'看板',media:'媒体'};
+
+// Covers come from /w/<slug>/preview (same exposure as the public work page),
+// so the feed listing itself stays a body-free projection.
+export function attachFeedThumb(document, cover, preview) {
+  if (!cover || !preview || cover.classList.contains('has-thumb')) return false;
+  const thumb = renderThumb(document, preview);
+  if (!thumb) return false;
+  cover.classList.add('has-thumb');
+  cover.append(thumb);
+  return true;
+}
+
+export function feedPreviewPath(item) {
+  if (!item || item.kind === 'image' || !/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(String(item.slug || ''))) return '';
+  return '/w/' + item.slug + '/preview';
+}
+
 export function renderFeedCard(document, item) {
   const card = document.createElement('a');
   card.className = 'feed-card';
   card.href = item.path || ('/w/' + (item.slug || ''));
-  const kind = document.createElement('p');
-  kind.className = 'kind';
-  kind.textContent = item.kind_label || item.kind || '';
-  const title = document.createElement('h3');
-  title.textContent = item.title || '';
-  const meta = document.createElement('p');
-  meta.className = 'meta';
-  const when = formatFeedTime(item.updated);
-  meta.textContent = [item.author || '', when].filter(Boolean).join(' · ');
-  card.append(kind, title, meta);
   const cover = document.createElement(item.kind === 'image' ? 'img' : 'div');
   cover.className = 'work-cover';
   cover.dataset.kind = item.kind || 'work';
+  cover.dataset.pattern = coverPattern(item.title || item.slug || '');
   if (item.kind === 'image') {
     cover.src = '/w/' + encodeURIComponent(item.slug) + '/file';
     cover.alt = ''; cover.loading = 'lazy';
   } else {
     cover.setAttribute('aria-hidden', 'true');
-    cover.textContent = ({document:'文档',website:'网页',slides:'幻灯片',audio:'音频',video:'视频',whiteboard:'白板',dashboard:'看板',media:'媒体'}[item.kind] || '作品');
+    attachFeedThumb(document, cover, item.preview);
   }
-  card.append(cover);
+  const kind = document.createElement('p');
+  kind.className = 'kind';
+  kind.textContent = item.kind_label || KIND_LABELS[item.kind] || item.kind || '';
+  const title = document.createElement('h3');
+  title.textContent = item.title || '';
+  const meta = document.createElement('p');
+  meta.className = 'meta';
+  const mark = document.createElement('span');
+  mark.className = 'feed-author-mark avatar';
+  mark.dataset.tone = String(catalogTone(item.author || item.title || ''));
+  mark.textContent = catalogMonogram(item.author || item.title || '');
+  const who = document.createElement('span');
+  const when = formatFeedTime(item.updated);
+  who.textContent = [item.author || '', when].filter(Boolean).join(' · ');
+  meta.append(mark, who);
+  if (item.likes != null) {
+    const likes = document.createElement('span');
+    likes.className = 'feed-likes';
+    likes.textContent = '♡ ' + (item.likes || 0);
+    meta.append(likes);
+  }
+  card.append(cover, kind, title, meta);
   return card;
 }
 
@@ -180,6 +217,11 @@ export function renderTeamCard(document, item) {
   return card;
 }
 
+export function reuseKey(seed = Date.now()) {
+  return 'discover-reuse-' + seed.toString(36) + '-' +
+    Math.random().toString(36).slice(2, 10).padEnd(8, '0');
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -191,6 +233,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const mainPanel = document.getElementById('main-panel');
   const workspaceSelect = document.getElementById('workspace');
   let currentUser = null;
+  // A refused workspace list and an empty one both leave the selector blank, but
+  // they are different states: only the second one means "you have no workspace".
+  let workspaceListFailed = false;
   let catalog = [];
   let cursor = '';
   let activeQuery = '';
@@ -289,12 +334,30 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       ? FEED_SEARCH_EMPTY_NOTE : (feedState.items.length ? FEED_ACTIVITY_LISTED_NOTE : FEED_ACTIVITY_EMPTY_NOTE);
   }
 
+  const previewCache = new Map();
+  function hydrateThumb(card, item) {
+    const path = feedPreviewPath(item);
+    if (!path || typeof fetcher !== 'function') return;
+    const key = path + '@' + (item.updated || '');
+    if (!previewCache.has(key)) {
+      previewCache.set(key, Promise.resolve()
+        .then(() => fetcher(path, {method: 'GET', credentials: 'same-origin', headers: {Accept: 'application/json'}}))
+        .then(response => response && response.status === 200 ? response.json() : null)
+        .then(body => (body && body.preview) || null)
+        .catch(() => null));
+    }
+    const cover = typeof card.querySelector === 'function' ? card.querySelector('.work-cover') : null;
+    if (!cover) return;
+    previewCache.get(key).then(preview => attachFeedThumb(document, cover, preview)).catch(() => {});
+  }
+
   function renderFeed() {
     const grid = document.getElementById('feed-grid');
     if (!grid) return;
     grid.replaceChildren();
     for (const item of feedState.items) {
       const card = renderFeedCard(document, item);
+      hydrateThumb(card, item);
       if (!currentUser) { grid.append(card); continue; }
       const entry = document.createElement('article'); entry.append(card);
       const actions = document.createElement('div');
@@ -375,8 +438,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     status.textContent = text;
   }
 
-  async function request(method, path, body) {
-    const headers = { Accept: 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie) };
+  async function request(method, path, body, extraHeaders = {}) {
+    const headers = Object.assign(
+      { Accept: 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie) }, extraHeaders);
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const response = await fetcher(path, {
       method, headers, credentials: 'same-origin',
@@ -413,7 +477,56 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       chat.title = '未接通：公共目录没有发起聊天的接口';
       chat.setAttribute('aria-label', (item.name || item.slug) + '：聊天未接通');
       copy.append(name, summary);
-      card.append(avatar, copy, chat);
+      // Public catalog entries carry only a name and a summary (no prompts, no
+      // instructions), so 用这个智能体 really calls the existing workspace-agent
+      // create endpoint with those two fields and lands on /agents. It does not
+      // copy a prompt nobody published, and it does not fake a local receipt.
+      const use = document.createElement('button');
+      use.type = 'button';
+      use.className = 'catalog-use';
+      use.textContent = '用这个智能体';
+      use.title = '按公共目录里的名称和简介，在你的工作区里新建一个同名智能体；说明需要你之后自己补。';
+      use.setAttribute('aria-label', '用这个智能体：「' + (item.name || item.slug) + '」');
+      use.addEventListener('click', async () => {
+        const label = item.name || item.slug;
+        if (!currentUser) {
+          show('error', '请先登录，再把这个智能体放进你的工作区。');
+          return;
+        }
+        const space = workspaceSelect.value;
+        if (!space) {
+          // Never tell a user to create a workspace when the list simply failed to load.
+          show('error', workspaceListFailed
+            ? '工作区列表读取失败，请稍后重试。'
+            : '先创建一个工作区，才能放进这个智能体。');
+          return;
+        }
+        if (use.disabled) return;
+        use.disabled = true;
+        let result;
+        try {
+          result = await request('POST', `/v1/workspaces/${space}/agents`, {
+            name: label,
+            summary: item.summary || '',
+            instructions: '',
+          }, {'Idempotency-Key': reuseKey()});
+        } catch {
+          result = {status: 0, body: {}};
+        }
+        use.disabled = false;
+        if (result.status === 201 || result.status === 200) {
+          show('ok', '已创建「' + label + '」，正在打开智能体页。');
+          if (typeof location.assign === 'function') location.assign('/agents');
+          else location.href = '/agents';
+          return;
+        }
+        if (result.status === 409) {
+          show('error', '你的工作区里已有同名智能体；改名后再从目录创建。');
+          return;
+        }
+        show('error', messageFor(result.body && result.body.error, '无法创建智能体。'));
+      });
+      card.append(avatar, copy, chat, use);
       // Slugs identify records, but no public detail route exists, so the card
       // carries no hover text: a "/d/<slug>" tooltip would promise a 404.
       li.append(card);
@@ -560,7 +673,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     document.getElementById('whoami').textContent = currentUser.username;
     if (agentsView) {
       const listed = await request('GET', '/v1/workspaces?limit=100');
-      const workspaces = listed.status === 200 ? (listed.body.items || []) : [];
+      workspaceListFailed = listed.status !== 200;
+      const workspaces = workspaceListFailed ? [] : (listed.body.items || []);
       workspaceSelect.replaceChildren();
       for (const space of workspaces) {
         const option = document.createElement('option');

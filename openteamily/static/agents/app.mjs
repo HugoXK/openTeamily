@@ -1,3 +1,5 @@
+import { createLookAvatar } from '../look/app.mjs';
+
 // Two-letter card monogram ("Slides Assistant" -> "SA"; CJK names keep one glyph).
 export function agentMonogram(name) {
   const text = String(name || '').replace(/^\s*\[[^\]]*\]\s*/, '');
@@ -203,6 +205,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let actor = null;
   let workspaces = [];
   let currentAgent = null;
+  let personalAgentId = '';
+  let personalLook = null;
   let currentConversation = null;
   let pollTimer = 0;
   let directoryLoaded = false;
@@ -287,6 +291,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
+    // The saved Personal Agent look is an optional identity detail. Never let
+    // this auxiliary read break the directory if an older server lacks it.
+    try {
+      const personal = await request('GET', '/v1/personal-agent');
+      const found = personal.status === 200 && personal.body.personal_agent;
+      personalAgentId = found && found.agent ? found.agent.id : '';
+      personalLook = found ? found.look || null : null;
+    } catch (error) {
+      personalAgentId = '';
+      personalLook = null;
+    }
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = '已登录为 ' + currentUser.username;
@@ -348,10 +363,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       shown += 1;
       const li = document.createElement('li');
       li.className = 'agent-card';
-      const avatar = document.createElement('span');
-      avatar.className = 'avatar';
-      avatar.textContent = agentMonogram(item.name);
-      avatar.dataset.tone = agentTone(item.name);
+      const lookAvatar = item.id === personalAgentId ? createLookAvatar(personalLook, document) : null;
+      const avatar = lookAvatar || document.createElement('span');
+      if (!lookAvatar) {
+        avatar.className = 'avatar';
+        avatar.textContent = agentMonogram(item.name);
+        avatar.dataset.tone = agentTone(item.name);
+      }
       const copy = document.createElement('div');
       copy.className = 'copy';
       const button = document.createElement('button');

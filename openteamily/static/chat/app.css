@@ -1405,3 +1405,192 @@ html[data-theme-resolved="dark"] { --ot-bubble-mine: var(--ot-accent-soft); }
 #message-list .reply-state { display: flex; align-items: center; gap: .5rem; margin: .125rem 0 .125rem; font-size: .875rem; font-weight: 650; color: var(--ot-ink); }
 #message-list li[data-state="failed"] > p.failed { padding: .5rem .75rem; border-radius: .625rem; background: #fdf0ef; color: #9b1c13; font-size: .8125rem; }
 html[data-theme-resolved="dark"] #message-list li[data-state="failed"] > p.failed { background: rgba(180, 35, 24, .18); color: #f3b7b1; }
+
+/* Page parity follow-up: header avatar stack, in-stream artifact card, group-agent panel. */
+.chat-avatar-stack {
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding-left: 0.55rem;
+}
+.chat-avatar-stack[hidden] { display: none; }
+.chat-avatar-stack .stack-face {
+  display: grid;
+  place-items: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  margin-left: -0.55rem;
+  border-radius: 50%;
+  font-size: 0.7rem;
+  font-weight: 650;
+  box-shadow: 0 0 0 2px var(--ot-surface);
+}
+.stream-artifact {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: center;
+  margin: 0.35rem 0 0;
+  max-width: 20rem;
+  padding: 0.4rem;
+  border-radius: 0.75rem;
+  background: var(--ot-surface);
+  box-shadow: 0 0 0 1px var(--ot-line);
+}
+.stream-artifact-cover {
+  display: grid;
+  place-items: center;
+  min-height: 3.2rem;
+  border-radius: 0.5rem;
+  background: linear-gradient(150deg, #f7f5ef, #ece6d6);
+  color: #6a5634;
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+.stream-artifact-copy { display: grid; gap: 0.2rem; min-width: 0; }
+.stream-artifact-copy strong { font-size: 0.8125rem; font-weight: 650; }
+.stream-artifact-copy a { font-size: 0.75rem; }
+#social-agent-members.group-agent-note,
+#group-agent-action.group-agent-panel {
+  margin: 0.65rem 1rem 0;
+  padding: 0.8rem 0.95rem;
+  border: 0;
+  border-bottom: 0;
+  border-radius: 0.85rem;
+  background: var(--ot-surface);
+  box-shadow: 0 0 0 1px var(--ot-line);
+}
+#social-agent-members.group-agent-note { font-size: 0.8125rem; color: var(--ot-muted); line-height: 1.5; }
+#group-agent-action.group-agent-panel h2 { font-size: 0.875rem; font-weight: 650; }
+
+#group-agent-form fieldset,
+#social-agent-members fieldset {
+  padding: 0.15rem 0.65rem;
+  box-sizing: border-box;
+}
+
+/* Capsule composer: + on the left, icon tools, circular send on the right. */
+.composer {
+  position: relative;
+  padding: 0.4rem 0.5rem 0.35rem;
+  border-radius: 1.35rem;
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line-strong);
+  box-shadow: 0 2px 10px -6px rgb(16 32 24 / 16%);
+}
+.composer-row { display: flex; align-items: flex-end; gap: 0.35rem; }
+.composer-row textarea { min-height: 2.15rem; padding: 0.45rem 0.2rem; }
+.composer-plus { position: relative; flex: 0 0 auto; }
+.composer-plus > summary {
+  list-style: none;
+  width: 2rem; height: 2rem; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--ot-bg-accent); color: var(--ot-ink);
+  font-size: 1.15rem; line-height: 1; cursor: pointer;
+}
+.composer-plus > summary::-webkit-details-marker { display: none; }
+.composer-plus[open] > summary { background: var(--ot-accent); color: var(--ot-on-accent); }
+.composer-plus-sheet {
+  position: absolute; left: -0.4rem; bottom: calc(100% + 0.65rem);
+  width: min(30rem, 82vw); max-height: min(34rem, 72vh); overflow: auto;
+  padding: 0.35rem 0; border-radius: 1rem;
+  background: var(--ot-surface); color: var(--ot-ink);
+  box-shadow: 0 12px 36px rgb(16 32 24 / 14%), 0 0 0 1px var(--ot-line);
+  z-index: 8;
+}
+/* Creation grid laid out after the private reference 01d: bold section
+   titles, a three-up action row, a four-up icon grid, two-up automation
+   shortcuts and hairline dividers. Icons are original strokes. */
+.plus-section { padding: 0.7rem 1rem 0.6rem; }
+.plus-section + .plus-section { border-top: 1px solid var(--ot-line); }
+.plus-section-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.plus-heading { margin: 0 0 0.45rem; font-size: 0.8125rem; font-weight: 650; color: var(--ot-ink); letter-spacing: 0; }
+.plus-more { display: inline-flex; align-items: center; gap: 0.15rem; margin-bottom: 0.45rem; font-size: 0.75rem; color: var(--ot-muted); text-decoration: none; }
+.plus-more:hover { color: var(--ot-accent); }
+.plus-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.15rem; }
+.plus-auto { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.15rem 0.5rem; }
+.plus-create { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.25rem; }
+.composer-plus-sheet :is(.plus-row, .plus-auto) > :is(a, button) {
+  width: auto; min-width: 0; box-shadow: none;
+  display: flex; align-items: center; justify-content: flex-start; gap: 0.55rem;
+  min-height: 2.25rem; padding: 0.3rem 0.5rem; border: 0; border-radius: 0.6rem;
+  background: transparent; color: var(--ot-ink); text-decoration: none;
+  font: inherit; font-size: 0.8125rem; text-align: left; cursor: pointer;
+}
+.plus-auto > a { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plus-create > :is(a, button) {
+  width: auto; min-width: 0; box-shadow: none;
+  position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.35rem;
+  min-height: 4.1rem; padding: 0.5rem 0.25rem; border: 0; border-radius: 0.75rem;
+  background: transparent; color: var(--ot-ink); text-decoration: none;
+  font: inherit; font-size: 0.8125rem; cursor: pointer;
+}
+.composer-plus-sheet :is(a, button):not(:disabled):hover { background: var(--ot-bg-accent); }
+.composer-plus-sheet :is(a, button):focus-visible { outline: 2px solid var(--ot-focus); outline-offset: -2px; }
+.composer-plus-sheet button:disabled { cursor: not-allowed; color: var(--ot-muted); opacity: 1; }
+.composer-plus-sheet button:disabled .plus-ico { opacity: 0.55; }
+.plus-ico { flex: 0 0 auto; color: var(--ot-muted); }
+.plus-create .plus-ico { width: 1.5rem; height: 1.5rem; }
+.plus-create [data-tone="web"] .plus-ico { color: #2f6fd6; }
+.plus-create [data-tone="doc"] .plus-ico { color: #2b3530; }
+.plus-create [data-tone="slides"] .plus-ico { color: #d9661f; }
+.plus-create [data-tone="table"] .plus-ico { color: #11804c; }
+.plus-create [data-tone="image"] .plus-ico { color: #9a4fd0; }
+.plus-create [data-tone="camera"] .plus-ico { color: #d23f7a; }
+.plus-create [data-tone="music"] .plus-ico { color: #6a4fd0; }
+.plus-create [data-tone="cube"] .plus-ico { color: #138a9c; }
+html[data-theme-resolved="dark"] .plus-create [data-tone="doc"] .plus-ico { color: var(--ot-ink); }
+.plus-tag { position: absolute; top: 0.3rem; right: 0.3rem; padding: 0 0.3rem; border-radius: 999px; background: var(--ot-bg-accent); color: var(--ot-muted); font-size: 0.625rem; line-height: 1.1rem; }
+.plus-row .plus-tag { position: static; margin-left: auto; }
+.plus-hint { margin: 0.35rem 0.5rem 0; font-size: 0.75rem; color: var(--ot-muted); }
+.composer-tools { display: flex; align-items: center; gap: 0.1rem; margin-top: 0.1rem; }
+.composer-send {
+  width: 2.15rem !important; min-width: 2.15rem !important; height: 2.15rem !important;
+  margin-left: auto; padding: 0 !important; border-radius: 50% !important;
+  background: var(--ot-accent) !important; color: var(--ot-on-accent) !important;
+}
+.composer-send:hover { background: #0b6a3e !important; color: #fff !important; }
+
+/* Group agent tools stay available but collapsed so the conversation is the main surface. */
+#group-agent-action { padding: 0; background: transparent; border: 0; box-shadow: none; }
+.group-agent-sheet {
+  margin: 0.75rem auto 0; width: min(46rem, calc(100% - 2rem));
+  border: 1px solid var(--ot-line); border-radius: 0.875rem;
+  background: var(--ot-surface); padding: 0.15rem 0.85rem 0.25rem;
+}
+.group-agent-sheet > summary {
+  cursor: pointer; font-size: 0.8125rem; font-weight: 650;
+  padding: 0.55rem 0; color: var(--ot-ink);
+}
+.group-agent-sheet[open] { padding-bottom: 0.75rem; }
+
+/* Polish 5: fieldsets inside the new-group dialog and the group-agent panel are
+   plain groups (legend + rows), not boxed cards inside the card. */
+#compose-dialog fieldset,
+#group-agent-form fieldset,
+#social-agent-members fieldset { margin: 0; padding: 0 .5rem; border: 0; border-radius: 0; background: transparent; box-shadow: none; min-width: 0; }
+#compose-dialog fieldset > legend,
+#group-agent-form fieldset > legend,
+#social-agent-members fieldset > legend { padding: 0; margin: 0 0 .35rem; font-size: .75rem; font-weight: 600; color: var(--ot-muted); }
+.plus-tag { font-size: .6875rem; }
+@media (min-width: 701px) {
+  /* New-group dialog: the picker and name column are split by a hairline, not
+     two boxed cards inside the dialog card. */
+  #compose-member-picker { padding: 0 1rem 0 0; border-radius: 0; background: transparent; box-shadow: none; border-right: 1px solid var(--ot-line); }
+  #compose-dialog #compose-title-label { padding: 0; border-radius: 0; box-shadow: none; }
+}
+
+/* Polish 5: the group-agent tools are one quiet collapsible line above the thread
+   (like Teamily's centred system lines), not a card wrapped around a card. */
+#group-agent-action.group-agent-panel { margin: 0 1rem; padding: .5rem 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+#group-agent-action .group-agent-sheet { width: min(46rem, 100%); margin: 0 auto; padding: 0 .75rem; border: 0; border-radius: .75rem; background: transparent; }
+#group-agent-action .group-agent-sheet > summary { width: max-content; margin: 0 auto; padding: .25rem .75rem; border-radius: 999px; font-size: .75rem; font-weight: 600; color: var(--ot-muted); }
+#group-agent-action .group-agent-sheet > summary:hover { background: var(--ot-bg-accent); color: var(--ot-ink); }
+#group-agent-action .group-agent-sheet[open] { padding: 0 .75rem .75rem; background: var(--ot-bg-accent); }
+
+/* A message with no reactions yet should not grow a row just for the hover "+😊". */
+#message-list li { position: relative; }
+#message-list li .message-reactions:not(:has(.reaction-chip)):not(:has(.reaction-picker:not([hidden]))) {
+  position: absolute; right: .5rem; bottom: -.625rem; margin: 0; z-index: 2;
+}
+#message-list li .message-reactions:not(:has(.reaction-chip)) .reaction-add { background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line); }

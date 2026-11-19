@@ -85,6 +85,23 @@ class DiscoverWorksTests(unittest.TestCase):
         again = self.publish(self.alice, artifact, 'public-note')
         self.assertEqual(again['status'], 200)
 
+    def test_public_preview_serves_the_cover_model_for_listed_works_only(self):
+        artifact = self.create(body='# 封面标题\n\n第一行正文')
+        self.assertEqual(self.anon.call('GET', '/w/cover-note/preview')['status'], 404)
+        self.assertEqual(self.publish(self.alice, artifact, 'cover-note')['status'], 201)
+        preview = self.anon.call('GET', '/w/cover-note/preview')
+        self.assertEqual(preview['status'], 200, preview)
+        self.assertEqual(preview['body']['preview']['type'], 'document')
+        self.assertIn('第一行正文', str(preview['body']['preview']))
+        self.assertNotIn(self.wid, str(preview['body']))
+        self.assertNotIn(artifact['id'], str(preview['body']))
+        self.assertEqual(self.anon.call('GET', '/w/cover-note/preview?x=1')['status'], 400)
+        self.assertEqual(self.anon.call('POST', '/w/cover-note/preview', {})['status'], 400)
+        listed = self.anon.call('GET', '/v1/discover/works')
+        self.assertNotIn('第一行正文', str(listed['body']))
+        self.alice.call('POST', f'/v1/workspaces/{self.wid}/artifacts/{artifact["id"]}/discover/revoke', {})
+        self.assertEqual(self.anon.call('GET', '/w/cover-note/preview')['status'], 404)
+
     def test_permissions_conflict_validation_and_paging(self):
         first = self.create()
         second = self.create(title='另一篇', body='second', key='discover-work-0002')

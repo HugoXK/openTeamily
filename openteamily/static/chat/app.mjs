@@ -1,5 +1,6 @@
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
+import { createLookAvatar } from '../look/app.mjs';
 
 export const SEARCH_TABS = [
   ['all', '全部'],
@@ -348,18 +349,57 @@ export function chatIdentity(name) {
   return {title, initial: placeholder ? '' : initial(title), showAvatar: !placeholder};
 }
 
-export function applyChatIdentity(document, name) {
+export function applyChatAvatarStack(document, conversation) {
+  const stack = document.getElementById('chat-avatar-stack');
+  const avatar = document.getElementById('chat-avatar');
+  if (!stack) return false;
+  stack.replaceChildren();
+  const faces = [];
+  for (const member of (conversation && conversation.members) || []) {
+    faces.push(member.username || member.name || '');
+  }
+  for (const agent of (conversation && conversation.agent_members) || []) {
+    faces.push(agent.name || '');
+  }
+  const names = faces.filter(Boolean).slice(0, 4);
+  const grouped = Boolean(conversation && conversation.kind === 'group' && names.length);
+  stack.hidden = !grouped;
+  if (grouped) {
+    if (avatar) avatar.hidden = true;
+    for (const name of names) {
+      const face = document.createElement('span');
+      face.className = 'avatar stack-face';
+      face.textContent = initial(name);
+      if (face.dataset) face.dataset.tone = avatarTone(name);
+      stack.appendChild(face);
+    }
+  }
+  return grouped;
+}
+
+export function applyChatIdentity(document, name, conversation, look) {
   const identity = chatIdentity(name);
   const title = document.getElementById('chat-title');
   const avatar = document.getElementById('chat-avatar');
   if (title) title.textContent = identity.title;
   const subtitle = document.getElementById('chat-subtitle');
   if (subtitle) { subtitle.textContent = ''; subtitle.hidden = true; }
+  const lookAvatar = createLookAvatar(look, document);
+  const canRenderLook = Boolean(lookAvatar && avatar && avatar.replaceChildren && avatar.append);
   if (avatar) {
-    avatar.textContent = identity.initial;
-    avatar.hidden = !identity.showAvatar;
-    if (avatar.dataset) avatar.dataset.tone = avatarTone(identity.title);
+    if (avatar.replaceChildren) avatar.replaceChildren();
+    if (canRenderLook) {
+      avatar.append(lookAvatar);
+      avatar.hidden = false;
+    } else {
+      avatar.textContent = identity.initial;
+      avatar.hidden = !identity.showAvatar;
+      if (avatar.dataset) avatar.dataset.tone = avatarTone(identity.title);
+    }
   }
+  const stacked = applyChatAvatarStack(document, conversation);
+  if (stacked && avatar) avatar.hidden = true;
+  if (!stacked && avatar && (identity.showAvatar || canRenderLook)) avatar.hidden = false;
   return identity;
 }
 
@@ -414,6 +454,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let socialConversations = [];
   let sessions = [];
   let currentAgent = null;
+  let personalAgentId = '';
+  let personalLook = null;
   let currentConversation = null;
   let currentSource = 'agent';
   let pollTimer = 0;
@@ -572,11 +614,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentConversation && currentConversation.id === session.id && currentSource === session.source) {
         button.setAttribute('aria-current', 'true');
       }
-      const avatar = document.createElement('span');
-      avatar.className = 'avatar';
-      avatar.textContent = initial(session.title);
-      avatar.dataset.tone = avatarTone(session.title);
-      avatar.dataset.kind = session.kind || session.source || '';
+      const lookAvatar = session.agent_id === personalAgentId ? createLookAvatar(personalLook, document) : null;
+      const avatar = lookAvatar || document.createElement('span');
+      if (!lookAvatar) {
+        avatar.className = 'avatar';
+        avatar.textContent = initial(session.title);
+        avatar.dataset.tone = avatarTone(session.title);
+        avatar.dataset.kind = session.kind || session.source || '';
+      }
       const copy = document.createElement('span');
       copy.className = 'copy';
       const title = document.createElement('span');
@@ -896,8 +941,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.textContent = formatTime(item.created);
       li.append(role, body, time);
       if (item.attachment && !item.retracted) {
-        const file = document.createElement('a'); file.href = item.attachment.path;
-        file.textContent = '下载附件：' + item.attachment.title; li.append(file);
+        const card = document.createElement('article');
+        card.className = 'stream-artifact';
+        const cover = document.createElement('span');
+        cover.className = 'stream-artifact-cover';
+        cover.textContent = 'DOC';
+        const copy = document.createElement('span');
+        copy.className = 'stream-artifact-copy';
+        const heading = document.createElement('strong');
+        heading.textContent = item.attachment.title || '附件';
+        const file = document.createElement('a');
+        file.href = item.attachment.path;
+        file.textContent = '下载附件：' + item.attachment.title;
+        copy.append(heading, file);
+        card.append(cover, copy);
+        li.append(card);
       }
       if (mine && !item.retracted) {
         const edit = document.createElement('button');
@@ -1208,7 +1266,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentNote.textContent = groupAgentSummary(currentConversation);
     agentNote.hidden = !agentNote.textContent;
     applyChatIdentity(document, conversationLabel(
-      currentConversation, currentUser && currentUser.id));
+      currentConversation, currentUser && currentUser.id), currentConversation);
     setDirectoryLink({source: 'social'});
     writeHash({workspace: workspaceId(), social: conversationId});
     if (selecting && (!lastSocialItems.length || lastSocialItems[0].conversation_id !== conversationId)) {
@@ -1574,7 +1632,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             currentAgent = agents.find(entry => entry.id === item.id) || null;
             currentConversation = null;
             currentSource = 'agent';
-            if (currentAgent) applyChatIdentity(document, currentAgent.name);
+            if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
+              currentAgent.id === personalAgentId ? personalLook : null);
             document.getElementById('chat-empty').hidden = false;
             document.getElementById('message-list').replaceChildren();
             writeHash({workspace: workspaceId(), agent: item.id});
@@ -1660,6 +1719,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const personal = await request('POST', '/v1/personal-agent');
     const personalWorkspace = personal.status === 200 && personal.body.personal_agent
       ? personal.body.personal_agent.workspace.id : '';
+    const personalEntity = personal.status === 200 ? personal.body.personal_agent : null;
+    personalAgentId = personalEntity && personalEntity.agent ? personalEntity.agent.id : '';
+    personalLook = personalEntity ? personalEntity.look || null : null;
     const [listed, settings] = await Promise.all([
       request('GET', '/v1/workspaces?limit=100'),
       request('GET', '/v1/settings'),
@@ -1708,7 +1770,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       else {
         currentAgent = agents.find(item => item.id === start.agent) || null;
         currentSource = 'agent';
-        if (currentAgent) applyChatIdentity(document, currentAgent.name);
+        if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
+          currentAgent.id === personalAgentId ? personalLook : null);
         document.getElementById('chat-empty').hidden = false;
         writeHash({workspace: workspaceId(), agent: start.agent});
       }
@@ -2222,12 +2285,45 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeComposeDialog();
   });
 
+  // Composer "+": 上传 / 照片 / 视频 reuse the existing media-attachment upload
+  // (single and group chats only); agent chats show them disabled with a note.
+  const plus = document.querySelector('details.composer-plus');
+  const attachInput = document.getElementById('chat-attachment');
+  const defaultAccept = attachInput ? attachInput.getAttribute('accept') || '' : '';
+  function syncPlusState() {
+    const social = currentSource === 'social' && Boolean(currentConversation);
+    for (const button of document.querySelectorAll('[data-plus-attach]')) {
+      button.disabled = !social;
+      if (!button.dataset.title) button.dataset.title = button.title;
+      button.title = social ? button.dataset.title : '未接通：智能体私聊还不能发附件';
+    }
+    const hint = document.getElementById('plus-attach-hint');
+    if (hint) hint.hidden = social;
+  }
+  if (plus) plus.addEventListener('toggle', () => { if (plus.open) syncPlusState(); });
+  for (const button of document.querySelectorAll('[data-plus-attach]')) {
+    button.addEventListener('click', () => {
+      if (!attachInput || button.disabled) return;
+      attachInput.setAttribute('accept', plusAttachAccept(button.dataset.plusAttach, defaultAccept));
+      attachInput.click();
+      if (plus) plus.open = false;
+    });
+  }
+  if (attachInput) attachInput.addEventListener('change', () => attachInput.setAttribute('accept', defaultAccept));
+
   globalThis.addEventListener('hashchange', () => load());
   return load();
 }
 
 if (globalThis.document && globalThis.document.getElementById('session-pane')) {
   mount(globalThis.document);
+}
+
+export function plusAttachAccept(kind, fallback) {
+  const all = String(fallback || '').split(',').map(item => item.trim()).filter(Boolean);
+  if (kind === 'image') return all.filter(item => item.startsWith('image/')).join(',');
+  if (kind === 'video') return all.filter(item => item.startsWith('video/')).join(',');
+  return all.join(',');
 }
 
 export { canManage, conversationLabel };

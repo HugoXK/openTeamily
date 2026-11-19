@@ -9,7 +9,7 @@ The 2026-11-18 real-account walk captured the full four-step onboarding:
 3. **我们能帮你分担些什么？** — one-off tasks and routines derived from the role.
 4. **你的 Agent** — Personal Agent look (colour, expression, headwear, glasses, hand item).
 
-Step 1 (industry and role) follows the captured layout. Steps 2–4 are a **functional flow that has not been compared with Teamily** (no comparable layout capture): step 2 lists the eight captured apps as not connected because account authorization is unimplemented; step 3 stores up to six picks from self-written task/routine suggestions (two industry-specific ones for some industries plus four general ones) and creates no automation; step 4 stores a Personal Agent look (colour, expression, headwear, glasses, hand item; self-written option labels) without generating an image. The steps appear on `/onboarding` once step 1 is saved or skipped.
+Step 1 (industry and role) follows the captured layout. Steps 2–4 are a **functional flow that has not been compared with Teamily** (no comparable layout capture): step 2 lists the eight captured apps as not connected because account authorization is unimplemented; step 3 stores up to six picks from self-written task/routine suggestions (two industry-specific ones for some industries plus four general ones) and creates no automation; step 4 stores a Personal Agent look (colour, expression, headwear, glasses, hand item; self-written option labels). The saved look is rendered as an original CSS avatar in step 4, the owner's Personal Agent card on `/agents`, and its `/chat` session/header; no bitmap image is generated. The steps appear on `/onboarding` once step 1 is saved or skipped. See [PERSONAL_LOOK.md](PERSONAL_LOOK.md).
 
 | Method | Path | Behavior |
 |---|---|---|

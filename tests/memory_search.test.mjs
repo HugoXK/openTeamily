@@ -89,6 +89,8 @@ function fakeDocument() {
     },
     createElement(tag) { return new Element(tag); },
     createElementNS(_ns, tag) { return new Element(tag); },
+    // The WYSIWYG memory editor renders the opened page body with text nodes.
+    createTextNode(text) { const node = new Element('#text'); node.textContent = String(text); node.nodeType = 3; return node; },
     querySelectorAll() { return []; },
     addEventListener() {},
   };

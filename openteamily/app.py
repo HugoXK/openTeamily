@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, gateway, invites, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -46,6 +46,7 @@ class Config:
     max_memory_actions_per_workspace: int = 200
     max_memory_links_per_workspace: int = 500
     max_agents_per_workspace: int = 50
+    max_meetings_per_workspace: int = 100
     max_conversations_per_user: int = 50
     max_messages_per_conversation: int = 200
     max_social_conversations_per_workspace: int = 200
@@ -496,10 +497,12 @@ class App:
             if method != 'GET':
                 refuse(405, 'method', 'Only GET is supported')
             return self.discover_works(query)
-        work_path = re.fullmatch(r'/w/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])(/file)?', path)
+        work_path = re.fullmatch(r'/w/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])(/file|/preview)?', path)
         if work_path:
             if method != 'GET' or query:
                 refuse(400, 'invalid', 'Invalid public work request')
+            if work_path[2] == '/preview':
+                return self.public_work_preview(work_path[1])
             return self.render_public_work(work_path[1], bool(work_path[2]))
         if path in ('/v1/auth/register', '/v1/auth/login') and method == 'POST':
             self.origin_check(env)  # Login/registration CSRF protection before a session exists.
@@ -908,6 +911,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/agents(?:/([0-9a-f]{32})(?:/(archive))?)?', path)
             if agent_path:
                 return self.workspace_agent_dispatch(db, session, method, query, now, env, *agent_path.groups())
+            meeting_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/meetings(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
+            if meeting_path:
+                return self.meeting_dispatch(db, session, method, query, now, env, *meeting_path.groups())
             match = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})(/instances)?', path)
             if match:
                 row = members.load(db, match[1], session['user_id'])
@@ -3280,12 +3287,130 @@ class App:
             'personal_agent': {
                 'workspace': {'id': workspace['id'], 'name': workspace['name'], 'kind': 'personal'},
                 'agent': agents.snapshot(db, agent) if agent is not None else None,
+                'look': onboarding.load_look(db, session['user_id']),
             },
             'builtin_agents': [
                 {'key': item['builtin_key'], 'agent': agents.snapshot(db, item)}
                 for item in personal.builtins(db, row['workspace_id'])
             ],
         }
+
+    def meeting_dispatch(self, db, session, method, query, now, env, workspace_id, meeting_id, removing):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if meeting_id is None and removing is None:
+            if method == 'GET':
+                limit, cursor, _ = self.pagination(query)
+                rows = meetings.listing(db, workspace['id'], cursor, limit + 1)
+                return 200, {'items': [meetings.view(row, include_body=False) for row in rows[:limit]],
+                             'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
+            if method == 'POST' and not query:
+                return self.create_meeting(db, workspace, session, now, env)
+            refuse(400, 'invalid', 'Invalid meeting request')
+        if meeting_id is None:
+            refuse(404, 'not_found', 'Meeting not found')
+        row = meetings.load(db, workspace['id'], meeting_id)
+        if row is None:
+            refuse(404, 'not_found', 'Meeting not found')
+        if removing == 'remove':
+            if method != 'POST' or query:
+                refuse(400, 'invalid', 'Invalid meeting request')
+            self.body(env, [])
+            if actor not in ('owner', 'admin') and row['created_by'] != session['user_id']:
+                refuse(403, 'forbidden', 'Not allowed to change this meeting')
+            db.execute('DELETE FROM meetings WHERE id=?', (row['id'],))
+            return 200, {'removed': meetings.view(row, include_body=False)}, []
+        if method == 'GET' and not query:
+            return 200, {'meeting': meetings.view(row)}, []
+        if method == 'POST' and not query:
+            return self.update_meeting(db, session, actor, row, now,
+                                       self.body(env, ['revision', 'changes'], limit=70000))
+        refuse(400, 'invalid', 'Invalid meeting request')
+
+    def create_meeting(self, db, workspace, session, now, env):
+        body = self.body(env, ['title', 'started_at', 'attendees', 'transcript', 'summary', 'action_items'], limit=70000)
+        title = body.get('title')
+        started_at = body.get('started_at', now)
+        attendees = body.get('attendees', [])
+        transcript = body.get('transcript', '')
+        summary = body.get('summary', '')
+        actions = body.get('action_items', [])
+        if (not meetings.valid_title(title) or not meetings.valid_started_at(started_at)
+                or not meetings.valid_attendees(attendees) or not meetings.valid_transcript(transcript)
+                or not meetings.valid_summary(summary) or not meetings.valid_action_items(actions)):
+            refuse(400, 'invalid', 'Provide valid meeting fields')
+        title = title.strip()
+        attendees = [item.strip() for item in attendees]
+        actions = meetings.normalize_action_items(actions)
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        payload = {'title': title, 'started_at': started_at, 'attendees': sorted(attendees),
+                   'transcript': transcript, 'summary': summary, 'action_items': actions}
+        key_hash, request_hash = digest('meeting:' + key), digest(
+            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False))
+        prior = db.execute('SELECT * FROM meetings WHERE workspace_id=? AND key_hash=?',
+                           (workspace['id'], key_hash)).fetchone()
+        if prior is not None:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'meeting': meetings.view(prior)}, []
+        title_digest = meetings.title_hash(title)
+        if db.execute('SELECT id FROM meetings WHERE workspace_id=? AND title_hash=?',
+                      (workspace['id'], title_digest)).fetchone():
+            refuse(409, 'conflict', 'A meeting with this title already exists')
+        if (db.execute('SELECT COUNT(*) FROM meetings WHERE workspace_id=?',
+                       (workspace['id'],)).fetchone()[0]
+                >= self.config.max_meetings_per_workspace):
+            refuse(429, 'quota', 'Meeting capacity reached')
+        meeting_id = uuid4().hex
+        db.execute(
+            'INSERT INTO meetings VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?)',
+            (meeting_id, workspace['id'], title, title_digest, started_at,
+             meetings.serialize(attendees), transcript, summary, meetings.serialize(actions),
+             now, now, session['user_id'], session['user_id'], key_hash, request_hash))
+        return 201, {'meeting': meetings.view(meetings.load(db, workspace['id'], meeting_id))}, []
+
+    def update_meeting(self, db, session, actor, row, now, body):
+        revision, changes = body.get('revision'), body.get('changes')
+        if (type(revision) is not int or not isinstance(changes, dict) or not changes
+                or set(changes) - {'title', 'started_at', 'attendees', 'transcript', 'summary', 'action_items'}):
+            refuse(400, 'invalid', 'Provide the current revision and known changes')
+        if actor not in ('owner', 'admin') and row['created_by'] != session['user_id']:
+            refuse(403, 'forbidden', 'Not allowed to change this meeting')
+        if revision != row['revision']:
+            raise RuntimeFault(409, 'conflict', 'Meeting changed elsewhere; reload and retry',
+                               meetings.view(row))
+        title = changes.get('title', row['title'])
+        started_at = changes.get('started_at', row['started_at'])
+        attendees = changes.get('attendees', json.loads(row['attendees'] or '[]'))
+        transcript = changes.get('transcript', row['transcript'])
+        summary = changes.get('summary', row['summary'])
+        actions = changes.get('action_items', json.loads(row['action_items'] or '[]'))
+        if (not meetings.valid_title(title) or not meetings.valid_started_at(started_at)
+                or not meetings.valid_attendees(attendees) or not meetings.valid_transcript(transcript)
+                or not meetings.valid_summary(summary) or not meetings.valid_action_items(actions)):
+            refuse(400, 'invalid', 'Provide valid meeting fields')
+        title = title.strip()
+        attendees = [item.strip() for item in attendees]
+        actions = meetings.normalize_action_items(actions)
+        if (title, started_at, attendees, transcript, summary, actions) == (
+                row['title'], row['started_at'], json.loads(row['attendees'] or '[]'),
+                row['transcript'], row['summary'], json.loads(row['action_items'] or '[]')):
+            return 200, {'meeting': meetings.view(row)}, []
+        title_digest = meetings.title_hash(title)
+        if title != row['title'] and db.execute(
+                'SELECT id FROM meetings WHERE workspace_id=? AND title_hash=? AND id!=?',
+                (row['workspace_id'], title_digest, row['id'])).fetchone():
+            refuse(409, 'conflict', 'A meeting with this title already exists')
+        db.execute(
+            'UPDATE meetings SET title=?, title_hash=?, started_at=?, attendees=?, transcript=?, '
+            'summary=?, action_items=?, revision=?, updated=?, updated_by=? WHERE id=?',
+            (title, title_digest, started_at, meetings.serialize(attendees), transcript, summary,
+             meetings.serialize(actions), row['revision'] + 1, now, session['user_id'], row['id']))
+        return 200, {'meeting': meetings.view(meetings.load(db, row['workspace_id'], row['id']))}, []
 
     def search_messages(self, db, session, method, query, workspace_id):
         if method != 'GET':
@@ -3370,6 +3495,18 @@ class App:
             return listed(db)
         with self.store.connect() as connection:
             return listed(connection)
+
+    def public_work_preview(self, slug):
+        # Text-only cover model for a listed work. It exposes no more than the
+        # public /w/<slug> page already shows, and keeps the feed listing itself
+        # a body-free projection.
+        if not discover.valid_slug(slug):
+            refuse(404, 'not_found', 'Work not found')
+        with self.store.connect() as db:
+            row = discover.load_listed_work(db, slug)
+        if row is None:
+            refuse(404, 'not_found', 'Work not found')
+        return 200, {'preview': artifacts.preview(row)}, []
 
     def render_public_work(self, slug, media_file=False):
         if not discover.valid_slug(slug):
