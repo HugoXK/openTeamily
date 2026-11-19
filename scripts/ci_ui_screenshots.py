@@ -204,7 +204,7 @@ def main(argv=None):
     env['PYTHONPATH'] = str(ROOT) + ((':' + env['PYTHONPATH']) if env.get('PYTHONPATH') else '')
     server = subprocess.Popen(
         [sys.executable, '-m', 'openteamily.server', '--data-dir', str(data_dir / 'state'),
-         '--origin', origin, '--port', str(port), '--insecure-local'],
+         '--origin', origin, '--port', str(port), '--insecure-local', '--open-registration'],
         cwd=str(ROOT), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     time.sleep(0.4)
