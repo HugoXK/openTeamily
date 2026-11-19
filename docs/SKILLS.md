@@ -1,0 +1,40 @@
+# Real instruction-skill lifecycle
+
+Related: #231, #10, #1, #14.
+
+`/skills` now installs **real, original, instruction-only packages**, not an in-memory installed set or a boolean claiming execution. A binding is not an execution receipt: the page separately reports “waiting for next task” and historical runtime loading acknowledgement. No claim of Teamily skill-operation parity or real-vendor acceptance.
+
+## Content and source
+
+`openteamily/skill_packages.py` bundles ten original SKILL.md-style definitions, each with bounded instructions, input boundaries, a useful procedure and output contract. The authenticated catalogue returns `id`, `name`, semantic `version`, full `content`, SHA-256 `digest`, `permissions: [model_context]`, `format: openteamily.prompt-skill.v1`, and `source: bundled-original`.
+
+The content is actually added to a model request. It does not itself fetch a URL, send email, generate a file, run code, grant a connector, or authorize an external action. Such claims are explicitly prohibited in the package instructions without separate tool evidence. The catalogue is not a mock remote marketplace and contains no copied Teamily prose/assets/account data.
+
+Upstream reuse investigation inspected `ds-bot/src/host/office-skills.js` and `goal-skills.js` in the pinned DS-Bot source: they register description/content providers using SKILL.md material with `ctx.skills`. The management Python/zipapp inference loop and container `agent-loop.mjs` are separate from standalone DSH sessions. This implementation reuses the **declarative content contract**, not a pretend DSH filesystem install. It deliberately does not unpack archives, execute package hooks or write arbitrary runtime paths.
+
+## Install, bind, load, revoke
+
+1. Inspect real content/version/digest, choose account or `workspace:agent` scope, and explicitly permit model-context loading.
+2. POST `/v1/skills/bindings` with `skill_id`, current `version`/`digest`, `scope`, boolean `enabled`, and exact `permissions`. Session/CSRF and per-user ownership apply. Agent installation requires active agent and workspace owner/admin membership. Bindings persist in SQLite across refresh and management restart/new login; max 200/user.
+3. A supported inference task records its initiating skill owner only when it uses that same user's runtime. Account bindings and that task's agent bindings are deduplicated. Version/digest and active agent/role are rechecked at materialization. Another user's bindings are never injected into a shared runtime.
+4. The claimed runtime requests one-time model access advertising `skill_format: openteamily.prompt-skill.v1`. When bindings exist, a legacy runtime without that handshake receives `409 runtime_upgrade_required` **before model credentials/material are issued**. Existing tasks with no skills retain compatibility.
+5. Both Python daemon/zipapp and container JS validate exact allowed fields, bounds, semantic version, ID, format, source, permissions and SHA-256. They load the full real content into the prompt, then POST `/v1/agent/tasks/:id/skills/ack` with the exact digest list **before** calling the actual configured model API. A task cannot report success without the required acknowledgement. Errors identify the safe failing stage without echoing credentials.
+6. GET `/v1/skills/bindings` includes `last_loaded_task` only from stored acknowledgements matching the package digest/scope. This is a historical loading receipt, not proof that every later task used the skill or that provider output obeyed it.
+7. Uninstall deletes only the current user's binding. It stays possible after agent archival or permission loss; the UI retains a revocable scope option. Version-changed bindings are labelled stale, not active. Already-issued tasks losing their last applicable binding are cancelled; stale acknowledgements fail. Subsequent tasks omit the removed content. Content already sent to a model cannot be recalled.
+
+No archive upload/extraction, scripts, filesystem paths, shell permission, credential material, or arbitrary package fields are accepted. Traversal IDs/scopes, injected archive/files/path/script/user ownership, version/digest mismatch, unknown permissions and cross-task/runtime access fail closed. A runtime is still a trusted holder of its user's model access; acknowledgement is protocol evidence, not cryptographic attestation of an untrusted daemon.
+
+## Supported execution boundary
+
+Covered: personal management inference/private agent chat and agent-scoped management tasks dispatched onto the initiating user's own upgraded runtime; private message-assistance tasks can use account skills without gaining any connected-tool grant. The model remains platform default + user override. Composio remains user-supplied and its existing approval broker is unchanged.
+
+**Not implemented:** a third-party registry, package uploads/downloads, signatures/upgrades/migrations for arbitrary packages, executable/filesystem skills, dynamic SDK tools, standalone upstream DSH session loading, schedule-specific skill material, or delegated/shared-runtime grants. A skill that asks for an external action does not authorize one. Real inference still requires an operator-configured model and online runtime; a persisted binding alone cannot manufacture those dependencies.
+
+## Verification
+
+- `tests/test_skill_packages.py`: actual synthetic provider request contains exact installed content; subsequent request omits it after uninstall; SQLite restart/new login; account/agent isolation; archived-agent revocation; explicit permission; CSRF; version/digest/field/traversal/archive injection; compatibility handshake; tampered/missing acknowledgement; cancel-on-revoke.
+- `tests/agent_loop.test.mjs`: container handshake/ack precedes real inference function, actual model-request context includes installed material and excludes revoked material; malformed package fields rejected.
+- `tests/skills_page.test.mjs`: server catalogue/digests, permission gate, persisted synthetic service reload/uninstall and refusal without invented success. This service stub is labelled synthetic, not provider acceptance.
+- `scripts/ci_ui_screenshots.mjs`: real local page → SQLite install/reload → actual daemon → local synthetic model → loading receipt → uninstall/reload, with content and 390px captures. Python tests separately inspect provider request content.
+
+Private after screenshots live outside the repository. Older `docs/screenshots/skills` demo captures, if present, are historical UI-only evidence and must not be used as lifecycle acceptance. No Teamily skill installation/execution reference scene exists; that parity is **unverified**.

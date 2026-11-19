@@ -1,0 +1,70 @@
+{
+  "phase": "after",
+  "errors": [],
+  "states": [
+    {
+      "shot": "dream-after-1440x900",
+      "note": "the memory page and its 做梦 control",
+      "viewport": "1440x900",
+      "horizontalOverflow": 0,
+      "state": {
+        "dreamDisabled": false,
+        "dreamTitle": "找出这一页可以合并的重复段落；不接受不会改动原文",
+        "panelVisible": false,
+        "acceptVisible": true,
+        "summary": "",
+        "status": "",
+        "body": "第一条正文。\n\n这一条重复了。\n\n这一条重复了。\n\n最后一条正文。",
+        "painted": true
+      }
+    },
+    {
+      "shot": "dream-suggested-after-1440x900",
+      "note": "one consolidation suggestion with 接受 / 忽略",
+      "viewport": "1440x900",
+      "horizontalOverflow": 0,
+      "state": {
+        "dreamDisabled": false,
+        "dreamTitle": "找出这一页可以合并的重复段落；不接受不会改动原文",
+        "panelVisible": true,
+        "acceptVisible": true,
+        "summary": "这一页有 2 段重复的正文，可以合并成 1 段。",
+        "status": "接受会真的合并；忽略不会改动原文。",
+        "body": "第一条正文。\n\n这一条重复了。\n\n这一条重复了。\n\n最后一条正文。",
+        "painted": true
+      }
+    },
+    {
+      "shot": "dream-accepted-after-1440x900",
+      "note": "the page after 接受: one paragraph fewer",
+      "viewport": "1440x900",
+      "horizontalOverflow": 0,
+      "state": {
+        "dreamDisabled": false,
+        "dreamTitle": "找出这一页可以合并的重复段落；不接受不会改动原文",
+        "panelVisible": true,
+        "acceptVisible": true,
+        "summary": "已合并：删掉了一段重复正文。",
+        "status": "这次整理留在这一页的历史里。",
+        "body": "第一条正文。\n\n这一条重复了。\n\n最后一条正文。",
+        "painted": true
+      }
+    },
+    {
+      "shot": "dream-accepted-after-390x844",
+      "note": "the same page after 接受, narrow width",
+      "viewport": "390x844",
+      "horizontalOverflow": 0,
+      "state": {
+        "dreamDisabled": false,
+        "dreamTitle": "找出这一页可以合并的重复段落；不接受不会改动原文",
+        "panelVisible": true,
+        "acceptVisible": true,
+        "summary": "已合并：删掉了一段重复正文。",
+        "status": "这次整理留在这一页的历史里。",
+        "body": "第一条正文。\n\n这一条重复了。\n\n最后一条正文。",
+        "painted": true
+      }
+    }
+  ]
+}

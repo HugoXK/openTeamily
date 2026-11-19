@@ -1,0 +1,22 @@
+{
+  "phase": "before",
+  "errors": [],
+  "states": [
+    {
+      "shot": "dream-before-1440x900",
+      "note": "the memory page and its 做梦 control",
+      "viewport": "1440x900",
+      "horizontalOverflow": 0,
+      "state": {
+        "dreamDisabled": true,
+        "dreamTitle": "未接通：还没有整理记忆的接口。",
+        "panelVisible": null,
+        "acceptVisible": null,
+        "summary": null,
+        "status": null,
+        "body": "第一条正文。\n\n这一条重复了。\n\n这一条重复了。\n\n最后一条正文。",
+        "painted": true
+      }
+    }
+  ]
+}
