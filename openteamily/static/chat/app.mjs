@@ -1,5 +1,35 @@
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
+export const SEARCH_JUMP_MISSING = '这条消息在更早的历史里，当前会话还没有加载到它。请用会话内搜索再查一次，或先加载更多消息。';
+
+// A search hit lands on an ordinary message row, so the row is the only place
+// that knows where the matched message currently sits on screen.
+export function messageNodeById(list, messageId) {
+  const wanted = String(messageId || '');
+  if (!wanted) return null;
+  for (const node of Array.from((list && list.children) || [])) {
+    if (node && node.dataset && node.dataset.messageId === wanted) return node;
+  }
+  return null;
+}
+
+// Centre the matched row, focus it for keyboard and screen-reader users, and
+// flash the same outline the in-conversation search already uses. Only one row
+// carries the flash, and it clears itself, so a second hit never stacks.
+export function jumpToSearchHit(list, messageId, {schedule = globalThis.setTimeout, ms = SEARCH_JUMP_HIGHLIGHT_MS} = {}) {
+  const target = messageNodeById(list, messageId);
+  if (!target) return false;
+  const behavior = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+  target.scrollIntoView({block: 'center', behavior});
+  target.tabIndex = -1;
+  target.focus({preventScroll: true});
+  for (const node of Array.from((list && list.children) || [])) {
+    if (node && node.dataset) delete node.dataset.searchJump;
+  }
+  target.dataset.searchJump = 'true';
+  schedule(() => { delete target.dataset.searchJump; }, ms);
+  return true;
+}
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -1710,9 +1740,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           }
         } else if (item.type === 'social' || item.kind === 'social') {
           await openSocialConversation(item.conversationId || item.id);
+          if (item.messageId) await focusSearchHit(item);
         } else if (item.type === 'agent-message' || item.kind === 'agent') {
           const session = sessions.find(row => row.source === 'agent' && row.id === item.conversationId);
-          if (session) await openAgentConversation(session.agent_id, session.id);
+          if (session) {
+            await openAgentConversation(session.agent_id, session.id);
+            if (item.messageId) await focusSearchHit(item);
+          }
         } else if (item.type === 'contact') {
           openComposeDialog('contact');
           const box = document.querySelector(`#member-choices input[value="${item.id}"]`);
@@ -1974,6 +2008,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-search-status').textContent = state.error || (state.hits.length ? '已显示 ' + state.hits.length + ' 条消息' : '没有找到匹配的消息。试试其他关键词。');
     document.getElementById('conversation-search-more').hidden = !state.cursor;
   }
+  // A sidebar message hit opens its conversation first, then lands on the row
+  // it came from. Older hits may sit outside the loaded window; say so instead
+  // of leaving the reader on the newest screen with no explanation.
+  function focusSearchHit(hit) {
+    if (jumpToSearchHit(document.getElementById('message-list'), hit.messageId)) return true;
+    show('error', SEARCH_JUMP_MISSING);
+    return false;
+  }
+
   function searchHitRow(hit, query) {
     const li = document.createElement('li');
     li.className = 'search-hit';
@@ -1981,17 +2024,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     li.setAttribute('role', 'button');
     li.setAttribute('aria-label', '跳到这条消息');
     const jump = () => {
-      const list = document.getElementById('message-list');
-      const target = Array.from(list.children || []).find(node => node.dataset.messageId === hit.messageId);
-      if (!target) {
+      if (!jumpToSearchHit(document.getElementById('message-list'), hit.messageId)) {
         document.getElementById('conversation-search-status').textContent = '这条消息不在当前已加载的消息窗口里，请加载更多消息后重试。';
-        return;
       }
-      target.scrollIntoView({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
-      target.tabIndex = -1; target.focus({preventScroll: true});
-      for (const node of Array.from(list.children || [])) delete node.dataset.searchJump;
-      target.dataset.searchJump = 'true';
-      setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
     };
     li.addEventListener('click', jump);
     li.addEventListener('keydown', event => {
