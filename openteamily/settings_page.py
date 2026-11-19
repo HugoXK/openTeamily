@@ -86,6 +86,7 @@ class SettingsPage:
         '/look/app.mjs': ('look', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/look/app.css': ('look', 'app.css', 'text/css; charset=utf-8'),
         '/skills': ('skills', 'index.html', 'text/html; charset=utf-8'),
+        '/skills/execution.mjs': ('skills', 'execution.mjs', 'text/javascript; charset=utf-8'),
         '/skills/app.mjs': ('skills', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/skills/app.css': ('skills', 'app.css', 'text/css; charset=utf-8'),
         '/help': ('help', 'index.html', 'text/html; charset=utf-8'),

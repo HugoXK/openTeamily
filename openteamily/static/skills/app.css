@@ -153,3 +153,14 @@
 .skills-grid { align-items: start; }
 .skill-card { align-items: start; }
 #skills-error:empty { display: none; }
+
+.skills-execution {margin:1.25rem 0;padding:1.25rem;border:1px solid var(--ot-line);border-radius:1rem;background:var(--ot-surface);color:var(--ot-ink)}
+.skills-execution h2 {font-size:1rem;margin:0 0 .75rem}
+.skills-execution form,.skills-execution label {display:grid;gap:.5rem}
+.skills-execution form {gap:1rem;margin:1rem 0}
+.skills-execution textarea,.skills-execution select {width:100%;max-width:100%;box-sizing:border-box;font:inherit}
+.skills-execution button {min-height:2.5rem}
+#skill-run-history {list-style:none;padding:0}
+#skill-run-history li {padding:1rem 0;border-bottom:1px solid var(--ot-line)}
+#skill-run-history pre {white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:24rem;overflow:auto}
+.skill-card .skill-use {grid-column:2 / -1;justify-self:start;min-height:2.5rem}

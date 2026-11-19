@@ -234,3 +234,8 @@ The gate's PR-body Related-only policy does not stop older commit messages from 
 Ordinary main sync incorporated contributor #307 at main `2e3e7de` (help/terms/privacy pages and real menu links); no competing implementation was added. The census now includes these landed surfaces. Earlier local counts above refer to the pre-sync baseline; exact-head validation and CI must include the newly landed docs suites.
 
 Final scene review found a genuine new dark-dialog defect despite the primary-button contrast check: undefined generic surface variables fell back to white while text inherited the dark theme. Assistance/announcement/resource dialogs and document cards now use actual shared theme tokens. Browser regression additionally checks heading/label/helper-text contrast across all four new dialog surfaces; this is not a blanket dark-theme or Teamily parity certification.
+
+
+## Skills/runtime usability follow-up (not Teamily parity)
+
+Library structure/branding retained; a run-and-proof section below the catalogue adds actual readiness, isolated skill execution, reload-persistent result history, cancellation and explicit document saving. Automation scopes are an original functional extension. No skill-operation reference capture exists, so these scenes are **unverified against Teamily**, even when synthetic CI screenshots pass. CI screenshot acceptance now includes actual UI-run → digest receipt/result → reload → save → real rich editor; no manual account/browser operation or real-vendor claim. Runtime/member/cancellation defects are functional fixes, not cosmetic parity completion. Remaining static design warnings are retained in private Impeccable4.9.2 findings, not waived by CI.

@@ -916,6 +916,9 @@ class App:
             search_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/search/messages', path)
             if search_path:
                 return self.search_messages(db, session, method, query, search_path.group(1))
+            if path in ('/v1/skills/scopes','/v1/skills/readiness','/v1/skills/runs'):
+                from . import skill_execution
+                return skill_execution.dispatch(self,db,session,method,path,query,now,env,refuse)
             if path in ('/v1/skills/catalog', '/v1/skills/bindings'):
                 return self.skill_package_dispatch(db, session, method, query, now, env, path)
             utility_path = re.fullmatch(
@@ -1086,11 +1089,15 @@ class App:
         with self.store.transaction() as db:
             key = self._runtime_key_from_env(db, env, now)
             if path == '/v1/agent/connect' and method == 'POST' and not query:
-                body = self.body(env, ['hostname'])
+                body = self.body(env, ['hostname','skill_formats'])
+                formats = body.get('skill_formats',[])
+                if not isinstance(formats,list) or any(f != skill_packages.FORMAT for f in formats) or len(formats)>1:
+                    refuse(400,'invalid','Unsupported skill capability advertisement')
                 hostname = body.get('hostname', 'flybot')
                 if not runtime_connect.valid_hostname(hostname):
                     refuse(400, 'invalid', 'Provide a hostname')
                 row, created = runtime_connect.connect(db, key, now, hostname)
+                db.execute('INSERT OR REPLACE INTO runtime_skill_capabilities VALUES(?,?,?)',(row['id'],json.dumps(formats),now))
                 return (201 if created else 200), {
                     'connection': runtime_connect.connection_view(row, now, stale),
                 }, []
@@ -1153,6 +1160,10 @@ class App:
                     refuse(404, 'not_found', 'Runtime task not found')
                 task = runtime_connect.expire_task(db, task, now)
                 material = db.execute('SELECT * FROM skill_task_material WHERE task_id=?',(task['id'],)).fetchone()
+                if status == 'succeeded' and skill_packages.material(db,task['id']) and material is None:
+                    refuse(409,'conflict','Runtime must fetch and acknowledge required skill material before success')
+                if status == 'succeeded' and skill_packages.selection(db,task['id']) and skill_packages.material(db,task['id']) != skill_packages.selection(db,task['id']):
+                    refuse(409,'skill_revoked','Selected skill binding or permission was revoked')
                 if status == 'succeeded' and material and json.loads(material['manifest']) and not material['acknowledged']:
                     refuse(409,'conflict','Runtime has not acknowledged verified skill loading; upgrade runtime')
                 try:
@@ -1222,6 +1233,9 @@ class App:
         if public['provider'] not in ('openai', 'custom'):
             refuse(409, 'conflict', 'This agent only supports OpenAI-compatible model APIs')
         skill_material = skill_packages.material(db, task['id'])
+        expected = skill_packages.selection(db,task['id'])
+        if expected and skill_material != expected:
+            refuse(409,'skill_revoked','Selected skill is no longer available; no model access issued')
         if skill_material and skill_format != 'openteamily.prompt-skill.v1':
             refuse(409, 'runtime_upgrade_required', 'Installed skills require an upgraded runtime with verified skill loading')
         db.execute('INSERT OR REPLACE INTO skill_task_material VALUES(?,?,0)', (task['id'], json.dumps(skill_material, sort_keys=True)))
@@ -3718,18 +3732,13 @@ class App:
             refuse(409,'conflict','Package version/digest changed; reload catalogue')
         if body.get('permissions') != skill_packages.PERMISSIONS:
             refuse(400,'invalid','Only the explicit model_context permission is supported')
-        if scope != 'account':
-            match = re.fullmatch(r'([0-9a-f]{32}):([0-9a-f]{32})',scope)
-            if match is None:
-                refuse(400,'invalid','Invalid agent binding scope')
-            if body['enabled']:
-                workspace = members.load(db,match[1],uid)
-                agent = agents.load(db,match[1],match[2]) if workspace else None
-                if workspace is None or agent is None or agent['archived']:
-                    refuse(404,'not_found','Agent scope not available')
-                if members.role_of(db,workspace,uid) not in ('owner','admin'):
-                    refuse(403,'forbidden','Agent binding requires workspace administration')
-            # Revoking one's own binding must remain possible after agent/archive or role changes.
+        if scope != 'account' and re.fullmatch(r'(?:(automation):)?[0-9a-f]{32}:[0-9a-f]{32}',scope) is None:
+            refuse(400,'invalid','Invalid binding scope')
+        if body['enabled']:
+            if skill_packages.scope_context(db,uid,scope) is None:
+                refuse(403,'forbidden','Scope requires active workspace administration')
+            if scope.startswith('automation:') and db.execute('SELECT 1 FROM skill_bindings WHERE scope=? AND user_id<>?',(scope,uid)).fetchone():
+                refuse(409,'conflict','This automation already has another skill owner; revoke that binding before transferring')
         if body['enabled']:
             if db.execute('SELECT COUNT(*) FROM skill_bindings WHERE user_id=?',(uid,)).fetchone()[0] >= 200 and db.execute('SELECT 1 FROM skill_bindings WHERE user_id=? AND scope=? AND skill_id=?',(uid,scope,item['id'])).fetchone() is None:
                 refuse(429,'quota','Skill binding capacity reached')
@@ -3737,7 +3746,7 @@ class App:
         else:
             db.execute('DELETE FROM skill_bindings WHERE user_id=? AND scope=? AND skill_id=?',(uid,scope,item['id']))
             # Cancel loaded tasks; already transmitted provider input cannot be recalled.
-            for record in db.execute('SELECT m.task_id,m.manifest FROM skill_task_material m JOIN skill_task_owners o ON o.task_id=m.task_id WHERE o.user_id=?',(uid,)).fetchall():
+            for record in db.execute("SELECT o.task_id,COALESCE(s.manifest,m.manifest,'[]') AS manifest FROM skill_task_owners o LEFT JOIN skill_task_selection s ON s.task_id=o.task_id LEFT JOIN skill_task_material m ON m.task_id=o.task_id WHERE o.user_id=?",(uid,)).fetchall():
                 if any(i['id']==item['id'] for i in json.loads(record['manifest'])) and not any(i['id']==item['id'] for i in skill_packages.material(db,record['task_id'])):
                     task = runtime_connect.load_task(db,record['task_id'])
                     if task and task['status'] in ('queued','claimed'):

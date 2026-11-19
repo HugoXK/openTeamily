@@ -1,3 +1,12 @@
+// Authorized saved-result links select a real workspace and fetch the actual editor record.
+export function artifactTargetFromSearch(search) {
+  const params=new URLSearchParams(search||'');
+  if(!params.has('workspace')&&!params.has('artifact'))return null;
+  const workspace=params.get('workspace'),artifact=params.get('artifact');
+  if(params.getAll('workspace').length!==1||params.getAll('artifact').length!==1||!(/^[0-9a-f]{32}$/).test(workspace||'')||!(/^[0-9a-f]{32}$/).test(artifact||''))return {invalid:true};
+  return {workspace,artifact};
+}
+
 import { bindDocumentEditor } from '../shell/rich-editor.mjs';
 import { renderThumb } from '../shell/thumb.mjs';
 
@@ -1016,6 +1025,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (item && item.id && workspaceId()) {
       const seen = await request('GET', `/v1/workspaces/${workspaceId()}/artifacts/${item.id}`);
       if (seen.status !== 200) {
+        current=null;form.hidden=true;listPanel.hidden=false;
         show('error', messageFor(seen.body.error, '无法打开文档。'));
         return;
       }
@@ -1201,6 +1211,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     workspaces = space.body.items || [];
+    const requested=artifactTargetFromSearch(document.defaultView?.location?.search);
     const previous = workspaceSelect.value;
     workspaceSelect.textContent = '';
     for (const item of workspaces) {
@@ -1224,7 +1235,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (emptyMessage) emptyMessage.textContent = '这个工作区还没有作品。';
     form.hidden = true;
     listPanel.hidden = false;
+    if(requested){
+      if(requested.invalid||!workspaces.some(w=>w.id===requested.workspace)){
+        await loadList();show('error','文档链接无效，或你没有访问该工作区的权限。');return;
+      }
+      workspaceSelect.value=requested.workspace;
+    }
     await loadList();
+    if(requested)await openEditor({id:requested.artifact});
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
