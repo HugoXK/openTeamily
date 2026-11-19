@@ -855,7 +855,7 @@ class App:
                 return self.agent_runtime_dispatch(db, session, method, query, now, env, *agent_runtime_path.groups())
             conversation_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages(?:/([0-9a-f]{32})(?:/(artifact))?)?))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages(?:/([0-9a-f]{32})(?:/(artifact))?)?|read))?)?', path)
             if conversation_path:
                 return self.conversation_dispatch(db, session, method, query, now, env, *conversation_path.groups())
             resource_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/search/resources', path)
@@ -2677,7 +2677,7 @@ class App:
         if agent is None:
             refuse(404, 'not_found', 'Agent not found')
         if conversation_id is None and method == 'GET':
-            return self.list_conversations(db, workspace, session, actor, agent, query)
+            return self.list_conversations(db, workspace, session, actor, agent, query, now)
         if conversation_id is None and method == 'POST' and not query:
             if agent['archived'] == 1:
                 refuse(409, 'conflict', 'Archived agents cannot start conversations')
@@ -2691,10 +2691,19 @@ class App:
             self.reconcile_conversation(db, row, now)
             row = conversations.load_conversation(db, workspace['id'], conversation_id)
             items = conversations.messages(db, row['id'], '', 201) or []
-            return 200, {'conversation': conversations.conversation_item(db, row),
+            conversation = conversations.conversation_item(db, row)
+            conversation['unread_count'] = conversations.unread_count(db, row['id'], session['user_id'])
+            return 200, {'conversation': conversation,
                          'agent': agents.snapshot(db, agent),
                          'items': [self.public_message(db, item) for item in items[:200]],
                          'cursor': items[199]['id'] if len(items) > 200 else None}, []
+        if rest == 'read' and method == 'POST' and not query:
+            mid = self.body(env, ['message_id']).get('message_id')
+            if not isinstance(mid, str) or not re.fullmatch(r'[0-9a-f]{32}', mid):
+                refuse(400, 'invalid', 'Provide a message id from this conversation')
+            if not conversations.mark_read(db, row['id'], session['user_id'], mid):
+                refuse(404, 'not_found', 'Message not found')
+            return 200, {'unread_count': conversations.unread_count(db, row['id'], session['user_id'])}, []
         if rest == 'messages' and message_id is None and method == 'GET':
             return self.list_conversation_messages(db, row, query, now)
         if rest == 'messages' and message_id is None and method == 'POST' and not query:
@@ -2707,7 +2716,7 @@ class App:
             return self.save_conversation_message(db, workspace, session, actor, row, message_id, now, env)
         refuse(400, 'invalid', 'Invalid conversation request')
 
-    def list_conversations(self, db, workspace, session, actor, agent, query):
+    def list_conversations(self, db, workspace, session, actor, agent, query, now=0):
         try:
             args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=2) if query else {}
             if set(args) - {'limit', 'cursor'} or any(len(v) != 1 for v in args.values()):
@@ -2721,7 +2730,16 @@ class App:
             refuse(400, 'invalid', 'Invalid pagination parameters')
         rows = conversations.listing(
             db, workspace['id'], session['user_id'], agent['id'], cursor, int(limit) + 1)
-        return 200, {'items': conversations.conversation_items(db, rows[:int(limit)]),
+        # Finish in-flight replies so the list's unread counts reflect completed tasks.
+        for row in rows[:int(limit)]:
+            if db.execute("SELECT 1 FROM agent_messages WHERE conversation_id=? AND status IN ('queued','running') LIMIT 1",
+                          (row['id'],)).fetchone():
+                self.reconcile_conversation(db, row, now)
+        rows = [conversations.load_conversation(db, workspace['id'], row['id']) for row in rows]
+        items = conversations.conversation_items(db, rows[:int(limit)])
+        for item in items:
+            item['unread_count'] = conversations.unread_count(db, item['id'], session['user_id'])
+        return 200, {'items': items,
                      'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
 
     def create_conversation(self, db, workspace, session, agent, now, env):
