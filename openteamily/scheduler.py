@@ -264,6 +264,10 @@ class Scheduler:
                 'INSERT INTO automation_runs VALUES(?,?,?,?,?,?,?,?,?)',
                 (run_id, row['id'], row['workspace_id'], due, now, None, 'queued', None, '{}'),
             )
+        return self._dispatch(db, row, run_id, due, now)
+
+    def _dispatch(self, db, row, run_id, due, now):
+        """Hand one already-inserted queued run to the backend and record the outcome."""
         public, secret, source = model_api.resolve(
             db, self.store, workspace_id=row['workspace_id'],
         )
@@ -286,6 +290,30 @@ class Scheduler:
         else:
             self._finish(db, run_id, now, status, error, dispatch)
         return automations.run_view(db.execute('SELECT * FROM automation_runs WHERE id=?', (run_id,)).fetchone())
+
+    def retry_run(self, db, row, source, now):
+        """Queue a fresh run for a finished one. The source run is not touched.
+
+        Returns None when the automation already holds the maximum number of
+        runs, so the caller can answer 429 instead of silently dropping work.
+        """
+        count = db.execute(
+            'SELECT COUNT(*) FROM automation_runs WHERE automation_id=?', (row['id'],)
+        ).fetchone()[0]
+        if count >= self.max_runs:
+            return None
+        # (automation_id, due_at) is unique and a retry is its own slot, so the
+        # retry gets the first free instant at or after now.
+        due = int(now)
+        while db.execute('SELECT 1 FROM automation_runs WHERE automation_id=? AND due_at=?',
+                         (row['id'], due)).fetchone() is not None:
+            due += 1
+        run_id = uuid4().hex
+        db.execute(
+            'INSERT INTO automation_runs VALUES(?,?,?,?,?,?,?,?,?)',
+            (run_id, row['id'], row['workspace_id'], due, now, None, 'queued', None, '{}'),
+        )
+        return self._dispatch(db, row, run_id, due, now), run_id
 
     def _reconcile_one(self, db, run, now):
         if run['status'] != 'queued':

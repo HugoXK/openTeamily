@@ -60,6 +60,13 @@ export function runStatusLabel(run) {
   return run.status || '';
 }
 
+// A run that ended can be asked for again; a queued run is cancelled instead,
+// and a finished success has nothing to re-run.
+export function retryAllowed(run) {
+  if (!run) return false;
+  return run.status === 'failed' || run.status === 'cancelled' || run.status === 'timeout';
+}
+
 export function runResultText(run) {
   if (run && run.result && typeof run.result.text === 'string') return run.result.text;
   return '';
@@ -459,6 +466,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         });
         head.appendChild(cancel);
       }
+      if (retryAllowed(item) && current && current.id) {
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.textContent = '重新运行';
+        retry.addEventListener('click', () => {
+          // Bound to this run snapshot: retrying after switching automation
+          // cannot retarget someone else's run.
+          retryRun({workspace: workspaceId(), automation: current.id, run: item.id});
+        });
+        head.appendChild(retry);
+      }
       row.appendChild(head);
       const text = runResultText(item);
       if (text) {
@@ -492,6 +510,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     show('ok', '已取消。');
+    await loadRuns();
+  }
+
+  // A double click has to reuse one idempotency key, otherwise the server
+  // queues the automation twice. The key is dropped once a retry lands, so a
+  // deliberate later retry of the same run is a new attempt.
+  const retryKeys = new Map();
+
+  function retryKeyFor(runId) {
+    if (!retryKeys.has(runId)) retryKeys.set(runId, idempotencyKey());
+    return retryKeys.get(runId);
+  }
+
+  async function retryRun(target) {
+    if (!target || !target.workspace || !target.automation || !target.run) return;
+    const result = await request(
+      'POST',
+      `/v1/workspaces/${target.workspace}/automations/${target.automation}/runs/${target.run}/retry`,
+      {}, {'Idempotency-Key': retryKeyFor(target.run)},
+    );
+    if (result.status !== 200 && result.status !== 201) {
+      show('error', messageFor(result.body.error, '重新运行失败。'));
+      return;
+    }
+    retryKeys.delete(target.run);
+    show('ok', '已重新排队。');
     await loadRuns();
   }
 

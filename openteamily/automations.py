@@ -326,7 +326,14 @@ CREATE TABLE IF NOT EXISTS automation_runs (
  dispatch TEXT NOT NULL,
  UNIQUE(automation_id, due_at));
 CREATE INDEX IF NOT EXISTS automation_run_list ON automation_runs(automation_id, id);
+CREATE TABLE IF NOT EXISTS automation_run_retries (
+ run_id TEXT NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
+ key_hash TEXT NOT NULL,
+ new_run_id TEXT NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
+ created INTEGER NOT NULL,
+ PRIMARY KEY (run_id, key_hash));
 '''
+
 
 SCHEMA = SCHEMA + RUN_SCHEMA
 
