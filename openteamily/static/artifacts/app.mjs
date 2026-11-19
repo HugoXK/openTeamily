@@ -143,6 +143,11 @@ export function suggestedDiscoverSlug(title) {
   return /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug) ? slug : '';
 }
 
+export function applyArtifactLayout(list, layout) {
+  list.dataset.layout = layout === 'list' ? 'list' : 'grid';
+  return list.dataset.layout;
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -663,6 +668,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const list = document.getElementById('artifact-list');
     const empty = document.getElementById('list-empty');
     list.textContent = '';
+    applyArtifactLayout(list, catalogLayout);
     if (empty) empty.hidden = items.length > 0;
     for (const item of items) {
       const row = document.createElement('li');
@@ -677,6 +683,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       meta.textContent = `${kindLabel(item.kind)} · ${item.created_by || ''}${source}`;
       row.appendChild(open);
       row.appendChild(meta);
+      const cover = document.createElement('span');
+      cover.className = 'artifact-cover';
+      cover.setAttribute('aria-hidden', 'true');
+      cover.textContent = kindLabel(item.kind);
+      row.appendChild(cover);
       list.appendChild(row);
     }
   }

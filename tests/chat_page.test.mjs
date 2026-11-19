@@ -60,7 +60,7 @@ test('mergeSessions combines agent and social rows without inventing pins', () =
     ['social', 's2', '产品群'],
     ['agent', 'c1', 'Helper'],
   ]);
-  assert.equal(sessions.every((row) => row.pinned == null), true);
+  assert.equal(sessions.every((row) => !row.pinned), true);
   assert.deepEqual(sessions.map((row) => row.preview), [
     '单聊 · 2 人',
     '群聊 · 2 人',
@@ -782,4 +782,185 @@ test('a homepage start query opens the created conversation after a member start
       else globalThis[key] = saved[key];
     }
   }
+});
+
+
+test('message search tab switches await the in-flight query and newer queries win', async () => {
+  const {createMessageSearch} = await import('../openteamily/static/chat/app.mjs');
+  const resolvers = [];
+  const search = createMessageSearch(() => new Promise(resolve => resolvers.push(resolve)));
+  const first = search.load('old');
+  const same = search.load('old');
+  assert.equal(resolvers.length, 1, 'a tab switch reuses the pending search');
+  resolvers[0]({items: [{kind: 'social', message_id: 'old', snippet: 'old'}]});
+  await Promise.all([first, same]);
+  assert.equal(search.state.hits.length, 1);
+  const stale = search.load('stale');
+  const latest = search.load('latest');
+  resolvers[2]({items: [{kind: 'social', message_id: 'latest', snippet: 'latest'}]});
+  await latest;
+  resolvers[1]({items: [{kind: 'social', message_id: 'stale', snippet: 'stale'}]});
+  await stale;
+  assert.equal(search.state.hits[0].messageId, 'latest');
+});
+
+test('social sessions retain server unread counts without inventing agent unread state', () => {
+  const rows = mergeSessions([], [{id: 'social-unread', kind: 'group', title: 'Group', unread_count: 3}], 'alice');
+  assert.equal(rows[0].unread_count, 3);
+});
+
+
+for (const mode of ['visible', 'hidden', 'failed']) {
+  test('social unread acknowledgement is snapshot bounded: ' + mode, async () => {
+    const {doc, el} = fakeChatDocument(chatHtml());
+    const {fetcher: original} = sessionFetcher();
+    const posts = [];
+    doc.visibilityState = mode === 'hidden' ? 'hidden' : 'visible';
+    const fetcher = async (path, options = {}) => {
+      if (path.endsWith('/conv-1/read')) {
+        posts.push(JSON.parse(options.body));
+        return json(mode === 'failed' ? 500 : 200, {unread_count: 1});
+      }
+      const result = await original(path, options);
+      const body = await result.json();
+      if (path.endsWith('/social/conversations?limit=100')) body.items[0].unread_count = 2;
+      if (path.endsWith('/social/conversations/conv-1')) {
+        body.conversation.unread_count = 2;
+        body.items.push({id: 'm-2', user_id: bob, body: 'second', created: '2026-01-01T00:00:01Z'});
+      }
+      return json(result.status, body);
+    };
+    const restore = installChatGlobals({narrow: true});
+    try {
+      await mount(doc, {fetcher});
+      assert.equal(sessionRows(el)[0].children[2].children[0].textContent, '2');
+      await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+      if (mode === 'hidden') assert.equal(posts.length, 0);
+      else assert.deepEqual(posts, [{message_id: 'm-2'}]);
+      assert.equal(sessionRows(el)[0].children[2].children[0].textContent, mode === 'visible' ? '1' : '2');
+    } finally { restore(); }
+  });
+}
+
+
+test('social pinned state sorts before recency and unread filter uses server state', () => {
+  const rows = mergeSessions([], [
+    {id: 'new', kind: 'dm', updated: 20, unread_count: 1},
+    {id: 'old', kind: 'group', updated: 1, pinned: true},
+  ], alice);
+  assert.equal(rows[0].id, 'old');
+  assert.equal(rows[1].unread_count, 1);
+});
+
+test('session filter selects only real unread social rows', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations?limit=100')) body.items[0].unread_count = 2;
+      return json(result.status, body);
+    }});
+    el('session-filter-value').value = 'unread';
+    await fire(el('session-filter-value'), 'change');
+    assert.equal(sessionRows(el).length, 1);
+    assert.equal(sessionRows(el)[0].dataset.conversation, 'conv-1');
+    el('session-filter-value').value = 'all';
+    await fire(el('session-filter-value'), 'change');
+    assert.equal(sessionRows(el).length, 2);
+  } finally { restore(); }
+});
+
+test('independent conversation search uses current id and pages without opening sidebar search', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const calls = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.includes('/search/messages?')) {
+        calls.push(path);
+        const url = new URL(path, 'https://management.test');
+        assert.equal(url.searchParams.get('conversation_id'), 'conv-1');
+        return json(200, {items: [{kind: 'social', conversation_id: 'conv-1', message_id: url.searchParams.get('cursor') ? 'second' : 'first', snippet: 'Scoped result'}], cursor: url.searchParams.get('cursor') ? null : 'next-id'});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('conversation-search-open'), 'click');
+    assert.equal(el('conversation-search-panel').hidden, false);
+    el('conversation-search-query').value = 'needle';
+    await fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
+    assert.equal(el('conversation-search-results').children[0].textContent, 'Scoped result');
+    assert.equal(el('conversation-search-more').hidden, false);
+    await fire(el('conversation-search-more'), 'click');
+    assert.equal(calls.length, 2);
+    assert.equal(el('conversation-search-results').children.length, 2);
+    assert.match(calls[1], /cursor=next-id/);
+  } finally { restore(); }
+});
+
+test('own message editing and confirmed retraction call versioned endpoints', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  let text = 'Original', revision = 1, retracted = false;
+  const posts = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.includes('/messages/mine-1/')) {
+        const payload = JSON.parse(options.body); posts.push([path, payload]);
+        assert.equal(payload.revision, revision);
+        revision += 1;
+        if (path.endsWith('/edit')) text = payload.body;
+        else { text = ''; retracted = true; }
+        return json(200, {message: {}});
+      }
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations/conv-1')) body.items = [{id: 'mine-1', user_id: alice, body: text, revision, retracted}];
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    let li = el('message-list').children[0];
+    await fire(li.children[3], 'click'); // edit opens inline controls
+    li.children[5].children[0].value = 'Edited';
+    await fire(li.children[5].children[1], 'click');
+    assert.equal(text, 'Edited');
+    li = el('message-list').children[0];
+    await fire(li.children[4], 'click'); // only opens confirmation
+    assert.equal(posts.length, 1);
+    await fire(li.children[5].children[0], 'click');
+    assert.equal(posts.length, 2);
+    assert.equal(el('message-list').children[0].children[1].textContent, '此消息已撤回');
+  } finally { restore(); }
+});
+
+
+test('visual session groups use real pins and preserve order within each group', async () => {
+  const {groupSessionsForDisplay, sessionDisplayGroup} = await import('../openteamily/static/chat/app.mjs');
+  const items = [{id: 'g', kind: 'group'}, {id: 'a', source: 'agent'}, {id: 'p', pinned: true, kind: 'group'}, {id: 'd', kind: 'dm'}];
+  assert.deepEqual(groupSessionsForDisplay(items).map(row => row.id), ['p', 'a', 'd', 'g']);
+  assert.deepEqual(items.map(row => row.id), ['g', 'a', 'p', 'd']);
+  assert.equal(sessionDisplayGroup(items[0]), '群聊');
+  assert.equal(sessionDisplayGroup(items[2]), '置顶');
+});
+
+test('session timestamps use Hong Kong calendar boundaries and never invent unread state', async () => {
+  const {formatSessionTime} = await import('../openteamily/static/chat/app.mjs');
+  const seconds = value => Date.parse(value) / 1000;
+  const now = Date.parse('2026-11-19T00:01:00+08:00');
+  assert.equal(formatSessionTime(seconds('2026-11-18T23:59:00+08:00'), now), '昨天');
+  assert.equal(formatSessionTime(seconds('2026-11-19T00:00:00+08:00'), now), '00:00');
+  assert.match(formatSessionTime(seconds('2026-11-10T12:00:00+08:00'), now), /2026/);
+  assert.equal(formatSessionTime('invalid', now), '');
+});
+
+test('icon chat controls preserve accessible names, disabled truth and attachment privacy', () => {
+  const html = chatHtml();
+  assert.match(html, /id="conversation-search-open"[^>]*aria-label="搜索当前会话"[\s\S]*?<svg/);
+  assert.match(html, /disabled title="未实现：语音或视频通话"/);
+  assert.match(html, /class="attachment-menu"[\s\S]*?id="chat-attachment"/);
+  assert.match(html, /工作区成员可在作品库查看/);
+  assert.match(html, /disabled title="未实现：语音消息"[\s\S]*?sr-only">语音/);
 });

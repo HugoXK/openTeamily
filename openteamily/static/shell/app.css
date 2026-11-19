@@ -1,6 +1,17 @@
 /* Shared FlyBot management shell. Self-written; no Teamily assets.
    Pages keep their own forms, IDs, and APIs. This file only styles chrome. */
 :root {
+  --ot-bg: #f4f8f5;
+  --ot-bg-accent: #edf3ef;
+  --ot-surface: #ffffff;
+  --ot-surface-2: #f8fbf9;
+  --ot-ink: #20382d;
+  --ot-muted: #52665b;
+  --ot-line: #dce6df;
+  --ot-line-strong: #bdcfc2;
+  --ot-accent: #17694e;
+  --ot-accent-hover: #10563f;
+  --ot-accent-soft: #dcefe3;
   --ot-bg: #f2f5fc;
   --ot-bg-accent: #e7edfa;
   --ot-surface: rgba(255,255,255,0.78);
@@ -18,6 +29,17 @@
   --ot-ok: #0f766e;
   --ot-ok-bg: rgba(20,200,212,0.14);
   --ot-danger: #be123c;
+  --ot-danger-bg: #ffe4e6;
+  --ot-warn-bg: #fff7ed;
+  --ot-focus: #227453;
+  --ot-shadow-sm: 0 1px 2px rgb(15 23 42 / 6%);
+  --ot-shadow: 0 1px 2px rgb(15 23 42 / 6%), 0 12px 32px rgb(15 23 42 / 8%);
+  --ot-shadow-lg: 0 18px 48px rgb(15 23 42 / 14%);
+  --ot-rail-bg: #20382d;
+  --ot-rail-ink: #e2e8f0;
+  --ot-radius-sm: 0.55rem;
+  --ot-radius: 0.9rem;
+  --ot-radius-lg: 1.25rem;
   --ot-danger-bg: rgba(190,18,60,0.12);
   --ot-warn-bg: rgba(245,158,11,0.14);
   --ot-focus: #7c6cff;
@@ -44,6 +66,17 @@
 
 @media (prefers-color-scheme: dark) {
   html:not([data-theme-resolved="light"]) {
+    --ot-bg: #121c17;
+    --ot-bg-accent: #20382d;
+    --ot-surface: #1b2821;
+    --ot-surface-2: #17231c;
+    --ot-ink: #e5eee8;
+    --ot-muted: #a9bbb0;
+    --ot-line: #34473b;
+    --ot-line-strong: #4a6252;
+    --ot-accent: #89d5b5;
+    --ot-accent-hover: #a4e3c5;
+    --ot-accent-soft: #233e30;
     --ot-bg: #050812;
     --ot-bg-accent: #0a1020;
     --ot-surface: rgba(17,25,45,0.66);
@@ -61,6 +94,14 @@
     --ot-ok: #5eead4;
     --ot-ok-bg: rgba(46,230,233,0.14);
     --ot-danger: #fda4af;
+    --ot-danger-bg: #4c0519;
+    --ot-warn-bg: #2a2113;
+    --ot-focus: #a4e3c5;
+    --ot-shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+    --ot-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 12px 32px rgb(0 0 0 / 30%);
+    --ot-shadow-lg: 0 18px 48px rgb(0 0 0 / 45%);
+    --ot-rail-bg: #131e17;
+    --ot-rail-ink: #e2e8f0;
     --ot-danger-bg: rgba(253,164,175,0.14);
     --ot-warn-bg: rgba(245,158,11,0.14);
     --ot-focus: #a094ff;
@@ -77,6 +118,17 @@
 }
 
 html[data-theme-resolved="light"] {
+  --ot-bg: #f4f8f5;
+  --ot-bg-accent: #edf3ef;
+  --ot-surface: #ffffff;
+  --ot-surface-2: #f8fbf9;
+  --ot-ink: #20382d;
+  --ot-muted: #52665b;
+  --ot-line: #dce6df;
+  --ot-line-strong: #bdcfc2;
+  --ot-accent: #17694e;
+  --ot-accent-hover: #10563f;
+  --ot-accent-soft: #dcefe3;
   --ot-bg: #f2f5fc;
   --ot-bg-accent: #e7edfa;
   --ot-surface: rgba(255,255,255,0.78);
@@ -94,6 +146,14 @@ html[data-theme-resolved="light"] {
   --ot-ok: #0f766e;
   --ot-ok-bg: rgba(20,200,212,0.14);
   --ot-danger: #be123c;
+  --ot-danger-bg: #ffe4e6;
+  --ot-warn-bg: #fff7ed;
+  --ot-focus: #227453;
+  --ot-shadow-sm: 0 1px 2px rgb(15 23 42 / 6%);
+  --ot-shadow: 0 1px 2px rgb(15 23 42 / 6%), 0 12px 32px rgb(15 23 42 / 8%);
+  --ot-shadow-lg: 0 18px 48px rgb(15 23 42 / 14%);
+  --ot-rail-bg: #20382d;
+  --ot-rail-ink: #e2e8f0;
   --ot-danger-bg: rgba(190,18,60,0.12);
   --ot-warn-bg: rgba(245,158,11,0.14);
   --ot-focus: #7c6cff;
@@ -109,6 +169,17 @@ html[data-theme-resolved="light"] {
 }
 
 html[data-theme-resolved="dark"] {
+  --ot-bg: #121c17;
+  --ot-bg-accent: #20382d;
+  --ot-surface: #1b2821;
+  --ot-surface-2: #17231c;
+  --ot-ink: #e5eee8;
+  --ot-muted: #a9bbb0;
+  --ot-line: #34473b;
+  --ot-line-strong: #4a6252;
+  --ot-accent: #89d5b5;
+  --ot-accent-hover: #a4e3c5;
+  --ot-accent-soft: #233e30;
   --ot-bg: #050812;
   --ot-bg-accent: #0a1020;
   --ot-surface: rgba(17,25,45,0.66);
@@ -126,6 +197,14 @@ html[data-theme-resolved="dark"] {
   --ot-ok: #5eead4;
   --ot-ok-bg: rgba(46,230,233,0.14);
   --ot-danger: #fda4af;
+  --ot-danger-bg: #4c0519;
+  --ot-warn-bg: #2a2113;
+  --ot-focus: #a4e3c5;
+  --ot-shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --ot-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 12px 32px rgb(0 0 0 / 30%);
+  --ot-shadow-lg: 0 18px 48px rgb(0 0 0 / 45%);
+  --ot-rail-bg: #131e17;
+  --ot-rail-ink: #e2e8f0;
   --ot-danger-bg: rgba(253,164,175,0.14);
   --ot-warn-bg: rgba(245,158,11,0.14);
   --ot-focus: #a094ff;
@@ -948,10 +1027,10 @@ body.app-workspace .account-sub > button {
 ------------------------------------------------------------------- */
 :root { --ot-on-accent: #ffffff; }
 @media (prefers-color-scheme: dark) {
-  html:not([data-theme-resolved="light"]) { --ot-on-accent: #0b1120; }
+  html:not([data-theme-resolved="light"]) { --ot-on-accent: #121c17; }
 }
 html[data-theme-resolved="light"] { --ot-on-accent: #ffffff; }
-html[data-theme-resolved="dark"] { --ot-on-accent: #0b1120; }
+html[data-theme-resolved="dark"] { --ot-on-accent: #121c17; }
 
 body {
   font-size: 15px;
@@ -1058,24 +1137,41 @@ fieldset, .step {
   box-shadow: var(--ot-shadow-sm);
 }
 
-/* Dark rail in both themes; the previous rail reused --ot-ink and flipped
-   to a light bar in dark mode. */
-body.app-workspace > .app-rail {
-  background: var(--ot-rail-bg);
-  color: var(--ot-rail-ink);
-  width: 4.75rem;
-  box-shadow: inset -1px 0 rgb(255 255 255 / 6%);
-}
-body.app-workspace { grid-template-columns: 4.75rem minmax(0, 1fr); }
+/* Evidence-led shared workspace repair: quiet icon rail and inset app canvas.
+   Existing light/dark preferences remain the only theme authority. */
+:root { --ot-rail-width: 3.5rem; --ot-session-width: 18rem; --ot-space: .5rem; }
+body.app-workspace { grid-template-columns: var(--ot-rail-width) minmax(0, 1fr); height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
+body.app-workspace > .app-rail { width: auto; padding: .55rem .25rem; gap: .35rem; background: var(--ot-bg-accent); color: var(--ot-muted); box-shadow: none; }
 body.app-workspace > .app-rail > a,
 body.app-workspace > .app-rail > .rail-link,
-body.app-workspace > .app-rail .account-trigger {
-  color: var(--ot-rail-ink);
-  border-radius: 0.7rem;
-  font-weight: 560;
-  transition: background-color .16s ease, color .16s ease, transform .08s ease;
-}
+body.app-workspace > .app-rail .account-trigger { width: 2.6rem; min-height: 2.6rem; padding: .35rem; border: 0; border-radius: 50%; color: var(--ot-muted); box-shadow: none; }
 body.app-workspace > .app-rail > a:hover,
+body.app-workspace > .app-rail .account-trigger:hover { background: var(--ot-surface); }
+body.app-workspace > .app-rail > a[aria-current="page"] { background: var(--ot-accent-soft); color: var(--ot-accent-hover); }
+body.app-workspace > .app-rail .brand-mark { width: 2.25rem; min-height: 2.25rem; height: 2.25rem; background: var(--ot-accent); color: var(--ot-on-accent); font-size: .75rem; box-shadow: none; }
+.rail-label, .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+body.app-workspace > main { grid-row: 2; min-width: 0; overflow: auto; margin: 0 .4rem .4rem 0; border: 1px solid var(--ot-line); border-radius: .8rem; background: var(--ot-surface-2); }
+body.app-workspace > #status { grid-row: 1; }
+body.app-workspace > #status:empty { display: none; margin: 0; }
+body.app-workspace.chat-open { grid-template-columns: var(--ot-rail-width) var(--ot-session-width) minmax(0, 1fr); }
+body.app-workspace.chat-open > main { overflow: hidden; }
+body.app-workspace .page-top { border: 0; box-shadow: none; background: transparent; padding: .4rem 0 .85rem; }
+body.app-workspace .page-top h1 { font-size: 1.1rem; font-weight: 650; }
+body.app-workspace .account-menu { left: 2.6rem; background: var(--ot-surface); color: var(--ot-ink); border: 1px solid var(--ot-line); box-shadow: var(--ot-shadow-lg); }
+body.app-workspace button, body.app-workspace input, body.app-workspace select { accent-color: var(--ot-accent); }
+body.app-workspace input::placeholder, body.app-workspace textarea::placeholder { color: var(--ot-muted); opacity: 1; }
+body.app-workspace :focus-visible { outline: 2px solid var(--ot-focus); outline-offset: 3px; }
+body.app-workspace :is(h1,h2,h3,p,a,button,label) { overflow-wrap: anywhere; }
+@media (pointer: coarse) { body.app-workspace > .app-rail > a, body.app-workspace > .app-rail > .rail-link { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
+/* Keep foreground/background pairs together in hover/expanded states. */
+nav a[aria-current="page"], nav a[aria-current="page"]:hover { background: var(--ot-accent); color: var(--ot-on-accent); }
+body.app-workspace > .app-rail > a.brand-mark:hover { background: var(--ot-accent-hover); color: var(--ot-on-accent); }
+body.app-workspace > .app-rail .account-trigger[aria-expanded="true"],
+body.app-workspace > .app-rail .account-trigger[aria-expanded="true"]:hover { background: var(--ot-accent); color: var(--ot-on-accent); }
+.skip-link:hover, .skip-link:focus-visible { background: var(--ot-accent); color: var(--ot-on-accent); }
+body.app-workspace .account-menu { width: min(18rem, calc(100vw - 5rem)); max-height: calc(100dvh - 1rem); overflow-y: auto; }
+body.app-workspace #login-panel { width: min(24rem, calc(100% - 2rem)); box-sizing: border-box; }
 body.app-workspace > .app-rail .account-trigger:hover {
   background: rgb(255 255 255 / 9%);
 }

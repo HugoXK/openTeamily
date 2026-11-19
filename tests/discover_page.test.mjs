@@ -294,13 +294,14 @@ test('catalog cards do not promise a /d/ detail route the server does not serve'
   assert.equal(title.includes('fixture-one'), false);
 });
 
-test('default discover view is the unconnected feed and does not load the catalog API', async () => {
+test('default discover view loads works; private tabs require sign-in and does not load the catalog API', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();
   const requests = [];
   const fetcher = async (path, options) => {
     requests.push([path, options.method]);
     if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    if (path.startsWith('/v1/discover/me/works?')) return {status: 401, json: async () => ({})};
     if (path.startsWith('/v1/discover/works?')) return {status: 200, json: async () => ({items: [], cursor: null})};
     throw new Error('unexpected ' + path);
   };
@@ -315,16 +316,16 @@ test('default discover view is the unconnected feed and does not load the catalo
   assert.equal(el('feed-tab-activity').attributes['aria-selected'], 'true');
   assert.equal(requests.some(([path]) => path.startsWith('/v1/discover/agents')), false);
   assert.equal(requests.some(([path]) => path.startsWith('/v1/discover/works?')), true);
-  el('feed-tab-following').handlers.click();
-  assert.equal(el('feed-note').textContent, FEED_FOLLOWING_NOTE);
-  assert.equal(el('feed-following-empty').hidden, false);
-  assert.equal(el('feed-activity-empty').hidden, true);
+  await el('feed-tab-following').handlers.click();
+  assert.match(el('feed-note').textContent, /请先登录/);
+  assert.equal(el('feed-following-empty').hidden, true);
+  assert.equal(el('feed-activity-empty').hidden, false);
   assert.equal(el('feed-tab-following').attributes['aria-selected'], 'true');
   assert.equal(FEED_FOLLOWING_EMPTY_TITLE, '关注列表暂无动态');
   assert.equal(FEED_FOLLOWING_EMPTY_BODY, '你关注的人发布动态后会显示在这里。');
   assert.equal(FEED_FOLLOWING_NOTE.includes('没有对照截图'), false);
-  assert.match(FEED_FOLLOWING_NOTE, /关注关系还没有接口/);
-  el('feed-tab-activity').handlers.click();
+  assert.match(FEED_FOLLOWING_NOTE, /你关注的作者已公开/);
+  await el('feed-tab-activity').handlers.click();
   assert.equal(el('feed-following-empty').hidden, true);
   assert.equal(el('feed-activity-empty').hidden, false);
   assert.equal(el('feed-note').textContent, FEED_ACTIVITY_EMPTY_NOTE);
@@ -406,4 +407,118 @@ test('the activity feed renders opted-in work cards from the public API', async 
 
 test('formatFeedTime renders the listing timestamp in Asia/Shanghai', () => {
   assert.equal(formatFeedTime(1800000000), '2027/1/15');
+});
+
+
+test('work type selection uses the real API and resets pagination, all restores full feed', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const calls = [];
+  const fetcher = async (path, options) => {
+    calls.push([path, options.method]);
+    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    return {status: 200, json: async () => ({items: [], cursor: path.includes('kind=website') ? '1.site-one' : null})};
+  };
+  await mount(doc, {fetcher, location: {search: ''}});
+  const el = id => doc.getElementById(id);
+  await el('feed-kind-website').handlers.click();
+  assert.equal(calls.at(-1)[0], '/v1/discover/works?limit=12&kind=website');
+  assert.equal(el('feed-kind-website').attributes['aria-current'], 'true');
+  assert.equal(el('feed-kind-all').attributes['aria-current'], 'false');
+  el('feed-more').handlers.click();
+  await flush();
+  assert.equal(calls.at(-1)[0], '/v1/discover/works?limit=12&cursor=1.site-one&kind=website');
+  await el('feed-kind-image').handlers.click();
+  assert.equal(calls.at(-1)[0], '/v1/discover/works?limit=12&kind=image');
+  await el('feed-kind-all').handlers.click();
+  assert.equal(calls.at(-1)[0], '/v1/discover/works?limit=12');
+  assert.equal(calls.every(([, method]) => method === 'GET'), true);
+});
+
+test('supported work categories are enabled, unsupported classifications stay disabled', () => {
+  const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
+  for (const kind of ['website', 'image', 'audio', 'slides', 'video']) {
+    const tag = html.match(new RegExp('<button[^>]*id="feed-kind-' + kind + '"[^>]*>'))[0];
+    assert.equal(tag.includes('disabled'), false);
+  }
+  assert.match(html, /disabled[^>]*>小游戏</);
+  assert.equal(feedQuery('中文', '1.site-one', 'website'), 'limit=12&q=%E4%B8%AD%E6%96%87&cursor=1.site-one&kind=website');
+});
+
+
+test('every supported selected type uses the selected category styling', () => {
+  const css = readFileSync(new URL('../openteamily/static/discover/app.css', import.meta.url), 'utf8');
+  assert.match(css, /\.feed-filters button\[aria-current="true"\]/);
+});
+
+
+test('signed-in feed persists like/collect/follow and loads real private tabs', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument(), calls = [];
+  const state = {liked: false, collected: false, following: false, likes: 0};
+  const item = {slug: 'shared-doc', title: 'Public work', author: 'bob', path: '/w/shared-doc', kind: 'document'};
+  const fetcher = async (path, options) => {
+    calls.push([path, options]);
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path.endsWith('/engagement')) {
+      const body = JSON.parse(options.body);
+      state[{like: 'liked', collect: 'collected', follow: 'following'}[body.action]] = body.enabled;
+      state.likes = state.liked ? 1 : 0;
+      return {status: 200, json: async () => state};
+    }
+    if (path.startsWith('/v1/discover/me/works?')) return {status: 200, json: async () => ({items: [{...item, ...state}], cursor: null})};
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location: {search: ''}});
+  const grid = doc.getElementById('feed-grid');
+  await grid.children[0].children[1].children[0].handlers.click();
+  assert.equal(state.liked, true);
+  assert.match(grid.children[0].children[1].children[0].textContent, /取消点赞.*1/);
+  await grid.children[0].children[1].children[1].handlers.click();
+  assert.equal(state.collected, true);
+  await grid.children[0].children[1].children[2].handlers.click();
+  assert.equal(state.following, true);
+  await doc.getElementById('feed-tab-following').handlers.click();
+  assert.match(calls.at(-1)[0], /tab=following/);
+  await doc.getElementById('feed-tab-collected').handlers.click();
+  assert.match(calls.at(-1)[0], /tab=collected/);
+});
+
+
+test('switching private feed tabs cannot be overwritten by an older in-flight response', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  let release;
+  const fetcher = async path => {
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {id: 'owner'}})};
+    if (path.startsWith('/v1/workspaces')) return {status: 200, json: async () => ({items: []})};
+    if (path.includes('tab=following')) return new Promise(resolve => {release = resolve;});
+    return {status: 200, json: async () => ({items: path.includes('tab=collected') ? [{slug: 'saved-work', title: 'Saved fixture', kind: 'document'}] : []})};
+  };
+  await mount(doc, {fetcher, location: {search: ''}});
+  const pending = doc.getElementById('feed-tab-following').handlers.click();
+  await flush();
+  await doc.getElementById('feed-tab-collected').handlers.click();
+  release({status: 200, json: async () => ({items: [{slug: 'old-work', title: 'Stale fixture', kind: 'document'}]})});
+  await pending;
+  const grid = doc.getElementById('feed-grid');
+  assert.equal(grid.children.length, 1);
+  assert.match(JSON.stringify(grid.children[0]), /Saved fixture/);
+  assert.doesNotMatch(JSON.stringify(grid.children[0]), /Stale fixture/);
+});
+
+
+test('work covers use real same-origin published media, not invented screenshots', () => {
+  const doc = fakeDocument();
+  const image = renderFeedCard(doc, {slug: 'real-photo', title: '<safe>', kind: 'image'});
+  const cover = image.children.find(node => node.className === 'work-cover');
+  assert.equal(cover.tagName, 'img');
+  assert.equal(cover.src, '/w/real-photo/file');
+  assert.equal(cover.loading, 'lazy');
+  assert.equal(cover.alt, '');
+  const website = renderFeedCard(doc, {slug: 'real-site', title: 'Site', kind: 'website'});
+  const fallback = website.children.find(node => node.className === 'work-cover');
+  assert.equal(fallback.tagName, 'div');
+  assert.equal(fallback.textContent, '网页');
+  assert.equal(fallback.src, undefined);
 });

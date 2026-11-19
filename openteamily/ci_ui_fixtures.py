@@ -216,9 +216,12 @@ def seed_fixtures(data_dir, origin, password, provider_base, model_api_key, *, i
         {'slug': DOCUMENT_DISCOVER_SLUG},
         {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-doc-discover-0001'},
     ), (201,), 'list the fixture document on discover')
-    _require(owner.call('POST', '/v1/workspaces/%s/artifacts' % wid, {
+    website = _require(owner.call('POST', '/v1/workspaces/%s/artifacts' % wid, {
         'title': WEBSITE_TITLE, 'body': WEBSITE_BODY, 'kind': 'website',
     }, {'HTTP_IDEMPOTENCY_KEY': 'ci-ui-screenshot-site-0001'}), (201,), 'create the fixture website')
+    _require(owner.call('POST', '/v1/workspaces/%s/artifacts/%s/discover' %
+                        (wid, website['body']['artifact']['id']), {'slug': 'ci-fixture-site'}),
+             (201,), 'list the fixture website on discover')
     raw, content_type = multipart(
         [('title', MEDIA_TITLE), ('kind', 'media')],
         [('file', 'ci-fixture.png', 'image/png', solid_png())],

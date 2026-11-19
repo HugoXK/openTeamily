@@ -75,6 +75,23 @@ CREATE TABLE IF NOT EXISTS social_messages (
  UNIQUE(conversation_id, key_hash));
 CREATE INDEX IF NOT EXISTS social_message_list
  ON social_messages(conversation_id, seq, id);
+CREATE TABLE IF NOT EXISTS social_reads (
+ conversation_id TEXT NOT NULL REFERENCES social_conversations(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ read_seq INTEGER NOT NULL DEFAULT 0 CHECK(read_seq >= 0),
+ PRIMARY KEY(conversation_id, user_id));
+
+CREATE TABLE IF NOT EXISTS social_message_state (
+ message_id TEXT PRIMARY KEY REFERENCES social_messages(id) ON DELETE CASCADE,
+ revision INTEGER NOT NULL DEFAULT 1, edited INTEGER, retracted INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS social_preferences (
+ conversation_id TEXT NOT NULL REFERENCES social_conversations(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN(0,1)),
+ PRIMARY KEY(conversation_id,user_id));
+CREATE TABLE IF NOT EXISTS social_attachments (
+ message_id TEXT PRIMARY KEY REFERENCES social_messages(id) ON DELETE CASCADE,
+ artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL);
 '''
 
 KINDS = ('dm', 'group')
@@ -132,6 +149,12 @@ def conversation_view(row, members=None, preview='', agent_members=None):
 def message_view(row):
     data = {key: row[key] for key in (
         'id', 'conversation_id', 'workspace_id', 'user_id', 'body', 'created')}
+    data.update(revision=row['revision'] if 'revision' in row.keys() else 1,
+                edited=row['edited'] if 'edited' in row.keys() else None,
+                retracted=bool(row['retracted']) if 'retracted' in row.keys() else False)
+    if not data['retracted'] and 'attachment_id' in row.keys() and row['attachment_id']:
+        data['attachment'] = {'id': row['attachment_id'], 'title': row['attachment_title'],
+                              'path': '/v1/workspaces/' + row['workspace_id'] + '/artifacts/' + row['attachment_id'] + '/file'}
     if 'agent_id' in row.keys() and row['agent_id']:
         data.update(role='agent', agent_id=row['agent_id'], agent_name=row['agent_name'],
                     source='runtime_infer')
@@ -140,11 +163,16 @@ def message_view(row):
 
 # Success-only union: agent output has no human author and shares the group sequence.
 MESSAGE_ROWS = """
- SELECT id, conversation_id, workspace_id, user_id, body, seq, created,
-        NULL AS agent_id, NULL AS agent_name FROM social_messages
+ SELECT m.id, m.conversation_id, m.workspace_id, m.user_id, m.body, m.seq, m.created,
+        NULL AS agent_id, NULL AS agent_name, COALESCE(st.revision,1) AS revision,
+        st.edited, COALESCE(st.retracted,0) AS retracted, at.artifact_id AS attachment_id, af.title AS attachment_title FROM social_messages m
+ LEFT JOIN social_message_state st ON st.message_id=m.id
+ LEFT JOIN social_attachments at ON at.message_id=m.id
+ LEFT JOIN artifacts af ON af.id=at.artifact_id
  UNION ALL
  SELECT id, conversation_id, workspace_id, NULL, body, seq, updated,
-        agent_id, agent_name FROM social_agent_replies WHERE status='succeeded'
+        agent_id, agent_name, 1 AS revision, NULL AS edited, 0 AS retracted, NULL AS attachment_id, NULL AS attachment_title
+ FROM social_agent_replies WHERE status='succeeded'
 """
 
 
@@ -291,3 +319,29 @@ def workspace_member_ids(db, workspace):
 def username(db, user_id):
     row = db.execute('SELECT username FROM users WHERE id=?', (user_id,)).fetchone()
     return None if row is None else row['username']
+
+
+def unread_count(db, conversation_id, user_id):
+    return db.execute(
+        f"""SELECT COUNT(*) FROM ({MESSAGE_ROWS}) msg
+        WHERE msg.conversation_id=? AND msg.retracted=0 AND (msg.user_id IS NULL OR msg.user_id<>?)
+        AND msg.seq>COALESCE((SELECT read_seq FROM social_reads
+                             WHERE conversation_id=? AND user_id=?),0)""",
+        (conversation_id, user_id, conversation_id, user_id)).fetchone()[0]
+
+
+def mark_read(db, conversation_id, user_id, message_id):
+    message = db.execute(f'SELECT seq FROM ({MESSAGE_ROWS}) WHERE conversation_id=? AND id=?',
+                         (conversation_id, message_id)).fetchone()
+    if message is None:
+        return False
+    db.execute("""INSERT INTO social_reads(conversation_id,user_id,read_seq) VALUES(?,?,?)
+        ON CONFLICT(conversation_id,user_id) DO UPDATE SET read_seq=MAX(read_seq,excluded.read_seq)""",
+               (conversation_id, user_id, message['seq']))
+    return True
+
+
+def preference(db, conversation_id, user_id):
+    row = db.execute('SELECT pinned FROM social_preferences WHERE conversation_id=? AND user_id=?',
+                     (conversation_id, user_id)).fetchone()
+    return {'pinned': bool(row and row['pinned'])}

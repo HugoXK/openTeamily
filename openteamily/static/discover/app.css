@@ -135,7 +135,7 @@ button.catalog-create[hidden], a.catalog-create[hidden] { display: none; }
   padding: .2rem 0;
   font: inherit;
 }
-.feed-filter-all[aria-current="true"] {
+.feed-filters button[aria-current="true"] {
   padding: .2rem .75rem;
   border-radius: 999px;
   background: var(--ot-accent-soft);
@@ -266,8 +266,8 @@ button.catalog-create[hidden], a.catalog-create[hidden] { display: none; }
   box-shadow: var(--ot-shadow);
 }
 .catalog-avatar {
-  background: linear-gradient(135deg, var(--ot-accent), #7c3aed);
-  color: #ffffff;
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
 }
 .catalog-create {
   background: var(--ot-accent);
@@ -290,6 +290,46 @@ button.catalog-create[hidden], a.catalog-create[hidden] { display: none; }
   border-radius: var(--ot-radius-lg);
 }
 
+/* 17 Nov captured directory rows and four-column work-feed hierarchy. */
+body.app-workspace:not(.chat-open) > main > #main-panel { padding: 1.25rem clamp(1rem, 5vw, 4rem); max-width: 84rem; }
+.catalog-toolbar { gap: .65rem; }
+.catalog-filters { margin-top: 1rem; }
+.catalog article { padding: .7rem .65rem; min-height: 5rem; border-radius: .6rem; box-shadow: none; transition: border-color .15s; }
+.catalog article:hover { transform: none; box-shadow: none; border-color: var(--ot-line-strong); }
+.catalog-avatar { background: var(--ot-accent-soft); color: var(--ot-accent-hover); }
+.catalog h3 { font-size: .88rem; font-weight: 600; }
+.catalog .summary { line-height: 1.45; font-size: .8rem; }
+.catalog article button { border-color: var(--ot-line); box-shadow: none; }
+.catalog-create { box-shadow: none; }
+#feed-search { min-width: 0; flex: 1 1 14rem; }
+#feed-query, #catalog-query { background: var(--ot-bg-accent); border-color: transparent; }
+.feed-toolbar { margin-bottom: .75rem; }
+.feed-filters { flex-wrap: nowrap; overflow-x: auto; padding-bottom: .4rem; gap: .9rem; }
+.feed-filters button { flex: 0 0 auto; white-space: nowrap; font-size: .82rem; }
+.feed-grid { gap: .85rem; align-items: start; }
+.feed-grid > article { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--ot-line); border-radius: .75rem; overflow: hidden; background: var(--ot-surface); }
+.feed-card { border: 0; border-radius: .75rem; padding: .6rem; min-height: 0; gap: .4rem; }
+.feed-card:focus-visible { outline-offset: -3px; }
+.feed-card h3 { font-size: .9rem; line-height: 1.45; }
+.feed-card .kind { font-size: .75rem; letter-spacing: 0; text-transform: none; }
+.feed-card .meta { font-size: .78rem; }
+.work-cover { order: -1; display: grid; place-items: center; width: calc(100% + 1.2rem); height: 11.5rem; object-fit: cover; margin: -.6rem -.6rem .15rem; background: var(--ot-bg-accent); color: var(--ot-muted); font-size: 1.05rem; }
+.feed-grid > article > div { display: flex; flex-wrap: wrap; gap: .25rem; padding: 0 .5rem .5rem; }
+.feed-grid > article > div > button { padding: .2rem .35rem; font-size: .75rem; box-shadow: none; border: 0; background: transparent; }
+.feed-grid > article > div > button[aria-pressed="true"] { color: var(--ot-accent-hover); background: var(--ot-accent-soft); }
+.feed-following-empty { background: transparent; padding: 6rem 1rem; border-radius: 0; }
+#feed-note { color: var(--ot-muted); font-size: .8rem; }
+@media (max-width: 65rem) { .feed-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 45rem) {
+  .catalog, .feed-grid { grid-template-columns: minmax(0,1fr); }
+  .catalog-toolbar { align-items: stretch; }
+  #catalog-search, #catalog-query { width: 100%; }
+  #catalog-search { flex-wrap: wrap; }
+  .feed-toolbar { gap: .5rem; }
+  .feed-tabs { margin-left: 0; }
+  .feed-tabs button { min-height: 2.5rem; }
+}
+a.catalog-create:hover { background: var(--ot-accent-hover); color: var(--ot-on-accent); }
 /* Aurora Glass: discover */
 .catalog article {
   position: relative;

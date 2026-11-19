@@ -716,6 +716,36 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   border-radius: var(--ot-radius-lg);
 }
 
+/* Captured library directory/chrome; populated tiles are an original adaptation. */
+body.app-workspace:not(.chat-open) > main > #main-panel { padding: .65rem .75rem .75rem; }
+.artifacts-top { margin: 0 0 .5rem; }
+.artifacts-workspace { grid-template-columns: 13.5rem minmax(0,1fr); gap: .75rem; }
+.artifact-dir { background: var(--ot-surface); border: 0; border-right: 1px solid var(--ot-line); border-radius: 0; padding: .7rem .65rem; }
+.artifact-main { background: transparent; border: 0; padding: .5rem .65rem; border-radius: 0; }
+.artifact-kinds button { border: 0; background: transparent; padding: .45rem .65rem; font-size: .85rem; }
+.artifact-kinds button[aria-current="page"], .artifact-scopes button[aria-current="page"] { color: var(--ot-accent-hover); background: var(--ot-accent-soft); }
+#new-menu-button { background: var(--ot-accent); color: var(--ot-on-accent); border: 0; min-height: 2.5rem; }
+#artifact-list { display: grid; gap: .75rem; }
+#artifact-list[data-layout="grid"] { grid-template-columns: repeat(auto-fill, minmax(min(100%,13rem),1fr)); align-items: stretch; }
+#artifact-list li { border: 1px solid var(--ot-line); box-shadow: none; border-radius: .75rem; padding: .75rem; min-width: 0; background: var(--ot-surface); }
+#artifact-list li:hover { box-shadow: none; border-color: var(--ot-line-strong); }
+#artifact-list[data-layout="grid"] li { display: flex; align-items: stretch; flex-direction: column; gap: .5rem; overflow: hidden; }
+#artifact-list button.link { text-align: left; white-space: normal; overflow-wrap: anywhere; font-size: .95rem; font-weight: 600; }
+#artifact-list .note { font-size: .78rem; line-height: 1.5; }
+.artifact-cover { display: none; }
+#artifact-list[data-layout="grid"] .artifact-cover { display: grid; order: -1; place-items: center; min-height: 6.5rem; background: var(--ot-bg-accent); color: var(--ot-muted); margin: -.75rem -.75rem .3rem; font-size: .9rem; }
+#artifact-list[data-layout="list"] li { display: grid; grid-template-columns: minmax(0,1fr) minmax(8rem,auto); align-items: center; }
+#layout-note { font-size: .75rem; margin: .6rem 0; }
+#editor-form { max-width: 64rem; margin: .5rem auto; box-shadow: none; }
+@media (max-width: 850px) { .artifacts-workspace { grid-template-columns: 11rem minmax(0,1fr); } }
+@media (max-width: 650px) {
+  .artifacts-workspace { display: flex; flex-direction: column; }
+  .artifact-dir { border-right: 0; border-bottom: 1px solid var(--ot-line); overflow: visible; }
+  .artifact-kinds { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; }
+  .artifact-kinds button { flex: 0 0 auto; width: auto; }
+  #artifact-list[data-layout="list"] li { grid-template-columns: minmax(0,1fr); }
+}
+
 /* Aurora Glass: works library */
 #artifact-list li {
   background: var(--ot-surface);
