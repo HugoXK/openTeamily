@@ -65,7 +65,10 @@ test('the screenshot script pins the same step-2 wording as the page', () => {
   const script = readFileSync(path.join(root, 'scripts/ci_ui_screenshots.mjs'), 'utf8');
   assert.doesNotMatch(script, /Gmail · 未连接/,
     'ci_ui_screenshots.mjs still asserts the retired "Gmail · 未连接" wording');
-  assert.match(script, /Gmail · 未接入/, 'the step-2 record must pin the unreadable case as 未接入');
+  assert.match(script, /appStates\.length === 8/,
+    'the step-2 record must require all 8 connector rows, not one sample row');
+  assert.match(script, /'· 未接入'/, 'the step-2 record must pin the unreadable case as 未接入');
   assert.match(script, /!appsText\.includes\('已连接'\)/, 'the step-2 record must also reject a fake 已连接');
   assert.match(script, /onboarding_connectors_honest/, 'the honesty check needs its own named record');
+  assert.match(script, /appStates\.length\}\/8/, 'the honesty record must carry the text it read');
 });
