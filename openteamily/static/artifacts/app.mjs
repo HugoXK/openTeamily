@@ -107,6 +107,16 @@ export function queryForView(kind, scope) {
   return '';
 }
 
+export function artifactDeletePrompt(artifact) {
+  const title = artifact && typeof artifact.title === 'string' ? artifact.title.trim() : '';
+  return {
+    question: title ? `删除「${title}」？` : '删除这个作品？',
+    detail: '删除后不能恢复。',
+    cancelLabel: '取消',
+    confirmLabel: '确认',
+  };
+}
+
 export function applyDirectoryCollapsed(root, collapsed) {
   const next = Boolean(collapsed);
   const dir = root.getElementById('artifact-dir');
@@ -1213,8 +1223,61 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadDiscover();
   });
 
+  function askDeleteConfirmation() {
+    const trigger = document.getElementById('remove-artifact');
+    const prompt = artifactDeletePrompt(current);
+    const box = document.createElement('div');
+    box.className = 'inline-confirm';
+    box.setAttribute('role', 'alertdialog');
+    box.setAttribute('aria-labelledby', 'remove-artifact-question');
+    const question = document.createElement('span');
+    question.id = 'remove-artifact-question';
+    question.textContent = prompt.question;
+    const detail = document.createElement('span');
+    detail.className = 'note';
+    detail.textContent = prompt.detail;
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = prompt.cancelLabel;
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.textContent = prompt.confirmLabel;
+    box.appendChild(question);
+    box.appendChild(detail);
+    box.appendChild(cancel);
+    box.appendChild(confirm);
+    trigger.hidden = true;
+    const parent = trigger.parentNode;
+    if (parent && typeof parent.insertBefore === 'function') parent.insertBefore(box, trigger.nextSibling || null);
+    else form.appendChild(box);
+    if (typeof cancel.focus === 'function') cancel.focus();
+
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = answer => {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('keydown', onKey);
+        box.remove();
+        trigger.hidden = false;
+        if (!answer && typeof trigger.focus === 'function') trigger.focus();
+        resolve(answer);
+      };
+      const onKey = event => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          finish(false);
+        }
+      };
+      cancel.addEventListener('click', () => finish(false));
+      confirm.addEventListener('click', () => finish(true));
+      document.addEventListener('keydown', onKey);
+    });
+  }
+
   document.getElementById('remove-artifact').addEventListener('click', async () => {
     if (!current || !current.id || !workspaceId()) return;
+    if (!await askDeleteConfirmation()) return;
     const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/remove`, {});
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '删除失败。'));
