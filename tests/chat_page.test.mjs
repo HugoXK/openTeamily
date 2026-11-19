@@ -407,15 +407,17 @@ async function fire(node, type, event = {}) {
   for (const handler of (node.handlers && node.handlers[type]) || []) await handler(event);
 }
 
-function installChatGlobals() {
+function installChatGlobals({narrow = false} = {}) {
   const saved = {
     location: globalThis.location,
     history: globalThis.history,
     addEventListener: globalThis.addEventListener,
+    matchMedia: globalThis.matchMedia,
   };
   globalThis.location = {hash: '', pathname: '/chat'};
   globalThis.history = {replaceState() {}};
   globalThis.addEventListener = () => {};
+  globalThis.matchMedia = (query) => ({matches: narrow && query === '(max-width: 900px)'});
   return () => {
     for (const key of Object.keys(saved)) {
       if (saved[key] === undefined) delete globalThis[key];
@@ -533,6 +535,146 @@ test('messageSearchQuery hands the next-page cursor to the server', () => {
   assert.equal(next.get('limit'), '20', 'the page size stays 20');
   assert.equal(next.get('conversation_id'), alice);
   assert.equal(next.get('cursor'), 'cursor-1', 'a supplied cursor must reach the server, or page two is unreachable');
+});
+
+// Narrow screens show one pane at a time: the conversation list or the open
+// conversation. The stylesheet keys that switch on `sessions-open`; these tests
+// drive mount() and pin the class to the user's actual path through the page.
+
+function sessionFetcher() {
+  const aliceRow = {user_id: alice, username: 'alice'};
+  const first = {
+    id: 'conv-1', kind: 'dm', title: 'bob', updated: 30,
+    members: [aliceRow, {user_id: bob, username: 'bob'}],
+  };
+  const second = {
+    id: 'conv-2', kind: 'dm', title: 'carol', updated: 20,
+    members: [aliceRow, {user_id: 'c'.repeat(32), username: 'carol'}],
+  };
+  const fetcher = async (path) => {
+    if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
+    if (path === '/v1/onboarding') return json(200, {onboarding: {completed: true}});
+    if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
+    if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
+    if (path === '/v1/settings') return json(200, {settings: {values: {}}});
+    if (path === '/v1/workspaces/ws-1/agents?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/social/conversations?limit=100') {
+      return json(200, {items: [first, second]});
+    }
+    if (path === '/v1/workspaces/ws-1/members') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/artifacts?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/social/conversations/conv-1') {
+      return json(200, {
+        conversation: first,
+        items: [{id: 'm-1', user_id: bob, body: '你好', created: '2026-01-01T00:00:00Z'}],
+      });
+    }
+    if (path === '/v1/workspaces/ws-1/social/conversations/conv-2') {
+      return json(200, {conversation: second, items: []});
+    }
+    throw new Error('unexpected ' + path);
+  };
+  return {fetcher};
+}
+
+function sessionRows(el) {
+  return el('conversation-list').children.map((li) => li.children[0]);
+}
+
+test('a narrow-screen chat starts on the conversation list and returns to it from the back control', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    assert.equal(sessionRows(el).length, 2, 'the fixture lists two conversations');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      true,
+      'no conversation is open yet, so the session list must be the pane the narrow stylesheet shows',
+    );
+
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await settle();
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      false,
+      'opening a conversation must uncover it instead of leaving the list over it',
+    );
+    assert.equal(el('message-list').children.length, 1, 'the opened conversation renders its messages');
+
+    assert.ok(el('chat-back'), 'the chat header offers a way back to the session list');
+    await fire(el('chat-back'), 'click');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      true,
+      'the back control returns to the list so another conversation can be opened',
+    );
+
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[1]});
+    await settle();
+    assert.equal(doc.body.classList.contains('sessions-open'), false, 'the second conversation opens the same way');
+  } finally {
+    restore();
+  }
+});
+
+test('the 900px stylesheet restores the session pane for the sessions-open state', () => {
+  const css = readFileSync(new URL('../openteamily/static/chat/app.css', import.meta.url), 'utf8');
+  const start = css.indexOf('@media (max-width: 900px)');
+  assert.ok(start > -1, 'the chat stylesheet has a 900px block');
+  const end = css.indexOf('}', css.indexOf('{', start)) > -1 ? css.indexOf('\n}', start) : -1;
+  const block = css.slice(start, end);
+  assert.match(
+    block,
+    /\.sessions-open\s*>\s*\.session-pane\s*\{\s*display:\s*flex/,
+    'the rule that hides the pane at 900px needs a matching restore for the list state',
+  );
+});
+
+test('the 900px stylesheet puts the chat panel back in the second column', () => {
+  const css = readFileSync(new URL('../openteamily/static/chat/app.css', import.meta.url), 'utf8');
+  const start = css.indexOf('@media (max-width: 900px)');
+  assert.ok(start > -1, 'the chat stylesheet has a 900px block');
+  const block = css.slice(start, css.indexOf('\n}', start));
+  for (const selector of ['#main', '#status']) {
+    const rule = block.match(
+      new RegExp(`body\\.app-workspace\\.chat-open\\s*>\\s*${selector}[^{]*\\{([^}]*)\\}`),
+    );
+    assert.ok(rule, `the two-column override at 900px must also move ${selector} out of column 3`);
+    assert.match(
+      rule[1],
+      /grid-column:\s*2\b/,
+      `${selector} is pinned to grid-column 3 by the shell stylesheet; without this the implicit third column collapses the session pane to its minimum`,
+    );
+  }
+  // With the list shown, #main must leave the flow: otherwise it is auto-placed
+  // in an implicit row below the pane and the 1fr row shrinks (pane 624px tall
+  // instead of the full viewport).
+  assert.match(
+    block,
+    /\.sessions-open\s*>\s*#main\s*\{\s*display:\s*none/,
+    'the list state must hide the chat panel so the pane fills the viewport',
+  );
+});
+
+test('a wide chat still opens the first conversation instead of stopping on the list', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher} = sessionFetcher();
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      false,
+      'above 900px the list is shown beside the conversation, so no list state is applied',
+    );
+    assert.equal(el('message-list').children.length, 1, 'the first conversation still opens by default');
+  } finally {
+    restore();
+  }
 });
 
 test('homepageStartIndex only accepts a 0-4 start query', () => {

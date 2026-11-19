@@ -233,6 +233,8 @@
   border: 1px solid var(--ot-line);
 }
 
+#chat-back { display: none; }
+
 #message-scroller {
   flex: 1;
   min-height: 0;
@@ -732,6 +734,16 @@
 @media (max-width: 900px) {
   body.app-workspace.chat-open { grid-template-columns: 4.75rem minmax(0, 1fr); }
   body.app-workspace.chat-open > .session-pane { display: none; }
+  body.app-workspace.chat-open.sessions-open > .session-pane {
+    display: flex;
+    grid-column: 2;
+    grid-row: 1 / -1;
+    z-index: 6;
+  }
+  body.app-workspace.chat-open > #main,
+  body.app-workspace.chat-open > #status { grid-column: 2; }
+  body.app-workspace.chat-open.sessions-open > #main { display: none; }
+  #chat-back { display: inline-flex; }
 }
 
 /* Group agent roster and multi-agent request */

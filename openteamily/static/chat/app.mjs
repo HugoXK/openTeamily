@@ -426,6 +426,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return !document.getElementById('search-panel').hidden;
   }
 
+  function setSessionsOpen(open) {
+    if (open) document.body.classList.add('sessions-open');
+    else document.body.classList.remove('sessions-open');
+  }
+
+  function narrowScreen() {
+    return typeof globalThis.matchMedia === 'function'
+      && globalThis.matchMedia('(max-width: 900px)').matches;
+  }
+
   function renderSessions() {
     const list = document.getElementById('conversation-list');
     list.replaceChildren();
@@ -592,6 +602,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentConversation = result.body.conversation;
     writeHash({workspace: workspaceId(), agent: agentId, conversation: conversationId});
+    setSessionsOpen(false);
     const pending = renderAgentMessages(result.body.items);
     renderSessions();
     if (pending) schedulePoll();
@@ -608,6 +619,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     currentConversation = result.body.conversation;
+    setSessionsOpen(false);
     const agentNote = document.getElementById('social-agent-members');
     agentNote.textContent = groupAgentSummary(currentConversation);
     agentNote.hidden = !agentNote.textContent;
@@ -987,6 +999,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       mainPanel.hidden = true;
       document.getElementById('session-pane').hidden = true;
       document.body.classList.remove('chat-open');
+      setSessionsOpen(false);
       show('', '');
       return;
     }
@@ -995,6 +1008,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     mainPanel.hidden = false;
     document.getElementById('session-pane').hidden = false;
     document.body.classList.add('chat-open');
+    setSessionsOpen(true);
     document.getElementById('whoami').textContent = currentUser.username;
     const onboarding = await request('GET', '/v1/onboarding');
     const banner = document.getElementById('onboarding-banner');
@@ -1057,7 +1071,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         document.getElementById('chat-empty').hidden = false;
         writeHash({workspace: workspaceId(), agent: start.agent});
       }
-    } else if (sessions.length) {
+    } else if (sessions.length && !narrowScreen()) {
       const first = sessions[0];
       if (first.source === 'social') await openSocialConversation(first.id);
       else await openAgentConversation(first.agent_id, first.id);
@@ -1101,6 +1115,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else renderSearch();
   });
   document.getElementById('search-close').addEventListener('click', closeSearchPanel);
+  document.getElementById('chat-back').addEventListener('click', () => setSessionsOpen(true));
   document.getElementById('search-more').addEventListener('click', async () => {
     const query = (document.getElementById('session-search').value || '').trim();
     if (!query || messageSearch.state.loading || !messageSearch.state.cursor) return;
