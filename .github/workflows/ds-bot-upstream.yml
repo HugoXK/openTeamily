@@ -27,7 +27,7 @@ jobs:
           node-version: '24'
       - run: node scripts/ds-bot-upstream.mjs check
       - run: node --test scripts/ds-bot-upstream.test.mjs
-      - run: node --test scripts/upstream-test-clock.test.mjs
+      - run: node --test --test-timeout=5000 scripts/upstream-test-clock.test.mjs
 
   upstream-suite:
     name: Upstream suite · Node ${{ matrix.node }} · DSH from pin
@@ -75,11 +75,11 @@ jobs:
             exit 1
           fi
           npm run harness -- --no-save "@deepseek-ai/dsh@${DSH_VERSION}" "@deepseek-ai/dsh-agent-loop-testkit@${DSH_VERSION}"
-      # The pinned fixture waits5ms before a close timer is scheduled after an
-      # awaited mock send. Under a delayed turn the5ms timer fires FIRST. Use the
-      # audited test-only causal barrier; no assertions/skips/retries/longer sleeps.
-      # Vendor bytes remain pinned; the overlay rejects any unexpected source hash.
-      - name: Full pinned upstream suite with owned annotation clock overlay
+      # The VM component awaits a host mock promise: neither5ms nor a host-only
+      # microtask barrier proves dismissal. Await actual dismiss/reportError instead.
+      # Only test-bench completion/wait wiring is overlaid; every assertion and
+      # vendor byte remains unchanged. Unexpected source hashes fail closed.
+      - name: Full pinned upstream suite with owned annotation completion overlay
         run: NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$(realpath ../../../scripts/upstream-test-clock.mjs)" npm test -- --test-concurrency=1
       - run: node scripts/build-client.mjs --check
       - run: npm run lint
