@@ -46,3 +46,22 @@ platform guidance112243da70 and365 attendee-name completion2925622bf9. Updated
 358 unread-divider2b36a42e41 and354 attachment-searchee761c6233 remain separate.
 Contributor348 run-detail UI is now in the synced main base, not implemented
 again or counted from its formerly open PR state.
+
+## First real CI capture and substantive follow-up
+PR369 first head3c3aa76 captured visible registration on390/471/1280 widths;
+username/password widths and backgrounds match, both are44px tall, and mobile
+and desktop forms actually created accounts/session/personal workspaces. That
+is not end-to-end normal-use acceptance: the run failed six strict scenes.
+
+The new-account normal-use scene exposed a real existing agent-create defect:
+DOM dispatch clears event.currentTarget while its async handler awaits the POST;
+retaining the form before awaiting repairs the post201 reset/directory readback.
+A real initial-SSE/directory race could supersede the first session snapshot
+before deep-link resolution; subscription now starts after that snapshot
+commits, with a deferred-directory regression. Permanently CLOSED handshakes
+receive at most three bounded recovery attempts without relaxing server limits;
+stale timers/close cannot reconnect. The private-import capture now identifies
+the unique form's details summary rather than two ambiguous summaries. Existing
+assertions/timeouts remain; exact new-head capture results are still required.
+The first head's document live/export scene and older conversation scenes also
+failed, so their acceptance remains blocked until the follow-up proves them.

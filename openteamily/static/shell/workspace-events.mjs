@@ -1,9 +1,9 @@
 // Server invalidations only: content remains behind the ordinary authenticated APIs.
-export function mountWorkspaceEvents(document,{onInvalidate=()=>{},EventSource=globalThis.EventSource}={}){
-  let source=null,wid='',fingerprints={},closed=false,generation=0;
+export function mountWorkspaceEvents(document,{onInvalidate=()=>{},EventSource=globalThis.EventSource,setTimer=globalThis.setTimeout,clearTimer=globalThis.clearTimeout}={}){
+  let source=null,wid='',fingerprints={},closed=false,generation=0,retryTimer=null,retryAttempts=0;
   const status=document.getElementById('workspace-events-status');
   const show=text=>{if(status)status.textContent=text;};
-  function disconnect(){generation++;source?.close();source=null;}
+  function disconnect(){generation++;if(retryTimer!==null)clearTimer(retryTimer);retryTimer=null;source?.close();source=null;}
   function connect(){
     disconnect();
     if(closed||!wid||document.visibilityState==='hidden')return;
@@ -12,8 +12,20 @@ export function mountWorkspaceEvents(document,{onInvalidate=()=>{},EventSource=g
     try{source=new EventSource('/v1/workspaces/'+wid+'/events',{withCredentials:true});}
     catch{show('无法建立实时连接，保留定时 / 手动刷新。');return;}
     show('连接实时更新…');
-    source.addEventListener('open',()=>{if(wid===own&&generation===ownGeneration)show('实时更新已连接（非模型逐字推送）。');});
-    source.addEventListener('error',()=>{if(wid===own&&generation===ownGeneration)show('实时连接中断，正在重连；仍可定时 / 手动刷新。');});
+    source.addEventListener('open',()=>{if(wid===own&&generation===ownGeneration){retryAttempts=0;show('实时更新已连接（非模型逐字推送）。');}});
+    source.addEventListener('error',()=>{
+      if(wid!==own||generation!==ownGeneration||closed)return;
+      // Non-200 handshakes (including a temporary lease-limit429 during rapid
+      // page navigation) can permanently close native EventSource. Its normal
+      // CONNECTING retries remain native; only CLOSED receives bounded retries.
+      if(source?.readyState===2){
+        if(retryAttempts>=3){show('实时连接不可用，请点重连；仍可定时 / 手动刷新。');return;}
+        if(retryTimer===null){const delay=3000*2**retryAttempts++;retryTimer=setTimer(()=>{
+          retryTimer=null;if(wid===own&&generation===ownGeneration&&!closed)connect();
+        },delay);retryTimer?.unref?.();}
+      }
+      show('实时连接中断，正在重连；仍可定时 / 手动刷新。');
+    });
     source.addEventListener('invalidate',event=>{
       if(wid!==own||closed||generation!==ownGeneration)return;
       try{
@@ -30,11 +42,11 @@ export function mountWorkspaceEvents(document,{onInvalidate=()=>{},EventSource=g
     });
   }
   const visible=()=>{if(document.visibilityState==='hidden')disconnect();else connect();};
-  const retry=()=>connect();
+  const retry=()=>{retryAttempts=0;connect();};
   document.addEventListener?.('visibilitychange',visible);
   document.getElementById('workspace-events-retry')?.addEventListener('click',retry);
   return {
-    start(value){if(value===wid&&source)return;if(value!==wid)fingerprints={};wid=value||'';connect();},
+    start(value){if(value===wid&&source)return;if(value!==wid){fingerprints={};retryAttempts=0;}wid=value||'';connect();},
     close(){closed=true;disconnect();document.removeEventListener?.('visibilitychange',visible);document.getElementById('workspace-events-retry')?.removeEventListener('click',retry);},
   };
 }

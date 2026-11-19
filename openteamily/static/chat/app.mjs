@@ -1177,7 +1177,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function loadSessions() {
     const sequence = ++sessionsRequest;
     const user = currentUser;
-    workspaceEvents.start(workspaceId());
     loadNotifications();
     const id = workspaceId();
     if (id !== sessionsWorkspace || user !== sessionsUser || !id) {
@@ -1216,6 +1215,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     sessions = mergeSessions(agentRows, socialConversations, currentUser && currentUser.id);
     renderSessions();
+    // The first SSE snapshot may immediately refresh; do not invalidate the
+    // initial directory before deep-link resolution has a committed snapshot.
+    workspaceEvents.start(id);
   }
 
   function memberRow(name, note, kind) {

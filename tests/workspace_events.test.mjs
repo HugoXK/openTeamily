@@ -42,3 +42,17 @@ test('revocation closes transport, explicit retry restores it, unsupported brows
  const g=fixture();mountWorkspaceEvents(g.document,{EventSource:null}).start('1'.repeat(32));assert.match(g.elements['workspace-events-status'].textContent,/不支持/);
  const h=fixture();mountWorkspaceEvents(h.document,{EventSource:class{constructor(){throw new Error('host blocked')}}}).start('1'.repeat(32));assert.match(h.elements['workspace-events-status'].textContent,/无法建立/);
 });
+
+
+test('a closed non-200 handshake gets bounded recovery; stale timers and close cannot reconnect',()=>{
+ const f=fixture(),timers=new Map();let id=0;
+ const mount=mountWorkspaceEvents(f.document,{EventSource:f.FakeSource,setTimer:(fn,ms)=>{timers.set(++id,{fn,ms});return id;},clearTimer:key=>timers.delete(key)});
+ mount.start('1'.repeat(32));
+ for(const delay of [3000,6000,12000]){
+  const source=f.instances.at(-1);source.readyState=2;source.emit('error');source.emit('error');
+  assert.equal(timers.size,1);const [key,timer]=[...timers][0];assert.equal(timer.ms,delay);timers.delete(key);timer.fn();
+ }
+ f.instances.at(-1).readyState=2;f.instances.at(-1).emit('error');assert.equal(timers.size,0);assert.match(f.elements['workspace-events-status'].textContent,/请点重连/);
+ f.elements['workspace-events-retry'].click();f.instances.at(-1).readyState=2;f.instances.at(-1).emit('error');
+ const stale=[...timers.values()][0].fn;mount.close();assert.equal(timers.size,0);const count=f.instances.length;stale();assert.equal(f.instances.length,count);
+});

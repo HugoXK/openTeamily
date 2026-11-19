@@ -99,11 +99,16 @@ async function waitForStoredValue(page, selector, expected, timeout = 15000) {
 
 async function waitForLocatorText(page, selector, expected, timeout = 15000) {
   await page.locator(selector).waitFor({ state: 'visible', timeout });
-  await page.waitForFunction(
-    ({ selector, expected }) => (document.querySelector(selector)?.innerText || '').includes(expected),
-    { selector, expected },
-    { timeout },
-  );
+  try {
+    await page.waitForFunction(
+      ({ selector, expected }) => (document.querySelector(selector)?.innerText || '').includes(expected),
+      { selector, expected },
+      { timeout },
+    );
+  } catch (error) {
+    const transport=await page.evaluate(()=>document.querySelector('#workspace-events-status')?.textContent||'not on this page');
+    throw new Error(`Text assertion ${selector} expected ${JSON.stringify(expected)}; live status=${transport}; ${String(error)}`);
+  }
 }
 
 
@@ -295,6 +300,7 @@ async function main() {
     }
 
     const page = await context.newPage();
+    page.on('response', response=>{if(new URL(response.url()).pathname.endsWith('/events'))console.log('Synthetic SSE handshake status='+response.status());});
 
     await page.goto(`${origin}/settings`, { waitUntil: 'load' });
     await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
@@ -2347,7 +2353,7 @@ async function main() {
 
     try {
       await page.goto(origin+'/skills',{waitUntil:'load'});
-      await page.locator('.skill-import-panel > summary').click();
+      await page.locator('details:has(#skill-import-form) > summary').click();
       await page.locator('#skill-import-template').click();
       await page.locator('#skill-import-consent').check();
       await page.locator('#skill-import-submit').click();
