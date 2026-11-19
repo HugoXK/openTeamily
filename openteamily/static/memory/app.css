@@ -774,3 +774,12 @@ html[data-theme-resolved="dark"] .filter-count {
 .memory-side #topic-list li, .memory-side #recent-list li { border: 0; border-radius: .625rem; box-shadow: 0 0 0 1px var(--ot-line); padding: .5rem .625rem; font-size: .75rem; }
 #overview-panel .graph-stage { background: var(--ot-surface); background-image: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ot-line-strong) 55%, transparent) 1px, transparent 0); background-size: 22px 22px; }
 #overview-panel .topic-search input { border-radius: 999px; }
+
+/* Parity (2026-11-19) counts on both filters and a collapsed comparison note. */
+details.memory-disclaimer { margin: 0 1rem .25rem; font-size: .6875rem; color: var(--ot-muted); }
+details.memory-disclaimer summary { cursor: pointer; width: max-content; margin-left: auto; list-style-position: inside; }
+details.memory-disclaimer p { margin: .25rem 0 0; }
+@media (min-width: 701px) {
+  body #main-panel > details.memory-disclaimer:not(.x) { grid-column: 1 / -1; }
+}
+#overview-panel .graph-stage { background-image: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ot-line-strong) 28%, transparent) 1px, transparent 0); }
