@@ -63,7 +63,7 @@
         <h2>数据落在哪</h2>
         <ul>
           <li>全部应用数据在一个 SQLite 数据库里：启动参数 <code>--data-dir</code> 指向的目录下的 <code>management.sqlite3</code>。目录和文件权限是 0700 / 0600，要求属主是运行进程的用户。</li>
-          <li>作品里的媒体（聊天图片、白板、上传文件）以 BLOB 存在同一个数据库的 <code>artifact_media</code> 表，没有外部对象存储，也没有 CDN。</li>
+          <li>作品与头像的媒体字节存在 <code>--data-dir</code> 下的 <code>artifact-objects/&lt;工作区 ID&gt;/&lt;sha256&gt;</code>（目录 0700、文件 0600，按内容寻址），数据库里只记 <code>sha256</code>、MIME 与字节数（<code>artifact_media</code>、<code>user_avatars</code> 表）；没有外部对象存储，也没有 CDN。</li>
           <li>页面静态资源随代码发布，不含用户数据。</li>
         </ul>
       </section>
@@ -72,7 +72,7 @@
         <h2>存了什么</h2>
         <ul>
           <li>账号：用户名、密码哈希、注册时间；登录后是会话 Cookie。</li>
-          <li>资料：昵称、Teamily ID、简介、标签、性别、所在地、网站、人生目标；人生目标标记为仅自己可见。</li>
+          <li>资料：昵称、Teamily ID、简介、标签、性别、所在地、网站、人生目标、头像；人生目标标记为仅自己可见。</li>
           <li>内容：会话消息与附件、作品及其版本、自动化运行记录、会议与行动项、记忆页与下一步行动、团队与成员关系、邀请。</li>
           <li>运行：运行时名称、连接状态与心跳、API key 的哈希（明文只在生成时显示一次）。</li>
         </ul>

@@ -40,7 +40,9 @@ class DocsPagesTests(unittest.TestCase):
         privacy = self.raw.call('GET', '/privacy')['body'].decode()
         self.assertIn('<h1>隐私政策</h1>', privacy)
         self.assertIn('management.sqlite3', privacy)
+        self.assertIn('artifact-objects/', privacy)
         self.assertIn('artifact_media', privacy)
+        self.assertIn('user_avatars', privacy)
         self.assertIn('/artifacts/&lt;id&gt;/export', privacy)
 
         for path in ('/help', '/terms', '/privacy'):
