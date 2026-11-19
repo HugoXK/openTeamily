@@ -1,6 +1,5 @@
-// Skills library catalogue. This is a self-written page constant; installing a
-// skill only changes this page's in-memory set. No backend is contacted and no
-// skill is created or executed. Refreshing the page resets every card.
+// Self-written capability catalogue. No install/execution backend exists yet.
+// Search is real; install controls are deliberately disabled (never fake success).
 
 export const SKILLS = [
   {id: 'meeting-notes', mark: '会', name: '会议纪要', description: '把会议记录整理成结论、待办和负责人。'},
@@ -21,17 +20,6 @@ export function filterSkills(items = SKILLS, query = '') {
   return items.filter((item) => `${item.name} ${item.description}`.toLowerCase().includes(needle));
 }
 
-export function toggleSkill(installed, id) {
-  const next = new Set(installed || []);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  return next;
-}
-
-export function skillButtonLabel(installed) {
-  return installed ? '已安装' : '安装';
-}
-
 export function skillCountLabel(shown, total) {
   return shown === total ? `共 ${total} 个技能` : `显示 ${shown} / ${total} 个技能`;
 }
@@ -42,14 +30,12 @@ export function mountSkills(document) {
   const empty = document.getElementById('skills-empty');
   const count = document.getElementById('skills-count');
   if (!list || !input) return null;
-  const installed = new Set();
 
   function render() {
     const matches = filterSkills(SKILLS, input.value);
     list.replaceChildren(...matches.map((skill) => {
       const item = document.createElement('li');
       item.className = 'skill-card';
-      if (installed.has(skill.id)) item.classList.add('is-installed');
 
       const mark = document.createElement('span');
       mark.className = 'skill-mark';
@@ -69,15 +55,10 @@ export function mountSkills(document) {
       button.type = 'button';
       button.className = 'skill-install';
       button.dataset.skill = skill.id;
-      button.setAttribute('aria-pressed', installed.has(skill.id) ? 'true' : 'false');
-      button.setAttribute('aria-label', `${installed.has(skill.id) ? '卸载' : '安装'} ${skill.name}`);
-      button.textContent = skillButtonLabel(installed.has(skill.id));
-      button.addEventListener('click', () => {
-        const next = toggleSkill(installed, skill.id);
-        installed.clear();
-        for (const id of next) installed.add(id);
-        render();
-      });
+      button.disabled = true;
+      button.setAttribute('aria-label', `安装 ${skill.name}（未接通）`);
+      button.title = '未接通：尚无技能安装、授权及运行时加载接口';
+      button.textContent = '未接通';
 
       item.append(mark, copy, button);
       return item;
@@ -88,7 +69,7 @@ export function mountSkills(document) {
 
   input.addEventListener('input', render);
   render();
-  return {installed, render};
+  return {render};
 }
 
 if (typeof document !== 'undefined') mountSkills(document);

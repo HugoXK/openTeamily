@@ -65,6 +65,18 @@ export function runResultText(run) {
   return '';
 }
 
+// The two destructive controls on this page ask before they act. The wording is
+// a pure function so it can be asserted without a DOM; it stays generic on
+// purpose and never echoes a user-supplied title, which could make the question
+// look like a different action.
+export function deletePrompt(item) {
+  return {question: '删除这条自动化？', confirmLabel: '确认'};
+}
+
+export function cancellationPrompt(run) {
+  return {question: '取消这次运行？', confirmLabel: '确认取消'};
+}
+
 
 // `/automations?template=<id>` opens the editor prefilled from that template
 // (used by the chat composer's 自动化 shortcuts).
@@ -300,6 +312,60 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return workspaceSelect.value;
   }
 
+  let pendingConfirm = null;
+  let confirmSerial = 0;
+
+  function closeConfirm({restoreFocus = true} = {}) {
+    if (!pendingConfirm) return;
+    const {box, trigger} = pendingConfirm;
+    pendingConfirm = null;
+    if (box && box.parentNode) box.parentNode.removeChild(box);
+    if (trigger) {
+      trigger.hidden = false;
+      if (restoreFocus && typeof trigger.focus === 'function') trigger.focus();
+    }
+  }
+
+  function openConfirm({parent, trigger, prompt, action}) {
+    closeConfirm();
+    const questionId = 'automation-confirm-question-' + (++confirmSerial);
+    const box = document.createElement('span');
+    box.className = 'row-confirm';
+    box.setAttribute('role', 'alertdialog');
+    box.setAttribute('aria-labelledby', questionId);
+    const question = document.createElement('span');
+    question.id = questionId;
+    question.textContent = prompt.question;
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = '取消';
+    cancel.dataset.confirmAction = 'cancel';
+    cancel.addEventListener('click', () => closeConfirm());
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.textContent = prompt.confirmLabel;
+    confirm.dataset.confirmAction = 'ok';
+    confirm.addEventListener('click', () => {
+      const run = action;
+      closeConfirm();
+      run();
+    });
+    box.appendChild(question);
+    box.appendChild(cancel);
+    box.appendChild(confirm);
+    trigger.hidden = true;
+    parent.appendChild(box);
+    pendingConfirm = {box, trigger, action};
+    if (typeof cancel.focus === 'function') cancel.focus();
+  }
+
+  // One question at a time; Esc is the keyboard way out and never acts.
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !pendingConfirm) return;
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    closeConfirm();
+  });
+
   function stopRunPoll() {
     if (runTimer) {
       globalThis.clearInterval(runTimer);
@@ -334,14 +400,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.textContent = '取消这次运行';
-        cancel.addEventListener('click', async () => {
-          const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs/${item.id}/cancel`, {});
-          if (result.status !== 200) {
-            show('error', messageFor(result.body.error, '取消失败。'));
-            return;
-          }
-          show('ok', '已取消。');
-          await loadRuns();
+        cancel.addEventListener('click', () => {
+          // The question is bound to the run it names: switching workspace or
+          // automation later cannot retarget the request built from this snapshot.
+          const target = {workspace: workspaceId(), automation: current.id, run: item.id};
+          openConfirm({
+            parent: head,
+            trigger: cancel,
+            prompt: cancellationPrompt(item),
+            action: () => cancelRun(target),
+          });
         });
         head.appendChild(cancel);
       }
@@ -368,6 +436,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       list.appendChild(row);
     }
+  }
+
+  async function cancelRun(target) {
+    if (!target || !target.workspace || !target.automation || !target.run) return;
+    const result = await request('POST', `/v1/workspaces/${target.workspace}/automations/${target.automation}/runs/${target.run}/cancel`, {});
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '取消失败。'));
+      return;
+    }
+    show('ok', '已取消。');
+    await loadRuns();
   }
 
   async function loadRuns() {
@@ -426,6 +505,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function openEditor(item) {
+    // A question belongs to the editor that raised it; entering another editor
+    // drops the question instead of showing it again above a different item.
+    closeConfirm({restoreFocus: false});
     current = item;
     listPanel.hidden = true;
     form.hidden = false;
@@ -535,7 +617,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  workspaceSelect.addEventListener('change', () => loadList());
+  workspaceSelect.addEventListener('change', () => {
+    closeConfirm({restoreFocus: false});
+    loadList();
+  });
   search.addEventListener('input', () => loadList());
   for (const tab of document.querySelectorAll('.tabs [data-category]')) {
     tab.addEventListener('click', async () => {
@@ -545,6 +630,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       form.hidden = true;
       listPanel.hidden = false;
+      closeConfirm({restoreFocus: false});
       mainPanel.classList.remove('is-editing');
       const runPanel = document.getElementById('run-panel');
       if (runPanel) runPanel.hidden = true;
@@ -564,6 +650,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
+    closeConfirm({restoreFocus: false});
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
@@ -616,6 +703,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     current = result.body.automation;
+    closeConfirm({restoreFocus: false});
     fillEditor(form, current, templates, currentUser && currentUser.username);
     document.getElementById('remove-automation').hidden = false;
     document.getElementById('tick-automation').hidden = false;
@@ -634,9 +722,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadRuns();
   });
 
-  document.getElementById('remove-automation').addEventListener('click', async () => {
-    if (!current || !current.id || !workspaceId()) return;
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/remove`, {});
+  const removeButton = document.getElementById('remove-automation');
+
+  async function removeAutomation(target) {
+    if (!target || !target.workspace || !target.automation) return;
+    const result = await request('POST', `/v1/workspaces/${target.workspace}/automations/${target.automation}/remove`, {});
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '删除失败。'));
       return;
@@ -650,6 +740,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopRunPoll();
     show('ok', '已删除。');
     await loadList();
+  }
+
+  removeButton.addEventListener('click', () => {
+    if (!current || !current.id || !workspaceId()) return;
+    // Bind the question to the automation and workspace it names right now.
+    const target = {workspace: workspaceId(), automation: current.id};
+    openConfirm({
+      parent: removeButton.parentNode || form,
+      trigger: removeButton,
+      prompt: deletePrompt(current),
+      action: () => removeAutomation(target),
+    });
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
@@ -659,6 +761,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '退出失败。'));
       return;
     }
+    closeConfirm({restoreFocus: false});
     current = null;
     stopRunPoll();
     await load();

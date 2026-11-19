@@ -28,8 +28,8 @@ class SkillsPageTests(unittest.TestCase):
         for ident in ('main-panel', 'skills-search', 'skills-list', 'skills-empty'):
             self.assertIn('id="%s"' % ident, html)
         self.assertIn('技能库', html)
-        self.assertIn('不会连接后端、创建技能或执行任何操作', html)
-        self.assertIn('刷新页面后恢复为未安装', html)
+        self.assertIn('不会显示虚假的安装成功', html)
+        self.assertIn('安装与运行时加载未接通', html)
         self.assertIn('没有匹配的技能', html)
         self.assertIn('aria-label="搜索技能"', html)
         self.assertIn('default-src \'none\'', page['headers']['Content-Security-Policy'])
@@ -43,7 +43,8 @@ class SkillsPageTests(unittest.TestCase):
         script = self.raw.call('GET', '/skills/app.mjs')['body'].decode()
         self.assertIn('export const SKILLS', script)
         self.assertIn('export function filterSkills', script)
-        self.assertIn('export function toggleSkill', script)
+        self.assertNotIn('export function toggleSkill', script)
+        self.assertIn('button.disabled = true', script)
         self.assertNotIn('fetch(', script)
         self.assertNotIn('innerHTML', script)
 
