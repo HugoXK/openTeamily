@@ -274,14 +274,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let pendingConfirm = null;
   let confirmSerial = 0;
 
-  function closeConfirm() {
+  function closeConfirm({restoreFocus = true} = {}) {
     if (!pendingConfirm) return;
     const {box, trigger} = pendingConfirm;
     pendingConfirm = null;
     if (box && box.parentNode) box.parentNode.removeChild(box);
     if (trigger) {
       trigger.hidden = false;
-      if (typeof trigger.focus === 'function') trigger.focus();
+      if (restoreFocus && typeof trigger.focus === 'function') trigger.focus();
     }
   }
 
@@ -356,11 +356,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         cancel.type = 'button';
         cancel.textContent = '取消这次运行';
         cancel.addEventListener('click', () => {
+          // The question is bound to the run it names: switching workspace or
+          // automation later cannot retarget the request built from this snapshot.
+          const target = {workspace: workspaceId(), automation: current.id, run: item.id};
           openConfirm({
             parent: head,
             trigger: cancel,
             prompt: cancellationPrompt(item),
-            action: () => cancelRun(item),
+            action: () => cancelRun(target),
           });
         });
         head.appendChild(cancel);
@@ -390,9 +393,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  async function cancelRun(item) {
-    if (!current || !current.id || !workspaceId()) return;
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs/${item.id}/cancel`, {});
+  async function cancelRun(target) {
+    if (!target || !target.workspace || !target.automation || !target.run) return;
+    const result = await request('POST', `/v1/workspaces/${target.workspace}/automations/${target.automation}/runs/${target.run}/cancel`, {});
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '取消失败。'));
       return;
@@ -457,6 +460,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function openEditor(item) {
+    // A question belongs to the editor that raised it; entering another editor
+    // drops the question instead of showing it again above a different item.
+    closeConfirm({restoreFocus: false});
     current = item;
     listPanel.hidden = true;
     form.hidden = false;
@@ -555,7 +561,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  workspaceSelect.addEventListener('change', () => loadList());
+  workspaceSelect.addEventListener('change', () => {
+    closeConfirm({restoreFocus: false});
+    loadList();
+  });
   search.addEventListener('input', () => loadList());
   for (const tab of document.querySelectorAll('.tabs [data-category]')) {
     tab.addEventListener('click', async () => {
@@ -565,6 +574,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       form.hidden = true;
       listPanel.hidden = false;
+      closeConfirm({restoreFocus: false});
       const runPanel = document.getElementById('run-panel');
       if (runPanel) runPanel.hidden = true;
       stopRunPoll();
@@ -583,6 +593,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
+    closeConfirm({restoreFocus: false});
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
@@ -634,6 +645,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     current = result.body.automation;
+    closeConfirm({restoreFocus: false});
     fillEditor(form, current, templates, currentUser && currentUser.username);
     document.getElementById('remove-automation').hidden = false;
     document.getElementById('tick-automation').hidden = false;
@@ -654,9 +666,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const removeButton = document.getElementById('remove-automation');
 
-  async function removeAutomation() {
-    if (!current || !current.id || !workspaceId()) return;
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/remove`, {});
+  async function removeAutomation(target) {
+    if (!target || !target.workspace || !target.automation) return;
+    const result = await request('POST', `/v1/workspaces/${target.workspace}/automations/${target.automation}/remove`, {});
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '删除失败。'));
       return;
@@ -673,11 +685,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   removeButton.addEventListener('click', () => {
     if (!current || !current.id || !workspaceId()) return;
+    // Bind the question to the automation and workspace it names right now.
+    const target = {workspace: workspaceId(), automation: current.id};
     openConfirm({
       parent: removeButton.parentNode || form,
       trigger: removeButton,
       prompt: deletePrompt(current),
-      action: removeAutomation,
+      action: () => removeAutomation(target),
     });
   });
 
@@ -688,6 +702,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '退出失败。'));
       return;
     }
+    closeConfirm({restoreFocus: false});
     current = null;
     stopRunPoll();
     await load();

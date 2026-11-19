@@ -238,7 +238,7 @@ function holdRunPolling() {
   };
 }
 
-async function mountEditor({items = [AUTOMATION], runs = []} = {}) {
+async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 'ws1', name: '团队'}]} = {}) {
   // The click handlers resolve `document` and the run poll from globals, so both
   // stay installed until the test calls restore().
   const restorePolling = holdRunPolling();
@@ -248,15 +248,22 @@ async function mountEditor({items = [AUTOMATION], runs = []} = {}) {
     const method = options.method || 'GET';
     calls.push(`${method} ${path}`);
     if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
-    if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: [{id: 'ws1', name: '团队'}]})};
+    if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: workspaces})};
     if (path === '/v1/automation-templates') return {status: 200, json: async () => ({items: []})};
-    if (path === '/v1/workspaces/ws1/automations?category=mine') return {status: 200, json: async () => ({items})};
-    if (path === '/v1/workspaces/ws1/automations/a1/runs?limit=20') return {status: 200, json: async () => ({items: runs})};
-    if (method === 'POST' && path === '/v1/workspaces/ws1/automations/a1/remove') {
+    const listed = path.match(/^\/v1\/workspaces\/([^/]+)\/automations\?category=mine$/);
+    if (method === 'GET' && listed) return {status: 200, json: async () => ({items})};
+    const listedRuns = path.match(/^\/v1\/workspaces\/([^/]+)\/automations\/([^/]+)\/runs\?limit=20$/);
+    if (method === 'GET' && listedRuns) {
+      return {status: 200, json: async () => ({items: listedRuns[2] === 'a1' ? runs : []})};
+    }
+    if (method === 'POST' && /^\/v1\/workspaces\/[^/]+\/automations\/[^/]+\/remove$/.test(path)) {
       return {status: 200, json: async () => ({})};
     }
-    if (method === 'POST' && path === '/v1/workspaces/ws1/automations/a1/runs/r1/cancel') {
+    if (method === 'POST' && /^\/v1\/workspaces\/[^/]+\/automations\/[^/]+\/runs\/[^/]+\/cancel$/.test(path)) {
       return {status: 200, json: async () => ({})};
+    }
+    if (method === 'POST' && /^\/v1\/workspaces\/[^/]+\/automations\/[^/]+$/.test(path)) {
+      return {status: 200, json: async () => ({automation: {...AUTOMATION, title: '新的标题', revision: 2}})};
     }
     throw new Error('unexpected ' + method + ' ' + path);
   };
@@ -380,4 +387,131 @@ test('deletePrompt and cancellationPrompt carry the confirmation wording', () =>
   assert.deepEqual(cancellationPrompt({id: 'r1', status: 'queued'}), {
     question: '取消这次运行？', confirmLabel: '确认取消',
   });
+});
+
+test('切工作区后问句关闭，残留确认也只能打到快照里的工作区', async () => {
+  const {elements, calls, restore} = await mountEditor({
+    workspaces: [{id: 'ws1', name: '团队'}, {id: 'ws2', name: '另一个团队'}],
+  });
+  try {
+    await openFirst(elements);
+    const form = elements.get('editor-form');
+    const remove = elements.get('remove-automation');
+    remove.handlers.click[0]();
+    await flush();
+    assert.equal(labelledQuestion(alertdialogIn(form)).textContent, '删除这条自动化？');
+    const staleConfirm = alertdialogIn(form).children.find(node => node.textContent === '确认');
+
+    const select = elements.get('workspace');
+    select.value = 'ws2';
+    select.handlers.change[0]();
+    await flush();
+
+    assert.equal(alertdialogIn(form), undefined,
+      'changing workspace must close the question that belongs to ws1, not leave it open on ws2');
+    assert.equal(postCount(calls, '/workspaces/ws2/'), 0,
+      'changing workspace itself must never send a request for ws2');
+
+    staleConfirm.handlers.click[0]();
+    await flush();
+    assert.equal(postCount(calls, '/workspaces/ws2/'), 0,
+      'a confirm that is still reachable must use the workspace snapshotted when it opened, never ws2');
+    assert.equal(postCount(calls, '/workspaces/ws1/automations/a1/remove'), 1,
+      'the confirm must delete the automation it asked about, in the workspace it asked about');
+  } finally { restore(); }
+});
+
+test('返回列表再打开第二条时旧问句不跟随，确认也不删第二条', async () => {
+  const {elements, calls, restore} = await mountEditor({
+    items: [AUTOMATION, {id: 'a2', title: '周报', enabled: true, schedule: {kind: 'now', time_zone: 'Asia/Shanghai'}}],
+  });
+  try {
+    await openFirst(elements);
+    const form = elements.get('editor-form');
+    const remove = elements.get('remove-automation');
+    remove.handlers.click[0]();
+    await flush();
+    const staleConfirm = alertdialogIn(form).children.find(node => node.textContent === '确认');
+
+    elements.get('cancel-editor').handlers.click[0]();
+    await flush();
+    assert.equal(alertdialogIn(form), undefined,
+      'returning to the list must close the question instead of hiding it inside the form');
+    assert.notEqual(remove.focused, true,
+      'leaving the editor must not move focus onto the 删除 button, which is about to be hidden');
+
+    const list = elements.get('automation-list');
+    assert.equal(list.children.length, 2, 'the list must still offer both automations');
+    list.children[1].children[0].handlers.click[0]();
+    await flush();
+    assert.equal(alertdialogIn(form), undefined,
+      'opening the second automation must not bring the first automation question back');
+    assert.equal(postCount(calls, '/remove'), 0, 'opening the second automation must send no remove request');
+
+    staleConfirm.handlers.click[0]();
+    await flush();
+    assert.equal(postCount(calls, '/automations/a2/remove'), 0,
+      'a confirm must never delete the second automation the user was never asked about');
+    assert.equal(postCount(calls, '/automations/a1/remove'), 1,
+      'a leftover confirm may only act on the automation it asked about');
+  } finally { restore(); }
+});
+
+test('取消运行的问句同样绑定快照，切工作区后确认也不改道', async () => {
+  const {elements, calls, restore} = await mountEditor({
+    workspaces: [{id: 'ws1', name: '团队'}, {id: 'ws2', name: '另一个团队'}],
+    runs: [{id: 'r1', status: 'queued'}],
+  });
+  try {
+    await openFirst(elements);
+    const head = elements.get('run-list').children[0].children[0];
+    const trigger = head.children.find(node => node.textContent === '取消这次运行');
+    trigger.handlers.click[0]();
+    await flush();
+    const staleConfirm = alertdialogIn(head).children.find(node => node.textContent === '确认取消');
+
+    const select = elements.get('workspace');
+    select.value = 'ws2';
+    select.handlers.change[0]();
+    await flush();
+    assert.equal(postCount(calls, '/workspaces/ws2/'), 0,
+      'changing workspace itself must never send a request for ws2');
+
+    staleConfirm.handlers.click[0]();
+    await flush();
+    assert.equal(postCount(calls, '/workspaces/ws2/'), 0,
+      'a run cancel confirm must use the workspace snapshotted when it opened, never ws2');
+    assert.equal(postCount(calls, '/v1/workspaces/ws1/automations/a1/runs/r1/cancel'), 1,
+      'the run question must cancel exactly the run it named, in the workspace it named');
+  } finally { restore(); }
+});
+
+test('保存成功后旧问句关闭，不会在已保存的编辑器里重问', async () => {
+  const {elements, calls, restore} = await mountEditor();
+  const savedFormData = globalThis.FormData;
+  try {
+    await openFirst(elements);
+    const form = elements.get('editor-form');
+    elements.get('remove-automation').handlers.click[0]();
+    await flush();
+    assert.ok(alertdialogIn(form), 'the delete question must be open before the save happens');
+
+    const values = {
+      title: '新的标题', template_id: 'custom', intent: '', scope: 'once',
+      participants: 'alice', agents: '', kind: 'now', time_zone: 'Asia/Shanghai', prompt: '',
+    };
+    globalThis.FormData = class {
+      constructor() { return {get(name) { return values[name] || ''; }, has() { return false; }}; }
+    };
+    form.handlers.submit[0]({preventDefault() {}});
+    await flush();
+
+    assert.equal(postCount(calls, '/automations/a1/remove'), 0,
+      'saving must not carry out a delete question that was left open');
+    assert.equal(alertdialogIn(form), undefined,
+      'a successful save must close the delete question instead of re-showing it in the saved editor');
+  } finally {
+    if (savedFormData === undefined) delete globalThis.FormData; else globalThis.FormData = savedFormData;
+    restore();
+  }
 });
