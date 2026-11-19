@@ -211,6 +211,18 @@ export function groupPickerChoices(members, currentUserId, agents = []) {
   ];
 }
 
+export function leadGlyph(text, fallback = '?') {
+  const cleaned = String(text || '').replace(/^\s*\[[^\]]*\]\s*/, '');
+  const match = cleaned.match(/[\p{L}\p{N}]/u) || String(text || '').match(/[\p{L}\p{N}]/u);
+  return match ? match[0].toUpperCase() : fallback;
+}
+
+export function groupInfoCounts(conversation) {
+  const people = (conversation && conversation.members || []).length;
+  const agents = (conversation && conversation.agent_members || []).length;
+  return {people, agents, text: `${people + agents} 位成员 · ${people} 位真人 · ${agents} 位智能体`};
+}
+
 export function groupAgentSummary(conversation) {
   const list = conversation && conversation.agent_members || [];
   return list.length ? '群内智能体：' + list.map(agent => agent.name).join('、')
@@ -936,6 +948,70 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderSessions();
   }
 
+  function memberRow(name, note, kind) {
+    const row = document.createElement('li');
+    row.className = 'group-info-member';
+    row.dataset.kind = kind;
+    const avatar = document.createElement('span');
+    avatar.className = 'group-info-member-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    avatar.textContent = kind === 'empty' ? '+' : leadGlyph(name);
+    const text = document.createElement('span');
+    const strong = document.createElement('strong');
+    strong.textContent = name;
+    const small = document.createElement('small');
+    small.textContent = note;
+    text.append(strong, small);
+    row.append(avatar, text);
+    return row;
+  }
+
+  function setGroupInfoTab(which) {
+    const agentsTab = document.getElementById('group-info-tab-agents');
+    const peopleTab = document.getElementById('group-info-tab-people');
+    agentsTab.setAttribute('aria-selected', String(which === 'agents'));
+    peopleTab.setAttribute('aria-selected', String(which === 'people'));
+    document.getElementById('group-info-agents').hidden = which !== 'agents';
+    document.getElementById('group-info-people').hidden = which !== 'people';
+  }
+
+  function setGroupInfo(conversation) {
+    const toggle = document.getElementById('group-info-toggle');
+    const panel = document.getElementById('group-info-panel');
+    if (!toggle || !panel) return;
+    const group = Boolean(conversation && conversation.kind === 'group');
+    toggle.hidden = !group;
+    if (!group) {
+      panel.hidden = true;
+      toggle.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    const title = conversationLabel(conversation, currentUser && currentUser.id);
+    const counts = groupInfoCounts(conversation);
+    document.getElementById('group-info-title').textContent = title;
+    document.getElementById('group-info-avatar').textContent = leadGlyph(title, '群');
+    document.getElementById('group-info-count').textContent = counts.text;
+    document.getElementById('group-info-tab-agents').textContent = `智能体 (${counts.agents})`;
+    document.getElementById('group-info-tab-people').textContent = `成员 (${counts.people})`;
+    const agentList = document.getElementById('group-info-agents');
+    agentList.replaceChildren(...(conversation.agent_members || []).map(agent =>
+      memberRow(agent.name, agent.archived ? '已归档' : '可明确请求一次回复', 'agent')));
+    if (!agentList.children.length) agentList.append(memberRow('还没有智能体', '创建群聊时可以加入工作区智能体', 'empty'));
+    const peopleList = document.getElementById('group-info-people');
+    peopleList.replaceChildren(...(conversation.members || []).map(member =>
+      memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你' : '工作区成员', 'person')));
+    const pinned = sessions.some(item => item.source === 'social' && item.id === conversation.id && item.pinned);
+    document.getElementById('group-info-pin').setAttribute('aria-checked', String(pinned));
+  }
+
+  function setGroupInfoOpen(open) {
+    const toggle = document.getElementById('group-info-toggle');
+    const panel = document.getElementById('group-info-panel');
+    if (!toggle || !panel) return;
+    panel.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+  }
+
   function setSocialHeaderTools(social) {
     const invite = document.getElementById('chat-invite');
     const unavailable = document.getElementById('chat-invite-unavailable');
@@ -952,6 +1028,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function openAgentConversation(agentId, conversationId) {
     setSocialHeaderTools(false);
+    setGroupInfo(null);
     const pin = document.getElementById('pin-conversation');
     if (pin) pin.hidden = true;
     const agent = agents.find(item => item.id === agentId);
@@ -1021,6 +1098,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     renderPinned(result.body.pinned_messages || []);
     setSocialHeaderTools(true);
+    setGroupInfo(currentConversation);
     renderSocialMessages(result.body.items);
     renderGroupReplyAction(result.body.agent_replies || []);
     // Acknowledge only the last message actually rendered, not messages that
@@ -1641,6 +1719,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     document.getElementById('conversation-search-status').textContent = state.error || ('已显示 ' + state.hits.length + ' 条消息');
     document.getElementById('conversation-search-more').hidden = !state.cursor;
+  }
+  const groupInfoToggle = document.getElementById('group-info-toggle');
+  if (groupInfoToggle) {
+    groupInfoToggle.addEventListener('click', () => setGroupInfoOpen(groupInfoToggle.getAttribute('aria-expanded') !== 'true'));
+    document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
+    document.getElementById('group-info-search').addEventListener('click', () => {
+      setGroupInfoOpen(false);
+      document.getElementById('conversation-search-open').click();
+    });
+    document.getElementById('group-info-tab-agents').addEventListener('click', () => setGroupInfoTab('agents'));
+    document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
+    document.getElementById('group-info-pin').addEventListener('click', async () => {
+      const pin = document.getElementById('pin-conversation');
+      if (!pin || pin.hidden) return;
+      pin.click();
+      const switchButton = document.getElementById('group-info-pin');
+      const wanted = switchButton.getAttribute('aria-checked') !== 'true';
+      for (let tries = 0; tries < 20; tries += 1) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        const now = pin.textContent === '取消置顶';
+        if (now === wanted) { switchButton.setAttribute('aria-checked', String(now)); break; }
+      }
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !document.getElementById('group-info-panel').hidden) setGroupInfoOpen(false);
+    });
   }
   const inChatOpen = document.getElementById('conversation-search-open');
   if (inChatOpen) inChatOpen.addEventListener('click', () => {

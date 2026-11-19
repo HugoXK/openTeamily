@@ -1117,3 +1117,15 @@ test('agent task completion notifications have their own summary', () => {
   assert.equal(notificationSummary({kind: 'agent_reply', status: 'failed', actor_username: '助理',
     conversation_kind: 'group', conversation_title: '项目群'}), '助理 在「项目群」未能完成你的请求');
 });
+
+test('group info panel counts members and agents honestly and picks a readable glyph', async () => {
+  const { groupInfoCounts, leadGlyph } = await import('../openteamily/static/chat/app.mjs');
+  assert.equal(groupInfoCounts({ members: [{}, {}], agent_members: [{}] }).text, '3 位成员 · 2 位真人 · 1 位智能体');
+  assert.equal(groupInfoCounts({}).text, '0 位成员 · 0 位真人 · 0 位智能体');
+  assert.equal(leadGlyph('[CI FIXTURE] Group chat'), 'G');
+  assert.equal(leadGlyph('产品群'), '产');
+  assert.equal(leadGlyph('---', '群'), '群');
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  for (const label of ['视频通话', '语音通话', 'Agent 主动性', '自动翻译', '消息免打扰']) assert.ok(html.includes(label));
+  assert.match(html, /aria-label="自动翻译（未接通）"/);
+});

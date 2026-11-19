@@ -188,9 +188,41 @@
         <button type="button" id="pin-conversation" hidden>置顶会话</button>
         <button type="button" id="conversation-search-open" class="icon-action" title="搜索当前会话" aria-label="搜索当前会话"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 0-12 0 6 6 0 0 0 12 0Z m-1 5 6 6"/></svg><span class="sr-only">会话内搜索</span></button>
         <button type="button" id="message-search" class="icon-action" title="在侧栏搜索消息" aria-label="在侧栏搜索消息"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18v16H3z M9 4v16 M13 9h5 M13 13h4"/></svg><span class="sr-only">搜索</span></button>
+        <button type="button" id="group-info-toggle" class="icon-action" hidden aria-expanded="false" aria-controls="group-info-panel" title="群信息" aria-label="群信息"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z M15 5v14"/></svg><span class="sr-only">群信息</span></button>
         <a id="open-agent-dir" href="/agents">资料</a>
       </div>
     </header>
+    <aside id="group-info-panel" class="group-info" hidden aria-labelledby="group-info-title">
+      <button type="button" id="group-info-close" class="group-info-close" aria-label="关闭群信息">×</button>
+      <div class="group-info-head">
+        <span id="group-info-avatar" class="group-info-avatar" aria-hidden="true"></span>
+        <h2 id="group-info-title">群信息</h2>
+        <p id="group-info-count" class="group-info-count"></p>
+      </div>
+      <button type="button" id="group-info-search" class="group-info-row group-info-search">搜索聊天记录</button>
+      <section class="group-info-card" aria-labelledby="group-info-notice-heading">
+        <div class="group-info-card-head"><h3 id="group-info-notice-heading">群公告</h3><button type="button" class="group-info-link" disabled title="未接通：还没有群公告接口">发布</button></div>
+        <p class="group-info-sub">暂无群公告。</p>
+      </section>
+      <section class="group-info-card group-info-list" aria-label="通话">
+        <button type="button" class="group-info-row" disabled title="未接通：还没有视频通话">视频通话<span class="group-info-tag">未接通</span></button>
+        <button type="button" class="group-info-row" disabled title="未接通：还没有语音通话">语音通话<span class="group-info-tag">未接通</span></button>
+      </section>
+      <section class="group-info-card group-info-list" aria-label="群设置">
+        <div class="group-info-toggle-row"><span><strong>Agent 主动性</strong><small>未接通：群内自动回复尚未实现，只能明确请求一次回复。</small></span><button type="button" role="switch" aria-checked="false" disabled class="group-info-switch" aria-label="Agent 主动性（未接通）"></button></div>
+        <div class="group-info-toggle-row"><span><strong>自动翻译</strong><small>未接通：没有翻译服务。</small></span><button type="button" role="switch" aria-checked="false" disabled class="group-info-switch" aria-label="自动翻译（未接通）"></button></div>
+        <div class="group-info-toggle-row"><span><strong>消息免打扰</strong><small>未接通。</small></span><button type="button" role="switch" aria-checked="false" disabled class="group-info-switch" aria-label="消息免打扰（未接通）"></button></div>
+        <div class="group-info-toggle-row"><span><strong>置顶聊天</strong></span><button type="button" role="switch" aria-checked="false" id="group-info-pin" class="group-info-switch" aria-label="置顶聊天"></button></div>
+      </section>
+      <section class="group-info-card" aria-label="成员">
+        <div class="group-info-tabs" role="tablist">
+          <button type="button" role="tab" id="group-info-tab-agents" aria-selected="true" aria-controls="group-info-agents"></button>
+          <button type="button" role="tab" id="group-info-tab-people" aria-selected="false" aria-controls="group-info-people"></button>
+        </div>
+        <ul id="group-info-agents" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-agents"></ul>
+        <ul id="group-info-people" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-people" hidden></ul>
+      </section>
+    </aside>
     <section id="conversation-search-panel" hidden aria-label="会话内搜索">
       <form id="conversation-search-form"><label>搜索当前会话<input id="conversation-search-query" maxlength="80"></label><button type="submit">搜索</button><button type="button" id="conversation-search-close">关闭</button></form>
       <p id="conversation-search-status" role="status"></p><ul id="conversation-search-results"></ul><button type="button" id="conversation-search-more" hidden>加载更多</button>
