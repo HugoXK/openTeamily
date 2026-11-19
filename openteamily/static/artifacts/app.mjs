@@ -143,6 +143,21 @@ export function suggestedDiscoverSlug(title) {
   return /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug) ? slug : '';
 }
 
+export function kindBadge(kind) {
+  return ({document: 'DOC', website: 'WEB', slides: 'PPT', dashboard: 'DASH', whiteboard: 'BOARD', media: 'MEDIA', image: 'IMG', audio: 'AUDIO', video: 'VIDEO'}[kind] || 'FILE');
+}
+
+export function artifactTime(seconds, now = Date.now()) {
+  if (!seconds) return '';
+  const when = new Date(Number(seconds) * 1000);
+  if (Number.isNaN(when.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  const today = new Date(now);
+  const sameDay = when.toDateString() === today.toDateString();
+  return sameDay ? `今天 ${pad(when.getHours())}:${pad(when.getMinutes())}`
+    : `${when.getMonth() + 1}月${when.getDate()}日 ${pad(when.getHours())}:${pad(when.getMinutes())}`;
+}
+
 export function applyArtifactLayout(list, layout) {
   list.dataset.layout = layout === 'list' ? 'list' : 'grid';
   return list.dataset.layout;
@@ -664,14 +679,103 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  let openItemMenu = null;
+  function closeItemMenu() {
+    if (!openItemMenu) return;
+    openItemMenu.menu.hidden = true;
+    openItemMenu.button.setAttribute('aria-expanded', 'false');
+    openItemMenu = null;
+  }
+  document.addEventListener('click', event => {
+    if (openItemMenu && !openItemMenu.menu.contains(event.target) && event.target !== openItemMenu.button) closeItemMenu();
+  });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeItemMenu(); });
+
+  function itemMenu(item, onOpen) {
+    const wrap = document.createElement('span');
+    wrap.className = 'artifact-more-wrap';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'artifact-more';
+    button.setAttribute('aria-haspopup', 'menu');
+    button.setAttribute('aria-expanded', 'false');
+    button.setAttribute('aria-label', item.title + '：更多操作');
+    button.textContent = '⋯';
+    const menu = document.createElement('div');
+    menu.className = 'artifact-item-menu';
+    menu.setAttribute('role', 'menu');
+    menu.hidden = true;
+    const send = document.createElement('button');
+    send.type = 'button';
+    send.setAttribute('role', 'menuitem');
+    send.className = 'artifact-menu-send';
+    send.disabled = true;
+    send.title = '未接通：还没有把作品发送到聊天的接口';
+    send.textContent = '发送到聊天';
+    const rename = document.createElement('button');
+    rename.type = 'button';
+    rename.setAttribute('role', 'menuitem');
+    rename.textContent = '重命名';
+    rename.title = '打开文档并编辑标题';
+    rename.addEventListener('click', async () => {
+      closeItemMenu();
+      await onOpen(item);
+      const title = form.elements.title;
+      if (title) { title.focus(); title.select(); }
+    });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.setAttribute('role', 'menuitem');
+    remove.className = 'artifact-menu-danger';
+    remove.textContent = '删除';
+    remove.addEventListener('click', async () => {
+      closeItemMenu();
+      if (!workspaceId() || !item.id) return;
+      if (typeof globalThis.confirm === 'function' && !globalThis.confirm('删除「' + item.title + '」？')) return;
+      const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/remove`, {});
+      if (result.status !== 200) {
+        show('error', messageFor(result.body.error, '删除失败。'));
+        return;
+      }
+      show('ok', '已删除。');
+      await loadList();
+    });
+    menu.append(send, rename, remove);
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      const wasOpen = openItemMenu && openItemMenu.menu === menu;
+      closeItemMenu();
+      if (wasOpen) return;
+      menu.hidden = false;
+      button.setAttribute('aria-expanded', 'true');
+      openItemMenu = {menu, button};
+    });
+    wrap.append(button, menu);
+    return wrap;
+  }
+
   function renderList(items, onOpen) {
     const list = document.getElementById('artifact-list');
     const empty = document.getElementById('list-empty');
     list.textContent = '';
+    closeItemMenu();
     applyArtifactLayout(list, catalogLayout);
     if (empty) empty.hidden = items.length > 0;
+    if (items.length) {
+      const head = document.createElement('li');
+      head.className = 'artifact-list-head';
+      head.setAttribute('aria-hidden', 'true');
+      for (const label of ['名称', '来源', '创建时间', '最近动态']) {
+        const cell = document.createElement('span');
+        cell.textContent = label;
+        head.append(cell);
+      }
+      list.appendChild(head);
+    }
     for (const item of items) {
       const row = document.createElement('li');
+      row.className = 'artifact-item';
+      row.dataset.kind = item.kind || '';
       const open = document.createElement('button');
       open.type = 'button';
       open.className = 'link';
@@ -688,6 +792,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       cover.setAttribute('aria-hidden', 'true');
       cover.textContent = kindLabel(item.kind);
       row.appendChild(cover);
+      const badge = document.createElement('span');
+      badge.className = 'artifact-kind';
+      badge.setAttribute('aria-hidden', 'true');
+      badge.textContent = kindBadge(item.kind);
+      row.appendChild(badge);
+      const created = document.createElement('span');
+      created.className = 'artifact-created';
+      created.textContent = artifactTime(item.created);
+      const updated = document.createElement('span');
+      updated.className = 'artifact-updated';
+      updated.textContent = item.updated ? '编辑于 ' + artifactTime(item.updated) : '';
+      row.append(created, updated, itemMenu(item, onOpen));
       list.appendChild(row);
     }
   }
