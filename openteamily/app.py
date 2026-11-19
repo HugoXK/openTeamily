@@ -492,6 +492,15 @@ class App:
             if method != 'GET':
                 refuse(405, 'method', 'Only GET is supported')
             return self.discover_list(query)
+        if path == '/v1/discover/works':
+            if method != 'GET':
+                refuse(405, 'method', 'Only GET is supported')
+            return self.discover_works(query)
+        work_path = re.fullmatch(r'/w/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])', path)
+        if work_path:
+            if method != 'GET' or query:
+                refuse(400, 'invalid', 'Invalid public work request')
+            return self.render_public_work(work_path[1])
         if path in ('/v1/auth/register', '/v1/auth/login') and method == 'POST':
             self.origin_check(env)  # Login/registration CSRF protection before a session exists.
             body = self.body(env, ['username', 'password'])
@@ -772,6 +781,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel|artifact))?)?)?))?', path)
             if auto_path:
                 return self.automation_dispatch(db, session, method, query, now, env, *auto_path.groups())
+            artifact_discover_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/artifacts/([0-9a-f]{32})/discover(?:/(revoke))?', path)
+            if artifact_discover_path:
+                return self.artifact_discover_dispatch(db, session, method, query, now, env, *artifact_discover_path.groups())
             artifact_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|preview|file|export|restore|versions(?:/(\d{1,8})(?:/(export))?)?|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
             if artifact_path:
@@ -3099,6 +3112,76 @@ class App:
             rows = discover.listing(db, text, cursor, int(limit) + 1)
             return 200, {'items': [discover.public_view(row) for row in rows[:int(limit)]],
                          'cursor': rows[int(limit) - 1]['slug'] if len(rows) > int(limit) else None}, []
+
+    def discover_works(self, query):
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=3) if query else {}
+            if set(args) - {'q', 'limit', 'cursor'} or any(len(v) != 1 for v in args.values()):
+                raise ValueError()
+            text = args.get('q', [''])[0]
+            if len(text) > 80 or any(ord(ch) < 32 for ch in text):
+                raise ValueError()
+            limit = args.get('limit', ['20'])[0]
+            if not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 50:
+                raise ValueError()
+            cursor = args.get('cursor', [''])[0]
+            if cursor and not discover.valid_work_cursor(cursor):
+                raise ValueError()
+        except ValueError:
+            refuse(400, 'invalid', 'Invalid discover parameters')
+        with self.store.connect() as db:
+            rows = discover.work_listing(db, text, cursor, int(limit) + 1)
+            return 200, {'items': [discover.work_public_view(row) for row in rows[:int(limit)]],
+                         'cursor': discover.work_cursor(rows[int(limit) - 1]) if len(rows) > int(limit) else None}, []
+
+    def render_public_work(self, slug):
+        if not discover.valid_slug(slug):
+            refuse(404, 'not_found', 'Work not found')
+        with self.store.connect() as db:
+            row = discover.load_listed_work(db, slug)
+        if row is None:
+            refuse(404, 'not_found', 'Work not found')
+        return 200, artifacts.render_page(row).encode('utf-8'), artifacts.share_headers()
+
+    def artifact_discover_dispatch(self, db, session, method, query, now, env, workspace_id,
+                                   artifact_id, revoking):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        row = artifacts.load(db, workspace['id'], artifact_id)
+        if row is None:
+            refuse(404, 'not_found', 'Artifact not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        listing = discover.load_work(db, row['id'])
+        if revoking is None and method == 'GET' and not query:
+            return 200, {'discover': discover.work_metadata_view(listing)}, []
+        if actor not in ('owner', 'admin'):
+            refuse(403, 'forbidden', 'Only the owner or an admin can change discover listing')
+        if revoking == 'revoke' and method == 'POST' and not query:
+            self.body(env, [])
+            if listing is not None:
+                db.execute('UPDATE artifact_discover SET listed=0, updated=? WHERE artifact_id=?',
+                           (now, row['id']))
+            return 200, {'discover': discover.work_metadata_view(discover.load_work(db, row['id']))}, []
+        if revoking is None and method == 'POST' and not query:
+            slug = self.body(env, ['slug']).get('slug')
+            if not discover.valid_slug(slug):
+                refuse(400, 'invalid', 'Provide a valid discover slug')
+            try:
+                if listing is None:
+                    db.execute(
+                        'INSERT INTO artifact_discover VALUES(?,?,?,1,?,?)',
+                        (row['id'], workspace['id'], slug, now, now))
+                    created = True
+                else:
+                    db.execute(
+                        'UPDATE artifact_discover SET slug=?, listed=1, updated=? WHERE artifact_id=?',
+                        (slug, now, row['id']))
+                    created = False
+            except sqlite3.IntegrityError:
+                refuse(409, 'conflict', 'That discover slug is already in use')
+            return (201 if created else 200), {'discover': discover.work_metadata_view(discover.load_work(db, row['id']))}, []
+        refuse(400, 'invalid', 'Invalid discover request')
 
     def agent_discover_dispatch(self, db, session, method, query, now, env, workspace_id,
                                 agent_id, revoking):
