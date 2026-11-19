@@ -45,6 +45,7 @@ class Config:
     max_memory_pages_per_workspace: int = 100
     max_memory_actions_per_workspace: int = 200
     max_memory_links_per_workspace: int = 500
+    max_memory_preferences_per_user: int = 50
     max_agents_per_workspace: int = 50
     max_meetings_per_workspace: int = 100
     max_conversations_per_user: int = 50
@@ -651,6 +652,11 @@ class App:
             memory_profile = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/memory/profile', path)
             if memory_profile:
                 return self.memory_profile_dispatch(db, session, method, query, now, env, memory_profile[1])
+            memory_preference_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/memory/preferences(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
+            if memory_preference_path:
+                return self.memory_preference_dispatch(
+                    db, session, method, query, now, env, *memory_preference_path.groups())
             if path == '/v1/profile/avatar':
                 if method == 'GET':
                     return self.profile_avatar(db, session, query)
@@ -5688,6 +5694,64 @@ class App:
                    'communication=excluded.communication,revision=excluded.revision,updated=excluded.updated',
                    (workspace_id, session['user_id'], *values, current['revision']+1, now))
         return 200, {'profile': dict(zip(fields, values), revision=current['revision']+1, updated=now)}, []
+
+    def memory_preference_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
+        if members.load(db, workspace_id, session['user_id']) is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        if query:
+            refuse(400, 'invalid', 'Invalid preference request')
+        if method == 'GET' and target_id is None and not removing:
+            rows = memory.preference_listing(db, workspace_id, session['user_id'])
+            return 200, {'items': [memory.preference_view(row) for row in rows]}, []
+        if method == 'POST' and target_id is None and not removing:
+            body = self.body(env, ['text'])
+            text = body.get('text')
+            if not memory.valid_preference(text):
+                refuse(400, 'invalid', 'Provide a preference up to 120 characters')
+            text = text.strip()
+            key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+            if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+                refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+            # The row is keyed on (workspace, user), so the same written
+            # preference is never duplicated for one account.
+            key_hash = digest('memory-preference:' + key)
+            request_hash = digest(json.dumps({'text': text}, sort_keys=True, separators=(',', ':'),
+                                             ensure_ascii=False))
+            prior = db.execute(
+                'SELECT * FROM memory_preferences WHERE workspace_id=? AND user_id=? AND key_hash=?',
+                (workspace_id, session['user_id'], key_hash)).fetchone()
+            if prior:
+                if prior['request_hash'] != request_hash:
+                    refuse(409, 'conflict', 'Idempotency key was used for a different request')
+                return 200, {'preference': memory.preference_view(prior)}, []
+            text_hash = memory.preference_hash(text)
+            existing = db.execute(
+                'SELECT * FROM memory_preferences WHERE workspace_id=? AND user_id=? AND text_hash=?',
+                (workspace_id, session['user_id'], text_hash)).fetchone()
+            if existing:
+                return 200, {'preference': memory.preference_view(existing)}, []
+            if (db.execute('SELECT COUNT(*) FROM memory_preferences WHERE workspace_id=? AND user_id=?',
+                           (workspace_id, session['user_id'])).fetchone()[0]
+                    >= self.config.max_memory_preferences_per_user):
+                refuse(429, 'quota', 'Preference capacity reached')
+            position = db.execute(
+                'SELECT COALESCE(MAX(position), 0) + 1 FROM memory_preferences WHERE workspace_id=? AND user_id=?',
+                (workspace_id, session['user_id'])).fetchone()[0]
+            preference_id = uuid4().hex
+            db.execute(
+                'INSERT INTO memory_preferences VALUES(?,?,?,?,?,?,?,?,?)',
+                (preference_id, workspace_id, session['user_id'], text, text_hash, position, now,
+                 key_hash, request_hash))
+            row = memory.load_preference(db, workspace_id, session['user_id'], preference_id)
+            return 201, {'preference': memory.preference_view(row)}, []
+        if target_id and removing == 'remove' and method == 'POST':
+            row = memory.load_preference(db, workspace_id, session['user_id'], target_id)
+            if row is None:
+                refuse(404, 'not_found', 'Preference not found')
+            self.body(env, [])
+            db.execute('DELETE FROM memory_preferences WHERE id=?', (row['id'],))
+            return 200, {'removed': memory.preference_view(row)}, []
+        refuse(400, 'invalid', 'Invalid preference request')
 
 
     def search_resources(self, db, session, method, query, workspace_id):

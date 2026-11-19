@@ -86,10 +86,25 @@ CREATE TABLE IF NOT EXISTS memory_profiles (
  professional TEXT NOT NULL, work_style TEXT NOT NULL, communication TEXT NOT NULL,
  revision INTEGER NOT NULL, updated INTEGER NOT NULL,
  PRIMARY KEY(workspace_id,user_id));
+CREATE TABLE IF NOT EXISTS memory_preferences (
+ id TEXT PRIMARY KEY,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ text TEXT NOT NULL,
+ text_hash TEXT NOT NULL,
+ position INTEGER NOT NULL,
+ created INTEGER NOT NULL,
+ key_hash TEXT NOT NULL,
+ request_hash TEXT NOT NULL,
+ UNIQUE(workspace_id, user_id, text_hash),
+ UNIQUE(workspace_id, user_id, key_hash));
+CREATE INDEX IF NOT EXISTS memory_preference_owner
+ ON memory_preferences(workspace_id, user_id, position, id);
 """
 
 TITLE_MAX = 80
 BODY_MAX = 8000
+PREFERENCE_MAX = 120
 ROW_SELECT = (
     'SELECT p.*, cu.username AS created_by_username, uu.username AS updated_by_username '
     'FROM memory_pages p '
@@ -370,6 +385,31 @@ def graph(db, workspace_id):
     }
 
 
+def valid_preference(value):
+    return (isinstance(value, str) and 1 <= len(value.strip()) <= PREFERENCE_MAX
+            and not re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', value))
+
+
+def preference_hash(text):
+    return digest(text.strip().casefold())
+
+
+def preference_view(row):
+    return {'id': row['id'], 'text': row['text'], 'created': row['created']}
+
+
+def preference_listing(db, workspace_id, user_id):
+    return db.execute(
+        'SELECT * FROM memory_preferences WHERE workspace_id=? AND user_id=? ORDER BY position, id',
+        (workspace_id, user_id),
+    ).fetchall()
+
+
+def load_preference(db, workspace_id, user_id, preference_id):
+    return db.execute(
+        'SELECT * FROM memory_preferences WHERE id=? AND workspace_id=? AND user_id=?',
+        (preference_id, workspace_id, user_id),
+    ).fetchone()
 EXPORT_NAME_MAX = 60
 EXPORT_STAMP = '%Y-%m-%dT%H:%M:%SZ'
 
