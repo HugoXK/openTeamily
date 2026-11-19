@@ -62,6 +62,15 @@ async function shot(page, outDir, name) {
   return file;
 }
 
+
+async function openGroupAgentSheet(page) {
+  const sheet = page.locator('#group-agent-action details.group-agent-sheet');
+  if (!(await sheet.count())) return;
+  if (await sheet.getAttribute('open') === null) {
+    await sheet.locator(':scope > summary').click();
+  }
+}
+
 async function openListItem(page, title, listSelector = '#main-panel') {
   const button = page.locator(`${listSelector} button.link`, { hasText: title }).first();
   await button.waitFor({ state: 'visible', timeout: 15000 });
@@ -771,8 +780,13 @@ async function main() {
           && (await visibleText(page.locator('#member-choices'))).includes('AI 智能体（自动回复未接通）'),
         'An existing human and agent are selected; custom group create is enabled');
       await page.locator('#compose-mode-team').click();
-      record('chat_group_agent_team_unconnected', await page.locator('#compose-dialog-submit').isDisabled(),
-        'Agent selections do not enable the unconnected AI-team mode');
+      await page.locator('#team-template-choices input[value="product-squad"]').waitFor({state: 'visible', timeout: 8000});
+      const disabledBeforePick = await page.locator('#compose-dialog-submit').isDisabled();
+      await page.locator('#team-template-choices input[value="product-squad"]').check();
+      record('chat_group_agent_team_template',
+        disabledBeforePick && await page.locator('#compose-dialog-submit').isEnabled()
+          && (await visibleText(page.locator('#team-template-choices'))).includes('产品研发小队'),
+        'AI-team mode requires picking a real template before create is enabled');
       await page.locator('#compose-mode-custom').click();
       screenshots.push(path.basename(await shot(page, outDir, '79-chat-group-agent-picker.png')));
       await page.locator('#compose-dialog-submit').click();
@@ -802,6 +816,7 @@ async function main() {
     try {
       await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
       await page.locator('#group-agent-action').waitFor({state: 'visible', timeout: 8000});
+      await openGroupAgentSheet(page);
       const groupAgentChoice = page.locator(`#group-agent-choices input[name="group-agent"][value="${ready.agent_id}"]`);
       await groupAgentChoice.waitFor({state: 'visible', timeout: 8000});
       await groupAgentChoice.check();
@@ -1954,7 +1969,7 @@ async function main() {
       const token = homepagePath.slice(3);
       record(
         'agent_public_homepage',
-        homeText.includes('OpenTeamily / FlyBot')
+        homeText.includes('OpenTeamily')
           && homeText.includes('Agent profile')
           && statusLabel === 'Public page'
           && homeText.includes(ready.agent_name)
@@ -1993,7 +2008,11 @@ async function main() {
       await page.locator('#industry').selectOption('科技与软件');
       await page.locator('#role-choices input[value="产品经理"]').check();
       await page.locator('#onboarding-save').click();
-      await page.waitForURL(url => url.pathname === '/chat');
+      // Step 1 now continues to step 2 like the recorded wizard; the saved context must already
+      // clear the chat banner even if the user leaves the wizard here (进入 OpenTeamily sits on step 4).
+      await page.locator('#onboarding-steps').waitFor({state: 'visible'});
+      await page.locator('[data-step="2"]').waitFor({state: 'visible'});
+      await page.goto(`${origin}/chat`, {waitUntil: 'load'});
       await page.locator('#main-panel').waitFor({state: 'visible'});
       await page.waitForFunction(() => document.getElementById('onboarding-banner').hidden);
       const personalResponse = await page.request.get(`${origin}/v1/personal-agent`);
@@ -2005,11 +2024,37 @@ async function main() {
         && Boolean(personalState.personal_agent && personalState.personal_agent.agent),
         'Saved work context survives reload alongside the personal agent; no recommendations or connector claims');
       screenshots.push(path.basename(await shot(page, outDir, '86-onboarding-saved-context.png')));
+      try {
+        await page.locator('#onboarding-save').click();
+        await page.locator('#onboarding-steps').waitFor({state: 'visible'});
+        const appsText = await visibleText(page.locator('#onboarding-apps'));
+        const connectDisabled = await page.locator('#onboarding-apps .app-connect').evaluateAll(
+          (buttons) => buttons.length > 0 && buttons.every((button) => button.disabled));
+        await page.locator('[data-step="2"] button[data-go="3"]:not(.onboarding-later)').click();
+        await page.locator('#onboarding-picks input[value="release-notes"]').check();
+        await page.locator('#onboarding-picks-form button[type="submit"]').click();
+        await waitForLocatorText(page, '#onboarding-steps-meta', '已选 1 项');
+        await page.locator('#onboarding-look select[name="color"]').selectOption('天空蓝');
+        await page.locator('#onboarding-look-form button[type="submit"]').click();
+        await waitForLocatorText(page, '#onboarding-look-preview', '颜色：天空蓝');
+        record('onboarding_steps_2_4',
+          appsText.includes('Gmail · 未连接') && !appsText.includes('已连接') && connectDisabled
+          && (await visibleText(page.locator('#onboarding-steps-meta'))).includes('形象已保存'),
+          'Steps 2-4 wizard: apps honestly unconnected with disabled connect buttons, picks and look saved');
+        screenshots.push(path.basename(await shot(page, outDir, '87-onboarding-steps.png')));
+        await page.locator('#onboarding-enter').click();
+        await page.waitForURL(url => url.pathname === '/chat');
+        record('onboarding_enter_chat', true, 'Step 4 进入 OpenTeamily opens chat');
+      } catch (error) {
+        record('onboarding_steps_2_4', false, String(error));
+      }
+      await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
+      await page.locator('#industry option[value="其他"]').waitFor({state: 'attached'});
       await page.locator('#industry').selectOption('其他');
       await page.locator('#custom-industry').fill('[CI FIXTURE] Independent research');
       await page.locator('#custom-role').fill('[CI FIXTURE] Analyst');
       await page.locator('#onboarding-save').click();
-      await page.waitForURL(url => url.pathname === '/chat');
+      await page.locator('#onboarding-steps').waitFor({state: 'visible'});
       await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
       await waitForLocatorText(page, '#onboarding-meta', '[CI FIXTURE] Independent research');
       record('onboarding_custom_reopen',

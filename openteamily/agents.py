@@ -244,8 +244,10 @@ HOMEPAGE_STYLE = """
 :root{color-scheme:light;--ink:#1c1917;--muted:#57534e;--line:#d6d3d1;--bg:#f5f5f4;--card:#ffffff;--accent:#292524}
 *{box-sizing:border-box}
 body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--ink);line-height:1.5}
-.topbar{display:flex;align-items:baseline;gap:.5rem;padding:1rem 1.5rem;border-bottom:1px solid var(--line);background:var(--card)}
-.topbar .brand{font-weight:600}
+.topbar{display:flex;align-items:center;gap:.75rem;padding:1rem 1.5rem;border-bottom:1px solid var(--line);background:var(--card)}
+.topbar .brand{display:inline-flex;align-items:center;gap:.5rem;font-weight:700;letter-spacing:-.03em;color:inherit;text-decoration:none}
+.topbar .brand-mark{display:inline-flex;align-items:center;justify-content:center;width:1.75rem;height:1.75rem;border-radius:50%;background:#097845;color:#fff}
+.topbar .brand-mark svg{display:block;width:1.1rem;height:1.1rem}
 .topbar .crumb{color:var(--muted);font-size:.9rem}
 .page{max-width:72rem;margin:0 auto;padding:2rem 1.5rem 3rem;display:grid;gap:2rem}
 @media(min-width:880px){.page{grid-template-columns:minmax(16rem,1fr) minmax(20rem,26rem);align-items:start}}
@@ -329,7 +331,9 @@ def render_homepage(row, quick_starts=None):
         '<title>' + heading + '</title>'
         '<style>' + HOMEPAGE_STYLE + '</style>'
         '</head><body>'
-        '<header class="topbar"><span class="brand">OpenTeamily / FlyBot</span>'
+        '<header class="topbar"><a class="brand" href="/chat" title="OpenTeamily">'
+        '<span class="brand-mark" aria-hidden="true"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></span>'
+        '<span>OpenTeamily</span></a>'
         '<span class="crumb">Agent profile</span></header>'
         '<main class="page">'
         '<section>'

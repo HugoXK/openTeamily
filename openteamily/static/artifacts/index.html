@@ -13,7 +13,7 @@
 <body class="app-workspace">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
-    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
+    <a class="brand-mark" href="/chat" title="OpenTeamily" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
     <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
     <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
     <a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
@@ -146,7 +146,7 @@
         <span class="visually-hidden">通知</span>
       </button>
     </header>
-    <p id="layout-note" class="note" hidden>当前网格使用真实作品标题和类型，不生成虚构缩略图；有数据的网格版式尚未完成 Teamily 对照。</p>
+    <p id="layout-note" class="note" hidden>封面只显示作品类型，不生成虚构缩略图。媒体作品可以通过菜单发送到群或单聊；文档和其他类型仍未接通。</p>
     <p id="whoami" class="visually-hidden"></p>
     <section id="list-panel" class="artifacts-workspace">
       <aside class="artifact-dir" id="artifact-dir">
@@ -307,18 +307,28 @@
         <h2>公开到发现页</h2>
         <p class="note">发布后会出现在公开发现动态里，并用短地址 /w/… 打开。不会自动发布。发布后任何访问者可查看作品；媒体内容也可公开查看和下载。推荐尚未接通。</p>
         <p id="discover-status" class="note" hidden></p>
-        <form id="discover-form">
+        <div id="discover-form" class="discover-form" role="group" aria-label="公开到发现页">
           <label for="discover-slug">公开短地址</label>
           <input id="discover-slug" name="slug" maxlength="30" autocomplete="off" spellcheck="false" inputmode="latin">
-          <button type="submit" id="publish-discover">发布到发现页</button>
+          <button type="button" id="publish-discover">发布到发现页</button>
           <button type="button" id="revoke-discover" hidden>从发现页撤回</button>
-        </form>
+        </div>
       </section>
       <button type="submit" id="save-artifact">保存</button>
       <button type="button" id="cancel-editor">返回列表</button>
       <button type="button" id="remove-artifact">删除</button>
     </form>
   </section>
+  <div id="send-to-chat-dialog" class="send-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="send-to-chat-title">
+    <div class="send-dialog-card">
+      <h2 id="send-to-chat-title">发送到聊天</h2>
+      <p id="send-to-chat-lead" class="note"></p>
+      <ul id="send-to-chat-list"></ul>
+      <p id="send-to-chat-empty" class="empty-state" hidden>这个工作区还没有可发送的群或单聊。</p>
+      <p id="send-to-chat-error" class="note" hidden></p>
+      <button type="button" id="send-to-chat-cancel">取消</button>
+    </div>
+  </div>
   </main>
 </body>
 </html>

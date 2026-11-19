@@ -1,3 +1,8 @@
+export function recentlyUpdatedCount(pages, now = Date.now(), days = 7) {
+  const since = now / 1000 - days * 86400;
+  return (pages || []).filter((page) => Number(page.updated || 0) >= since).length;
+}
+
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -48,6 +53,35 @@ export function parseTopics(value) {
     names.push(name);
   }
   return names;
+}
+
+
+export function applyMarkdown(textarea, kind) {
+  if (!textarea) return '';
+  const value = textarea.value;
+  const start = textarea.selectionStart ?? value.length;
+  const end = textarea.selectionEnd ?? value.length;
+  const selected = value.slice(start, end);
+  const wraps = {
+    bold: ['**', '**', '粗体'],
+    italic: ['_', '_', '斜体'],
+    strike: ['~~', '~~', '删除线'],
+    code: ['`', '`', '代码'],
+    h1: ['# ', '', '标题'],
+    h2: ['## ', '', '小标题'],
+    ul: ['- ', '', '列表项'],
+    quote: ['> ', '', '引用'],
+    link: ['[', '](https://)', '链接文字'],
+  };
+  const [pre, post, fallback] = wraps[kind] || ['', '', '文本'];
+  const body = selected || fallback;
+  const next = value.slice(0, start) + pre + body + post + value.slice(end);
+  textarea.value = next;
+  if (typeof textarea.setSelectionRange === 'function') {
+    textarea.setSelectionRange(start + pre.length, start + pre.length + body.length);
+  }
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  return next;
 }
 
 export function formatTopics(topics) {
@@ -455,6 +489,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : (String(needle || '').trim() ? MEMORY_EMPTY_NO_MATCH : MEMORY_EMPTY_WORKSPACE);
     const count = document.getElementById('filter-all-count');
     if (count) count.textContent = String((pageChoices || []).length);
+    const recent = document.getElementById('filter-updated-count');
+    if (recent) recent.textContent = String(recentlyUpdatedCount(pageChoices));
   }
 
   function renderDirectory() {
@@ -643,7 +679,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const topicEmpty = document.getElementById('topic-empty');
     const payload = graph || {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
     const stats = payload.counts || {nodes: 0, edges: 0, topics: 0};
-    if (counts) counts.textContent = `${stats.nodes} 节点 · ${stats.edges} 连接 · ${stats.topics} 话题`;
+    if (counts) {
+      const linked = new Set();
+      for (const edge of payload.edges || []) {
+        if (edge.source) linked.add(edge.source);
+        if (edge.target) linked.add(edge.target);
+      }
+      const unconnected = (payload.nodes || []).filter((node) => !linked.has(node.id)).length;
+      counts.replaceChildren();
+      for (const [value, label] of [[stats.nodes, '节点'], [stats.edges, '连接'], [unconnected, '未连接'], [stats.topics, '话题']]) {
+        const item = document.createElement('span');
+        item.className = 'memory-count';
+        const strong = document.createElement('strong');
+        strong.textContent = String(value ?? 0);
+        const caption = document.createElement('span');
+        caption.textContent = label;
+        item.append(strong, caption);
+        counts.appendChild(item);
+      }
+    }
     const empty = document.getElementById('graph-empty');
     if (empty) {
       empty.hidden = !graphEmptyStateVisible({
@@ -901,6 +955,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
+    const savedHint = document.getElementById('editor-saved');
+    if (savedHint) {
+      const when = memoryUpdatedLabel(currentPage.updated);
+      savedHint.hidden = false;
+      savedHint.textContent = when ? ('已保存 · ' + when) : ('已保存 · 修订 ' + currentPage.revision);
+    }
+
     renderPageLinks();
   }
 
@@ -1154,6 +1215,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await openPage(parsed.page.id);
   });
 
+  const toolbar = editor.querySelector('.editor-toolbar');
+  if (toolbar) {
+    toolbar.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-md]');
+      if (!button) return;
+      applyMarkdown(editor.elements.body, button.getAttribute('data-md'));
+      editor.elements.body.focus();
+    });
+  }
+
   editor.addEventListener('submit', async (event) => {
     event.preventDefault();
     const id = workspaceId();
@@ -1174,6 +1245,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
+    const savedHint = document.getElementById('editor-saved');
+    if (savedHint) {
+      const when = memoryUpdatedLabel(currentPage.updated);
+      savedHint.hidden = false;
+      savedHint.textContent = when ? ('已保存 · ' + when) : ('已保存 · 修订 ' + currentPage.revision);
+    }
+
     await loadGraph();
     renderPageLinks();
     show('ok', '已保存。');

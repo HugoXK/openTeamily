@@ -13,7 +13,7 @@
 <body class="app-workspace">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
-    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
+    <a class="brand-mark" href="/chat" title="OpenTeamily" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
     <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
     <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
     <a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
@@ -35,6 +35,7 @@
           <div id="help-menu" hidden>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 帮助中心页">帮助中心</button>
             <a href="/guide" role="menuitem">功能指引</a>
+            <a href="/about" role="menuitem">关于</a>
             <a href="/download" role="menuitem" aria-label="下载">下载</a>
             <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
@@ -108,7 +109,7 @@
           <span id="model-key-state" class="settings-row-meta">平台默认或你自己的配置，不用积分</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
-        <a class="settings-row" href="#skill-secrets">
+        <a class="settings-row" href="/settings/skill-configuration">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z"/></svg></span>
           <span class="settings-row-label">技能配置</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
@@ -159,6 +160,41 @@
         <a class="settings-row" href="/settings/privacy">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8 9V7a4 4 0 1 1 8 0v2h1.5A1.5 1.5 0 0 1 19 10.5v8A1.5 1.5 0 0 1 17.5 20h-11A1.5 1.5 0 0 1 5 18.5v-8A1.5 1.5 0 0 1 6.5 9H8zm2 0h4V7a2 2 0 1 0-4 0v2z"/></svg></span>
           <span class="settings-row-label">隐私</span>
+          <span class="settings-row-chevron" aria-hidden="true">›</span>
+        </a>
+        </div>
+      </section>
+      <section class="settings-cluster" aria-labelledby="group-support">
+        <h2 id="group-support">支持与法律</h2>
+        <div class="settings-group">
+        <a class="settings-row" href="/guide">
+          <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.6 2.2c-.8.4-1.1.9-1.1 1.8 M12 17h.01"/></svg></span>
+          <span class="settings-row-label">功能指引</span>
+          <span class="settings-row-chevron" aria-hidden="true">›</span>
+        </a>
+        <a class="settings-row" href="/about">
+          <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 11v6 M12 8h.01"/></svg></span>
+          <span class="settings-row-label">关于</span>
+          <span class="settings-row-chevron" aria-hidden="true">›</span>
+        </a>
+        <button type="button" class="settings-row" disabled title="未接通：还没有 OpenTeamily 帮助中心页">
+          <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v12H4z M8 6V5a4 4 0 0 1 8 0v1"/></svg></span>
+          <span class="settings-row-label">帮助中心</span>
+          <span class="settings-row-meta">未接通</span>
+        </button>
+        <button type="button" class="settings-row" disabled title="未接通：还没有 OpenTeamily 服务条款页">
+          <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h8l4 4v12H7z M15 4v4h4 M9 12h6 M9 16h6"/></svg></span>
+          <span class="settings-row-label">服务条款</span>
+          <span class="settings-row-meta">未接通</span>
+        </button>
+        <button type="button" class="settings-row" disabled title="未接通：还没有 OpenTeamily 隐私政策页">
+          <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 19 6v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg></span>
+          <span class="settings-row-label">隐私政策</span>
+          <span class="settings-row-meta">未接通</span>
+        </button>
+        <a class="settings-row" href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">
+          <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v5 M12 16h.01"/></svg></span>
+          <span class="settings-row-label">报告问题</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
         </div>
@@ -337,18 +373,51 @@
       <button type="submit" id="save-model-api">保存模型 API</button>
     </form>
     </div>
-    <div data-settings-page="skill-secrets" hidden>
+    <div data-settings-page="skill-configuration" hidden>
         <header class="settings-subhead">
-          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 技能密钥</a>
+          <a href="/settings" class="settings-back" aria-label="返回设置">‹ 技能配置</a>
         </header>
-    <form id="skill-secrets-form" method="post" action="/v1/skill-secrets">
-      <fieldset id="skill-secrets" class="settings-card">
-        <legend>技能密钥</legend>
-        <p class="note">名称只能用大写字母、数字和下划线，并且必须以字母开头。值保存后不会回显。对照里的技能配置页是独立子页，空态为「暂无密钥」，但没有留下版式截图。</p>
+        <div class="skill-banner" role="note">
+          <span class="skill-banner-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v6c0 5 3.2 7.6 7 9 3.8-1.4 7-4 7-9V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+          </span>
+          <div>
+            <p class="skill-banner-title">用于技能授权</p>
+            <p class="skill-banner-body">部分技能需要 API Key 才能调用第三方服务。请在此添加密钥，名称须与技能声明的名称完全一致（区分大小写，例如 MY_API_KEY）。配置值加密存储，仅在技能运行时使用，不会在对话中展示。</p>
+          </div>
+        </div>
+        <details class="skill-help">
+          <summary>
+            <span class="skill-help-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6 M10 22h4 M12 2a7 7 0 0 0-4 13c.6.5 1 1.2 1 2h6c0-.8.4-1.5 1-2A7 7 0 0 0 12 2Z"/></svg>
+            </span>
+            正在编写 Skill?
+            <span class="skill-help-chevron" aria-hidden="true">▾</span>
+          </summary>
+          <p class="note">密钥名称只能用大写字母、数字和下划线，并且必须以字母开头。值保存后不会回显。这是本实例自己的技能密钥页，不复制外部编写教程。</p>
+        </details>
+        <div class="skill-head">
+          <h2 class="skill-head-title">我的密钥</h2>
+          <button type="button" id="skill-add-open" class="skill-add">+ 添加密钥</button>
+        </div>
+        <div id="skill-empty" class="skill-empty">
+          <span class="skill-empty-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="10" r="3.2"/><path d="M11 11.5 20 20 M16.5 16.5 19 19 M14 18.5h3"/></svg>
+          </span>
+          <p class="skill-empty-title">暂无密钥</p>
+          <p class="skill-empty-body">添加智能体技能所需的密钥，即可免去在对话中输入密钥。</p>
+        </div>
+    <form id="skill-secrets-form" method="post" action="/v1/skill-secrets" hidden>
+      <fieldset id="skill-secrets" class="settings-card skill-form-card">
+        <legend class="visually-hidden">技能密钥</legend>
+        <p class="note">名称只能用大写字母、数字和下划线，并且必须以字母开头。值保存后不会回显。</p>
         <ul id="skill-secret-list"></ul>
         <label>名称 <input name="name" maxlength="64" autocomplete="off" spellcheck="false"></label>
         <label>值 <input name="value" type="password" maxlength="4096" autocomplete="new-password"></label>
-        <button type="submit" id="save-skill-secret">保存技能密钥</button>
+        <div class="skill-form-actions">
+          <button type="button" id="skill-add-cancel" class="secondary">取消</button>
+          <button type="submit" id="save-skill-secret">保存技能密钥</button>
+        </div>
       </fieldset>
     </form>
     </div>
@@ -358,20 +427,24 @@
         </header>
         <p class="settings-lead">通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。</p>
         <ul class="settings-card channel-list">
-          <li class="channel-row">
-            <span>WeChat Official Account</span>
+          <li class="channel-row" data-channel="wechat">
+            <span class="channel-mark" data-mark="wechat" aria-hidden="true"></span>
+            <span class="channel-name">WeChat Official Account</span>
             <button type="button" disabled title="未实现：OpenTeamily 还没有接入 WeChat Official Account。对照里未点连接。">+ 连接</button>
           </li>
-          <li class="channel-row">
-            <span>Apple iMessage</span>
+          <li class="channel-row" data-channel="imessage">
+            <span class="channel-mark" data-mark="imessage" aria-hidden="true"></span>
+            <span class="channel-name">Apple iMessage</span>
             <button type="button" disabled title="未实现：OpenTeamily 还没有接入 Apple iMessage。对照里未点连接。">+ 连接</button>
           </li>
-          <li class="channel-row">
-            <span>Slack</span>
+          <li class="channel-row" data-channel="slack">
+            <span class="channel-mark" data-mark="slack" aria-hidden="true"></span>
+            <span class="channel-name">Slack</span>
             <button type="button" disabled title="未实现：OpenTeamily 还没有接入 Slack。对照里未点连接。">+ 连接</button>
           </li>
-          <li class="channel-row">
-            <span>WhatsApp</span>
+          <li class="channel-row" data-channel="whatsapp">
+            <span class="channel-mark" data-mark="whatsapp" aria-hidden="true"></span>
+            <span class="channel-name">WhatsApp</span>
             <button type="button" disabled title="未实现：OpenTeamily 还没有接入 WhatsApp。对照里未点连接。">+ 连接</button>
           </li>
         </ul>
@@ -387,7 +460,7 @@
         <h2 class="settings-section-title">已授权的 AI 客户端</h2>
         <p class="settings-lead">那些被授权使用你的 agent 的客户端，例如 Claude Code，撤销后立即失效。</p>
         <p class="settings-card settings-empty">没有已授权的 AI 客户端。</p>
-        <p class="note">这是对照空态的版式。OpenTeamily 还没有站外 Agent API 或授权客户端接口，所以这里不会列出可点的开放或撤销操作。</p>
+        <p class="note">按智能体的 Agent API 调用密钥在<a href="/agents">智能体</a>页的「API 密钥」里生成和撤销；这里还不会汇总列出，也还没有 AI 客户端授权接口。</p>
     </div>
     <div data-settings-page="connectors" hidden>
         <header class="settings-subhead">
@@ -406,7 +479,7 @@
         </div>
         <ul id="connectors-catalog" class="connector-list">
           <li class="connector-row" data-connector-id="github" data-category="dev">
-            <span class="connector-mark" aria-hidden="true">G</span>
+            <span class="connector-mark" data-mark="github" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">GitHub</span>
@@ -417,7 +490,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="notion" data-category="docs">
-            <span class="connector-mark" aria-hidden="true">N</span>
+            <span class="connector-mark" data-mark="notion" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Notion</span>
@@ -428,7 +501,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="linear" data-category="work">
-            <span class="connector-mark" aria-hidden="true">L</span>
+            <span class="connector-mark" data-mark="linear" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Linear</span>
@@ -439,7 +512,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="atlassian" data-category="work">
-            <span class="connector-mark" aria-hidden="true">A</span>
+            <span class="connector-mark" data-mark="atlassian" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Atlassian</span>
@@ -450,7 +523,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="sentry" data-category="dev">
-            <span class="connector-mark" aria-hidden="true">S</span>
+            <span class="connector-mark" data-mark="sentry" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Sentry</span>
@@ -461,7 +534,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="stripe" data-category="commerce">
-            <span class="connector-mark" aria-hidden="true">S</span>
+            <span class="connector-mark" data-mark="stripe" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Stripe</span>
@@ -472,7 +545,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="paypal" data-category="commerce">
-            <span class="connector-mark" aria-hidden="true">P</span>
+            <span class="connector-mark" data-mark="paypal" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">PayPal</span>
@@ -483,7 +556,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="square" data-category="commerce">
-            <span class="connector-mark" aria-hidden="true">S</span>
+            <span class="connector-mark" data-mark="square" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Square</span>
@@ -494,7 +567,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="cloudflare" data-category="dev">
-            <span class="connector-mark" aria-hidden="true">C</span>
+            <span class="connector-mark" data-mark="cloudflare" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Cloudflare</span>
@@ -505,7 +578,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="vercel" data-category="dev">
-            <span class="connector-mark" aria-hidden="true">V</span>
+            <span class="connector-mark" data-mark="vercel" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Vercel</span>
@@ -516,7 +589,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="supabase" data-category="data">
-            <span class="connector-mark" aria-hidden="true">S</span>
+            <span class="connector-mark" data-mark="supabase" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Supabase</span>
@@ -527,7 +600,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="neon" data-category="data">
-            <span class="connector-mark" aria-hidden="true">N</span>
+            <span class="connector-mark" data-mark="neon" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Neon</span>
@@ -538,7 +611,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="figma" data-category="design">
-            <span class="connector-mark" aria-hidden="true">F</span>
+            <span class="connector-mark" data-mark="figma" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Figma</span>
@@ -549,7 +622,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="canva" data-category="design">
-            <span class="connector-mark" aria-hidden="true">C</span>
+            <span class="connector-mark" data-mark="canva" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Canva</span>
@@ -560,7 +633,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="intercom" data-category="work">
-            <span class="connector-mark" aria-hidden="true">I</span>
+            <span class="connector-mark" data-mark="intercom" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Intercom</span>
@@ -571,7 +644,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="monday" data-category="work">
-            <span class="connector-mark" aria-hidden="true">M</span>
+            <span class="connector-mark" data-mark="monday" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">monday.com</span>
@@ -582,7 +655,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="webflow" data-category="design">
-            <span class="connector-mark" aria-hidden="true">W</span>
+            <span class="connector-mark" data-mark="webflow" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Webflow</span>
@@ -593,7 +666,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="wix" data-category="design">
-            <span class="connector-mark" aria-hidden="true">W</span>
+            <span class="connector-mark" data-mark="wix" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Wix</span>
@@ -604,7 +677,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="netlify" data-category="dev">
-            <span class="connector-mark" aria-hidden="true">N</span>
+            <span class="connector-mark" data-mark="netlify" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Netlify</span>
@@ -615,7 +688,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="airtable" data-category="data">
-            <span class="connector-mark" aria-hidden="true">A</span>
+            <span class="connector-mark" data-mark="airtable" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Airtable</span>
@@ -626,7 +699,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="dropbox" data-category="docs">
-            <span class="connector-mark" aria-hidden="true">D</span>
+            <span class="connector-mark" data-mark="dropbox" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Dropbox</span>
@@ -637,7 +710,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="zapier" data-category="work">
-            <span class="connector-mark" aria-hidden="true">Z</span>
+            <span class="connector-mark" data-mark="zapier" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Zapier</span>
@@ -648,7 +721,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="clickup" data-category="work">
-            <span class="connector-mark" aria-hidden="true">C</span>
+            <span class="connector-mark" data-mark="clickup" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">ClickUp</span>
@@ -659,7 +732,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="todoist" data-category="work">
-            <span class="connector-mark" aria-hidden="true">T</span>
+            <span class="connector-mark" data-mark="todoist" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Todoist</span>
@@ -670,7 +743,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="miro" data-category="design">
-            <span class="connector-mark" aria-hidden="true">M</span>
+            <span class="connector-mark" data-mark="miro" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Miro</span>
@@ -681,7 +754,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="attio" data-category="work">
-            <span class="connector-mark" aria-hidden="true">A</span>
+            <span class="connector-mark" data-mark="attio" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Attio</span>
@@ -692,7 +765,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="postman" data-category="dev">
-            <span class="connector-mark" aria-hidden="true">P</span>
+            <span class="connector-mark" data-mark="postman" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Postman</span>
@@ -703,7 +776,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="asana" data-category="work">
-            <span class="connector-mark" aria-hidden="true">A</span>
+            <span class="connector-mark" data-mark="asana" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Asana</span>
@@ -714,7 +787,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="box" data-category="docs">
-            <span class="connector-mark" aria-hidden="true">B</span>
+            <span class="connector-mark" data-mark="box" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Box</span>
@@ -725,7 +798,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="hubspot" data-category="work">
-            <span class="connector-mark" aria-hidden="true">H</span>
+            <span class="connector-mark" data-mark="hubspot" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">HubSpot</span>
@@ -736,7 +809,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="slack" data-category="work">
-            <span class="connector-mark" aria-hidden="true">S</span>
+            <span class="connector-mark" data-mark="slack" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Slack</span>
@@ -747,7 +820,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="huggingface" data-category="data">
-            <span class="connector-mark" aria-hidden="true">HF</span>
+            <span class="connector-mark" data-mark="huggingface" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Hugging Face</span>
@@ -758,7 +831,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="exa" data-category="search">
-            <span class="connector-mark" aria-hidden="true">E</span>
+            <span class="connector-mark" data-mark="exa" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Exa</span>
@@ -769,7 +842,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="deepwiki" data-category="docs">
-            <span class="connector-mark" aria-hidden="true">D</span>
+            <span class="connector-mark" data-mark="deepwiki" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">DeepWiki</span>
@@ -780,7 +853,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="context7" data-category="docs">
-            <span class="connector-mark" aria-hidden="true">C</span>
+            <span class="connector-mark" data-mark="context7" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Context7</span>
@@ -791,7 +864,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="mslearn" data-category="docs">
-            <span class="connector-mark" aria-hidden="true">ML</span>
+            <span class="connector-mark" data-mark="mslearn" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Microsoft Learn</span>
@@ -802,7 +875,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="cloudflare-docs" data-category="docs">
-            <span class="connector-mark" aria-hidden="true">CD</span>
+            <span class="connector-mark" data-mark="cloudflare-docs" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Cloudflare Docs</span>
@@ -813,7 +886,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="amap" data-category="search">
-            <span class="connector-mark" aria-hidden="true">A</span>
+            <span class="connector-mark" data-mark="amap" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Amap</span>
@@ -824,7 +897,7 @@
             <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="mail" data-category="mail">
-            <span class="connector-mark" aria-hidden="true">M</span>
+            <span class="connector-mark" data-mark="mail" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Mailbox</span>
