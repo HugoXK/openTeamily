@@ -1,5 +1,6 @@
 """Memory page serving tests. In-process WSGI only; not browser E2E."""
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 
@@ -39,10 +40,16 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('总览', html)
         self.assertIn('我的资料', html)
         self.assertIn('我的作品', html)
+        self.assertIn('href="/space"', html)
         self.assertIn('我的会议', html)
+        self.assertIn('href="/space?view=meetings"', html)
+        self.assertNotIn('data-view="meetings"', html)
+        self.assertNotIn('id="meetings-panel"', html)
+        self.assertNotIn('<button type="button" data-view="meetings"', html)
         self.assertIn('话题亮点', html)
         self.assertIn('未实现', html)
-        self.assertIn('未接通', html)
+        self.assertIn('尚未自动注入模型', html)
+        self.assertIn('id="memory-profile-form"', html)
         self.assertIn('做梦', html)
         self.assertIn('Professional Profile', html)
         self.assertIn('Work Style', html)
@@ -66,6 +73,11 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('已读状态接口', html)
         self.assertIn('data-filter="updated"', html)
         self.assertIn('id="graph-canvas"', html)
+        self.assertIn('id="graph-empty"', html)
+        self.assertIn('id="graph-empty" class="graph-empty" hidden', html)
+        self.assertIn('创建两个或更多记忆页后，这里会把它们连成图谱', html)
+        self.assertIn('id="graph-empty-new"', html)
+        self.assertIn('新建记忆页', html)
         self.assertIn('class="graph-hint"', html)
         self.assertIn('单击查看 · 双击打开 · 悬停预览', html)
         self.assertIn('id="graph-hover-card"', html)
@@ -97,6 +109,8 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('export function topicTag', js)
         self.assertIn('export function memoryPageMeta', js)
         self.assertIn('export function graphPreviewModel', js)
+        self.assertIn('export function graphEmptyStateVisible', js)
+        self.assertIn('GRAPH_EMPTY_MESSAGE', js)
         self.assertIn('export function bindGraphNodeGestures', js)
         self.assertIn('GRAPH_HOVER_DELAY_MS', js)
         self.assertIn('dir-collapse', js)
@@ -112,6 +126,8 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('memory-page-preview', css)
         self.assertIn('memory-page-icon', css)
         self.assertIn('.graph-hint', css)
+        self.assertIn('.graph-empty', css)
+        self.assertIn('.graph-empty[hidden]', css)
         self.assertIn('.graph-hover-card', css)
         self.assertEqual(self.raw.call('GET', '/memory/missing')['status'], 404)
 
@@ -142,6 +158,51 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertEqual(listed['status'], 200)
         self.assertEqual([item['title'] for item in listed['body']['items']], ['Brief'])
 
+    def test_directory_search_filters_in_place_and_keeps_open_editor(self):
+        page = self.raw.call('GET', '/memory')
+        html = page['body'].decode()
+        self.assertIn('id="search"', html)
+        self.assertIn('placeholder="搜索主题……"', html)
+        self.assertIn('这个工作区还没有记忆页。', html)
+        script = self.raw.call('GET', '/memory/app.mjs')
+        source = script['body'].decode()
+        self.assertNotIn("addEventListener('input', () => loadWorkspace())", source)
+        self.assertIn("addEventListener('input', () => renderDirectory())", source)
+        self.assertIn('没有匹配的记忆页。试试其他关键词。', source)
+        self.assertIn("event.key !== 'Escape'", source)
+        self.assertIn('matchingMemoryPages', source)
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            ['node', '--test', 'tests/memory_search.test.mjs'],
+            cwd=root, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_graph_empty_state_explains_how_to_get_a_graph(self):
+        page = self.raw.call('GET', '/memory')
+        html = page['body'].decode()
+        self.assertIn('id="graph-empty" class="graph-empty" hidden', html)
+        self.assertIn('创建两个或更多记忆页后，这里会把它们连成图谱', html)
+        js = self.raw.call('GET', '/memory/app.mjs')['body'].decode()
+        self.assertIn('export function graphEmptyStateVisible', js)
+        self.assertIn("getElementById('graph-empty-new')", js)
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            ['node', '--test', 'tests/memory_graph_empty.test.mjs'],
+            cwd=root, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MemoryProfileWorkspaceSwitchTests(unittest.TestCase):
+    def test_workspace_switch_invalidates_previous_profile_before_loading(self):
+        source = (Path(__file__).resolve().parents[1] / 'openteamily/static/memory/app.mjs').read_text()
+        handler = source.split("workspaceSelect.addEventListener('change'", 1)[1].split('});', 1)[0]
+        self.assertLess(handler.index('invalidateMemoryProfile()'), handler.index('await loadWorkspace()'))
+        helper = source.split('function invalidateMemoryProfile()', 1)[1].split('\n  }', 1)[0]
+        self.assertIn('profileRevision = null', helper)
+        self.assertIn('profileRequest += 1', helper)
+        self.assertIn('save.disabled = true', helper)

@@ -78,6 +78,36 @@ export function filterCatalog(items, {category = 'all', query = ''} = {}) {
   });
 }
 
+// An empty category is not a failed search: name whichever one the user is
+// looking at, and say nothing when there is something to list.
+export function emptyGuideMessage(items, query) {
+  if (items.length > 0) return '';
+  return normalize(query) ? '没有匹配的条目。换个词，或按 Esc 清空搜索。' : '这一类还没有指引。';
+}
+
+// Split guide text into the runs that match the keyword so the page can mark
+// them. Case-insensitive and length-preserving: joining the segments always
+// gives the original text back, and an unknown keyword marks nothing.
+export function highlightSegments(text, query) {
+  const source = String(text || '');
+  const needle = normalize(query);
+  if (!source) return [];
+  if (!needle) return [{text: source, match: false}];
+  const haystack = source.toLowerCase();
+  const segments = [];
+  let start = 0;
+  let hit = haystack.indexOf(needle);
+  while (hit !== -1) {
+    if (hit > start) segments.push({text: source.slice(start, hit), match: false});
+    segments.push({text: source.slice(hit, hit + needle.length), match: true});
+    start = hit + needle.length;
+    hit = haystack.indexOf(needle, start);
+  }
+  if (start < source.length) segments.push({text: source.slice(start), match: false});
+  return segments;
+}
+
+
 export function groupCatalog(items) {
   const groups = [];
   const index = new Map();
@@ -95,6 +125,32 @@ export function groupCatalog(items) {
 
 export function formatPath(path) {
   return (path || []).join(' › ');
+}
+
+// Deep link only: /guide?q=<keyword>, /guide?category=<id>, or both. An empty
+// keyword and the 全部 category both go back to a bare /guide, and an unknown
+// category id reads as 全部 instead of inventing an empty category.
+export function categorySlug(value) {
+  const id = String(value || '');
+  return CATEGORIES.some((category) => category.id === id) ? id : 'all';
+}
+
+export function guideHref(value, category = 'all') {
+  const keyword = String(value || '').trim();
+  const slug = categorySlug(category);
+  const params = new URLSearchParams();
+  if (slug !== 'all') params.set('category', slug);
+  if (keyword) params.set('q', keyword);
+  const search = params.toString();
+  return search ? `/guide?${search}` : '/guide';
+}
+
+export function guideInitialQuery(search) {
+  return new URLSearchParams(search || '').get('q') || '';
+}
+
+export function guideInitialCategory(search) {
+  return categorySlug(new URLSearchParams(search || '').get('category'));
 }
 
 function csrfCookie(source) {
@@ -151,7 +207,7 @@ function mount() {
   const dialogClose = document.getElementById('guide-dialog-close');
   if (!status || !loginPanel || !mainPanel || !form || !categoriesEl || !listEl) return;
 
-  let currentCategory = 'all';
+  let currentCategory = guideInitialCategory(globalThis.location ? globalThis.location.search : '');
   let currentItemId = '';
 
   function show(kind, text) {
@@ -168,11 +224,29 @@ function mount() {
     }
   }
 
+  // Mark the searched runs with <mark> elements and plain text nodes; the page
+  // never writes markup into the document, so a keyword can only ever be text.
+  function fillHighlighted(node, text, query) {
+    const parts = [];
+    for (const segment of highlightSegments(text, query)) {
+      if (!segment.text) continue;
+      if (segment.match) {
+        const mark = document.createElement('mark');
+        mark.textContent = segment.text;
+        parts.push(mark);
+      } else {
+        parts.push(document.createTextNode(segment.text));
+      }
+    }
+    node.replaceChildren(...parts);
+  }
+
   function openDialog(item) {
     if (!dialog || !dialogTitle || !dialogBody || !dialogPath) return;
+    const query = searchEl ? searchEl.value : '';
     currentItemId = item.id;
-    dialogTitle.textContent = item.title;
-    dialogBody.textContent = item.body;
+    fillHighlighted(dialogTitle, item.title, query);
+    fillHighlighted(dialogBody, item.body, query);
     dialogPath.textContent = formatPath(item.path);
     dialog.hidden = false;
     if (dialogClose) dialogClose.focus();
@@ -202,18 +276,23 @@ function mount() {
         currentCategory = category.id;
         closeDialog();
         render();
+        syncQuery(searchEl ? searchEl.value : '');
       });
       categoriesEl.append(button);
     }
   }
 
   function renderList() {
+    const query = searchEl ? searchEl.value : '';
     const items = filterCatalog(CATALOG, {
       category: currentCategory,
-      query: searchEl ? searchEl.value : '',
+      query,
     });
-    if (countEl) countEl.textContent = `${items.length} 个功能`;
-    if (emptyEl) emptyEl.hidden = items.length > 0;
+    if (countEl) countEl.textContent = `当前显示 ${items.length} 条`;
+    if (emptyEl) {
+      emptyEl.hidden = items.length > 0;
+      emptyEl.textContent = emptyGuideMessage(items, query);
+    }
     listEl.replaceChildren();
     for (const group of groupCatalog(items)) {
       const section = document.createElement('section');
@@ -232,7 +311,7 @@ function mount() {
         icon.className = 'item-icon';
         icon.append(iconNode());
         const title = document.createElement('span');
-        title.textContent = item.title;
+        fillHighlighted(title, item.title, query);
         button.append(icon, title);
         button.addEventListener('click', () => openDialog(item));
         section.append(button);
@@ -246,17 +325,37 @@ function mount() {
     renderList();
   }
 
+  function syncQuery(value) {
+    const location = globalThis.location;
+    const history = globalThis.history;
+    if (!location || !history || typeof history.replaceState !== 'function') return;
+    const href = guideHref(value, currentCategory);
+    if (location.pathname + location.search === href) return;
+    history.replaceState(null, '', href);
+  }
+
   if (searchEl) {
+    searchEl.value = guideInitialQuery(globalThis.location ? globalThis.location.search : '');
     searchEl.addEventListener('input', () => {
       closeDialog();
       renderList();
+      syncQuery(searchEl.value);
     });
   }
   if (dialogClose) dialogClose.addEventListener('click', closeDialog);
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && dialog && !dialog.hidden) {
+    if (event.key !== 'Escape') return;
+    if (dialog && !dialog.hidden) {
       event.preventDefault();
       closeDialog();
+      return;
+    }
+    if (searchEl && searchEl.value) {
+      event.preventDefault();
+      searchEl.value = '';
+      renderList();
+      syncQuery('');
+      searchEl.focus();
     }
   });
 

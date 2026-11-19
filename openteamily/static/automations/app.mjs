@@ -123,6 +123,39 @@ function kindOf(schedule) {
   return schedule.kind === 'once' ? 'later' : schedule.kind;
 }
 
+const WEEKDAY_NAMES = ['一', '二', '三', '四', '五', '六', '日'];
+
+function clampNumber(value, low, high, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(Math.max(Math.trunc(number), low), high);
+}
+
+// The list row says the same thing as the editor radios, and never leaks the
+// stored kind (`now`, `once`, `daily`, ...) to the reader.
+export function scheduleSummary(schedule, enabled) {
+  const state = enabled ? '已启用' : '未启用';
+  const kind = schedule && schedule.kind ? schedule.kind : 'now';
+  const zone = (schedule && schedule.time_zone) || 'Asia/Shanghai';
+  const time = (schedule && schedule.time) || '09:00';
+  if (kind === 'now') return `立即运行 · ${state}`;
+  if (kind === 'once' || kind === 'later') {
+    const date = schedule && schedule.date ? `${schedule.date} ` : '';
+    return `单次 ${date}${time}（${zone}）· ${state}`;
+  }
+  if (kind === 'daily') return `每天 ${time}（${zone}）· ${state}`;
+  if (kind === 'weekdays') return `工作日 ${time}（${zone}）· ${state}`;
+  if (kind === 'weekly') {
+    const weekday = WEEKDAY_NAMES[clampNumber(schedule && schedule.weekday, 1, 7, 1) - 1];
+    return `每周${weekday} ${time}（${zone}）· ${state}`;
+  }
+  if (kind === 'monthly') {
+    const day = clampNumber(schedule && schedule.day, 1, 31, 1);
+    return `每月 ${day} 日 ${time}（${zone}）· ${state}`;
+  }
+  return `已安排 · ${state}`;
+}
+
 function fillEditor(form, item, templates, username) {
   const schedule = (item && item.schedule) || {kind: 'now', time_zone: 'Asia/Shanghai'};
   const kind = kindOf(schedule);
@@ -159,7 +192,7 @@ function renderList(items, list, empty, onOpen) {
     open.addEventListener('click', () => onOpen(item));
     const meta = document.createElement('span');
     meta.className = 'note';
-    meta.textContent = `${item.schedule && item.schedule.kind ? item.schedule.kind : ''} ${item.enabled ? '已启用' : '未启用'}`;
+    meta.textContent = scheduleSummary(item.schedule, item.enabled);
     row.appendChild(open);
     row.appendChild(meta);
     list.appendChild(row);

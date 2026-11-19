@@ -1,5 +1,6 @@
 """Runtimes / connection page serving tests. In-process WSGI only; not browser E2E."""
 from pathlib import Path
+import re
 import tempfile
 import unittest
 
@@ -37,6 +38,7 @@ class RuntimesPageTests(unittest.TestCase):
         self.assertIn('runtime-badge', html)
         css = self.raw.call('GET', '/runtimes/app.css')['body'].decode()
         self.assertIn('margin-inline: auto', css)
+        self.assertIn('.copy-row', css)
         self.assertIn('id="detect-runtimes"', html)
         self.assertIn('id="detected-list"', html)
         self.assertIn('id="open-connect"', html)
@@ -65,6 +67,15 @@ class RuntimesPageTests(unittest.TestCase):
         self.assertIn('不要把安装脚本管道给 shell', html)
         self.assertIn('python3 flybot.pyz daemon start', html)
         self.assertIn('/install/flybot.pyz', html)
+        self.assertIn('id="copy-install"', html)
+        self.assertIn('id="copy-install-feedback"', html)
+        # Anchor the live-region attributes to the feedback span itself: the page-level
+        # #status also carries role="status", so a bare assertIn would pass even if the
+        # span lost its own semantics.
+        feedback_tag = re.search(r'<span[^>]*id="copy-install-feedback"[^>]*>', html)
+        self.assertIsNotNone(feedback_tag, 'the copy feedback span is served')
+        self.assertIn('role="status"', feedback_tag.group(0))
+        self.assertIn('aria-live="polite"', feedback_tag.group(0))
         self.assertNotIn('curl -fsSL', html)
         self.assertNotIn('install.ps1', html.lower())
         self.assertNotIn('teamily-releases', html.lower())

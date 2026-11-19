@@ -24,7 +24,7 @@ The default backend is `AgentAutomationBackend`. A caller may still inject a con
 
 `GET .../automations/{id}/runs` returns durable status, error code and a redacted `result` (`text`, `model`, `source`). Credentials never appear.
 
-The same-origin page at `/automations` lists automations and shows the run log and result text. A fake OpenAI-compatible provider in tests or a local demo is **not** proof against a real vendor.
+The same-origin page at `/automations` lists automations and shows the run log and result text. Each list row spells the slot out in the same wording as the editor radios: `立即运行`, `每天 09:00（Asia/Shanghai）`, `每周四 09:00（…）`, `每月 16 日 09:00（…）`, `工作日 09:00（…）`, `单次 2026-11-20 09:00（…）`, followed by `· 已启用` or `· 未启用`. The internal `kind` value stays in the record and in `kindOf()`; `scheduleSummary(schedule, enabled)` is the pure helper that renders the row, and it never echoes an unknown kind. A fake OpenAI-compatible provider in tests or a local demo is **not** proof against a real vendor.
 
 ## Not claimed
 

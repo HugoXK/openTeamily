@@ -34,6 +34,10 @@ class ChatPageTests(unittest.TestCase):
         self.assertIn('id="search-panel"', html)
         self.assertIn('id="chat-avatar"', html)
         self.assertIn('id="social-agent-members"', html)
+        self.assertIn('id="group-agent-chips"', html)
+        self.assertIn('id="group-agent-choices"', html)
+        self.assertIn('id="group-agent-add"', html)
+        self.assertIn('id="onboarding-banner"', html)
         self.assertIn('id="session-filter"', html)
         self.assertLess(html.find('id="session-filter"'), html.find('id="session-search"'))
         self.assertLess(html.find('id="session-search"'), html.find('id="new-conversation"'))
@@ -52,7 +56,8 @@ class ChatPageTests(unittest.TestCase):
         self.assertIn('输入群组名称（可选）', html)
         self.assertIn('id="compose-member-search"', html)
         self.assertIn('已选 0', html)
-        self.assertIn('未接通：还没有智能体团队模板或创建接口', html)
+        self.assertIn('选择一个团队模板', html)
+        self.assertIn('id="team-template-choices"', html)
         self.assertIn('compose-dialog-submit" disabled', html)
         self.assertNotIn('成员付费', html)
         self.assertNotIn('群主付费', html)
@@ -69,6 +74,8 @@ class ChatPageTests(unittest.TestCase):
         self.assertEqual(script['status'], 200)
         self.assertIn(b'/conversations', script['body'])
         self.assertIn(b'/social/conversations', script['body'])
+        self.assertIn(b'agent_ids', script['body'])
+        self.assertIn(b'/v1/personal-agent', script['body'])
         self.assertIn(b'/search/messages', script['body'])
         self.assertIn(b'mergeSessions', script['body'])
         self.assertIn(b'composeCreateEnabled', script['body'])
@@ -79,6 +86,15 @@ class ChatPageTests(unittest.TestCase):
         discover = self.raw.call('GET', '/discover')
         self.assertEqual(discover['status'], 200)
         self.assertIn('id="discover-list"', discover['body'].decode())
+
+    def test_empty_state_offers_the_two_recorded_next_steps(self):
+        page = self.raw.call('GET', '/chat')
+        self.assertEqual(page['status'], 200)
+        html = page['body'].decode()
+        start = html.index('id="chat-empty"')
+        block = html[start:html.index('id="message-list"', start)]
+        self.assertIn('<a href="/agents">浏览智能体</a>', block)
+        self.assertIn('<a href="/guide">查看功能指引</a>', block)
 
     def test_page_rejects_cross_origin_queries_and_writes(self):
         self.assertEqual(self.raw.call('GET', '/chat', origin='https://evil.test')['status'], 403)

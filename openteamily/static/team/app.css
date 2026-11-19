@@ -1,2 +1,141 @@
-#steps { display: flex; gap: .8rem; margin: 0 0 1rem; }
-#steps span[aria-current="step"] { font-weight: 600; }
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.team-wizard {
+  max-width: 28rem;
+  margin: 1.5rem auto 3rem;
+}
+
+.wizard-progress {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin: 0 0 1.25rem;
+  color: var(--ot-muted);
+  font-size: .85rem;
+}
+
+.wizard-dots {
+  display: inline-flex;
+  gap: .2rem;
+}
+
+.wizard-dots span {
+  width: 1.1rem;
+  height: .22rem;
+  border-radius: 99px;
+  background: var(--ot-line);
+}
+
+.wizard-dots span.is-current {
+  background: var(--ot-ink);
+}
+
+.wizard-header h1 {
+  margin: 0 0 1.5rem;
+  font-size: 1.35rem;
+}
+
+.team-wizard h2 {
+  margin: 0 0 .4rem;
+  font-size: 1.15rem;
+}
+
+.wizard-lead {
+  margin: 0 0 1.1rem;
+  color: var(--ot-muted);
+}
+
+.wizard-field {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+  font-weight: 600;
+}
+
+.wizard-field input {
+  font: inherit;
+  font-weight: 400;
+  padding: .55rem .7rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .65rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+
+.wizard-hint {
+  margin: .3rem 0 1rem;
+  color: var(--ot-muted);
+  font-size: .85rem;
+}
+
+.mode-list {
+  margin: 0 0 1.25rem;
+  padding: 0;
+  border: 0;
+}
+
+.mode-list legend {
+  padding: 0;
+  margin: 0 0 .6rem;
+  font-weight: 600;
+}
+
+.mode-card {
+  display: flex;
+  gap: .7rem;
+  align-items: flex-start;
+  margin: 0 0 .6rem;
+  padding: .85rem .9rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  background: var(--ot-surface);
+  cursor: pointer;
+}
+
+.mode-card:has(input:checked) {
+  border-color: var(--ot-accent);
+  box-shadow: inset 0 0 0 1px var(--ot-accent);
+}
+
+.mode-card input {
+  margin: .2rem 0 0;
+}
+
+.mode-body {
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+}
+
+.mode-title {
+  font-weight: 600;
+}
+
+.mode-hint {
+  color: var(--ot-muted);
+  font-size: .85rem;
+}
+
+.team-wizard .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: .6rem;
+}
+
+#next:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+/* Avoid nesting the mode selector card inside the existing wizard card. */
+.team-wizard .mode-list { border: 0; border-radius: 0; padding: .5rem 0; background: transparent; box-shadow: none; }

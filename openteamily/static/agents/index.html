@@ -14,34 +14,35 @@
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
-    <a href="/chat" title="聊天">聊天</a>
-    <a href="/agents" title="智能体">智能体</a>
-    <a href="/automations" title="自动化">自动化</a>
-    <a href="/memory" title="记忆">记忆</a>
-    <a href="/space" title="作品">作品</a>
-    <a href="/discover" title="发现">发现</a>
+    <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
+    <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
+    <a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
+    <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
+    <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
+    <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
     <span class="rail-spacer"></span>
-    <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
+    <a href="/profile" class="rail-signed-in" hidden title="我的资料" aria-label="我"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span class="rail-label">我</span></a>
     <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
-    <a href="/download" title="下载">下载</a>
+    <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
     <div class="account-slot" hidden>
       <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
       <div id="account-menu" class="account-menu" role="menu" hidden>
         <p id="account-identity" class="account-identity"></p>
-        <a href="/profile" role="menuitem">查看我的资料</a>
+        <a href="/profile" role="menuitem" aria-label="查看我的资料">查看我的资料</a>
         <a href="/team" role="menuitem">创建团队</a>
         <div class="account-sub">
           <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
           <div id="help-menu" hidden>
-            <a href="/guide" role="menuitem">帮助中心</a>
-            <a href="/download" role="menuitem">下载</a>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 帮助中心页">帮助中心</button>
+            <a href="/guide" role="menuitem">功能指引</a>
+            <a href="/download" role="menuitem" aria-label="下载">下载</a>
             <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
             <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
             <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
           </div>
         </div>
-        <a href="/settings" role="menuitem">所有设置</a>
+        <a href="/settings" role="menuitem" aria-label="所有设置">所有设置</a>
         <form id="logout-form" method="post" action="/v1/auth/logout">
           <button type="submit">退出登录</button>
         </form>
@@ -74,7 +75,7 @@
     <p id="role-note" class="note"></p>
     <details class="gap-note">
       <summary>对照说明</summary>
-      <p class="note">工作区成员可以维护智能体目录，并从卡片进入独立的聊天页。所有者或管理员可以发布可撤销的公开主页链接（只展示名称和简介，不含说明）。没有嵌入对话，也没有 Auto / Instant / Agentic 模式。创建者筛选、AI 团队模板尚未实现，对应入口已禁用。分类按目标站的 17 个类目可选，选中会写进链接；智能体记录还没有分类字段，所以选中不会缩小下面的工作区目录。还不能写成已经功能对等。</p>
+      <p class="note">工作区成员可以维护智能体目录，并从卡片进入独立的聊天页。所有者或管理员可以发布可撤销的公开主页链接（只展示名称和简介，不含说明）。没有嵌入对话，也没有 Auto / Instant / Agentic 模式。创建者下拉按创建人筛选智能体，可以和类目叠加使用；AI 团队模板尚未实现，对应入口已禁用。分类按目标站的 17 个类目可选，选中会写进链接并缩小下面的工作区目录；类目由所有者或管理员在新建或编辑时选择（OpenTeamily 原创补充，未与目标站的类目设置流程对照），未分类的智能体只在「全部」里出现。还不能写成已经功能对等。</p>
     </details>
     <div class="filter-row" aria-label="筛选">
       <button type="button" class="pill" data-category="all" aria-pressed="true">全部</button>
@@ -96,12 +97,13 @@
       <button type="button" class="pill" data-category="research" aria-pressed="false">Research</button>
       <button type="button" class="pill" data-category="sales" aria-pressed="false">Sales</button>
       <label>创建者
-        <select id="creator-filter" disabled title="未实现：创建者筛选">
-          <option>全部</option>
+        <select id="creator-filter">
+          <option value="">全部</option>
         </select>
       </label>
     </div>
     <section id="list-panel">
+      <p id="agents-count" class="directory-count" role="status" aria-live="polite"></p>
       <ul id="agent-list" class="card-grid"></ul>
       <p id="agents-empty" class="note" hidden>这个工作区还没有智能体。</p>
     </section>
@@ -115,6 +117,7 @@
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+          <label>类目 <select name="category"><option value="">未分类</option></select></label>
           <button type="submit">创建</button>
         </fieldset>
       </form>
@@ -126,6 +129,7 @@
           <label>名称 <input type="text" name="name" required maxlength="80" autocomplete="off"></label>
           <label class="stack">简介 <input type="text" name="summary" maxlength="500" autocomplete="off"></label>
           <label class="stack">说明 <textarea name="instructions" maxlength="16000"></textarea></label>
+          <label>类目 <select name="category"><option value="">未分类</option></select></label>
           <div class="actions">
             <button type="submit">保存</button>
             <button type="button" id="archive-button">归档</button>
@@ -142,6 +146,17 @@
           <button type="button" id="publish-homepage">发布链接</button>
           <button type="button" id="revoke-homepage">撤回链接</button>
         </div>
+      </section>
+      <section id="api-key-panel" hidden>
+        <h2>外部 API 访问</h2>
+        <p class="note">为这个智能体生成仅限调用的 API 密钥。外部程序用 <code>Authorization: Bearer</code> 调用 <code>/v1/gateway/agents/&lt;智能体 ID&gt;/invocations</code>，回复由你已连接的运行时完成。密钥只显示一次。</p>
+        <form id="api-key-form">
+          <label>名称 <input id="api-key-name" maxlength="60" required autocomplete="off"></label>
+          <label>每分钟上限 <input id="api-key-rate" type="number" min="1" max="60" value="10"></label>
+          <button type="submit">生成密钥</button>
+        </form>
+        <p id="api-key-token" class="note" hidden></p>
+        <ul id="api-key-list"></ul>
       </section>
       <section id="runtime-panel" hidden>
         <h2>运行时绑定</h2>

@@ -48,7 +48,61 @@ export function readAgentForm(form) {
     name: (data.get('name') || '').trim(),
     summary: (data.get('summary') || '').trim(),
     instructions: data.get('instructions') || '',
+    category: AGENT_CATEGORY_SLUGS.has(data.get('category')) ? data.get('category') : null,
   };
+}
+
+export function categoryLabel(slug) {
+  const found = AGENT_CATEGORIES.find((entry) => entry.slug === slug);
+  return found ? found.label : '';
+}
+
+export function matchesCategory(item, slug) {
+  return !slug || slug === 'all' || (item && item.category === slug);
+}
+
+export function matchesCreator(item, creatorId) {
+  return !creatorId || (item && item.created_by === creatorId);
+}
+
+export function creatorChoices(items, names) {
+  const seen = new Map();
+  for (const item of items || []) {
+    const id = item && item.created_by;
+    if (id && !seen.has(id)) seen.set(id, (names && names.get(id)) || '用户 ' + String(id).slice(0, 8));
+  }
+  return [...seen.entries()]
+    .sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]))
+    .map(([id, label]) => ({id, label}));
+}
+
+export function fillCreatorOptions(select, items, names, doc) {
+  if (!select) return;
+  const chosen = select.value;
+  const producer = doc || select.ownerDocument;
+  const choices = creatorChoices(items, names);
+  select.replaceChildren();
+  const all = producer.createElement('option');
+  all.value = '';
+  all.textContent = '全部';
+  select.append(all);
+  for (const choice of choices) {
+    const option = producer.createElement('option');
+    option.value = choice.id;
+    option.textContent = choice.label;
+    select.append(option);
+  }
+  select.value = choices.some((choice) => choice.id === chosen) ? chosen : '';
+}
+
+export function fillCategoryOptions(select, doc) {
+  if (!select || !select.options || select.options.length > 1) return;
+  for (const entry of AGENT_CATEGORIES) {
+    const option = (doc || select.ownerDocument).createElement('option');
+    option.value = entry.slug;
+    option.textContent = entry.label;
+    select.append(option);
+  }
 }
 
 export function idempotencyKey(prefix) {
@@ -86,8 +140,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentAgent = null;
   let currentConversation = null;
   let pollTimer = 0;
+  let directoryLoaded = false;
+  fillCategoryOptions(createForm.elements.category, document);
+  fillCategoryOptions(editForm.elements.category, document);
   const categoryButtons = [...document.querySelectorAll('.filter-row .pill[data-category]')];
+  const creatorFilter = document.getElementById('creator-filter');
   let selectedCategory = categoryFromSearch(globalThis.location && globalThis.location.search);
+  let selectedCreator = '';
+  let memberNames = new Map();
 
   function renderCategoryFilter() {
     for (const button of categoryButtons) {
@@ -98,6 +158,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function selectCategory(slug, push) {
     selectedCategory = AGENT_CATEGORY_SLUGS.has(slug) ? slug : 'all';
     renderCategoryFilter();
+    if (directoryLoaded) renderDirectory();
     if (!globalThis.location || !globalThis.history) return;
     const next = searchWithCategory(globalThis.location.search, selectedCategory);
     const url = globalThis.location.pathname + next + globalThis.location.hash;
@@ -113,6 +174,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     globalThis.addEventListener('popstate', () => {
       selectedCategory = categoryFromSearch(globalThis.location.search);
       renderCategoryFilter();
+      if (directoryLoaded) renderDirectory();
     });
   }
 
@@ -177,9 +239,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       workspaceSelect.value = previous;
     }
     if (!workspaces.length) {
+      directoryAgents = [];
+      fillCreatorOptions(creatorFilter, [], memberNames, document);
+      selectedCreator = '';
       document.getElementById('role-note').textContent = '还没有可访问的工作区。';
       document.getElementById('agent-list').replaceChildren();
-      document.getElementById('agents-empty').hidden = false;
+      const empty = document.getElementById('agents-empty');
+      empty.hidden = false;
+      empty.textContent = '这个工作区还没有智能体。';
+      const count = document.getElementById('agents-count');
+      if (count) count.textContent = '显示 0 个智能体';
       createForm.hidden = true;
       editForm.hidden = true;
       chatPanel.hidden = true;
@@ -190,44 +259,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadWorkspace();
   }
 
-  async function loadWorkspace() {
+  let directoryAgents = [];
+
+  function matchesDirectoryQuery(item, query) {
+    if (!query) return true;
+    const hay = (item.name + ' ' + (item.summary || '')).toLowerCase();
+    return hay.includes(query);
+  }
+
+  function renderDirectory() {
     const id = workspaceId();
-    if (!id) return;
-    currentAgent = null;
-    currentConversation = null;
-    stopPolling();
-    chatPanel.hidden = true;
-    if (runtimePanel) runtimePanel.hidden = true;
-    const detail = await request('GET', `/v1/workspaces/${id}`);
-    if (detail.status !== 200) {
-      show('error', messageFor(detail.body.error, '无法打开工作区。'));
-      return;
-    }
-    const members = await request('GET', `/v1/workspaces/${id}/members`);
-    const self = members.status === 200
-      ? (members.body.items || []).find(row => row.user_id === currentUser.id)
-      : null;
-    actor = self ? self.role : (detail.body.workspace && detail.body.workspace.owner_id === currentUser.id ? 'owner' : 'member');
-    document.getElementById('role-note').textContent = actor === 'owner'
-      ? '你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。'
-      : actor === 'admin'
-        ? '你是管理员，可以创建和归档智能体，并与自己的智能体对话。'
-        : '你是成员，可以查看目录并与自己的智能体对话，但不能改目录。';
-    createForm.hidden = !canManage(actor);
-    editForm.hidden = true;
-    const listed = await request('GET', `/v1/workspaces/${id}/agents?limit=100`);
-    if (listed.status !== 200) {
-      show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
-      return;
-    }
-    const items = listed.body.items || [];
     const list = document.getElementById('agent-list');
-    list.replaceChildren();
+    const empty = document.getElementById('agents-empty');
+    const count = document.getElementById('agents-count');
     const query = ((document.getElementById('agent-search') || {}).value || '').trim().toLowerCase();
+    list.replaceChildren();
     let shown = 0;
-    for (const item of items) {
-      const hay = (item.name + ' ' + (item.summary || '')).toLowerCase();
-      if (query && !hay.includes(query)) continue;
+    for (const item of directoryAgents) {
+      if (!matchesDirectoryQuery(item, query) || !matchesCategory(item, selectedCategory)
+          || !matchesCreator(item, selectedCreator)) continue;
       shown += 1;
       const li = document.createElement('li');
       li.className = 'agent-card';
@@ -246,6 +296,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       note.className = 'summary';
       note.textContent = item.summary || '暂无简介';
       copy.append(note);
+      if (item.category && categoryLabel(item.category)) {
+        const tag = document.createElement('span');
+        tag.className = 'category-tag';
+        tag.textContent = categoryLabel(item.category);
+        copy.append(tag);
+      }
       const chat = document.createElement('a');
       chat.className = 'chat-cta';
       chat.href = '/chat#workspace=' + encodeURIComponent(id) + '&agent=' + encodeURIComponent(item.id);
@@ -253,7 +309,76 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       li.append(avatar, copy, chat);
       list.append(li);
     }
-    document.getElementById('agents-empty').hidden = shown > 0;
+    if (empty) {
+      empty.hidden = shown > 0;
+      empty.textContent = !directoryAgents.length
+        ? '这个工作区还没有智能体。'
+        : query
+        ? '没有匹配的智能体。试试其他关键词。'
+        : selectedCreator
+          ? '没有符合筛选的智能体'
+          : selectedCategory !== 'all' && directoryAgents.length
+            ? '「' + categoryLabel(selectedCategory) + '」类目下还没有智能体。选「全部」查看其余智能体。'
+            : '这个工作区还没有智能体。';
+    }
+    if (count) count.textContent = '显示 ' + shown + ' 个智能体';
+  }
+
+  const apiKeyForm = document.getElementById('api-key-form');
+  if (apiKeyForm) apiKeyForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!currentAgent) return;
+    const agent = currentAgent, wid = workspaceId();
+    const result = await request('POST', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys`, {
+      name: document.getElementById('api-key-name').value,
+      rate_per_minute: Number(document.getElementById('api-key-rate').value) || 10,
+    });
+    if (result.status !== 201) { show('error', messageFor(result.body.error, '无法生成密钥。')); return; }
+    const out = document.getElementById('api-key-token');
+    out.hidden = false;
+    out.textContent = `密钥只显示一次：${result.body.token}`;
+    document.getElementById('api-key-name').value = '';
+    loadApiKeys(agent, true);
+  });
+
+  async function loadWorkspace() {
+    const id = workspaceId();
+    if (!id) return;
+    currentAgent = null;
+    currentConversation = null;
+    stopPolling();
+    chatPanel.hidden = true;
+    if (runtimePanel) runtimePanel.hidden = true;
+    const detail = await request('GET', `/v1/workspaces/${id}`);
+    if (detail.status !== 200) {
+      show('error', messageFor(detail.body.error, '无法打开工作区。'));
+      return;
+    }
+    const members = await request('GET', `/v1/workspaces/${id}/members`);
+    memberNames = new Map(members.status === 200
+      ? (members.body.items || []).map(row => [row.user_id, row.username])
+      : []);
+    const self = members.status === 200
+      ? (members.body.items || []).find(row => row.user_id === currentUser.id)
+      : null;
+    actor = self ? self.role : (detail.body.workspace && detail.body.workspace.owner_id === currentUser.id ? 'owner' : 'member');
+    document.getElementById('role-note').textContent = actor === 'owner'
+      ? '你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。'
+      : actor === 'admin'
+        ? '你是管理员，可以创建和归档智能体，并与自己的智能体对话。'
+        : '你是成员，可以查看目录并与自己的智能体对话，但不能改目录。';
+    createForm.hidden = !canManage(actor);
+    editForm.hidden = true;
+    const listed = await request('GET', `/v1/workspaces/${id}/agents?limit=100`);
+    if (listed.status !== 200) {
+      show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
+      return;
+    }
+    directoryAgents = listed.body.items || [];
+    directoryLoaded = true;
+    fillCreatorOptions(creatorFilter, directoryAgents, memberNames, document);
+    selectedCreator = creatorFilter ? creatorFilter.value : '';
+    renderDirectory();
     show('', '');
   }
 
@@ -265,9 +390,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editForm.elements.name.value = agent.name;
     editForm.elements.summary.value = agent.summary || '';
     editForm.elements.instructions.value = agent.instructions || '';
+    if (editForm.elements.category) {
+      editForm.elements.category.value = AGENT_CATEGORY_SLUGS.has(agent.category) ? agent.category : '';
+    }
     const writable = canManage(actor);
-    for (const field of ['name', 'summary', 'instructions']) {
-      editForm.elements[field].disabled = !writable;
+    for (const field of ['name', 'summary', 'instructions', 'category']) {
+      if (editForm.elements[field]) editForm.elements[field].disabled = !writable;
     }
     document.getElementById('archive-button').hidden = !writable;
     editForm.querySelector('button[type="submit"]').hidden = !writable;
@@ -281,6 +409,44 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     renderHomepage(agent, writable);
     if (runtimePanel) loadRuntime();
+    loadApiKeys(agent, writable);
+  }
+
+  async function loadApiKeys(agent, writable) {
+    const panel = document.getElementById('api-key-panel');
+    if (!panel) return;
+    panel.hidden = !writable || Boolean(agent.archived);
+    document.getElementById('api-key-token').hidden = true;
+    if (panel.hidden) return;
+    const wid = workspaceId();
+    let listed;
+    try {
+      listed = await request('GET', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys`);
+    } catch (error) {
+      return;  // optional panel; never break the editor
+    }
+    if (workspaceId() !== wid || !currentAgent || currentAgent.id !== agent.id) return;
+    const list = document.getElementById('api-key-list');
+    list.replaceChildren(...(listed.status === 200 ? listed.body.items : []).map(key => {
+      const li = document.createElement('li');
+      const meta = document.createElement('span');
+      meta.textContent = `${key.name} · ${key.rate_per_minute} 次/分钟 · ${key.revoked ? '已撤销' : '有效'}`
+        + (key.last_used ? ' · 用过' : ' · 未使用');
+      li.append(meta);
+      if (!key.revoked) {
+        const revoke = document.createElement('button');
+        revoke.type = 'button';
+        revoke.textContent = '撤销';
+        revoke.addEventListener('click', async () => {
+          const result = await request('POST', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys/${key.id}/revoke`, {});
+          if (result.status !== 200) { show('error', messageFor(result.body.error, '无法撤销密钥。')); return; }
+          show('ok', '已撤销密钥。');
+          loadApiKeys(agent, writable);
+        });
+        li.append(revoke);
+      }
+      return li;
+    }));
   }
 
   function renderHomepage(agent, writable, tokenPath) {
@@ -675,7 +841,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (canManage(actor)) createForm.hidden = false;
   });
   const search = document.getElementById('agent-search');
-  if (search) search.addEventListener('input', () => loadWorkspace());
+  if (creatorFilter) creatorFilter.addEventListener('change', () => {
+    selectedCreator = creatorFilter.value || '';
+    renderDirectory();
+  });
+  if (search) {
+    search.addEventListener('input', () => renderDirectory());
+    search.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      search.value = '';
+      renderDirectory();
+      if (typeof search.focus === 'function') search.focus();
+    });
+  }
   const tabAgents = document.getElementById('tab-agents');
   const tabTeams = document.getElementById('tab-teams');
   if (tabAgents && tabTeams) {

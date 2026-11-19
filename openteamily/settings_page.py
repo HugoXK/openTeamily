@@ -6,7 +6,7 @@ does not interpret /v1 routes. Self-written; no upstream or Teamily source.
 import os
 from pathlib import Path
 import stat
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 from . import discover
 
@@ -28,6 +28,7 @@ class SettingsPage:
         '/automations/app.mjs': ('automations', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/automations/app.css': ('automations', 'app.css', 'text/css; charset=utf-8'),
         '/team': ('team', 'index.html', 'text/html; charset=utf-8'),
+        '/new/team': ('team', 'index.html', 'text/html; charset=utf-8'),
         '/team/app.mjs': ('team', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/team/app.css': ('team', 'app.css', 'text/css; charset=utf-8'),
         '/members': ('members', 'index.html', 'text/html; charset=utf-8'),
@@ -61,13 +62,17 @@ class SettingsPage:
         '/discover/app.css': ('discover', 'app.css', 'text/css; charset=utf-8'),
         '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/app.mjs': ('profile', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/onboarding': ('onboarding', 'index.html', 'text/html; charset=utf-8'),
+        '/onboarding/app.mjs': ('onboarding', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/onboarding/app.css': ('onboarding', 'app.css', 'text/css; charset=utf-8'),
+        '/profile/app.css': ('profile', 'app.css', 'text/css; charset=utf-8'),
         '/download': ('download', 'index.html', 'text/html; charset=utf-8'),
         '/download/app.mjs': ('download', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/guide': ('guide', 'index.html', 'text/html; charset=utf-8'),
         '/guide/app.mjs': ('guide', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/guide/app.css': ('guide', 'app.css', 'text/css; charset=utf-8'),
     }
-    PREFIXES = ('/settings', '/automations', '/team', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/profile', '/download', '/guide')
+    PREFIXES = ('/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/download', '/guide')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")
@@ -153,6 +158,18 @@ class SettingsPage:
             return slug in discover.AGENT_CATEGORY_SLUGS
         if path == '/memory':
             return query in ('page=profile', 'page=todos')
+        if path == '/guide':
+            # Deep links: one non-empty q, one non-empty category, or both, each
+            # named at most once. An unknown category id is served anyway and the
+            # page falls back to 全部, so a stale link is not a 400. Every other
+            # /guide query, and every query on the guide CSS/JS, still answers 400.
+            pairs = parse_qsl(query, keep_blank_values=True)
+            seen = set()
+            for key, value in pairs:
+                if key not in ('q', 'category') or not value or key in seen:
+                    return False
+                seen.add(key)
+            return bool(seen)
         return False
 
     def __call__(self, env, start_response):

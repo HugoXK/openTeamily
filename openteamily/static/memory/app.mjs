@@ -258,6 +258,23 @@ export function applyDirectoryCollapsed(root, collapsed) {
   return next;
 }
 
+
+export const MEMORY_EMPTY_WORKSPACE = '这个工作区还没有记忆页。';
+export const MEMORY_EMPTY_NO_MATCH = '没有匹配的记忆页。试试其他关键词。';
+export const GRAPH_EMPTY_MESSAGE = '创建两个或更多记忆页后，这里会把它们连成图谱';
+
+export function graphEmptyStateVisible({nodeCount = 0, query = ''} = {}) {
+  if (String(query || '').trim()) return false;
+  return Number(nodeCount) < 2;
+}
+
+export function matchingMemoryPages(items, needle) {
+  const query = String(needle || '').trim().toLocaleLowerCase();
+  const rows = [...(items || [])];
+  if (!query) return rows;
+  return rows.filter((item) => String(item.title || '').toLocaleLowerCase().includes(query));
+}
+
 export function memoryPageFromSearch(search) {
   const value = new URLSearchParams(search || '').get('page');
   if (value === 'profile') return 'profile';
@@ -430,9 +447,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else {
       for (const item of rows) appendPage(listEl, item);
     }
+    const needle = document.getElementById('search') ? document.getElementById('search').value : '';
     emptyEl.hidden = rows.length > 0;
+    emptyEl.textContent = rows.length > 0
+      ? emptyEl.textContent
+      : (String(needle || '').trim() ? MEMORY_EMPTY_NO_MATCH : MEMORY_EMPTY_WORKSPACE);
     const count = document.getElementById('filter-all-count');
-    if (count) count.textContent = String((items || []).length);
+    if (count) count.textContent = String((pageChoices || []).length);
+  }
+
+  function renderDirectory() {
+    renderList(matchingMemoryPages(pageChoices, document.getElementById('search') ? document.getElementById('search').value : ''));
   }
 
   function renderRecent(items) {
@@ -467,7 +492,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       button.addEventListener('click', () => {
         topicFilter = topicFilter === topic.name ? '' : topic.name;
         renderTopicFilters();
-        renderList(pageChoices);
+        renderDirectory();
       });
       box.appendChild(button);
     }
@@ -480,23 +505,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     view.history.replaceState({}, '', path + queryForMemoryPage(currentView));
   }
 
+  let profileRevision = null;
+  let profileRequest = 0;
+  async function loadMemoryProfile() {
+    profileRevision = null;
+    const token = ++profileRequest, wid = workspaceId();
+    const save = document.getElementById('save-memory-profile'); if (save) save.disabled = true;
+    if (!wid) return;
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/profile`);
+    if (token !== profileRequest || workspaceId() !== wid) return;
+    const status = document.getElementById('memory-profile-status');
+    if (result.status !== 200) { if (status) status.textContent = '无法读取画像。'; return; }
+    const profile = result.body.profile;
+    profileRevision = profile.revision;
+    if (save) save.disabled = false;
+    for (const field of ['professional', 'work_style', 'communication']) {
+      const input = document.getElementById('profile-' + field); if (input) input.value = profile[field];
+    }
+    if (status) status.textContent = '';
+  }
   function showView(name, {sync = true} = {}) {
     currentView = name || 'overview';
     const workspace = document.getElementById('list-panel');
     if (workspace) workspace.dataset.view = currentView;
     const title = document.getElementById('view-title');
-    const labels = {overview: '总览', profile: '我的资料', actions: '下一步行动', meetings: '我的会议'};
+    const labels = {overview: '总览', profile: '我的资料', actions: '下一步行动'};
     if (title) title.textContent = labels[currentView] || '总览';
     const overview = document.getElementById('overview-panel');
     const side = document.getElementById('memory-side');
     const actions = document.getElementById('actions-panel');
     const profile = document.getElementById('profile-panel');
-    const meetings = document.getElementById('meetings-panel');
     if (overview) overview.hidden = currentView !== 'overview';
     if (side) side.hidden = currentView !== 'overview';
     if (actions) actions.hidden = currentView !== 'actions';
     if (profile) profile.hidden = currentView !== 'profile';
-    if (meetings) meetings.hidden = currentView !== 'meetings';
+    if (currentView === 'profile') loadMemoryProfile();
     for (const button of document.querySelectorAll('.memory-views [data-view]')) {
       if (button.getAttribute('data-view') === currentView) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
@@ -600,6 +643,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const payload = graph || {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
     const stats = payload.counts || {nodes: 0, edges: 0, topics: 0};
     if (counts) counts.textContent = `${stats.nodes} 节点 · ${stats.edges} 连接 · ${stats.topics} 话题`;
+    const empty = document.getElementById('graph-empty');
+    if (empty) {
+      empty.hidden = !graphEmptyStateVisible({
+        nodeCount: (payload.nodes || []).length,
+        query: topicQuery,
+      });
+    }
     if (canvas) {
       canvas.replaceChildren();
       const world = svgNode('g', {id: 'graph-world', transform: `translate(320 200) scale(${graphZoom}) translate(-320 -200)`});
@@ -803,7 +853,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     listPanel.hidden = false;
     if (!id) {
       pageChoices = [];
-      renderList([]);
+      renderDirectory();
       renderRecent([]);
       fillPageSelect(document.getElementById('new-action-page'), '');
       renderActions([]);
@@ -811,23 +861,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       showView(currentView);
       return;
     }
-    const needle = document.getElementById('search').value.trim();
-    const listed = await request('GET', `/v1/workspaces/${id}/memory${listQuery(needle)}`);
+    const listed = await request('GET', `/v1/workspaces/${id}/memory`);
     if (listed.status !== 200) {
       pageChoices = [];
-      renderList([]);
+      renderDirectory();
       renderActions([]);
       renderGraph({nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}});
       show('error', messageFor(listed.body.error, '无法加载记忆页。'));
       return;
     }
     pageChoices = listed.body.items || [];
-    renderList(pageChoices);
+    renderDirectory();
     renderRecent(pageChoices);
     fillPageSelect(document.getElementById('new-action-page'), '');
     await loadActions();
     await loadGraph();
-    renderList(pageChoices);
+    renderDirectory();
     renderRecent(pageChoices);
     showView(currentView);
   }
@@ -904,8 +953,40 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadSession();
   });
 
-  workspaceSelect.addEventListener('change', () => loadWorkspace());
-  document.getElementById('search').addEventListener('input', () => loadWorkspace());
+  const profileForm = document.getElementById('memory-profile-form');
+  if (profileForm) profileForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (profileRevision === null) return;
+    const wid = workspaceId();
+    const payload = {revision: profileRevision};
+    for (const field of ['professional', 'work_style', 'communication']) payload[field] = document.getElementById('profile-' + field).value;
+    const status = document.getElementById('memory-profile-status');
+    const result = await request('POST', `/v1/workspaces/${wid}/memory/profile`, payload);
+    if (workspaceId() !== wid) return;
+    if (result.status !== 200) { status.textContent = result.status === 409 ? '画像已在别处更新，请重新打开后重试。' : '画像未保存。'; return; }
+    profileRevision = result.body.profile.revision; status.textContent = '画像已保存。';
+  });
+  function invalidateMemoryProfile() {
+    // A workspace switch must not leave the previous workspace's revision or
+    // an enabled Save button while the new workspace profile is still loading.
+    profileRevision = null;
+    profileRequest += 1;
+    const save = document.getElementById('save-memory-profile'); if (save) save.disabled = true;
+  }
+  workspaceSelect.addEventListener('change', async () => {
+    invalidateMemoryProfile();
+    await loadWorkspace();
+    if (currentView === 'profile') await loadMemoryProfile();
+  });
+  document.getElementById('search').addEventListener('input', () => renderDirectory());
+  document.getElementById('search').addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    const box = document.getElementById('search');
+    box.value = '';
+    renderDirectory();
+    if (box.focus) box.focus();
+  });
   document.getElementById('action-filter').addEventListener('change', () => loadActions());
 
   for (const button of document.querySelectorAll('.memory-views [data-view]')) {
@@ -928,7 +1009,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       for (const item of document.querySelectorAll('.memory-filters [data-filter]')) {
         item.setAttribute('aria-pressed', item.getAttribute('data-filter') === listFilter ? 'true' : 'false');
       }
-      renderList(pageChoices);
+      renderDirectory();
     });
   }
   for (const button of document.querySelectorAll('.side-tabs [data-side]')) {
@@ -982,6 +1063,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     ? document.defaultView.location.search
     : '';
   showView(memoryPageFromSearch(initialSearch), {sync: false});
+
+  const graphEmptyNew = document.getElementById('graph-empty-new');
+  if (graphEmptyNew) {
+    graphEmptyNew.addEventListener('click', () => {
+      const create = document.getElementById('new-page');
+      if (create) create.click();
+    });
+  }
 
   document.getElementById('new-page').addEventListener('click', async () => {
     const id = workspaceId();
@@ -1159,6 +1248,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('close-action-editor').addEventListener('click', () => loadWorkspace());
 
   loadSession();
+  return {renderGraph};
 }
 
 if (typeof document !== 'undefined' && document.getElementById('login-form')) {

@@ -1,0 +1,83 @@
+.onboarding-card {
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  padding: 1.2rem 1.35rem;
+  max-width: 52rem;
+}
+.onboarding-card h2 { margin: 0 0 0.35rem; }
+.onboarding-card > label {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--ot-muted);
+  margin: 0.6rem 0;
+}
+.role-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+}
+.role-choices label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 999px;
+  background: var(--ot-surface);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.role-choices label:has(input:checked) {
+  background: var(--ot-accent-soft);
+  border-color: color-mix(in srgb, var(--ot-accent) 35%, transparent);
+  color: var(--ot-accent-hover);
+}
+.role-choices input { accent-color: var(--ot-accent); }
+.onboarding-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  margin-top: 1rem;
+}
+#custom-industry-label,
+#custom-role-label { margin-top: 0.5rem; }
+
+/* Step one follows the captured layout. Steps 2-4 below are a functional flow without a compared layout. */
+body.app-workspace:not(.chat-open) > main > #main-panel { max-width: 46rem; width: 100%; margin: 0 auto; padding: 2rem 1.25rem; box-sizing: border-box; }
+.onboarding-card { max-width: none; border: 0; box-shadow: none; padding: 1.5rem; }
+.onboarding-card h2 { font-size: 1.4rem; font-weight: 600; }
+.onboarding-card > .note { line-height: 1.65; }
+.onboarding-card > label { margin: 1.25rem 0; font-size: .9rem; }
+.onboarding-card select { min-height: 2.75rem; }
+#role-field { border: 0; padding: .5rem; }
+#role-field legend { padding: 0; font-size: .9rem; }
+.role-choices { gap: .5rem; }
+.role-choices label { padding: .55rem .8rem; min-height: 2.5rem; box-sizing: border-box; }
+.onboarding-actions { padding-top: 1rem; border-top: 1px solid var(--ot-line); }
+@media (max-width: 600px) { .onboarding-card { padding: 1rem; } .onboarding-actions { flex-wrap: wrap; } }
+
+#onboarding-steps { margin-top: 1rem; border-top: 1px solid var(--ot-line); }
+#onboarding-steps form { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--ot-line); }
+#onboarding-steps h2 { font-size: 1.1rem; }
+#onboarding-apps { list-style: none; padding: 0; }
+#onboarding-apps li {
+  padding: .4rem .75rem;
+  border: 1px dashed var(--ot-line-strong);
+  border-radius: 999px;
+  color: var(--ot-muted);
+  font-size: .85rem;
+}
+#onboarding-look { display: flex; flex-wrap: wrap; gap: .6rem 1rem; margin: .5rem 0; }
+#onboarding-look label { display: inline-flex; align-items: center; gap: .4rem; font-size: .85rem; color: var(--ot-muted); }
+#onboarding-look-preview {
+  padding: .5rem .75rem;
+  border-radius: var(--ot-radius-sm);
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+}

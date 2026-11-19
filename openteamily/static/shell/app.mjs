@@ -22,6 +22,11 @@ function markNavigation() {
   }
 }
 
+/* The account stores no location, so「日落到日出」has no sunrise to read. Until one exists, the
+   automatic look falls back to a fixed night window: 22:00 inclusive to 06:00 exclusive is dark.
+   A `custom` window keeps the times the account chose and stays ahead of this fallback. */
+export const NIGHT_WINDOW = {start: '22:00', end: '06:00'};
+
 function minutes(value) {
   const match = /^([01]?\d|2[0-3]):([0-5]\d)/.exec(String(value || ''));
   if (!match) return null;
@@ -31,9 +36,10 @@ function minutes(value) {
 export function resolveTheme(values, now = new Date(), media) {
   const appearance = values && values.appearance ? values.appearance : 'system';
   if (appearance === 'light' || appearance === 'dark') return appearance;
-  if (appearance === 'auto' && values && values.appearance_schedule === 'custom') {
-    const start = minutes(values.appearance_start);
-    const end = minutes(values.appearance_end);
+  if (appearance === 'auto') {
+    const custom = values.appearance_schedule === 'custom';
+    const start = minutes(custom ? values.appearance_start : NIGHT_WINDOW.start);
+    const end = minutes(custom ? values.appearance_end : NIGHT_WINDOW.end);
     if (start != null && end != null && start !== end) {
       const current = now.getHours() * 60 + now.getMinutes();
       const inRange = start < end ? current >= start && current < end : current >= start || current < end;
@@ -149,6 +155,82 @@ function syncAccountSlot(doc) {
   }
 }
 
+
+export const ONBOARDING_MENU_HREF = '/onboarding';
+export const ONBOARDING_MENU_LABEL = '工作背景';
+export const ONBOARDING_MENU_TITLE = '打开已有的工作背景页。对照账户菜单写的是「新手引导」，因为第 2 至 4 步尚未接通，入口名称与落点保持一致。';
+
+export const CHANNELS_MENU_HREF = '/settings/channels';
+export const CHANNELS_MENU_LABEL = 'Agent 渠道';
+export const CHANNELS_MENU_TITLE = '打开已有的 Agent 渠道设置页。对照账户菜单写的是「Teamily Agent 渠道」，这里用本仓已有名称，不复制商标。';
+
+export const CONNECTORS_MENU_HREF = '/settings/connectors';
+export const CONNECTORS_MENU_LABEL = '应用连接器';
+export const CONNECTORS_MENU_TITLE = '打开已有的应用连接器设置页。连接第三方账号仍未接通，本入口只负责导航。';
+
+function menuChildByHref(menu, href) {
+  const children = menu && menu.children ? Array.from(menu.children) : [];
+  return children.find((node) => {
+    const tag = (node.tagName || '').toLowerCase();
+    const value = (node.getAttribute && node.getAttribute('href')) || node.href || '';
+    return tag === 'a' && value === href;
+  }) || null;
+}
+
+function menuChildByClass(menu, className) {
+  const children = menu && menu.children ? Array.from(menu.children) : [];
+  return children.find((node) => {
+    const current = ' ' + (node.className || node.getAttribute && node.getAttribute('class') || '') + ' ';
+    return current.includes(' ' + className + ' ');
+  }) || null;
+}
+
+function ensureMenuLink(doc, menu, href, label, title) {
+  let link = menuChildByHref(menu, href);
+  if (!link) {
+    link = doc.createElement('a');
+    menu.appendChild(link);
+  }
+  link.setAttribute('href', href);
+  link.setAttribute('role', 'menuitem');
+  link.setAttribute('title', title);
+  link.textContent = label;
+  return link;
+}
+
+function placeMenuLink(menu, link, reference) {
+  if (reference && link !== reference) menu.insertBefore(link, reference);
+  else menu.appendChild(link);
+  return link;
+}
+
+/* Recorded Teamily account menu has「新手引导」after 创建团队 and before 帮助.
+   Only step 1 exists, so the item uses the destination name 工作背景 and opens /onboarding.
+   The function is also used to move an already-present link into that slot. */
+export function ensureOnboardingMenuItem(doc) {
+  const menu = doc.getElementById('account-menu');
+  if (!menu) return null;
+  const link = ensureMenuLink(doc, menu, ONBOARDING_MENU_HREF, ONBOARDING_MENU_LABEL, ONBOARDING_MENU_TITLE);
+  const reference = menuChildByClass(menu, 'account-sub') || menuChildByHref(menu, '/settings');
+  return placeMenuLink(menu, link, reference);
+}
+
+/* Recorded Teamily account menu has Agent 渠道 and 应用连接器 after 创建团队
+   (and the skipped credit/plan rows) and before 新手引导/帮助. Both pages already
+   exist; this only adds navigation. Connector account linking stays unconnected. */
+export function ensureChannelsAndConnectorsMenuItems(doc) {
+  const menu = doc.getElementById('account-menu');
+  if (!menu) return null;
+  const channels = ensureMenuLink(doc, menu, CHANNELS_MENU_HREF, CHANNELS_MENU_LABEL, CHANNELS_MENU_TITLE);
+  const connectors = ensureMenuLink(doc, menu, CONNECTORS_MENU_HREF, CONNECTORS_MENU_LABEL, CONNECTORS_MENU_TITLE);
+  const before = menuChildByHref(menu, ONBOARDING_MENU_HREF)
+    || menuChildByClass(menu, 'account-sub')
+    || menuChildByHref(menu, '/settings');
+  placeMenuLink(menu, connectors, before);
+  placeMenuLink(menu, channels, connectors);
+  return {channels, connectors};
+}
+
 function bindAccountMenu(doc) {
   const button = doc.getElementById('account-menu-button');
   const menu = doc.getElementById('account-menu');
@@ -181,6 +263,8 @@ function bindAccountMenu(doc) {
     if (who) new MutationObserver(sync).observe(who, { childList: true, characterData: true, subtree: true });
   }
   syncAccountSlot(doc);
+  ensureOnboardingMenuItem(doc);
+  ensureChannelsAndConnectorsMenuItems(doc);
   bindHelpMenu(doc);
   bindAppearanceToggle(doc);
 }

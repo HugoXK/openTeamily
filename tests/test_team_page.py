@@ -47,6 +47,36 @@ class TeamPageTests(unittest.TestCase):
         self.assertEqual(created['status'], 201, created)
         self.assertEqual(created['body']['workspace']['slug'], 'desk-team')
 
+    def test_recorded_first_step_keeps_name_id_and_modes_together(self):
+        html = self.raw.call('GET', '/team')['body'].decode()
+        self.assertIn('为团队命名', html)
+        self.assertIn('为团队设置一个显示名称和一个稳定的 Team ID。', html)
+        self.assertIn('例如: My Cool Team', html)
+        self.assertIn('最多 60 个字符', html)
+        self.assertIn('acme-team', html)
+        self.assertIn('3–30 个字符，小写字母、数字、连字符', html)
+        self.assertIn('创建独立的团队工作区', html)
+        self.assertIn('设一个全新、独立的团队工作区开始。', html)
+        self.assertIn('转化我当前的工作区', html)
+        self.assertIn('将当前工作区升入该团队。', html)
+        self.assertIn('id="step-later"', html)
+        self.assertNotIn('id="step-2"', html)
+        self.assertNotIn('id="step-3"', html)
+        self.assertIn('继续', html)
+
+    def test_new_team_alias_is_served_and_unknown_new_paths_404(self):
+        alias = self.raw.call('GET', '/new/team')
+        self.assertEqual(alias['status'], 200)
+        html = alias['body'].decode()
+        self.assertIn('创建团队', html)
+        self.assertIn('为团队命名', html)
+        self.assertEqual(html, self.raw.call('GET', '/team')['body'].decode())
+        self.assertEqual(self.raw.call('GET', '/new')['status'], 404)
+        self.assertEqual(self.raw.call('GET', '/new/other')['status'], 404)
+        self.assertEqual(self.raw.call('GET', '/new/team', origin='https://evil.test')['status'], 403)
+        self.assertEqual(self.raw.call('GET', '/new/team', query='x=1')['status'], 400)
+        self.assertEqual(self.raw.call('POST', '/new/team')['status'], 405)
+
 
 if __name__ == '__main__':
     unittest.main()

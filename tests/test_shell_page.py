@@ -7,7 +7,7 @@ from tests import test_settings_page as settings_page_tests
 PAGES = (
     '/settings', '/agents', '/chat', '/automations', '/artifacts', '/space',
     '/members', '/team', '/runtimes', '/memory', '/discover',
-    '/profile', '/download', '/guide',
+    '/profile', '/onboarding', '/download', '/guide',
 )
 
 CAPTURE_IDS = {
@@ -34,7 +34,7 @@ CAPTURE_IDS = {
                'empty-starred', 'empty-memory', 'empty-meetings',
                'meetings-chrome'),
     '/members': ('member-list', 'invite-list'),
-    '/team': ('wizard-form', 'step-1', 'step-2', 'step-3', 'next'),
+    '/team': ('wizard-form', 'step-1', 'step-later', 'next', 'back', 'submit'),
     '/runtimes': ('runtimes-panel', 'connect-panel', 'key-list',
                   'connection-list', 'issued-token', 'detect-runtimes',
                   'detected-list', 'hosted-agent-section',
@@ -46,7 +46,11 @@ CAPTURE_IDS = {
                 'search', 'new-page', 'graph-canvas', 'topic-list',
                 'overview-panel', 'actions-panel', 'action-list',
                 'profile-panel', 'dream-profile', 'dream-actions'),
-    '/profile': ('main-panel', 'whoami', 'profile-username'),
+    '/profile': ('main-panel', 'whoami', 'profile-username', 'profile-form',
+                 'profile-name', 'profile-handle', 'profile-bio', 'profile-save'),
+
+    '/onboarding': ('main-panel', 'onboarding-form', 'industry', 'role-choices',
+                    'onboarding-save', 'onboarding-skip'),
     '/download': ('main-panel', 'download-web', 'download-runtime',
                   'download-unavailable', 'daemon-command'),
     '/guide': ('main-panel', 'whoami', 'guide-search', 'guide-categories',
@@ -83,6 +87,14 @@ class ShellPageTests(unittest.TestCase):
         self.assertIn(b'export function resolveTheme', script['body'])
         self.assertIn(b'export function startShell', script['body'])
         self.assertIn(b'export function accountNameFromLabel', script['body'])
+        self.assertIn(b'export function ensureOnboardingMenuItem', script['body'])
+        self.assertIn(b'export function ensureChannelsAndConnectorsMenuItems', script['body'])
+        self.assertIn('工作背景'.encode(), script['body'])
+        self.assertIn(b'/onboarding', script['body'])
+        self.assertIn('Agent 渠道'.encode(), script['body'])
+        self.assertIn(b'/settings/channels', script['body'])
+        self.assertIn('应用连接器'.encode(), script['body'])
+        self.assertIn(b'/settings/connectors', script['body'])
         self.assertIn('已登录为'.encode(), script['body'])
         head = self.raw.call('HEAD', '/shell/app.css')
         self.assertEqual(head['status'], 200)
@@ -121,6 +133,10 @@ class ShellPageTests(unittest.TestCase):
             self.assertNotIn('contact@teamily.ai', html.lower(), path)
             self.assertIn('id="help-menu"', html, path)
             self.assertIn('查看我的资料', html, path)
+            if path == '/onboarding':
+                self.assertIn('href="/onboarding"', html, path)
+                self.assertIn('工作背景', html, path)
+            self.assertNotIn('>新手引导</a>', html, path)
             self.assertIn('href="/download"', html, path)
             self.assertIn('id="appearance-toggle"', html, path)
             self.assertIn('href="/discover"', html, path)

@@ -2,7 +2,7 @@
 
 Related: [#86](https://github.com/openTeamily/openTeamily/issues/86), [#1](https://github.com/openTeamily/openTeamily/issues/1), [#7](https://github.com/openTeamily/openTeamily/issues/7).
 
-This is a first **human-to-human** messaging slice in the management plane, written for OpenTeamily. It adds workspace-scoped direct messages and named group chats next to the existing user↔agent conversations ([AGENT_CONVERSATIONS.md](AGENT_CONVERSATIONS.md)). It is **not** Teamily messenger parity: there are no agent participants, unread counts, notifications, attachments, reactions, edits, retractions, typing indicators or cross-workspace delivery. Those remain the follow-up issues noted below.
+This is a first **human-to-human** messaging slice in the management plane, written for OpenTeamily. It adds workspace-scoped direct messages and named group chats next to the existing user↔agent conversations ([AGENT_CONVERSATIONS.md](AGENT_CONVERSATIONS.md)). It is **not** Teamily messenger parity: notifications, reactions, typing indicators and cross-workspace delivery remain pending. Social unread counts, media attachments, edits, retractions and personal conversation pins are implemented as documented below. Stored agent participants and one-shot explicit runtime replies are described below. Those remain the follow-up issues noted below.
 
 The management process only stores messages. It does not call a model provider or a runtime.
 
@@ -37,13 +37,13 @@ Additive `social_conversations`, `social_members` and `social_messages` tables (
 
 ## Page
 
-The management UI for these conversations lives on the unified `/chat` page, together with user↔agent conversations. `/messenger` redirects to `/chat`. The recorded list toolbar is 筛选, then 搜索, then +. 筛选 stays visible and disabled because there is no session-filter API. The main header shows a letter avatar from the current conversation or agent name; there is no verified-badge field. Starting a direct message uses「添加联系人」; starting a group uses「新建群组」. The first group screen shows the intro 「添加名称，然后邀请好友并添加 AI 智能体。」, a 「自定义群组」 / 「AI 智能体团队」 switch (custom is the default), an optional 「群组名称」 field, a member search with a 「已选」 count, and Create disabled until at least one member is selected. 「AI 智能体团队」 stays visible but unconnected: there is no template list, no invented members, and create in that mode is disabled. Paid-team options are not shown. An omitted custom-group title still uses the existing create API, which defaults the stored title to「群聊」. It is not browser E2E evidence, and it is not Teamily messenger parity.
+The management UI for these conversations lives on the unified `/chat` page, together with user↔agent conversations. `/messenger` redirects to `/chat`. The recorded list toolbar is 筛选, then 搜索, then +. 筛选 opens real local all/group/DM/social read/unread/pinned filters over the loaded conversation list. The main header shows a letter avatar from the current conversation or agent name; there is no verified-badge field. Starting a direct message uses「添加联系人」; starting a group uses「新建群组」. The first group screen shows the intro 「添加名称，然后邀请好友并添加 AI 智能体。」, a 「自定义群组」 / 「AI 智能体团队」 switch (custom is the default), an optional 「群组名称」 field, a member search with a 「已选」 count, and Create disabled until at least one member is selected. 「AI 智能体团队」 stays visible but unconnected: there is no template list, no invented members, and create in that mode is disabled. Paid-team options are not shown. An omitted custom-group title still uses the existing create API, which defaults the stored title to「群聊」. It is not browser E2E evidence, and it is not Teamily messenger parity.
 
 ## Explicitly not in this slice
 
 - `@Agent` mentions, automatic agent replies and task delegation in a group ([#89](https://github.com/openTeamily/openTeamily/issues/89)).
 - Workspace-wide authorized message search ([#88](https://github.com/openTeamily/openTeamily/issues/88)).
-- Unread counts, read receipts, notifications, attachments, reactions, editing, retraction, typing indicators.
+- Notification center, recipient read receipts, reactions, typing indicators and user-agent unread state; see the implemented social capabilities below.
 - Cross-workspace or federated delivery, Bot Social transport, and any Teamily comparison.
 - Browser acceptance. Tests are in-process WSGI with a temporary SQLite file and are not a live server or vendor run.
 
@@ -61,7 +61,7 @@ request hashes. Agents grant no extra human access to conversations.
 An additive `social_agent_members` table keeps schema `user_version` 1. Create,
 GET and list return `agent_members` with `agent_id`, `name`, `archived`, `created`;
 existing `members` remains human-only. Archived agents remain visible on existing
-groups, but cannot be newly invited. No new membership-edit endpoint is added.
+groups, but cannot be newly invited. Existing-group membership-edit endpoints are described below.
 
 The custom-group picker labels people and existing workspace agents separately;
 search and the selected count include both. Contact creation remains human-only.
@@ -98,7 +98,7 @@ GET/list/message reads reconcile task results/deadlines. A successful nonempty
 response becomes an agent-authored item in the same paginated message stream with
 `role=agent`, `agent_id`, snapshotted `agent_name`, `source=runtime_infer`, and no
 human `user_id`. It contributes to the group preview. Human messages are unchanged.
-Agent reply bodies are not yet indexed by workspace message search.
+Persisted successful agent reply bodies are included in authorized workspace/current-conversation message search (see [SEARCH.md](SEARCH.md)); request prompts and non-success bodies are excluded.
 
 Timeouts, cancelled/failed/missing tasks and empty results never become successful
 messages. There is no automatic retry or redispatch on read; after failure a human
@@ -113,3 +113,100 @@ a labeled local fake OpenAI-compatible provider outside the Web process, followe
 by group persistence/read/pagination and idempotent replay. CI Playwright uses the
 same fake-provider runtime fixture for shots 81/82. This is not real-vendor,
 production/container deployment, or Teamily/Impeccable acceptance.
+
+## Edit agent participants of an existing group (Related #89 #86 #7 #1)
+
+This backend-only slice adapts the unique existing-group membership capability
+proposed in PR #125 to the owner-selected PR #124 reply protocol. It does **not**
+import PR #125/#126's competing message tables or multi-recipient dispatch.
+There is no new management UI; use the authenticated same-origin API with the
+normal session cookie, Origin and CSRF headers. The existing `/chat` header and
+one-shot agent selector reflect saved membership on reload.
+
+| Method | Relative to `/v1/workspaces/{workspace_id}/social/conversations/{id}` | Body |
+| --- | --- | --- |
+| POST | `/agents` | `{agent_ids:[...]}`: 1–49 unique active same-workspace agent ids. Adds to the saved roster. |
+| POST | `/agents/{agent_id}/remove` | `{}`: removes this same-workspace agent, including an archived one. |
+
+Both operations require **both** actual human group membership and workspace
+owner/admin role, following workspace-agent management permissions. A workspace
+admin cannot discover or edit a private group they have not joined (`404`). An
+ordinary group member receives `403 forbidden`. DMs reject edits (`400 invalid`);
+unknown/foreign ids, invalid bodies, duplicate ids and archived invitations
+return `400 invalid`. All ids are validated before any batch mutation. Existing
+human membership and the minimum two-human creation rule remain unchanged.
+
+Both return `200 {conversation: ...}` with the current saved snapshot, including
+`agent_members`. These are idempotent **set operations**, not queued commands;
+repeating an add/remove without an intervening opposite edit is a no-op. No
+Idempotency-Key is required, no infer task or success message is created, and no
+new schema/table is needed (`user_version` remains 1). The existing total-member
+structural capacity counts humans plus agents, including archived roster entries;
+a batch exceeding it returns `429 quota` without partial writes. No billing,
+credits or model-usage limits are introduced.
+
+Removing an agent with a queued/running request returns `409 conflict`. Finish or
+wait for that existing task to fail/expire, then remove; this endpoint does not
+pretend to cancel a runtime already executing. Authorized removal reconciles
+terminal results first. Completed messages, agent identity and request history
+are retained, and original conversation-create replays never re-add a removed
+member. New explicit reply requests for an uninvited agent are rejected; replays
+of already accepted requests retain their existing semantics. Re-adding an agent
+does not erase history. Requests still use only PR #124's one-agent explicit
+`/agent-replies` endpoint; no group history, automatic replies, @mentions, handoff,
+AI-team mode or multi-agent orchestration is connected.
+
+Tests exercise persist/reopen/list, owner/admin plus group membership, isolation,
+CSRF/Origin, batch atomicity, archive, repeat/no-op, capacity, active-task removal
+and retained messages. An actual HTTP claim → model-access → result integration
+starts with an empty group, invites the agent via this API, invokes a labeled
+local fake provider in a separate process, and verifies persisted reply/history
+through removal and re-addition. This is not a real-vendor/container or
+Teamily/Impeccable acceptance. Existing CI screenshots only show the unchanged
+UI baseline; they are not evidence of a new membership-edit UI.
+
+
+## Per-user unread state
+
+Social DM/group list and snapshot responses include `unread_count`, counting incoming human
+messages and successful runtime agent replies after this user's durable read cursor. Own
+human sends do not count. GET never acknowledges messages. A member can POST
+`/{conversation_id}/read` with `{message_id}` (Origin + CSRF required); the cursor advances
+monotonically only through that message in that conversation. Cross-conversation ids and
+non-members are rejected. The visible chat acknowledges only the last message actually
+rendered; newer messages beyond the snapshot remain unread. Hidden tabs do not acknowledge.
+The session list shows a numeric badge and only clears it after a successful acknowledgement.
+
+This is not a notification center, @mention/push/email notification, another member's read
+receipt, unread user-agent conversations, or live background delivery. Refresh/reopen loads
+updated counts. The additive `social_reads` table retains state across restarts without a
+schema version change. Teamily + Impeccable acceptance remains pending.
+
+The same chat slice fixes pending message-search queries across tab switches and prevents
+stale search responses replacing newer queries (the CI chat_search_messages race).
+
+## Consolidated functional delivery
+
+- Social conversation rows include per-user `unread_count` and `pinned`. Existing snapshot-bounded
+  read acknowledgement never marks unseen newer messages read; GET does not acknowledge anything.
+- `POST /{id}/preferences {pinned:boolean}` stores a private per-user pin. Pins sort before recency in
+  the loaded list. UI filters all/groups/DMs/social-unread/social-read/pinned honestly omit unsupported
+  agent unread state. Pins/filtering cover loaded pages, not an invented global total or group model.
+- `POST /{id}/messages/{message_id}/edit {revision,body}` and `/retract {revision}` are author-only
+  human-message operations. Group membership is required before author checks; stale revisions or
+  already-retracted messages return 409. Retraction clears stored message text and hides its
+  attachment from message projection; it does not delete an independently uploaded library work.
+  Message search no longer returns the old body. There is no model regeneration or automatic reply.
+- `POST /{id}/messages` additionally accepts optional `artifact_id` referencing existing same-workspace
+  media. The browser uploads through the existing MIME-sniffed/size-bounded artifact API, then sends
+  the reference with normal idempotency. Image/audio/video only, not arbitrary documents. Downloads
+  reuse authenticated artifact `/file`; the UI warns that uploaded media belongs to the WORKSPACE
+  library, not a DM-private vault. Failed send may leave an uploaded library item and says so.
+- The header's **会话内搜索** opens a separate paged panel using the existing authorized
+  conversation-scoped message API. Sidebar search remains independent; switching workspace or
+  conversation clears stale panel state. No duplicate backend message corpus or new reply protocol.
+
+Mounted Node tests exercise pins/filters, independent scoped search pagination, author edit and
+confirmed retraction; temporary-DB HTTP tests verify permissions, revisions, search erasure and media
+upload/reference/download. This is not Teamily + Impeccable acceptance or real-vendor inference.
+See [FUNCTIONAL_COMPLETION.md](FUNCTIONAL_COMPLETION.md) for the full remaining-work matrix.

@@ -253,17 +253,19 @@ async function main() {
       await page.locator('#appearance input[value="auto"]').check();
       await page.locator('#appearance-schedule-card').waitFor({ state: 'visible', timeout: 15000 });
       await waitForLocatorText(page, '#appearance-status', '当前为');
+      const statusText = `${await visibleText(page.locator('#appearance-status'))}`;
       const autoText = `${await visibleText(page.locator('#appearance-schedule-card'))}`;
       record(
         'settings_appearance',
         values.join(',') === 'light,dark,auto,system'
           && appearanceText.includes('始终使用浅色主题。')
           && appearanceText.includes('选择应用在此设备上的显示外观。')
-          && autoText.includes('当前为')
+          && /当前为(浅色|深色)，直到 (22:00|06:00)。/.test(statusText)
+          && !autoText.includes('当前为')
           && autoText.includes('没有使用实际日出日落时刻')
           && autoText.includes('可选用「自定义时段」')
           && autoText.includes('自动切换'),
-        `values=${values.join(',')}; ${appearanceText || 'appearance page empty'} | auto=${autoText || 'schedule card empty'}`,
+        `values=${values.join(',')}; ${appearanceText || 'appearance page empty'} | status=${statusText || 'missing'} | auto=${autoText || 'schedule card empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '27-settings-appearance.png')));
     } catch (error) {
@@ -407,18 +409,35 @@ async function main() {
       await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
       const connectors = page.locator('[data-settings-page="connectors"]');
       await connectors.waitFor({ state: 'visible', timeout: 15000 });
+      const catalogRows = page.locator('#connectors-catalog .connector-row');
+      await catalogRows.first().waitFor({ state: 'visible', timeout: 15000 });
+      const rowCount = await catalogRows.count();
+      const connectButtons = page.locator('#connectors-catalog button');
+      const connectCount = await connectButtons.count();
+      const allConnectDisabled = connectCount === 39
+        && await connectButtons.evaluateAll((nodes) => nodes.every((node) => node.disabled));
+      const statuses = await page.locator('#connectors-catalog .connector-status').allTextContents();
+      const allDisconnected = statuses.length === 39
+        && statuses.every((text) => text.includes('未连接') && !text.includes('已连接'));
       const connectorsText = `${await visibleText(connectors)}`;
       const addMcp = page.locator('#add-mcp-server');
       const addMcpDisabled = await addMcp.isDisabled();
       record(
         'settings_connectors',
         !addMcpDisabled
+          && rowCount === 39
+          && allConnectDisabled
+          && allDisconnected
           && connectorsText.includes('应用连接器')
           && connectorsText.includes('添加 MCP 服务器')
-          && connectorsText.includes('还没有可连接的应用目录。')
+          && connectorsText.includes('GitHub')
+          && connectorsText.includes('Mailbox')
+          && connectorsText.includes('未连接')
+          && connectorsText.includes('还没有连接器后端或账号授权接口')
+          && !connectorsText.includes('还没有可连接的应用目录。')
           && !connectorsText.includes('已连接')
           && !/积分|套餐|升级/.test(connectorsText),
-        `addDisabled=${addMcpDisabled}; ${connectorsText || 'connectors page empty'}`,
+        `rows=${rowCount}; connect=${connectCount}; addDisabled=${addMcpDisabled}; ${connectorsText || 'connectors page empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '46-settings-connectors.png')));
       await addMcp.click();
@@ -448,11 +467,14 @@ async function main() {
       await page.locator('#help-menu').waitFor({ state: 'visible', timeout: 8000 });
       const menuText = await visibleText(page.locator('#account-menu'));
       const settingsHref = await page.locator('#account-menu a[href="/settings"]').getAttribute('href');
+      const onboardingHref = await page.locator('#account-menu a[href="/onboarding"]').getAttribute('href');
+      const channelsHref = await page.locator('#account-menu a[href="/settings/channels"]').getAttribute('href');
+      const connectorsHref = await page.locator('#account-menu a[href="/settings/connectors"]').getAttribute('href');
       const initials = String(ready.username || '').slice(0, 2).toUpperCase();
       const settingsButton = (await visibleText(page.locator('#account-menu-button'))).trim();
       record(
         'account_menu',
-        menuText.includes('所有设置') && menuText.includes('退出登录') && menuText.includes('创建团队') && menuText.includes('查看我的资料') && menuText.includes('帮助中心') && menuText.includes('下载') && settingsHref === '/settings' && settingsButton === initials && !/积分|套餐|升级/.test(menuText) && !/contact@teamily\.ai/.test(menuText),
+        menuText.includes('所有设置') && menuText.includes('退出登录') && menuText.includes('创建团队') && menuText.includes('查看我的资料') && menuText.includes('帮助中心') && menuText.includes('下载') && menuText.includes('工作背景') && menuText.includes('Agent 渠道') && menuText.includes('应用连接器') && settingsHref === '/settings' && onboardingHref === '/onboarding' && channelsHref === '/settings/channels' && connectorsHref === '/settings/connectors' && settingsButton === initials && !/积分|套餐|升级/.test(menuText) && !/contact@teamily\.ai/.test(menuText),
         `button=${settingsButton}; ${menuText || 'account menu empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '23-account-menu.png')));
@@ -482,6 +504,55 @@ async function main() {
       screenshots.push(path.basename(await shot(page, outDir, '04-agents-editor.png')));
     } catch (error) {
       record('agents_editor', false, String(error));
+    }
+    try {
+      await page.locator('#chat-panel').waitFor({ state: 'visible', timeout: 15000 });
+      const search = page.locator('#agent-search');
+      await search.fill('zz-no-such-agent');
+      await waitForLocatorText(page, '#agents-empty', '没有匹配的智能体。试试其他关键词。');
+      const countText = ((await page.locator('#agents-count').textContent()) || '').trim();
+      const emptyText = ((await page.locator('#agents-empty').textContent()) || '').trim();
+      const chatVisible = await page.locator('#chat-panel').isVisible();
+      record(
+        'agents_search_filter',
+        countText === '显示 0 个智能体'
+          && emptyText === '没有匹配的智能体。试试其他关键词。'
+          && chatVisible,
+        `count=${countText}; empty=${emptyText}; chat=${chatVisible}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '87-agents-search-filter.png')));
+      await search.press('Escape');
+      await waitForLocatorText(page, '#agent-list', ready.agent_name);
+    } catch (error) {
+      record('agents_search_filter', false, String(error));
+    }
+    try {
+      await page.locator('#edit-form').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#edit-form select[name="category"]').selectOption('operations');
+      await page.locator('#edit-form button[type="submit"]').click();
+      // The save reloads the directory (which clears #status), so wait for the card tag instead.
+      await waitForLocatorText(page, '#agent-list', 'Operations');
+      await page.locator('.filter-row .pill[data-category="operations"]').click();
+      const filteredList = await visibleText(page.locator('#agent-list'));
+      const filteredUrl = page.url();
+      const chatStillOpen = await page.locator('#chat-panel').isVisible();
+      await page.locator('.filter-row .pill[data-category="sales"]').click();
+      await waitForLocatorText(page, '#agents-empty', '「Sales」类目下还没有智能体。');
+      const salesEmpty = ((await page.locator('#agents-empty').textContent()) || '').trim();
+      await page.locator('.filter-row .pill[data-category="operations"]').click();
+      await waitForLocatorText(page, '#agent-list', ready.agent_name);
+      record(
+        'agents_category_filter',
+        filteredList.includes(ready.agent_name)
+          && filteredUrl.includes('category=operations')
+          && chatStillOpen
+          && salesEmpty === '「Sales」类目下还没有智能体。选「全部」查看其余智能体。',
+        `list=${filteredList}; url=${filteredUrl}; chat=${chatStillOpen}; sales=${salesEmpty}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '89-agents-category-filter.png')));
+      await page.locator('.filter-row .pill[data-category="all"]').click();
+    } catch (error) {
+      record('agents_category_filter', false, String(error));
     }
 
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -533,6 +604,15 @@ async function main() {
         `avatar=${identity || 'empty'} hidden=${identityHidden} expected=${expectedInitial} order=${[filterBox && Math.round(filterBox.x), searchBox && Math.round(searchBox.x), addBox && Math.round(addBox.x)].join(',')}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '16-agents-conversation.png')));
+      const chrome = await page.evaluate(() => ({
+        rail: document.querySelector('.app-rail').getBoundingClientRect().width,
+        sessions: document.getElementById('session-pane').getBoundingClientRect().width,
+        icons: document.querySelectorAll('.chat-actions svg').length,
+        shellOverflow: document.documentElement.scrollWidth > innerWidth,
+      }));
+      record('ui_chat_compact_chrome', chrome.rail <= 64 && chrome.sessions <= 320 && chrome.icons >= 3 && !chrome.shellOverflow,
+        JSON.stringify(chrome));
+
       screenshots.push(path.basename(await shot(page, outDir, '22-chat-desktop.png')));
       screenshots.push(path.basename(await shot(page, outDir, '62-chat-list-previews.png')));
       screenshots.push(path.basename(await shot(page, outDir, '68-chat-header-identity.png')));
@@ -691,8 +771,13 @@ async function main() {
           && (await visibleText(page.locator('#member-choices'))).includes('AI 智能体（自动回复未接通）'),
         'An existing human and agent are selected; custom group create is enabled');
       await page.locator('#compose-mode-team').click();
-      record('chat_group_agent_team_unconnected', await page.locator('#compose-dialog-submit').isDisabled(),
-        'Agent selections do not enable the unconnected AI-team mode');
+      await page.locator('#team-template-choices input[value="product-squad"]').waitFor({state: 'visible', timeout: 8000});
+      const disabledBeforePick = await page.locator('#compose-dialog-submit').isDisabled();
+      await page.locator('#team-template-choices input[value="product-squad"]').check();
+      record('chat_group_agent_team_template',
+        disabledBeforePick && await page.locator('#compose-dialog-submit').isEnabled()
+          && (await visibleText(page.locator('#team-template-choices'))).includes('产品研发小队'),
+        'AI-team mode requires picking a real template before create is enabled');
       await page.locator('#compose-mode-custom').click();
       screenshots.push(path.basename(await shot(page, outDir, '79-chat-group-agent-picker.png')));
       await page.locator('#compose-dialog-submit').click();
@@ -722,7 +807,9 @@ async function main() {
     try {
       await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
       await page.locator('#group-agent-action').waitFor({state: 'visible', timeout: 8000});
-      await page.locator('#group-agent-select').selectOption(ready.agent_id);
+      const groupAgentChoice = page.locator(`#group-agent-choices input[name="group-agent"][value="${ready.agent_id}"]`);
+      await groupAgentChoice.waitFor({state: 'visible', timeout: 8000});
+      await groupAgentChoice.check();
       await page.locator('#group-agent-prompt').fill('[CI FIXTURE] Explicit one-shot group request to the labeled fake provider');
       screenshots.push(path.basename(await shot(page, outDir, '81-group-agent-request.png')));
       await page.locator('#group-agent-submit').click();
@@ -820,6 +907,35 @@ async function main() {
       record('chat_search_conversation_scope', false, String(error));
     }
 
+    // Appended backend-search integration; keep previous capture blocks intact.
+    try {
+      await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 15000);
+      await page.locator('#message-search').click();
+      await waitForLocatorText(page, '#search-source-note', '仅搜索当前对话');
+      await page.locator('#session-search').fill(ready.provider_text);
+      await waitForLocatorText(page, '#search-results', ready.provider_text, 15000);
+      const hits = await visibleText(page.locator('#search-results'));
+      record('chat_search_group_agent_reply', hits.includes('[CI FIXTURE] Agent members group')
+        && hits.includes(ready.provider_text), 'Persisted fake-provider group reply found: ' + hits);
+      screenshots.push(path.basename(await shot(page, outDir, '85-chat-group-agent-search.png')));
+      const groupId = await page.evaluate(() => new URLSearchParams(location.hash.slice(1)).get('social'));
+      const reopened = page.waitForResponse(response => response.request().method() === 'GET'
+        && new URL(response.url()).pathname === `/v1/workspaces/${ready.workspace_id}/social/conversations/${groupId}`);
+      await page.locator('#search-results button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
+      const response = await reopened;
+      const saved = await response.json();
+      await waitForLocatorText(page, '#message-list', ready.provider_text, 15000);
+      record('chat_search_group_agent_open', response.status() === 200 && saved.conversation.id === groupId
+        && saved.items.some(item => item.role === 'agent' && item.body === ready.provider_text)
+        && (await visibleText(page.locator('#message-list'))).includes('AI 智能体 · 运行时回复'),
+        'Search result fetched the same saved group and runtime-authored reply');
+    } catch (error) {
+      record('chat_search_group_agent_reply', false, String(error));
+    }
+    // The next existing step navigates to /automations (a new document), avoiding
+    // a fragment-only cleanup navigation racing the async result-open handler.
+
     await page.setViewportSize({ width: 1280, height: 900 });
 
     await page.goto(`${origin}/automations`, { waitUntil: 'load' });
@@ -862,6 +978,15 @@ async function main() {
         await waitForLocatorText(page, '#artifact-list', title);
       }
       artifacts = await visibleText(page.locator('#artifact-list'));
+      const libraryLayout = () => page.locator('#artifact-list').evaluate(node => ({layout: node.dataset.layout, display: getComputedStyle(node).display}));
+      const initialLayout = await libraryLayout();
+      await page.locator('#layout-toggle [data-layout="list"]').click();
+      const listLayout = await libraryLayout();
+      await page.locator('#layout-toggle [data-layout="grid"]').click();
+      const restoredLayout = await libraryLayout();
+      record('ui_library_real_layout_toggle', initialLayout.layout === 'grid' && initialLayout.display === 'grid'
+        && listLayout.layout === 'list' && restoredLayout.layout === 'grid', JSON.stringify({initialLayout,listLayout,restoredLayout}));
+
     } catch (error) {
       artifacts = String(error);
     }
@@ -1151,21 +1276,33 @@ async function main() {
     await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
     const teamHeading = await visibleText(page.locator('h1'));
     const step1 = await page.locator('#wizard-form #step-1').isVisible();
-    record('team_wizard', teamHeading.includes('创建团队') && step1, `heading=${teamHeading}`);
+    const nameField = await page.locator('#wizard-form input[name="name"]').isVisible();
+    const slugField = await page.locator('#wizard-form input[name="slug"]').isVisible();
+    const nextDisabled = await page.locator('#next').isDisabled();
+    const step1Text = await visibleText(page.locator('#step-1'));
+    record(
+      'team_wizard',
+      teamHeading.includes('创建团队') && step1 && nameField && slugField && nextDisabled
+        && step1Text.includes('为团队命名')
+        && step1Text.includes('创建独立的团队工作区')
+        && step1Text.includes('转化我当前的工作区'),
+      `heading=${teamHeading}; nextDisabled=${nextDisabled}`,
+    );
     screenshots.push(path.basename(await shot(page, outDir, '13-team-wizard-step1.png')));
     try {
       await page.locator('#wizard-form input[name="name"]').fill('CI Fixture Preview Team');
-      await page.locator('#next').click();
-      await page.locator('#step-2').waitFor({ state: 'visible', timeout: 10000 });
-      record('team_wizard_step2', await page.locator('#step-2').isVisible(), 'name accepted; team ID step visible', { soft: true });
-      screenshots.push(path.basename(await shot(page, outDir, '13b-team-wizard-step2.png')));
       await page.locator('#wizard-form input[name="slug"]').fill('ci-preview-team');
       await page.locator('#next').click();
-      await page.locator('#step-3').waitFor({ state: 'visible', timeout: 10000 });
-      record('team_wizard_step3', await page.locator('#step-3').isVisible(), 'slug accepted; workspace step visible, not submitted', { soft: true });
-      screenshots.push(path.basename(await shot(page, outDir, '13c-team-wizard-step3.png')));
+      await page.locator('#step-later').waitFor({ state: 'visible', timeout: 10000 });
+      record(
+        'team_wizard_continuation',
+        await page.locator('#step-later').isVisible() && await page.locator('#submit').isVisible(),
+        'name and slug accepted; unverified continuation visible, not submitted',
+        { soft: true },
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '13b-team-wizard-continuation.png')));
     } catch (error) {
-      record('team_wizard_steps', false, String(error), { soft: true });
+      record('team_wizard_continuation', false, String(error), { soft: true });
     }
 
     await page.goto(`${origin}/runtimes`, { waitUntil: 'load' });
@@ -1247,6 +1384,52 @@ async function main() {
       dirText || 'memory directory chrome missing',
     );
     screenshots.push(path.basename(await shot(page, outDir, '18-memory-list.png')));
+    try {
+      const emptyHint = page.locator('#graph-empty');
+      await emptyHint.waitFor({ state: 'visible', timeout: 8000 });
+      const emptyText = ((await visibleText(emptyHint)) || '').trim();
+      const createLabel = ((await visibleText(page.locator('#graph-empty-new'))) || '').trim();
+      record(
+        'memory_graph_empty',
+        emptyText.includes('创建两个或更多记忆页后，这里会把它们连成图谱')
+          && createLabel === '新建记忆页'
+          && await page.locator('#graph-empty-new').isEnabled(),
+        emptyText || 'memory graph empty hint missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '90-memory-graph-empty.png')));
+      const previous = page.viewportSize();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await emptyHint.waitFor({ state: 'visible', timeout: 8000 });
+      await emptyHint.scrollIntoViewIfNeeded();
+      const viewport = page.viewportSize();
+      const inViewport = (box) => Boolean(box && viewport && box.x >= 0 && box.y >= 0
+        && box.x + box.width <= viewport.width && box.y + box.height <= viewport.height);
+      const hintBox = await emptyHint.boundingBox();
+      const zoomBox = await page.locator('.graph-zoom').boundingBox();
+      const zoomVisible = await page.locator('.graph-zoom').isVisible();
+      const overlaps = Boolean(
+        hintBox && zoomBox
+          && hintBox.x < zoomBox.x + zoomBox.width
+          && hintBox.x + hintBox.width > zoomBox.x
+          && hintBox.y < zoomBox.y + zoomBox.height
+          && hintBox.y + hintBox.height > zoomBox.y,
+      );
+      record(
+        'memory_graph_empty_narrow',
+        zoomVisible && hintBox && zoomBox && hintBox.width >= 180
+          && inViewport(hintBox) && inViewport(zoomBox) && !overlaps,
+        `overlap=${overlaps}; hintInViewport=${inViewport(hintBox)}; zoomInViewport=${inViewport(zoomBox)}; hint=${JSON.stringify(hintBox)}; zoom=${JSON.stringify(zoomBox)}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '91-memory-graph-empty-390.png')));
+      await page.setViewportSize(previous || { width: 1440, height: 900 });
+    } catch (error) {
+      record('memory_graph_empty', false, String(error));
+      try {
+        await page.setViewportSize({ width: 1440, height: 900 });
+      } catch {
+        // Keep going so later memory shots still use the default viewport.
+      }
+    }
     record(
       'memory_dir_previews',
       await page.locator('#memory-list .memory-page-preview').count() === 1
@@ -1323,8 +1506,8 @@ async function main() {
           && profileView.includes('Professional Profile')
           && profileView.includes('Work Style')
           && profileView.includes('Communication & Writing Style')
-          && profileView.includes('还没有这份画像')
-          && profileView.includes('未接通')
+          && profileView.includes('保存画像')
+          && profileView.includes('尚未自动注入模型')
           && profileDir.includes(ready.memory_title)
           && profileDir.includes(`${ready.memory_topic} 1`)
           && profileDir.includes(ready.memory_body)
@@ -1336,6 +1519,26 @@ async function main() {
         profileView || 'memory profile empty',
       );
       screenshots.push(path.basename(await shot(page, outDir, '42-memory-profile.png')));
+      await page.waitForFunction(() => !document.getElementById('save-memory-profile').disabled);
+      await page.locator('#profile-professional').fill('[CI FIXTURE] Personal professional context');
+      await page.locator('#profile-work_style').fill('[CI FIXTURE] Async work style');
+      await page.locator('#profile-communication').fill('[CI FIXTURE] Concise communication');
+      await page.locator('#save-memory-profile').click();
+      await waitForLocatorText(page, '#memory-profile-status', '画像已保存');
+      await page.reload({waitUntil: 'load'});
+      await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+      // The profile is private per workspace; reopen the same fixture workspace after reload.
+      await selectWorkspace(page, ready.workspace_name);
+      await page.locator('#profile-panel').waitFor({state: 'visible'});
+      await page.waitForFunction(
+        () => !document.getElementById('save-memory-profile').disabled
+          && document.getElementById('profile-professional').value === '[CI FIXTURE] Personal professional context',
+        null, {timeout: 15000},
+      ).catch(() => {});
+      record('memory_profile_persists', (await page.locator('#profile-professional').inputValue()) === '[CI FIXTURE] Personal professional context'
+        && (await page.locator('#profile-work_style').inputValue()) === '[CI FIXTURE] Async work style',
+        'synthetic personal profile persisted after reload; no model injection');
+
     } catch (error) {
       record('memory_profile_layout', false, String(error));
     }
@@ -1387,6 +1590,26 @@ async function main() {
       await page.keyboard.press('Escape');
     } catch (error) {
       record('memory_account_button', false, String(error));
+    }
+
+    try {
+      const search = page.locator('#search');
+      await search.fill('zz-no-such-memory');
+      await waitForLocatorText(page, '#list-empty', '没有匹配的记忆页。试试其他关键词。');
+      const emptyText = ((await page.locator('#list-empty').textContent()) || '').trim();
+      const listPanelVisible = await page.locator('#list-panel').isVisible();
+      const allCount = ((await page.locator('#filter-all-count').textContent()) || '').trim();
+      record(
+        'memory_search_filter',
+        emptyText === '没有匹配的记忆页。试试其他关键词。'
+          && listPanelVisible,
+        `empty=${emptyText}; count=${allCount}; listPanel=${listPanelVisible}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '88-memory-search-filter.png')));
+      await search.press('Escape');
+      await waitForLocatorText(page, '#memory-list', ready.memory_title);
+    } catch (error) {
+      record('memory_search_filter', false, String(error));
     }
 
     try {
@@ -1523,7 +1746,7 @@ async function main() {
       await page.goto(`${origin}/guide`, { waitUntil: 'load' });
       await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#guide-list').waitFor({ state: 'visible', timeout: 8000 });
-      await waitForLocatorText(page, '#guide-count', '个功能');
+      await waitForLocatorText(page, '#guide-count', '当前显示');
       const guideText = await visibleText(page.locator('#main-panel'));
       record(
         'guide_page',
@@ -1578,7 +1801,10 @@ async function main() {
           && discoverText.includes('关注')
           && discoverText.includes('动态')
           && discoverText.includes('搜索动态、创作者')
-          && discoverText.includes('动态信息流还没有接口')
+          && discoverText.includes('[CI FIXTURE] Document')
+          && discoverText.includes('文档')
+          && discoverText.includes('支持点赞、收录和关注作者')
+          && !discoverText.includes('动态信息流还没有接口')
           && discoverText.includes('热门')
           && discoverText.includes('/discover?tab=agents')
           && await page.locator('#feed-panel').isVisible()
@@ -1587,6 +1813,15 @@ async function main() {
         `whoami=${discoverWho || '(empty)'}; current=${discoverCurrent}; ${discoverText || 'discover empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '52-discover.png')));
+      await page.locator('#feed-kind-website').click();
+      await waitForLocatorText(page, '#feed-count', '已显示 1 件公开作品');
+      record('discover_work_type_filter',
+        await page.locator('#feed-grid a[href="/w/ci-fixture-site"]').count() === 1
+          && await page.locator('#feed-grid a[href="/w/ci-fixture-doc"]').count() === 0
+          && await page.locator('#feed-kind-website').getAttribute('aria-current') === 'true',
+        'website type filter uses the opted-in website fixture');
+      await page.locator('#feed-kind-all').click();
+      await waitForLocatorText(page, '#feed-count', '已显示 2 件公开作品');
       await page.locator('#feed-tab-following').click();
       await waitForLocatorText(page, '#feed-following-empty', '关注列表暂无动态');
       const followingText = `${await visibleText(page.locator('#feed-panel'))}`;
@@ -1596,12 +1831,23 @@ async function main() {
           && (await page.locator('#feed-following-empty').isVisible())
           && followingText.includes('关注列表暂无动态')
           && followingText.includes('你关注的人发布动态后会显示在这里。')
-          && followingText.includes('关注关系还没有接口')
+          && followingText.includes('你关注的作者已公开')
           && !followingText.includes('没有对照截图')
           && !/积分|套餐|升级|CREDITS/.test(followingText),
         followingText.slice(0, 240) || 'following empty',
       );
       screenshots.push(path.basename(await shot(page, outDir, '63-discover-following.png')));
+      await page.locator('#feed-tab-activity').click();
+      await waitForLocatorText(page, '#feed-count', '已显示 2 件公开作品');
+      await page.locator('#feed-grid article button').filter({hasText: /^点赞/}).first().click();
+      await page.locator('#feed-grid article button[aria-pressed="true"]').first().waitFor({state: 'visible'});
+      record('discover_like_persists', await page.locator('#feed-grid article button').filter({hasText: /取消点赞/}).count() === 1,
+        'a synthetic fixture work was liked through the real CSRF-protected endpoint');
+      await page.locator('#feed-grid article button').filter({hasText: /^收录/}).first().click();
+      await page.locator('#feed-tab-collected').click();
+      await waitForLocatorText(page, '#feed-count', '已显示 1 件公开作品');
+      record('discover_collection_feed', await page.locator('#feed-grid article').count() === 1,
+        'private collection feed contains the saved synthetic work');
       await page.goto(`${origin}/discover?tab=agents`, { waitUntil: 'load' });
       await page.locator('#catalog-view').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#discover-list article').first().waitFor({state: 'visible'});
@@ -1707,8 +1953,9 @@ async function main() {
       const statusLabel = ((await page.locator('p.status').textContent()) || '').trim();
       const talkHeading = ((await page.locator('.section h2').first().textContent()) || '').trim();
       const sendDisabled = await page.locator('.composer button').isDisabled();
-      const createDisabled = await page.locator('.create-agent').isDisabled();
+      const createHref = await page.locator('.create-agent').getAttribute('href');
       const composerDisabled = await page.locator('#public-composer').isDisabled();
+      const quickStartsHeading = ((await page.locator('.quick-starts h3').textContent()) || '').trim();
       const token = homepagePath.slice(3);
       record(
         'agent_public_homepage',
@@ -1718,13 +1965,21 @@ async function main() {
           && homeText.includes(ready.agent_name)
           && homeText.includes('Synthetic CI directory entry.')
           && talkHeading === 'Talk via'
+          && homeText.includes('Start a conversation')
           && homeText.includes('Web conversation')
+          && homeText.includes('Ask how this fixture agent is organized')
+          && homeText.includes('Request a walkthrough of the directory')
+          && homeText.includes('List what this fixture assistant covers')
+          && quickStartsHeading === 'Quick starts'
           && homeText.includes('Built with FlyBot')
           && homeText.includes('Create your own Agent')
           && homeText.includes('未接通')
           && sendDisabled
-          && createDisabled
+          && createHref === '/agents'
           && composerDisabled
+          && !homeText.includes("Help me organize today's priorities")
+          && !homeText.includes('Create something with my team')
+          && !homeText.includes('Connect a messaging channel')
           && !/(?<!Open)Teamily|AVAILABLE NOW|\bLIVE\b/.test(homeText)
           && !homeText.includes(ready.workspace_id)
           && !homeText.includes(ready.agent_id)
@@ -1734,6 +1989,57 @@ async function main() {
       screenshots.push(path.basename(await shot(page, outDir, '77-agent-public-homepage.png')));
     } catch (error) {
       record('agent_public_homepage', false, String(error).replace(/\/a\/[A-Za-z0-9_-]{20,}/g, '/a/<redacted>'));
+    }
+
+    // PR151 integration: real UI save/reopen, with current personal-agent startup retained.
+    try {
+      await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
+      await page.locator('#industry option[value="科技与软件"]').waitFor({state: 'attached'});
+      await page.locator('#industry').selectOption('科技与软件');
+      await page.locator('#role-choices input[value="产品经理"]').check();
+      await page.locator('#onboarding-save').click();
+      await page.waitForURL(url => url.pathname === '/chat');
+      await page.locator('#main-panel').waitFor({state: 'visible'});
+      await page.waitForFunction(() => document.getElementById('onboarding-banner').hidden);
+      const personalResponse = await page.request.get(`${origin}/v1/personal-agent`);
+      const personalState = await personalResponse.json();
+      await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#onboarding-meta', '科技与软件');
+      record('onboarding_save_reopen', await page.locator('#industry').inputValue() === '科技与软件'
+        && await page.locator('#role-choices input[value="产品经理"]').isChecked()
+        && Boolean(personalState.personal_agent && personalState.personal_agent.agent),
+        'Saved work context survives reload alongside the personal agent; no recommendations or connector claims');
+      screenshots.push(path.basename(await shot(page, outDir, '86-onboarding-saved-context.png')));
+      try {
+        await page.locator('#onboarding-steps').waitFor({state: 'visible'});
+        const appsText = await visibleText(page.locator('#onboarding-apps'));
+        await page.locator('#onboarding-picks input[value="release-notes"]').check();
+        await page.locator('#onboarding-picks-form button[type="submit"]').click();
+        await waitForLocatorText(page, '#onboarding-steps-meta', '已选 1 项');
+        await page.locator('#onboarding-look select[name="color"]').selectOption('天空蓝');
+        await page.locator('#onboarding-look-form button[type="submit"]').click();
+        await waitForLocatorText(page, '#onboarding-look-preview', '颜色：天空蓝');
+        record('onboarding_steps_2_4',
+          appsText.includes('Gmail · 未连接') && !appsText.includes('已连接')
+          && (await visibleText(page.locator('#onboarding-steps-meta'))).includes('形象已保存'),
+          'Steps 2-4 functional flow: apps honestly unconnected, picks and look saved; not compared with Teamily');
+        screenshots.push(path.basename(await shot(page, outDir, '87-onboarding-steps.png')));
+      } catch (error) {
+        record('onboarding_steps_2_4', false, String(error));
+      }
+      await page.locator('#industry').selectOption('其他');
+      await page.locator('#custom-industry').fill('[CI FIXTURE] Independent research');
+      await page.locator('#custom-role').fill('[CI FIXTURE] Analyst');
+      await page.locator('#onboarding-save').click();
+      await page.waitForURL(url => url.pathname === '/chat');
+      await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
+      await waitForLocatorText(page, '#onboarding-meta', '[CI FIXTURE] Independent research');
+      record('onboarding_custom_reopen',
+        await page.locator('#custom-industry').inputValue() === '[CI FIXTURE] Independent research'
+        && await page.locator('#custom-role').inputValue() === '[CI FIXTURE] Analyst',
+        'Custom industry and role are both restored, not lost on the Other form');
+    } catch (error) {
+      record('onboarding_save_reopen', false, String(error));
     }
 
     await context.close();
