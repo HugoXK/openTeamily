@@ -121,37 +121,51 @@ export function mergeSearchHits(existing, incoming) {
 // never drops what the user is already reading.
 export function createMessageSearch(loadPage) {
   const state = {hits: [], cursor: '', loading: false, error: ''};
+  let generation = 0;
+  let pending = null;
+  let activeKey = '';
   async function load(query, conversationId = '', {append = false} = {}) {
     const text = String(query || '').trim();
+    const key = JSON.stringify([text, conversationId]);
     if (!text) {
-      state.hits = [];
-      state.cursor = '';
-      state.error = '';
-      state.loading = false;
+      generation += 1;
+      activeKey = '';
+      pending = null;
+      Object.assign(state, {hits: [], cursor: '', error: '', loading: false});
       return state;
     }
-    if (state.loading) return state;
+    // A tab switch during the same search must await the existing request,
+    // not render its temporary empty state and invalidate the completing view.
+    if (state.loading && key === activeKey) return pending;
+    if (append && state.loading) return state;
+    const token = ++generation;
+    activeKey = key;
     if (!append) {
       state.hits = [];
       state.cursor = '';
     }
     state.loading = true;
-    try {
-      const page = await loadPage(text, conversationId, append ? state.cursor : '');
-      const incoming = ((page && page.items) || []).map(searchHitFromItem);
-      state.hits = mergeSearchHits(append ? state.hits : [], incoming);
-      state.cursor = (page && page.cursor) || '';
-      state.error = '';
-    } catch (failure) {
-      state.error = (failure && failure.message) || '无法搜索消息。';
-      if (!append) {
-        state.hits = [];
-        state.cursor = '';
+    pending = (async () => {
+      try {
+        const page = await loadPage(text, conversationId, append ? state.cursor : '');
+        if (token !== generation) return state;
+        const incoming = ((page && page.items) || []).map(searchHitFromItem);
+        state.hits = mergeSearchHits(append ? state.hits : [], incoming);
+        state.cursor = (page && page.cursor) || '';
+        state.error = '';
+      } catch (failure) {
+        if (token !== generation) return state;
+        state.error = (failure && failure.message) || '无法搜索消息。';
+        if (!append) {
+          state.hits = [];
+          state.cursor = '';
+        }
+      } finally {
+        if (token === generation) state.loading = false;
       }
-    } finally {
-      state.loading = false;
-    }
-    return state;
+      return state;
+    })();
+    return pending;
   }
   return {state, load};
 }

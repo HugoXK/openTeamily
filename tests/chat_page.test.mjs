@@ -641,3 +641,22 @@ test('a homepage start query opens the created conversation after a member start
     }
   }
 });
+
+test('message search tab switches await the in-flight query and newer queries win', async () => {
+  const {createMessageSearch} = await import('../openteamily/static/chat/app.mjs');
+  const resolvers = [];
+  const search = createMessageSearch(() => new Promise(resolve => resolvers.push(resolve)));
+  const first = search.load('old');
+  const same = search.load('old');
+  assert.equal(resolvers.length, 1, 'a tab switch reuses the pending search');
+  resolvers[0]({items: [{kind: 'social', message_id: 'old', snippet: 'old'}]});
+  await Promise.all([first, same]);
+  assert.equal(search.state.hits.length, 1);
+  const stale = search.load('stale');
+  const latest = search.load('latest');
+  resolvers[2]({items: [{kind: 'social', message_id: 'latest', snippet: 'latest'}]});
+  await latest;
+  resolvers[1]({items: [{kind: 'social', message_id: 'stale', snippet: 'stale'}]});
+  await stale;
+  assert.equal(search.state.hits[0].messageId, 'latest');
+});
