@@ -118,7 +118,7 @@ class Broker:
         discovered = []
         for row in rows:
             account = client.get_account(row['account_id'])
-            if account.get('status') != 'ACTIVE' or account.get('user_id', composio.composio_user_id(user_id)) != composio.composio_user_id(user_id):
+            if account.get('status') != 'ACTIVE' or account.get('user_id') not in (None, '', composio.composio_user_id(user_id)):
                 continue
             page = client.tools(row['toolkit'], search)
             for item in page.get('items', [])[:20]:
@@ -225,7 +225,7 @@ class Broker:
         status, result = 'failed', {'error': 'tool_execution_failed_no_retry'}
         try:
             remote = client.get_account(account['account_id'])
-            if remote.get('status') != 'ACTIVE' or remote.get('user_id', composio.composio_user_id(user_id)) != composio.composio_user_id(user_id):
+            if remote.get('status') != 'ACTIVE' or remote.get('user_id') not in (None, '', composio.composio_user_id(user_id)):
                 result = {'error': 'connection_not_active'}
             else:
                 # Recheck after network status read, immediately before execution.

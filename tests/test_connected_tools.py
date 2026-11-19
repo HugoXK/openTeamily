@@ -192,6 +192,14 @@ class ConnectedToolsTests(unittest.TestCase):
         self.assertEqual(self.propose()['status'], 403)
         self.assertEqual(self.fake.executions, [])
 
+    def test_deprecated_upstream_owner_field_can_be_omitted(self):
+        # Composio deprecates user_id on GET account responses. Ownership still
+        # comes from our local task/connection mapping; contradictory nonempty
+        # upstream identities remain rejected by the adjacent test.
+        for value in (None, ''):
+            self.fake.accounts['ca_0001']['user_id'] = value
+            self.assertEqual(len(self.discover()['tools']), 1)
+
     def test_private_conversation_grants_same_owner_and_revokes_with_membership(self):
         workspace = self.alice.workspace()['body']['workspace']['id']
         self.alice.call('POST', f'/v1/workspaces/{workspace}/members', {'username': 'bob', 'role': 'member'})
