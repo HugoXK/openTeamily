@@ -7,7 +7,9 @@ permissions:
 jobs:
   management:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    # 500+ full Python cases plus all Node commands exceeded the old five-minute
+    # job budget (check135628640078 annotation). Preserve every assertion/test.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:

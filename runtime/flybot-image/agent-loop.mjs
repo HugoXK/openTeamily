@@ -122,12 +122,14 @@ export function loadSkillMaterial(items, prompt) {
 
 export async function runCycle(config, { requester = call, inferer = infer, once = true } = {}) {
   const { origin, token, hostname } = config
-  await requester(origin, token, 'POST', '/v1/agent/connect', { hostname })
+  await requester(origin, token, 'POST', '/v1/agent/connect', { hostname, skill_formats: ['openteamily.prompt-skill.v1'] })
   await requester(origin, token, 'POST', '/v1/agent/heartbeat', {})
   const listed = await requester(origin, token, 'GET', '/v1/agent/tasks')
   const processed = []
   for (const task of listed.items || []) {
-    const claimed = await requester(origin, token, 'POST', `/v1/agent/tasks/${task.id}/claim`, {})
+    let claimed
+    try { claimed = await requester(origin, token, 'POST', `/v1/agent/tasks/${task.id}/claim`, {}) }
+    catch (error) { if ([404,409].includes(error.status)) continue; throw error }
     const payload = claimed.task || task
     let status = 'failed'
     let result = { error: 'unsupported task kind' }
@@ -159,7 +161,8 @@ export async function runCycle(config, { requester = call, inferer = infer, once
     } finally {
       if (modelApi) delete modelApi.api_key
     }
-    await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/result`, { status, result })
+    try { await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/result`, { status, result }) }
+    catch (error) { if ([404,409].includes(error.status)) continue; throw error }
     processed.push(payload.id)
   }
   return processed

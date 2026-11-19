@@ -85,6 +85,11 @@ CREATE TABLE IF NOT EXISTS social_reads (
  read_seq INTEGER NOT NULL DEFAULT 0 CHECK(read_seq >= 0),
  PRIMARY KEY(conversation_id, user_id));
 
+CREATE TABLE IF NOT EXISTS social_message_deletions (
+ message_id TEXT NOT NULL REFERENCES social_messages(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ created INTEGER NOT NULL,
+ PRIMARY KEY(message_id, user_id));
 CREATE TABLE IF NOT EXISTS social_message_state (
  message_id TEXT PRIMARY KEY REFERENCES social_messages(id) ON DELETE CASCADE,
  revision INTEGER NOT NULL DEFAULT 1, edited INTEGER, retracted INTEGER NOT NULL DEFAULT 0);
@@ -265,33 +270,38 @@ def member_rows(db, conversation_id):
     ).fetchall()
     return [member_view(row) for row in rows]
 
-def last_previews(db, workspace_id, conversation_ids):
+def last_previews(db, workspace_id, conversation_ids, user_id=None):
     ids = [item for item in conversation_ids if item]
     if not ids:
         return {}
     placeholders = ','.join('?' * len(ids))
+    hidden = ''
+    args = [workspace_id, *ids]
+    if user_id:
+        hidden = ' AND id NOT IN (SELECT message_id FROM social_message_deletions WHERE user_id=?)'
+        args.append(user_id)
     rows = db.execute(
         'SELECT conversation_id, body FROM ('
         ' SELECT conversation_id, body,'
         ' ROW_NUMBER() OVER (PARTITION BY conversation_id ORDER BY seq DESC, id DESC) AS rn'
         f' FROM ({MESSAGE_ROWS}) WHERE workspace_id=? AND conversation_id IN ({placeholders})'
-        " AND trim(body) != '') ranked WHERE rn=1",
-        (workspace_id, *ids),
+        f" AND trim(body) != ''{hidden}) ranked WHERE rn=1",
+        args,
     ).fetchall()
     return {row['conversation_id']: search.snippet(row['body']) for row in rows}
 
 
-def conversation_item(db, row, members=None):
-    preview = last_previews(db, row['workspace_id'], [row['id']]).get(row['id'], '')
+def conversation_item(db, row, members=None, user_id=None):
+    preview = last_previews(db, row['workspace_id'], [row['id']], user_id).get(row['id'], '')
     if members is None:
         members = member_rows(db, row['id'])
     return conversation_view(row, members, preview, agent_member_rows(db, row['id']))
 
 
-def conversation_items(db, rows):
+def conversation_items(db, rows, user_id=None):
     if not rows:
         return []
-    previews = last_previews(db, rows[0]['workspace_id'], [row['id'] for row in rows])
+    previews = last_previews(db, rows[0]['workspace_id'], [row['id'] for row in rows], user_id)
     return [conversation_view(row, member_rows(db, row['id']), previews.get(row['id'], ''),
                               agent_member_rows(db, row['id']))
             for row in rows]
@@ -306,7 +316,7 @@ def listing(db, workspace_id, user_id, cursor, limit):
     ).fetchall()
 
 
-def messages(db, conversation_id, cursor, limit):
+def messages(db, conversation_id, cursor, limit, user_id=None):
     start = 0
     if cursor:
         current = db.execute(
@@ -316,9 +326,14 @@ def messages(db, conversation_id, cursor, limit):
         if current is None:
             return None
         start = current['seq']
+    hidden = ''
+    args = [conversation_id, start, limit]
+    if user_id:
+        hidden = ' AND id NOT IN (SELECT message_id FROM social_message_deletions WHERE user_id=?)'
+        args.insert(2, user_id)
     return db.execute(
-        f'SELECT * FROM ({MESSAGE_ROWS}) WHERE conversation_id=? AND seq>? ORDER BY seq LIMIT ?',
-        (conversation_id, start, limit),
+        f'SELECT * FROM ({MESSAGE_ROWS}) WHERE conversation_id=? AND seq>?{hidden} ORDER BY seq LIMIT ?',
+        args,
     ).fetchall()
 
 
@@ -408,13 +423,18 @@ PIN_LIMIT = 20
 FORWARD_LIMIT = 20
 
 
-def pinned_messages(db, conversation_id):
+def pinned_messages(db, conversation_id, user_id=None):
+    hidden = ''
+    args = [conversation_id]
+    if user_id:
+        hidden = ' AND m.id NOT IN (SELECT message_id FROM social_message_deletions WHERE user_id=?)'
+        args.append(user_id)
     rows = db.execute(
         'SELECT p.message_id, p.pinned_by, p.created, m.body, m.user_id, u.username AS pinned_by_username '
         'FROM social_message_pins p JOIN social_messages m ON m.id=p.message_id '
         'JOIN users u ON u.id=p.pinned_by LEFT JOIN social_message_state st ON st.message_id=m.id '
-        'WHERE p.conversation_id=? AND COALESCE(st.retracted,0)=0 ORDER BY p.created DESC, p.message_id',
-        (conversation_id,)).fetchall()
+        f'WHERE p.conversation_id=? AND COALESCE(st.retracted,0)=0{hidden} ORDER BY p.created DESC, p.message_id',
+        args).fetchall()
     return [{'message_id': r['message_id'], 'pinned_by': r['pinned_by'], 'pinned_by_username': r['pinned_by_username'],
              'author_id': r['user_id'], 'created': r['created'],
              'excerpt': r['body'] if len(r['body']) <= 120 else r['body'][:119] + '…'} for r in rows]
