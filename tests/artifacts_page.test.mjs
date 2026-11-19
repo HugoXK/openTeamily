@@ -734,3 +734,12 @@ test('an older workspace list cannot overwrite the current selected workspace', 
     assert.equal(artifactRows(elements.get('artifact-list'))[0].children[0].textContent, 'New workspace document');
   } finally { if (saved === undefined) delete globalThis.document; else globalThis.document=saved; }
 });
+
+
+test('saved result deep links require an exact authorized workspace and artifact id pair', async () => {
+  const {artifactTargetFromSearch}=await import('../openteamily/static/artifacts/app.mjs');
+  const wid='a'.repeat(32),aid='b'.repeat(32);
+  assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&artifact='+aid),{workspace:wid,artifact:aid});
+  assert.equal(artifactTargetFromSearch('?new=document'),null);
+  for(const query of ['?artifact='+aid,'?workspace='+wid,'?workspace=../private&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&new=document','?workspace='+wid+'&artifact='+aid+'&x=1'])assert.deepEqual(artifactTargetFromSearch(query),{invalid:true});
+});

@@ -223,6 +223,11 @@ class SocialMessengerTests(unittest.TestCase):
         # A later conversation Eve cannot join should not appear in Eve's workspace list.
         self.assertEqual(self.eve.call('GET', self.base())['status'], 404)
 
+    def test_unread_security_regressions_are_discoverable(self):
+        names = unittest.defaultTestLoader.getTestCaseNames(type(self))
+        self.assertIn('test_unread_is_per_user_and_read_ack_is_snapshot_bounded', names)
+        self.assertIn('test_read_ack_permissions_csrf_and_cross_conversation_ids', names)
+
     def test_media_attachment_view_carries_the_mime_for_inline_rendering(self):
         """An image shared in chat must reach the client as an image.
 
@@ -262,10 +267,6 @@ class SocialMessengerTests(unittest.TestCase):
         # one-off send response, is what the client renders on reload.
         listing = self.alice.call('GET', self.base() + '/' + cid)
         self.assertEqual(listing['body']['items'][0]['attachment']['mime'], 'image/png')
-
-
-if __name__ == '__main__':
-    unittest.main()
 
 
     def test_unread_is_per_user_and_read_ack_is_snapshot_bounded(self):
@@ -309,3 +310,7 @@ if __name__ == '__main__':
         self.assertEqual(self.bob.call('POST', base + '/read', {'message_id': 'bad'})['status'], 400)
         other = self.create(self.alice, 'dm', [self.carol_id], key='unread-other-create')['body']['conversation']['id']
         self.assertEqual(self.alice.call('POST', self.base() + '/' + other + '/read', {'message_id': sent})['status'], 404)
+
+
+if __name__ == '__main__':
+    unittest.main()
