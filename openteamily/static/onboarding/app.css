@@ -183,3 +183,5 @@ html[data-theme-resolved="dark"] .choice-tile[data-tone] { background: var(--ot-
    lands on the input itself. */
 label.choice-card { position: relative; }
 label.choice-card input { inset: 0; width: 100%; height: 100%; margin: 0; z-index: 1; pointer-events: auto; cursor: pointer; }
+.role-choices.choice-cards label.choice-card { display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; text-align: left; font-size: .75rem; font-weight: 600; color: var(--ot-ink); }
+.role-choices.choice-cards label.choice-card .choice-name { font-size: .75rem; font-weight: 600; line-height: 1.35; }
