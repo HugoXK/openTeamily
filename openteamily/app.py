@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, gateway, invites, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_templates, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, gateway, invites, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -831,6 +831,19 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/memory(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if memory_path:
                 return self.memory_dispatch(db, session, method, query, now, env, *memory_path.groups())
+            if path == '/v1/team-directory':
+                if method != 'GET':
+                    refuse(405, 'method', 'Only GET is supported')
+                return self.search_team_directory(db, session, query)
+            directory_join = re.fullmatch(r'/v1/team-directory/([0-9a-f]{32})/join', path)
+            if directory_join:
+                if method != 'POST' or query:
+                    refuse(405, 'method', 'Only POST is supported')
+                self.body(env, [])
+                return self.join_from_directory(db, session, now, directory_join.group(1))
+            directory_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/directory', path)
+            if directory_path:
+                return self.directory_listing_dispatch(db, session, method, query, now, env, directory_path.group(1))
             if path == '/v1/invites/accept' and method == 'POST' and not query:
                 return self.accept_invite(db, session, now, self.body(env, ['token']))
             if path == '/v1/join-requests' and method == 'GET' and not query:
@@ -4121,6 +4134,81 @@ class App:
         )
         member = {'user_id': user_id, 'username': username, 'role': row['role'], 'created': now}
         return 201, {'workspace': teams.attach(db, workspace), 'member': members.view(member)}, []
+
+    def search_team_directory(self, db, session, query):
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=2) if query else {}
+            if set(args) - {'q', 'limit'} or any(len(v) != 1 for v in args.values()):
+                raise ValueError()
+            text = args.get('q', [''])[0]
+            if len(text) > team_directory.QUERY_MAX or any(ord(ch) < 32 for ch in text):
+                raise ValueError()
+            limit = args.get('limit', ['20'])[0]
+            if not re.fullmatch(r'[0-9]{1,2}', limit) or not 1 <= int(limit) <= 50:
+                raise ValueError()
+        except ValueError:
+            refuse(400, 'invalid', 'Invalid directory search')
+        return 200, {'items': team_directory.search(db, session['user_id'], text, int(limit))}, []
+
+    def directory_listing_dispatch(self, db, session, method, query, now, env, workspace_id):
+        if query:
+            refuse(400, 'invalid', 'Query parameters are not supported')
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if method == 'GET':
+            if actor not in ('owner', 'admin'):
+                refuse(403, 'forbidden', 'Only the owner or an admin can view the directory listing')
+            return 200, {'listing': team_directory.listing_view(team_directory.listing(db, workspace_id))}, []
+        if method != 'POST':
+            refuse(405, 'method', 'Only GET and POST are supported')
+        body = self.body(env, ['listed', 'summary'])
+        if actor != 'owner':
+            refuse(403, 'forbidden', 'Only the owner can list the workspace in the directory')
+        listed, summary = body.get('listed'), body.get('summary', '')
+        if type(listed) is not bool or not team_directory.valid_summary(summary):
+            refuse(400, 'invalid', 'Provide listed as a boolean and a summary of at most 200 characters')
+        row = team_directory.listing(db, workspace_id)
+        if not listed:
+            if row is not None:
+                if row['invite_id']:
+                    db.execute('UPDATE workspace_invites SET revoked=1 WHERE id=?', (row['invite_id'],))
+                db.execute('DELETE FROM team_directory_listings WHERE workspace_id=?', (workspace_id,))
+            return 200, {'listing': team_directory.listing_view(None)}, []
+        if row is None:
+            db.execute('INSERT INTO team_directory_listings VALUES(?,?,NULL,?,?,?)',
+                       (workspace_id, summary.strip(), session['user_id'], now, now))
+        else:
+            db.execute('UPDATE team_directory_listings SET summary=?, listed_by=?, updated=? WHERE workspace_id=?',
+                       (summary.strip(), session['user_id'], now, workspace_id))
+        return 200, {'listing': team_directory.listing_view(team_directory.listing(db, workspace_id))}, []
+
+    def join_from_directory(self, db, session, now, workspace_id):
+        row = team_directory.listing(db, workspace_id)
+        workspace = db.execute('SELECT * FROM workspaces WHERE id=?', (workspace_id,)).fetchone()
+        if row is None or workspace is None:
+            refuse(404, 'not_found', 'Team not found')
+        user_id = session['user_id']
+        if user_id == workspace['owner_id'] or db.execute(
+                'SELECT 1 FROM workspace_members WHERE workspace_id=? AND user_id=?', (workspace_id, user_id)).fetchone():
+            refuse(409, 'conflict', 'You are already a member of this team')
+        if row['listed_by'] != workspace['owner_id']:
+            refuse(404, 'not_found', 'Team not found')
+        invite = db.execute('SELECT * FROM workspace_invites WHERE id=?', (row['invite_id'],)).fetchone() \
+            if row['invite_id'] else None
+        if invite is None or invite['revoked'] or invite['expires'] <= now or invite['use_count'] >= invite['max_uses']:
+            # The listing owns one approval-required member invite; renew it when spent or expired.
+            if invite is not None:
+                db.execute('UPDATE workspace_invites SET revoked=1 WHERE id=?', (invite['id'],))
+            invite_id = uuid4().hex
+            db.execute('INSERT INTO workspace_invites VALUES(?,?,?,?,?,?,?,?,0,0)',
+                       (invite_id, workspace_id, digest(opaque()), 'member', now, now + team_directory.INVITE_TTL,
+                        workspace['owner_id'], team_directory.INVITE_USES))
+            db.execute('INSERT INTO workspace_invite_policies VALUES(?,1,0)', (invite_id,))
+            db.execute('UPDATE team_directory_listings SET invite_id=? WHERE workspace_id=?', (invite_id, workspace_id))
+            invite = db.execute('SELECT * FROM workspace_invites WHERE id=?', (invite_id,)).fetchone()
+        return self.request_to_join(db, workspace, invite, user_id, now)
 
     def request_to_join(self, db, workspace, invite, user_id, now):
         prior = db.execute('SELECT * FROM workspace_join_requests WHERE workspace_id=? AND user_id=?',

@@ -53,3 +53,10 @@ test('suspend permission mirrors the server rules', async () => {
   assert.equal(canSuspend('owner', {user_id: 'o', role: 'owner'}, 'o'), false);
   assert.equal(canSuspend('member', {user_id: 'm', role: 'member'}, 'x'), false);
 });
+
+test('team directory membership labels', async () => {
+  const {directoryMembershipLabel} = await import('../openteamily/static/members/app.mjs');
+  assert.equal(directoryMembershipLabel({membership: 'member'}), '已加入');
+  assert.equal(directoryMembershipLabel({membership: 'pending'}), '等待审批');
+  assert.equal(directoryMembershipLabel({membership: null}), '');
+});

@@ -23,6 +23,12 @@ export function readInvite(form) {
   };
 }
 
+export function directoryMembershipLabel(team) {
+  if (team.membership === 'member') return '已加入';
+  if (team.membership === 'pending') return '等待审批';
+  return '';
+}
+
 export function canSuspend(actorRole, item, selfId) {
   if (!item || item.role === 'owner' || item.user_id === selfId) return false;
   if (actorRole === 'owner') return true;
@@ -334,7 +340,86 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const joinPanel = document.getElementById('join-requests-panel');
       if (joinPanel) joinPanel.hidden = true;
     }
+    await loadDirectoryListing(id);
   }
+
+  async function loadDirectoryListing(id) {
+    const form = document.getElementById('directory-listing-form');
+    if (!form) return;
+    form.hidden = actor !== 'owner';
+    if (form.hidden) return;
+    let listing;
+    try {
+      listing = await request('GET', `/v1/workspaces/${id}/directory`);
+    } catch (error) {
+      form.hidden = true;  // optional panel; never break the member list
+      return;
+    }
+    if (listing.status !== 200 || workspaceId() !== id) return;
+    document.getElementById('directory-listed').checked = Boolean(listing.body.listing.listed);
+    document.getElementById('directory-summary').value = listing.body.listing.summary || '';
+  }
+
+  function renderDirectory(items) {
+    const list = document.getElementById('directory-results');
+    list.textContent = '';
+    document.getElementById('directory-empty').hidden = items.length > 0;
+    for (const team of items) {
+      const li = document.createElement('li');
+      const name = document.createElement('strong');
+      name.textContent = team.name;
+      const meta = document.createElement('span');
+      meta.className = 'note';
+      meta.textContent = `${team.member_count} 人` + (team.summary ? ' · ' + team.summary : '');
+      li.append(name, ' ', meta);
+      const label = directoryMembershipLabel(team);
+      if (label) {
+        li.append(' ' + label);
+      } else {
+        const join = document.createElement('button');
+        join.type = 'button';
+        join.textContent = '申请加入';
+        join.addEventListener('click', async () => {
+          const result = await request('POST', `/v1/team-directory/${team.workspace_id}/join`, {});
+          if (result.status !== 200 && result.status !== 202) {
+            show('error', messageFor(result.body.error, '无法提交加入申请。'));
+            return;
+          }
+          show('ok', '已提交加入申请，等待所有者或管理员审批。');
+          join.disabled = true;
+          join.textContent = '等待审批';
+        });
+        li.append(join);
+      }
+      list.appendChild(li);
+    }
+  }
+
+  const directoryForm = document.getElementById('directory-search-form');
+  if (directoryForm) directoryForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const q = document.getElementById('directory-query').value.trim();
+    const result = await request('GET', '/v1/team-directory' + (q ? '?q=' + encodeURIComponent(q) : ''));
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法搜索团队目录。'));
+      return;
+    }
+    renderDirectory(result.body.items || []);
+  });
+
+  const listingForm = document.getElementById('directory-listing-form');
+  if (listingForm) listingForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const result = await request('POST', `/v1/workspaces/${workspaceId()}/directory`, {
+      listed: document.getElementById('directory-listed').checked,
+      summary: document.getElementById('directory-summary').value,
+    });
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法保存目录设置。'));
+      return;
+    }
+    show('ok', result.body.listing.listed ? '已在团队目录中公开。' : '已从团队目录移除。');
+  });
 
   async function load() {
     const session = await request('GET', '/v1/auth/session');
