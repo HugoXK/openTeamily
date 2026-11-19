@@ -1,0 +1,332 @@
+{
+  "phase": "after",
+  "errors": [],
+  "states": [
+    {
+      "shot": "remind-menu-after-1440x900",
+      "note": "message menu open on a message",
+      "viewport": "1440x900",
+      "horizontalOverflow": 0,
+      "menu": [
+        {
+          "key": "reply",
+          "text": "回复",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "save",
+          "text": "保存到资料空间",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "translate",
+          "text": "翻译",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "ask",
+          "text": "问 AI",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "copy",
+          "text": "复制",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "forward",
+          "text": "转发",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "pin",
+          "text": "置顶",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "remind-1h",
+          "text": "提醒我：1 小时后",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "remind-tomorrow",
+          "text": "提醒我：明天 9 点",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "select",
+          "text": "选择消息",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "edit",
+          "text": "编辑",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "retract",
+          "text": "撤回",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "delete",
+          "text": "删除",
+          "disabled": true,
+          "inViewport": true,
+          "painted": true
+        }
+      ]
+    },
+    {
+      "shot": "remind-menu-after-390x844",
+      "note": "message menu open on a message, narrow width",
+      "viewport": "390x844",
+      "horizontalOverflow": 0,
+      "menu": [
+        {
+          "key": "reply",
+          "text": "回复",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "save",
+          "text": "保存到资料空间",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "translate",
+          "text": "翻译",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "ask",
+          "text": "问 AI",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "copy",
+          "text": "复制",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "forward",
+          "text": "转发",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "pin",
+          "text": "置顶",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "remind-1h",
+          "text": "提醒我：1 小时后",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "remind-tomorrow",
+          "text": "提醒我：明天 9 点",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "select",
+          "text": "选择消息",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "edit",
+          "text": "编辑",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "retract",
+          "text": "撤回",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "delete",
+          "text": "删除",
+          "disabled": true,
+          "inViewport": true,
+          "painted": true
+        }
+      ]
+    },
+    {
+      "shot": "remind-created-after-1440x900",
+      "note": "the reminder as a real automation row on /automations",
+      "viewport": "1440x900",
+      "horizontalOverflow": 0,
+      "before": 1,
+      "created": {
+        "count": 2,
+        "reminders": [
+          {
+            "id": "7ec507ea467f4febba2c03eac24f46c2",
+            "title": "提醒：[CI FIXTURE] Social message for search.",
+            "enabled": true,
+            "schedule": {
+              "date": "2026-11-19",
+              "kind": "once",
+              "time": "16:53",
+              "time_zone": "UTC"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "shot": "run-collapsed-after-1440x900",
+      "note": "run rows closed; the row is the control",
+      "viewport": "1440x900",
+      "horizontalOverflow": 0,
+      "runs": [
+        {
+          "headText": "已完成succeeded摘要[CI FIXTURE] Fake provider briefing. Not a real vendor response.模型fake-model来源account执行位置agent任务b0a4f9eafc",
+          "hasToggle": true,
+          "expanded": "false",
+          "detailVisible": false,
+          "detailText": "摘要[CI FIXTURE] Fake provider briefing. Not a real vendor response.模型fake-model来源account执行位置agent任务b0a4f9eafce543afab656a6064259688保存到作品库",
+          "inViewport": false,
+          "painted": false
+        },
+        {
+          "headText": "已完成succeeded摘要今天的简报：三件待办、两条需要回复的消息。模型fixture-provider来源workspace执行位置agent任务task-fixture-1保存到作品库",
+          "hasToggle": true,
+          "expanded": "false",
+          "detailVisible": false,
+          "detailText": "摘要今天的简报：三件待办、两条需要回复的消息。模型fixture-provider来源workspace执行位置agent任务task-fixture-1保存到作品库",
+          "inViewport": false,
+          "painted": false
+        },
+        {
+          "headText": "失败failedprovider_error状态码provider_error失败原因上游 502：bad gateway执行位置agent",
+          "hasToggle": true,
+          "expanded": "false",
+          "detailVisible": false,
+          "detailText": "状态码provider_error失败原因上游 502：bad gateway执行位置agent",
+          "inViewport": false,
+          "painted": false
+        }
+      ]
+    },
+    {
+      "shot": "run-expanded-after-1440x900",
+      "note": "the same run opened in place",
+      "viewport": "1440x900",
+      "horizontalOverflow": 0,
+      "runs": [
+        {
+          "headText": "已完成succeeded摘要[CI FIXTURE] Fake provider briefing. Not a real vendor response.模型fake-model来源account执行位置agent任务b0a4f9eafc",
+          "hasToggle": true,
+          "expanded": "true",
+          "detailVisible": true,
+          "detailText": "摘要[CI FIXTURE] Fake provider briefing. Not a real vendor response.模型fake-model来源account执行位置agent任务b0a4f9eafce543afab656a6064259688保存到作品库",
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "headText": "已完成succeeded摘要今天的简报：三件待办、两条需要回复的消息。模型fixture-provider来源workspace执行位置agent任务task-fixture-1保存到作品库",
+          "hasToggle": true,
+          "expanded": "false",
+          "detailVisible": false,
+          "detailText": "摘要今天的简报：三件待办、两条需要回复的消息。模型fixture-provider来源workspace执行位置agent任务task-fixture-1保存到作品库",
+          "inViewport": false,
+          "painted": false
+        },
+        {
+          "headText": "失败failedprovider_error状态码provider_error失败原因上游 502：bad gateway执行位置agent",
+          "hasToggle": true,
+          "expanded": "false",
+          "detailVisible": false,
+          "detailText": "状态码provider_error失败原因上游 502：bad gateway执行位置agent",
+          "inViewport": false,
+          "painted": false
+        }
+      ]
+    },
+    {
+      "shot": "run-expanded-after-390x844",
+      "note": "the same run opened in place, narrow width",
+      "viewport": "390x844",
+      "horizontalOverflow": 0,
+      "runs": [
+        {
+          "headText": "已完成succeeded摘要[CI FIXTURE] Fake provider briefing. Not a real vendor response.模型fake-model来源account执行位置agent任务b0a4f9eafc",
+          "hasToggle": true,
+          "expanded": "true",
+          "detailVisible": true,
+          "detailText": "摘要[CI FIXTURE] Fake provider briefing. Not a real vendor response.模型fake-model来源account执行位置agent任务b0a4f9eafce543afab656a6064259688保存到作品库",
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "headText": "已完成succeeded摘要今天的简报：三件待办、两条需要回复的消息。模型fixture-provider来源workspace执行位置agent任务task-fixture-1保存到作品库",
+          "hasToggle": true,
+          "expanded": "false",
+          "detailVisible": false,
+          "detailText": "摘要今天的简报：三件待办、两条需要回复的消息。模型fixture-provider来源workspace执行位置agent任务task-fixture-1保存到作品库",
+          "inViewport": false,
+          "painted": false
+        },
+        {
+          "headText": "失败failedprovider_error状态码provider_error失败原因上游 502：bad gateway执行位置agent",
+          "hasToggle": true,
+          "expanded": "false",
+          "detailVisible": false,
+          "detailText": "状态码provider_error失败原因上游 502：bad gateway执行位置agent",
+          "inViewport": false,
+          "painted": false
+        }
+      ]
+    }
+  ]
+}
