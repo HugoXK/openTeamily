@@ -3871,9 +3871,9 @@ class App:
             return self.react_social_message(db, session, row, action.split('/')[1], now, env)
         if action and action.endswith('/save') and method == 'POST' and not query:
             return self.save_social_message(db, workspace, session, row, action.split('/')[1], now, env)
-        if action and action.startswith('messages/') and method == 'DELETE' and not query:
+        if action and re.fullmatch(r'messages/[0-9a-f]{32}', action) and method == 'DELETE' and not query:
             return self.delete_social_message(db, session, row, action.split('/')[1], now)
-        if action and action.startswith('messages/') and method == 'POST' and not query:
+        if action and re.fullmatch(r'messages/[0-9a-f]{32}/(?:edit|retract)', action) and method == 'POST' and not query:
             message_id, operation = action.split('/')[1:]
             message = db.execute('SELECT * FROM social_messages WHERE conversation_id=? AND id=?',
                                  (row['id'], message_id)).fetchone()
