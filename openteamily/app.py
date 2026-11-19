@@ -822,8 +822,18 @@ class App:
                 return self.memory_dispatch(db, session, method, query, now, env, *memory_path.groups())
             if path == '/v1/invites/accept' and method == 'POST' and not query:
                 return self.accept_invite(db, session, now, self.body(env, ['token']))
+            if path == '/v1/join-requests' and method == 'GET' and not query:
+                rows = db.execute(
+                    'SELECT r.*, w.name AS workspace_name FROM workspace_join_requests r '
+                    'JOIN workspaces w ON w.id=r.workspace_id WHERE r.user_id=? ORDER BY r.created DESC, r.id',
+                    (session['user_id'],)).fetchall()
+                return 200, {'items': [invites.request_view(row) for row in rows]}, []
+            join_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/join-requests(?:/([0-9a-f]{32})/(approve|reject))?', path)
+            if join_path:
+                return self.join_request_dispatch(db, session, method, query, now, env, *join_path.groups())
             invite_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/invites(?:/([0-9a-f]{32})(/revoke)?)?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/invites(?:/([0-9a-f]{32})(/revoke|/freeze|/unfreeze)?)?', path)
             if invite_path:
                 return self.invite_dispatch(db, session, method, query, now, env, *invite_path.groups())
             member_path = re.fullmatch(
@@ -3663,9 +3673,10 @@ class App:
             rows = db.execute(
                 'SELECT * FROM workspace_invites WHERE workspace_id=? ORDER BY id', (workspace['id'],)
             ).fetchall()
-            return 200, {'items': [invites.view(row) for row in rows]}, []
+            return 200, {'items': [invites.view(row, db) for row in rows]}, []
         if invite_id is None and method == 'POST' and not query:
-            return self.create_invite(db, workspace, actor, session['user_id'], now, self.body(env, ['role', 'expires_in', 'max_uses']))
+            return self.create_invite(db, workspace, actor, session['user_id'], now,
+                                      self.body(env, ['role', 'expires_in', 'max_uses', 'requires_approval']))
         if invite_id is None or method != 'POST' or query or not revoking:
             refuse(400, 'invalid', 'Invalid invite request')
         self.body(env, [])
@@ -3675,15 +3686,63 @@ class App:
         ).fetchone()
         if row is None:
             refuse(404, 'not_found', 'Invite not found')
-        db.execute('UPDATE workspace_invites SET revoked=1 WHERE id=?', (row['id'],))
-        row = dict(row)
-        row['revoked'] = 1
-        return 200, {'invite': invites.view(row)}, []
+        if actor == 'admin' and row['role'] != 'member':
+            refuse(403, 'forbidden', 'Admins can only manage member invites')
+        if revoking == '/revoke':
+            db.execute('UPDATE workspace_invites SET revoked=1 WHERE id=?', (row['id'],))
+        else:
+            if row['revoked']:
+                refuse(409, 'conflict', 'Revoked invites cannot be frozen or resumed')
+            db.execute('INSERT INTO workspace_invite_policies(invite_id,requires_approval,frozen) VALUES(?,0,?) '
+                       'ON CONFLICT(invite_id) DO UPDATE SET frozen=excluded.frozen',
+                       (row['id'], int(revoking == '/freeze')))
+        row = db.execute('SELECT * FROM workspace_invites WHERE id=?', (row['id'],)).fetchone()
+        return 200, {'invite': invites.view(row, db)}, []
+
+    def join_request_dispatch(self, db, session, method, query, now, env, workspace_id, request_id, decision):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if actor not in ('owner', 'admin'):
+            refuse(404, 'not_found', 'Workspace not found')
+        if request_id is None and method == 'GET' and query in ('', 'status=pending', 'status=all'):
+            rows = db.execute(
+                'SELECT r.*, u.username FROM workspace_join_requests r JOIN users u ON u.id=r.user_id '
+                "WHERE r.workspace_id=?" + (" AND r.status='pending'" if query != 'status=all' else '')
+                + ' ORDER BY r.created, r.id', (workspace['id'],)).fetchall()
+            return 200, {'items': [invites.request_view(row) for row in rows]}, []
+        if request_id is None or method != 'POST' or query:
+            refuse(400, 'invalid', 'Invalid join request')
+        self.body(env, [])
+        row = db.execute('SELECT r.*, u.username FROM workspace_join_requests r JOIN users u ON u.id=r.user_id '
+                         'WHERE r.id=? AND r.workspace_id=?', (request_id, workspace['id'])).fetchone()
+        if row is None:
+            refuse(404, 'not_found', 'Join request not found')
+        if row['status'] != 'pending':
+            refuse(409, 'conflict', 'Join request was already decided')
+        if actor == 'admin' and row['role'] != 'member':
+            refuse(403, 'forbidden', 'Admins can only approve member requests')
+        if decision == 'approve':
+            occupied = 1 + db.execute('SELECT COUNT(*) FROM workspace_members WHERE workspace_id=?',
+                                      (workspace['id'],)).fetchone()[0]
+            if occupied >= self.config.max_members_per_workspace:
+                refuse(429, 'quota', 'Workspace member capacity reached')
+            db.execute('INSERT OR IGNORE INTO workspace_members VALUES(?,?,?,?,?)',
+                       (workspace['id'], row['user_id'], row['role'], now, session['user_id']))
+        db.execute('UPDATE workspace_join_requests SET status=?, decided=?, decided_by=? WHERE id=?',
+                   ('approved' if decision == 'approve' else 'rejected', now, session['user_id'], row['id']))
+        row = db.execute('SELECT r.*, u.username FROM workspace_join_requests r JOIN users u ON u.id=r.user_id '
+                         'WHERE r.id=?', (row['id'],)).fetchone()
+        return 200, {'join_request': invites.request_view(row)}, []
 
     def create_invite(self, db, workspace, actor, actor_id, now, body):
         role = body.get('role')
         expires_in = body.get('expires_in', 604800)
         max_uses = body.get('max_uses', 1)
+        requires_approval = body.get('requires_approval', False)
+        if type(requires_approval) is not bool:
+            refuse(400, 'invalid', 'requires_approval must be a boolean')
         if role not in members.ASSIGNABLE:
             refuse(400, 'invalid', 'Provide a role of admin or member')
         if type(expires_in) is not int or not 60 <= expires_in <= 2592000:
@@ -3700,8 +3759,10 @@ class App:
             'INSERT INTO workspace_invites VALUES(?,?,?,?,?,?,?,?,0,0)',
             (invite_id, workspace['id'], digest(token), role, now, now + expires_in, actor_id, max_uses),
         )
+        if requires_approval:
+            db.execute('INSERT INTO workspace_invite_policies VALUES(?,1,0)', (invite_id,))
         row = db.execute('SELECT * FROM workspace_invites WHERE id=?', (invite_id,)).fetchone()
-        return 201, {'invite': invites.view(row), 'token': token}, []
+        return 201, {'invite': invites.view(row, db), 'token': token}, []
 
     def accept_invite(self, db, session, now, body):
         token = body.get('token')
@@ -3726,6 +3787,11 @@ class App:
             if existing['role'] != row['role']:
                 refuse(409, 'conflict', 'Member already exists with a different role')
             return 200, {'workspace': teams.attach(db, workspace), 'member': members.view(existing)}, []
+        policy = invites.policy(db, row['id'])
+        if policy['frozen']:
+            refuse(409, 'conflict', 'This invite is paused by the workspace')
+        if policy['requires_approval']:
+            return self.request_to_join(db, workspace, row, user_id, now)
         if row['use_count'] >= row['max_uses']:
             refuse(404, 'not_found', 'Invite not found')
         occupied = 1 + db.execute(
@@ -3743,6 +3809,28 @@ class App:
         )
         member = {'user_id': user_id, 'username': username, 'role': row['role'], 'created': now}
         return 201, {'workspace': teams.attach(db, workspace), 'member': members.view(member)}, []
+
+    def request_to_join(self, db, workspace, invite, user_id, now):
+        prior = db.execute('SELECT * FROM workspace_join_requests WHERE workspace_id=? AND user_id=?',
+                           (workspace['id'], user_id)).fetchone()
+        if prior is not None and prior['status'] == 'pending':
+            status = 200
+        else:
+            if invite['use_count'] >= invite['max_uses']:
+                refuse(404, 'not_found', 'Invite not found')
+            # Requesting reserves one use; a rejected user may ask again with a still-usable invite.
+            db.execute('UPDATE workspace_invites SET use_count=use_count+1 WHERE id=?', (invite['id'],))
+            if prior is None:
+                db.execute('INSERT INTO workspace_join_requests VALUES(?,?,?,?,?,?,?,NULL,NULL)',
+                           (uuid4().hex, workspace['id'], invite['id'], user_id, invite['role'], 'pending', now))
+            else:
+                db.execute("UPDATE workspace_join_requests SET status='pending', invite_id=?, role=?, created=?, "
+                           'decided=NULL, decided_by=NULL WHERE id=?', (invite['id'], invite['role'], now, prior['id']))
+            status = 202
+        row = db.execute('SELECT r.*, w.name AS workspace_name FROM workspace_join_requests r '
+                         'JOIN workspaces w ON w.id=r.workspace_id WHERE r.workspace_id=? AND r.user_id=?',
+                         (workspace['id'], user_id)).fetchone()
+        return status, {'join_request': invites.request_view(row)}, []
 
     def resolve_participants(self, db, workspace, names):
         allowed = {workspace['owner_id']}
