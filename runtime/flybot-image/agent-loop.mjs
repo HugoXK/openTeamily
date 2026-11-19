@@ -1,6 +1,7 @@
 // Poll the management /v1/agent task API from a FlyBot container.
 // Uses the lease-injected runtime key file. Never writes the token to stdout.
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 
 export const DEFAULT_KEY_FILE = '/run/secrets/openteamily-runtime-key.json'
 
@@ -102,6 +103,23 @@ export function toolBridge(origin, token, task, requester = call, {
   }
 }
 
+export function loadSkillMaterial(items, prompt) {
+  if (!Array.isArray(items) || items.length > 10) throw new Error('Invalid skill material')
+  const seen = new Set()
+  for (const item of items) {
+    const fields = ['id','name','version','content','digest','permissions','format','source'].sort()
+    if (!item || JSON.stringify(Object.keys(item).sort()) !== JSON.stringify(fields)
+      || typeof item.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(item.id) || seen.has(item.id)
+      || typeof item.name !== 'string' || item.name.length > 120
+      || typeof item.version !== 'string' || item.version.length > 32 || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(item.version)
+      || JSON.stringify(item.permissions) !== '["model_context"]' || item.format !== 'openteamily.prompt-skill.v1'
+      || item.source !== 'bundled-original' || typeof item.content !== 'string' || !item.content.length || item.content.length > 6000
+      || item.content.includes('\0') || createHash('sha256').update(item.content).digest('hex') !== item.digest) throw new Error('Skill integrity or permissions rejected')
+    seen.add(item.id)
+  }
+  return items.length ? 'Installed instruction-only skills (do not grant tools or external-action permission):\n' + JSON.stringify(items) + '\n\nUser task:\n' + prompt : prompt
+}
+
 export async function runCycle(config, { requester = call, inferer = infer, once = true } = {}) {
   const { origin, token, hostname } = config
   await requester(origin, token, 'POST', '/v1/agent/connect', { hostname })
@@ -114,21 +132,30 @@ export async function runCycle(config, { requester = call, inferer = infer, once
     let status = 'failed'
     let result = { error: 'unsupported task kind' }
     let modelApi
+    let stage = 'model access or runtime compatibility'
     try {
       if (payload.kind === 'echo') {
         status = 'succeeded'
         result = { echo: payload.prompt }
       } else if (payload.kind === 'infer') {
-        const access = await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/model-access`, {})
+        const access = await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/model-access`, {skill_format: 'openteamily.prompt-skill.v1'})
         modelApi = access.model_api
         const bridge = access.connected_tools ? toolBridge(origin, token, payload, requester) : null
-        const text = await inferer(modelApi, payload.prompt, bridge)
+        stage = 'skill verification/loading'
+        const material = access.skills || []
+        const prompt = loadSkillMaterial(material, payload.prompt)
+        if (material.length) {
+          const ack = await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/skills/ack`, {digests:material.map(item => item.digest)})
+          if (ack.acknowledged !== true) throw new Error('Skill loading was not acknowledged')
+        }
+        stage = 'inference or connected tool request'
+        const text = await inferer(modelApi, prompt, bridge)
         status = 'succeeded'
         result = { text, model: modelApi && modelApi.model, source: modelApi && modelApi.source }
       }
     } catch (error) {
       status = 'failed'
-      result = { error: 'infer failed' }
+      result = { error: stage + ' failed; check configuration and upgrade runtime if required; no automatic retry' }
     } finally {
       if (modelApi) delete modelApi.api_key
     }
