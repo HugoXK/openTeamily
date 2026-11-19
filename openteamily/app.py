@@ -431,8 +431,8 @@ class App:
     def oidc_signed_in(self, db, now, user_id):
         user = db.execute('SELECT id, username FROM users WHERE id=?', (user_id,)).fetchone()
         headers = self.new_session(db, user['id'], now)
-        headers.append(('Location', '/settings'))
-        return 302, {'redirect': '/settings', 'user': {'id': user['id'], 'username': user['username']}}, headers
+        headers.append(('Location', '/'))
+        return 302, {'redirect': '/', 'user': {'id': user['id'], 'username': user['username']}}, headers
 
     def credentials(self, body):
 
@@ -841,6 +841,9 @@ class App:
                 rows = members.visible(db, session['user_id'], cursor, int(limit) + 1)
                 return 200, {'items': [teams.attach(db, row) for row in rows[:int(limit)]],
                              'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
+            overview_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/overview', path)
+            if overview_path:
+                return self.workspace_overview(db, session, method, query, overview_path.group(1))
             if path == '/v1/automation-templates' and method == 'GET' and not query:
                 return 200, {'items': automations.templates()}, []
             auto_path = re.fullmatch(
@@ -4199,6 +4202,71 @@ class App:
             db.execute('INSERT INTO social_agent_members VALUES(?,?,?)', (conversation_id, agent_id, now))
         row = social.load(db, workspace['id'], conversation_id)
         return 201, {'conversation': social.conversation_item(db, row), 'created_agents': created}, []
+
+    def workspace_overview(self, db, session, method, query, workspace_id):
+        """Read-only home summaries; never exposes prompts, bodies or transcripts."""
+        if method != 'GET':
+            refuse(405, 'method', 'Only GET is supported')
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=1) if query else {}
+            if set(args) - {'limit'} or any(len(values) != 1 for values in args.values()):
+                raise ValueError()
+            limit = args.get('limit', ['5'])[0]
+            if not re.fullmatch(r'[0-9]{1,2}', limit) or not 1 <= int(limit) <= 10:
+                raise ValueError()
+            limit = int(limit)
+        except ValueError:
+            refuse(400, 'invalid', 'Provide a limit from 1 to 10')
+        uid = session['user_id']
+        agent_rows = db.execute(
+            'SELECT c.*, a.name AS agent_name FROM agent_conversations c '
+            'JOIN workspace_agents a ON a.id=c.agent_id '
+            'WHERE c.workspace_id=? AND c.user_id=? ORDER BY c.updated DESC, c.id DESC LIMIT ?',
+            (workspace_id, uid, limit)).fetchall()
+        agent_items = conversations.conversation_items(db, agent_rows)
+        for item, row in zip(agent_items, agent_rows):
+            item.update(source='agent', agent_name=row['agent_name'],
+                        unread_count=conversations.unread_count(db, row['id'], uid))
+        social_rows = db.execute(
+            'SELECT c.* FROM social_conversations c JOIN social_members m '
+            'ON m.conversation_id=c.id WHERE c.workspace_id=? AND m.user_id=? '
+            'ORDER BY c.updated DESC, c.id DESC LIMIT ?',
+            (workspace_id, uid, limit)).fetchall()
+        social_items = social.conversation_items(db, social_rows)
+        for item in social_items:
+            item.update(source='social', unread_count=social.unread_count(db, item['id'], uid))
+        recent = sorted(agent_items + social_items,
+                        key=lambda item: (item.get('updated') or 0, item.get('id') or ''),
+                        reverse=True)[:limit]
+        return 200, {
+            'workspace': {'id': workspace['id'], 'name': workspace['name'],
+                          'kind': teams.attach(db, workspace)['kind']},
+            'recent_conversations': recent,
+            'recent_artifacts': [artifacts.view(row, include_body=False)
+                                 for row in db.execute(artifacts.ROW_SELECT +
+                                                       'WHERE a.workspace_id=? ORDER BY a.updated DESC, a.id DESC LIMIT ?',
+                                                       (workspace_id, limit)).fetchall()],
+            'recent_meetings': [meetings.view(row, include_body=False)
+                                for row in db.execute(
+                                    'SELECT * FROM meetings WHERE workspace_id=? '
+                                    'ORDER BY started_at DESC, updated DESC, id DESC LIMIT ?',
+                                    (workspace_id, limit)).fetchall()],
+            'counts': {
+                'agents': db.execute('SELECT COUNT(*) FROM workspace_agents WHERE workspace_id=? AND archived=0',
+                                     (workspace_id,)).fetchone()[0],
+                'artifacts': db.execute('SELECT COUNT(*) FROM artifacts WHERE workspace_id=?',
+                                        (workspace_id,)).fetchone()[0],
+                'meetings': db.execute('SELECT COUNT(*) FROM meetings WHERE workspace_id=?',
+                                       (workspace_id,)).fetchone()[0],
+                'automations': db.execute('SELECT COUNT(*) FROM automations WHERE workspace_id=?',
+                                          (workspace_id,)).fetchone()[0],
+            },
+            'unread_notifications': notifications.unread_count(db, workspace_id, uid),
+            'limit': limit,
+        }, []
 
     def notification_dispatch(self, db, session, method, query, env, workspace_id, reading, now=0):
         workspace = members.load(db, workspace_id, session['user_id'])
