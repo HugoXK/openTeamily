@@ -112,8 +112,8 @@ export function loadSkillMaterial(items, prompt) {
       || typeof item.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(item.id) || seen.has(item.id)
       || typeof item.name !== 'string' || item.name.length > 120
       || typeof item.version !== 'string' || item.version.length > 32 || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(item.version)
-      || JSON.stringify(item.permissions) !== '["model_context"]' || item.format !== 'openteamily.prompt-skill.v1'
-      || item.source !== 'bundled-original' || typeof item.content !== 'string' || !item.content.length || item.content.length > 6000
+      || JSON.stringify(item.permissions) !== '["model_context"]' || !((item.format === 'openteamily.prompt-skill.v1' && item.source === 'bundled-original') || (item.format === 'openteamily.prompt-skill.v2' && item.source === 'user-imported'))
+       || typeof item.content !== 'string' || !item.content.length || item.content.length > 6000
       || item.content.includes('\0') || createHash('sha256').update(item.content).digest('hex') !== item.digest) throw new Error('Skill integrity or permissions rejected')
     seen.add(item.id)
   }
@@ -122,7 +122,7 @@ export function loadSkillMaterial(items, prompt) {
 
 export async function runCycle(config, { requester = call, inferer = infer, once = true } = {}) {
   const { origin, token, hostname } = config
-  await requester(origin, token, 'POST', '/v1/agent/connect', { hostname, skill_formats: ['openteamily.prompt-skill.v1'] })
+  await requester(origin, token, 'POST', '/v1/agent/connect', { hostname, skill_formats: ['openteamily.prompt-skill.v1','openteamily.prompt-skill.v2'] })
   await requester(origin, token, 'POST', '/v1/agent/heartbeat', {})
   const listed = await requester(origin, token, 'GET', '/v1/agent/tasks')
   const processed = []
@@ -140,7 +140,7 @@ export async function runCycle(config, { requester = call, inferer = infer, once
         status = 'succeeded'
         result = { echo: payload.prompt }
       } else if (payload.kind === 'infer') {
-        const access = await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/model-access`, {skill_format: 'openteamily.prompt-skill.v1'})
+        const access = await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/model-access`, {skill_format: 'openteamily.prompt-skill.v2'})
         modelApi = access.model_api
         const bridge = access.connected_tools ? toolBridge(origin, token, payload, requester) : null
         stage = 'skill verification/loading'
