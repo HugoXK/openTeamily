@@ -294,6 +294,7 @@ export function applyDirectoryCollapsed(root, collapsed) {
 
 
 export const MEMORY_EMPTY_WORKSPACE = '这个工作区还没有记忆页。';
+export const PREFERENCES_EMPTY = '还没有偏好，加一条试试';
 export const MEMORY_EMPTY_NO_MATCH = '没有匹配的记忆页。试试其他关键词。';
 export const GRAPH_EMPTY_MESSAGE = '创建两个或更多记忆页后，这里会把它们连成图谱';
 
@@ -1027,6 +1028,62 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (result.status !== 200) { status.textContent = result.status === 409 ? '画像已在别处更新，请重新打开后重试。' : '画像未保存。'; return; }
     profileRevision = result.body.profile.revision; status.textContent = '画像已保存。';
   });
+  // 「偏好」 lives in the 我的资料 view. It is local page state only: no
+  // request is made, nothing is stored, and a reload starts from an empty list.
+  const preferences = [];
+  let preferenceSerial = 0;
+
+  function renderPreferences() {
+    const list = document.getElementById('preference-list');
+    const empty = document.getElementById('preferences-empty');
+    if (!list) return;
+    list.replaceChildren();
+    for (const item of preferences) {
+      const row = document.createElement('li');
+      row.className = 'preference-row';
+      const text = document.createElement('span');
+      text.className = 'preference-text';
+      text.textContent = item.text;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'preference-remove';
+      remove.textContent = '删除';
+      remove.dataset.id = item.id;
+      remove.addEventListener('click', () => {
+        const index = preferences.findIndex(entry => entry.id === item.id);
+        if (index < 0) return;
+        preferences.splice(index, 1);
+        renderPreferences();
+        document.getElementById('preference-status').textContent = '已删除偏好。';
+      });
+      row.appendChild(text);
+      row.appendChild(remove);
+      list.appendChild(row);
+    }
+    if (empty) {
+      empty.textContent = PREFERENCES_EMPTY;
+      empty.hidden = preferences.length > 0;
+    }
+  }
+
+  const addPreference = document.getElementById('add-preference');
+  if (addPreference) {
+    addPreference.addEventListener('click', () => {
+      const input = document.getElementById('preference-input');
+      const status = document.getElementById('preference-status');
+      const text = String((input && input.value) || '').trim();
+      if (!text) {
+        status.textContent = '请先写一条偏好。';
+        return;
+      }
+      preferences.push({id: 'pref-' + (++preferenceSerial), text});
+      input.value = '';
+      renderPreferences();
+      status.textContent = '已添加偏好。';
+    });
+  }
+  renderPreferences();
+
   function invalidateMemoryProfile() {
     // A workspace switch must not leave the previous workspace's revision or
     // an enabled Save button while the new workspace profile is still loading.
