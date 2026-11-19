@@ -55,6 +55,35 @@ export function parseTopics(value) {
   return names;
 }
 
+
+export function applyMarkdown(textarea, kind) {
+  if (!textarea) return '';
+  const value = textarea.value;
+  const start = textarea.selectionStart ?? value.length;
+  const end = textarea.selectionEnd ?? value.length;
+  const selected = value.slice(start, end);
+  const wraps = {
+    bold: ['**', '**', '粗体'],
+    italic: ['_', '_', '斜体'],
+    strike: ['~~', '~~', '删除线'],
+    code: ['`', '`', '代码'],
+    h1: ['# ', '', '标题'],
+    h2: ['## ', '', '小标题'],
+    ul: ['- ', '', '列表项'],
+    quote: ['> ', '', '引用'],
+    link: ['[', '](https://)', '链接文字'],
+  };
+  const [pre, post, fallback] = wraps[kind] || ['', '', '文本'];
+  const body = selected || fallback;
+  const next = value.slice(0, start) + pre + body + post + value.slice(end);
+  textarea.value = next;
+  if (typeof textarea.setSelectionRange === 'function') {
+    textarea.setSelectionRange(start + pre.length, start + pre.length + body.length);
+  }
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  return next;
+}
+
 export function formatTopics(topics) {
   return (topics || []).join('，');
 }
@@ -925,6 +954,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
+    const savedHint = document.getElementById('editor-saved');
+    if (savedHint) {
+      const when = memoryUpdatedLabel(currentPage.updated);
+      savedHint.hidden = false;
+      savedHint.textContent = when ? ('已保存 · ' + when) : ('已保存 · 修订 ' + currentPage.revision);
+    }
+
     renderPageLinks();
   }
 
@@ -1122,6 +1158,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await openPage(parsed.page.id);
   });
 
+  const toolbar = editor.querySelector('.editor-toolbar');
+  if (toolbar) {
+    toolbar.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-md]');
+      if (!button) return;
+      applyMarkdown(editor.elements.body, button.getAttribute('data-md'));
+      editor.elements.body.focus();
+    });
+  }
+
   editor.addEventListener('submit', async (event) => {
     event.preventDefault();
     const id = workspaceId();
@@ -1142,6 +1188,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
+    const savedHint = document.getElementById('editor-saved');
+    if (savedHint) {
+      const when = memoryUpdatedLabel(currentPage.updated);
+      savedHint.hidden = false;
+      savedHint.textContent = when ? ('已保存 · ' + when) : ('已保存 · 修订 ' + currentPage.revision);
+    }
+
     await loadGraph();
     renderPageLinks();
     show('ok', '已保存。');

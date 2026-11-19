@@ -13,7 +13,7 @@
 <body class="app-workspace">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
-    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
+    <a class="brand-mark" href="/chat" title="OpenTeamily" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
     <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
     <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
     <a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
@@ -188,8 +188,27 @@
       </section>
     </section>
     <form id="editor-form" class="memory-editor" method="post" action="/v1/workspaces" hidden>
+      <div class="editor-topbar">
+        <p id="editor-saved" class="editor-saved" hidden></p>
+        <div class="editor-top-actions">
+          <button type="button" disabled title="未接通：还没有整理记忆的接口。">做梦</button>
+          <button type="button" disabled title="未接通：还没有分享记忆页的接口。">分享</button>
+          <button type="button" disabled title="未接通：还没有页内历史记录接口。">历史</button>
+        </div>
+      </div>
       <label class="editor-title-field"><span class="visually-hidden">标题</span> <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="标题"></label>
       <label class="editor-topics-field">话题 <input type="text" name="topics" maxlength="400" autocomplete="off" placeholder="添加标签"></label>
+      <div class="editor-toolbar" role="toolbar" aria-label="正文格式">
+        <button type="button" data-md="bold" title="粗体"><strong>B</strong></button>
+        <button type="button" data-md="italic" title="斜体"><em>I</em></button>
+        <button type="button" data-md="strike" title="删除线"><s>S</s></button>
+        <button type="button" data-md="h1" title="一级标题">H1</button>
+        <button type="button" data-md="h2" title="二级标题">H2</button>
+        <button type="button" data-md="ul" title="列表">列表</button>
+        <button type="button" data-md="quote" title="引用">引用</button>
+        <button type="button" data-md="code" title="代码">代码</button>
+        <button type="button" data-md="link" title="链接">链接</button>
+      </div>
       <label class="editor-body-field"><span class="visually-hidden">正文</span>
         <textarea name="body" maxlength="8000" rows="16" placeholder="开始写作…"></textarea>
       </label>
