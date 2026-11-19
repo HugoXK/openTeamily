@@ -3280,6 +3280,7 @@ class App:
             'personal_agent': {
                 'workspace': {'id': workspace['id'], 'name': workspace['name'], 'kind': 'personal'},
                 'agent': agents.snapshot(db, agent) if agent is not None else None,
+                'look': onboarding.load_look(db, session['user_id']),
             },
             'builtin_agents': [
                 {'key': item['builtin_key'], 'agent': agents.snapshot(db, item)}

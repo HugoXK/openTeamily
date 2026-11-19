@@ -75,6 +75,8 @@ class SettingsPage:
         '/guide/app.css': ('guide', 'app.css', 'text/css; charset=utf-8'),
         '/about': ('about', 'index.html', 'text/html; charset=utf-8'),
         '/about/app.css': ('about', 'app.css', 'text/css; charset=utf-8'),
+        '/look/app.mjs': ('look', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/look/app.css': ('look', 'app.css', 'text/css; charset=utf-8'),
     }
     PREFIXES = ('/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/download', '/guide', '/about')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
