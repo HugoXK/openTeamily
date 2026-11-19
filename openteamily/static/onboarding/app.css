@@ -47,3 +47,37 @@
 }
 #custom-industry-label,
 #custom-role-label { margin-top: 0.5rem; }
+
+/* Step one follows the captured layout. Steps 2-4 below are a functional flow without a compared layout. */
+body.app-workspace:not(.chat-open) > main > #main-panel { max-width: 46rem; width: 100%; margin: 0 auto; padding: 2rem 1.25rem; box-sizing: border-box; }
+.onboarding-card { max-width: none; border: 0; box-shadow: none; padding: 1.5rem; }
+.onboarding-card h2 { font-size: 1.4rem; font-weight: 600; }
+.onboarding-card > .note { line-height: 1.65; }
+.onboarding-card > label { margin: 1.25rem 0; font-size: .9rem; }
+.onboarding-card select { min-height: 2.75rem; }
+#role-field { border: 0; padding: .5rem; }
+#role-field legend { padding: 0; font-size: .9rem; }
+.role-choices { gap: .5rem; }
+.role-choices label { padding: .55rem .8rem; min-height: 2.5rem; box-sizing: border-box; }
+.onboarding-actions { padding-top: 1rem; border-top: 1px solid var(--ot-line); }
+@media (max-width: 600px) { .onboarding-card { padding: 1rem; } .onboarding-actions { flex-wrap: wrap; } }
+
+#onboarding-steps { margin-top: 1rem; border-top: 1px solid var(--ot-line); }
+#onboarding-steps form { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--ot-line); }
+#onboarding-steps h2 { font-size: 1.1rem; }
+#onboarding-apps { list-style: none; padding: 0; }
+#onboarding-apps li {
+  padding: .4rem .75rem;
+  border: 1px dashed var(--ot-line-strong);
+  border-radius: 999px;
+  color: var(--ot-muted);
+  font-size: .85rem;
+}
+#onboarding-look { display: flex; flex-wrap: wrap; gap: .6rem 1rem; margin: .5rem 0; }
+#onboarding-look label { display: inline-flex; align-items: center; gap: .4rem; font-size: .85rem; color: var(--ot-muted); }
+#onboarding-look-preview {
+  padding: .5rem .75rem;
+  border-radius: var(--ot-radius-sm);
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+}

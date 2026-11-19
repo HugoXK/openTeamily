@@ -324,6 +324,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (count) count.textContent = '显示 ' + shown + ' 个智能体';
   }
 
+  const apiKeyForm = document.getElementById('api-key-form');
+  if (apiKeyForm) apiKeyForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!currentAgent) return;
+    const agent = currentAgent, wid = workspaceId();
+    const result = await request('POST', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys`, {
+      name: document.getElementById('api-key-name').value,
+      rate_per_minute: Number(document.getElementById('api-key-rate').value) || 10,
+    });
+    if (result.status !== 201) { show('error', messageFor(result.body.error, '无法生成密钥。')); return; }
+    const out = document.getElementById('api-key-token');
+    out.hidden = false;
+    out.textContent = `密钥只显示一次：${result.body.token}`;
+    document.getElementById('api-key-name').value = '';
+    loadApiKeys(agent, true);
+  });
+
   async function loadWorkspace() {
     const id = workspaceId();
     if (!id) return;
@@ -392,6 +409,44 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     renderHomepage(agent, writable);
     if (runtimePanel) loadRuntime();
+    loadApiKeys(agent, writable);
+  }
+
+  async function loadApiKeys(agent, writable) {
+    const panel = document.getElementById('api-key-panel');
+    if (!panel) return;
+    panel.hidden = !writable || Boolean(agent.archived);
+    document.getElementById('api-key-token').hidden = true;
+    if (panel.hidden) return;
+    const wid = workspaceId();
+    let listed;
+    try {
+      listed = await request('GET', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys`);
+    } catch (error) {
+      return;  // optional panel; never break the editor
+    }
+    if (workspaceId() !== wid || !currentAgent || currentAgent.id !== agent.id) return;
+    const list = document.getElementById('api-key-list');
+    list.replaceChildren(...(listed.status === 200 ? listed.body.items : []).map(key => {
+      const li = document.createElement('li');
+      const meta = document.createElement('span');
+      meta.textContent = `${key.name} · ${key.rate_per_minute} 次/分钟 · ${key.revoked ? '已撤销' : '有效'}`
+        + (key.last_used ? ' · 用过' : ' · 未使用');
+      li.append(meta);
+      if (!key.revoked) {
+        const revoke = document.createElement('button');
+        revoke.type = 'button';
+        revoke.textContent = '撤销';
+        revoke.addEventListener('click', async () => {
+          const result = await request('POST', `/v1/workspaces/${wid}/agents/${agent.id}/api-keys/${key.id}/revoke`, {});
+          if (result.status !== 200) { show('error', messageFor(result.body.error, '无法撤销密钥。')); return; }
+          show('ok', '已撤销密钥。');
+          loadApiKeys(agent, writable);
+        });
+        li.append(revoke);
+      }
+      return li;
+    }));
   }
 
   function renderHomepage(agent, writable, tokenPath) {

@@ -55,6 +55,18 @@ CREATE TABLE IF NOT EXISTS artifact_discover (
  created INTEGER NOT NULL,
  updated INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS artifact_discover_list ON artifact_discover(listed, updated, slug);
+CREATE TABLE IF NOT EXISTS discover_likes (
+ artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ PRIMARY KEY(artifact_id,user_id));
+CREATE TABLE IF NOT EXISTS discover_collections (
+ artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ PRIMARY KEY(artifact_id,user_id));
+CREATE TABLE IF NOT EXISTS discover_follows (
+ follower_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ creator_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ CHECK(follower_id<>creator_id), PRIMARY KEY(follower_id,creator_id));
 '''
 
 
@@ -136,9 +148,13 @@ def work_cursor(row):
     return '%s.%s' % (row['listed_updated'], row['slug'])
 
 
-def work_listing(db, query, cursor, limit):
+WORK_FILTER_KINDS = frozenset(('document', 'website', 'image', 'audio', 'video',
+                                'slides', 'whiteboard', 'dashboard', 'media'))
+
+
+def work_listing(db, query, cursor, limit, kind='', viewer_id='', tab='all'):
     sql = (
-        'SELECT d.slug, d.updated AS listed_updated, a.title, '
+        'SELECT d.slug, d.updated AS listed_updated, a.title, a.id AS artifact_id, a.created_by, '
         'cu.username AS created_by_username, m.render AS render, '
         'md.mime AS media_mime, b.board AS board_json, sl.deck AS slides_json, '
         'dbd.dashboard AS dashboard_json '
@@ -153,6 +169,14 @@ def work_listing(db, query, cursor, limit):
         'WHERE d.listed=1'
     )
     params = []
+    if tab == 'following':
+        sql += ' AND EXISTS(SELECT 1 FROM discover_follows f WHERE f.creator_id=a.created_by AND f.follower_id=?)'
+        params.append(viewer_id)
+    elif tab == 'collected':
+        sql += ' AND EXISTS(SELECT 1 FROM discover_collections c WHERE c.artifact_id=a.id AND c.user_id=?)'
+        params.append(viewer_id)
+    elif tab != 'all':
+        raise ValueError('invalid feed tab')
     parsed = valid_work_cursor(cursor) if cursor else None
     if cursor:
         if parsed is None:
@@ -163,6 +187,22 @@ def work_listing(db, query, cursor, limit):
     if text:
         sql += ' AND (instr(lower(a.title), lower(?))>0 OR instr(lower(cu.username), lower(?))>0)'
         params.extend([text, text])
+    if kind:
+        if kind not in WORK_FILTER_KINDS:
+            raise ValueError('invalid work kind')
+        # Match the same precedence as artifacts.public_kind; media subtypes use
+        # server-sniffed MIME, never user-supplied category text.
+        sql += """ AND (CASE
+            WHEN md.mime LIKE 'image/%' THEN 'image'
+            WHEN md.mime LIKE 'audio/%' THEN 'audio'
+            WHEN md.mime LIKE 'video/%' THEN 'video'
+            WHEN md.mime IS NOT NULL THEN 'media'
+            WHEN b.board IS NOT NULL THEN 'whiteboard'
+            WHEN sl.deck IS NOT NULL THEN 'slides'
+            WHEN dbd.dashboard IS NOT NULL THEN 'dashboard'
+            WHEN m.render='website' THEN 'website'
+            ELSE 'document' END)=?"""
+        params.append(kind)
     sql += ' ORDER BY d.updated DESC, d.slug DESC LIMIT ?'
     params.append(limit)
     return db.execute(sql, tuple(params)).fetchall()
@@ -195,3 +235,24 @@ def load_listed_work(db, slug):
     if row is None or row['listed'] != 1:
         return None
     return artifacts.load(db, row['workspace_id'], row['artifact_id'])
+
+
+def engagement(db, artifact_id, creator_id, user_id):
+    def exists(table):
+        return bool(db.execute('SELECT 1 FROM ' + table + ' WHERE artifact_id=? AND user_id=?',
+                               (artifact_id, user_id)).fetchone())
+    return {
+        'likes': db.execute('SELECT COUNT(*) FROM discover_likes WHERE artifact_id=?', (artifact_id,)).fetchone()[0],
+        'collections': db.execute('SELECT COUNT(*) FROM discover_collections WHERE artifact_id=?', (artifact_id,)).fetchone()[0],
+        'liked': exists('discover_likes') if user_id else False,
+        'collected': exists('discover_collections') if user_id else False,
+        'following': bool(user_id and db.execute('SELECT 1 FROM discover_follows WHERE follower_id=? AND creator_id=?',
+                                                (user_id, creator_id)).fetchone()),
+        'own_work': user_id == creator_id,
+    }
+
+
+def engaged_work_view(db, row, user_id=''):
+    item = work_public_view(row)
+    item.update(engagement(db, row['artifact_id'], row['created_by'], user_id))
+    return item

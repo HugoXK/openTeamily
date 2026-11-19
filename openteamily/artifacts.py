@@ -1373,3 +1373,18 @@ def parse_multipart(content_type, raw):
                     return None
             fields[name] = payload
     return {'fields': fields, 'files': uploads}
+
+
+def render_listed_media(row, path):
+    """Only for explicitly listed works; path is a validated local public slug."""
+    mime, source = row['media_mime'], escape(path, quote=True)
+    title = escape(row['title'] or '媒体')
+    if mime.startswith('image/'):
+        player = '<img style="max-width:100%;height:auto" src="' + source + '" alt="' + title + '">'
+    elif mime.startswith('audio/'):
+        player = '<audio controls preload="metadata" src="' + source + '"></audio>'
+    else:
+        player = '<video style="max-width:100%" controls preload="metadata" src="' + source + '"></video>'
+    return ('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>' + title + '</title><body><h1>' + title + '</h1>' + player +
+            '<p><a href="' + source + '" download>下载媒体</a></p></body></html>')
