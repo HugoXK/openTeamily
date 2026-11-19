@@ -1268,3 +1268,14 @@ html[data-theme-resolved="dark"] { --ot-bubble-mine: var(--ot-accent-soft); }
 #compose-dialog input[type="checkbox"], #compose-dialog input[type="radio"] { width: auto; min-width: 0; flex: 0 0 auto; margin: 0; accent-color: var(--ot-accent); }
 #conversation-list .session-row[aria-current="true"], #conversation-list .session-row[aria-current="true"]:hover { box-shadow: none; }
 .chat-header .chat-title, #chat-title { font-size: .875rem; font-weight: 650; }
+/* Recorded Teamily shows no persistent per-message toolbar: actions surface on hover/focus only. */
+@media (hover: hover) {
+  #message-list li > button, #message-list li > .reaction-add, #message-list li .reactions > .reaction-add, #message-list li > .message-actions {
+    opacity: 0; transition: opacity .12s ease;
+  }
+  #message-list li:hover > button, #message-list li:focus-within > button,
+  #message-list li:hover .reaction-add, #message-list li:focus-within .reaction-add,
+  #message-list li:hover > .message-actions, #message-list li:focus-within > .message-actions { opacity: 1; }
+}
+#message-list li > button { height: 1.5rem; min-height: 0; padding: 0 .5rem; margin: .25rem .25rem 0 0; border: 0; border-radius: 999px; background: transparent; color: var(--ot-muted); font-size: .6875rem; box-shadow: none; }
+#message-list li > button:hover { background: var(--ot-bg-accent); color: var(--ot-ink); }
