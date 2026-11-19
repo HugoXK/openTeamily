@@ -87,8 +87,12 @@ class SettingsPage:
         '/skills': ('skills', 'index.html', 'text/html; charset=utf-8'),
         '/skills/app.mjs': ('skills', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/skills/app.css': ('skills', 'app.css', 'text/css; charset=utf-8'),
+        '/': ('home', 'index.html', 'text/html; charset=utf-8'),
+        '/home': ('home', 'index.html', 'text/html; charset=utf-8'),
+        '/home/app.mjs': ('home', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/home/app.css': ('home', 'app.css', 'text/css; charset=utf-8'),
     }
-    PREFIXES = ('/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills')
+    PREFIXES = ('/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")
@@ -171,7 +175,11 @@ class SettingsPage:
                              'new=document', 'new=website', 'new=slides', 'new=dashboard',
                              'new=whiteboard')
         if path == '/automations':
-            # template=<id> opens the editor prefilled from a known template.
+            # template=<id> opens the editor prefilled from a known template;
+            # runs=<filter> keeps the run-history filter shareable. The two are
+            # one-shot and permanent respectively, so they never share a URL.
+            if query in ('runs=all', 'runs=succeeded', 'runs=failed'):
+                return True
             from .automations import TEMPLATES
             template = query[len('template='):] if query.startswith('template=') else ''
             return template in TEMPLATES and template != 'custom'

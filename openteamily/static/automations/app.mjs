@@ -65,12 +65,46 @@ export function runResultText(run) {
   return '';
 }
 
+// The two destructive controls on this page ask before they act. The wording is
+// a pure function so it can be asserted without a DOM; it stays generic on
+// purpose and never echoes a user-supplied title, which could make the question
+// look like a different action.
+export function deletePrompt(item) {
+  return {question: '删除这条自动化？', confirmLabel: '确认'};
+}
+
+export function cancellationPrompt(run) {
+  return {question: '取消这次运行？', confirmLabel: '确认取消'};
+}
+
 
 // `/automations?template=<id>` opens the editor prefilled from that template
 // (used by the chat composer's 自动化 shortcuts).
 export function templateFromSearch(search) {
   const value = new URLSearchParams(search || '').get('template') || '';
   return /^[a-z0-9_-]{1,64}$/.test(value) ? value : '';
+}
+
+// `/automations?runs=failed` keeps the run-history filter across refresh,
+// back/forward and sharing. One recorded value at a time; anything else is 全部.
+export const RUN_FILTERS = Object.freeze(['all', 'succeeded', 'failed']);
+
+export function runFilterFromSearch(search) {
+  const value = new URLSearchParams(search || '').get('runs') || '';
+  return value === 'succeeded' || value === 'failed' ? value : 'all';
+}
+
+export function runFilterSearchText(filter) {
+  return filter === 'succeeded' || filter === 'failed' ? `?runs=${filter}` : '';
+}
+
+// The server filters on the stored status, and run_view reports cancelled and
+// timed-out runs as their own status. 失败 therefore names all three, so the
+// mirror here can never hide a row the server sent back for status=failed.
+export function matchesRunFilter(item, filter) {
+  if (filter === 'succeeded') return item.status === 'succeeded';
+  if (filter === 'failed') return item.status === 'failed' || item.status === 'cancelled' || item.status === 'timeout';
+  return true;
 }
 
 export function catalogItems(templates, category, search) {
@@ -277,6 +311,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let current = null;
   let category = 'mine';
   let runTimer = 0;
+  const view = document.defaultView;
+  const readSearch = () => (view && view.location && view.location.search) || '';
+  let runFilter = runFilterFromSearch(readSearch());
+
+  function pushRunFilter(filter) {
+    const text = runFilterSearchText(filter);
+    if (!view || !view.history || !view.location) return;
+    if ((view.location.search || '') === text) return;
+    const base = view.location.pathname || '/automations';
+    view.history.pushState({runs: filter}, '', text ? base + text : base);
+  }
+
+  const RUN_FILTER_BUTTONS = {all: 'run-filter-all', succeeded: 'run-filter-succeeded', failed: 'run-filter-failed'};
+
+  function syncRunFilters() {
+    for (const [name, id] of Object.entries(RUN_FILTER_BUTTONS)) {
+      const button = document.getElementById(id);
+      if (button) button.setAttribute('aria-current', name === runFilter ? 'true' : 'false');
+    }
+  }
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -300,6 +354,60 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return workspaceSelect.value;
   }
 
+  let pendingConfirm = null;
+  let confirmSerial = 0;
+
+  function closeConfirm({restoreFocus = true} = {}) {
+    if (!pendingConfirm) return;
+    const {box, trigger} = pendingConfirm;
+    pendingConfirm = null;
+    if (box && box.parentNode) box.parentNode.removeChild(box);
+    if (trigger) {
+      trigger.hidden = false;
+      if (restoreFocus && typeof trigger.focus === 'function') trigger.focus();
+    }
+  }
+
+  function openConfirm({parent, trigger, prompt, action}) {
+    closeConfirm();
+    const questionId = 'automation-confirm-question-' + (++confirmSerial);
+    const box = document.createElement('span');
+    box.className = 'row-confirm';
+    box.setAttribute('role', 'alertdialog');
+    box.setAttribute('aria-labelledby', questionId);
+    const question = document.createElement('span');
+    question.id = questionId;
+    question.textContent = prompt.question;
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = '取消';
+    cancel.dataset.confirmAction = 'cancel';
+    cancel.addEventListener('click', () => closeConfirm());
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.textContent = prompt.confirmLabel;
+    confirm.dataset.confirmAction = 'ok';
+    confirm.addEventListener('click', () => {
+      const run = action;
+      closeConfirm();
+      run();
+    });
+    box.appendChild(question);
+    box.appendChild(cancel);
+    box.appendChild(confirm);
+    trigger.hidden = true;
+    parent.appendChild(box);
+    pendingConfirm = {box, trigger, action};
+    if (typeof cancel.focus === 'function') cancel.focus();
+  }
+
+  // One question at a time; Esc is the keyboard way out and never acts.
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !pendingConfirm) return;
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    closeConfirm();
+  });
+
   function stopRunPoll() {
     if (runTimer) {
       globalThis.clearInterval(runTimer);
@@ -314,8 +422,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!list || !panel) return;
     panel.hidden = false;
     list.textContent = '';
-    empty.hidden = items.length > 0;
-    for (const item of items) {
+    const visible = items.filter(item => matchesRunFilter(item, runFilter));
+    const filtering = runFilter !== 'all';
+    empty.hidden = items.length > 0 || filtering;
+    const filterEmpty = document.getElementById('run-filter-empty');
+    if (filterEmpty) filterEmpty.hidden = !(filtering && visible.length === 0);
+    for (const item of visible) {
       const row = document.createElement('li');
       const head = document.createElement('div');
       head.className = 'run-head';
@@ -334,14 +446,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.textContent = '取消这次运行';
-        cancel.addEventListener('click', async () => {
-          const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs/${item.id}/cancel`, {});
-          if (result.status !== 200) {
-            show('error', messageFor(result.body.error, '取消失败。'));
-            return;
-          }
-          show('ok', '已取消。');
-          await loadRuns();
+        cancel.addEventListener('click', () => {
+          // The question is bound to the run it names: switching workspace or
+          // automation later cannot retarget the request built from this snapshot.
+          const target = {workspace: workspaceId(), automation: current.id, run: item.id};
+          openConfirm({
+            parent: head,
+            trigger: cancel,
+            prompt: cancellationPrompt(item),
+            action: () => cancelRun(target),
+          });
         });
         head.appendChild(cancel);
       }
@@ -370,6 +484,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  async function cancelRun(target) {
+    if (!target || !target.workspace || !target.automation || !target.run) return;
+    const result = await request('POST', `/v1/workspaces/${target.workspace}/automations/${target.automation}/runs/${target.run}/cancel`, {});
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '取消失败。'));
+      return;
+    }
+    show('ok', '已取消。');
+    await loadRuns();
+  }
+
   async function loadRuns() {
     const panel = document.getElementById('run-panel');
     if (!panel) return;
@@ -378,7 +503,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       stopRunPoll();
       return;
     }
-    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs?limit=20`);
+    const wanted = runFilter === 'all' ? '' : `&status=${runFilter}`;
+    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs?limit=20${wanted}`);
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法读取运行记录。'));
       return;
@@ -426,6 +552,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function openEditor(item) {
+    // A question belongs to the editor that raised it; entering another editor
+    // drops the question instead of showing it again above a different item.
+    closeConfirm({restoreFocus: false});
     current = item;
     listPanel.hidden = true;
     form.hidden = false;
@@ -535,8 +664,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  workspaceSelect.addEventListener('change', () => loadList());
+  workspaceSelect.addEventListener('change', () => {
+    closeConfirm({restoreFocus: false});
+    loadList();
+  });
   search.addEventListener('input', () => loadList());
+  syncRunFilters();
+  for (const [filter, id] of Object.entries(RUN_FILTER_BUTTONS)) {
+    const button = document.getElementById(id);
+    if (!button) continue;
+    button.addEventListener('click', async () => {
+      if (filter === runFilter) return;
+      runFilter = filter;
+      syncRunFilters();
+      pushRunFilter(filter);
+      await loadRuns();
+    });
+  }
+  if (view && typeof view.addEventListener === 'function') {
+    view.addEventListener('popstate', () => {
+      const wanted = runFilterFromSearch(readSearch());
+      if (wanted === runFilter) return;
+      runFilter = wanted;
+      syncRunFilters();
+      loadRuns();
+    });
+  }
   for (const tab of document.querySelectorAll('.tabs [data-category]')) {
     tab.addEventListener('click', async () => {
       category = tabCategory(tab.dataset.category);
@@ -545,6 +698,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       form.hidden = true;
       listPanel.hidden = false;
+      closeConfirm({restoreFocus: false});
       mainPanel.classList.remove('is-editing');
       const runPanel = document.getElementById('run-panel');
       if (runPanel) runPanel.hidden = true;
@@ -564,6 +718,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
+    closeConfirm({restoreFocus: false});
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
@@ -616,6 +771,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     current = result.body.automation;
+    closeConfirm({restoreFocus: false});
     fillEditor(form, current, templates, currentUser && currentUser.username);
     document.getElementById('remove-automation').hidden = false;
     document.getElementById('tick-automation').hidden = false;
@@ -634,9 +790,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadRuns();
   });
 
-  document.getElementById('remove-automation').addEventListener('click', async () => {
-    if (!current || !current.id || !workspaceId()) return;
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/remove`, {});
+  const removeButton = document.getElementById('remove-automation');
+
+  async function removeAutomation(target) {
+    if (!target || !target.workspace || !target.automation) return;
+    const result = await request('POST', `/v1/workspaces/${target.workspace}/automations/${target.automation}/remove`, {});
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '删除失败。'));
       return;
@@ -650,6 +808,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopRunPoll();
     show('ok', '已删除。');
     await loadList();
+  }
+
+  removeButton.addEventListener('click', () => {
+    if (!current || !current.id || !workspaceId()) return;
+    // Bind the question to the automation and workspace it names right now.
+    const target = {workspace: workspaceId(), automation: current.id};
+    openConfirm({
+      parent: removeButton.parentNode || form,
+      trigger: removeButton,
+      prompt: deletePrompt(current),
+      action: () => removeAutomation(target),
+    });
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
@@ -659,6 +829,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '退出失败。'));
       return;
     }
+    closeConfirm({restoreFocus: false});
     current = null;
     stopRunPoll();
     await load();

@@ -257,7 +257,7 @@ function reply({status = 200, body = {}} = {}) {
 }
 
 async function openArtifactsPage({items = [], artifact, meetings = [], meetingsStatus = 200, meetingsError = null,
-                                  withKinds = false, workspaces = [{id: 'w1', name: 'Desk'}]} = {}) {
+                                  withKinds = false, workspaces = [{id: 'w1', name: 'Desk'}], tasks = [], saveReply = null} = {}) {
   const {doc, elements, created, form} = fakeDocument();
   if (withKinds) {
     doc.kindButtons = ['all', 'website', 'document', 'media', 'messages', 'meetings'].map((kind) => {
@@ -268,6 +268,7 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
     });
   }
   const calls = [];
+  const saveCalls = [];
   let listed = items.slice();
   const target = artifact || {id: 'a1', title: 'Doc', kind: 'document', revision: 1, body: 'hello', created_by: 'alice'};
   const fetcher = async (path, options = {}) => {
@@ -281,6 +282,16 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
     if (path === '/v1/workspaces/w1/meetings?limit=50') {
       if (meetingsStatus !== 200) return reply({status: meetingsStatus, body: meetingsError || {}});
       return reply({body: {items: meetings, cursor: null}});
+    }
+    if (path === '/v1/runtime/tasks' && method === 'GET') return reply({body: {items: tasks}});
+    const taskSave = /^\/v1\/runtime\/tasks\/([0-9a-f]+)\/artifact$/.exec(path);
+    if (taskSave && method === 'POST') {
+      saveCalls.push({id: taskSave[1], body: options.body ? JSON.parse(options.body) : null});
+      if (saveReply) return reply(saveReply);
+      const task = tasks.find((row) => row.id === taskSave[1]);
+      const saved = {id: 'a9', title: `${task.prompt} · 任务结果`, kind: 'document', created_by: 'alice'};
+      listed = [saved, ...listed];
+      return reply({status: 201, body: {artifact: saved}});
     }
     const detail = /^\/v1\/workspaces\/w1\/artifacts\/([^/]+)(\/(shares|versions|discover))?$/.exec(path);
     if (detail && method === 'GET') {
@@ -309,7 +320,7 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
     }
   }
   return {
-    doc, elements, created, form, calls,
+    doc, elements, created, form, calls, saveCalls,
     async openKind(kind) {
       const button = (doc.kindButtons || []).find((node) => node.getAttribute('data-kind') === kind);
       assert.ok(button, `kind button ${kind} must exist`);
@@ -322,6 +333,10 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
       if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
     },
   };
+}
+
+function cardOf(dialog) {
+  return dialog.children.find(child => String(child.className || '').includes('send-dialog-card')) || dialog;
 }
 
 function artifactRows(list) {
@@ -678,6 +693,83 @@ test('a failing meetings request shows the server reason instead of an empty lis
     assert.equal(page.elements.get('empty-meetings').hidden, true, 'a failure must not read as "no meetings"');
     const list = page.elements.get('artifact-list');
     assert.equal(list.children.filter((child) => String(child.className || '').includes('artifact-item')).length, 0);
+  } finally {
+    page.close();
+  }
+});
+
+test('saving a completed task artifact posts the task id and lists the document', async () => {
+  const page = await openArtifactsPage({
+    items: [],
+    tasks: [
+      {id: 'abc123', status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '周报正文'}},
+      {id: 'def456', status: 'running', prompt: '还在跑', workspace_id: 'w1', result: {}},
+      {id: 'aaa999', status: 'succeeded', prompt: '空结果', workspace_id: 'w1', result: {text: '   '}},
+    ],
+  });
+  try {
+    await page.doc.getElementById('empty-save-agent').dispatch('click');
+    assert.equal(page.calls.some(call => call.path === '/v1/runtime/tasks' && call.method === 'GET'), true,
+                 'the agent save panel must read the real task list');
+    const dialog = page.created.find(node => node.id === 'agent-task-dialog');
+    assert.ok(dialog, 'the panel is rendered');
+    assert.equal(dialog.getAttribute('role'), 'dialog');
+    const rows = cardOf(dialog).children.find(child => child.id === 'agent-task-list').children;
+    assert.equal(rows.length, 1, 'only succeeded tasks with text results are offered');
+    assert.match(rows[0].textContent, /整理周报/);
+    const save = rows[0].children.filter(child => child.tagName === 'BUTTON')[0];
+    assert.equal(save.textContent, '保存');
+    await save.dispatch('click');
+    assert.equal(page.saveCalls.length, 1);
+    assert.equal(page.saveCalls[0].id, 'abc123');
+    assert.deepEqual(page.saveCalls[0].body, {workspace_id: 'w1'});
+    assert.equal(page.elements.get('status').textContent, '已保存。');
+    const list = page.elements.get('artifact-list');
+    const titles = artifactRows(list).map(row => row.textContent);
+    assert.equal(titles.some(text => text.includes('整理周报 · 任务结果')), true, 'the saved document joins the list');
+  } finally {
+    page.close();
+  }
+});
+
+test('a refused save shows the server reason and keeps the task on screen', async () => {
+  const page = await openArtifactsPage({
+    items: [],
+    tasks: [{id: 'abc123', status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '正文'}}],
+    saveReply: {status: 409, body: {error: {code: 'conflict', message: 'Only a succeeded task with a text result can be saved'}}},
+  });
+  try {
+    await page.doc.getElementById('empty-save-agent').dispatch('click');
+    const dialog = page.created.find(node => node.id === 'agent-task-dialog');
+    const row = cardOf(dialog).children.find(child => child.id === 'agent-task-list').children[0];
+    const save = row.children.filter(child => child.tagName === 'BUTTON')[0];
+    await save.dispatch('click');
+    const note = cardOf(dialog).children.find(child => child.id === 'agent-task-note');
+    assert.equal(note.hidden, false, 'the failure is shown');
+    assert.equal(note.textContent, 'Only a succeeded task with a text result can be saved');
+    assert.equal(dialog.hidden, false, 'the panel stays open after a failure');
+    assert.equal(save.disabled, false, 'the button is not flipped to a success state');
+    assert.equal(artifactRows(page.elements.get('artifact-list')).length, 0, 'nothing was added to the list');
+  } finally {
+    page.close();
+  }
+});
+
+test('an unauthorised save asks the user to sign in instead of failing silently', async () => {
+  const page = await openArtifactsPage({
+    items: [],
+    tasks: [{id: 'abc123', status: 'succeeded', prompt: '整理周报', workspace_id: 'w1', result: {text: '正文'}}],
+    saveReply: {status: 401, body: {error: {code: 'unauthorized', message: 'Sign in first'}}},
+  });
+  try {
+    await page.doc.getElementById('empty-save-agent').dispatch('click');
+    const dialog = page.created.find(node => node.id === 'agent-task-dialog');
+    const row = cardOf(dialog).children.find(child => child.id === 'agent-task-list').children[0];
+    await row.children.filter(child => child.tagName === 'BUTTON')[0].dispatch('click');
+    const note = cardOf(dialog).children.find(child => child.id === 'agent-task-note');
+    assert.equal(note.hidden, false);
+    assert.match(note.textContent, /登录/);
+    assert.equal(artifactRows(page.elements.get('artifact-list')).length, 0);
   } finally {
     page.close();
   }
