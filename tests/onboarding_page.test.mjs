@@ -56,7 +56,7 @@ function fakeDocument() {
 }
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
-async function settle(times = 12) {
+async function settle(times = 16) {
   for (let i = 0; i < times; i += 1) await flush();
 }
 
@@ -76,17 +76,24 @@ function fetcherFor(state) {
         if (state.workspaces === 'error') return json(500, {error: {message: 'workspace listing failed'}});
         return json(200, {items: state.workspaces || []});
       }
-      const members = /^\/v1\/workspaces\/([^/]+)\/members$/.exec(path);
-      if (members) {
-        if (state.members === 'error') return json(500, {error: {message: 'member listing failed'}});
-        return json(200, {items: (state.members || []).map((name) => ({username: name}))});
-      }
       const agents = /^\/v1\/workspaces\/([^/]+)\/agents\?limit=100$/.exec(path);
-      if (agents) return json(200, {items: state.agents || []});
-      const conversations = /^\/v1\/workspaces\/([^/]+)\/agents\/([^/]+)\/conversations\?limit=1$/.exec(path);
-      if (conversations) return json(200, {items: state.conversations || []});
-      if (/^\/v1\/workspaces\/([^/]+)\/social\/conversations\?limit=1$/.test(path)) {
-        return json(200, {items: state.social || []});
+      if (agents) {
+        if (state.agents === 'error') return json(500, {error: {message: 'agent listing failed'}});
+        return json(200, {items: state.agents || []});
+      }
+      if (path === '/v1/runtime/connections') {
+        if (state.runtimes === 'error') return json(500, {error: {message: 'runtime listing failed'}});
+        return json(200, {items: (state.runtimes || []).map((status, index) => ({id: 'rt-' + index, status}))});
+      }
+      const automations = /^\/v1\/workspaces\/([^/]+)\/automations$/.exec(path);
+      if (automations) {
+        if (state.automations === 'error') return json(500, {error: {message: 'automation listing failed'}});
+        return json(200, {items: (state.automations || []).map(id => ({id}))});
+      }
+      const runs = /^\/v1\/workspaces\/([^/]+)\/automations\/([^/]+)\/runs\?limit=20$/.exec(path);
+      if (runs) {
+        if (state.runs === 'error') return json(500, {error: {message: 'run listing failed'}});
+        return json(200, {items: (state.runs || []).map(status => ({status}))});
       }
       throw new Error('unexpected ' + path);
     },
@@ -118,30 +125,33 @@ function steps(doc) {
 }
 
 test('a fresh account sees three steps, none of them faked as done', async () => {
-  const {doc} = await mountOnboarding({workspaces: [], members: [], agents: [], conversations: []});
+  const {doc} = await mountOnboarding({workspaces: [], runtimes: [], automations: []});
   const rows = steps(doc);
   assert.equal(rows.length, 3, 'expected 3 onboarding steps, got ' + rows.length);
   assert.deepEqual(rows.map((row) => row.done), [false, false, false],
     'an empty account claims a step is already done');
-  assert.match(rows[0].text, /创建工作区/);
-  assert.match(rows[1].text, /邀请一位同事/);
-  assert.match(rows[2].text, /发出第一条消息/);
+  assert.match(rows[0].text, /建智能体/);
+  assert.match(rows[1].text, /连运行时/);
+  assert.match(rows[2].text, /跑一次自动化/);
+  assert.match(rows[0].text, /需要你先创建工作区/);
+  assert.match(rows[2].text, /需要你先创建工作区/);
   assert.equal(doc.getElementById('onboarding-ready').hidden, true,
     'the ready banner shows before the checklist is complete');
 });
 
-test('a workspace with a second member and one message completes every step', async () => {
+test('an agent, an online runtime and a finished automation run complete every step', async () => {
   const {doc, calls} = await mountOnboarding({
     workspaces: [{id: 'ws-1', name: 'Desk'}],
-    members: ['alice', 'bob'],
-    agents: [{id: 'ag-1'}],
-    conversations: [{id: 'c-1'}],
-    social: [],
+    agents: [{id: 'ag-1', name: 'Helper'}],
+    runtimes: ['online'],
+    automations: ['au-1'],
+    runs: ['succeeded'],
   });
   const rows = steps(doc);
   assert.deepEqual(rows.map((row) => row.done), [true, true, true],
-    'real state (workspace, second member, one message) did not complete the steps');
+    'real state (agent, online runtime, finished run) did not complete the steps');
   for (const row of rows) assert.match(row.text, /✓/, 'a completed step is not ticked: ' + row.text);
+  assert.match(rows[0].text, /Helper/);
   const ready = doc.getElementById('onboarding-ready');
   assert.equal(ready.hidden, false, 'all steps are done but the ready banner is hidden');
   assert.match(ready.textContent, /可以开始了/);
@@ -149,27 +159,46 @@ test('a workspace with a second member and one message completes every step', as
   assert.ok(link, 'the ready banner has no link to /chat');
   assert.equal(link.getAttribute('href'), '/chat');
   assert.ok(calls.includes('/v1/workspaces?limit=100'), 'the checklist did not read the workspaces API');
-  assert.ok(calls.some((path) => /\/members$/.test(path)), 'the checklist did not read members');
+  assert.ok(calls.includes('/v1/runtime/connections'), 'the checklist did not read the runtime connections');
+  assert.ok(calls.some((path) => /\/automations$/.test(path)), 'the checklist did not read automations');
+  assert.ok(calls.some((path) => /\/runs\?limit=20$/.test(path)), 'the checklist did not read automation runs');
 });
 
-test('with only a workspace, the remaining steps say what is missing instead of pretending', async () => {
+test('an offline runtime and a queued-only run stay unproven with the reason shown', async () => {
   const {doc} = await mountOnboarding({
     workspaces: [{id: 'ws-1', name: 'Desk'}],
-    members: ['alice'],
-    agents: [],
-    conversations: [],
-    social: [],
+    agents: [{id: 'ag-1', name: 'Helper'}],
+    runtimes: ['offline'],
+    automations: ['au-1'],
+    runs: ['queued'],
   });
   const rows = steps(doc);
   assert.deepEqual(rows.map((row) => row.done), [true, false, false]);
-  assert.match(rows[1].text, /还差|邀请|需要/);
+  assert.match(rows[1].text, /当前离线/);
+  assert.match(rows[2].text, /还没有执行过/);
   assert.equal(doc.getElementById('onboarding-ready').hidden, true);
 });
 
-test('a failing workspace request leaves every step unproven and says so', async () => {
-  const {doc} = await mountOnboarding({workspaces: 'error', members: [], agents: [], conversations: []});
+test('a failing workspace request leaves the workspace steps unproven but still judges the runtime', async () => {
+  const {doc} = await mountOnboarding({workspaces: 'error', runtimes: ['online'], automations: []});
   const rows = steps(doc);
   assert.equal(rows.length, 3);
-  assert.deepEqual(rows.map((row) => row.done), [false, false, false],
-    'a failed workspace request was reported as completed');
+  assert.deepEqual(rows.map((row) => row.done), [false, true, false],
+    'a failed workspace request was reported as completed, or a judgeable runtime was skipped');
+  assert.match(rows[0].text, /读取工作区失败/);
+  assert.match(rows[2].text, /读取工作区失败/);
+});
+
+test('a failing run listing reports the automation step as unknown, not done', async () => {
+  const {doc} = await mountOnboarding({
+    workspaces: [{id: 'ws-1', name: 'Desk'}],
+    agents: [{id: 'ag-1', name: 'Helper'}],
+    runtimes: ['online'],
+    automations: ['au-1'],
+    runs: 'error',
+  });
+  const rows = steps(doc);
+  assert.deepEqual(rows.map((row) => row.done), [true, true, false]);
+  assert.match(rows[2].text, /读取运行记录失败/);
+  assert.equal(doc.getElementById('onboarding-ready').hidden, true);
 });
