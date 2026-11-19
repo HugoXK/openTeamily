@@ -134,8 +134,9 @@ class AgentDirectoryTests(unittest.TestCase):
             'POST', f'/v1/workspaces/{self.wid}/agents/{item["id"]}/archive', {'revision': 1})
         self.alice.call('POST', f'/v1/workspaces/{self.wid}/members',
                         {'username': 'bob', 'role': 'member'})
+        # Archived agents stay invisible to members, so restore looks like a missing agent to them.
         self.assertEqual(self.bob.call(
-            'POST', f'/v1/workspaces/{self.wid}/agents/{item["id"]}/restore', {'revision': 2})['status'], 403)
+            'POST', f'/v1/workspaces/{self.wid}/agents/{item["id"]}/restore', {'revision': 2})['status'], 404)
         restored = self.alice.call(
             'POST', f'/v1/workspaces/{self.wid}/agents/{item["id"]}/restore', {'revision': 2})
         self.assertEqual(restored['status'], 200, restored)

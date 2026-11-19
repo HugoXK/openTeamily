@@ -932,7 +932,7 @@ class App:
             if homepage_api:
                 return self.agent_homepage_dispatch(db, session, method, query, now, env, *homepage_api.groups())
             agent_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/agents(?:/([0-9a-f]{32})(?:/(archive))?)?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/agents(?:/([0-9a-f]{32})(?:/(archive|restore))?)?', path)
             if agent_path:
                 return self.workspace_agent_dispatch(db, session, method, query, now, env, *agent_path.groups())
             meeting_path = re.fullmatch(
@@ -2611,7 +2611,7 @@ class App:
         )
         return 201, {'agent': agents.snapshot(db, row, include_token=True, token=token)}, []
 
-    def workspace_agent_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, archiving):
+    def workspace_agent_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, operation):
 
         workspace = members.load(db, workspace_id, session['user_id'])
         if workspace is None:
@@ -2628,12 +2628,13 @@ class App:
         row = agents.load(db, workspace['id'], target_id)
         if row is None or (row['archived'] == 1 and not agents.can_manage(actor)):
             refuse(404, 'not_found', 'Agent not found')
-        if archiving:
+        if operation in ('archive', 'restore'):
             if method != 'POST' or query:
                 refuse(400, 'invalid', 'Invalid agent request')
             if not agents.can_manage(actor):
-                refuse(403, 'forbidden', 'Only owners and admins can archive agents')
-            return self.archive_workspace_agent(db, row, now, self.body(env, ['revision']))
+                refuse(403, 'forbidden', 'Only owners and admins can archive or restore agents')
+            return self.archive_workspace_agent(
+                db, row, now, self.body(env, ['revision']), restore=operation == 'restore')
         if method == 'GET' and not query:
             return 200, {'agent': agents.snapshot(db, row)}, []
         if method != 'POST' or query:
@@ -2748,18 +2749,20 @@ class App:
             agents.store_quick_starts(db, row['id'], agents.normalize_quick_starts(body['quick_starts']))
         return 200, {'agent': agents.snapshot(db, updated)}, []
 
-    def archive_workspace_agent(self, db, row, now, body):
+    def archive_workspace_agent(self, db, row, now, body, restore=False):
         if body.get('revision') != row['revision']:
             refuse(409, 'conflict', 'Agent was updated; reload and retry')
-        if row['archived'] == 1:
+        target = 0 if restore else 1
+        if row['archived'] == target:
             return 200, {'agent': agents.snapshot(db, row)}, []
         db.execute(
-            'UPDATE workspace_agents SET archived=1, revision=?, updated=? WHERE id=? AND revision=?',
-            (row['revision'] + 1, now, row['id'], row['revision']),
+            'UPDATE workspace_agents SET archived=?, revision=?, updated=? WHERE id=? AND revision=?',
+            (target, row['revision'] + 1, now, row['id'], row['revision']),
         )
-        agents.revoke_active_homepages(db, row['id'], now)
+        if target:
+            agents.revoke_active_homepages(db, row['id'], now)
         updated = agents.load(db, row['workspace_id'], row['id'])
-        if updated is None or updated['archived'] != 1:
+        if updated is None or updated['archived'] != target:
             refuse(409, 'conflict', 'Agent was updated; reload and retry')
         return 200, {'agent': agents.snapshot(db, updated)}, []
 
