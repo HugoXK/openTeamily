@@ -382,8 +382,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     status.textContent = text;
   }
 
-  async function request(method, path, body) {
-    const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
+  async function request(method, path, body, extra = {}) {
+    const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie), ...extra};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const response = await fetcher(path, {
       method, headers, credentials: 'same-origin',
@@ -584,6 +584,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (actions) actions.hidden = currentView !== 'actions';
     if (profile) profile.hidden = currentView !== 'profile';
     if (currentView === 'profile') loadMemoryProfile();
+    if (currentView === 'profile') loadPreferences();
     for (const button of document.querySelectorAll('.memory-views [data-view]')) {
       if (button.getAttribute('data-view') === currentView) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
@@ -1131,10 +1132,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (result.status !== 200) { status.textContent = result.status === 409 ? '画像已在别处更新，请重新打开后重试。' : '画像未保存。'; return; }
     profileRevision = result.body.profile.revision; status.textContent = '画像已保存。';
   });
-  // 「偏好」 lives in the 我的资料 view. It is local page state only: no
-  // request is made, nothing is stored, and a reload starts from an empty list.
+  // 「偏好」 lives in the 我的资料 view. Rows come from and go back to the
+  // workspace store per user, so a reload or a new conversation reads the same
+  // list instead of starting from page state.
   const preferences = [];
-  let preferenceSerial = 0;
+  let preferenceRequest = 0;
+
+  function preferenceStatus() {
+    return document.getElementById('preference-status');
+  }
 
   function renderPreferences() {
     const list = document.getElementById('preference-list');
@@ -1152,12 +1158,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       remove.className = 'preference-remove';
       remove.textContent = '删除';
       remove.dataset.id = item.id;
-      remove.addEventListener('click', () => {
+      remove.addEventListener('click', async () => {
+        const wid = workspaceId();
+        if (!wid) return;
+        const status = preferenceStatus();
+        const result = await request(
+          'POST', `/v1/workspaces/${wid}/memory/preferences/${encodeURIComponent(item.id)}/remove`, {});
+        if (workspaceId() !== wid) return;
+        if (result.status === 404) {
+          await loadPreferences();
+          if (status) status.textContent = '这条偏好已经不在列表里。';
+          return;
+        }
+        if (result.status !== 200) {
+          if (status) status.textContent = '偏好没有删除成功。';
+          return;
+        }
         const index = preferences.findIndex(entry => entry.id === item.id);
-        if (index < 0) return;
-        preferences.splice(index, 1);
+        if (index >= 0) preferences.splice(index, 1);
         renderPreferences();
-        document.getElementById('preference-status').textContent = '已删除偏好。';
+        if (status) status.textContent = '已删除偏好。';
       });
       row.appendChild(text);
       row.appendChild(remove);
@@ -1169,20 +1189,54 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  async function loadPreferences() {
+    const wid = workspaceId();
+    const token = ++preferenceRequest;
+    const list = document.getElementById('preference-list');
+    if (!wid || !list) return;
+    // A workspace switch must not leave the other workspace's rows visible
+    // while this one is still loading.
+    preferences.length = 0;
+    renderPreferences();
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/preferences`);
+    if (token !== preferenceRequest || workspaceId() !== wid) return;
+    if (result.status !== 200) {
+      const status = preferenceStatus();
+      if (status) status.textContent = '偏好没有读取成功。';
+      return;
+    }
+    preferences.length = 0;
+    preferences.push(...(result.body.items || []));
+    renderPreferences();
+  }
+
   const addPreference = document.getElementById('add-preference');
   if (addPreference) {
-    addPreference.addEventListener('click', () => {
+    addPreference.addEventListener('click', async () => {
+      const wid = workspaceId();
       const input = document.getElementById('preference-input');
-      const status = document.getElementById('preference-status');
+      const status = preferenceStatus();
       const text = String((input && input.value) || '').trim();
+      if (!wid) return;
       if (!text) {
         status.textContent = '请先写一条偏好。';
         return;
       }
-      preferences.push({id: 'pref-' + (++preferenceSerial), text});
+      const result = await request(
+        'POST', `/v1/workspaces/${wid}/memory/preferences`, {text}, {'Idempotency-Key': randomKey()});
+      if (workspaceId() !== wid) return;
+      if (result.status !== 200 && result.status !== 201) {
+        status.textContent = result.status === 429
+          ? '这个工作区的偏好数量已到上限，先删掉几条再加。'
+          : '偏好没有保存成功。';
+        return;
+      }
+      const saved = result.body.preference;
+      const known = preferences.some(entry => entry.id === saved.id);
+      if (!known) preferences.push(saved);
       input.value = '';
       renderPreferences();
-      status.textContent = '已添加偏好。';
+      status.textContent = (result.status === 200 && known) ? '这条偏好已经在列表里。' : '已添加偏好。';
     });
   }
   renderPreferences();
@@ -1198,6 +1252,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     invalidateMemoryProfile();
     await loadWorkspace();
     if (currentView === 'profile') await loadMemoryProfile();
+    if (currentView === 'profile') await loadPreferences();
   });
   document.getElementById('search').addEventListener('input', () => renderDirectory());
   document.getElementById('search').addEventListener('keydown', (event) => {

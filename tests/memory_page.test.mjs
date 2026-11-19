@@ -387,14 +387,31 @@ const prefSettle = async (times = 8) => {
 };
 const prefJson = (status, body) => ({status, json: async () => body});
 
-function prefFetcher(calls) {
+function prefFetcher(calls, store = {items: []}) {
   return async (path, options = {}) => {
-    calls.push({path, method: options.method || 'GET'});
+    const method = options.method || 'GET';
+    calls.push({path, method});
     if (path === '/v1/auth/session') return prefJson(200, {user: {id: 'user-1', username: 'alice'}});
     if (path === '/v1/settings') return prefJson(404, {});
     if (path === '/v1/workspaces') return prefJson(200, {items: [{id: 'ws-1', name: 'Desk', owner_id: 'user-1'}]});
     if (path === '/v1/workspaces/ws-1/memory') return prefJson(200, {items: []});
     if (path === '/v1/workspaces/ws-1/memory/actions') return prefJson(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/memory/preferences') {
+      if (method === 'GET') return prefJson(200, {items: store.items});
+      const text = JSON.parse(options.body).text;
+      const known = store.items.find((item) => item.text === text);
+      if (known) return prefJson(200, {preference: known});
+      const preference = {id: 'pref-' + (store.items.length + 1), text, created: 1800000000};
+      store.items.push(preference);
+      return prefJson(201, {preference});
+    }
+    const removal = path.match(/^\/v1\/workspaces\/ws-1\/memory\/preferences\/([^/]+)\/remove$/);
+    if (removal) {
+      const index = store.items.findIndex((item) => item.id === removal[1]);
+      if (index < 0) return prefJson(404, {error: {code: 'not_found'}});
+      const [removed] = store.items.splice(index, 1);
+      return prefJson(200, {removed});
+    }
     if (path === '/v1/workspaces/ws-1/memory/graph') {
       return prefJson(200, {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}});
     }
@@ -408,9 +425,10 @@ function prefFetcher(calls) {
 async function mountPreferences() {
   const {doc, el} = prefDocument();
   const calls = [];
-  await mount(doc, {fetcher: prefFetcher(calls)});
+  const store = {items: []};
+  await mount(doc, {fetcher: prefFetcher(calls, store)});
   await prefSettle();
-  return {doc, el, calls};
+  return {doc, el, calls, store};
 }
 
 test('the 偏好 block starts empty and says how to fill it', async () => {
@@ -419,6 +437,8 @@ test('the 偏好 block starts empty and says how to fill it', async () => {
   assert.equal(el('preferences-empty').hidden, false);
   assert.equal(el('preferences-empty').textContent, '还没有偏好，加一条试试');
   assert.equal(el('preference-list').children.length, 0);
+  // The list is read from the workspace store, not from page state.
+  assert.ok(calls.some((call) => call.method === 'GET' && call.path === '/v1/workspaces/ws-1/memory/preferences'));
   assert.deepEqual(calls.filter((call) => call.method !== 'GET'), []);
 });
 
@@ -426,6 +446,7 @@ test('adding a preference appends one row, clears the field and hides the empty 
   const {el, calls} = await mountPreferences();
   el('preference-input').value = '回复用中文';
   el('add-preference').click();
+  await prefSettle();
   assert.equal(el('preference-list').children.length, 1);
   const row = el('preference-list').children[0];
   assert.equal(row.children[0].textContent, '回复用中文');
@@ -433,13 +454,15 @@ test('adding a preference appends one row, clears the field and hides the empty 
   assert.equal(el('preferences-empty').hidden, true);
   assert.equal(el('preference-input').value, '');
   assert.equal(el('preference-status').textContent, '已添加偏好。');
-  assert.deepEqual(calls.filter((call) => call.method !== 'GET'), []);
+  assert.ok(calls.some((call) => call.method === 'POST' &&
+    call.path === '/v1/workspaces/ws-1/memory/preferences'));
 });
 
 test('an empty preference is not added and the status line says why', async () => {
   const {el} = await mountPreferences();
   el('preference-input').value = '   ';
   el('add-preference').click();
+  await prefSettle();
   assert.equal(el('preference-list').children.length, 0);
   assert.equal(el('preferences-empty').hidden, false);
   assert.equal(el('preference-status').textContent, '请先写一条偏好。');
@@ -450,17 +473,21 @@ test('deleting removes only that preference and brings the empty state back', as
   for (const text of ['回复用中文', '会议纪要控制在 200 字']) {
     el('preference-input').value = text;
     el('add-preference').click();
+    await prefSettle();
   }
   assert.equal(el('preference-list').children.length, 2);
   el('preference-list').children[0].children[1].click();
+  await prefSettle();
   assert.equal(el('preference-list').children.length, 1);
   assert.equal(el('preference-list').children[0].children[0].textContent, '会议纪要控制在 200 字');
   assert.equal(el('preferences-empty').hidden, true);
   el('preference-list').children[0].children[1].click();
+  await prefSettle();
   assert.equal(el('preference-list').children.length, 0);
   assert.equal(el('preferences-empty').hidden, false);
   assert.equal(el('preference-status').textContent, '已删除偏好。');
-  assert.deepEqual(calls.filter((call) => call.method !== 'GET'), []);
+  assert.equal(calls.filter((call) => call.method === 'POST' &&
+    call.path.endsWith('/remove')).length, 2);
 });
 
 test('applyMarkdown wraps or prefixes the selected textarea text', () => {
