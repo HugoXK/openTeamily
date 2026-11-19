@@ -122,15 +122,15 @@ class MessageToolTests(unittest.TestCase):
         first = self.send(self.alice, '只对我隐藏')
         second = self.send(self.bob, '对方仍然可见')
         base = f'{self.base}/{self.source}'
-        self.assertEqual(self.bob.call('DELETE', f'{base}/messages/{second}')['status'], 204)
+        self.assertEqual(self.bob.call('DELETE', f'{base}/messages/{second}', parse='raw')['status'], 204)
         self.assertEqual([m['body'] for m in self.bob.call('GET', base)['body']['items']], ['只对我隐藏'])
         self.assertEqual(self.bob.call('GET', base)['body']['conversation']['preview'], '只对我隐藏')
         self.assertEqual([m['body'] for m in self.alice.call('GET', base)['body']['items']],
                          ['只对我隐藏', '对方仍然可见'])
-        self.assertEqual(self.alice.call('DELETE', f'{base}/messages/{first}')['status'], 204)
+        self.assertEqual(self.alice.call('DELETE', f'{base}/messages/{first}', parse='raw')['status'], 204)
         self.assertEqual([m['body'] for m in self.alice.call('GET', base)['body']['items']], ['对方仍然可见'])
         self.assertEqual(self.alice.call('GET', base)['body']['conversation']['preview'], '对方仍然可见')
-        self.assertEqual(self.alice.call('DELETE', f'{base}/messages/{first}')['status'], 404)
+        self.assertEqual(self.alice.call('DELETE', f'{base}/messages/{first}', parse='raw')['status'], 404)
         self.assertEqual(self.bob.call('DELETE', f'{base}/messages/{first}')['status'], 403)
         self.assertEqual(self.carol.call('DELETE', f'{base}/messages/{first}')['status'], 404)
 

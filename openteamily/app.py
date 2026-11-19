@@ -133,7 +133,7 @@ class App:
             headers.insert(0, ('Content-Type', 'application/json; charset=utf-8'))
             data = json.dumps(body, ensure_ascii=True, separators=(',', ':')).encode('utf-8')
         headers.append(('Content-Length', str(len(data))))
-        reasons = {200: 'OK', 201: 'Created', 202: 'Accepted', 302: 'Found', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
+        reasons = {200: 'OK', 201: 'Created', 202: 'Accepted', 204: 'No Content', 302: 'Found', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
                    404: 'Not Found', 405: 'Method Not Allowed', 409: 'Conflict', 411: 'Length Required',
                    413: 'Content Too Large', 415: 'Unsupported Media Type', 429: 'Too Many Requests',
                    500: 'Internal Server Error', 501: 'Not Implemented', 502: 'Bad Gateway', 503: 'Service Unavailable'}
@@ -455,8 +455,8 @@ class App:
         method, path, query = env.get('REQUEST_METHOD'), env.get('PATH_INFO', ''), env.get('QUERY_STRING', '')
         if len(path) > 256 or len(query) > 512:
             refuse(400, 'invalid', 'Request target is too long')
-        if method not in ('GET', 'POST'):
-            refuse(405, 'method', 'Only GET and POST are supported')
+        if method not in ('GET', 'POST', 'DELETE'):
+            refuse(405, 'method', 'Only GET, POST and DELETE are supported')
         if method == 'POST' and query:
             refuse(400, 'invalid', 'Query parameters are not accepted for writes')
         now = int(self.clock())
@@ -599,7 +599,7 @@ class App:
             return self.runtime_dispatch(env, session['user_id'], method, path, query)
         with self.store.transaction() as db:
             session = self.authenticated(db, env, now)
-            if method == 'POST':
+            if method in ('POST', 'DELETE'):
                 self.csrf_check(env, session)
             if path == '/v1/auth/session' and method == 'GET' and not query:
                 return 200, {'user': {'id': session['user_id'], 'username': session['username']},
@@ -918,7 +918,7 @@ class App:
                 return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}/(?:edit|retract|reactions|pin|save))?|forward|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}(?:/(?:edit|retract|reactions|pin|save))?)?|forward|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -3671,7 +3671,7 @@ class App:
                 rows = social.listing(db, workspace['id'], session['user_id'], cursor, limit + 1)
                 for conversation in rows[:limit]:
                     self.reconcile_group_replies(db, conversation, now)
-                items = social.conversation_items(db, rows[:limit])
+                items = social.conversation_items(db, rows[:limit], session['user_id'])
                 for item in items:
                     item['unread_count'] = social.unread_count(db, item['id'], session['user_id'])
                     item.update(social.preference(db, item['id'], session['user_id']))
@@ -3705,6 +3705,8 @@ class App:
             return self.react_social_message(db, session, row, action.split('/')[1], now, env)
         if action and action.endswith('/save') and method == 'POST' and not query:
             return self.save_social_message(db, workspace, session, row, action.split('/')[1], now, env)
+        if action and action.startswith('messages/') and method == 'DELETE' and not query:
+            return self.delete_social_message(db, session, row, action.split('/')[1], now)
         if action and action.startswith('messages/') and method == 'POST' and not query:
             message_id, operation = action.split('/')[1:]
             message = db.execute('SELECT * FROM social_messages WHERE conversation_id=? AND id=?',
@@ -3743,18 +3745,18 @@ class App:
         if action == 'agent-replies' and method == 'POST' and not query:
             return self.request_group_reply(db, workspace, session, row, now, env)
         if action is None and method == 'GET' and not query:
-            items = social.messages(db, row['id'], '', 101) or []
-            conversation = social.conversation_item(db, row)
+            items = social.messages(db, row['id'], '', 101, session['user_id']) or []
+            conversation = social.conversation_item(db, row, user_id=session['user_id'])
             conversation['unread_count'] = social.unread_count(db, row['id'], session['user_id'])
             return 200, {'conversation': conversation,
                          'agent_replies': [social.reply_view(item) for item in social.reply_requests(db, row['id'])],
-                         'pinned_messages': social.pinned_messages(db, row['id']),
+                         'pinned_messages': social.pinned_messages(db, row['id'], session['user_id']),
                          'items': social.forward_info(db, social.with_reactions(
                              db, [social.message_view(item) for item in items[:100]], session['user_id'])),
                          'cursor': items[99]['id'] if len(items) > 100 else None}, []
         if action == 'messages' and method == 'GET':
             limit, cursor, _ = self.pagination(query)
-            rows = social.messages(db, row['id'], cursor, limit + 1)
+            rows = social.messages(db, row['id'], cursor, limit + 1, session['user_id'])
             if rows is None:
                 refuse(400, 'invalid', 'Invalid pagination parameters')
             return 200, {'items': social.forward_info(db, social.with_reactions(
@@ -3808,14 +3810,30 @@ class App:
         if pinned:
             exists = db.execute('SELECT 1 FROM social_message_pins WHERE conversation_id=? AND message_id=?',
                                 (row['id'], message_id)).fetchone()
-            if not exists and len(social.pinned_messages(db, row['id'])) >= social.PIN_LIMIT:
+            if not exists and len(social.pinned_messages(db, row['id'], session['user_id'])) >= social.PIN_LIMIT:
                 refuse(429, 'quota', 'Pinned message limit reached')
             db.execute('INSERT OR IGNORE INTO social_message_pins VALUES(?,?,?,?)',
                        (row['id'], message_id, session['user_id'], now))
         else:
             db.execute('DELETE FROM social_message_pins WHERE conversation_id=? AND message_id=?',
                        (row['id'], message_id))
-        return 200, {'pinned_messages': social.pinned_messages(db, row['id'])}, []
+        return 200, {'pinned_messages': social.pinned_messages(db, row['id'], session['user_id'])}, []
+
+    def delete_social_message(self, db, session, row, message_id, now):
+        if not social.HEX32.fullmatch(message_id or ''):
+            refuse(404, 'not_found', 'Message not found')
+        message = db.execute('SELECT * FROM social_messages WHERE conversation_id=? AND id=?',
+                             (row['id'], message_id)).fetchone()
+        if message is None:
+            refuse(404, 'not_found', 'Message not found')
+        if message['user_id'] != session['user_id']:
+            refuse(403, 'forbidden', 'Only the author can delete a message')
+        hidden = db.execute('SELECT 1 FROM social_message_deletions WHERE message_id=? AND user_id=?',
+                            (message_id, session['user_id'])).fetchone()
+        if hidden is not None:
+            refuse(404, 'not_found', 'Message not found')
+        db.execute('INSERT INTO social_message_deletions VALUES(?,?,?)', (message_id, session['user_id'], now))
+        return 204, b'', []
 
     def forward_social_messages(self, db, workspace, session, row, now, env):
         body = self.body(env, ['message_ids', 'target_conversation_id'])
