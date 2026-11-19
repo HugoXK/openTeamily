@@ -1,0 +1,29 @@
+{
+  "after": {
+    "present": true,
+    "hidden": false,
+    "text": "导出 Markdown",
+    "href": "/v1/workspaces/1a516a7e32c14ae7872ad06b9a4f19db/meetings/0a46c0cd09dd4a56899b460cfd9284f2/export",
+    "overflow": 0
+  },
+  "download": {
+    "suggested": "meeting-0a46c0cd09dd4a56899b460cfd9284f2.md",
+    "bytes": 336,
+    "lines": 20,
+    "first": "# 发布节奏评审",
+    "checklist": [
+      "- [x] 补齐发布检查单（alice）",
+      "- [ ] 确认回归范围（bob）"
+    ],
+    "hasDone": true,
+    "hasOpen": true
+  },
+  "errors": [],
+  "mobile": {
+    "present": true,
+    "hidden": false,
+    "text": "导出 Markdown",
+    "href": "/v1/workspaces/1a516a7e32c14ae7872ad06b9a4f19db/meetings/0a46c0cd09dd4a56899b460cfd9284f2/export",
+    "overflow": 0
+  }
+}
