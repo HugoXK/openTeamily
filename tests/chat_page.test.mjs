@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery } from '../openteamily/static/chat/app.mjs';
+import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery } from '../openteamily/static/chat/app.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
@@ -648,5 +648,112 @@ test('a wide chat still opens the first conversation instead of stopping on the 
     assert.equal(el('message-list').children.length, 1, 'the first conversation still opens by default');
   } finally {
     restore();
+  }
+});
+
+test('homepageStartIndex only accepts a 0-4 start query', () => {
+  assert.equal(homepageStartIndex(''), null);
+  assert.equal(homepageStartIndex('?q=1'), null);
+  assert.equal(homepageStartIndex('?start=5'), null);
+  assert.equal(homepageStartIndex('?start=-1'), null);
+  assert.equal(homepageStartIndex('?start=abc'), null);
+  assert.equal(homepageStartIndex('?start=0'), 0);
+  assert.equal(homepageStartIndex('start=4'), 4);
+  assert.equal(homepageStartIndex('?start=1&x=2'), 1);
+});
+
+test('stripHomepageStartQuery removes only the start parameter', () => {
+  assert.deepEqual(
+    stripHomepageStartQuery('/chat', '?start=0', '#workspace=ws-1'),
+    {changed: true, href: '/chat#workspace=ws-1'},
+  );
+  assert.deepEqual(
+    stripHomepageStartQuery('/chat', '?start=0&x=1', ''),
+    {changed: true, href: '/chat?x=1'},
+  );
+  assert.deepEqual(
+    stripHomepageStartQuery('/chat', '', '#workspace=ws-1'),
+    {changed: false, href: '/chat#workspace=ws-1'},
+  );
+});
+
+test('a homepage start query opens the created conversation after a member starts it', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const calls = [];
+  const conversation = {
+    id: 'c'.repeat(32),
+    workspace_id: 'ws-1',
+    agent_id: 'a'.repeat(32),
+    title: '列出这个助手能做什么',
+  };
+  const fetcher = async (path, options = {}) => {
+    calls.push({path, method: options.method || 'GET', body: options.body});
+    if (path === '/v1/auth/session') return json(200, {user: {id: 'user-1', username: 'alice'}});
+    if (path === '/v1/onboarding') return json(200, {onboarding: {completed: true}});
+    if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
+    if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
+    if (path === '/v1/settings') return json(200, {settings: {values: {}}});
+    if (path === '/v1/workspaces/ws-1/agents?limit=100') {
+      return json(200, {items: [{id: conversation.agent_id, name: '文档助手'}]});
+    }
+    if (path === `/v1/workspaces/ws-1/agents/${conversation.agent_id}/conversations?limit=100`) {
+      return json(200, {items: [conversation]});
+    }
+    if (path === `/v1/workspaces/ws-1/agents/${conversation.agent_id}/conversations/${conversation.id}`) {
+      return json(200, {conversation, items: [
+        {id: 'm1', role: 'user', body: '列出这个助手能做什么', status: 'succeeded'},
+        {id: 'm2', role: 'assistant', body: '这是本地测试回复。', status: 'succeeded'},
+      ]});
+    }
+    if (path === '/v1/workspaces/ws-1/social/conversations?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/members') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/artifacts?limit=100') return json(200, {items: []});
+    if (path === '/v1/agent-homepages/start') {
+      assert.equal(options.method, 'POST');
+      assert.equal(JSON.parse(options.body).quick_start, 0);
+      assert.match(options.headers['Idempotency-Key'] || '', /^home-start-/);
+      return json(201, {
+        conversation,
+        message: {id: 'm1', role: 'user', body: '列出这个助手能做什么'},
+        reply: {id: 'm2', role: 'assistant', body: '这是本地测试回复。', status: 'succeeded'},
+      });
+    }
+    throw new Error('unexpected ' + options.method + ' ' + path);
+  };
+  const history = [];
+  const saved = {
+    location: globalThis.location,
+    history: globalThis.history,
+    addEventListener: globalThis.addEventListener,
+  };
+  globalThis.location = {hash: '', pathname: '/chat', search: '?start=0'};
+  globalThis.history = {
+    replaceState(_state, _title, url) { history.push(String(url)); globalThis.location.hash = String(url).includes('#') ? '#' + String(url).split('#').pop() : ''; },
+  };
+  globalThis.addEventListener = () => {};
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    const startCalls = calls.filter((item) => item.path === '/v1/agent-homepages/start');
+    assert.equal(startCalls.length, 1, 'the page should start once from the query');
+    assert.equal(JSON.parse(startCalls[0].body).quick_start, 0);
+    assert.match(history.join(' '), /conversation=/);
+    assert.ok(history.some((url) => url.startsWith('/chat#') || url === '/chat' || !url.includes('start=')),
+      'the start query should be removed after a successful start: ' + history.join(' | '));
+    const list = el('message-list');
+    const texts = [];
+    const visit = (node) => {
+      if (!node) return;
+      if (node.textContent) texts.push(String(node.textContent));
+      for (const child of node.children || []) visit(child);
+    };
+    visit(list);
+    assert.ok(texts.some((text) => text.includes('列出这个助手能做什么')),
+      'the started prompt should appear in the conversation: ' + texts.join(' | '));
+  } finally {
+    for (const key of Object.keys(saved)) {
+      if (saved[key] === undefined) delete globalThis[key];
+      else globalThis[key] = saved[key];
+    }
   }
 });
