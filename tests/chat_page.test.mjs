@@ -263,6 +263,7 @@ class FakeElement {
   removeEventListener(type, handler) {
     this.handlers[type] = (this.handlers[type] || []).filter((item) => item !== handler);
   }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter(node => node !== this); this.parent = null; }
   focus() { this.focused = true; }
   reset() { this.resetCount = (this.resetCount || 0) + 1; }
   closest(selector) {
@@ -551,7 +552,9 @@ function sessionFetcher() {
     id: 'conv-2', kind: 'dm', title: 'carol', updated: 20,
     members: [aliceRow, {user_id: 'c'.repeat(32), username: 'carol'}],
   };
+  const requests = [];
   const fetcher = async (path) => {
+    requests.push(path);
     if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
     if (path === '/v1/onboarding') return json(200, {onboarding: {completed: true}});
     if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
@@ -574,7 +577,7 @@ function sessionFetcher() {
     }
     throw new Error('unexpected ' + path);
   };
-  return {fetcher};
+  return {fetcher, requests};
 }
 
 function sessionRows(el) {
@@ -672,6 +675,133 @@ test('a wide chat still opens the first conversation instead of stopping on the 
       'above 900px the list is shown beside the conversation, so no list state is applied',
     );
     assert.equal(el('message-list').children.length, 1, 'the first conversation still opens by default');
+  } finally {
+    restore();
+  }
+});
+
+// The search panel is a child of the session pane, and the 900px stylesheet
+// paints that pane only in the `sessions-open` state. With a conversation open
+// the pane is display:none, so opening search without that state leaves the
+// panel in the DOM and visible to script but zero by zero on screen.
+
+function searchRequests(requests) {
+  return requests.filter((path) => path.includes('/search/'));
+}
+
+function viewedConversationRequests(requests, id) {
+  return requests.filter((path) => path === `/v1/workspaces/ws-1/social/conversations/${id}`);
+}
+
+test('a narrow chat shows the search panel over an open conversation by revealing the session pane', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher, requests} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await settle();
+    assert.equal(doc.body.classList.contains('sessions-open'), false, 'the conversation is the visible pane');
+
+    await fire(el('message-search'), 'click');
+    await settle();
+
+    assert.equal(el('search-panel').hidden, false, 'the search panel is assigned the open state');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      true,
+      'the search panel lives inside the session pane, which the narrow stylesheet hides while a conversation is open; without the list state the panel is 0x0 on screen',
+    );
+    assert.equal(viewedConversationRequests(requests, 'conv-1').length, 1, 'opening search must not refetch the conversation');
+    assert.equal(el('chat-title').textContent, 'bob', 'the open conversation is still the one named in the header');
+  } finally {
+    restore();
+  }
+});
+
+test('closing search on a narrow screen returns to the conversation that was open', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher, requests} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await settle();
+    await fire(el('message-search'), 'click');
+    await settle();
+
+    await fire(el('search-close'), 'click');
+    await settle();
+
+    assert.equal(el('search-panel').hidden, true, 'closing search hides the panel again');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      false,
+      'the conversation, not the list, must be the visible pane after search closes',
+    );
+    assert.equal(el('message-list').children.length, 1, 'the opened conversation and its messages are still there');
+    assert.equal(viewedConversationRequests(requests, 'conv-1').length, 1, 'the user does not have to open the conversation again');
+  } finally {
+    restore();
+  }
+});
+
+test('closing search from the narrow session list keeps the list visible', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    assert.equal(doc.body.classList.contains('sessions-open'), true, 'the list is the visible pane before search');
+
+    await fire(el('session-search'), 'focus');
+    await settle();
+    assert.equal(el('search-panel').hidden, false, 'typing in the list search opens the panel');
+
+    await fire(doc, 'keydown', {key: 'Escape'});
+    await settle();
+
+    assert.equal(el('search-panel').hidden, true, 'Escape closes the panel');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      true,
+      'no conversation is open, so dropping the list state would leave the narrow screen blank',
+    );
+    assert.equal(sessionRows(el).length, 2, 'the conversation list is still rendered underneath');
+  } finally {
+    restore();
+  }
+});
+
+test('a wide chat leaves the grid classes alone when search opens and closes', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher} = sessionFetcher();
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    assert.equal(el('message-list').children.length, 1, 'the wide page opens the first conversation');
+
+    await fire(el('message-search'), 'click');
+    await settle();
+    assert.equal(el('search-panel').hidden, false, 'search opens');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      false,
+      'above 900px the pane is never hidden, so no list state may be added',
+    );
+
+    await fire(el('search-close'), 'click');
+    await settle();
+    assert.equal(el('search-panel').hidden, true, 'search closes');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      false,
+      'closing search must not add a class the wide layout never uses',
+    );
   } finally {
     restore();
   }
@@ -1042,13 +1172,13 @@ test('reaction chips post the toggle and re-render server counts', async () => {
     }});
     await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
     const li = el('message-list').children[0];
-    const bar = li.children[li.children.length - 1];
+    const bar = li.children.find(node => node.className === 'message-reactions');
     assert.equal(bar.className, 'message-reactions');
     assert.equal(bar.children[0].textContent, '👍 1');
     await fire(bar.children[0], 'click');
     await settle();
     assert.deepEqual(posts, [{emoji: '👍', active: true}]);
-    const next = li.children[li.children.length - 1];
+    const next = li.children.find(node => node.className === 'message-reactions');
     assert.equal(next.children[0].textContent, '👍 2');
     assert.equal(next.children[0].getAttribute('aria-pressed'), 'true');
   } finally { restore(); }
@@ -1088,18 +1218,18 @@ test('pin a message and multi-select forward call the real endpoints', async () 
     assert.equal(el('chat-invite').hidden, false);
     assert.equal(el('multi-select-toggle').hidden, false);
     let li = el('message-list').children[0];
-    const tools = li.children[li.children.length - 2];
+    const tools = li.children.find(node => node.className === 'message-tools');
     assert.equal(tools.className, 'message-tools');
     await fire(tools.children[0], 'click');
     await settle();
     assert.deepEqual(posts[0][1], {pinned: true});
     assert.equal(el('pinned-messages').hidden, false);
     li = el('message-list').children[0];
-    assert.equal(li.children[li.children.length - 2].children[0].textContent, '取消置顶');
+    assert.equal(li.children.find(node => node.className === 'message-tools').children[0].textContent, '取消置顶');
     await fire(el('multi-select-toggle'), 'click');
     assert.equal(el('forward-bar').hidden, false);
     li = el('message-list').children[0];
-    const box = li.children[li.children.length - 2].children[0].children[0];
+    const box = li.children.find(node => node.className === 'message-tools').children[0].children[0];
     box.checked = true;
     await fire(box, 'change');
     assert.equal(el('forward-count').textContent, '已选 1 条');
@@ -1154,4 +1284,61 @@ test('composer + creation grid deep-links real editors and labels the rest 未�
   for (const kind of ['website', 'document', 'slides', 'dashboard']) assert.ok(html.includes(`/space?new=${kind}`), kind);
   for (const id of ['meeting_prep', 'daily_brief', 'expert_research', 'advance_goals']) assert.ok(html.includes(`/automations?template=${id}`), id);
   assert.ok((html.match(/未接通/g) || []).length >= 5);
+});
+
+test('in-chat search jumps to loaded messages, explains unloaded hits, and restores scroll on close', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow:true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.includes('/search/messages?')) return json(200, {items:[{message_id:'jump-loaded',snippet:'Find me'}, {message_id:'not-loaded',snippet:'Earlier message'}],cursor:null});
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
+    const target = el('message-list').children[0];
+    target.dataset.messageId = 'jump-loaded';
+    let scrolled = false;
+    target.scrollIntoView = () => {scrolled=true;};
+    el('message-scroller').scrollTop = 41;
+    await fire(el('conversation-search-open'), 'click');
+    el('conversation-search-query').value = 'Find';
+    await fire(el('conversation-search-form'), 'submit', {preventDefault(){}});
+    const hits = el('conversation-search-results').children;
+    assert.equal(hits[0].getAttribute('role'), 'button');
+    await fire(hits[0], 'keydown', {key:'Enter',preventDefault(){}});
+    assert.equal(scrolled, true);
+    assert.equal(target.dataset.searchJump, 'true');
+    await fire(hits[1], 'click');
+    assert.match(el('conversation-search-status').textContent, /不在当前已加载/);
+    el('message-scroller').scrollTop = 99;
+    await fire(el('conversation-search-close'), 'click');
+    assert.equal(el('message-scroller').scrollTop, 41);
+    assert.equal(el('conversation-search-panel').hidden, true);
+  } finally {restore();}
+});
+
+test('removing a group agent sends nothing until the explicit confirmation', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const posts = [];
+  const restore = installChatGlobals({narrow:true});
+  try {
+    await mount(doc, {fetcher: async (path, options={}) => {
+      if (path.endsWith('/agents/a-1/remove')) {posts.push(path);return json(200, {});}
+      return original(path, options);
+    }});
+    await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
+    const remove = new FakeElement('button'); remove.dataset.removeAgent = 'a-1';
+    await fire(el('group-agent-chips'), 'click', {target:remove});
+    assert.equal(posts.length,0);
+    let question = el('group-agent-chips').children.at(-1);
+    assert.equal(question.getAttribute('role'),'alertdialog');
+    await fire(question.children[1], 'click');
+    assert.equal(posts.length,0);
+    await fire(el('group-agent-chips'), 'click', {target:remove});
+    question = el('group-agent-chips').children.at(-1);
+    await fire(question.children[2], 'click');
+    assert.equal(posts.length,1);
+  } finally {restore();}
 });

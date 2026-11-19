@@ -34,6 +34,30 @@ class MessageToolTests(unittest.TestCase):
         return client.call('POST', f'{self.base}/{conv or self.source}/messages', {'body': text},
                            {'HTTP_IDEMPOTENCY_KEY': f'tools-msg-{self.n:08d}'})['body']['message']['id']
 
+    def test_explicit_save_is_durable_idempotent_and_membership_checked(self):
+        mid = self.send(self.bob, 'A durable decision')
+        path = f'{self.base}/{self.source}/messages/{mid}/save'
+        payload = {'title': 'Decision copy', 'revision': 1}
+        self.assertEqual(self.carol.call('POST', path, payload)['status'], 404)
+        self.assertEqual(self.alice.call('POST', path, payload, csrf=False)['status'], 403)
+        self.assertEqual(self.alice.call('POST', path, {**payload, 'revision': 2})['status'], 409)
+        saved = self.alice.call('POST', path, payload)
+        self.assertEqual(saved['status'], 201, saved)
+        aid = saved['body']['artifact']['id']
+        again = self.bob.call('POST', path, payload)
+        self.assertEqual(again['status'], 200, again)
+        self.assertEqual(again['body']['artifact']['id'], aid)
+        # The explicit workspace copy is readable by other workspace members.
+        read = self.carol.call('GET', f'/v1/workspaces/{self.wid}/artifacts/{aid}')
+        self.assertEqual(read['body']['artifact']['body'], 'A durable decision')
+        self.bob.call('POST', f'{self.base}/{self.source}/messages/{mid}/retract', {'revision': 1})
+        self.assertEqual(self.alice.call('POST', path, payload)['status'], 409)
+        self.assertEqual(self.carol.call('GET', f'/v1/workspaces/{self.wid}/artifacts/{aid}')['status'], 200)
+        # Reopen the store: the saved text and source survive app instances.
+        reopened = App(Store(Path(self.temp.name) / 'state'), Config(ORIGIN, allow_registration=True), clock=lambda: 1800000000)
+        with reopened.store.connect() as db:
+            self.assertEqual(db.execute('SELECT body FROM artifacts WHERE id=?', (aid,)).fetchone()['body'], 'A durable decision')
+
     def test_pin_unpin_and_retraction(self):
         first, second = self.send(self.alice, '决议：周五上线'), self.send(self.bob, '收到')
         pinned = self.bob.call('POST', f'{self.base}/{self.source}/messages/{first}/pin', {'pinned': True})

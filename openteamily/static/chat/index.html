@@ -17,7 +17,8 @@
     <a class="brand-mark" href="/chat" title="OpenTeamily" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
     <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
     <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
-    <a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
+        <a href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span class="rail-label">技能</span></a>
+<a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
     <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
     <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
     <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
@@ -229,13 +230,14 @@
     <div id="message-context-menu" class="message-menu" role="menu" aria-label="消息操作" hidden>
       <div class="message-menu-reactions" id="message-menu-reactions"></div>
       <button type="button" role="menuitem" data-menu="reply">回复</button>
-      <button type="button" role="menuitem" data-menu="save" disabled title="未接通：群聊消息还不能保存到资料空间">保存到资料空间</button>
+      <button type="button" role="menuitem" data-menu="save">保存到资料空间</button>
       <button type="button" role="menuitem" data-menu="translate" disabled title="未接通：没有翻译服务">翻译</button>
       <button type="button" role="menuitem" data-menu="copy">复制</button>
       <button type="button" role="menuitem" data-menu="forward">转发</button>
       <button type="button" role="menuitem" data-menu="pin">置顶</button>
       <button type="button" role="menuitem" data-menu="select">选择消息</button>
       <hr>
+      <button type="button" role="menuitem" data-menu="edit">编辑</button>
       <button type="button" role="menuitem" data-menu="retract">撤回</button>
       <button type="button" role="menuitem" data-menu="delete" class="message-menu-danger" disabled title="未接通：还没有删除消息接口">删除</button>
     </div>
@@ -265,6 +267,15 @@
       <button type="button" id="forward-submit" disabled>转发</button>
       <button type="button" id="forward-cancel">取消</button>
     </section>
+    <dialog id="save-message-dialog" aria-labelledby="save-message-heading">
+      <form id="save-message-form">
+        <h2 id="save-message-heading">保存到资料空间</h2>
+        <p>这会把消息文字复制为当前工作区的文档。<strong>工作区内所有成员都可以读取副本</strong>，之后撤回原消息不会删除副本。附件不会被复制。重复保存会沿用既有副本，不会同步后续编辑。</p>
+        <label>文档标题 <input id="save-message-title" maxlength="80" required></label>
+        <p id="save-message-error" role="alert" hidden></p>
+        <div class="actions"><button type="button" id="save-message-cancel">取消</button><button type="submit" id="save-message-submit">确认保存</button></div>
+      </form>
+    </dialog>
     <p id="onboarding-banner" class="note" hidden>完善<strong>工作背景</strong>，让自动化推荐更贴合你。<a href="/onboarding">去设置</a></p>
     <section id="group-agent-action" class="gap-note group-agent-panel" hidden>
       <details class="group-agent-sheet">

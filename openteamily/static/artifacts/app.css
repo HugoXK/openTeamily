@@ -1041,3 +1041,26 @@ html[data-theme-resolved="dark"] #send-to-chat-cancel{
   backdrop-filter: var(--ot-blur);
   border-radius: var(--ot-radius);
 }}
+
+/* Functional parity 6: original document editing surface, same stored markdown. */
+#document-editor { padding: 0; margin: .75rem 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.document-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: .15rem; padding: .375rem 0; border-bottom: 1px solid var(--ot-line); position: sticky; top: 0; background: var(--ot-surface); z-index: 2; }
+#editor-form .document-toolbar button { width: auto; min-height: 1.875rem; height: 1.875rem; padding: 0 .5rem; border: 0; border-radius: .375rem; background: transparent; color: var(--ot-muted); box-shadow: none; font-size: .75rem; }
+#editor-form .document-toolbar button:hover:not(:disabled) { background: var(--ot-bg-accent); color: var(--ot-ink); }
+#editor-form #document-source-toggle { margin-left: auto; }
+#document-rich { min-height: 20rem; padding: 1.25rem 0; font-size: .9375rem; line-height: 1.8; overflow-wrap: anywhere; }
+body.app-workspace #document-rich:focus-visible { outline: none; }
+#document-editor:focus-within .document-toolbar { border-bottom-color: var(--ot-accent); }
+#document-rich:empty::before { content: attr(data-placeholder); color: var(--ot-muted); }
+#document-rich h1 { font-size: 1.75rem; line-height: 1.35; }
+#document-rich h2 { font-size: 1.375rem; line-height: 1.4; }
+#document-rich h3 { font-size: 1.125rem; line-height: 1.45; }
+#document-rich p { margin: 0 0 .875rem; }
+#document-rich blockquote { margin: 1rem 0; padding: .75rem 1rem; border: 0; border-radius: .5rem; background: var(--ot-bg-accent); }
+#document-rich pre { white-space: pre-wrap; padding: .875rem; border-radius: .5rem; background: var(--ot-bg-accent); }
+#document-rich ul, #document-rich ol { padding-left: 1.5rem; }
+#document-rich hr { border: 0; border-top: 1px solid var(--ot-line); margin: 1.5rem 0; }
+#document-source { min-height: 22rem; font-family: monospace; line-height: 1.65; }
+#editor-form #document-save { padding: 0 .75rem; border-radius: 999px; background: var(--ot-accent); color: var(--ot-on-accent); }
+#editor-form #document-save:hover:not(:disabled) { background: var(--ot-accent-hover); color: var(--ot-on-accent); }
+#editor-form:has(#document-editor:not([hidden])) > #editor-meta { margin: -.125rem 0 .75rem; font-size: .75rem; color: var(--ot-muted); }

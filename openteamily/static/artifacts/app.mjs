@@ -1,3 +1,4 @@
+import { bindDocumentEditor } from '../shell/rich-editor.mjs';
 import { renderThumb } from '../shell/thumb.mjs';
 
 // `/space?new=<kind>` opens the matching 新建 editor once the page has loaded
@@ -65,8 +66,9 @@ export function visibleArtifacts(items, options = {}) {
   const creators = options.creators || [];
   const sessions = options.sessions || [];
   const now = options.now == null ? Date.now() : options.now;
-  if (kind === 'meetings' || scope === 'favorites') return [];
+  if (kind === 'meetings') return [];
   let rows = [...(items || [])];
+  if (scope === 'favorites') rows = rows.filter(item => item.favorited);
   if (scope === 'mine' && username) {
     rows = rows.filter((item) => item.created_by === username);
   }
@@ -498,10 +500,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (add) add.disabled = dashboardState.widgets.length >= 20;
   }
 
+  const richDocument = bindDocumentEditor(document, form);
+
   function fillEditor(item) {
     form.elements.title.value = item && item.title ? item.title : '';
     form.elements.body.value = item && typeof item.body === 'string' ? item.body : '';
     const kind = (item && item.kind) || draftKind;
+    richDocument.load(form.elements.body.value, kind === 'document');
     const meta = document.getElementById('editor-meta');
     const labels = {website: '新网站', media: '新媒体', whiteboard: '新白板', slides: '新幻灯片', dashboard: '新看板', document: '新文档'};
     if (item && item.id) {
@@ -509,7 +514,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else {
       meta.textContent = labels[kind] || '新文档';
     }
-    document.getElementById('body-label').hidden = kind === 'media' || kind === 'whiteboard' || kind === 'slides' || kind === 'dashboard';
+    document.getElementById('body-label').hidden = kind !== 'website';
     document.getElementById('media-editor').hidden = kind !== 'media';
     document.getElementById('board-editor').hidden = kind !== 'whiteboard';
     document.getElementById('slides-editor').hidden = kind !== 'slides';
@@ -942,9 +947,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const bookmark = document.createElement('button');
       bookmark.type = 'button';
       bookmark.className = 'artifact-bookmark';
-      bookmark.disabled = true;
-      bookmark.title = '未接通：还没有收藏作品接口';
-      bookmark.setAttribute('aria-label', '收藏（未接通）');
+      bookmark.title = item.favorited ? '取消收藏' : '收藏';
+      bookmark.setAttribute('aria-label', bookmark.title);
+      bookmark.setAttribute('aria-pressed', String(!!item.favorited));
+      bookmark.addEventListener('click', async event => {
+        event.stopPropagation();
+        const wid = workspaceId();
+        bookmark.disabled = true;
+        try {
+          const result = await request('POST', `/v1/workspaces/${wid}/artifacts/${item.id}/favorite`, {enabled: !item.favorited});
+          if (workspaceId() !== wid) return;
+          if (result.status !== 200) { show('error', messageFor(result.body.error, '收藏未保存。')); return; }
+          item.favorited = result.body.favorited;
+          renderCatalog();
+        } catch { show('error', '网络错误，收藏未保存。'); }
+        finally { bookmark.disabled = false; }
+      });
       bookmark.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10v16l-5-3-5 3V4Z"/></svg>';
       row.appendChild(bookmark);
       const created = document.createElement('span');
@@ -1110,10 +1128,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  let listGeneration = 0;
   async function loadList() {
+    const generation = ++listGeneration;
     const id = workspaceId();
     if (!id) return;
     const listed = await request('GET', `/v1/workspaces/${id}/artifacts${listQuery(search.value)}`);
+    // An old workspace/search response must never replace the current list.
+    if (generation !== listGeneration || workspaceId() !== id) return;
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法读取作品库。'));
       return;
@@ -1392,13 +1414,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return {status: response.status, body: parsed};
   }
 
+  let savingArtifact = false;
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (savingArtifact) return;
+    savingArtifact = true;
+    const saveButtons = ['save-artifact', 'document-save'].map(id => document.getElementById(id)).filter(Boolean);
+    for (const button of saveButtons) button.disabled = true;
+    try {
     if (!workspaceId()) {
       show('error', '先选择一个工作区。');
       return;
     }
     const title = form.elements.title.value.trim();
+    richDocument.flush();
     const body = form.elements.body.value;
     const kind = (current && current.kind) || draftKind;
     if (!title) {
@@ -1493,6 +1522,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     show('ok', '已保存。');
     await loadShares();
     await loadDiscover();
+    } catch { show('error', '网络错误，未能确认保存结果。请重新打开作品检查后再重试。'); }
+    finally { savingArtifact = false; for (const button of saveButtons) button.disabled = false; }
   });
 
   function askDeleteConfirmation() {

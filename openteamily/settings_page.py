@@ -23,6 +23,7 @@ class SettingsPage:
         '/settings/agent-access': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/connectors': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/skill-configuration': ('settings', 'index.html', 'text/html; charset=utf-8'),
+        '/settings/connected-tools.mjs': ('settings', 'connected-tools.mjs', 'text/javascript; charset=utf-8'),
         '/settings/app.mjs': ('settings', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/settings/app.css': ('settings', 'app.css', 'text/css; charset=utf-8'),
         '/automations': ('automations', 'index.html', 'text/html; charset=utf-8'),
@@ -53,6 +54,7 @@ class SettingsPage:
         '/install/flybot.ps1': ('install', 'flybot.ps1', 'text/plain; charset=utf-8'),
         '/shell/app.css': ('shell', 'app.css', 'text/css; charset=utf-8'),
         '/shell/app.mjs': ('shell', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/rich-editor.mjs': ('shell', 'rich-editor.mjs', 'text/javascript; charset=utf-8'),
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
@@ -82,8 +84,11 @@ class SettingsPage:
         '/about/app.css': ('about', 'app.css', 'text/css; charset=utf-8'),
         '/look/app.mjs': ('look', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/look/app.css': ('look', 'app.css', 'text/css; charset=utf-8'),
+        '/skills': ('skills', 'index.html', 'text/html; charset=utf-8'),
+        '/skills/app.mjs': ('skills', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/skills/app.css': ('skills', 'app.css', 'text/css; charset=utf-8'),
     }
-    PREFIXES = ('/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about')
+    PREFIXES = ('/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")

@@ -1,3 +1,4 @@
+export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -669,6 +670,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     let pending = false;
     for (const item of items || []) {
       const li = document.createElement('li');
+      li.dataset.messageId = item.id;
       li.className = item.role === 'user' ? 'user' : 'assistant';
       const role = document.createElement('p');
       role.className = 'role';
@@ -779,6 +781,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       renderPinned(result.body.pinned_messages);
       renderSocialMessages(lastSocialItems);
     });
+    pin.hidden = true;
     tools.append(pin);
     return tools;
   }
@@ -860,6 +863,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pin = menu.querySelector('[data-menu="pin"]');
     pin.textContent = pinnedIds.has(item.id) ? '取消置顶' : '置顶';
     menu.querySelector('[data-menu="retract"]').hidden = !mine;
+    const edit = menu.querySelector('[data-menu="edit"]');
+    if (edit) edit.hidden = !mine;
     menu.querySelector('[data-menu="forward"]').disabled = forwardTargets(socialConversations, currentConversation && currentConversation.id).length === 0;
     menu.hidden = false;
     const width = menu.offsetWidth || 200, height = menu.offsetHeight || 360;
@@ -889,6 +894,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         input.value = `> ${author}：${excerpt}\n` + input.value;
         input.dispatchEvent(new Event('input', {bubbles: true}));
         input.focus();
+      } else if (action === 'save') {
+        openSaveMessage(item);
+      } else if (action === 'edit') {
+        const edit = Array.from(li.querySelectorAll(':scope > button')).find(node => node.textContent === '编辑');
+        if (edit) edit.click();
       } else if (action === 'copy') {
         try { await navigator.clipboard.writeText(item.body || ''); show('ok', '已复制。'); }
         catch { show('error', '浏览器不允许复制，请手动选择文本。'); }
@@ -912,6 +922,38 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (scroller) scroller.addEventListener('scroll', closeMessageMenu, {passive: true});
   }
 
+  let saveMessageTarget = null;
+  const saveMessageDialog = document.getElementById('save-message-dialog');
+  function openSaveMessage(item) {
+    saveMessageTarget = {item, workspace: workspaceId(), conversation: currentConversation.id};
+    document.getElementById('save-message-title').value = String(item.body || '').replace(/\s+/g, ' ').trim().slice(0, 60) || '消息记录';
+    document.getElementById('save-message-error').hidden = true;
+    saveMessageDialog.showModal();
+    document.getElementById('save-message-title').focus();
+  }
+  const saveMessageCancel = document.getElementById('save-message-cancel');
+  if (saveMessageCancel) saveMessageCancel.addEventListener('click', () => { saveMessageDialog.close(); saveMessageTarget = null; });
+  const saveMessageForm = document.getElementById('save-message-form');
+  if (saveMessageForm) saveMessageForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!saveMessageTarget) return;
+    const {item, workspace, conversation} = saveMessageTarget;
+    const button = document.getElementById('save-message-submit');
+    const error = document.getElementById('save-message-error');
+    if (button.disabled) return;
+    button.disabled = true; error.hidden = true;
+    try {
+      const result = await request('POST', `/v1/workspaces/${workspace}/social/conversations/${conversation}/messages/${item.id}/save`,
+        {title: document.getElementById('save-message-title').value, revision: item.revision || 1});
+      if (result.status !== 200 && result.status !== 201) {
+        error.textContent = messageFor(result.body.error, '消息未保存，请重新打开消息后重试。'); error.hidden = false; return;
+      }
+      saveMessageDialog.close(); saveMessageTarget = null;
+      show('ok', result.status === 201 ? `已保存到工作区资料空间：${result.body.artifact.title}` : `已存在工作区资料空间中（未同步后续编辑）：${result.body.artifact.title}`);
+    } catch { error.textContent = '网络错误，无法确认保存结果。可以重试，不会产生重复副本。'; error.hidden = false; }
+    finally { button.disabled = false; }
+  });
+
   let lastSocialItems = [];
   function renderSocialMessages(items) {
     lastSocialItems = items || [];
@@ -921,6 +963,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const people = currentConversation && currentConversation.members || members;
     for (const item of items || []) {
       const li = document.createElement('li');
+      li.dataset.messageId = item.id;
       const mine = item.user_id === (currentUser && currentUser.id);
       li.className = mine ? 'mine' : 'other';
       const role = document.createElement('p');
@@ -959,10 +1002,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       if (mine && !item.retracted) {
         const edit = document.createElement('button');
-        edit.type = 'button'; edit.textContent = '编辑';
+        edit.type = 'button'; edit.textContent = '编辑'; edit.hidden = true;
         const retract = document.createElement('button');
-        retract.type = 'button'; retract.textContent = '撤回';
+        retract.type = 'button'; retract.textContent = '撤回'; retract.hidden = true;
         const controls = document.createElement('span');
+        controls.className = 'message-edit-controls';
         const change = async (operation, text) => {
           const payload = {revision: item.revision || 1};
           if (operation === 'edit') payload.body = text;
@@ -996,6 +1040,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (item.role !== 'agent' && !item.retracted) li.append(messageTools(item));
       if (item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
       if (item.role !== 'agent' && !item.retracted) {
+        const more = document.createElement('button');
+        more.type = 'button'; more.className = 'message-more'; more.textContent = '⋯';
+        more.setAttribute('aria-label', '消息操作'); more.setAttribute('aria-haspopup', 'menu');
+        const openAtMessage = () => {
+          const rect = more.getBoundingClientRect();
+          openMessageMenu(item, li, mine, rect.left, rect.bottom);
+        };
+        more.addEventListener('click', event => { event.stopPropagation(); openAtMessage(); });
+        li.addEventListener('keydown', event => {
+          if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') { event.preventDefault(); openAtMessage(); }
+        });
+        li.append(more);
         li.addEventListener('contextmenu', event => {
           if (selecting) return;
           event.preventDefault();
@@ -1462,6 +1518,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('pinned-group').hidden = true;
     document.getElementById('compose-dialog').hidden = true;
     closeComposeMenu();
+    // The panel is a child of the session pane, which the narrow stylesheet
+    // paints only in the sessions-open state. Opening search has to reveal it
+    // there, or the panel is laid out inside a display:none parent.
+    if (narrowScreen()) setSessionsOpen(true);
     if (tab) setSearchTab(tab);
     renderSearch();
   }
@@ -1474,6 +1534,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-group').hidden = false;
     document.getElementById('session-search').value = '';
     setSearchTab('all');
+    // Narrow screens show the conversation when one is open and the list
+    // otherwise; dropping the state unconditionally would blank both.
+    if (narrowScreen()) setSessionsOpen(!currentConversation);
   }
 
   function addSearchSection(root, title, items, onPick) {
@@ -1900,12 +1963,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const hit of state.hits) {
       list.append(searchHitRow(hit, (document.getElementById('conversation-search-query').value || '').trim()));
     }
-    document.getElementById('conversation-search-status').textContent = state.error || ('已显示 ' + state.hits.length + ' 条消息');
+    document.getElementById('conversation-search-status').textContent = state.error || (state.hits.length ? '已显示 ' + state.hits.length + ' 条消息' : '没有找到匹配的消息。试试其他关键词。');
     document.getElementById('conversation-search-more').hidden = !state.cursor;
   }
   function searchHitRow(hit, query) {
     const li = document.createElement('li');
     li.className = 'search-hit';
+    li.tabIndex = 0;
+    li.setAttribute('role', 'button');
+    li.setAttribute('aria-label', '跳到这条消息');
+    const jump = () => {
+      const list = document.getElementById('message-list');
+      const target = Array.from(list.children || []).find(node => node.dataset.messageId === hit.messageId);
+      if (!target) {
+        document.getElementById('conversation-search-status').textContent = '这条消息不在当前已加载的消息窗口里，请加载更多消息后重试。';
+        return;
+      }
+      target.scrollIntoView({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+      target.tabIndex = -1; target.focus({preventScroll: true});
+      for (const node of Array.from(list.children || [])) delete node.dataset.searchJump;
+      target.dataset.searchJump = 'true';
+      setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
+    };
+    li.addEventListener('click', jump);
+    li.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
+    });
     const avatar = document.createElement('span');
     avatar.className = 'search-hit-avatar';
     avatar.setAttribute('aria-hidden', 'true');
@@ -1957,15 +2040,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (event.key === 'Escape' && !document.getElementById('group-info-panel').hidden) setGroupInfoOpen(false);
     });
   }
+  let searchScrollSnapshot = null;
   const inChatOpen = document.getElementById('conversation-search-open');
   if (inChatOpen) inChatOpen.addEventListener('click', () => {
     if (!currentConversation) { show('error', '请先打开一个会话。'); return; }
     setGroupInfoOpen(false);
+    if (document.getElementById('conversation-search-panel').hidden) {
+      searchScrollSnapshot = {conversation: currentConversation.id, top: document.getElementById('message-scroller').scrollTop};
+    }
     document.getElementById('conversation-search-panel').hidden = false;
     const field = document.getElementById('conversation-search-query'); if (field) field.focus();
   });
   const inChatClose = document.getElementById('conversation-search-close');
-  if (inChatClose) inChatClose.addEventListener('click', () => { document.getElementById('conversation-search-panel').hidden = true; });
+  function closeInChatSearch() {
+    document.getElementById('conversation-search-panel').hidden = true;
+    if (searchScrollSnapshot && currentConversation && currentConversation.id === searchScrollSnapshot.conversation) {
+      document.getElementById('message-scroller').scrollTop = searchScrollSnapshot.top;
+    }
+    searchScrollSnapshot = null;
+    if (inChatOpen) inChatOpen.focus();
+  }
+  if (inChatClose) inChatClose.addEventListener('click', closeInChatSearch);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !document.getElementById('conversation-search-panel').hidden) closeInChatSearch();
+  });
   const inChatForm = document.getElementById('conversation-search-form');
   if (inChatForm) inChatForm.addEventListener('submit', async event => { event.preventDefault(); await searchCurrentConversation(); });
   const inChatMore = document.getElementById('conversation-search-more');
@@ -2089,18 +2187,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
 
-  document.getElementById('group-agent-chips').addEventListener('click', async event => {
+  document.getElementById('group-agent-chips').addEventListener('click', event => {
     const button = event.target.closest('button[data-remove-agent]');
-    if (!button || currentSource !== 'social' || !currentConversation) return;
-    const cid = currentConversation.id;
-    const result = await request('POST',
-      `${socialBase()}/${cid}/agents/${button.dataset.removeAgent}/remove`, {});
-    if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法移除智能体。'));
-      return;
-    }
-    await openSocialConversation(cid);
-    show('ok', '已移除智能体。');
+    if (!button || currentSource !== 'social' || !currentConversation || button.disabled) return;
+    const cid = currentConversation.id, wid = workspaceId(), agentId = button.dataset.removeAgent;
+    const holder = document.getElementById('group-agent-chips');
+    if (holder.querySelector('.agent-remove-confirm')) return;
+    const question = document.createElement('span');
+    question.className = 'agent-remove-confirm'; question.setAttribute('role', 'alertdialog');
+    question.setAttribute('aria-label', '移除群内智能体确认');
+    const text = document.createElement('span'); text.textContent = '从当前群聊移除此智能体？已有消息会保留。';
+    const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = '确认移除';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
+    cancel.addEventListener('click', () => { question.remove(); button.focus(); });
+    question.addEventListener('keydown', event => { if (event.key === 'Escape') { question.remove(); button.focus(); } });
+    confirm.addEventListener('click', async () => {
+      if (workspaceId() !== wid || !currentConversation || currentConversation.id !== cid) { question.remove(); return; }
+      confirm.disabled = true; cancel.disabled = true;
+      try {
+        const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${cid}/agents/${agentId}/remove`, {});
+        if (workspaceId() !== wid || !currentConversation || currentConversation.id !== cid) return;
+        if (result.status !== 200) { show('error', messageFor(result.body.error, '无法移除智能体。')); return; }
+        await openSocialConversation(cid); show('ok', '已移除智能体。');
+      } catch { show('error', '网络错误，智能体未移除。'); }
+      finally { confirm.disabled = false; cancel.disabled = false; }
+    });
+    question.append(text, cancel, confirm); holder.append(question); cancel.focus();
   });
 
   document.getElementById('group-agent-add-submit').addEventListener('click', async () => {

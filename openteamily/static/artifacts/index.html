@@ -16,7 +16,8 @@
     <a class="brand-mark" href="/chat" title="OpenTeamily" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
     <a href="/chat" title="聊天" aria-label="聊天"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H9l-5 4V4Z"/></svg><span class="rail-label">聊天</span></a>
     <a href="/agents" title="智能体" aria-label="智能体"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14v12H5z M9 3h6 M12 3v4 M8 12h1 M15 12h1 M9 16h6"/></svg><span class="rail-label">智能体</span></a>
-    <a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
+        <a href="/skills" title="技能" aria-label="技能"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg><span class="rail-label">技能</span></a>
+<a href="/automations" title="自动化" aria-label="自动化"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg><span class="rail-label">自动化</span></a>
     <a href="/memory" title="记忆" aria-label="记忆"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4 M16 4a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4 M8 8h8 M8 12h8 M8 16h8 M12 4v16"/></svg><span class="rail-label">记忆</span></a>
     <a href="/space" title="作品" aria-label="作品"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 9 5-9 5-9-5 9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg><span class="rail-label">作品</span></a>
     <a href="/meetings" title="会议" aria-label="会议"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v14H4z M8 3v4 M16 3v4 M4 10h16"/></svg><span class="rail-label">会议</span></a>
@@ -210,12 +211,12 @@
           </div>
           <div id="empty-starred" hidden>
             <div class="empty-hero" aria-hidden="true"><span class="empty-cta-icon" data-tone="mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M7 3h10a1 1 0 0 1 1 1v16l-6-3.2L6 20V4a1 1 0 0 1 1-1z"/></svg></span></div>
-            <h2>暂无保存</h2>
-            <p>你保存的内容会按时间倒序出现在这里。</p>
+            <h2>暂无收藏</h2>
+            <p>点击作品卡片上的书签，将作品收藏到这里。</p>
             <div class="empty-cta-list">
               <a href="/chat" class="empty-cta" id="empty-starred-save-message">
                 <span class="empty-cta-icon" data-tone="chat" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-6l-4 3v-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg></span>
-                <span class="empty-cta-copy"><strong>保存聊天中的消息</strong><span class="hint">在已完成的对话里保存到作品库。OpenTeamily 还没有收藏接口。</span></span>
+                <span class="empty-cta-copy"><strong>保存聊天中的消息</strong><span class="hint">在已完成的对话里保存到作品库。点击作品上的书签可以收藏。</span></span>
                 <span class="empty-cta-go" aria-hidden="true">→</span>
               </a>
               <button type="button" class="empty-cta" id="empty-save-image" disabled title="未实现：还没有从作品库保存聊天图片的接口">
@@ -252,6 +253,29 @@
     </section>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
+      <p id="editor-meta" class="note"></p>
+      <section id="document-editor" hidden aria-label="文档编辑器">
+        <div class="document-toolbar" role="toolbar" aria-label="文档格式">
+          <button type="button" data-doc-format="undo" aria-label="撤销">↶</button>
+          <button type="button" data-doc-format="redo" aria-label="重做">↷</button>
+          <button type="button" data-doc-format="bold" aria-label="加粗">B</button>
+          <button type="button" data-doc-format="italic" aria-label="斜体">I</button>
+          <button type="button" data-doc-format="strike" aria-label="删除线">S</button>
+          <button type="button" data-doc-format="h1">H1</button>
+          <button type="button" data-doc-format="h2">H2</button>
+          <button type="button" data-doc-format="h3">H3</button>
+          <button type="button" data-doc-format="ul" aria-label="无序列表">• 列表</button>
+          <button type="button" data-doc-format="ol" aria-label="有序列表">1. 列表</button>
+          <button type="button" data-doc-format="quote" aria-label="引用">❞</button>
+          <button type="button" data-doc-format="code" aria-label="代码块">&lt;/&gt;</button>
+          <button type="button" data-doc-format="hr" aria-label="分隔线">—</button>
+          <button type="button" id="document-source-toggle" aria-pressed="false">Markdown</button>
+          <button type="submit" id="document-save">保存</button>
+        </div>
+        <div id="document-rich" contenteditable="true" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="开始写作…"></div>
+        <textarea id="document-source" aria-label="文档 Markdown 源码" maxlength="8000" rows="16" hidden></textarea>
+        <p id="document-length" class="note" hidden></p>
+      </section>
       <label id="body-label">正文
         <textarea name="body" maxlength="8000" rows="16"></textarea>
       </label>
@@ -286,7 +310,6 @@
         </div>
         <canvas id="board-canvas" width="800" height="600"></canvas>
       </div>
-      <p id="editor-meta" class="note"></p>
       <p id="editor-source" class="note" hidden></p>
       <iframe id="website-preview" title="网站预览" sandbox hidden></iframe>
       <section id="version-panel" hidden>
