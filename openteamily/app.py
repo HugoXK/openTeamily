@@ -881,6 +881,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/memory/links(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if memory_link_path:
                 return self.memory_link_dispatch(db, session, method, query, now, env, *memory_link_path.groups())
+            memory_export_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/memory/([0-9a-f]{32})/export', path)
+            if memory_export_path:
+                return self.memory_export(db, session, method, query, *memory_export_path.groups())
             memory_page_version_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/memory/([0-9a-f]{32})/versions(?:/(\d{1,8})(?:/(restore))?)?',
                 path)
@@ -2252,6 +2256,24 @@ class App:
         return self.artifact_saved(db, workspace['id'], aid, 201)
 
 
+
+    def memory_export(self, db, session, method, query, workspace_id, page_id):
+        """One saved page as a Markdown download; reading it writes nothing."""
+        if method != 'GET':
+            refuse(405, 'method', 'Only GET is supported')
+        if query:
+            refuse(400, 'invalid', 'Invalid memory request')
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        row = memory.load(db, workspace['id'], page_id)
+        if row is None:
+            refuse(404, 'not_found', 'Memory page not found')
+        topics = memory.topics_for(db, [row['id']]).get(row['id'], [])
+        disposition = memory.export_disposition(row['title'])
+        headers = [(key, disposition if key.lower() == 'content-disposition' else value)
+                   for key, value in artifacts.export_headers('text/markdown; charset=utf-8', 'memory.md')]
+        return 200, memory.export_document(row, topics).encode('utf-8'), headers
 
     def memory_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
         workspace = members.load(db, workspace_id, session['user_id'])
