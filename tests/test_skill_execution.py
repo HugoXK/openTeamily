@@ -3,6 +3,8 @@ import json
 import unittest
 from openteamily.app import App
 from openteamily.store import Store
+from openteamily.settings_page import SettingsPage
+from tests.test_settings_page import RawClient
 from openteamily.flybot import AgentError, handle_task, run_cycle
 from openteamily.scheduler import Scheduler, AgentAutomationBackend
 from tests import test_skill_packages as skill_helpers
@@ -71,6 +73,20 @@ class SkillExecutionTests(unittest.TestCase):
         saved=self.alice.call('POST',save,{'workspace_id':self.wid});self.assertEqual(saved['status'],201,saved)
         self.assertEqual(self.alice.call('POST',save,{'workspace_id':self.wid})['body']['artifact']['id'],saved['body']['artifact']['id'])
         self.assertEqual(self.bob.call('POST',save,{'workspace_id':self.wid})['status'],404)
+        artifact = saved['body']['artifact']['id']
+        # Exercise the actual HTML wrapper, then its authenticated document API.
+        wrapped = SettingsPage(reopened)
+        self.assertEqual(RawClient(wrapped).call('GET', '/space', query=f'workspace={self.wid}&artifact={artifact}')['status'], 200)
+        endpoint = f'/v1/workspaces/{self.wid}/artifacts/{artifact}'
+        self.assertEqual(fresh.call('GET', endpoint)['status'], 200)
+        anonymous = Client(wrapped)
+        self.assertEqual(anonymous.call('GET', endpoint)['status'], 401)
+        outsider = Client(wrapped)
+        outsider.register('outside')
+        self.assertIn(outsider.call('GET', endpoint)['status'], (403, 404))
+        self.assertEqual(fresh.call('GET', f'/v1/workspaces/{"f" * 32}/artifacts/{artifact}')['status'], 404)
+        self.assertEqual(fresh.call('GET', f'/v1/workspaces/{self.wid}/artifacts/{"e" * 32}')['status'], 404)
+
         pending=self.run_skill(key='skill-execution-00002')['body']['task']
         self.assertEqual(self.alice.call('POST',f'/v1/runtime/tasks/{pending["id"]}/cancel',{})['body']['task']['status'],'cancelled')
 

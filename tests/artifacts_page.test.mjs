@@ -721,5 +721,5 @@ test('saved result deep links require an exact authorized workspace and artifact
   const wid='a'.repeat(32),aid='b'.repeat(32);
   assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&artifact='+aid),{workspace:wid,artifact:aid});
   assert.equal(artifactTargetFromSearch('?new=document'),null);
-  for(const query of ['?artifact='+aid,'?workspace='+wid,'?workspace=../private&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&artifact='+aid])assert.deepEqual(artifactTargetFromSearch(query),{invalid:true});
+  for(const query of ['?artifact='+aid,'?workspace='+wid,'?workspace=../private&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&new=document','?workspace='+wid+'&artifact='+aid+'&x=1'])assert.deepEqual(artifactTargetFromSearch(query),{invalid:true});
 });

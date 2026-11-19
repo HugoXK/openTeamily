@@ -164,3 +164,11 @@
 #skill-run-history li {padding:1rem 0;border-bottom:1px solid var(--ot-line)}
 #skill-run-history pre {white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:24rem;overflow:auto}
 .skill-card .skill-use {grid-column:2 / -1;justify-self:start;min-height:2.5rem}
+
+/* Opaque scoped primary states: the shared dark gradient carries dark ink. */
+#skill-run-submit {background:#097845;color:#fff;border-color:transparent}
+#skill-run-submit:hover {background:#076a3d;color:#fff}
+html[data-theme-resolved="dark"] #skill-run-submit {background:#097845;color:#fff;border-color:transparent}
+html[data-theme-resolved="dark"] #skill-run-submit:hover {background:#076a3d;color:#fff}
+#skill-run-history button,#skill-run-history a {display:inline-flex;align-items:center;margin:.4rem .5rem .25rem 0;vertical-align:middle}
+#skill-run-history a {white-space:nowrap;max-width:100%}

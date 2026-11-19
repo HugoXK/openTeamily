@@ -2215,6 +2215,25 @@ async function main() {
       record('skills_daemon_loaded',await page.evaluate(async id=>{const d=await(await fetch('/v1/skills/bindings')).json();return d.items.some(i=>i.skill_id==='meeting-notes'&&i.last_loaded_task===id)},task),'Upgraded daemon verified exact package digests and acknowledged context loading before successful synthetic inference; Python tests inspect model request content');
       await page.locator('.skill-card').filter({has:page.locator('button[data-skill="meeting-notes"]')}).locator('.skill-use').click();
       await page.waitForFunction(()=>!document.getElementById('skill-run-submit').disabled);
+      // Computed enabled primary states, not token-only or mixed-theme inference.
+      const skillContrasts=[];
+      for(const theme of ['light','dark']) {
+        await page.evaluate(value=>{document.documentElement.dataset.themeResolved=value},theme);
+        for(const state of ['normal','hover']) {
+          if(state==='hover')await page.locator('#skill-run-submit').hover();else await page.mouse.move(0,0);
+          const measured=await page.locator('#skill-run-submit').evaluate(e=>{
+            for(const animation of e.getAnimations())animation.finish();
+            const s=getComputedStyle(e),lum=color=>{const c=color.match(/[\d.]+/g).slice(0,3).map(Number).map(n=>{n/=255;return n<=.04045?n/12.92:((n+.055)/1.055)**2.4});return .2126*c[0]+.7152*c[1]+.0722*c[2]};
+            const a=lum(s.color),b=lum(s.backgroundColor);
+            return {ratio:(Math.max(a,b)+.05)/(Math.min(a,b)+.05),color:s.color,background:s.backgroundColor,image:s.backgroundImage,opacity:s.opacity};
+          });
+          skillContrasts.push({theme,state,...measured});
+        }
+        if(theme==='dark')screenshots.push(path.basename(await shot(page,outDir,'107-skills-run-dark-hover.png')));
+      }
+      record('skills_run_primary_contrast',skillContrasts.every(s=>s.ratio>=4.5&&s.image==='none'&&s.opacity==='1'),'Actual enabled normal/hover, light/dark primary contrast: '+JSON.stringify(skillContrasts));
+      await page.evaluate(()=>{document.documentElement.dataset.themeResolved='light'});
+      await page.mouse.move(0,0);
       await page.locator('#skill-run-prompt').fill('[SYNTHETIC CI] Use only the selected meeting skill on: We decided to test the full run and document path.');
       await page.locator('#skill-run-submit').click();
       await waitForApi(page,'/v1/skills/runs',d=>d.items?.some(r=>r.verified&&r.task.prompt.includes('full run and document path')));

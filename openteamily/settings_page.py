@@ -4,6 +4,7 @@ Serves only an exact asset allowlist. API security stays in App; this wrapper
 does not interpret /v1 routes. Self-written; no upstream or Teamily source.
 """
 import os
+import re
 from pathlib import Path
 import stat
 from urllib.parse import parse_qsl, urlsplit
@@ -176,6 +177,12 @@ class SettingsPage:
         if not query:
             return True
         if path in ('/space', '/artifacts'):
+            # A result link selects a record; the API still authorizes every read.
+            # Match the complete raw pair: no duplicates, extras, encoded keys,
+            # traversal, or queries on the CSS/JS assets can slip through.
+            identifier = r'[0-9a-f]{32}'
+            if re.fullmatch(rf'workspace={identifier}&artifact={identifier}|artifact={identifier}&workspace={identifier}', query):
+                return True
             # new=<kind> opens that 新建 editor (chat composer 创建 grid).
             return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings',
                              'new=document', 'new=website', 'new=slides', 'new=dashboard',

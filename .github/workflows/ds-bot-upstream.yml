@@ -1,6 +1,7 @@
 name: Upstream DS Bot runtime
-# Proves the tracked upstream DS Bot (runtime/ds-bot-upstream, pinned in
-# runtime/ds-bot-upstream.pin.json) is unmodified, passes upstream's own suite on the DSH
+# Verifies the tracked upstream DS Bot (runtime/ds-bot-upstream, pinned in
+# runtime/ds-bot-upstream.pin.json) is unmodified, runs its suite with the documented
+# test-clock-only overlay (all assertions retained), on the DSH
 # version it pins, and starts as a container whose Bot API answers. No secrets: upstream's
 # suite uses its own fake model, and the startup test runs with --network none.
 on:
@@ -26,6 +27,7 @@ jobs:
           node-version: '24'
       - run: node scripts/ds-bot-upstream.mjs check
       - run: node --test scripts/ds-bot-upstream.test.mjs
+      - run: node --test scripts/upstream-test-clock.test.mjs
 
   upstream-suite:
     name: Upstream suite · Node ${{ matrix.node }} · DSH from pin
@@ -73,13 +75,12 @@ jobs:
             exit 1
           fi
           npm run harness -- --no-save "@deepseek-ai/dsh@${DSH_VERSION}" "@deepseek-ai/dsh-agent-loop-testkit@${DSH_VERSION}"
-      # The pinned vendor test for Ctrl+Enter annotated-quote send uses a 5ms
-      # settle and a module-level React hook mock. Default node:test parallelism
-      # has been flaking that case on Node 24 (AssertionError 0 !== 1 on
-      # send/dismiss) while the same SHA can pass the other event. The vendor
-      # tree must stay unmodified (Pin and vendor tree), so this job runs the
-      # suite serially instead of skipping, retrying, or patching upstream.
-      - run: npm test -- --test-concurrency=1
+      # The pinned fixture waits5ms before a close timer is scheduled after an
+      # awaited mock send. Under a delayed turn the5ms timer fires FIRST. Use the
+      # audited test-only causal barrier; no assertions/skips/retries/longer sleeps.
+      # Vendor bytes remain pinned; the overlay rejects any unexpected source hash.
+      - name: Full pinned upstream suite with owned annotation clock overlay
+        run: NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$(realpath ../../../scripts/upstream-test-clock.mjs)" npm test -- --test-concurrency=1
       - run: node scripts/build-client.mjs --check
       - run: npm run lint
 

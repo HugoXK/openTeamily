@@ -3,7 +3,7 @@ export function artifactTargetFromSearch(search) {
   const params=new URLSearchParams(search||'');
   if(!params.has('workspace')&&!params.has('artifact'))return null;
   const workspace=params.get('workspace'),artifact=params.get('artifact');
-  if(params.getAll('workspace').length!==1||params.getAll('artifact').length!==1||!(/^[0-9a-f]{32}$/).test(workspace||'')||!(/^[0-9a-f]{32}$/).test(artifact||''))return {invalid:true};
+  if([...params.keys()].some(key=>!['workspace','artifact'].includes(key))||params.getAll('workspace').length!==1||params.getAll('artifact').length!==1||!(/^[0-9a-f]{32}$/).test(workspace||'')||!(/^[0-9a-f]{32}$/).test(artifact||''))return {invalid:true};
   return {workspace,artifact};
 }
 
