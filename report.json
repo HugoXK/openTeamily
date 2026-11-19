@@ -1,0 +1,659 @@
+{
+  "slug": "automation-run-filter",
+  "issue": 292,
+  "pr": 295,
+  "capturedAt": "2026-11-19T12:07:00.287Z",
+  "shots": 16,
+  "grid": "2 arms (before/after) x 2 states (runs-list / runs-failed) x 2 viewports (1440x900, 390x844) x 2 themes (light/dark)",
+  "locale": "zh-CN",
+  "before": {
+    "sha": "f1b5018531519bf044a4c6c38408972bc3809efa",
+    "label": "upstream/main f1b5018"
+  },
+  "after": {
+    "sha": "600204a34ad6a50b046b4e1dbc9e191adf01ad53",
+    "label": "dev3/automation-run-filter 600204a"
+  },
+  "notes": [
+    "Both arms open the same automation (1 succeeded + 2 failed runs from the same seed).",
+    "Before: the run panel has no status filter; /automations?runs=failed is HTTP 400 and /runs?status=failed is HTTP 400 Invalid pagination parameters.",
+    "After: clicking 失败 asks the server for status=failed, shows the 2 failed rows, writes /automations?runs=failed, and a reload keeps it.",
+    "Theme is switched with the page own appearance control (#appearance-toggle -> POST /v1/settings)."
+  ],
+  "api": {
+    "before": {
+      "sha": "f1b5018531519bf044a4c6c38408972bc3809efa",
+      "status": 400,
+      "bodyHead": "{\"error\":{\"code\":\"invalid\",\"message\":\"Invalid pagination parameters\"}}"
+    },
+    "after": {
+      "sha": "600204a",
+      "status": 200,
+      "bodyHead": "{\"items\":[{\"id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb01\",\"automation_id\":\"c597bd610e57490592a775ed63d73ee2\",\"workspace_id\":\"a32104d6646e4c549af27a7aedba0d5a\",\"due_at\":1795082700,\"started\":1795082702,\"finish"
+    }
+  },
+  "files": {
+    "after/after-runs-failed-1440x900-dark.png": {
+      "bytes": 97861,
+      "sha256": "c4e99edee4635c89e9a2cf927bebc63fdbc6c5f86f0b075cdfe13c8da20bc211",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-runs-failed-1440x900-light.png": {
+      "bytes": 57395,
+      "sha256": "6cf599547e0256f093d5ca08b9acf655940f0bc142067edc42cbe7e463f0d2e1",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-runs-failed-390x844-dark.png": {
+      "bytes": 61422,
+      "sha256": "17a58e37e91cf510511b3a674fa05059803e5e9d568f890279481bf69e9df436",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "after/after-runs-failed-390x844-light.png": {
+      "bytes": 48987,
+      "sha256": "ba4a95d0758e776b587a49cf52ff267e7ba3c34ee9ce30495ffadaec9ca4ca38",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "after/after-runs-list-1440x900-dark.png": {
+      "bytes": 97959,
+      "sha256": "aef734603cb3ac03be9a348ecdae69fde1b8859a8ff61fbd1a90b98f16b117b7",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-runs-list-1440x900-light.png": {
+      "bytes": 57395,
+      "sha256": "6cf599547e0256f093d5ca08b9acf655940f0bc142067edc42cbe7e463f0d2e1",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-runs-list-390x844-dark.png": {
+      "bytes": 61382,
+      "sha256": "a4a6d8f404acb1d24b5501769af9c684c73e1d059e7b37b55baa49a895f18192",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "after/after-runs-list-390x844-light.png": {
+      "bytes": 48967,
+      "sha256": "a3c3ce4e9f6c6733e40d4562604d877e98bf515befadc4f64be2ab53c9357ae4",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "before/before-runs-failed-1440x900-dark.png": {
+      "bytes": 98009,
+      "sha256": "66e0a42042047cd72c40c3215200f60fdb28fafce7bd12dbed67f37ef3cd2ca1",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "before/before-runs-failed-1440x900-light.png": {
+      "bytes": 57395,
+      "sha256": "6cf599547e0256f093d5ca08b9acf655940f0bc142067edc42cbe7e463f0d2e1",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "before/before-runs-failed-390x844-dark.png": {
+      "bytes": 61417,
+      "sha256": "dff9098434f7ca4fdf3c90a1eff59d38cbf4f2f9e481d04cbb92b5cf7c0a21f4",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "before/before-runs-failed-390x844-light.png": {
+      "bytes": 48987,
+      "sha256": "ba4a95d0758e776b587a49cf52ff267e7ba3c34ee9ce30495ffadaec9ca4ca38",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "before/before-runs-list-1440x900-dark.png": {
+      "bytes": 97647,
+      "sha256": "0b2cea6ccff88ddacd15bed081eb85742239fd86adc52f002b2c1d96945478eb",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "before/before-runs-list-1440x900-light.png": {
+      "bytes": 57395,
+      "sha256": "6cf599547e0256f093d5ca08b9acf655940f0bc142067edc42cbe7e463f0d2e1",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "before/before-runs-list-390x844-dark.png": {
+      "bytes": 61382,
+      "sha256": "a4a6d8f404acb1d24b5501769af9c684c73e1d059e7b37b55baa49a895f18192",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "before/before-runs-list-390x844-light.png": {
+      "bytes": 48982,
+      "sha256": "8dfb32ed19a75975e706e054564fd3805b004fa47ec93c1dd53e59c4637140bc",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    }
+  },
+  "states": [
+    {
+      "arm": "before",
+      "armSha": "f1b5018531519bf044a4c6c38408972bc3809efa",
+      "port": 8131,
+      "state": "runs-list",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-runs-list-1440x900-light.png",
+      "bytes": 57395,
+      "sha256": "6cf599547e0256f093d5ca08b9acf655940f0bc142067edc42cbe7e463f0d2e1",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "",
+      "rows": 3,
+      "statuses": [
+        "已完成succeeded[CI FIXTURE] Fake provider b",
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": false,
+      "selected": null,
+      "filterEmptyHidden": null,
+      "emptyHidden": true,
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "f1b5018531519bf044a4c6c38408972bc3809efa",
+      "port": 8131,
+      "state": "runs-failed",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-runs-failed-1440x900-light.png",
+      "bytes": 57395,
+      "sha256": "6cf599547e0256f093d5ca08b9acf655940f0bc142067edc42cbe7e463f0d2e1",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "",
+      "rows": 3,
+      "statuses": [
+        "已完成succeeded[CI FIXTURE] Fake provider b",
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": false,
+      "selected": null,
+      "filterEmptyHidden": null,
+      "emptyHidden": true,
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "f1b5018531519bf044a4c6c38408972bc3809efa",
+      "port": 8131,
+      "state": "runs-list",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-runs-list-1440x900-dark.png",
+      "bytes": 97647,
+      "sha256": "0b2cea6ccff88ddacd15bed081eb85742239fd86adc52f002b2c1d96945478eb",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "",
+      "rows": 3,
+      "statuses": [
+        "已完成succeeded[CI FIXTURE] Fake provider b",
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": false,
+      "selected": null,
+      "filterEmptyHidden": null,
+      "emptyHidden": true,
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "f1b5018531519bf044a4c6c38408972bc3809efa",
+      "port": 8131,
+      "state": "runs-failed",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-runs-failed-1440x900-dark.png",
+      "bytes": 98009,
+      "sha256": "66e0a42042047cd72c40c3215200f60fdb28fafce7bd12dbed67f37ef3cd2ca1",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "",
+      "rows": 3,
+      "statuses": [
+        "已完成succeeded[CI FIXTURE] Fake provider b",
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": false,
+      "selected": null,
+      "filterEmptyHidden": null,
+      "emptyHidden": true,
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "f1b5018531519bf044a4c6c38408972bc3809efa",
+      "port": 8131,
+      "state": "runs-list",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-runs-list-390x844-light.png",
+      "bytes": 48982,
+      "sha256": "8dfb32ed19a75975e706e054564fd3805b004fa47ec93c1dd53e59c4637140bc",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "",
+      "rows": 3,
+      "statuses": [
+        "已完成succeeded[CI FIXTURE] Fake provider b",
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": false,
+      "selected": null,
+      "filterEmptyHidden": null,
+      "emptyHidden": true,
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "f1b5018531519bf044a4c6c38408972bc3809efa",
+      "port": 8131,
+      "state": "runs-failed",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-runs-failed-390x844-light.png",
+      "bytes": 48987,
+      "sha256": "ba4a95d0758e776b587a49cf52ff267e7ba3c34ee9ce30495ffadaec9ca4ca38",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "",
+      "rows": 3,
+      "statuses": [
+        "已完成succeeded[CI FIXTURE] Fake provider b",
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": false,
+      "selected": null,
+      "filterEmptyHidden": null,
+      "emptyHidden": true,
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "f1b5018531519bf044a4c6c38408972bc3809efa",
+      "port": 8131,
+      "state": "runs-list",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-runs-list-390x844-dark.png",
+      "bytes": 61382,
+      "sha256": "a4a6d8f404acb1d24b5501769af9c684c73e1d059e7b37b55baa49a895f18192",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "",
+      "rows": 3,
+      "statuses": [
+        "已完成succeeded[CI FIXTURE] Fake provider b",
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": false,
+      "selected": null,
+      "filterEmptyHidden": null,
+      "emptyHidden": true,
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "f1b5018531519bf044a4c6c38408972bc3809efa",
+      "port": 8131,
+      "state": "runs-failed",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-runs-failed-390x844-dark.png",
+      "bytes": 61417,
+      "sha256": "dff9098434f7ca4fdf3c90a1eff59d38cbf4f2f9e481d04cbb92b5cf7c0a21f4",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "",
+      "rows": 3,
+      "statuses": [
+        "已完成succeeded[CI FIXTURE] Fake provider b",
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": false,
+      "selected": null,
+      "filterEmptyHidden": null,
+      "emptyHidden": true,
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "600204a",
+      "port": 8132,
+      "state": "runs-list",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-runs-list-1440x900-light.png",
+      "bytes": 57395,
+      "sha256": "6cf599547e0256f093d5ca08b9acf655940f0bc142067edc42cbe7e463f0d2e1",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "",
+      "rows": 3,
+      "statuses": [
+        "已完成succeeded[CI FIXTURE] Fake provider b",
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": true,
+      "selected": "全部",
+      "filterEmptyHidden": true,
+      "emptyHidden": true,
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "600204a",
+      "port": 8132,
+      "state": "runs-failed",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-runs-failed-1440x900-light.png",
+      "bytes": 57395,
+      "sha256": "6cf599547e0256f093d5ca08b9acf655940f0bc142067edc42cbe7e463f0d2e1",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "?runs=failed",
+      "rows": 2,
+      "statuses": [
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": true,
+      "selected": "失败",
+      "filterEmptyHidden": true,
+      "emptyHidden": true,
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "reload": {
+        "search": "?runs=failed",
+        "rows": 2,
+        "selected": "失败"
+      },
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "600204a",
+      "port": 8132,
+      "state": "runs-list",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-runs-list-1440x900-dark.png",
+      "bytes": 97959,
+      "sha256": "aef734603cb3ac03be9a348ecdae69fde1b8859a8ff61fbd1a90b98f16b117b7",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "",
+      "rows": 3,
+      "statuses": [
+        "已完成succeeded[CI FIXTURE] Fake provider b",
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": true,
+      "selected": "全部",
+      "filterEmptyHidden": true,
+      "emptyHidden": true,
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "600204a",
+      "port": 8132,
+      "state": "runs-failed",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-runs-failed-1440x900-dark.png",
+      "bytes": 97861,
+      "sha256": "c4e99edee4635c89e9a2cf927bebc63fdbc6c5f86f0b075cdfe13c8da20bc211",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "?runs=failed",
+      "rows": 2,
+      "statuses": [
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": true,
+      "selected": "失败",
+      "filterEmptyHidden": true,
+      "emptyHidden": true,
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "reload": {
+        "search": "?runs=failed",
+        "rows": 2,
+        "selected": "失败"
+      },
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "600204a",
+      "port": 8132,
+      "state": "runs-list",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-runs-list-390x844-light.png",
+      "bytes": 48967,
+      "sha256": "a3c3ce4e9f6c6733e40d4562604d877e98bf515befadc4f64be2ab53c9357ae4",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "",
+      "rows": 3,
+      "statuses": [
+        "已完成succeeded[CI FIXTURE] Fake provider b",
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": true,
+      "selected": "全部",
+      "filterEmptyHidden": true,
+      "emptyHidden": true,
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "600204a",
+      "port": 8132,
+      "state": "runs-failed",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-runs-failed-390x844-light.png",
+      "bytes": 48987,
+      "sha256": "ba4a95d0758e776b587a49cf52ff267e7ba3c34ee9ce30495ffadaec9ca4ca38",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "?runs=failed",
+      "rows": 2,
+      "statuses": [
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": true,
+      "selected": "失败",
+      "filterEmptyHidden": true,
+      "emptyHidden": true,
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "reload": {
+        "search": "?runs=failed",
+        "rows": 2,
+        "selected": "失败"
+      },
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "600204a",
+      "port": 8132,
+      "state": "runs-list",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-runs-list-390x844-dark.png",
+      "bytes": 61382,
+      "sha256": "a4a6d8f404acb1d24b5501769af9c684c73e1d059e7b37b55baa49a895f18192",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "",
+      "rows": 3,
+      "statuses": [
+        "已完成succeeded[CI FIXTURE] Fake provider b",
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": true,
+      "selected": "全部",
+      "filterEmptyHidden": true,
+      "emptyHidden": true,
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "600204a",
+      "port": 8132,
+      "state": "runs-failed",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-runs-failed-390x844-dark.png",
+      "bytes": 61422,
+      "sha256": "17a58e37e91cf510511b3a674fa05059803e5e9d568f890279481bf69e9df436",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "?runs=failed",
+      "rows": 2,
+      "statuses": [
+        "失败failedruntime_failure",
+        "已超时timeouttimeout"
+      ],
+      "filterPresent": true,
+      "selected": "失败",
+      "filterEmptyHidden": true,
+      "emptyHidden": true,
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "reload": {
+        "search": "?runs=failed",
+        "rows": 2,
+        "selected": "失败"
+      },
+      "consoleErrors": []
+    }
+  ]
+}

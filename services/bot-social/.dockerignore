@@ -1,6 +1,0 @@
-node_modules
-data
-*.env
-!botsocial.env.example
-.git
-dist
