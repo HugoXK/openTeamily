@@ -1,5 +1,6 @@
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
+import { createLookAvatar } from '../look/app.mjs';
 
 export const SEARCH_TABS = [
   ['all', '全部'],
@@ -376,21 +377,29 @@ export function applyChatAvatarStack(document, conversation) {
   return grouped;
 }
 
-export function applyChatIdentity(document, name, conversation) {
+export function applyChatIdentity(document, name, conversation, look) {
   const identity = chatIdentity(name);
   const title = document.getElementById('chat-title');
   const avatar = document.getElementById('chat-avatar');
   if (title) title.textContent = identity.title;
   const subtitle = document.getElementById('chat-subtitle');
   if (subtitle) { subtitle.textContent = ''; subtitle.hidden = true; }
+  const lookAvatar = createLookAvatar(look, document);
+  const canRenderLook = Boolean(lookAvatar && avatar && avatar.replaceChildren && avatar.append);
   if (avatar) {
-    avatar.textContent = identity.initial;
-    avatar.hidden = !identity.showAvatar;
-    if (avatar.dataset) avatar.dataset.tone = avatarTone(identity.title);
+    if (avatar.replaceChildren) avatar.replaceChildren();
+    if (canRenderLook) {
+      avatar.append(lookAvatar);
+      avatar.hidden = false;
+    } else {
+      avatar.textContent = identity.initial;
+      avatar.hidden = !identity.showAvatar;
+      if (avatar.dataset) avatar.dataset.tone = avatarTone(identity.title);
+    }
   }
   const stacked = applyChatAvatarStack(document, conversation);
   if (stacked && avatar) avatar.hidden = true;
-  if (!stacked && avatar && identity.showAvatar) avatar.hidden = false;
+  if (!stacked && avatar && (identity.showAvatar || canRenderLook)) avatar.hidden = false;
   return identity;
 }
 
@@ -445,6 +454,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let socialConversations = [];
   let sessions = [];
   let currentAgent = null;
+  let personalAgentId = '';
+  let personalLook = null;
   let currentConversation = null;
   let currentSource = 'agent';
   let pollTimer = 0;
@@ -603,11 +614,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentConversation && currentConversation.id === session.id && currentSource === session.source) {
         button.setAttribute('aria-current', 'true');
       }
-      const avatar = document.createElement('span');
-      avatar.className = 'avatar';
-      avatar.textContent = initial(session.title);
-      avatar.dataset.tone = avatarTone(session.title);
-      avatar.dataset.kind = session.kind || session.source || '';
+      const lookAvatar = session.agent_id === personalAgentId ? createLookAvatar(personalLook, document) : null;
+      const avatar = lookAvatar || document.createElement('span');
+      if (!lookAvatar) {
+        avatar.className = 'avatar';
+        avatar.textContent = initial(session.title);
+        avatar.dataset.tone = avatarTone(session.title);
+        avatar.dataset.kind = session.kind || session.source || '';
+      }
       const copy = document.createElement('span');
       copy.className = 'copy';
       const title = document.createElement('span');
@@ -1618,7 +1632,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             currentAgent = agents.find(entry => entry.id === item.id) || null;
             currentConversation = null;
             currentSource = 'agent';
-            if (currentAgent) applyChatIdentity(document, currentAgent.name);
+            if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
+              currentAgent.id === personalAgentId ? personalLook : null);
             document.getElementById('chat-empty').hidden = false;
             document.getElementById('message-list').replaceChildren();
             writeHash({workspace: workspaceId(), agent: item.id});
@@ -1704,6 +1719,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const personal = await request('POST', '/v1/personal-agent');
     const personalWorkspace = personal.status === 200 && personal.body.personal_agent
       ? personal.body.personal_agent.workspace.id : '';
+    const personalEntity = personal.status === 200 ? personal.body.personal_agent : null;
+    personalAgentId = personalEntity && personalEntity.agent ? personalEntity.agent.id : '';
+    personalLook = personalEntity ? personalEntity.look || null : null;
     const [listed, settings] = await Promise.all([
       request('GET', '/v1/workspaces?limit=100'),
       request('GET', '/v1/settings'),
@@ -1752,7 +1770,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       else {
         currentAgent = agents.find(item => item.id === start.agent) || null;
         currentSource = 'agent';
-        if (currentAgent) applyChatIdentity(document, currentAgent.name);
+        if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
+          currentAgent.id === personalAgentId ? personalLook : null);
         document.getElementById('chat-empty').hidden = false;
         writeHash({workspace: workspaceId(), agent: start.agent});
       }
