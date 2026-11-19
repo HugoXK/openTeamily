@@ -1502,7 +1502,7 @@ button:focus-visible, a:focus-visible, .skip-link:focus-visible {
 }
 
 fieldset, .step, .profile-card, .onboarding-card, .meeting-card,
-.chat-top, .composer, .session-pane, .app-rail .account-menu,
+.chat-top, .composer, .app-rail .account-menu,
 #settings-panel > section, .memory-dir, .overview-panel, .actions-panel,
 #filter-panel, .slide-card, .catalog article, .artifact-row, #artifact-list li {
   background: var(--ot-surface);
