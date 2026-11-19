@@ -935,3 +935,32 @@ test('own message editing and confirmed retraction call versioned endpoints', as
     assert.equal(el('message-list').children[0].children[1].textContent, '此消息已撤回');
   } finally { restore(); }
 });
+
+
+test('visual session groups use real pins and preserve order within each group', async () => {
+  const {groupSessionsForDisplay, sessionDisplayGroup} = await import('../openteamily/static/chat/app.mjs');
+  const items = [{id: 'g', kind: 'group'}, {id: 'a', source: 'agent'}, {id: 'p', pinned: true, kind: 'group'}, {id: 'd', kind: 'dm'}];
+  assert.deepEqual(groupSessionsForDisplay(items).map(row => row.id), ['p', 'a', 'd', 'g']);
+  assert.deepEqual(items.map(row => row.id), ['g', 'a', 'p', 'd']);
+  assert.equal(sessionDisplayGroup(items[0]), '群聊');
+  assert.equal(sessionDisplayGroup(items[2]), '置顶');
+});
+
+test('session timestamps use Hong Kong calendar boundaries and never invent unread state', async () => {
+  const {formatSessionTime} = await import('../openteamily/static/chat/app.mjs');
+  const seconds = value => Date.parse(value) / 1000;
+  const now = Date.parse('2026-11-19T00:01:00+08:00');
+  assert.equal(formatSessionTime(seconds('2026-11-18T23:59:00+08:00'), now), '昨天');
+  assert.equal(formatSessionTime(seconds('2026-11-19T00:00:00+08:00'), now), '00:00');
+  assert.match(formatSessionTime(seconds('2026-11-10T12:00:00+08:00'), now), /2026/);
+  assert.equal(formatSessionTime('invalid', now), '');
+});
+
+test('icon chat controls preserve accessible names, disabled truth and attachment privacy', () => {
+  const html = chatHtml();
+  assert.match(html, /id="conversation-search-open"[^>]*aria-label="搜索当前会话"[\s\S]*?<svg/);
+  assert.match(html, /disabled title="未实现：语音或视频通话"/);
+  assert.match(html, /class="attachment-menu"[\s\S]*?id="chat-attachment"/);
+  assert.match(html, /工作区成员可在作品库查看/);
+  assert.match(html, /disabled title="未实现：语音消息"[\s\S]*?sr-only">语音/);
+});

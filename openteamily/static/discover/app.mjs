@@ -91,6 +91,16 @@ export function renderFeedCard(document, item) {
   const when = formatFeedTime(item.updated);
   meta.textContent = [item.author || '', when].filter(Boolean).join(' · ');
   card.append(kind, title, meta);
+  const cover = document.createElement(item.kind === 'image' ? 'img' : 'div');
+  cover.className = 'work-cover';
+  if (item.kind === 'image') {
+    cover.src = '/w/' + encodeURIComponent(item.slug) + '/file';
+    cover.alt = ''; cover.loading = 'lazy';
+  } else {
+    cover.setAttribute('aria-hidden', 'true');
+    cover.textContent = ({document:'文档',website:'网页',slides:'幻灯片',audio:'音频',video:'视频',whiteboard:'白板',dashboard:'看板',media:'媒体'}[item.kind] || '作品');
+  }
+  card.append(cover);
   return card;
 }
 
