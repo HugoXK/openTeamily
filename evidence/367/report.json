@@ -1,0 +1,242 @@
+{
+  "slug": "settings-support-links",
+  "issue": 367,
+  "pr": null,
+  "capturedAt": "2026-11-19T16:49:14.249Z",
+  "locale": "zh-CN",
+  "arms": [
+    {
+      "name": "before",
+      "sha": "9a7aa53c7db5ff93526f82cb959989171efd0569"
+    },
+    {
+      "name": "after",
+      "sha": "f8a967c5636e91ad6f109ca0e58bc0448c6f9376"
+    }
+  ],
+  "notes": [
+    "before: three 支持与法律 rows are disabled buttons titled 未接通：还没有 OpenTeamily …页.",
+    "after: the same three rows are plain settings-row links to /help, /terms and /privacy, and the stale copy is gone.",
+    "the affected state is a real click on the 帮助中心 row, landing on /help in the same browser context.",
+    "fixture data is synthetic and on loopback; the provider is a local fake, not a vendor."
+  ],
+  "rows": [
+    {
+      "arm": "before",
+      "armSha": "9a7aa53c7db5ff93526f82cb959989171efd0569",
+      "state": "light__1440x900__settings__support.png",
+      "viewport": "1440x900",
+      "file": "before/zh-CN__light__1440x900__settings__support.png",
+      "bytes": 69858,
+      "sha256": "c22fdfd8a975558b048c3c980456e9e0ea340923f8ea3e317491ca37456628f7",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "rows": [
+        {
+          "label": "帮助中心",
+          "tag": "button",
+          "href": null,
+          "disabled": true,
+          "meta": "未接通",
+          "title": "未接通：还没有 OpenTeamily 帮助中心页",
+          "text": "帮助中心 未接通"
+        },
+        {
+          "label": "服务条款",
+          "tag": "button",
+          "href": null,
+          "disabled": true,
+          "meta": "未接通",
+          "title": "未接通：还没有 OpenTeamily 服务条款页",
+          "text": "服务条款 未接通"
+        },
+        {
+          "label": "隐私政策",
+          "tag": "button",
+          "href": null,
+          "disabled": true,
+          "meta": "未接通",
+          "title": "未接通：还没有 OpenTeamily 隐私政策页",
+          "text": "隐私政策 未接通"
+        }
+      ],
+      "stillClaimsMissing": true,
+      "path": "/settings",
+      "heading": "支持与法律",
+      "themeResolved": "light",
+      "scrollWidth": 1440,
+      "scrollHeight": 900,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "9a7aa53c7db5ff93526f82cb959989171efd0569",
+      "state": "light__390x844__settings__support.png",
+      "viewport": "390x844",
+      "file": "before/zh-CN__light__390x844__settings__support.png",
+      "bytes": 55160,
+      "sha256": "34fad85e549016ffb8fb4c6a5d493c8cbac832a4b9427f0e96d8983afdd1b7f1",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "rows": [
+        {
+          "label": "帮助中心",
+          "tag": "button",
+          "href": null,
+          "disabled": true,
+          "meta": "未接通",
+          "title": "未接通：还没有 OpenTeamily 帮助中心页",
+          "text": "帮助中心 未接通"
+        },
+        {
+          "label": "服务条款",
+          "tag": "button",
+          "href": null,
+          "disabled": true,
+          "meta": "未接通",
+          "title": "未接通：还没有 OpenTeamily 服务条款页",
+          "text": "服务条款 未接通"
+        },
+        {
+          "label": "隐私政策",
+          "tag": "button",
+          "href": null,
+          "disabled": true,
+          "meta": "未接通",
+          "title": "未接通：还没有 OpenTeamily 隐私政策页",
+          "text": "隐私政策 未接通"
+        }
+      ],
+      "stillClaimsMissing": true,
+      "path": "/settings",
+      "heading": "支持与法律",
+      "themeResolved": "light",
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "f8a967c5636e91ad6f109ca0e58bc0448c6f9376",
+      "state": "light__1440x900__settings__support.png",
+      "viewport": "1440x900",
+      "file": "after/zh-CN__light__1440x900__settings__support.png",
+      "bytes": 67540,
+      "sha256": "73bcde77edb146f46a754275129234c9d46bc3149e63cc00c25681a5c8f1d6c8",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "rows": [
+        {
+          "label": "帮助中心",
+          "tag": "a",
+          "href": "/help",
+          "disabled": false,
+          "meta": null,
+          "title": null,
+          "text": "帮助中心 ›"
+        },
+        {
+          "label": "服务条款",
+          "tag": "a",
+          "href": "/terms",
+          "disabled": false,
+          "meta": null,
+          "title": null,
+          "text": "服务条款 ›"
+        },
+        {
+          "label": "隐私政策",
+          "tag": "a",
+          "href": "/privacy",
+          "disabled": false,
+          "meta": null,
+          "title": null,
+          "text": "隐私政策 ›"
+        }
+      ],
+      "stillClaimsMissing": false,
+      "path": "/settings",
+      "heading": "支持与法律",
+      "themeResolved": "light",
+      "scrollWidth": 1440,
+      "scrollHeight": 900,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "f8a967c5636e91ad6f109ca0e58bc0448c6f9376",
+      "state": "light__1440x900__help__opened-from-settings.png",
+      "viewport": "1440x900",
+      "file": "after/zh-CN__light__1440x900__help__opened-from-settings.png",
+      "bytes": 151867,
+      "sha256": "455593f3ff35a98b58817d0182582be6509c45802e4ea4a5b3a369ae4ecdd5bc",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "rows": [],
+      "stillClaimsMissing": false,
+      "path": "/help",
+      "heading": "帮助中心",
+      "themeResolved": "light",
+      "scrollWidth": 1440,
+      "scrollHeight": 900,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "f8a967c5636e91ad6f109ca0e58bc0448c6f9376",
+      "state": "light__390x844__settings__support.png",
+      "viewport": "390x844",
+      "file": "after/zh-CN__light__390x844__settings__support.png",
+      "bytes": 52939,
+      "sha256": "a8516e033dd0b4808181a9742c79e3bbde429f73af5536342beee2b908a66d85",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "rows": [
+        {
+          "label": "帮助中心",
+          "tag": "a",
+          "href": "/help",
+          "disabled": false,
+          "meta": null,
+          "title": null,
+          "text": "帮助中心 ›"
+        },
+        {
+          "label": "服务条款",
+          "tag": "a",
+          "href": "/terms",
+          "disabled": false,
+          "meta": null,
+          "title": null,
+          "text": "服务条款 ›"
+        },
+        {
+          "label": "隐私政策",
+          "tag": "a",
+          "href": "/privacy",
+          "disabled": false,
+          "meta": null,
+          "title": null,
+          "text": "隐私政策 ›"
+        }
+      ],
+      "stillClaimsMissing": false,
+      "path": "/settings",
+      "heading": "支持与法律",
+      "themeResolved": "light",
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "consoleErrors": []
+    }
+  ]
+}
