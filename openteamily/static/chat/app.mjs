@@ -248,6 +248,21 @@ export function groupAgentSummary(conversation) {
     + '。可明确请求一次回复。未接通：群内自动回复、@Agent 和任务委派。' : '';
 }
 
+export function autoReplyNote(auto) {
+  if (!auto) return '未接通。';
+  if (!auto.can_manage) {
+    return auto.enabled
+      ? `已开启：未 @ 的消息由 ${auto.agent_name || '群内智能体'} 自动回复；只有工作区所有者或管理员可以修改。`
+      : '只有工作区所有者或管理员可以开启 Agent 主动性。';
+  }
+  if (!auto.available) return '先在下方「智能体」里加入一个可用的群内智能体，才能开启自动回复。';
+  if (!auto.enabled) return `开启后，本群未 @ 的消息由 ${auto.agent_name} 自动回复；每小时最多 ${auto.limit} 条。`;
+  if (auto.used >= auto.limit) {
+    return `本小时已自动回复 ${auto.used}/${auto.limit} 条，达到上限：新的未 @ 消息不会再自动回复。`;
+  }
+  return `已开启：由 ${auto.agent_name} 自动回复未 @ 的消息；本小时已用 ${auto.used}/${auto.limit} 条。`;
+}
+
 export function groupReplyStatus(reply) {
   const labels = {queued: '等待执行', running: '执行中', succeeded: '已完成', failed: '失败', cancelled: '已取消'};
   const errors = {no_agent: '没有可用运行时连接', quota: '运行时任务容量已满', timeout: '执行超时',
@@ -1240,6 +1255,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你' : '工作区成员', 'person')));
     const pinned = sessions.some(item => item.source === 'social' && item.id === conversation.id && item.pinned);
     document.getElementById('group-info-pin').setAttribute('aria-checked', String(pinned));
+    const autoSwitch = document.getElementById('group-info-auto');
+    if (autoSwitch && conversation.auto_reply) {
+      autoSwitch.setAttribute('aria-checked', String(Boolean(conversation.auto_reply.enabled)));
+      autoSwitch.disabled = !conversation.auto_reply.can_manage
+        || (!conversation.auto_reply.available && !conversation.auto_reply.enabled);
+      document.getElementById('group-info-auto-note').textContent = autoReplyNote(conversation.auto_reply);
+    }
   }
 
   function setGroupInfoOpen(open) {
@@ -2111,6 +2133,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pinned = Boolean(sessions.find(item => item.id === id && item.pinned));
     const result = await request('POST', `${socialBase()}/${id}/preferences`, {pinned: !pinned});
     if (result.status !== 200) { show('error', '置顶未保存。'); return; }
+    await loadSessions(); await openSocialConversation(id);
+  });
+  const autoSwitch = document.getElementById('group-info-auto');
+  if (autoSwitch) autoSwitch.addEventListener('click', async () => {
+    if (currentSource !== 'social' || !currentConversation) return;
+    const id = currentConversation.id;
+    const info = currentConversation.auto_reply || {};
+    const result = await request('POST', `${socialBase()}/${id}/auto-reply`, {enabled: !info.enabled});
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, 'Agent 主动性未保存。'));
+      return;
+    }
     await loadSessions(); await openSocialConversation(id);
   });
   document.getElementById('search-close').addEventListener('click', closeSearchPanel);
