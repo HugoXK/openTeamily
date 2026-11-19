@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  SKILLS, filterSkills, mountSkills, skillButtonLabel, skillCountLabel, toggleSkill,
+  SKILLS, filterSkills, mountSkills, skillCountLabel,
 } from '../openteamily/static/skills/app.mjs';
 
 class Element {
@@ -54,22 +54,12 @@ test('filterSkills matches names and descriptions without inventing data', () =>
   assert.deepEqual(filterSkills(SKILLS, '  邮件 ').map((item) => item.id), ['email-draft']);
 });
 
-test('toggleSkill is immutable and skips unknown ids', () => {
-  const empty = new Set();
-  const installed = toggleSkill(empty, 'meeting-notes');
-  assert.equal(empty.size, 0);
-  assert.equal(installed.has('meeting-notes'), true);
-  const removed = toggleSkill(installed, 'meeting-notes');
-  assert.equal(removed.has('meeting-notes'), false);
-  assert.equal(installed.has('meeting-notes'), true);
-  assert.equal(toggleSkill(new Set(), 'not-a-skill').has('not-a-skill'), true);
-  assert.equal(skillButtonLabel(false), '安装');
-  assert.equal(skillButtonLabel(true), '已安装');
+test('skill counts reflect actual catalogue matches', () => {
   assert.equal(skillCountLabel(SKILLS.length, SKILLS.length), `共 ${SKILLS.length} 个技能`);
   assert.equal(skillCountLabel(1, SKILLS.length), `显示 1 / ${SKILLS.length} 个技能`);
 });
 
-test('mountSkills filters, toggles and resets on re-render', () => {
+test('mountSkills searches and never pretends to install a skill', () => {
   const {doc, el} = fakeDocument();
   const mounted = mountSkills(doc);
   assert.equal(el('skills-list').children.length, SKILLS.length);
@@ -83,14 +73,12 @@ test('mountSkills filters, toggles and resets on re-render', () => {
   const card = el('skills-list').children[0];
   assert.equal(card.children[1].children[0].textContent, '会议纪要');
   const install = card.children[2];
-  assert.equal(install.textContent, '安装');
-  assert.equal(install.attributes['aria-pressed'], 'false');
-  install.handlers.click();
-  assert.equal(mounted.installed.has('meeting-notes'), true);
-  assert.equal(el('skills-list').children[1], undefined);
-  const installedCard = el('skills-list').children[0];
-  assert.equal(installedCard.children[2].textContent, '已安装');
-  assert.equal(installedCard.className.includes('is-installed'), true);
+  assert.equal(install.textContent, '未接通');
+  assert.equal(install.disabled, true);
+  assert.equal(install.handlers.click, undefined);
+  assert.equal(card.className.includes('is-installed'), false);
+  mounted.render();
+  assert.equal(el('skills-list').children[0].children[2].disabled, true);
 
   el('skills-search').value = '找不到的技能';
   el('skills-search').handlers.input();

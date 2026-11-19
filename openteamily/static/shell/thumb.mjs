@@ -21,7 +21,10 @@ export function thumbModel(preview) {
     const lines = Array.isArray(preview.lines) ? preview.lines.map(line => text(line)).filter(Boolean).slice(0, 4) : [];
     const heading = text(preview.heading);
     if (!heading && !lines.length) return {type, heading: '', lines: [], empty: true};
-    return {type, heading, lines};
+    const blocks = type === 'document' && Array.isArray(preview.blocks) ? preview.blocks.slice(0, 6)
+      .filter(block => block && ['text', 'heading', 'list', 'code', 'quote'].includes(block.type))
+      .map(block => ({type: block.type, text: text(block.text)})).filter(block => block.text) : [];
+    return blocks.length ? {type, heading, lines, blocks} : {type, heading, lines};
   }
   if (type === 'slides') {
     const bullets = Array.isArray(preview.bullets) ? preview.bullets.map(item => text(item)).filter(Boolean).slice(0, 3) : [];
@@ -99,8 +102,12 @@ export function renderThumb(document, preview) {
       bar.append(el(document, 'i'), el(document, 'i'), el(document, 'i'));
       page.append(bar);
     }
-    if (model.heading) page.append(el(document, 'p', 'thumb-heading', model.heading));
-    for (const line of model.lines) page.append(el(document, 'p', 'thumb-line', line));
+    if (model.blocks) {
+      for (const block of model.blocks) page.append(el(document, 'p', 'thumb-block thumb-block-' + block.type, block.text));
+    } else {
+      if (model.heading) page.append(el(document, 'p', 'thumb-heading', model.heading));
+      for (const line of model.lines) page.append(el(document, 'p', 'thumb-line', line));
+    }
     root.append(page);
     return root;
   }
