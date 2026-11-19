@@ -37,6 +37,7 @@ export function mergeSessions(agentRows, socialRows, currentUserId) {
     sessions.push({
       source: 'social',
       id: row.id,
+      unread_count: Number(row.unread_count) || 0,
       kind: row.kind,
       members: row.members,
       title: conversationLabel(row, currentUserId),
@@ -121,37 +122,51 @@ export function mergeSearchHits(existing, incoming) {
 // never drops what the user is already reading.
 export function createMessageSearch(loadPage) {
   const state = {hits: [], cursor: '', loading: false, error: ''};
+  let generation = 0;
+  let pending = null;
+  let activeKey = '';
   async function load(query, conversationId = '', {append = false} = {}) {
     const text = String(query || '').trim();
+    const key = JSON.stringify([text, conversationId]);
     if (!text) {
-      state.hits = [];
-      state.cursor = '';
-      state.error = '';
-      state.loading = false;
+      generation += 1;
+      activeKey = '';
+      pending = null;
+      Object.assign(state, {hits: [], cursor: '', error: '', loading: false});
       return state;
     }
-    if (state.loading) return state;
+    // A tab switch during the same search must await the existing request,
+    // not render its temporary empty state and invalidate the completing view.
+    if (state.loading && key === activeKey) return pending;
+    if (append && state.loading) return state;
+    const token = ++generation;
+    activeKey = key;
     if (!append) {
       state.hits = [];
       state.cursor = '';
     }
     state.loading = true;
-    try {
-      const page = await loadPage(text, conversationId, append ? state.cursor : '');
-      const incoming = ((page && page.items) || []).map(searchHitFromItem);
-      state.hits = mergeSearchHits(append ? state.hits : [], incoming);
-      state.cursor = (page && page.cursor) || '';
-      state.error = '';
-    } catch (failure) {
-      state.error = (failure && failure.message) || '无法搜索消息。';
-      if (!append) {
-        state.hits = [];
-        state.cursor = '';
+    pending = (async () => {
+      try {
+        const page = await loadPage(text, conversationId, append ? state.cursor : '');
+        if (token !== generation) return state;
+        const incoming = ((page && page.items) || []).map(searchHitFromItem);
+        state.hits = mergeSearchHits(append ? state.hits : [], incoming);
+        state.cursor = (page && page.cursor) || '';
+        state.error = '';
+      } catch (failure) {
+        if (token !== generation) return state;
+        state.error = (failure && failure.message) || '无法搜索消息。';
+        if (!append) {
+          state.hits = [];
+          state.cursor = '';
+        }
+      } finally {
+        if (token === generation) state.loading = false;
       }
-    } finally {
-      state.loading = false;
-    }
-    return state;
+      return state;
+    })();
+    return pending;
   }
   return {state, load};
 }
@@ -468,6 +483,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.className = 'time';
       time.textContent = formatTime(session.updated);
       button.append(avatar, copy, time);
+      if (session.unread_count > 0) {
+        const unread = document.createElement('span');
+        unread.className = 'unread-badge';
+        unread.textContent = String(session.unread_count);
+        unread.setAttribute('aria-label', session.unread_count + ' 条未读消息');
+        button.append(unread);
+      }
+
       li.append(button);
       list.append(li);
     }
@@ -629,6 +652,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     writeHash({workspace: workspaceId(), social: conversationId});
     renderSocialMessages(result.body.items);
     renderGroupReplyAction(result.body.agent_replies || []);
+    // Acknowledge only the last message actually rendered, not messages that
+    // arrived after this snapshot, and never consume unread in a hidden tab.
+    const shown = result.body.items || [];
+    if (currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
+      const acknowledged = await request('POST', `${socialBase()}/${conversationId}/read`,
+        {message_id: shown[shown.length - 1].id});
+      if (acknowledged.status === 200) {
+        const session = sessions.find(item => item.source === 'social' && item.id === conversationId);
+        if (session) session.unread_count = acknowledged.body.unread_count;
+      }
+    }
     renderSessions();
     if ((result.body.agent_replies || []).some(item => ['queued', 'running'].includes(item.status))) schedulePoll();
   }

@@ -164,3 +164,23 @@ local fake provider in a separate process, and verifies persisted reply/history
 through removal and re-addition. This is not a real-vendor/container or
 Teamily/Impeccable acceptance. Existing CI screenshots only show the unchanged
 UI baseline; they are not evidence of a new membership-edit UI.
+
+
+## Per-user unread state
+
+Social DM/group list and snapshot responses include `unread_count`, counting incoming human
+messages and successful runtime agent replies after this user's durable read cursor. Own
+human sends do not count. GET never acknowledges messages. A member can POST
+`/{conversation_id}/read` with `{message_id}` (Origin + CSRF required); the cursor advances
+monotonically only through that message in that conversation. Cross-conversation ids and
+non-members are rejected. The visible chat acknowledges only the last message actually
+rendered; newer messages beyond the snapshot remain unread. Hidden tabs do not acknowledge.
+The session list shows a numeric badge and only clears it after a successful acknowledgement.
+
+This is not a notification center, @mention/push/email notification, another member's read
+receipt, unread user-agent conversations, or live background delivery. Refresh/reopen loads
+updated counts. The additive `social_reads` table retains state across restarts without a
+schema version change. Teamily + Impeccable acceptance remains pending.
+
+The same chat slice fixes pending message-search queries across tab switches and prevents
+stale search responses replacing newer queries (the CI chat_search_messages race).

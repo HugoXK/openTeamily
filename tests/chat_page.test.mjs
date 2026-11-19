@@ -783,3 +783,61 @@ test('a homepage start query opens the created conversation after a member start
     }
   }
 });
+
+
+test('message search tab switches await the in-flight query and newer queries win', async () => {
+  const {createMessageSearch} = await import('../openteamily/static/chat/app.mjs');
+  const resolvers = [];
+  const search = createMessageSearch(() => new Promise(resolve => resolvers.push(resolve)));
+  const first = search.load('old');
+  const same = search.load('old');
+  assert.equal(resolvers.length, 1, 'a tab switch reuses the pending search');
+  resolvers[0]({items: [{kind: 'social', message_id: 'old', snippet: 'old'}]});
+  await Promise.all([first, same]);
+  assert.equal(search.state.hits.length, 1);
+  const stale = search.load('stale');
+  const latest = search.load('latest');
+  resolvers[2]({items: [{kind: 'social', message_id: 'latest', snippet: 'latest'}]});
+  await latest;
+  resolvers[1]({items: [{kind: 'social', message_id: 'stale', snippet: 'stale'}]});
+  await stale;
+  assert.equal(search.state.hits[0].messageId, 'latest');
+});
+
+test('social sessions retain server unread counts without inventing agent unread state', () => {
+  const rows = mergeSessions([], [{id: 'social-unread', kind: 'group', title: 'Group', unread_count: 3}], 'alice');
+  assert.equal(rows[0].unread_count, 3);
+});
+
+
+for (const mode of ['visible', 'hidden', 'failed']) {
+  test('social unread acknowledgement is snapshot bounded: ' + mode, async () => {
+    const {doc, el} = fakeChatDocument(chatHtml());
+    const {fetcher: original} = sessionFetcher();
+    const posts = [];
+    doc.visibilityState = mode === 'hidden' ? 'hidden' : 'visible';
+    const fetcher = async (path, options = {}) => {
+      if (path.endsWith('/conv-1/read')) {
+        posts.push(JSON.parse(options.body));
+        return json(mode === 'failed' ? 500 : 200, {unread_count: 1});
+      }
+      const result = await original(path, options);
+      const body = await result.json();
+      if (path.endsWith('/social/conversations?limit=100')) body.items[0].unread_count = 2;
+      if (path.endsWith('/social/conversations/conv-1')) {
+        body.conversation.unread_count = 2;
+        body.items.push({id: 'm-2', user_id: bob, body: 'second', created: '2026-01-01T00:00:01Z'});
+      }
+      return json(result.status, body);
+    };
+    const restore = installChatGlobals({narrow: true});
+    try {
+      await mount(doc, {fetcher});
+      assert.equal(sessionRows(el)[0].children[3].textContent, '2');
+      await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+      if (mode === 'hidden') assert.equal(posts.length, 0);
+      else assert.deepEqual(posts, [{message_id: 'm-2'}]);
+      assert.equal(sessionRows(el)[0].children[3].textContent, mode === 'visible' ? '1' : '2');
+    } finally { restore(); }
+  });
+}

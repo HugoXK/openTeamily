@@ -828,7 +828,7 @@ class App:
                 return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -3236,6 +3236,8 @@ class App:
                 for conversation in rows[:limit]:
                     self.reconcile_group_replies(db, conversation, now)
                 items = social.conversation_items(db, rows[:limit])
+                for item in items:
+                    item['unread_count'] = social.unread_count(db, item['id'], session['user_id'])
                 return 200, {'items': items,
                              'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
             if method == 'POST' and not query:
@@ -3251,11 +3253,20 @@ class App:
                 refuse(400, 'invalid', 'Invalid group agent membership request')
             return self.edit_group_agents(db, workspace, session, row, action, now, env)
         self.reconcile_group_replies(db, row, now)
+        if action == 'read' and method == 'POST' and not query:
+            message_id = self.body(env, ['message_id']).get('message_id')
+            if not isinstance(message_id, str) or not social.HEX32.fullmatch(message_id):
+                refuse(400, 'invalid', 'Provide a message id from this conversation')
+            if not social.mark_read(db, row['id'], session['user_id'], message_id):
+                refuse(404, 'not_found', 'Message not found')
+            return 200, {'unread_count': social.unread_count(db, row['id'], session['user_id'])}, []
         if action == 'agent-replies' and method == 'POST' and not query:
             return self.request_group_reply(db, workspace, session, row, now, env)
         if action is None and method == 'GET' and not query:
             items = social.messages(db, row['id'], '', 101) or []
-            return 200, {'conversation': social.conversation_item(db, row),
+            conversation = social.conversation_item(db, row)
+            conversation['unread_count'] = social.unread_count(db, row['id'], session['user_id'])
+            return 200, {'conversation': conversation,
                          'agent_replies': [social.reply_view(item) for item in social.reply_requests(db, row['id'])],
                          'items': [social.message_view(item) for item in items[:100]],
                          'cursor': items[99]['id'] if len(items) > 100 else None}, []
