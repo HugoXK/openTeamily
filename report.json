@@ -1,0 +1,602 @@
+{
+  "slug": "discover-feed-url",
+  "issue": 270,
+  "pr": 280,
+  "capturedAt": "2026-11-19T11:26:02.908Z",
+  "shots": 16,
+  "grid": "2 arms (before/after) x 2 states (default/following) x 2 viewports (1440x900, 390x844) x 2 themes (light/dark)",
+  "locale": "zh-CN",
+  "before": {
+    "sha": "7a8bdb258b7379cf41338b35913f1c9121efdb57",
+    "branch": "upstream/main (7a8bdb2)"
+  },
+  "after": {
+    "sha": "a8575c62c9cedae7533c328724cc5800efec377a",
+    "branch": "dev3/discover-feed-url merged with 7a8bdb2"
+  },
+  "notes": [
+    "Same two states render the same list in both arms; the user-visible delta is the address bar and what survives a refresh.",
+    "before arm: clicking 关注 leaves location.search empty and a reload falls back to 动态 (3 cards).",
+    "after arm: clicking 关注 writes ?feed=following and a reload restores 关注 with 1 card.",
+    "before arm: /discover?feed=following is HTTP 400 \"Queries not supported\" (settings_page.py whitelist); after arm: HTTP 200.",
+    "Theme is switched through the page own appearance control (#appearance-toggle -> POST /v1/settings), not injected CSS."
+  ],
+  "deepLink": {
+    "before": {
+      "sha": "7a8bdb258b7379cf41338b35913f1c9121efdb57",
+      "status": 400,
+      "text": "Queries not supported",
+      "httpBodyHead": "Queries not supported"
+    },
+    "after": {
+      "sha": "a8575c62c9cedae7533c328724cc5800efec377a",
+      "status": 200,
+      "text": "跳到主要内容\n聊天\n智能体\n技能\n自动化\n记忆\n作品\n会议\n发现\n我\n深色\n下载\nCI\n\ncifixture\n\n发现\n搜索动态、创作者\n搜索\n关注\n动态\n已收录\n全部\n热门\n网页\n小游戏\n图片\n音乐\n幻灯片\n视频\n3D 作品\n短剧\n文章\n教",
+      "httpBodyHead": "<!DOCTYPE html> <html lang=\"zh-CN\"> <head> <meta charset=\"utf-8\"> <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"> <meta name=\"referre"
+    }
+  },
+  "files": {
+    "after/after-default-1440x900-dark.png": {
+      "bytes": 79778,
+      "sha256": "901bf4d003a48d2ccc76daf7ef9762a856c2f86edc821850c379d478cefb165a",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-default-1440x900-light.png": {
+      "bytes": 115309,
+      "sha256": "55a29a4d571c233399f1c08560e6aa9b25aa2cf8c3916f5921d792650e27fccc",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-default-390x844-dark.png": {
+      "bytes": 47177,
+      "sha256": "812af5d19e730e2cf74d596a7f143eb2d8774094048051d2ebec62a04f3e8255",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "after/after-default-390x844-light.png": {
+      "bytes": 72268,
+      "sha256": "112bbb8ce8caa873e02722068b3674b446fb1472194b2fa092a133324de7702c",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "after/after-following-1440x900-dark.png": {
+      "bytes": 61454,
+      "sha256": "50ab127e889858066f72ab81e138e3e641781906fb0c9d615f418048fdd32aec",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-following-1440x900-light.png": {
+      "bytes": 70215,
+      "sha256": "c74a80f61093cf943d1097d79a5048825a265b34f3e1cc3342080d6ed8fd933a",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-following-390x844-dark.png": {
+      "bytes": 45212,
+      "sha256": "e64f79b8f91f9dda940716c1ca755f1383b7668560a182e362c1b9dff6080504",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "after/after-following-390x844-light.png": {
+      "bytes": 53328,
+      "sha256": "7b2bc3a5d636e3ea633a0a87327c9bbfe95d08d3b53f63d5cbe91a71bfd624b8",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "before/before-default-1440x900-dark.png": {
+      "bytes": 79916,
+      "sha256": "2700c74e2fddb4b2c0d9d7d708e6b6b644b4ac69b3023aea35e83a379ccee531",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "before/before-default-1440x900-light.png": {
+      "bytes": 115151,
+      "sha256": "a5571269ab69385605f56cf96d769ad34a6ae5293b8ce5b6dd9c72d93f9a9467",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "before/before-default-390x844-dark.png": {
+      "bytes": 47177,
+      "sha256": "812af5d19e730e2cf74d596a7f143eb2d8774094048051d2ebec62a04f3e8255",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "before/before-default-390x844-light.png": {
+      "bytes": 72268,
+      "sha256": "112bbb8ce8caa873e02722068b3674b446fb1472194b2fa092a133324de7702c",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "before/before-following-1440x900-dark.png": {
+      "bytes": 61453,
+      "sha256": "5bbc4a87a73280f8393919946c05567814685fec0efcf4ab089c57a1134945ac",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "before/before-following-1440x900-light.png": {
+      "bytes": 70217,
+      "sha256": "0c123d1b6f2e9b732cfc53a3a4f87269f3d0a53564c8e30efe804cd6055f3d1a",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "before/before-following-390x844-dark.png": {
+      "bytes": 45212,
+      "sha256": "e64f79b8f91f9dda940716c1ca755f1383b7668560a182e362c1b9dff6080504",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "before/before-following-390x844-light.png": {
+      "bytes": 53328,
+      "sha256": "7b2bc3a5d636e3ea633a0a87327c9bbfe95d08d3b53f63d5cbe91a71bfd624b8",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    }
+  },
+  "states": [
+    {
+      "arm": "before",
+      "armSha": "7a8bdb258b7379cf41338b35913f1c9121efdb57",
+      "port": 8121,
+      "state": "default",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-default-1440x900-light.png",
+      "bytes": 115151,
+      "sha256": "a5571269ab69385605f56cf96d769ad34a6ae5293b8ce5b6dd9c72d93f9a9467",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "",
+      "tab": "动态",
+      "cards": 3,
+      "followingEmptyVisible": false,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "themeResolved": "light",
+      "bodyBackground": "rgb(238, 242, 239)",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "7a8bdb258b7379cf41338b35913f1c9121efdb57",
+      "port": 8121,
+      "state": "following",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-following-1440x900-light.png",
+      "bytes": 70217,
+      "sha256": "0c123d1b6f2e9b732cfc53a3a4f87269f3d0a53564c8e30efe804cd6055f3d1a",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "",
+      "tab": "关注",
+      "cards": 1,
+      "followingEmptyVisible": false,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "themeResolved": "light",
+      "bodyBackground": "rgb(238, 242, 239)",
+      "reload": {
+        "search": "",
+        "tab": "动态",
+        "cards": 3
+      },
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "7a8bdb258b7379cf41338b35913f1c9121efdb57",
+      "port": 8121,
+      "state": "default",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-default-1440x900-dark.png",
+      "bytes": 79916,
+      "sha256": "2700c74e2fddb4b2c0d9d7d708e6b6b644b4ac69b3023aea35e83a379ccee531",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "",
+      "tab": "动态",
+      "cards": 3,
+      "followingEmptyVisible": false,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "themeResolved": "dark",
+      "bodyBackground": "rgb(18, 28, 23)",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "7a8bdb258b7379cf41338b35913f1c9121efdb57",
+      "port": 8121,
+      "state": "following",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-following-1440x900-dark.png",
+      "bytes": 61453,
+      "sha256": "5bbc4a87a73280f8393919946c05567814685fec0efcf4ab089c57a1134945ac",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "",
+      "tab": "关注",
+      "cards": 1,
+      "followingEmptyVisible": false,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "themeResolved": "dark",
+      "bodyBackground": "rgb(18, 28, 23)",
+      "reload": {
+        "search": "",
+        "tab": "动态",
+        "cards": 3
+      },
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "7a8bdb258b7379cf41338b35913f1c9121efdb57",
+      "port": 8121,
+      "state": "default",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-default-390x844-light.png",
+      "bytes": 72268,
+      "sha256": "112bbb8ce8caa873e02722068b3674b446fb1472194b2fa092a133324de7702c",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "",
+      "tab": "动态",
+      "cards": 3,
+      "followingEmptyVisible": false,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "themeResolved": "light",
+      "bodyBackground": "rgb(238, 242, 239)",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "7a8bdb258b7379cf41338b35913f1c9121efdb57",
+      "port": 8121,
+      "state": "following",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-following-390x844-light.png",
+      "bytes": 53328,
+      "sha256": "7b2bc3a5d636e3ea633a0a87327c9bbfe95d08d3b53f63d5cbe91a71bfd624b8",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "",
+      "tab": "关注",
+      "cards": 1,
+      "followingEmptyVisible": false,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "themeResolved": "light",
+      "bodyBackground": "rgb(238, 242, 239)",
+      "reload": {
+        "search": "",
+        "tab": "动态",
+        "cards": 3
+      },
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "7a8bdb258b7379cf41338b35913f1c9121efdb57",
+      "port": 8121,
+      "state": "default",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-default-390x844-dark.png",
+      "bytes": 47177,
+      "sha256": "812af5d19e730e2cf74d596a7f143eb2d8774094048051d2ebec62a04f3e8255",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "",
+      "tab": "动态",
+      "cards": 3,
+      "followingEmptyVisible": false,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "themeResolved": "dark",
+      "bodyBackground": "rgb(18, 28, 23)",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "7a8bdb258b7379cf41338b35913f1c9121efdb57",
+      "port": 8121,
+      "state": "following",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-following-390x844-dark.png",
+      "bytes": 45212,
+      "sha256": "e64f79b8f91f9dda940716c1ca755f1383b7668560a182e362c1b9dff6080504",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "",
+      "tab": "关注",
+      "cards": 1,
+      "followingEmptyVisible": false,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "themeResolved": "dark",
+      "bodyBackground": "rgb(18, 28, 23)",
+      "reload": {
+        "search": "",
+        "tab": "动态",
+        "cards": 3
+      },
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "a8575c62c9cedae7533c328724cc5800efec377a",
+      "port": 8122,
+      "state": "default",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-default-1440x900-light.png",
+      "bytes": 115309,
+      "sha256": "55a29a4d571c233399f1c08560e6aa9b25aa2cf8c3916f5921d792650e27fccc",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "",
+      "tab": "动态",
+      "cards": 3,
+      "followingEmptyVisible": false,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "themeResolved": "light",
+      "bodyBackground": "rgb(238, 242, 239)",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "a8575c62c9cedae7533c328724cc5800efec377a",
+      "port": 8122,
+      "state": "following",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-following-1440x900-light.png",
+      "bytes": 70215,
+      "sha256": "c74a80f61093cf943d1097d79a5048825a265b34f3e1cc3342080d6ed8fd933a",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "?feed=following",
+      "tab": "关注",
+      "cards": 1,
+      "followingEmptyVisible": false,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "themeResolved": "light",
+      "bodyBackground": "rgb(238, 242, 239)",
+      "reload": {
+        "search": "?feed=following",
+        "tab": "关注",
+        "cards": 1
+      },
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "a8575c62c9cedae7533c328724cc5800efec377a",
+      "port": 8122,
+      "state": "default",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-default-1440x900-dark.png",
+      "bytes": 79778,
+      "sha256": "901bf4d003a48d2ccc76daf7ef9762a856c2f86edc821850c379d478cefb165a",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "",
+      "tab": "动态",
+      "cards": 3,
+      "followingEmptyVisible": false,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "themeResolved": "dark",
+      "bodyBackground": "rgb(18, 28, 23)",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "a8575c62c9cedae7533c328724cc5800efec377a",
+      "port": 8122,
+      "state": "following",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-following-1440x900-dark.png",
+      "bytes": 61454,
+      "sha256": "50ab127e889858066f72ab81e138e3e641781906fb0c9d615f418048fdd32aec",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "search": "?feed=following",
+      "tab": "关注",
+      "cards": 1,
+      "followingEmptyVisible": false,
+      "scrollWidth": 1440,
+      "clientWidth": 1440,
+      "themeResolved": "dark",
+      "bodyBackground": "rgb(18, 28, 23)",
+      "reload": {
+        "search": "?feed=following",
+        "tab": "关注",
+        "cards": 1
+      },
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "a8575c62c9cedae7533c328724cc5800efec377a",
+      "port": 8122,
+      "state": "default",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-default-390x844-light.png",
+      "bytes": 72268,
+      "sha256": "112bbb8ce8caa873e02722068b3674b446fb1472194b2fa092a133324de7702c",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "",
+      "tab": "动态",
+      "cards": 3,
+      "followingEmptyVisible": false,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "themeResolved": "light",
+      "bodyBackground": "rgb(238, 242, 239)",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "a8575c62c9cedae7533c328724cc5800efec377a",
+      "port": 8122,
+      "state": "following",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-following-390x844-light.png",
+      "bytes": 53328,
+      "sha256": "7b2bc3a5d636e3ea633a0a87327c9bbfe95d08d3b53f63d5cbe91a71bfd624b8",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "?feed=following",
+      "tab": "关注",
+      "cards": 1,
+      "followingEmptyVisible": false,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "themeResolved": "light",
+      "bodyBackground": "rgb(238, 242, 239)",
+      "reload": {
+        "search": "?feed=following",
+        "tab": "关注",
+        "cards": 1
+      },
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "a8575c62c9cedae7533c328724cc5800efec377a",
+      "port": 8122,
+      "state": "default",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-default-390x844-dark.png",
+      "bytes": 47177,
+      "sha256": "812af5d19e730e2cf74d596a7f143eb2d8774094048051d2ebec62a04f3e8255",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "",
+      "tab": "动态",
+      "cards": 3,
+      "followingEmptyVisible": false,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "themeResolved": "dark",
+      "bodyBackground": "rgb(18, 28, 23)",
+      "reload": null,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "a8575c62c9cedae7533c328724cc5800efec377a",
+      "port": 8122,
+      "state": "following",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-following-390x844-dark.png",
+      "bytes": 45212,
+      "sha256": "e64f79b8f91f9dda940716c1ca755f1383b7668560a182e362c1b9dff6080504",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "search": "?feed=following",
+      "tab": "关注",
+      "cards": 1,
+      "followingEmptyVisible": false,
+      "scrollWidth": 390,
+      "clientWidth": 390,
+      "themeResolved": "dark",
+      "bodyBackground": "rgb(18, 28, 23)",
+      "reload": {
+        "search": "?feed=following",
+        "tab": "关注",
+        "cards": 1
+      },
+      "consoleErrors": []
+    }
+  ]
+}
