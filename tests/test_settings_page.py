@@ -63,6 +63,17 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(head['status'], 200)
         self.assertEqual(head['body'], b'')
 
+    def test_composer_deep_links_pass_only_known_queries(self):
+        for kind in ('document', 'website', 'slides', 'dashboard', 'whiteboard'):
+            self.assertEqual(self.raw.call('GET', '/space', query='new=' + kind)['status'], 200, kind)
+        self.assertEqual(self.raw.call('GET', '/space', query='new=image')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/automations', query='template=daily_brief')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/automations', query='template=custom')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/automations', query='template=nope')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/shell/thumb.mjs')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/memory/rich.mjs')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/shell/thumb.mjs', query='x=1')['status'], 400)
+
     def test_page_rejects_cross_origin_queries_and_writes(self):
         self.assertEqual(self.raw.call('GET', '/settings', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/settings', host='evil.test')['status'], 403)

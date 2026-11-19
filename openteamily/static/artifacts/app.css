@@ -945,7 +945,7 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
 #artifact-list[data-layout="list"] .artifact-updated { font-size: 0.75rem; color: var(--ot-muted); }
 
 
-/* Kind-tint cover typography: original lettering, not thumbnails. */
+/* Kind-tint cover typography: fallback lettering when a work has no preview (audio, video). */
 #artifact-list[data-layout="grid"] .artifact-cover {
   font-size: 0.8125rem;
   font-weight: 650;

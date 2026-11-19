@@ -86,6 +86,17 @@ async function waitForInputValue(page, selector, expected, timeout = 15000) {
   );
 }
 
+// The memory editor keeps its markdown in a hidden field behind the WYSIWYG
+// surface, so this waits on the stored value without requiring visibility.
+async function waitForStoredValue(page, selector, expected, timeout = 15000) {
+  await page.locator(selector).waitFor({ state: 'attached', timeout });
+  await page.waitForFunction(
+    ({ selector, expected }) => document.querySelector(selector)?.value === expected,
+    { selector, expected },
+    { timeout },
+  );
+}
+
 async function waitForLocatorText(page, selector, expected, timeout = 15000) {
   await page.locator(selector).waitFor({ state: 'visible', timeout });
   await page.waitForFunction(
@@ -1630,7 +1641,7 @@ async function main() {
     try {
       await page.locator('#memory-list button', { hasText: ready.memory_title }).first().click();
       await waitForInputValue(page, '#editor-form input[name="title"]', ready.memory_title);
-      await waitForInputValue(page, '#editor-form textarea[name="body"]', ready.memory_body);
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', ready.memory_body);
       record('memory_editor_seeded', true, await visibleText(page.locator('#editor-meta')));
       await page.locator('#close-editor').click();
       await page.locator('#list-panel').waitFor({ state: 'visible', timeout: 15000 });
@@ -1643,17 +1654,25 @@ async function main() {
       await waitForInputValue(page, '#editor-form input[name="title"]', '未命名页面');
       await waitForLocatorText(page, '#status', '已创建记忆页');
       await page.locator('#editor-form input[name="title"]').fill(ready.memory_create_title);
-      await page.locator('#editor-form textarea[name="body"]').fill(ready.memory_create_body);
+      // WYSIWYG first: typing into the rich surface must land as markdown in the saved field.
+      await page.locator('#editor-rich').fill(ready.memory_create_body);
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', ready.memory_create_body);
       await page.locator('#save-page').click();
       await waitForLocatorText(page, '#status', '已保存');
       await waitForLocatorText(page, '#editor-meta', '修订 2');
       await page.locator('#editor-form input[name="title"]').fill(ready.memory_edited_title);
+      // Then the Markdown source toggle edits the same stored body directly.
+      if ((await page.locator('#editor-source-toggle').getAttribute('aria-pressed')) !== 'true') {
+        await page.locator('#editor-source-toggle').click();
+      }
       await page.locator('#editor-form textarea[name="body"]').fill(ready.memory_edited_body);
       await page.locator('#save-page').click();
       await waitForLocatorText(page, '#status', '已保存');
       await waitForLocatorText(page, '#editor-meta', '修订 3');
       await waitForInputValue(page, '#editor-form input[name="title"]', ready.memory_edited_title);
-      await waitForInputValue(page, '#editor-form textarea[name="body"]', ready.memory_edited_body);
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', ready.memory_edited_body);
+      await page.locator('#editor-source-toggle').click();
+      await waitForLocatorText(page, '#editor-rich', ready.memory_edited_body);
       const memoryMeta = await visibleText(page.locator('#editor-meta'));
       record(
         'memory_create_edit',

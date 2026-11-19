@@ -546,7 +546,7 @@ a.settings-row:focus-visible {
 
 #privacy #save:enabled {
   background: var(--ot-accent);
-  color: #fff;
+  color: var(--ot-on-accent);
   cursor: pointer;
 }
 
@@ -736,7 +736,7 @@ body.app-workspace > main > #settings-panel { max-width: 32rem; padding: .875rem
 #settings-panel .skill-head-title { margin: 0; font-size: .95rem; font-weight: 650; }
 #settings-panel .skill-add {
   display: inline-flex; align-items: center; height: 2rem; padding: 0 .85rem;
-  border: 0; border-radius: 999px; background: var(--ot-accent); color: #fff;
+  border: 0; border-radius: 999px; background: var(--ot-accent); color: var(--ot-on-accent);
   font: inherit; font-size: .8125rem; font-weight: 650; cursor: pointer;
 }
 #settings-panel .skill-add:hover { background: var(--ot-accent-hover, #07663a); }

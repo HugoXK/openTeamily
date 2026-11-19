@@ -304,34 +304,45 @@
         <div class="composer-row">
           <details class="composer-plus">
             <summary title="添加" aria-label="添加">+</summary>
-            <div class="composer-plus-sheet">
-              <p class="plus-heading">常用操作</p>
-              <div class="plus-grid">
-                <button type="button" id="composer-upload-trigger">
-                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V5 M8 8l4-4 4 4 M5 19h14"/></svg>
-                  上传
-                </button>
-                <button type="button" disabled title="未接通：请用上传选择照片。">照片</button>
-                <button type="button" disabled title="未接通：请用上传选择视频。">视频</button>
-              </div>
-              <p class="plus-heading">创建</p>
-              <div class="plus-grid plus-create">
-                <a href="/space">网站</a>
-                <a href="/space">文档</a>
-                <a href="/space">幻灯片</a>
-                <a href="/space">表格</a>
-                <button type="button" disabled title="未接通：还没有在输入区直接生成图片的接口。">图片</button>
-                <button type="button" disabled title="未接通：还没有在输入区直接生成视频的接口。">视频</button>
-                <button type="button" disabled title="未接通：还没有在输入区直接生成音乐的接口。">音乐</button>
-                <button type="button" disabled title="未接通：还没有在输入区直接生成 3D 的接口。">3D</button>
-              </div>
-              <p class="plus-heading">自动化</p>
-              <div class="plus-grid"><a href="/automations">打开自动化</a></div>
-              <p class="plus-heading">上下文</p>
-              <div class="plus-grid">
-                <a href="/memory">记忆</a>
-                <button type="button" disabled title="未接通：还没有从输入区调取资料的接口。">调取</button>
-              </div>
+            <div class="composer-plus-sheet" aria-label="添加与创建">
+              <section class="plus-section" aria-labelledby="plus-common">
+                <h3 class="plus-heading" id="plus-common">常用操作</h3>
+                <div class="plus-row">
+                  <button type="button" id="composer-upload-trigger" data-plus-attach="any" title="上传到工作区作品库并作为附件发送（单聊/群聊）"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m8 12 7-7a4 4 0 0 1 6 6l-9 9a6 6 0 0 1-8-8l9-9 M7 14l8-8a1 1 0 0 1 3 3l-8 8"/></svg>上传</button>
+                  <button type="button" data-plus-attach="image" title="选择照片，上传并作为附件发送（单聊/群聊）"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z M4 16l4.5-4.5 3.5 3.5 2.5-2.5L20 18 M15.5 9.5h.01"/></svg>照片</button>
+                  <button type="button" data-plus-attach="video" title="选择视频，上传并作为附件发送（单聊/群聊）"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z M8 5v14 M16 5v14 M4 9.5h4 M4 14.5h4 M16 9.5h4 M16 14.5h4"/></svg>视频</button>
+                </div>
+                <p class="plus-hint" id="plus-attach-hint" hidden>智能体私聊还不能发附件（未接通），请在单聊或群聊里上传。</p>
+              </section>
+              <section class="plus-section" aria-labelledby="plus-create">
+                <div class="plus-section-head"><h3 class="plus-heading" id="plus-create">创建</h3><a class="plus-more" href="/space">探索更多<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg></a></div>
+                <div class="plus-create">
+                  <a href="/space?new=website" data-tone="web" title="在资料空间新建网站"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M3 12h18 M12 3c2.6 2.5 4 5.6 4 9s-1.4 6.5-4 9c-2.6-2.5-4-5.6-4-9s1.4-6.5 4-9Z"/></svg><span>网站</span></a>
+                  <a href="/space?new=document" data-tone="doc" title="在资料空间新建云文档"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l5 5v13H7z M14 3v5h5 M9.5 12.5h7 M9.5 16h7"/></svg><span>文档</span></a>
+                  <a href="/space?new=slides" data-tone="slides" title="在资料空间新建幻灯片"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18 M5 4v10h14V4 M12 14v3 M8.5 21l3.5-4 3.5 4"/></svg><span>幻灯片</span></a>
+                  <a href="/space?new=dashboard" data-tone="table" title="新建看板（含表格组件），不是完整电子表格"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z M4 9.5h16 M4 15h16 M10 4v16"/></svg><span>表格</span></a>
+                  <button type="button" disabled data-tone="image" title="未接通：还没有在输入区直接生成图片的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z M4 16l5-5 4 4 2-2 5 5 M15 8.5h.01"/></svg><span>图片</span><span class="plus-tag">未接通</span></button>
+                  <button type="button" disabled data-tone="camera" title="未接通：还没有在输入区直接生成视频的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z M12 16.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/></svg><span>视频</span><span class="plus-tag">未接通</span></button>
+                  <button type="button" disabled data-tone="music" title="未接通：还没有在输入区直接生成音乐的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l11-2v12 M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z M20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg><span>音乐</span><span class="plus-tag">未接通</span></button>
+                  <button type="button" disabled data-tone="cube" title="未接通：还没有在输入区直接生成 3D 的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z M4 7.5l8 4.5 8-4.5 M12 12v9"/></svg><span>3D 模型</span><span class="plus-tag">未接通</span></button>
+                </div>
+              </section>
+              <section class="plus-section" aria-labelledby="plus-auto">
+                <div class="plus-section-head"><h3 class="plus-heading" id="plus-auto">自动化</h3><a class="plus-more" href="/automations">全部自动化<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg></a></div>
+                <div class="plus-auto">
+                  <a href="/automations?template=meeting_prep"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15Z M10 20.5h4"/></svg>会议提醒和准备</a>
+                  <a href="/automations?template=daily_brief"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5z M8 9h8 M8 12.5h8 M8 16h5"/></svg>每日工作简报</a>
+                  <a href="/automations?template=expert_research"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6 M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3 M7.5 15h9"/></svg>专家团队研究</a>
+                  <a href="/automations?template=advance_goals"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10Z M12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"/></svg>推进目标</a>
+                </div>
+              </section>
+              <section class="plus-section" aria-labelledby="plus-context">
+                <h3 class="plus-heading" id="plus-context">上下文</h3>
+                <div class="plus-row">
+                  <a href="/memory"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5a2 2 0 0 1 2-2h5v17H6a2 2 0 0 0-2 2z M20 5a2 2 0 0 0-2-2h-5v17h5a2 2 0 0 1 2 2z"/></svg>记忆</a>
+                  <button type="button" disabled title="未接通：还没有从输入区调取资料的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9 M12 7v5l3 2 M21 3v6h-6"/></svg>调取<span class="plus-tag">未接通</span></button>
+                </div>
+              </section>
             </div>
           </details>
           <textarea id="chat-body" name="body" maxlength="4000" required placeholder="输入消息" rows="1"></textarea>

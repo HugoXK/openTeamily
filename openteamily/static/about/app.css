@@ -67,3 +67,9 @@ body.about-page a:visited { color: #097845; }
 }
 .about-cover .about-mark .brand-glyph { width: 2rem; height: 2rem; }
 .about-cover p { font-size: 1.25rem; letter-spacing: -0.03em; }
+
+/* The about article pins light colours; keep the skip link legible too
+   (it otherwise inherits the dark-scheme accent behind the green link text). */
+body.about-page a.skip-link,
+body.about-page a.skip-link:hover,
+body.about-page a.skip-link:focus-visible { background: #097845; color: #ffffff; }

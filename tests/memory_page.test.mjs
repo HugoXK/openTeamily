@@ -472,6 +472,51 @@ test('applyMarkdown wraps or prefixes the selected textarea text', () => {
   assert.equal(applyMarkdown(link, 'link'), '[docs](https://)');
 });
 
+import { safeHref, markdownToBlocks, renderMarkdown, domToMarkdown } from '../openteamily/static/memory/rich.mjs';
+
+function richDocument() {
+  class Node {
+    constructor(type, name, value) { this.nodeType = type; this.tagName = name ? name.toUpperCase() : undefined; this.nodeName = this.tagName || '#text'; this.nodeValue = value ?? null; this.childNodes = []; this.attrs = {}; this.parentNode = null; }
+    get firstChild() { return this.childNodes[0] || null; }
+    appendChild(child) { child.parentNode = this; this.childNodes.push(child); return child; }
+    append(...kids) { for (const kid of kids) this.appendChild(typeof kid === 'string' ? new Node(3, null, kid) : kid); }
+    removeChild(child) { this.childNodes = this.childNodes.filter(item => item !== child); return child; }
+    setAttribute(key, value) { this.attrs[key] = String(value); }
+    getAttribute(key) { return key in this.attrs ? this.attrs[key] : null; }
+    get textContent() { return this.nodeType === 3 ? this.nodeValue : this.childNodes.map(child => child.textContent).join(''); }
+    set textContent(value) { this.childNodes = []; if (value) this.appendChild(new Node(3, null, String(value))); }
+  }
+  return {createElement: (name) => new Node(1, name), createTextNode: (text) => new Node(3, null, text)};
+}
+
+test('rich memory editor round-trips stored markdown through the DOM', () => {
+  const doc = richDocument();
+  const source = '# 标题\n\n一段 **加粗** 与 _斜体_ 和 `代码`，见 [[项目简报]]。\n\n- 第一点\n- 第二点\n\n1. 步骤一\n2. 步骤二\n\n> 引用\n\n```\ncode\n```\n\n---\n\n[链接](https://example.com)';
+  const root = doc.createElement('div');
+  renderMarkdown(doc, root, source);
+  const once = domToMarkdown(root);
+  const again = doc.createElement('div');
+  renderMarkdown(doc, again, once);
+  assert.equal(domToMarkdown(again), once);
+  for (const part of ['# 标题', '**加粗**', '`代码`', '[[项目简报]]', '- 第一点', '1. 步骤一', '> 引用', '```', '---', '[链接](https://example.com)']) {
+    assert.ok(once.includes(part), part);
+  }
+});
+
+test('rich memory editor drops unsafe links and keeps a list nested in a paragraph', () => {
+  assert.equal(safeHref('javascript:alert(1)'), '');
+  assert.equal(safeHref('https://example.com/a'), 'https://example.com/a');
+  assert.equal(safeHref('/memory'), '/memory');
+  assert.ok(markdownToBlocks('# a\n\nb').length >= 2);
+  const doc = richDocument();
+  const root = doc.createElement('div');
+  const p = root.appendChild(doc.createElement('p'));
+  const ul = p.appendChild(doc.createElement('ul'));
+  ul.appendChild(doc.createElement('li')).appendChild(doc.createTextNode('First point'));
+  ul.appendChild(doc.createElement('li')).appendChild(doc.createTextNode('Second point'));
+  assert.equal(domToMarkdown(root).trim(), '- First point\n- Second point');
+});
+
 // --- Issue #241: deleting a memory page or a next action must ask first. ---
 // These tests import only symbols that exist on main today, and they build the
 // fake document from the served HTML, so a control missing from the page cannot

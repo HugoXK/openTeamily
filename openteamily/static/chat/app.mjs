@@ -2285,15 +2285,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeComposeDialog();
   });
 
-  const uploadTrigger = document.getElementById('composer-upload-trigger');
-  if (uploadTrigger) {
-    uploadTrigger.addEventListener('click', () => {
-      const input = document.getElementById('chat-attachment');
-      if (input) input.click();
-      const plus = document.querySelector('details.composer-plus');
+  // Composer "+": 上传 / 照片 / 视频 reuse the existing media-attachment upload
+  // (single and group chats only); agent chats show them disabled with a note.
+  const plus = document.querySelector('details.composer-plus');
+  const attachInput = document.getElementById('chat-attachment');
+  const defaultAccept = attachInput ? attachInput.getAttribute('accept') || '' : '';
+  function syncPlusState() {
+    const social = currentSource === 'social' && Boolean(currentConversation);
+    for (const button of document.querySelectorAll('[data-plus-attach]')) {
+      button.disabled = !social;
+      if (!button.dataset.title) button.dataset.title = button.title;
+      button.title = social ? button.dataset.title : '未接通：智能体私聊还不能发附件';
+    }
+    const hint = document.getElementById('plus-attach-hint');
+    if (hint) hint.hidden = social;
+  }
+  if (plus) plus.addEventListener('toggle', () => { if (plus.open) syncPlusState(); });
+  for (const button of document.querySelectorAll('[data-plus-attach]')) {
+    button.addEventListener('click', () => {
+      if (!attachInput || button.disabled) return;
+      attachInput.setAttribute('accept', plusAttachAccept(button.dataset.plusAttach, defaultAccept));
+      attachInput.click();
       if (plus) plus.open = false;
     });
   }
+  if (attachInput) attachInput.addEventListener('change', () => attachInput.setAttribute('accept', defaultAccept));
 
   globalThis.addEventListener('hashchange', () => load());
   return load();
@@ -2301,6 +2317,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
 if (globalThis.document && globalThis.document.getElementById('session-pane')) {
   mount(globalThis.document);
+}
+
+export function plusAttachAccept(kind, fallback) {
+  const all = String(fallback || '').split(',').map(item => item.trim()).filter(Boolean);
+  if (kind === 'image') return all.filter(item => item.startsWith('image/')).join(',');
+  if (kind === 'video') return all.filter(item => item.startsWith('video/')).join(',');
+  return all.join(',');
 }
 
 export { canManage, conversationLabel };
