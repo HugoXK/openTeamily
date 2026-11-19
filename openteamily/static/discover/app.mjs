@@ -196,6 +196,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const mainPanel = document.getElementById('main-panel');
   const workspaceSelect = document.getElementById('workspace');
   let currentUser = null;
+  // A refused workspace list and an empty one both leave the selector blank, but
+  // they are different states: only the second one means "you have no workspace".
+  let workspaceListFailed = false;
   let catalog = [];
   let cursor = '';
   let activeQuery = '';
@@ -437,7 +440,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         }
         const space = workspaceSelect.value;
         if (!space) {
-          show('error', '先创建一个工作区，才能放进这个智能体。');
+          // Never tell a user to create a workspace when the list simply failed to load.
+          show('error', workspaceListFailed
+            ? '工作区列表读取失败，请稍后重试。'
+            : '先创建一个工作区，才能放进这个智能体。');
           return;
         }
         if (use.disabled) return;
@@ -612,7 +618,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     document.getElementById('whoami').textContent = currentUser.username;
     if (agentsView) {
       const listed = await request('GET', '/v1/workspaces?limit=100');
-      const workspaces = listed.status === 200 ? (listed.body.items || []) : [];
+      workspaceListFailed = listed.status !== 200;
+      const workspaces = workspaceListFailed ? [] : (listed.body.items || []);
       workspaceSelect.replaceChildren();
       for (const space of workspaces) {
         const option = document.createElement('option');

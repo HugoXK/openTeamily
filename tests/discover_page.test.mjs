@@ -583,6 +583,44 @@ test('用这个智能体 reports a same-name conflict instead of pretending the 
   assert.equal(arrived, '', 'a refused create must not navigate away as if it worked');
 });
 
+test('a failed workspace list read says the read failed and does not send the user to create a workspace', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const calls = [];
+  const fetcher = async (path, options) => {
+    calls.push([path, options.method]);
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path === '/v1/workspaces?limit=100') return {status: 500, json: async () => ({error: {message: 'boom'}})};
+    return {status: 200, json: async () => ({items: [{name: '竞品周报助手', slug: 'weekly-digest', summary: '每周竞品摘要'}], cursor: null})};
+  };
+  await mount(doc, {fetcher, location: {search: '?tab=agents', assign: () => {}}});
+  const el = id => doc.getElementById(id);
+  const use = el('discover-list').children[0].children[0].children.find(node => node.className === 'catalog-use');
+  const before = calls.length;
+  await use.handlers.click();
+  assert.equal(el('status').dataset.kind, 'error');
+  assert.match(el('status').textContent, /工作区列表读取失败/);
+  assert.doesNotMatch(el('status').textContent, /先创建一个工作区/,
+    'a 500 on the workspace list is not the same state as having no workspace');
+  assert.equal(calls.length, before, 'a failed workspace read must not POST an agent');
+});
+
+test('with no workspace at all the page still asks for one, because that state is real', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const fetcher = async (path) => {
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: [], cursor: null})};
+    return {status: 200, json: async () => ({items: [{name: '竞品周报助手', slug: 'weekly-digest', summary: '每周竞品摘要'}], cursor: null})};
+  };
+  await mount(doc, {fetcher, location: {search: '?tab=agents', assign: () => {}}});
+  const el = id => doc.getElementById(id);
+  const use = el('discover-list').children[0].children[0].children.find(node => node.className === 'catalog-use');
+  await use.handlers.click();
+  assert.equal(el('status').dataset.kind, 'error');
+  assert.match(el('status').textContent, /先创建一个工作区/);
+});
+
 test('用这个智能体 asks a signed-out visitor to sign in and sends nothing', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();
