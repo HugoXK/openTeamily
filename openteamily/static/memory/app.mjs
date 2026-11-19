@@ -1044,8 +1044,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const dreamStatus = document.getElementById('dream-status');
   let dreamSuggestion = null;
 
+  // Only the wording lives here: the suggestion itself must survive the update so
+  // 接受 / 忽略 still knows which row they are talking about.
   function resetDream(summary = '', status = '') {
-    dreamSuggestion = null;
     if (dreamSummary) dreamSummary.textContent = summary;
     if (dreamStatus) dreamStatus.textContent = status;
   }
@@ -1084,6 +1085,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (!result.body.suggestion) {
+      dreamSuggestion = null;
       resetDream(result.body.message || '这一页现在没有可以合并的重复段落。', '原文没有改动。');
       return;
     }
@@ -1109,6 +1111,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentPage = seen.body.page;
     currentAction = null;
     if (dreamPanel) dreamPanel.hidden = true;
+    dreamSuggestion = null;
     resetDream();
     showPageMode();
     if (actionEditor) actionEditor.hidden = true;
