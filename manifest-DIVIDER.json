@@ -1,0 +1,174 @@
+{
+  "rows": [
+    {
+      "state": {
+        "title": "bob",
+        "rows": 4,
+        "divider": null,
+        "dividerVisible": false,
+        "dividerTop": null,
+        "scrollTop": 0,
+        "scrollHeight": 603,
+        "bodies": [
+          "上周的排期我这边确认过了，没有问题。",
+          "评审会的材料我先放到共享盘了，周四上午过一遍。",
+          "接口联调今天下午能收尾，风险只剩灰度名单。",
+          "发布窗口我建议还是按周五下午三点，大家有异议现在说。"
+        ],
+        "badge": null
+      },
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "divider-before-1440x900.png",
+      "bytes": 117687,
+      "width": 1440,
+      "height": 900,
+      "sha256": "36bebe775af92eecaeddbe8647933c0489043ca4db4a9f6dcaabb72dc5127788",
+      "scrollWidth": 1440
+    },
+    {
+      "state": {
+        "title": "bob",
+        "rows": 5,
+        "divider": "以下是新消息 · 3 条",
+        "dividerVisible": true,
+        "dividerTop": 185,
+        "scrollTop": 56,
+        "scrollHeight": 659,
+        "bodies": [
+          "上周的排期我这边确认过了，没有问题。",
+          "评审会的材料我先放到共享盘了，周四上午过一遍。",
+          "接口联调今天下午能收尾，风险只剩灰度名单。",
+          "发布窗口我建议还是按周五下午三点，大家有异议现在说。"
+        ],
+        "badge": null
+      },
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "divider-after-1440x900.png",
+      "bytes": 119840,
+      "width": 1440,
+      "height": 900,
+      "sha256": "c7ba6429cb59f7985bda902c1faa7d50c4ce1843640f7e1a76626f3b1eb48618",
+      "scrollWidth": 1440
+    },
+    {
+      "state": {
+        "title": "carol",
+        "rows": 5,
+        "divider": "以下是新消息 · 3 条",
+        "dividerVisible": true,
+        "dividerTop": 133,
+        "scrollTop": 161,
+        "scrollHeight": 681,
+        "bodies": [
+          "设计稿我按你的意见改完了。",
+          "按钮的对比度我调深了一档，你看这版行不行。",
+          "移动端列表的间距也一起改了。",
+          "这版今天可以给开发吗？"
+        ],
+        "badge": null
+      },
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "divider-after-390x844.png",
+      "bytes": 66356,
+      "width": 390,
+      "height": 844,
+      "sha256": "b0c5a0f9f1c806ca2789246fef755af79edfc8bf486883f65c2f225db7d70552",
+      "scrollWidth": 390
+    },
+    {
+      "state": {
+        "title": "bob",
+        "rows": 4,
+        "divider": null,
+        "dividerVisible": false,
+        "dividerTop": null,
+        "scrollTop": 0,
+        "scrollHeight": 603,
+        "bodies": [
+          "上周的排期我这边确认过了，没有问题。",
+          "评审会的材料我先放到共享盘了，周四上午过一遍。",
+          "接口联调今天下午能收尾，风险只剩灰度名单。",
+          "发布窗口我建议还是按周五下午三点，大家有异议现在说。"
+        ],
+        "badge": null
+      },
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "divider-affected-1440x900.png",
+      "bytes": 116754,
+      "width": 1440,
+      "height": 900,
+      "sha256": "883994a793232e71eba1f7f7f24b9bff89be85f9b8e81b38653148fdebbbcf4a",
+      "scrollWidth": 1440
+    }
+  ],
+  "facts": {
+    "before": {
+      "title": "bob",
+      "rows": 4,
+      "divider": null,
+      "dividerVisible": false,
+      "dividerTop": null,
+      "scrollTop": 0,
+      "scrollHeight": 603,
+      "bodies": [
+        "上周的排期我这边确认过了，没有问题。",
+        "评审会的材料我先放到共享盘了，周四上午过一遍。",
+        "接口联调今天下午能收尾，风险只剩灰度名单。",
+        "发布窗口我建议还是按周五下午三点，大家有异议现在说。"
+      ],
+      "badge": null
+    },
+    "after": {
+      "title": "bob",
+      "rows": 5,
+      "divider": "以下是新消息 · 3 条",
+      "dividerVisible": true,
+      "dividerTop": 185,
+      "scrollTop": 56,
+      "scrollHeight": 659,
+      "bodies": [
+        "上周的排期我这边确认过了，没有问题。",
+        "评审会的材料我先放到共享盘了，周四上午过一遍。",
+        "接口联调今天下午能收尾，风险只剩灰度名单。",
+        "发布窗口我建议还是按周五下午三点，大家有异议现在说。"
+      ],
+      "badge": null
+    },
+    "afterMobile": {
+      "title": "carol",
+      "rows": 5,
+      "divider": "以下是新消息 · 3 条",
+      "dividerVisible": true,
+      "dividerTop": 133,
+      "scrollTop": 161,
+      "scrollHeight": 681,
+      "bodies": [
+        "设计稿我按你的意见改完了。",
+        "按钮的对比度我调深了一档，你看这版行不行。",
+        "移动端列表的间距也一起改了。",
+        "这版今天可以给开发吗？"
+      ],
+      "badge": null
+    },
+    "read": {
+      "title": "bob",
+      "rows": 4,
+      "divider": null,
+      "dividerVisible": false,
+      "dividerTop": null,
+      "scrollTop": 0,
+      "scrollHeight": 603,
+      "bodies": [
+        "上周的排期我这边确认过了，没有问题。",
+        "评审会的材料我先放到共享盘了，周四上午过一遍。",
+        "接口联调今天下午能收尾，风险只剩灰度名单。",
+        "发布窗口我建议还是按周五下午三点，大家有异议现在说。"
+      ],
+      "badge": null
+    }
+  }
+}
