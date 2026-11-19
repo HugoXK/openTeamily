@@ -1,7 +1,7 @@
 # Screenshots — save a completed task's agent result as a document (issue #266)
 
 - before `af18ab1aa95d40ec0ed460f4c80924ddf68ed282` (live main this branch starts from)
-- after `9b31f124e5967eb59092df2ff082a0bc31c4706d` (this branch's tip)
+- after `684a8e6618ee92a859ee4ac016eb7570f4032d02` (this branch's tip)
 
 40 PNGs: zh-CN light/dark × 1440×900 / 390×844, states
 
