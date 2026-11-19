@@ -865,6 +865,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('pinned-group').hidden = true;
     document.getElementById('compose-dialog').hidden = true;
     closeComposeMenu();
+    // The panel is a child of the session pane, which the narrow stylesheet
+    // paints only in the sessions-open state. Opening search has to reveal it
+    // there, or the panel is laid out inside a display:none parent.
+    if (narrowScreen()) setSessionsOpen(true);
     if (tab) setSearchTab(tab);
     renderSearch();
   }
@@ -877,6 +881,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-group').hidden = false;
     document.getElementById('session-search').value = '';
     setSearchTab('all');
+    // Narrow screens show the conversation when one is open and the list
+    // otherwise; dropping the state unconditionally would blank both.
+    if (narrowScreen()) setSessionsOpen(!currentConversation);
   }
 
   function addSearchSection(root, title, items, onPick) {

@@ -551,7 +551,9 @@ function sessionFetcher() {
     id: 'conv-2', kind: 'dm', title: 'carol', updated: 20,
     members: [aliceRow, {user_id: 'c'.repeat(32), username: 'carol'}],
   };
+  const requests = [];
   const fetcher = async (path) => {
+    requests.push(path);
     if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
     if (path === '/v1/onboarding') return json(200, {onboarding: {completed: true}});
     if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
@@ -574,7 +576,7 @@ function sessionFetcher() {
     }
     throw new Error('unexpected ' + path);
   };
-  return {fetcher};
+  return {fetcher, requests};
 }
 
 function sessionRows(el) {
@@ -672,6 +674,133 @@ test('a wide chat still opens the first conversation instead of stopping on the 
       'above 900px the list is shown beside the conversation, so no list state is applied',
     );
     assert.equal(el('message-list').children.length, 1, 'the first conversation still opens by default');
+  } finally {
+    restore();
+  }
+});
+
+// The search panel is a child of the session pane, and the 900px stylesheet
+// paints that pane only in the `sessions-open` state. With a conversation open
+// the pane is display:none, so opening search without that state leaves the
+// panel in the DOM and visible to script but zero by zero on screen.
+
+function searchRequests(requests) {
+  return requests.filter((path) => path.includes('/search/'));
+}
+
+function viewedConversationRequests(requests, id) {
+  return requests.filter((path) => path === `/v1/workspaces/ws-1/social/conversations/${id}`);
+}
+
+test('a narrow chat shows the search panel over an open conversation by revealing the session pane', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher, requests} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await settle();
+    assert.equal(doc.body.classList.contains('sessions-open'), false, 'the conversation is the visible pane');
+
+    await fire(el('message-search'), 'click');
+    await settle();
+
+    assert.equal(el('search-panel').hidden, false, 'the search panel is assigned the open state');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      true,
+      'the search panel lives inside the session pane, which the narrow stylesheet hides while a conversation is open; without the list state the panel is 0x0 on screen',
+    );
+    assert.equal(viewedConversationRequests(requests, 'conv-1').length, 1, 'opening search must not refetch the conversation');
+    assert.equal(el('chat-title').textContent, 'bob', 'the open conversation is still the one named in the header');
+  } finally {
+    restore();
+  }
+});
+
+test('closing search on a narrow screen returns to the conversation that was open', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher, requests} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await settle();
+    await fire(el('message-search'), 'click');
+    await settle();
+
+    await fire(el('search-close'), 'click');
+    await settle();
+
+    assert.equal(el('search-panel').hidden, true, 'closing search hides the panel again');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      false,
+      'the conversation, not the list, must be the visible pane after search closes',
+    );
+    assert.equal(el('message-list').children.length, 1, 'the opened conversation and its messages are still there');
+    assert.equal(viewedConversationRequests(requests, 'conv-1').length, 1, 'the user does not have to open the conversation again');
+  } finally {
+    restore();
+  }
+});
+
+test('closing search from the narrow session list keeps the list visible', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    assert.equal(doc.body.classList.contains('sessions-open'), true, 'the list is the visible pane before search');
+
+    await fire(el('session-search'), 'focus');
+    await settle();
+    assert.equal(el('search-panel').hidden, false, 'typing in the list search opens the panel');
+
+    await fire(doc, 'keydown', {key: 'Escape'});
+    await settle();
+
+    assert.equal(el('search-panel').hidden, true, 'Escape closes the panel');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      true,
+      'no conversation is open, so dropping the list state would leave the narrow screen blank',
+    );
+    assert.equal(sessionRows(el).length, 2, 'the conversation list is still rendered underneath');
+  } finally {
+    restore();
+  }
+});
+
+test('a wide chat leaves the grid classes alone when search opens and closes', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher} = sessionFetcher();
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    assert.equal(el('message-list').children.length, 1, 'the wide page opens the first conversation');
+
+    await fire(el('message-search'), 'click');
+    await settle();
+    assert.equal(el('search-panel').hidden, false, 'search opens');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      false,
+      'above 900px the pane is never hidden, so no list state may be added',
+    );
+
+    await fire(el('search-close'), 'click');
+    await settle();
+    assert.equal(el('search-panel').hidden, true, 'search closes');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      false,
+      'closing search must not add a class the wide layout never uses',
+    );
   } finally {
     restore();
   }
