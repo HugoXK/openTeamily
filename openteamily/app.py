@@ -846,7 +846,7 @@ class App:
             if invite_path:
                 return self.invite_dispatch(db, session, method, query, now, env, *invite_path.groups())
             member_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/members(?:/([0-9a-f]{32})(/remove)?)?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/members(?:/([0-9a-f]{32})(/remove|/suspend|/unsuspend)?)?', path)
             if member_path:
                 return self.member_dispatch(db, session, method, query, now, env, *member_path.groups())
             agent_runtime_path = re.fullmatch(
@@ -1128,6 +1128,21 @@ class App:
         ).fetchone()
         if target is None:
             refuse(404, 'not_found', 'Member not found')
+        if removing in ('/suspend', '/unsuspend'):
+            self.body(env, [])
+            if actor not in ('owner', 'admin') or (actor == 'admin' and target['role'] != 'member'):
+                refuse(403, 'forbidden', 'Only owners, or admins for members, can suspend')
+            if target['user_id'] == session['user_id']:
+                refuse(400, 'invalid', 'You cannot suspend yourself')
+            if removing == '/suspend':
+                db.execute('INSERT OR IGNORE INTO workspace_member_suspensions VALUES(?,?,?,?)',
+                           (workspace['id'], target['user_id'], session['user_id'], now))
+            else:
+                db.execute('DELETE FROM workspace_member_suspensions WHERE workspace_id=? AND user_id=?',
+                           (workspace['id'], target['user_id']))
+            member = dict(members.view(target))
+            member['suspended'] = removing == '/suspend'
+            return 200, {'member': member}, []
         if removing:
             self.body(env, [])
             return self.remove_member(db, workspace, actor, session['user_id'], target)
@@ -3941,6 +3956,8 @@ class App:
             (workspace['id'], user_id),
         ).fetchone()
         if existing:
+            if members.suspended(db, workspace['id'], user_id):
+                refuse(403, 'forbidden', 'Your membership in this workspace is suspended')
             if existing['role'] != row['role']:
                 refuse(409, 'conflict', 'Member already exists with a different role')
             return 200, {'workspace': teams.attach(db, workspace), 'member': members.view(existing)}, []

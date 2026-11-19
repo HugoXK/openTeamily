@@ -23,6 +23,12 @@ export function readInvite(form) {
   };
 }
 
+export function canSuspend(actorRole, item, selfId) {
+  if (!item || item.role === 'owner' || item.user_id === selfId) return false;
+  if (actorRole === 'owner') return true;
+  return actorRole === 'admin' && item.role === 'member';
+}
+
 export function inviteState(item) {
   if (item.revoked) return '已撤销';
   if (item.frozen) return '已冻结';
@@ -135,8 +141,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const item of items) {
       const row = document.createElement('li');
       const label = document.createElement('span');
-      label.textContent = `${item.username} · ${ROLE_LABELS[item.role] || item.role}`;
+      label.textContent = `${item.username} · ${ROLE_LABELS[item.role] || item.role}${item.suspended ? ' · 已停用' : ''}`;
       row.appendChild(label);
+      if (canSuspend(actor, item, selfId)) {
+        const suspend = document.createElement('button');
+        suspend.type = 'button';
+        suspend.textContent = item.suspended ? '恢复访问' : '停用';
+        suspend.title = item.suspended ? '恢复后对方可再次访问本工作区' : '停用后对方保留成员身份，但无法访问本工作区，可随时恢复';
+        suspend.addEventListener('click', () => suspendMember(item, !item.suspended));
+        row.appendChild(suspend);
+      }
       if (canChange(actor) && item.role !== 'owner') {
         const change = document.createElement('button');
         change.type = 'button';
@@ -192,6 +206,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     show('ok', '已更改角色。');
+    await loadWorkspace();
+  }
+
+  async function suspendMember(item, suspend) {
+    const id = workspaceId();
+    if (!id) return;
+    const result = await request('POST', `/v1/workspaces/${id}/members/${item.user_id}/${suspend ? 'suspend' : 'unsuspend'}`, {});
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法更新成员状态。'));
+      return;
+    }
+    show('ok', suspend ? '已停用该成员的访问。' : '已恢复该成员的访问。');
     await loadWorkspace();
   }
 

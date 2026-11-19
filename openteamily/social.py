@@ -330,7 +330,9 @@ def next_seq(db, conversation_id):
 def workspace_member_ids(db, workspace):
     ids = {workspace['owner_id']}
     for row in db.execute(
-            'SELECT user_id FROM workspace_members WHERE workspace_id=?', (workspace['id'],)):
+            'SELECT user_id FROM workspace_members m WHERE workspace_id=? AND NOT EXISTS (SELECT 1 FROM '
+            'workspace_member_suspensions s WHERE s.workspace_id=m.workspace_id AND s.user_id=m.user_id)',
+            (workspace['id'],)):
         ids.add(row['user_id'])
     return ids
 
