@@ -118,5 +118,22 @@ class MessageToolTests(unittest.TestCase):
                                          key)['status'], 409)
 
 
+    def test_delete_hides_a_message_only_for_the_deleting_account(self):
+        first = self.send(self.alice, '只对我隐藏')
+        second = self.send(self.bob, '对方仍然可见')
+        base = f'{self.base}/{self.source}'
+        self.assertEqual(self.bob.call('DELETE', f'{base}/messages/{second}')['status'], 204)
+        self.assertEqual([m['body'] for m in self.bob.call('GET', base)['body']['items']], ['只对我隐藏'])
+        self.assertEqual(self.bob.call('GET', base)['body']['conversation']['preview'], '只对我隐藏')
+        self.assertEqual([m['body'] for m in self.alice.call('GET', base)['body']['items']],
+                         ['只对我隐藏', '对方仍然可见'])
+        self.assertEqual(self.alice.call('DELETE', f'{base}/messages/{first}')['status'], 204)
+        self.assertEqual([m['body'] for m in self.alice.call('GET', base)['body']['items']], ['对方仍然可见'])
+        self.assertEqual(self.alice.call('GET', base)['body']['conversation']['preview'], '对方仍然可见')
+        self.assertEqual(self.alice.call('DELETE', f'{base}/messages/{first}')['status'], 404)
+        self.assertEqual(self.bob.call('DELETE', f'{base}/messages/{first}')['status'], 403)
+        self.assertEqual(self.carol.call('DELETE', f'{base}/messages/{first}')['status'], 404)
+
+
 if __name__ == '__main__':
     unittest.main()

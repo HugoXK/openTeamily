@@ -1342,3 +1342,12 @@ test('removing a group agent sends nothing until the explicit confirmation', asy
     assert.equal(posts.length,1);
   } finally {restore();}
 });
+
+test('the message menu offers delete that hides the message only for this account', () => {
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../openteamily/static/chat/app.mjs', import.meta.url), 'utf8');
+  assert.match(html, /data-menu="delete"/);
+  assert.doesNotMatch(html, /data-menu="delete"[^>]*disabled/);
+  assert.doesNotMatch(html, /还没有删除消息接口/);
+  assert.match(app, /request\('DELETE', `\$\{socialBase\(\)\}\/\$\{cid\}\/messages\/\$\{item\.id\}`\)/);
+});
