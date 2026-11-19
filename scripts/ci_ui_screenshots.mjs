@@ -1998,10 +1998,11 @@ async function main() {
       await page.locator('#industry').selectOption('科技与软件');
       await page.locator('#role-choices input[value="产品经理"]').check();
       await page.locator('#onboarding-save').click();
-      // Step 1 now continues to step 2 like the recorded wizard; 进入 OpenTeamily opens chat.
+      // Step 1 now continues to step 2 like the recorded wizard; the saved context must already
+      // clear the chat banner even if the user leaves the wizard here (进入 OpenTeamily sits on step 4).
       await page.locator('#onboarding-steps').waitFor({state: 'visible'});
-      await page.locator('#onboarding-enter').click();
-      await page.waitForURL(url => url.pathname === '/chat');
+      await page.locator('[data-step="2"]').waitFor({state: 'visible'});
+      await page.goto(`${origin}/chat`, {waitUntil: 'load'});
       await page.locator('#main-panel').waitFor({state: 'visible'});
       await page.waitForFunction(() => document.getElementById('onboarding-banner').hidden);
       const personalResponse = await page.request.get(`${origin}/v1/personal-agent`);
@@ -2031,6 +2032,9 @@ async function main() {
           && (await visibleText(page.locator('#onboarding-steps-meta'))).includes('形象已保存'),
           'Steps 2-4 wizard: apps honestly unconnected with disabled connect buttons, picks and look saved');
         screenshots.push(path.basename(await shot(page, outDir, '87-onboarding-steps.png')));
+        await page.locator('#onboarding-enter').click();
+        await page.waitForURL(url => url.pathname === '/chat');
+        record('onboarding_enter_chat', true, 'Step 4 进入 OpenTeamily opens chat');
       } catch (error) {
         record('onboarding_steps_2_4', false, String(error));
       }
