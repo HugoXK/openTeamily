@@ -317,6 +317,11 @@ export function syncPrivacySaveButton(document, current, next) {
   button.disabled = Object.keys(privacyChanges(current, next)).length === 0;
 }
 
+export function removeSecretPrompt(item) {
+  const name = String((item && item.name) || '');
+  return {question: `删除技能密钥「${name}」？`, confirmLabel: '确认删除'};
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -332,6 +337,56 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let revision = 0;
   let current = null;
   let modelRevision = 0;
+  let pendingSecretConfirm = null;
+  let secretConfirmSeq = 0;
+
+  function closeSecretConfirm(restoreFocus) {
+    if (!pendingSecretConfirm) return false;
+    const {box, trigger} = pendingSecretConfirm;
+    pendingSecretConfirm = null;
+    if (typeof box.remove === 'function') box.remove();
+    trigger.hidden = false;
+    if (restoreFocus && typeof trigger.focus === 'function') trigger.focus();
+    return true;
+  }
+
+  function askSecretConfirmation(row, trigger, item) {
+    closeSecretConfirm(false);
+    const {question, confirmLabel} = removeSecretPrompt(item);
+    const box = document.createElement('span');
+    box.className = 'skill-secret-confirm';
+    box.setAttribute('role', 'alertdialog');
+    secretConfirmSeq += 1;
+    const questionNode = document.createElement('span');
+    questionNode.id = 'skill-secret-confirm-' + secretConfirmSeq;
+    questionNode.textContent = question;
+    box.setAttribute('aria-labelledby', questionNode.id);
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = '取消';
+    cancel.addEventListener('click', () => closeSecretConfirm(true));
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.textContent = confirmLabel;
+    confirm.addEventListener('click', async () => {
+      const target = {name: item.name};
+      closeSecretConfirm(false);
+      const result = await request('POST', '/v1/skill-secrets', {name: target.name, action: 'delete'});
+      if (result.status !== 200) {
+        show('error', messageFor(result.body.error, '无法删除技能密钥。'));
+        return;
+      }
+      await renderSkillSecrets();
+      show('ok', `已删除技能密钥「${target.name}」。`);
+    });
+    box.appendChild(questionNode);
+    box.appendChild(cancel);
+    box.appendChild(confirm);
+    row.appendChild(box);
+    trigger.hidden = true;
+    pendingSecretConfirm = {box, trigger};
+    if (typeof cancel.focus === 'function') cancel.focus();
+  }
 
   function renderView() {
     const location = globalThis.location || {};
@@ -538,6 +593,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const skillForm = document.getElementById('skill-secrets-form');
     const empty = document.getElementById('skill-empty');
     if (!list || !skillForm) return;
+    closeSecretConfirm(false);
     list.textContent = '';
     const listed = await request('GET', '/v1/skill-secrets');
     if (listed.status !== 200) return;
@@ -549,15 +605,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.textContent = '删除';
-      remove.addEventListener('click', async () => {
-        const result = await request('POST', '/v1/skill-secrets', {name: item.name, action: 'delete'});
-        if (result.status !== 200) {
-          show('error', messageFor(result.body.error, '无法删除技能密钥。'));
-          return;
-        }
-        await renderSkillSecrets();
-      });
-      row.append(name, remove);
+      remove.addEventListener('click', () => askSecretConfirmation(row, remove, item));
+      row.appendChild(name);
+      row.appendChild(remove);
       list.appendChild(row);
     }
     if (empty) empty.hidden = items.length > 0;
@@ -652,9 +702,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
     const dialog = document.getElementById('mcp-dialog');
-    if (!dialog || dialog.hidden) return;
-    event.preventDefault();
-    syncMcpDialog(document, false);
+    if (dialog && !dialog.hidden) {
+      event.preventDefault();
+      syncMcpDialog(document, false);
+      return;
+    }
+    if (pendingSecretConfirm) {
+      event.preventDefault();
+      closeSecretConfirm(true);
+    }
   });
 
   globalThis.addEventListener('hashchange', renderView);
