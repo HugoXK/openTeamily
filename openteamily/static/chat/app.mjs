@@ -13,6 +13,19 @@ export function messageNodeById(list, messageId) {
   return null;
 }
 
+// Where a message list should break between "already read" and "new to you".
+// The server names the oldest message this reader has not acknowledged; a
+// boundary outside the loaded window draws nothing rather than a wrong line.
+export function unreadDividerIndex(items, unreadFrom) {
+  if (!unreadFrom) return -1;
+  return (items || []).findIndex(item => item && item.id === unreadFrom);
+}
+
+export function unreadDividerText(count) {
+  const unread = Number(count) || 0;
+  return unread > 0 ? '以下是新消息 · ' + unread + ' 条' : '以下是新消息';
+}
+
 // Centre the matched row, focus it for keyboard and screen-reader users, and
 // flash the same outline the in-conversation search already uses. Only one row
 // carries the flash, and it clears itself, so a second hit never stacks.
@@ -493,6 +506,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // conversation triggers. Each render that finishes for that conversation
   // retries the jump, and a landed jump clears it.
   let pendingHitJump = null;
+  // Set when a conversation opens with unread messages; stays for as long as
+  // that conversation is open, so a background repaint keeps the divider.
+  let unreadBoundary = null;
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
   let pollTimer = 0;
@@ -994,8 +1010,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   let lastSocialItems = [];
-  function renderSocialMessages(items) {
+  function renderSocialMessages(items, {landOnUnread = false} = {}) {
     lastSocialItems = items || [];
+    const boundary = unreadBoundary && currentConversation
+      && unreadBoundary.conversationId === currentConversation.id ? unreadBoundary : null;
+    const unreadFrom = boundary ? boundary.messageId : '';
+    const boundaryIndex = unreadDividerIndex(items, unreadFrom);
     const list = document.getElementById('message-list');
     list.replaceChildren();
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
@@ -1100,8 +1120,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       list.append(li);
     }
+    let divider = null;
+    if (boundaryIndex >= 0) {
+      divider = document.createElement('li');
+      divider.className = 'unread-divider';
+      divider.setAttribute('role', 'separator');
+      divider.textContent = unreadDividerText(boundary && boundary.count);
+      list.insertBefore(divider, list.children[boundaryIndex] || null);
+    }
     const scroller = document.getElementById('message-scroller');
-    scroller.scrollTop = scroller.scrollHeight;
+    // Land on the first new message instead of the newest one, so a reader who
+    // comes back to three unread replies starts where they left off.
+    if (divider && landOnUnread) divider.scrollIntoView({block: 'start'});
+    else scroller.scrollTop = scroller.scrollHeight;
     return false;
   }
 
@@ -1357,7 +1388,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
+    const entering = !currentConversation || currentConversation.id !== result.body.conversation.id;
     currentConversation = result.body.conversation;
+    // The boundary comes from the snapshot taken before this open is
+    // acknowledged, so the divider describes what the reader had not seen.
+    if (result.body.unread_from) {
+      unreadBoundary = {conversationId: conversationId, messageId: result.body.unread_from,
+                        count: currentConversation.unread_count || 0};
+    } else if (!unreadBoundary || unreadBoundary.conversationId !== conversationId) {
+      unreadBoundary = null;
+    }
     setSessionsOpen(false);
     const pin = document.getElementById('pin-conversation');
     if (pin) { pin.hidden = false; pin.textContent = sessions.find(item => item.id === conversationId && item.pinned) ? '取消置顶' : '置顶会话'; }
@@ -1377,7 +1417,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     messageUtilities.refreshAnnouncement();
     setChatSubtitle(currentConversation.kind === 'group' ? groupInfoCounts(currentConversation).text
       : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
-    renderSocialMessages(result.body.items);
+    renderSocialMessages(result.body.items, {landOnUnread: entering});
     renderGroupReplyAction(result.body.agent_replies || []);
     // Acknowledge only the last message actually rendered, not messages that
     // arrived after this snapshot, and never consume unread in a hidden tab.

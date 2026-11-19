@@ -33,8 +33,9 @@ test('unreadDividerText counts the messages the reader has not seen', () => {
 
 test('the conversation render inserts the divider and starts the view there', () => {
   const source = readFileSync(new URL('../openteamily/static/chat/app.mjs', import.meta.url), 'utf8');
+  assert.match(source, /const unreadFrom = boundary \? boundary\.messageId : '';/);
   assert.match(source, /unreadDividerIndex\(items, unreadFrom\)/);
-  assert.match(source, /unreadFrom/);
+  assert.match(source, /divider\.scrollIntoView\(\{block: 'start'\}\)/);
   const css = readFileSync(new URL('../openteamily/static/chat/app.css', import.meta.url), 'utf8');
   assert.match(css, /\.unread-divider\s*\{/);
 });

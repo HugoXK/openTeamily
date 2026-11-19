@@ -1735,3 +1735,22 @@ html[data-theme-resolved="dark"] #message-assist-submit,
 html[data-theme-resolved="dark"] #announcement-save { background: #6953c7; color: #ffffff; border-color: transparent; }
 html[data-theme-resolved="dark"] #message-assist-submit:hover,
 html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3; color: #ffffff; }
+
+/* Boundary between messages the reader has already seen and new ones. */
+.unread-divider {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin: .6rem 0;
+  font-size: .75rem;
+  font-weight: 600;
+  color: var(--ot-accent);
+  text-align: center;
+}
+.unread-divider::before,
+.unread-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid color-mix(in srgb, var(--ot-accent) 45%, transparent);
+}

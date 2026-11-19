@@ -3913,6 +3913,7 @@ class App:
             conversation = social.conversation_item(db, row)
             conversation['unread_count'] = social.unread_count(db, row['id'], session['user_id'])
             return 200, {'conversation': conversation,
+                         'unread_from': social.first_unread(db, row['id'], session['user_id']),
                          'agent_replies': [social.reply_view(item) for item in social.reply_requests(db, row['id'])],
                          'pinned_messages': social.pinned_messages(db, row['id']),
                          'items': social.forward_info(db, social.with_reactions(
