@@ -70,3 +70,18 @@ class WorkspaceEventTests(unittest.TestCase):
         stream.deadline=0;self.assertEqual(b''.join(stream),b'retry: 3000\n: connected\n\n');self.assertEqual(limits.users,{})
         unconsumed=EventStream(limits,'synthetic-user',lambda:None,('synthetic-user','a'*64,{}))
         unconsumed.close();unconsumed.close();self.assertEqual(limits.users,{})
+
+    def test_own_message_delete_changes_only_authors_stream_and_persists(self):
+        mid=self.send(self.alice,'synthetic deletion visibility',self.source)
+        before_alice=snapshot(self.app,self.env(),self.wid)
+        before_bob=snapshot(self.app,self.env(self.bob),self.wid)
+        deleted=self.alice.call('DELETE',f'{self.base}/{self.source}/messages/{mid}',parse='raw')
+        self.assertEqual(deleted['status'],204,deleted)
+        self.assertEqual(deleted['body'],b'')
+        after=snapshot(self.app,self.env(),self.wid)
+        self.assertNotEqual(after[2]['social'],before_alice[2]['social'])
+        self.assertEqual(snapshot(self.app,self.env(self.bob),self.wid),before_bob)
+        from openteamily.app import App
+        from openteamily.store import Store
+        reopened=App(Store(self.temp.name + "/state"),self.app.config,clock=self.app.clock)
+        self.assertEqual(snapshot(reopened,self.env(),self.wid),after)

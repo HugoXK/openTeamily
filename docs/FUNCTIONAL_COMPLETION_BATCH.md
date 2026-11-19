@@ -1,6 +1,6 @@
 # Owned functional completion aggregate
 
-Base: ef71b3d1, after merged342. Local branch: feat/functional-completion-big. Not a claim of Teamily parity or all controls complete.
+Base: ef71b3d1, after merged342; ordinary-synced main13641eb9 including contributor332. Local branch: feat/functional-completion-big. Not a claim of Teamily parity or all controls complete.
 
 | Gap/control | Implementation and state | Automated proof | Acceptance still required |
 |---|---|---|---|
@@ -11,9 +11,32 @@ Base: ef71b3d1, after merged342. Local branch: feat/functional-completion-big. N
 | Word / PDF / spreadsheet downloads | actual DOCX OPC/XML, Unicode text-PDF, dashboard data XLSX; current and historical auth/version checks; no renderer execution, network fetch, macro or formula | test_office_exports validates ZIP/XML/relationships/formula safety/history/xref; local independent Poppler extraction; CI actual downloads added | Text PDF only BMP Unicode/CJK viewer-font substitution; DOCX retains text/headings, not full Markdown/Office; XLSX all strings; full Office/PPTX/media/thumbnail editing still engineering |
 
 ## Contributor ownership refreshed before coding and again before publication (48 open)
-Do not edit other branches or count these as landed:352/271 old search hit loading;349 reminders;348 run details;345 mute/notification;346 agent proactivity;320 chat-language prompt;284 preference/notification consumers;309/340 notification writers;335 Discover author;332 own message delete;299 memory share;315 composer;277/326 image;322 edit;330/310 automation;273 meeting works;289 action save;313/290 team/template;281 invite;293 email auth;282 runtime key;316 archive restore;298 profile;302 guide;317 docs;325 avatar;280 follow URL;197 preference honesty;294 onboarding;237 checklist. 283 boolean-only remains superseded. No124 reply-protocol changes.
+Do not edit other branches or count these as landed:352/271 old search hit loading;349 reminders;348 run details;345 mute/notification;346 agent proactivity;320 chat-language prompt;284 preference/notification consumers;309/340 notification writers;335 Discover author;299 memory share;315 composer;277/326 image;322 edit;330/310 automation;273 meeting works;289 action save;313/290 team/template;281 invite;293 email auth;282 runtime key;316 archive restore;298 profile;302 guide;317 docs;325 avatar;280 follow URL;197 preference honesty;294 onboarding;237 checklist. 283 boolean-only remains superseded. No124 reply-protocol changes.
 
 ## Remaining complete scope
 See FUNCTIONAL_COMPLETION_PLAN.md and VISIBLE_FUNCTIONS_INVENTORY.md for all six categories and source census. None is silently hidden or called credential-blocked wholesale. No operator/model/Composio credentials discovered or reused; Composio remains each user's own key; model platform default+user override retained. No production, user computer, :3320 or :3786 changes. No npm installation, external invitations/sends/payments, cloud sessions, proprietary assets, or upstream vendor byte edits. All current tests/captures are synthetic, not real-vendor or Teamily acceptance.
 
 Latest refresh additionally protects363 memory history84d3f736f,362 self-delete45765a294,361 memory preferencesd139d5dde,356 memory dream24a7590e4,358 unread dividercafded7a0,354 attachment search913480e28. Updated28449de89563,34967691d71a,348e838eec41 remain separate. Registration293410c6a45c covers email-code identity, not this same-origin form for the existing username/password endpoint.
+
+## Public HTTP model policy: reviewed, not integrated or enabled
+The independent operator-policy draft is not production-ready. Python's
+`ipaddress.is_global` alone also returns true for multicast (`224.0.0.1`,
+`239.255.255.250`, `ff02::1`); the draft accepts these and issues grants. Its
+11 helper tests pass but do not exercise this case, private-file loading, either
+credential issuance route, authenticated grant provenance, or actual redirect
+credential isolation. Do not infer application approval from those tests.
+
+This aggregate does not enable public HTTP model endpoints, read/import any
+provider key, or broaden shared `insecure_http_allowed`. Existing HTTPS and
+local/private rules remain unchanged. A future complete operator-only,
+default-disabled implementation needs strict public unicast IP/port/path
+validation, private bounded no-symlink loading, both issuance paths rechecking
+current policy, Python/container runtime grant checks, and denial of every HTTP
+redirect with integration tests. No hostname/wildcard/global insecure bypass is
+acceptable. Deployment must independently confirm its own concrete endpoint
+and key authorization; another agent's report is not that authorization.
+
+Contributor332 personal message hiding is now landed in the synced base. The
+SSE fingerprint respects the current user's deletion rows; another member's
+snapshot is unchanged. Overlapping session loads now commit one current
+workspace/user/request snapshot only, including the per-agent fanout phase.

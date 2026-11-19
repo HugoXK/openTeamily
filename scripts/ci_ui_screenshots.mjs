@@ -216,7 +216,7 @@ async function main() {
     try {
       await loginPage.goto(origin+'/',{waitUntil:'load'});
       await loginPage.locator('#login-panel').waitFor({state:'visible'});
-      for(const width of [390,471]){
+      for(const width of [1280,390,471]){
         await loginPage.setViewportSize({width,height:900});
         await loginPage.locator('.login-register-button').waitFor({state:'visible'});
         const geometry=await loginPage.evaluate(()=>{
@@ -224,6 +224,7 @@ async function main() {
           return {type:a.type,aw:ar.width,bw:br.width,ah:ar.height,bh:br.height,ab:getComputedStyle(a).backgroundColor,bb:getComputedStyle(b).backgroundColor,overflow:document.documentElement.scrollWidth>innerWidth};
         });
         record('mobile_login_entry_'+width,geometry.type==='text'&&Math.abs(geometry.aw-geometry.bw)<1&&Math.abs(geometry.ah-geometry.bh)<1&&geometry.ah>=44&&geometry.ab===geometry.bb&&!geometry.overflow,'Actual computed username/password geometry plus visible registration entry: '+JSON.stringify(geometry));
+        if(width===390)screenshots.push(path.basename(await shot(loginPage,outDir,'116a-login-registration-390.png')));
       }
       screenshots.push(path.basename(await shot(loginPage,outDir,'116-mobile-login-registration-entry.png')));
       await loginPage.locator('.login-register-button').click();
@@ -252,6 +253,36 @@ async function main() {
       screenshots.push(path.basename(await shot(loginPage,outDir,'111-new-account-agent-reload.png')));
     }catch(error){record('registration_full_new_account',false,String(error));}
     await anonymous.close();
+
+    const desktopRegistration = await browser.newContext({viewport:{width:1280,height:900},locale:'zh-CN'});
+    try {
+      const desktop = await desktopRegistration.newPage();
+      await desktop.goto(origin+'/settings',{waitUntil:'load'});
+      await desktop.locator('.login-register-button').waitFor({state:'visible'});
+      await desktop.locator('.login-register-button').click();
+      await waitForLocatorText(desktop,'#register-policy','已开放注册');
+      screenshots.push(path.basename(await shot(desktop,outDir,'117-desktop-registration-form.png')));
+      await desktop.locator('#register-username').fill('ci-new-desktop');
+      await desktop.locator('#register-password').fill(password);
+      await desktop.locator('#register-submit').click();
+      await desktop.waitForURL(origin+'/');
+      await waitForLocatorText(desktop,'#home-greeting','ci-new-desktop');
+      await desktop.waitForFunction(()=>document.querySelector('#home-workspace')?.options.length>0);
+      const session=await(await desktopRegistration.request.get(origin+'/v1/auth/session')).json();
+      const spaces=await(await desktopRegistration.request.get(origin+'/v1/workspaces?limit=100')).json();
+      record('desktop_registration_real_session',session.user?.username==='ci-new-desktop'&&spaces.items?.length===1,'Desktop settings login entry -> real form -> cookie session -> initialized personal workspace.');
+      await desktop.goto(origin+'/agents#workspace='+spaces.items[0].id,{waitUntil:'load'});
+      await desktop.locator('#open-create').click();
+      await desktop.locator('#create-form input[name="name"]').fill('Desktop account persisted agent');
+      await desktop.locator('#create-form textarea[name="instructions"]').fill('Synthetic test; no external operations.');
+      await desktop.locator('#create-form button[type="submit"]').click();
+      await waitForLocatorText(desktop,'#agent-list','Desktop account persisted agent');
+      await desktop.reload({waitUntil:'load'});
+      await waitForLocatorText(desktop,'#agent-list','Desktop account persisted agent');
+      record('desktop_registration_normal_use',true,'Second independent new desktop account can create and reload its own agent.');
+      screenshots.push(path.basename(await shot(desktop,outDir,'118-desktop-registration-agent-reload.png')));
+    }catch(error){record('desktop_registration_full_new_account',false,String(error));}
+    finally{await desktopRegistration.close();}
 
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'zh-CN' });
     const login = await context.request.post(`${origin}/v1/auth/login`, {

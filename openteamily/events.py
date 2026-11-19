@@ -46,9 +46,10 @@ def snapshot(app,env,wid):
         social=fingerprint(db.execute('''SELECT c.id,c.updated,m.id,m.seq,COALESCE(s.revision,1),COALESCE(s.retracted,0),p.pinned
           FROM social_conversations c JOIN social_members a ON a.conversation_id=c.id AND a.user_id=?
           LEFT JOIN social_messages m ON m.conversation_id=c.id
+          AND NOT EXISTS (SELECT 1 FROM social_message_deletions d WHERE d.message_id=m.id AND d.user_id=?)
           LEFT JOIN social_message_state s ON s.message_id=m.id
           LEFT JOIN social_preferences p ON p.conversation_id=c.id AND p.user_id=?
-          WHERE c.workspace_id=? ORDER BY c.id,m.seq''',(uid,uid,wid)))
+          WHERE c.workspace_id=? ORDER BY c.id,m.seq''',(uid,uid,uid,wid)))
         replies=fingerprint(db.execute('''SELECT r.id,r.status,r.updated,r.seq FROM social_agent_replies r
           JOIN social_members m ON m.conversation_id=r.conversation_id AND m.user_id=?
           WHERE r.workspace_id=? ORDER BY r.id''',(uid,wid)))

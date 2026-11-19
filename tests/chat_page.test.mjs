@@ -1429,3 +1429,39 @@ test('new dialog and document-card surfaces use actual theme tokens, not undefin
   assert.match(css, /#resource-picker \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
   assert.match(css, /\.chat-document-card \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
 });
+
+
+for (const phase of ['directory', 'fanout']) for (const target of ['ws-1','ws-2']) {
+  test(`deferred ${phase} from an older load cannot overwrite the latest ${target} session list`, async () => {
+    const {doc, el} = fakeChatDocument(chatHtml()); const restore = installChatGlobals();
+    let release, first=true; const requests=[];
+    const row=id=>({id,kind:'group',title:id,updated:30,members:[]});
+    const fetcher=async path=>{
+      requests.push(path);
+      if(path==='/v1/auth/session')return json(200,{user:{id:'user-1',username:'alice'}});
+      if(path==='/v1/onboarding')return json(200,{onboarding:{completed:true}});
+      if(path==='/v1/personal-agent')return json(200,{personal_agent:{workspace:{id:'ws-1'}}});
+      if(path==='/v1/workspaces?limit=100')return json(200,{items:[{id:'ws-1',name:'First'},{id:'ws-2',name:'Second'}]});
+      if(path==='/v1/settings')return json(200,{settings:{values:{}}});
+      if(path.endsWith('/agents?limit=100')){
+        if(first){first=false;
+          if(phase==='directory')return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'old-agent',name:'old'}]}));});
+          return json(200,{items:[{id:'old-agent',name:'old'}]});
+        }
+        return json(200,{items:[]});
+      }
+      if(path.includes('/agents/old-agent/conversations?'))return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'stale-agent-conversation',title:'stale',updated:40}]}));});
+      if(path.endsWith('/social/conversations?limit=100'))return json(200,{items:[row(release?'new-current':'old-stale')]});
+      if(path.endsWith('/members')||path.endsWith('/artifacts?limit=100'))return json(200,{items:[]});
+      return json(404,{error:{message:'not in synthetic fixture'}});
+    };
+    try{
+      mount(doc,{fetcher}); await settle(); assert.equal(typeof release,'function','first real request is pending');
+      el('workspace').value=target; await fire(el('workspace'),'change'); await settle();
+      const ids=()=>el('conversation-list').children.map(li=>li.children[0]?.dataset.conversation).filter(Boolean);
+      assert.deepEqual(ids(),['new-current']);
+      release(); await settle(); assert.deepEqual(ids(),['new-current'],'late old data must not overwrite a newer successful load');
+      if(phase==='directory')assert.equal(requests.some(path=>path.includes('/agents/old-agent/')),false,'stale directory must not trigger new fanout');
+    }finally{restore();}
+  });
+}
