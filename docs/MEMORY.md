@@ -13,6 +13,9 @@ This slice stores workspace-scoped **memory pages**, **next actions**, optional 
 | GET | `/v1/workspaces/{id}/memory/{id}` | One page, including body and topics |
 | POST | `/v1/workspaces/{id}/memory/{id}` | Revisioned `{revision, changes: {title?, body?, topics?}}` |
 | POST | `/v1/workspaces/{id}/memory/{id}/remove` | Delete the page |
+| GET | `/v1/workspaces/{id}/memory/{id}/versions` | The page's previous versions (newest first: `revision`, `title`, bounded `summary`, `created`, `created_by`) and the `current` revision. The live revision is not listed |
+| GET | `/v1/workspaces/{id}/memory/{id}/versions/{revision}` | One earlier version with its full `body`, for preview |
+| POST | `/v1/workspaces/{id}/memory/{id}/versions/{revision}/restore` | Revision-guarded `{revision}`: writes that version's title and body as a new revision; older versions stay |
 | GET | `/v1/workspaces/{id}/memory/graph` | Nodes (pages), edges, topics and counts for this workspace |
 | POST | `/v1/workspaces/{id}/memory/links` | Create an undirected manual link `{source, target}` between two pages. Requires an Idempotency-Key |
 | POST | `/v1/workspaces/{id}/memory/links/{id}/remove` | Delete a manual link |
@@ -36,7 +39,7 @@ Workspace members may list, read and create pages and actions, read the graph, a
 
 ## Not in this slice
 
-The profile page now uses the revisioned save API below. 「做梦」 was not opened in the recapture and is not implemented. Versions beyond the revision number and share or export links remain later slices on issue 8 and issue 9. "我的作品" already links to `/space`. "我的会议" now follows the same pattern and opens the existing `/space?view=meetings` empty chrome; there is still no meeting-artifact API, and this is not a Teamily/Impeccable comparison. Timeline and Project are not used as a memory implementation.
+The profile page now uses the revisioned save API below. 「做梦」 was not opened in the recapture and is not implemented. Page history is the slice below; share or export links, and generating profile text from the pages, remain later slices on issue 8 and issue 9. "我的作品" already links to `/space`. "我的会议" now follows the same pattern and opens the existing `/space?view=meetings` empty chrome; there is still no meeting-artifact API, and this is not a Teamily/Impeccable comparison. Timeline and Project are not used as a memory implementation.
 
 No Teamily comparison and no browser E2E are claimed. Issue 8 stays open.
 
@@ -50,3 +53,19 @@ another tab. The additive `(workspace_id,user_id)` primary key separates both us
 The page saves real content and restores it after reload; CI exercises that with labeled fixtures.
 **Not automatically injected into model prompts; no dreaming, generated profile or inference claim.**
 See [FUNCTIONAL_COMPLETION.md](FUNCTIONAL_COMPLETION.md) for the remaining full-scope checklist.
+
+## Page history
+
+`memory_page_versions` keeps a snapshot of the title and body for each revision. Creating a page
+records revision 1 and every later save records the new revision; a page created before this slice
+gets its existing revision recorded on its first edit, so the first edit already has something to
+show. `GET .../versions` lists only earlier revisions (newest first, bounded summary) and reports
+`current`; selecting one reads its full body. `POST .../versions/{revision}/restore` requires the
+current revision (stale input returns 409), the same edit permission as the page (403 otherwise) and
+an existing revision (404 otherwise); it writes the old title and body as a new revision, so the
+listed history grows by one and no snapshot is deleted. Topics and manual links are not versioned
+and stay as they are. Each page keeps at most 50 snapshots (`VERSION_KEEP`), so the very oldest are
+pruned once a page exceeds that many edits. Creating or restoring a title that another page has
+taken meanwhile returns 409. The `/memory` editor's 历史 button opens this list, a preview and the
+restore control; a restore reloads the editor and the graph. Deleting the page deletes its
+snapshots (foreign-key cascade).

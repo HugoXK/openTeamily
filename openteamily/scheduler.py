@@ -146,7 +146,7 @@ class AgentAutomationBackend:
                 return {'status':'failed','error_code':'skill_scope_revoked','instance_ids':[]}
             skill_owner = owners[0]['user_id']
             connection = runtime_connect.online_connection(db,skill_owner,now,self.stale,personal=True)
-            if connection and not skill_packages.supports(db,connection['id']):
+            if connection and not skill_packages.supports(db,connection['id'],skill_packages.required_formats(db,skill_owner,scope)):
                 return {'status':'failed','error_code':'runtime_upgrade_required','instance_ids':[]}
         else:
             connection = pick_connection(

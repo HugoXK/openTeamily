@@ -1,3 +1,4 @@
+import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 // Authorized saved-result links select a real workspace and fetch the actual editor record.
 export function artifactTargetFromSearch(search) {
   const params=new URLSearchParams(search||'');
@@ -1120,7 +1121,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function exportHref(revision) {
     const base = `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`;
-    return revision ? `${base}/versions/${revision}/export` : `${base}/export`;
+    if(revision)return `${base}/versions/${revision}/export`;
+    const format=document.getElementById('export-format')?.value;
+    return `${base}/export`+(format && format!=='original'?'?format='+encodeURIComponent(format):'');
   }
 
   async function loadVersions() {
@@ -1170,7 +1173,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   let listGeneration = 0;
+  const workspaceEvents=mountWorkspaceEvents(document,{onInvalidate:async(event)=>{
+    if(event.workspace!==workspaceId()||!event.changed.includes('artifacts'))return;
+    await loadList();
+    if(event.workspace!==workspaceId()||!current?.id)return;
+    const id=current.id,wid=workspaceId();
+    const result=await request('GET',`/v1/workspaces/${wid}/artifacts/${id}`);
+    if(workspaceId()!==wid||current?.id!==id)return;
+    const banner=document.getElementById('artifact-live-update');
+    if(banner)banner.hidden=result.status===200&&result.body.artifact.revision===current.revision;
+  }});
+  document.getElementById('artifact-live-load')?.addEventListener('click',async()=>{
+    if(!current?.id||!globalThis.confirm?.('读取服务器版本将覆盖编辑器内未保存的草稿。请先复制草稿。继续？'))return;
+    const wid=workspaceId(),id=current.id;
+    const result=await request('GET',`/v1/workspaces/${wid}/artifacts/${id}`);
+    if(workspaceId()!==wid||current?.id!==id)return;
+    if(result.status!==200){show('error','服务器作品不可读取，可能已删除或访问已撤销；保留本地草稿。');return;}
+    await openEditor(result.body.artifact);
+    const banner=document.getElementById('artifact-live-update');if(banner)banner.hidden=true;
+  });
   async function loadList() {
+    workspaceEvents.start(workspaceId());
     const generation = ++listGeneration;
     const id = workspaceId();
     if (!id) return;
@@ -1857,6 +1880,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!current || !current.id || !workspaceId()) {
       show('error', '请先保存作品，再导出。');
       return;
+    }
+    const format=document.getElementById('export-format')?.value||'original';
+    if((format==='docx'&&current.kind!=='document')||(format==='xlsx'&&current.kind!=='dashboard')||(format==='pdf'&&!['document','slides','dashboard'].includes(current.kind))){
+      show('error','此格式不支持当前作品类型；请按格式说明选择，或使用原格式。');return;
     }
     globalThis.location.assign(exportHref());
   });
