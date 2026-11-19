@@ -1,0 +1,1054 @@
+{
+  "rows": [
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "chat-tool",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-chat-tool-1440x900-light.png",
+      "bytes": 89169,
+      "width": 1440,
+      "height": 900,
+      "sha256": "281be89ac7f59b88e6d95108a814a62b399e40ebd72681d25bbf30c053398eec",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "formatButton": false,
+      "menuOpen": false
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "chat-wrap",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-chat-wrap-1440x900-light.png",
+      "bytes": 89158,
+      "width": 1440,
+      "height": 900,
+      "sha256": "4025020c7c8a6c3a5aad98352d5da5890b202b4af257776e324b9de77cc83fe8",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "value": "你好世界",
+      "start": 2,
+      "end": 4
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "chat-bubble",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-chat-bubble-1440x900-light.png",
+      "bytes": 89308,
+      "width": 1440,
+      "height": 900,
+      "sha256": "bf3e10c1069c3688de9179edffc157cb712300bc9ad180c022ae2fd725df2300",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "text": "你好，**世界**和**团队**都在这里",
+      "strongs": 0
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "agents-default",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-agents-default-1440x900-light.png",
+      "bytes": 65358,
+      "width": 1440,
+      "height": 900,
+      "sha256": "a203107ddfa80483d6c692e6472bf19ddc3edfcf4ef3d67b7a10a4aabb4cb562",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "cards": 1,
+      "toggle": false,
+      "archivedTags": 0
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "agents-archived",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-agents-archived-1440x900-light.png",
+      "bytes": 65358,
+      "width": 1440,
+      "height": 900,
+      "sha256": "a203107ddfa80483d6c692e6472bf19ddc3edfcf4ef3d67b7a10a4aabb4cb562",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "toggle": false,
+      "cards": 1,
+      "tags": 0
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "agents-restored",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-agents-restored-1440x900-light.png",
+      "bytes": 65358,
+      "width": 1440,
+      "height": 900,
+      "sha256": "a203107ddfa80483d6c692e6472bf19ddc3edfcf4ef3d67b7a10a4aabb4cb562",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "restored": false
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "chat-tool",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-chat-tool-1440x900-dark.png",
+      "bytes": 163709,
+      "width": 1440,
+      "height": 900,
+      "sha256": "f574ad721059e28cfeb8a885184da28283503992758e6fdda0f775e575b379da",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "formatButton": false,
+      "menuOpen": false
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "chat-wrap",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-chat-wrap-1440x900-dark.png",
+      "bytes": 167909,
+      "width": 1440,
+      "height": 900,
+      "sha256": "d5c27794c42f8fd93ec8816ba1dc8a9327034f4c734ecf44154e21a5714737df",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "value": "你好世界",
+      "start": 2,
+      "end": 4
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "chat-bubble",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-chat-bubble-1440x900-dark.png",
+      "bytes": 167811,
+      "width": 1440,
+      "height": 900,
+      "sha256": "98fbdf78a02687ec5bb23292da9642162d83af81cfb28261fa7b21b0190effa6",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "text": "你好，**世界**和**团队**都在这里",
+      "strongs": 0
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "agents-default",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-agents-default-1440x900-dark.png",
+      "bytes": 112054,
+      "width": 1440,
+      "height": 900,
+      "sha256": "46e38e75101c09c17c24fa24c59ea2c54d094b99032d46feb854ddfb411e861d",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "cards": 1,
+      "toggle": false,
+      "archivedTags": 0
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "agents-archived",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-agents-archived-1440x900-dark.png",
+      "bytes": 111798,
+      "width": 1440,
+      "height": 900,
+      "sha256": "8f2ee7848e5913bcd356defd225a673bf45a4ecc69a2b15e274eb1b7b0e44e3b",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "toggle": false,
+      "cards": 1,
+      "tags": 0
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "agents-restored",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-agents-restored-1440x900-dark.png",
+      "bytes": 111239,
+      "width": 1440,
+      "height": 900,
+      "sha256": "69026358e3d813102e1ca3c1242b6fa37e4b6c5465953f9213a769a03763a9f3",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "restored": false
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "chat-tool",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-chat-tool-390x844-light.png",
+      "bytes": 60051,
+      "width": 390,
+      "height": 844,
+      "sha256": "9d225b479d1e801d2c0053fff9c080799ef87ae9d6d31e47d691a7e12944ffce",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "formatButton": false,
+      "menuOpen": false
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "chat-wrap",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-chat-wrap-390x844-light.png",
+      "bytes": 60092,
+      "width": 390,
+      "height": 844,
+      "sha256": "9238b8bc7a397ba2346b791946cd42a5c277d846fdb2eb42e46e5d5dc24bb45d",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "value": "你好世界",
+      "start": 2,
+      "end": 4
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "chat-bubble",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-chat-bubble-390x844-light.png",
+      "bytes": 60108,
+      "width": 390,
+      "height": 844,
+      "sha256": "d85ee09924c5b5760f1b5c06b5c7febd92dc21af6a98184706ca02d1f0cc9a93",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "text": "你好，**世界**和**团队**都在这里",
+      "strongs": 0
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "agents-default",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-agents-default-390x844-light.png",
+      "bytes": 61626,
+      "width": 390,
+      "height": 844,
+      "sha256": "a73451030cbad11e869c1d1686597278326cce8cba57855fef8e5826c12cc2d3",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "cards": 1,
+      "toggle": false,
+      "archivedTags": 0
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "agents-archived",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-agents-archived-390x844-light.png",
+      "bytes": 61626,
+      "width": 390,
+      "height": 844,
+      "sha256": "a73451030cbad11e869c1d1686597278326cce8cba57855fef8e5826c12cc2d3",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "toggle": false,
+      "cards": 1,
+      "tags": 0
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "agents-restored",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-agents-restored-390x844-light.png",
+      "bytes": 61626,
+      "width": 390,
+      "height": 844,
+      "sha256": "a73451030cbad11e869c1d1686597278326cce8cba57855fef8e5826c12cc2d3",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "restored": false
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "chat-tool",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-chat-tool-390x844-dark.png",
+      "bytes": 94381,
+      "width": 390,
+      "height": 844,
+      "sha256": "5e27b1ea514867356c7e7143637d74caf8f256712ced9707fe1954f56c0b056f",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "formatButton": false,
+      "menuOpen": false
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "chat-wrap",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-chat-wrap-390x844-dark.png",
+      "bytes": 97060,
+      "width": 390,
+      "height": 844,
+      "sha256": "6ead457c47f5a843cb9ad0b4592e6f152d5ac49696c2df5f5b4eec7bb1ca3456",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "value": "你好世界",
+      "start": 2,
+      "end": 4
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "chat-bubble",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-chat-bubble-390x844-dark.png",
+      "bytes": 97233,
+      "width": 390,
+      "height": 844,
+      "sha256": "64a333ada7eb68ca03cffb4aed152243f719e3104701950dd924cb307c2dca93",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "text": "你好，**世界**和**团队**都在这里",
+      "strongs": 0
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "agents-default",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-agents-default-390x844-dark.png",
+      "bytes": 82022,
+      "width": 390,
+      "height": 844,
+      "sha256": "cb17e552e1e4368409c91d4d813051188c6f1be57419feec86c56a79bb174aed",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "cards": 1,
+      "toggle": false,
+      "archivedTags": 0
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "agents-archived",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-agents-archived-390x844-dark.png",
+      "bytes": 82080,
+      "width": 390,
+      "height": 844,
+      "sha256": "6a3796116c9d80d5a5745b1fc55467da4f21ad39aa283a9462408d5bd4be67ee",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "toggle": false,
+      "cards": 1,
+      "tags": 0
+    },
+    {
+      "arm": "before",
+      "sha": "2ee0c0eb28b5bd7506fd73163d26a75918ffb230",
+      "state": "agents-restored",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-agents-restored-390x844-dark.png",
+      "bytes": 81877,
+      "width": 390,
+      "height": 844,
+      "sha256": "80de7c4c4bc5cf73ce65cc34f44f30094acf934a7f572edb27ddcb67bf236213",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "restored": false
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "chat-tool",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-chat-tool-1440x900-light.png",
+      "bytes": 97240,
+      "width": 1440,
+      "height": 900,
+      "sha256": "26593d2ca3874b70777a1b97781d19fa77de3dab3646ff9394049d84779e9a5a",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "formatButton": true,
+      "menuOpen": true
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "chat-wrap",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-chat-wrap-1440x900-light.png",
+      "bytes": 89513,
+      "width": 1440,
+      "height": 900,
+      "sha256": "4a2661006f65d9d4999ddcbeed3f29f6658e15889ff7c35a8d8a07314b0dbe42",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "value": "你好**世界**",
+      "start": 4,
+      "end": 6
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "chat-bubble",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-chat-bubble-1440x900-light.png",
+      "bytes": 89448,
+      "width": 1440,
+      "height": 900,
+      "sha256": "ac69a5918e901813e13c21bd59ead32d9482850a08b2d206d056a482b7a4faec",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "text": "你好，世界和团队都在这里",
+      "strongs": 2
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "agents-default",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-agents-default-1440x900-light.png",
+      "bytes": 66816,
+      "width": 1440,
+      "height": 900,
+      "sha256": "277101ff45109e76846203fefb6eeed89614c4b8a12c3ff628d6af0a2b239b82",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "cards": 1,
+      "toggle": true,
+      "archivedTags": 0
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "agents-archived",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-agents-archived-1440x900-light.png",
+      "bytes": 75044,
+      "width": 1440,
+      "height": 900,
+      "sha256": "c337d6021e95503b581665f51f5ca810f3704dd2f7bf3de1461ff36fdb5b8ace",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "toggle": true,
+      "checked": true,
+      "cards": 2,
+      "tags": 1,
+      "restore": 1
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "agents-restored",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-agents-restored-1440x900-light.png",
+      "bytes": 69648,
+      "width": 1440,
+      "height": 900,
+      "sha256": "ed2a4dca395869b7b93241da36b6f8bc0a5570641817ee96b2ba4697fbfd77a7",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "restored": true,
+      "cards": 2,
+      "tags": 0
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "chat-tool",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-chat-tool-1440x900-dark.png",
+      "bytes": 171790,
+      "width": 1440,
+      "height": 900,
+      "sha256": "681439e8f0ed757035d67d632d222faddecdb251dd19e0cc5d963acf068cd5fc",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "formatButton": true,
+      "menuOpen": true
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "chat-wrap",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-chat-wrap-1440x900-dark.png",
+      "bytes": 164906,
+      "width": 1440,
+      "height": 900,
+      "sha256": "5c143d67cf1797f075309bbe32ea937b75d2a8fbdc6b8d88a54bc4916af07cdd",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "value": "你好**世界**",
+      "start": 4,
+      "end": 6
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "chat-bubble",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-chat-bubble-1440x900-dark.png",
+      "bytes": 164778,
+      "width": 1440,
+      "height": 900,
+      "sha256": "8ade481c384c12e5402d25f33a0ea94d50b8aec25976edb5626ee20e93eaee76",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "text": "你好，世界和团队都在这里",
+      "strongs": 2
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "agents-default",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-agents-default-1440x900-dark.png",
+      "bytes": 113488,
+      "width": 1440,
+      "height": 900,
+      "sha256": "847237ba3c874758bf9015373199897d5b397ed901084d786f4b42b61e2efd23",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "cards": 1,
+      "toggle": true,
+      "archivedTags": 0
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "agents-archived",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-agents-archived-1440x900-dark.png",
+      "bytes": 120145,
+      "width": 1440,
+      "height": 900,
+      "sha256": "61fd79f465eb6171ec3f4f5208cd4774e390a1b165388770b222eec12a5cba69",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "toggle": true,
+      "checked": true,
+      "cards": 2,
+      "tags": 1,
+      "restore": 1
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "agents-restored",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-agents-restored-1440x900-dark.png",
+      "bytes": 112846,
+      "width": 1440,
+      "height": 900,
+      "sha256": "4d3a2fb7529f61df55c0817fdf42f89345f03638bca9cb523278e6cb7abbb4b2",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "restored": true,
+      "cards": 2,
+      "tags": 0
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "chat-tool",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-chat-tool-390x844-light.png",
+      "bytes": 65264,
+      "width": 390,
+      "height": 844,
+      "sha256": "3058c101194bc1a70149900f198174b94cd75cff8da9fc30619212392d5a5f4f",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "formatButton": true,
+      "menuOpen": true
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "chat-wrap",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-chat-wrap-390x844-light.png",
+      "bytes": 60640,
+      "width": 390,
+      "height": 844,
+      "sha256": "a1982c4e33888d89ede5127cdbf31637a9811008b44fb1f3c41ccc5c9625e4ad",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "value": "你好**世界**",
+      "start": 4,
+      "end": 6
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "chat-bubble",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-chat-bubble-390x844-light.png",
+      "bytes": 60472,
+      "width": 390,
+      "height": 844,
+      "sha256": "42b1499a2b82f1917ce076e12231dd3e8cf41d3bcf1c13dfa696557bce6612ac",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "text": "你好，世界和团队都在这里",
+      "strongs": 2
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "agents-default",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-agents-default-390x844-light.png",
+      "bytes": 62993,
+      "width": 390,
+      "height": 844,
+      "sha256": "e34889772179f21ea94fd3f65e7e02ec079a049ab0574355cbf7af3b41494828",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "cards": 1,
+      "toggle": true,
+      "archivedTags": 0
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "agents-archived",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-agents-archived-390x844-light.png",
+      "bytes": 70633,
+      "width": 390,
+      "height": 844,
+      "sha256": "429bf4ed1d6cbc85f392690fcebd81164fb0a5480090d2b2cbf508c5abb4b97a",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "toggle": true,
+      "checked": true,
+      "cards": 2,
+      "tags": 1,
+      "restore": 1
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "agents-restored",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-agents-restored-390x844-light.png",
+      "bytes": 70058,
+      "width": 390,
+      "height": 844,
+      "sha256": "24d851b5a7f736ffaa7b81f423082c7eb1db1b93eca34800b7042f06b688f420",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "restored": true,
+      "cards": 2,
+      "tags": 0
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "chat-tool",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-chat-tool-390x844-dark.png",
+      "bytes": 105123,
+      "width": 390,
+      "height": 844,
+      "sha256": "bc2719cbbb07eacb91fb258574432a94b9fcd0b8f082862fd974063c2a317a76",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "formatButton": true,
+      "menuOpen": true
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "chat-wrap",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-chat-wrap-390x844-dark.png",
+      "bytes": 99809,
+      "width": 390,
+      "height": 844,
+      "sha256": "c31771ad8c2573fe06397631088470c54d34c76c08af504d04b8f286e07a397f",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "value": "你好**世界**",
+      "start": 4,
+      "end": 6
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "chat-bubble",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-chat-bubble-390x844-dark.png",
+      "bytes": 99756,
+      "width": 390,
+      "height": 844,
+      "sha256": "f7e2700b66e2ce332810d830d446a723bd0c2d93fc520a67384697ff2a00c82f",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "text": "你好，世界和团队都在这里",
+      "strongs": 2
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "agents-default",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-agents-default-390x844-dark.png",
+      "bytes": 83444,
+      "width": 390,
+      "height": 844,
+      "sha256": "f07f6b2d6009f6f5b1c0646d0d85161a0521ec953c2fbd9bb1b53b98d6cc5c80",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "cards": 1,
+      "toggle": true,
+      "archivedTags": 0
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "agents-archived",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-agents-archived-390x844-dark.png",
+      "bytes": 89276,
+      "width": 390,
+      "height": 844,
+      "sha256": "969f8d9513ef2ba194c39e2226f9bde85c5de6115104c7140c621316c7403d9e",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "toggle": true,
+      "checked": true,
+      "cards": 2,
+      "tags": 1,
+      "restore": 1
+    },
+    {
+      "arm": "after",
+      "sha": null,
+      "state": "agents-restored",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-agents-restored-390x844-dark.png",
+      "bytes": 88230,
+      "width": 390,
+      "height": 844,
+      "sha256": "7ac9f054f1f9bb26d6b1650f0c7dfc58f6f6b6b2e5f713eb3542aca3b6e6ce8d",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "restored": true,
+      "cards": 2,
+      "tags": 0
+    }
+  ],
+  "facts": {
+    "chat-before-1440-light": {
+      "bubble": {
+        "text": "你好，**世界**和**团队**都在这里",
+        "strongs": 0
+      },
+      "wrap": {
+        "value": "你好世界",
+        "start": 2,
+        "end": 4
+      },
+      "hasButton": false,
+      "errors": []
+    },
+    "agents-before-1440-light": {
+      "baseList": {
+        "cards": 1,
+        "toggle": false,
+        "archivedTags": 0
+      },
+      "archived": {
+        "toggle": false,
+        "cards": 1,
+        "tags": 0
+      },
+      "restored": {
+        "restored": false
+      },
+      "errors": []
+    },
+    "chat-before-1440-dark": {
+      "bubble": {
+        "text": "你好，**世界**和**团队**都在这里",
+        "strongs": 0
+      },
+      "wrap": {
+        "value": "你好世界",
+        "start": 2,
+        "end": 4
+      },
+      "hasButton": false,
+      "errors": []
+    },
+    "agents-before-1440-dark": {
+      "baseList": {
+        "cards": 1,
+        "toggle": false,
+        "archivedTags": 0
+      },
+      "archived": {
+        "toggle": false,
+        "cards": 1,
+        "tags": 0
+      },
+      "restored": {
+        "restored": false
+      },
+      "errors": []
+    },
+    "chat-before-390-light": {
+      "bubble": {
+        "text": "你好，**世界**和**团队**都在这里",
+        "strongs": 0
+      },
+      "wrap": {
+        "value": "你好世界",
+        "start": 2,
+        "end": 4
+      },
+      "hasButton": false,
+      "errors": []
+    },
+    "agents-before-390-light": {
+      "baseList": {
+        "cards": 1,
+        "toggle": false,
+        "archivedTags": 0
+      },
+      "archived": {
+        "toggle": false,
+        "cards": 1,
+        "tags": 0
+      },
+      "restored": {
+        "restored": false
+      },
+      "errors": []
+    },
+    "chat-before-390-dark": {
+      "bubble": {
+        "text": "你好，**世界**和**团队**都在这里",
+        "strongs": 0
+      },
+      "wrap": {
+        "value": "你好世界",
+        "start": 2,
+        "end": 4
+      },
+      "hasButton": false,
+      "errors": []
+    },
+    "agents-before-390-dark": {
+      "baseList": {
+        "cards": 1,
+        "toggle": false,
+        "archivedTags": 0
+      },
+      "archived": {
+        "toggle": false,
+        "cards": 1,
+        "tags": 0
+      },
+      "restored": {
+        "restored": false
+      },
+      "errors": []
+    },
+    "chat-after-1440-light": {
+      "bubble": {
+        "text": "你好，世界和团队都在这里",
+        "strongs": 2
+      },
+      "wrap": {
+        "value": "你好**世界**",
+        "start": 4,
+        "end": 6
+      },
+      "hasButton": true,
+      "errors": []
+    },
+    "agents-after-1440-light": {
+      "baseList": {
+        "cards": 1,
+        "toggle": true,
+        "archivedTags": 0
+      },
+      "archived": {
+        "toggle": true,
+        "checked": true,
+        "cards": 2,
+        "tags": 1,
+        "restore": 1
+      },
+      "restored": {
+        "restored": true,
+        "cards": 2,
+        "tags": 0
+      },
+      "errors": []
+    },
+    "chat-after-1440-dark": {
+      "bubble": {
+        "text": "你好，世界和团队都在这里",
+        "strongs": 2
+      },
+      "wrap": {
+        "value": "你好**世界**",
+        "start": 4,
+        "end": 6
+      },
+      "hasButton": true,
+      "errors": []
+    },
+    "agents-after-1440-dark": {
+      "baseList": {
+        "cards": 1,
+        "toggle": true,
+        "archivedTags": 0
+      },
+      "archived": {
+        "toggle": true,
+        "checked": true,
+        "cards": 2,
+        "tags": 1,
+        "restore": 1
+      },
+      "restored": {
+        "restored": true,
+        "cards": 2,
+        "tags": 0
+      },
+      "errors": []
+    },
+    "chat-after-390-light": {
+      "bubble": {
+        "text": "你好，世界和团队都在这里",
+        "strongs": 2
+      },
+      "wrap": {
+        "value": "你好**世界**",
+        "start": 4,
+        "end": 6
+      },
+      "hasButton": true,
+      "errors": []
+    },
+    "agents-after-390-light": {
+      "baseList": {
+        "cards": 1,
+        "toggle": true,
+        "archivedTags": 0
+      },
+      "archived": {
+        "toggle": true,
+        "checked": true,
+        "cards": 2,
+        "tags": 1,
+        "restore": 1
+      },
+      "restored": {
+        "restored": true,
+        "cards": 2,
+        "tags": 0
+      },
+      "errors": []
+    },
+    "chat-after-390-dark": {
+      "bubble": {
+        "text": "你好，世界和团队都在这里",
+        "strongs": 2
+      },
+      "wrap": {
+        "value": "你好**世界**",
+        "start": 4,
+        "end": 6
+      },
+      "hasButton": true,
+      "errors": []
+    },
+    "agents-after-390-dark": {
+      "baseList": {
+        "cards": 1,
+        "toggle": true,
+        "archivedTags": 0
+      },
+      "archived": {
+        "toggle": true,
+        "checked": true,
+        "cards": 2,
+        "tags": 1,
+        "restore": 1
+      },
+      "restored": {
+        "restored": true,
+        "cards": 2,
+        "tags": 0
+      },
+      "errors": []
+    }
+  }
+}
