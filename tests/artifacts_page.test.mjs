@@ -682,3 +682,36 @@ test('a failing meetings request shows the server reason instead of an empty lis
     page.close();
   }
 });
+
+test('favorites scope uses the persisted flag instead of inventing an empty collection', () => {
+  const items = [{id:'a', kind:'document', favorited:true}, {id:'b', kind:'document', favorited:false}];
+  assert.deepEqual(visibleArtifacts(items, {scope:'favorites'}).map(item=>item.id), ['a']);
+});
+
+test('an older workspace list cannot overwrite the current selected workspace', async () => {
+  const {doc, elements} = fakeDocument();
+  const saved = globalThis.document;
+  globalThis.document = doc;
+  let finishOld, announce;
+  const firstStarted = new Promise(resolve => {announce=resolve;});
+  const old = new Promise(resolve => {finishOld=resolve;});
+  const fetcher = async path => {
+    if (path === '/v1/auth/session') return reply({body:{user:{id:'u1',username:'alice'}}});
+    if (path === '/v1/workspaces?limit=100') return reply({body:{items:[{id:'w1',name:'Old'}, {id:'w2',name:'New'}]}});
+    if (path === '/v1/workspaces/w1/artifacts') { announce(); return old; }
+    if (path === '/v1/workspaces/w2/artifacts') return reply({body:{items:[{id:'new',kind:'document',title:'New workspace document'}]}});
+    throw new Error(path);
+  };
+  try {
+    const mounted = mount(doc, {fetcher});
+    await firstStarted;
+    const picker = elements.get('workspace'); picker.value = 'w2';
+    await picker.dispatch('change');
+    await new Promise(resolve=>setImmediate(resolve));
+    finishOld(reply({body:{items:[]}}));
+    await mounted;
+    assert.equal(elements.get('artifact-list').hidden, false);
+    assert.equal(artifactRows(elements.get('artifact-list')).length, 1);
+    assert.equal(artifactRows(elements.get('artifact-list'))[0].children[0].textContent, 'New workspace document');
+  } finally { if (saved === undefined) delete globalThis.document; else globalThis.document=saved; }
+});

@@ -41,7 +41,7 @@ class ArtifactsPageTests(unittest.TestCase):
         self.assertRegex(html, r'<img id="media-image"[^>]*src="data:image/')
         self.assertIn('让智能体搭建网站', html)
         self.assertIn('保存聊天中的消息', html)
-        self.assertIn('暂无保存', html)
+        self.assertIn('暂无收藏', html)
         self.assertIn('没有匹配的作品', html)
         self.assertIn('还没有会议纪要', html)
         self.assertIn('这里只列这个工作区已有的会议纪要，不生成、不录音。', html)

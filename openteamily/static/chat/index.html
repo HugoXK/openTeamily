@@ -230,13 +230,14 @@
     <div id="message-context-menu" class="message-menu" role="menu" aria-label="消息操作" hidden>
       <div class="message-menu-reactions" id="message-menu-reactions"></div>
       <button type="button" role="menuitem" data-menu="reply">回复</button>
-      <button type="button" role="menuitem" data-menu="save" disabled title="未接通：群聊消息还不能保存到资料空间">保存到资料空间</button>
+      <button type="button" role="menuitem" data-menu="save">保存到资料空间</button>
       <button type="button" role="menuitem" data-menu="translate" disabled title="未接通：没有翻译服务">翻译</button>
       <button type="button" role="menuitem" data-menu="copy">复制</button>
       <button type="button" role="menuitem" data-menu="forward">转发</button>
       <button type="button" role="menuitem" data-menu="pin">置顶</button>
       <button type="button" role="menuitem" data-menu="select">选择消息</button>
       <hr>
+      <button type="button" role="menuitem" data-menu="edit">编辑</button>
       <button type="button" role="menuitem" data-menu="retract">撤回</button>
       <button type="button" role="menuitem" data-menu="delete" class="message-menu-danger" disabled title="未接通：还没有删除消息接口">删除</button>
     </div>
@@ -266,6 +267,15 @@
       <button type="button" id="forward-submit" disabled>转发</button>
       <button type="button" id="forward-cancel">取消</button>
     </section>
+    <dialog id="save-message-dialog" aria-labelledby="save-message-heading">
+      <form id="save-message-form">
+        <h2 id="save-message-heading">保存到资料空间</h2>
+        <p>这会把消息文字复制为当前工作区的文档。<strong>工作区内所有成员都可以读取副本</strong>，之后撤回原消息不会删除副本。附件不会被复制。重复保存会沿用既有副本，不会同步后续编辑。</p>
+        <label>文档标题 <input id="save-message-title" maxlength="80" required></label>
+        <p id="save-message-error" role="alert" hidden></p>
+        <div class="actions"><button type="button" id="save-message-cancel">取消</button><button type="submit" id="save-message-submit">确认保存</button></div>
+      </form>
+    </dialog>
     <p id="onboarding-banner" class="note" hidden>完善<strong>工作背景</strong>，让自动化推荐更贴合你。<a href="/onboarding">去设置</a></p>
     <section id="group-agent-action" class="gap-note group-agent-panel" hidden>
       <details class="group-agent-sheet">

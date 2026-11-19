@@ -68,6 +68,24 @@ class ArtifactTests(unittest.TestCase):
         self.assertEqual(again['status'], 200)
         self.assertEqual(again['body']['artifact']['id'], item['id'])
 
+    def test_favorites_are_private_persistent_and_do_not_change_the_document(self):
+        artifact = self.create()['body']['artifact']
+        aid = artifact['id']
+        base = f'/v1/workspaces/{self.wid}/artifacts'
+        path = base + f'/{aid}/favorite'
+        first = self.alice.call('POST', path, {'enabled': True})
+        self.assertEqual(first['status'], 200, first)
+        self.assertEqual(self.alice.call('POST', path, {'enabled': True})['status'], 200)
+        self.assertTrue(self.alice.call('GET', base)['body']['items'][0]['favorited'])
+        self.assertFalse(self.bob.call('GET', base)['body']['items'][0]['favorited'])
+        self.assertEqual(self.alice.call('POST', path, {'enabled': 'yes'})['status'], 400)
+        self.assertEqual(self.alice.call('POST', path, {'enabled': False}, csrf=False)['status'], 403)
+        self.assertEqual(self.alice.call('GET', base + f'/{aid}')['body']['artifact']['revision'], 1)
+        with self.app.store.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM artifact_favorites WHERE artifact_id=?', (aid,)).fetchone()[0], 1)
+        self.assertEqual(self.alice.call('POST', path, {'enabled': False})['body'], {'favorited': False})
+        self.assertFalse(self.alice.call('GET', base)['body']['items'][0]['favorited'])
+
     def test_permissions_isolation_and_search(self):
         created = self.create()
         aid = created['body']['artifact']['id']
@@ -94,6 +112,7 @@ class ArtifactTests(unittest.TestCase):
         outsider.register('carol')
         self.assertEqual(outsider.call('GET', f'/v1/workspaces/{self.wid}/artifacts')['status'], 404)
         self.assertEqual(outsider.call('GET', f'/v1/workspaces/{self.wid}/artifacts/{aid}')['status'], 404)
+        self.assertEqual(outsider.call('POST', f'/v1/workspaces/{self.wid}/artifacts/{aid}/favorite', {'enabled': True})['status'], 404)
         self.assertEqual(
             outsider.call('POST', f'/v1/workspaces/{self.wid}/artifacts', {'title': 'Nope', 'body': 'x'},
                           {'HTTP_IDEMPOTENCY_KEY': 'artifact-create-carol1'})['status'],
@@ -185,6 +204,10 @@ class ArtifactPreviewTests(unittest.TestCase):
             self.assertEqual(doc['type'], 'document')
             self.assertEqual(doc['heading'], '标题')
             self.assertTrue(all(len(line) <= artifacts.PREVIEW_LINE_MAX for line in doc['lines']))
+            shaped = artifacts.preview(self.row(kind='document', body='# Heading\n- Item\n> Quote\n```\ncode\n```\n' + 'line\n' * 20))
+            self.assertEqual([block['type'] for block in shaped['blocks']][:4], ['heading', 'list', 'quote', 'code'])
+            self.assertEqual(len(shaped['blocks']), 6)
+            self.assertNotIn('```', str(shaped['blocks']))
             site = artifacts.preview(self.row(kind='website', body='<title>站点</title><script>alert(1)</script><h1>欢迎</h1><p>正文</p>'))
             self.assertEqual(site['type'], 'website')
             self.assertNotIn('alert', str(site))
