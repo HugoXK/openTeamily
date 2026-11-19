@@ -211,12 +211,12 @@
           </div>
           <div id="empty-starred" hidden>
             <div class="empty-hero" aria-hidden="true"><span class="empty-cta-icon" data-tone="mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M7 3h10a1 1 0 0 1 1 1v16l-6-3.2L6 20V4a1 1 0 0 1 1-1z"/></svg></span></div>
-            <h2>暂无保存</h2>
-            <p>你保存的内容会按时间倒序出现在这里。</p>
+            <h2>暂无收藏</h2>
+            <p>点击作品卡片上的书签，将作品收藏到这里。</p>
             <div class="empty-cta-list">
               <a href="/chat" class="empty-cta" id="empty-starred-save-message">
                 <span class="empty-cta-icon" data-tone="chat" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-6l-4 3v-3H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg></span>
-                <span class="empty-cta-copy"><strong>保存聊天中的消息</strong><span class="hint">在已完成的对话里保存到作品库。OpenTeamily 还没有收藏接口。</span></span>
+                <span class="empty-cta-copy"><strong>保存聊天中的消息</strong><span class="hint">在已完成的对话里保存到作品库。点击作品上的书签可以收藏。</span></span>
                 <span class="empty-cta-go" aria-hidden="true">→</span>
               </a>
               <a href="/chat" class="empty-cta" id="empty-save-image">
@@ -253,6 +253,29 @@
     </section>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
+      <p id="editor-meta" class="note"></p>
+      <section id="document-editor" hidden aria-label="文档编辑器">
+        <div class="document-toolbar" role="toolbar" aria-label="文档格式">
+          <button type="button" data-doc-format="undo" aria-label="撤销">↶</button>
+          <button type="button" data-doc-format="redo" aria-label="重做">↷</button>
+          <button type="button" data-doc-format="bold" aria-label="加粗">B</button>
+          <button type="button" data-doc-format="italic" aria-label="斜体">I</button>
+          <button type="button" data-doc-format="strike" aria-label="删除线">S</button>
+          <button type="button" data-doc-format="h1">H1</button>
+          <button type="button" data-doc-format="h2">H2</button>
+          <button type="button" data-doc-format="h3">H3</button>
+          <button type="button" data-doc-format="ul" aria-label="无序列表">• 列表</button>
+          <button type="button" data-doc-format="ol" aria-label="有序列表">1. 列表</button>
+          <button type="button" data-doc-format="quote" aria-label="引用">❞</button>
+          <button type="button" data-doc-format="code" aria-label="代码块">&lt;/&gt;</button>
+          <button type="button" data-doc-format="hr" aria-label="分隔线">—</button>
+          <button type="button" id="document-source-toggle" aria-pressed="false">Markdown</button>
+          <button type="submit" id="document-save">保存</button>
+        </div>
+        <div id="document-rich" contenteditable="true" role="textbox" aria-label="文档正文" aria-multiline="true" data-placeholder="开始写作…"></div>
+        <textarea id="document-source" aria-label="文档 Markdown 源码" maxlength="8000" rows="16" hidden></textarea>
+        <p id="document-length" class="note" hidden></p>
+      </section>
       <label id="body-label">正文
         <textarea name="body" maxlength="8000" rows="16"></textarea>
       </label>
@@ -287,7 +310,6 @@
         </div>
         <canvas id="board-canvas" width="800" height="600"></canvas>
       </div>
-      <p id="editor-meta" class="note"></p>
       <p id="editor-source" class="note" hidden></p>
       <iframe id="website-preview" title="网站预览" sandbox hidden></iframe>
       <section id="version-panel" hidden>

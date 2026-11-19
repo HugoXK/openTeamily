@@ -699,6 +699,29 @@ async function main() {
         `composer=${JSON.stringify(composerValue)} ${afterEnter.slice(0, 240) || 'enter send empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '61-chat-send-enter.png')));
+      try {
+        const message = page.locator('#message-list > li').filter({hasText:enterText}).last();
+        await message.locator('.message-more').click({force:true});
+        await page.locator('[data-menu="save"]').click();
+        await page.locator('#save-message-dialog').waitFor({state:'visible'});
+        const warning = await page.locator('#save-message-dialog').innerText();
+        if (!warning.includes('工作区内所有成员')) throw new Error('workspace sharing disclosure absent');
+        // Cancel is a genuine no-op; reopen and explicitly confirm the workspace copy.
+        await page.locator('#save-message-cancel').click();
+        await message.locator('.message-more').click({force:true});
+        await page.locator('[data-menu="save"]').click();
+        await page.locator('#save-message-title').fill('[CI FIXTURE] Explicit saved social message');
+        const saved = page.waitForResponse(r=>r.request().method()==='POST' && /\/messages\/[a-f0-9]+\/save$/.test(new URL(r.url()).pathname));
+        await page.locator('#save-message-submit').click();
+        const response = await saved; const result = await response.json();
+        if (response.status() !== 201) throw new Error('social save failed: ' + response.status());
+        await page.locator('#save-message-dialog').waitFor({state:'hidden'});
+        const persisted = await context.request.get(`${origin}/v1/workspaces/${ready.workspace_id}/artifacts/${result.artifact.id}`);
+        const copy = await persisted.json();
+        record('chat_social_save', persisted.status()===200 && copy.artifact.body===enterText, 'explicit workspace-visible copy persisted');
+        screenshots.push(path.basename(await shot(page, outDir, '95-chat-saved-message.png')));
+      } catch (error) { record('chat_social_save', false, String(error)); }
+
     } catch (error) {
       record('chat_send_enter_shortcut', false, String(error));
     } finally {
@@ -1144,7 +1167,7 @@ async function main() {
       const starred = await visibleText(page.locator('#empty-starred'));
       record(
         'artifacts_starred_empty',
-        starred.includes('暂无保存') && starred.includes('保存聊天中的消息') && starred.includes('保存聊天中的图片') && starred.includes('保存智能体成果') && starred.includes('未实现'),
+        starred.includes('暂无收藏') && starred.includes('保存聊天中的消息') && starred.includes('保存聊天中的图片') && starred.includes('保存智能体成果') && starred.includes('未实现'),
         starred || 'starred empty missing',
       );
       screenshots.push(path.basename(await shot(page, outDir, '34-space-starred-empty.png')));
@@ -1256,10 +1279,61 @@ async function main() {
       }
     };
     await openArtifact(ready.document_title, '08-artifacts-document.png', 'artifacts_document', async () => {
-      await waitForInputValue(page, '#editor-form textarea[name="body"]', ready.document_body);
+      await page.locator('#document-rich').waitFor({state: 'visible'});
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', ready.document_body);
       const body = await page.locator('#editor-form textarea[name="body"]').inputValue();
       return body === ready.document_body;
     }, { soft: false });
+    try {
+      await page.locator('#cancel-editor').click();
+      await page.locator('#new-menu-button').click();
+      await page.locator('#new-artifact').click();
+      const title = '[CI FIXTURE] Rich document round trip';
+      await page.locator('#editor-form input[name="title"]').fill(title);
+      await page.locator('#document-rich').fill('First rich paragraph');
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', 'First rich paragraph');
+      await page.locator('#document-rich').evaluate(root => {
+        root.focus();
+        const selection = window.getSelection();
+        selection.selectAllChildren(root);
+      });
+      await page.locator('[data-doc-format="h2"]').click();
+      await waitForLocatorText(page, '#document-rich h2', 'First rich paragraph');
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', '## First rich paragraph');
+      await page.locator('#document-source-toggle').click();
+      const markdown = '# Rich heading\n\n- First point\n- Second point';
+      await page.locator('#document-source').fill(markdown);
+      await page.locator('#document-source-toggle').click();
+      await waitForLocatorText(page, '#document-rich h1', 'Rich heading');
+      const saved = page.waitForResponse(response => response.request().method() === 'POST' && /\/artifacts$/.test(new URL(response.url()).pathname));
+      await page.locator('#save-artifact').click();
+      const response = await saved;
+      const result = await response.json();
+      if (response.status() !== 201) throw new Error('rich document not created: ' + response.status());
+      await waitForLocatorText(page, '#status', '已保存');
+      await page.reload();
+      await selectWorkspace(page, ready.workspace_name);
+      await openListItem(page, title, '#artifact-list');
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', markdown);
+      await page.locator('#document-rich h1').waitFor({state:'visible'});
+      record('artifacts_rich_roundtrip', await page.locator('#document-rich li').count() === 2 && !!result.artifact.id, 'rich typing + heading toolbar + Markdown toggle + save + reload');
+      screenshots.push(path.basename(await shot(page, outDir, '93-space-rich-document.png')));
+      await page.locator('#cancel-editor').click();
+      const row = page.locator('#artifact-list .artifact-item').filter({has: page.locator('.artifact-open', {hasText: title})});
+      // Use the returned title to select this exact saved card, not the first fixture row.
+      const card = (await row.count()) ? row : page.locator('#artifact-list .artifact-item').filter({hasText:title});
+      const favorite = card.locator('.artifact-bookmark');
+      const marked = page.waitForResponse(r => r.request().method()==='POST' && r.url().endsWith('/favorite'));
+      await favorite.click();
+      if ((await marked).status() !== 200) throw new Error('favorite not persisted');
+      await page.reload();
+      await selectWorkspace(page, ready.workspace_name);
+      await page.locator('.artifact-scopes [data-scope="favorites"]').click();
+      await waitForLocatorText(page, '#artifact-list', title);
+      record('artifacts_favorite_persisted', await page.locator('#artifact-list .artifact-bookmark[aria-pressed="true"]').count() >= 1, 'private favorite survives reload');
+      screenshots.push(path.basename(await shot(page, outDir, '94-space-favorites.png')));
+    } catch (error) { record('artifacts_rich_roundtrip', false, String(error)); }
+
     await openArtifact(ready.media_title, '09-artifacts-media.png', 'artifacts_media', async () => {
       const image = page.locator('#media-image');
       await image.waitFor({ state: 'visible', timeout: 15000 });
@@ -1346,6 +1420,11 @@ async function main() {
     await page.locator('[data-tab="connect"]').click();
     await page.locator('#connect-panel').waitFor({ state: 'visible', timeout: 15000 });
     const connect = await visibleText(page.locator('#connect-panel'));
+    // main-panel is shown before loadKeys()/connections finish. Wait on the
+    // actual seeded state, not visibility of the still-empty connect container.
+    await waitForLocatorText(page, '#key-list', ready.runtime_key_name);
+    await waitForLocatorText(page, '#connection-list', ready.runtime_key_name);
+    await page.locator('#daemon-script').waitFor({state: 'visible', timeout: 15000});
     const keys = await visibleText(page.locator('#key-list'));
     const connections = await visibleText(page.locator('#connection-list'));
     const generateDisabled = await page.locator('#generate-key').isDisabled();

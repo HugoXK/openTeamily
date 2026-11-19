@@ -263,6 +263,7 @@ class FakeElement {
   removeEventListener(type, handler) {
     this.handlers[type] = (this.handlers[type] || []).filter((item) => item !== handler);
   }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter(node => node !== this); this.parent = null; }
   focus() { this.focused = true; }
   reset() { this.resetCount = (this.resetCount || 0) + 1; }
   closest(selector) {
@@ -1171,13 +1172,13 @@ test('reaction chips post the toggle and re-render server counts', async () => {
     }});
     await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
     const li = el('message-list').children[0];
-    const bar = li.children[li.children.length - 1];
+    const bar = li.children.find(node => node.className === 'message-reactions');
     assert.equal(bar.className, 'message-reactions');
     assert.equal(bar.children[0].textContent, '👍 1');
     await fire(bar.children[0], 'click');
     await settle();
     assert.deepEqual(posts, [{emoji: '👍', active: true}]);
-    const next = li.children[li.children.length - 1];
+    const next = li.children.find(node => node.className === 'message-reactions');
     assert.equal(next.children[0].textContent, '👍 2');
     assert.equal(next.children[0].getAttribute('aria-pressed'), 'true');
   } finally { restore(); }
@@ -1217,18 +1218,18 @@ test('pin a message and multi-select forward call the real endpoints', async () 
     assert.equal(el('chat-invite').hidden, false);
     assert.equal(el('multi-select-toggle').hidden, false);
     let li = el('message-list').children[0];
-    const tools = li.children[li.children.length - 2];
+    const tools = li.children.find(node => node.className === 'message-tools');
     assert.equal(tools.className, 'message-tools');
     await fire(tools.children[0], 'click');
     await settle();
     assert.deepEqual(posts[0][1], {pinned: true});
     assert.equal(el('pinned-messages').hidden, false);
     li = el('message-list').children[0];
-    assert.equal(li.children[li.children.length - 2].children[0].textContent, '取消置顶');
+    assert.equal(li.children.find(node => node.className === 'message-tools').children[0].textContent, '取消置顶');
     await fire(el('multi-select-toggle'), 'click');
     assert.equal(el('forward-bar').hidden, false);
     li = el('message-list').children[0];
-    const box = li.children[li.children.length - 2].children[0].children[0];
+    const box = li.children.find(node => node.className === 'message-tools').children[0].children[0];
     box.checked = true;
     await fire(box, 'change');
     assert.equal(el('forward-count').textContent, '已选 1 条');
@@ -1368,4 +1369,61 @@ test('an audio attachment keeps the document card instead of becoming an image',
   } finally {
     restore();
   }
+});
+
+test('in-chat search jumps to loaded messages, explains unloaded hits, and restores scroll on close', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow:true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.includes('/search/messages?')) return json(200, {items:[{message_id:'jump-loaded',snippet:'Find me'}, {message_id:'not-loaded',snippet:'Earlier message'}],cursor:null});
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
+    const target = el('message-list').children[0];
+    target.dataset.messageId = 'jump-loaded';
+    let scrolled = false;
+    target.scrollIntoView = () => {scrolled=true;};
+    el('message-scroller').scrollTop = 41;
+    await fire(el('conversation-search-open'), 'click');
+    el('conversation-search-query').value = 'Find';
+    await fire(el('conversation-search-form'), 'submit', {preventDefault(){}});
+    const hits = el('conversation-search-results').children;
+    assert.equal(hits[0].getAttribute('role'), 'button');
+    await fire(hits[0], 'keydown', {key:'Enter',preventDefault(){}});
+    assert.equal(scrolled, true);
+    assert.equal(target.dataset.searchJump, 'true');
+    await fire(hits[1], 'click');
+    assert.match(el('conversation-search-status').textContent, /不在当前已加载/);
+    el('message-scroller').scrollTop = 99;
+    await fire(el('conversation-search-close'), 'click');
+    assert.equal(el('message-scroller').scrollTop, 41);
+    assert.equal(el('conversation-search-panel').hidden, true);
+  } finally {restore();}
+});
+
+test('removing a group agent sends nothing until the explicit confirmation', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const posts = [];
+  const restore = installChatGlobals({narrow:true});
+  try {
+    await mount(doc, {fetcher: async (path, options={}) => {
+      if (path.endsWith('/agents/a-1/remove')) {posts.push(path);return json(200, {});}
+      return original(path, options);
+    }});
+    await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
+    const remove = new FakeElement('button'); remove.dataset.removeAgent = 'a-1';
+    await fire(el('group-agent-chips'), 'click', {target:remove});
+    assert.equal(posts.length,0);
+    let question = el('group-agent-chips').children.at(-1);
+    assert.equal(question.getAttribute('role'),'alertdialog');
+    await fire(question.children[1], 'click');
+    assert.equal(posts.length,0);
+    await fire(el('group-agent-chips'), 'click', {target:remove});
+    question = el('group-agent-chips').children.at(-1);
+    await fire(question.children[2], 'click');
+    assert.equal(posts.length,1);
+  } finally {restore();}
 });
