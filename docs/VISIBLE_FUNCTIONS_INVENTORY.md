@@ -80,8 +80,9 @@ The intermediate314a582 head passed all screenshot/management/build checks, incl
 ## Current aggregate checkpoint (t234u/t235u)
 See FUNCTIONAL_COMPLETION_BATCH.md for precise new controls, code, tests, pending captures and limits. Source census now includes /register and all new import/version/history/revoke/export/live-update controls; no buttons were hidden to claim completion. Latest pre-publication list has49 open PRs: newer363memory history,362account deletion,361memory preferences,356memory dream,358unread divider,354attachment search are actively owned and not duplicated. Registration email-code293 is separate from this unchanged username/password API form; Deployment owns the deliberately closed live registration flag. New original form/policy/verified session/first-home race repairs are product work, not an assertion about the live root cause. All new-capture claims remain pending CI.
 
-Current synced main9a7aa53c includes contributor332 own-message hiding and348
-run details. The reproducible census is1449 static controls,132 dynamic
+Current synced main54222f7 includes contributor332 own-message hiding,348
+run details,363 memory history/restore and340 followed-public-work notifications.
+The reproducible census is1452 static controls,133 dynamic
 construction sites,6 server-template controls and23 HTML surfaces. These counts
 are a source checklist, not executed-control acceptance. Latest contributor
 heads and the public-HTTP draft security hold are recorded in
