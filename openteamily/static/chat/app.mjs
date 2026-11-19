@@ -873,6 +873,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pin = menu.querySelector('[data-menu="pin"]');
     pin.textContent = pinnedIds.has(item.id) ? '取消置顶' : '置顶';
     menu.querySelector('[data-menu="retract"]').hidden = !mine;
+    menu.querySelector('[data-menu="delete"]').hidden = !mine;
     const edit = menu.querySelector('[data-menu="edit"]');
     if (edit) edit.hidden = !mine;
     menu.querySelector('[data-menu="forward"]').disabled = forwardTargets(socialConversations, currentConversation && currentConversation.id).length === 0;
@@ -923,6 +924,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       } else if (action === 'retract') {
         const retract = Array.from(li.querySelectorAll(':scope > button')).find(node => node.textContent === '撤回');
         if (retract) retract.click();
+      } else if (action === 'delete') {
+        const cid = currentConversation.id;
+        const result = await request('DELETE', `${socialBase()}/${cid}/messages/${item.id}`);
+        if (result.status !== 204) {
+          show('error', messageFor(result.body.error, '消息未删除，请重试。'));
+          return;
+        }
+        if (!currentConversation || currentConversation.id !== cid) return;
+        renderSocialMessages(lastSocialItems.filter(row => row.id !== item.id));
+        await loadSessions();
       }
     });
     document.addEventListener('click', event => {
