@@ -650,7 +650,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const topicEmpty = document.getElementById('topic-empty');
     const payload = graph || {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}};
     const stats = payload.counts || {nodes: 0, edges: 0, topics: 0};
-    if (counts) counts.textContent = `${stats.nodes} 节点 · ${stats.edges} 连接 · ${stats.topics} 话题`;
+    if (counts) {
+      const linked = new Set();
+      for (const edge of payload.edges || []) {
+        if (edge.source) linked.add(edge.source);
+        if (edge.target) linked.add(edge.target);
+      }
+      const unconnected = (payload.nodes || []).filter((node) => !linked.has(node.id)).length;
+      counts.replaceChildren();
+      for (const [value, label] of [[stats.nodes, '节点'], [stats.edges, '连接'], [unconnected, '未连接'], [stats.topics, '话题']]) {
+        const item = document.createElement('span');
+        item.className = 'memory-count';
+        const strong = document.createElement('strong');
+        strong.textContent = String(value ?? 0);
+        const caption = document.createElement('span');
+        caption.textContent = label;
+        item.append(strong, caption);
+        counts.appendChild(item);
+      }
+    }
     const empty = document.getElementById('graph-empty');
     if (empty) {
       empty.hidden = !graphEmptyStateVisible({
