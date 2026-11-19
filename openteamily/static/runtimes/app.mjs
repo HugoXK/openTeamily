@@ -48,6 +48,43 @@ export function summarizeConnections(items) {
   return {kind: 'empty', label: '尚未连接本机或远程设备', items: [], preview: []};
 }
 
+const TASK_STATUS_TEXT = {
+  queued: '排队中',
+  claimed: '已领取',
+  succeeded: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+  timeout: '超时',
+};
+
+const TASK_PROMPT_LIMIT = 80;
+const TASKS_EMPTY_TEXT = '还没有发到运行时的任务。发一个测试任务后会出现在这里。';
+
+export function taskStatusText(task) {
+  return TASK_STATUS_TEXT[task && task.status] || '未知';
+}
+
+export function taskPromptText(task) {
+  const text = String((task && task.prompt) || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '（无内容）';
+  return text.length > TASK_PROMPT_LIMIT ? text.slice(0, TASK_PROMPT_LIMIT) + '…' : text;
+}
+
+export function taskActions(task) {
+  const status = task && task.status;
+  return status === 'queued' || status === 'claimed' ? ['cancel'] : [];
+}
+
+function taskKindText(task) {
+  if (task && task.kind === 'infer') return '推理';
+  if (task && task.kind === 'echo') return '测试';
+  return '任务';
+}
+
+function taskBadgeClass(task) {
+  return task && task.status === 'succeeded' ? 'is-online' : 'is-pending';
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -234,6 +271,55 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
       : `${names} 已登记但不在线。请确认守护进程仍在运行。`;
   }
 
+  function renderTasks(items) {
+    const list = document.getElementById('task-list');
+    const empty = document.getElementById('tasks-empty');
+    if (!list) return;
+    const rows = Array.isArray(items) ? items.filter(Boolean) : [];
+    list.textContent = '';
+    if (empty) {
+      empty.hidden = rows.length > 0;
+      empty.textContent = TASKS_EMPTY_TEXT;
+    }
+    for (const item of rows) {
+      const row = document.createElement('li');
+      const prompt = document.createElement('span');
+      prompt.textContent = taskPromptText(item);
+      const meta = document.createElement('span');
+      meta.className = 'runtime-badge ' + taskBadgeClass(item);
+      meta.textContent = `${taskKindText(item)} · ${taskStatusText(item)}`;
+      row.appendChild(prompt);
+      row.appendChild(meta);
+      if (taskActions(item).includes('cancel')) {
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.textContent = '取消';
+        cancel.addEventListener('click', () => cancelTask(item));
+        row.appendChild(cancel);
+      }
+      list.appendChild(row);
+    }
+  }
+
+  async function loadTasks() {
+    const listed = await request('GET', '/v1/runtime/tasks');
+    if (listed.status !== 200) {
+      show('error', messageFor(listed.body.error, '无法读取运行时任务。'));
+      return;
+    }
+    renderTasks(listed.body.items || []);
+  }
+
+  async function cancelTask(item) {
+    const result = await request('POST', `/v1/runtime/tasks/${item.id}/cancel`);
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, result.status === 409 ? '这个任务已经不能再取消。' : '无法取消任务。'));
+      return;
+    }
+    show('ok', '已取消任务。');
+    await loadTasks();
+  }
+
   async function detectRuntimes() {
     const connections = await request('GET', '/v1/runtime/connections');
     if (connections.status !== 200) {
@@ -280,6 +366,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
     await loadKeys();
+    await loadTasks();
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -303,6 +390,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
   const detectButton = document.getElementById('detect-runtimes');
   if (detectButton) {
     detectButton.addEventListener('click', () => detectRuntimes());
+  }
+  const refreshTasks = document.getElementById('refresh-tasks');
+  if (refreshTasks) {
+    refreshTasks.addEventListener('click', () => loadTasks());
   }
 
   function syncGenerateButton() {
@@ -413,10 +504,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
       }
       const box = document.getElementById('task-result');
       box.hidden = false;
-      box.textContent = '已排队，等待这台机器上的守护进程回传结果。刷新连接列表可查看状态。';
+      box.textContent = '已排队，等待这台机器上的守护进程回传结果。下方「最近任务」会显示状态。';
       show('ok', '已发送测试任务。');
       event.currentTarget.reset();
-      await loadKeys();
+      await loadTasks();
     });
   }
 

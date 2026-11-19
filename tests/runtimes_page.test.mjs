@@ -137,7 +137,7 @@ async function mountWithTasks(tasks, tag) {
     if (cancel && method === 'POST') {
       const task = state.tasks.find((item) => item.id === cancel[1]);
       if (!task) return {status: 404, json: async () => ({error: {code: 'not_found'}})};
-      task.status = 'failed';
+      task.status = 'cancelled';
       task.result = {cancelled: true};
       return {status: 200, json: async () => ({task})};
     }
@@ -192,7 +192,7 @@ test('cancelling a queued task sends one request and reloads the list', async ()
       'confirming sends exactly one cancel request');
     assert.ok(calls.filter((call) => call === 'GET /v1/runtime/tasks').length > getsBefore, 'the list is reloaded after cancelling');
     const rows = doc.getElementById('task-list').children;
-    assert.match(textOfTaskNode(rows[0]), /cancel me[\s\S]*测试 · 失败/, 'the cancelled task shows its new state');
+    assert.match(textOfTaskNode(rows[0]), /cancel me[\s\S]*测试 · 已取消/, 'the cancelled task shows its new state');
   } finally {
     restore();
   }
