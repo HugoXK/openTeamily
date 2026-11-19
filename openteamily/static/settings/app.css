@@ -641,3 +641,44 @@ body.app-workspace > main > #settings-panel { width: 100%; max-width: 42rem; mar
   #language-section select { max-width: 100%; }
   .settings-shortcut-row { flex-wrap: wrap; }
 }
+
+/* Page parity layer (2026-11-19): recorded settings hub — centered ~30rem column on a
+   soft canvas, 11px group labels, white rounded groups with compact 2.5rem rows. */
+body.app-workspace > main:has(> #settings-panel:not([hidden])) { background: var(--ot-surface-2); }
+body.app-workspace > main > #settings-panel { max-width: 32rem; padding: .875rem 1.25rem 3rem; }
+#settings-panel .page-top { margin: 0 0 .75rem; padding: 0; border: 0; background: transparent; box-shadow: none; min-height: 0; }
+#settings-panel .page-top h1 { font-size: 1rem; font-weight: 650; margin: 0; }
+#settings-panel [data-settings-hub] > #whoami {
+  margin: 0 0 .375rem; padding: .625rem .875rem; border-radius: .75rem; background: var(--ot-surface);
+  box-shadow: 0 0 0 1px var(--ot-line); font-size: .8125rem; color: var(--ot-ink);
+}
+#settings-panel .workspace-links { display: flex; gap: .375rem; margin: 0 0 .5rem; padding: 0; border: 0; background: transparent; box-shadow: none; }
+#settings-panel .workspace-links a {
+  display: inline-flex; align-items: center; height: 1.75rem; padding: 0 .75rem; border-radius: 999px;
+  background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line); color: var(--ot-ink); font-size: .75rem; text-decoration: none;
+}
+#settings-panel .workspace-links a:hover { background: var(--ot-bg-accent); }
+#settings-index.settings-index { gap: .5rem; }
+#settings-index .settings-cluster { gap: .25rem; margin: 0; }
+#settings-index .settings-cluster > h2 { margin: .5rem 0 .125rem .75rem; font-size: .6875rem; font-weight: 500; color: var(--ot-muted); letter-spacing: .01em; }
+#settings-panel .settings-group, #settings-panel .settings-card {
+  background: var(--ot-surface); border: 0; border-radius: .75rem; overflow: hidden;
+  box-shadow: 0 0 0 1px var(--ot-line), 0 1px 2px rgba(20, 40, 30, .03);
+}
+#settings-panel .settings-group > .settings-row, #settings-panel .settings-group > .settings-toggle,
+#settings-panel .settings-row, #settings-panel .settings-toggle {
+  min-height: 2.5rem; padding: .4375rem .875rem; gap: .625rem; font-size: .8125rem; line-height: 1.35;
+  border-bottom: 1px solid var(--ot-line); box-sizing: border-box;
+}
+#settings-panel .settings-group > :last-child { border-bottom: 0; }
+#settings-panel .settings-row-icon { flex: 0 0 1rem; width: 1rem; height: 1rem; color: var(--ot-ink); opacity: .72; }
+#settings-panel .settings-row-icon svg { width: 1rem; height: 1rem; }
+#settings-panel .settings-row-meta { font-size: .75rem; color: var(--ot-muted); line-height: 1.35; }
+#settings-panel .settings-row-stack .settings-row-meta { font-size: .6875rem; }
+#settings-panel .settings-row-title { font-size: .8125rem; }
+#settings-panel .settings-row-chevron { color: var(--ot-muted); font-size: 1rem; line-height: 1; }
+#settings-panel .settings-row:hover { background: var(--ot-surface-2); }
+#settings-panel .settings-card { padding: .25rem .875rem; }
+#settings-panel .settings-card-title, #settings-panel .settings-card > legend { font-size: .6875rem; font-weight: 500; color: var(--ot-muted); }
+#settings-panel .settings-toggle input[role="switch"] { accent-color: var(--ot-accent); }
+#settings-panel .settings-row-stack { align-items: center; }
