@@ -85,6 +85,27 @@ function taskBadgeClass(task) {
   return task && task.status === 'succeeded' ? 'is-online' : 'is-pending';
 }
 
+export function lastSeenText(lastSeen, now) {
+  const seen = Number(lastSeen);
+  const at = Number(now);
+  if (lastSeen === null || lastSeen === undefined || !Number.isFinite(seen) || !Number.isFinite(at)) return '未知';
+  const seconds = Math.max(0, Math.floor(at - seen));
+  if (seconds < 60) return '刚刚';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
+}
+
+export function connectionText(item, now) {
+  const online = Boolean(item) && item.status === 'online';
+  const when = lastSeenText(item && item.last_seen, now);
+  if (when === '未知') return online ? '已连接（最后活跃时间未知）' : '在线时间未知';
+  if (online) return when === '刚刚' ? '已连接（刚刚有活动）' : `已连接（最后活跃 ${when}）`;
+  return when === '刚刚' ? '刚刚离线' : `最后在线 ${when}`;
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -213,17 +234,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     await loadKeys();
   }
 
+  function connectionRow(item, now) {
+    const row = document.createElement('li');
+    const name = document.createElement('span');
+    name.textContent = item.hostname || 'flybot';
+    const state = document.createElement('span');
+    const online = item.status === 'online';
+    state.className = 'runtime-badge ' + (online ? 'is-online' : 'is-offline');
+    state.textContent = online ? '在线' : '离线';
+    const seen = document.createElement('span');
+    seen.textContent = connectionText(item, now);
+    row.appendChild(name);
+    row.appendChild(state);
+    row.appendChild(seen);
+    return row;
+  }
+
   function renderConnections(items) {
     const list = document.getElementById('connection-list');
     const empty = document.getElementById('connections-empty');
     if (!list) return;
+    const now = Math.floor(Date.now() / 1000);
     list.textContent = '';
     if (empty) empty.hidden = items.length > 0;
-    for (const item of items) {
-      const row = document.createElement('li');
-      row.textContent = `${item.hostname || 'flybot'} · ${item.status === 'online' ? '在线' : '离线'}`;
-      list.appendChild(row);
-    }
+    for (const item of items) list.appendChild(connectionRow(item, now));
     renderDetected(items);
     renderLocalStatus(items);
   }
@@ -232,20 +266,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     const list = document.getElementById('detected-list');
     const empty = document.getElementById('detected-empty');
     if (!list) return;
+    const now = Math.floor(Date.now() / 1000);
     list.textContent = '';
     if (empty) empty.hidden = items.length > 0;
-    for (const item of items) {
-      const row = document.createElement('li');
-      const name = document.createElement('span');
-      name.textContent = item.hostname || 'flybot';
-      const state = document.createElement('span');
-      const online = item.status === 'online';
-      state.className = 'runtime-badge ' + (online ? 'is-online' : 'is-offline');
-      state.textContent = online ? '在线' : '离线';
-      row.appendChild(name);
-      row.appendChild(state);
-      list.appendChild(row);
-    }
+    for (const item of items) list.appendChild(connectionRow(item, now));
   }
 
   function renderLocalStatus(items) {

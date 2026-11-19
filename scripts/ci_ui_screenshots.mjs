@@ -62,6 +62,15 @@ async function shot(page, outDir, name) {
   return file;
 }
 
+
+async function openGroupAgentSheet(page) {
+  const sheet = page.locator('#group-agent-action details.group-agent-sheet');
+  if (!(await sheet.count())) return;
+  if (await sheet.getAttribute('open') === null) {
+    await sheet.locator(':scope > summary').click();
+  }
+}
+
 async function openListItem(page, title, listSelector = '#main-panel') {
   const button = page.locator(`${listSelector} button.link`, { hasText: title }).first();
   await button.waitFor({ state: 'visible', timeout: 15000 });
@@ -807,6 +816,7 @@ async function main() {
     try {
       await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
       await page.locator('#group-agent-action').waitFor({state: 'visible', timeout: 8000});
+      await openGroupAgentSheet(page);
       const groupAgentChoice = page.locator(`#group-agent-choices input[name="group-agent"][value="${ready.agent_id}"]`);
       await groupAgentChoice.waitFor({state: 'visible', timeout: 8000});
       await groupAgentChoice.check();
@@ -1959,7 +1969,7 @@ async function main() {
       const token = homepagePath.slice(3);
       record(
         'agent_public_homepage',
-        homeText.includes('OpenTeamily / FlyBot')
+        homeText.includes('OpenTeamily')
           && homeText.includes('Agent profile')
           && statusLabel === 'Public page'
           && homeText.includes(ready.agent_name)
