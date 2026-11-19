@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { catalogItems, csrfCookie, draftFromTemplate, listQuery, mount, namesFromList, readEditor, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
+import { cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, mount, namesFromList, readEditor, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -111,13 +111,32 @@ class FakeNode {
     this._text = String(value);
   }
   get options() { return this.children.filter(child => child.tagName === 'OPTION'); }
-  get elements() { return (this._elements ||= {template_id: new FakeNode('select')}); }
+  get elements() {
+    if (this._elements) return this._elements;
+    this._elements = {};
+    // The editor form reads every named control through form.elements; the
+    // template select also needs appendChild/options so fillTemplates works.
+    for (const name of ['intent', 'scope', 'participants', 'agents', 'date', 'time', 'weekday',
+      'day', 'time_zone', 'prompt', 'enabled', 'title']) {
+      this._elements[name] = new FakeNode('input');
+    }
+    this._elements.template_id = new FakeNode('select');
+    return this._elements;
+  }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
   appendChild(child) {
     this.children.push(child);
+    child.parentNode = this;
     if (this.tagName === 'SELECT' && !this.value) this.value = child.value || '';
     return child;
   }
+  removeChild(child) {
+    const index = this.children.indexOf(child);
+    if (index >= 0) this.children.splice(index, 1);
+    child.parentNode = null;
+    return child;
+  }
+  focus() { this.focused = true; }
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name]; }
   querySelectorAll() { return []; }
@@ -129,6 +148,8 @@ function fakeDocument() {
   const tags = {'editor-form': 'form', workspace: 'select', search: 'input'};
   const doc = {
     cookie: '',
+    handlers: {},
+    addEventListener(type, handler) { (doc.handlers[type] ||= []).push(handler); },
     getElementById(id) {
       if (!elements.has(id)) elements.set(id, new FakeNode(tags[id] || 'div'));
       return elements.get(id);
@@ -193,4 +214,170 @@ test('list rows describe the schedule instead of printing the internal kind', as
   const joined = list.textContent;
   assert.doesNotMatch(joined, /(?:^|\s)(?:now|later|once|daily|weekly|monthly|weekdays)(?=\s|$)/u,
     `the list must not print an internal schedule kind: ${joined}`);
+});
+const flush = () => new Promise(resolve => setImmediate(resolve));
+
+const AUTOMATION = {
+  id: 'a1', title: '每日简报', enabled: true,
+  schedule: {kind: 'now', time_zone: 'Asia/Shanghai'},
+};
+
+function postCount(calls, fragment) {
+  return calls.filter(entry => entry.startsWith('POST ') && entry.includes(fragment)).length;
+}
+
+// A queued run starts a 3 s poll through globalThis.setInterval. Stub it while a
+// test drives the editor so `node --test` can exit, and restore it afterwards.
+function holdRunPolling() {
+  const saved = {setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval};
+  globalThis.setInterval = () => 0;
+  globalThis.clearInterval = () => {};
+  return () => {
+    globalThis.setInterval = saved.setInterval;
+    globalThis.clearInterval = saved.clearInterval;
+  };
+}
+
+async function mountEditor({items = [AUTOMATION], runs = []} = {}) {
+  // The click handlers resolve `document` and the run poll from globals, so both
+  // stay installed until the test calls restore().
+  const restorePolling = holdRunPolling();
+  const {doc, elements} = fakeDocument();
+  const calls = [];
+  const fetcher = async (path, options = {}) => {
+    const method = options.method || 'GET';
+    calls.push(`${method} ${path}`);
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: [{id: 'ws1', name: '团队'}]})};
+    if (path === '/v1/automation-templates') return {status: 200, json: async () => ({items: []})};
+    if (path === '/v1/workspaces/ws1/automations?category=mine') return {status: 200, json: async () => ({items})};
+    if (path === '/v1/workspaces/ws1/automations/a1/runs?limit=20') return {status: 200, json: async () => ({items: runs})};
+    if (method === 'POST' && path === '/v1/workspaces/ws1/automations/a1/remove') {
+      return {status: 200, json: async () => ({})};
+    }
+    if (method === 'POST' && path === '/v1/workspaces/ws1/automations/a1/runs/r1/cancel') {
+      return {status: 200, json: async () => ({})};
+    }
+    throw new Error('unexpected ' + method + ' ' + path);
+  };
+  const saved = globalThis.document;
+  globalThis.document = doc;
+  await mount(doc, {fetcher});
+  return {
+    doc, elements, calls,
+    restore() {
+      if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
+      restorePolling();
+    },
+  };
+}
+
+async function openFirst(elements) {
+  const list = elements.get('automation-list');
+  assert.ok(list.children.length, 'the list must render the automation before it can be opened');
+  list.children[0].children[0].handlers.click[0]();
+  await flush();
+}
+
+function alertdialogIn(parent) {
+  return parent.children.find(node => node.getAttribute('role') === 'alertdialog');
+}
+
+function labelledQuestion(box) {
+  return box.children.find(node => node.id === box.getAttribute('aria-labelledby'));
+}
+
+test('删除先在原位问一次，确认前 0 请求、确认后恰好 1 次 remove', async () => {
+  const {elements, calls, restore} = await mountEditor();
+  try {
+    await openFirst(elements);
+    const form = elements.get('editor-form');
+    const remove = elements.get('remove-automation');
+    remove.handlers.click[0]();
+    await flush();
+    assert.equal(postCount(calls, '/remove'), 0,
+      'clicking 删除 must not send the remove request before the user confirms');
+    const box = alertdialogIn(form);
+    assert.ok(box, 'clicking 删除 must put an alertdialog where the 删除 button was');
+    const question = labelledQuestion(box);
+    assert.ok(question, 'the alertdialog must label itself through aria-labelledby');
+    assert.equal(question.textContent, '删除这条自动化？');
+    const labels = box.children.map(node => node.textContent);
+    assert.ok(labels.includes('取消'), 'the delete question must offer 取消');
+    assert.ok(labels.includes('确认'), 'the delete question must offer 确认');
+    assert.equal(remove.hidden, true, 'the 删除 button is replaced by the question while it is open');
+    const cancel = box.children.find(node => node.textContent === '取消');
+    assert.equal(cancel.focused, true, 'focus must start on 取消, the safe choice');
+    box.children.find(node => node.textContent === '确认').handlers.click[0]();
+    await flush();
+    assert.equal(postCount(calls, '/remove'), 1, 'confirming must send exactly one remove request');
+    assert.equal(elements.get('status').textContent, '已删除。');
+    assert.equal(elements.get('editor-form').hidden, true, 'a confirmed delete returns to the list');
+    assert.equal(alertdialogIn(form), undefined);
+  } finally { restore(); }
+});
+
+test('取消运行先在原位问一次，确认前 0 请求、确认后恰好 1 次 cancel', async () => {
+  const {elements, calls, restore} = await mountEditor({runs: [{id: 'r1', status: 'queued'}]});
+  try {
+    await openFirst(elements);
+    const runList = elements.get('run-list');
+    const runRow = runList.children[0];
+    const head = runRow.children[0];
+    const trigger = head.children.find(node => node.textContent === '取消这次运行');
+    assert.ok(trigger, 'a queued run must offer 取消这次运行');
+    trigger.handlers.click[0]();
+    await flush();
+    assert.equal(postCount(calls, '/cancel'), 0,
+      'clicking 取消这次运行 must not send the cancel request before the user confirms');
+    const box = alertdialogIn(head);
+    assert.ok(box, 'clicking 取消这次运行 must put an alertdialog in the run row');
+    const question = labelledQuestion(box);
+    assert.equal(question.textContent, '取消这次运行？');
+    const confirm = box.children.find(node => node.textContent === '确认取消');
+    assert.ok(confirm, 'the run question must offer 确认取消');
+    assert.equal(box.children.find(node => node.textContent === '取消').focused, true);
+    confirm.handlers.click[0]();
+    await flush();
+    assert.equal(postCount(calls, '/cancel'), 1, 'confirming must send exactly one cancel request');
+    assert.equal(elements.get('status').textContent, '已取消。');
+  } finally { restore(); }
+});
+
+test('Esc 与取消都只关闭问句、0 请求，并把焦点还给触发按钮', async () => {
+  const {doc, elements, calls, restore} = await mountEditor();
+  try {
+    await openFirst(elements);
+    const form = elements.get('editor-form');
+    const remove = elements.get('remove-automation');
+    remove.handlers.click[0]();
+    await flush();
+    assert.ok(doc.handlers.keydown && doc.handlers.keydown.length,
+      'the page has no Escape handler, so Esc cannot close the delete question');
+    doc.handlers.keydown[0]({key: 'Escape', preventDefault() {}});
+    await flush();
+    assert.equal(postCount(calls, '/remove'), 0, 'Esc must close the delete question without sending a request');
+    assert.equal(remove.hidden, false, 'Esc must bring the 删除 button back');
+    assert.equal(remove.focused, true, 'Esc must return focus to the 删除 button it replaced');
+    assert.equal(alertdialogIn(form), undefined);
+
+    remove.focused = false;
+    remove.handlers.click[0]();
+    await flush();
+    const box = alertdialogIn(form);
+    box.children.find(node => node.textContent === '取消').handlers.click[0]();
+    await flush();
+    assert.equal(postCount(calls, '/remove'), 0, 'the 取消 button must close the delete question without sending a request');
+    assert.equal(remove.focused, true, 'the 取消 button must return focus to the 删除 button');
+    assert.equal(alertdialogIn(form), undefined);
+  } finally { restore(); }
+});
+
+test('deletePrompt and cancellationPrompt carry the confirmation wording', () => {
+  assert.deepEqual(deletePrompt({id: 'a1', title: '每日简报'}), {
+    question: '删除这条自动化？', confirmLabel: '确认',
+  });
+  assert.deepEqual(cancellationPrompt({id: 'r1', status: 'queued'}), {
+    question: '取消这次运行？', confirmLabel: '确认取消',
+  });
 });

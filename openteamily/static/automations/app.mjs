@@ -65,6 +65,18 @@ export function runResultText(run) {
   return '';
 }
 
+// The two destructive controls on this page ask before they act. The wording is
+// a pure function so it can be asserted without a DOM; it stays generic on
+// purpose and never echoes a user-supplied title, which could make the question
+// look like a different action.
+export function deletePrompt(item) {
+  return {question: '删除这条自动化？', confirmLabel: '确认'};
+}
+
+export function cancellationPrompt(run) {
+  return {question: '取消这次运行？', confirmLabel: '确认取消'};
+}
+
 
 export function catalogItems(templates, category, search) {
   const tab = tabCategory(category);
@@ -259,6 +271,60 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return workspaceSelect.value;
   }
 
+  let pendingConfirm = null;
+  let confirmSerial = 0;
+
+  function closeConfirm() {
+    if (!pendingConfirm) return;
+    const {box, trigger} = pendingConfirm;
+    pendingConfirm = null;
+    if (box && box.parentNode) box.parentNode.removeChild(box);
+    if (trigger) {
+      trigger.hidden = false;
+      if (typeof trigger.focus === 'function') trigger.focus();
+    }
+  }
+
+  function openConfirm({parent, trigger, prompt, action}) {
+    closeConfirm();
+    const questionId = 'automation-confirm-question-' + (++confirmSerial);
+    const box = document.createElement('span');
+    box.className = 'row-confirm';
+    box.setAttribute('role', 'alertdialog');
+    box.setAttribute('aria-labelledby', questionId);
+    const question = document.createElement('span');
+    question.id = questionId;
+    question.textContent = prompt.question;
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = '取消';
+    cancel.dataset.confirmAction = 'cancel';
+    cancel.addEventListener('click', () => closeConfirm());
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.textContent = prompt.confirmLabel;
+    confirm.dataset.confirmAction = 'ok';
+    confirm.addEventListener('click', () => {
+      const run = action;
+      closeConfirm();
+      run();
+    });
+    box.appendChild(question);
+    box.appendChild(cancel);
+    box.appendChild(confirm);
+    trigger.hidden = true;
+    parent.appendChild(box);
+    pendingConfirm = {box, trigger, action};
+    if (typeof cancel.focus === 'function') cancel.focus();
+  }
+
+  // One question at a time; Esc is the keyboard way out and never acts.
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !pendingConfirm) return;
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    closeConfirm();
+  });
+
   function stopRunPoll() {
     if (runTimer) {
       globalThis.clearInterval(runTimer);
@@ -289,14 +355,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.textContent = '取消这次运行';
-        cancel.addEventListener('click', async () => {
-          const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs/${item.id}/cancel`, {});
-          if (result.status !== 200) {
-            show('error', messageFor(result.body.error, '取消失败。'));
-            return;
-          }
-          show('ok', '已取消。');
-          await loadRuns();
+        cancel.addEventListener('click', () => {
+          openConfirm({
+            parent: head,
+            trigger: cancel,
+            prompt: cancellationPrompt(item),
+            action: () => cancelRun(item),
+          });
         });
         head.appendChild(cancel);
       }
@@ -323,6 +388,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       list.appendChild(row);
     }
+  }
+
+  async function cancelRun(item) {
+    if (!current || !current.id || !workspaceId()) return;
+    const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs/${item.id}/cancel`, {});
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '取消失败。'));
+      return;
+    }
+    show('ok', '已取消。');
+    await loadRuns();
   }
 
   async function loadRuns() {
@@ -576,7 +652,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadRuns();
   });
 
-  document.getElementById('remove-automation').addEventListener('click', async () => {
+  const removeButton = document.getElementById('remove-automation');
+
+  async function removeAutomation() {
     if (!current || !current.id || !workspaceId()) return;
     const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/remove`, {});
     if (result.status !== 200) {
@@ -591,6 +669,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopRunPoll();
     show('ok', '已删除。');
     await loadList();
+  }
+
+  removeButton.addEventListener('click', () => {
+    if (!current || !current.id || !workspaceId()) return;
+    openConfirm({
+      parent: removeButton.parentNode || form,
+      trigger: removeButton,
+      prompt: deletePrompt(current),
+      action: removeAutomation,
+    });
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
