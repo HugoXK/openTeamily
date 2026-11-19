@@ -71,8 +71,21 @@
     </div>
     <p id="skills-count" class="skills-count" role="status" aria-live="polite"></p>
     <p id="skills-error" role="status" aria-live="polite"></p><label>安装范围<select id="skills-scope"><option value="account">我的账户（自己的管理任务运行时）</option></select></label><label><input type="checkbox" id="skills-permission">我已阅读内容，允许将所选技能加入模型上下文；不授权联网、文件执行或对外操作。</label><p class="note skills-runtime-note">需要<a href="/runtimes">自己的在线运行时</a>和<a href="/settings#model-api-form">模型配置</a>。智能体范围需工作区管理权限；旧运行时须升级，独立 DSH 会话尚未接入。</p>
+
 <ul id="skills-list" class="skills-grid"></ul>
     <p id="skills-empty" class="note skills-empty" hidden>没有匹配的技能</p>
+<section class="skills-execution" aria-labelledby="skill-execution-heading">
+<h2 id="skill-execution-heading">运行与验证</h2>
+<p id="skills-readiness" role="status">正在检查当前范围的运行时和模型配置…</p>
+<p><button id="skills-refresh" type="button">刷新状态与记录</button> · <a href="/install/flybot.pyz">下载当前 FlyBot</a> · <a href="/runtimes">连接 / 重启运行时</a> · <a href="/settings#model-api-form">模型配置</a></p>
+<p class="note" id="skill-scope-warning">试用只加载本次所选技能，不调用连接器、不发送消息。自动化范围安装后会在该任务定时运行时生效：仅使用安装者自己的兼容在线运行时，不自动回退到其他成员；输出对工作区成员可见。更新 zipapp 后须停止旧进程并用原来的私有 key-file 重启；不会替你执行命令或读取密钥。</p>
+<form id="skill-run-form"><label>本次使用的已安装技能<select id="skill-run-skill" required></select></label>
+<label>输入任务或源材料<textarea id="skill-run-prompt" rows="5" maxlength="4000" required placeholder="粘贴实际内容，并写明希望技能完成什么。不会自动访问网页或文件。"></textarea></label>
+<button id="skill-run-submit" type="submit">使用所选技能运行</button></form>
+<p id="skill-run-error" role="status" aria-live="polite"></p>
+<label>保存结果到工作区（成员可见）<select id="skill-result-workspace"></select></label>
+<ul id="skill-run-history" aria-label="当前范围最近的技能运行记录"></ul>
+</section>
   </section>
   </main>
 </body>
