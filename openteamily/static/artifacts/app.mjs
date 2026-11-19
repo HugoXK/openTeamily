@@ -706,6 +706,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openEditor(item) {
+    if (pendingDeleteCancel) pendingDeleteCancel();
     closeNewMenu();
     current = item;
     listPanel.hidden = true;
@@ -1103,6 +1104,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
+    if (pendingDeleteCancel) pendingDeleteCancel();
     current = null;
     form.hidden = true;
     listPanel.hidden = false;

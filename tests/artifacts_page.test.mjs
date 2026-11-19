@@ -262,10 +262,15 @@ async function openArtifactsPage({items = [], artifact, workspaces = [{id: 'w1',
     if (path === '/v1/workspaces?limit=100') return reply({body: {items: workspaces}});
     if (path === '/v1/workspaces/w2/artifacts') return reply({body: {items: []}});
     if (path === '/v1/workspaces/w1/artifacts') return reply({body: {items: listed}});
-    if (path === '/v1/workspaces/w1/artifacts/a1') return reply({body: {artifact: target}});
-    if (path === '/v1/workspaces/w1/artifacts/a1/shares') return reply({body: {items: []}});
-    if (path === '/v1/workspaces/w1/artifacts/a1/versions') return reply({body: {items: []}});
-    if (path === '/v1/workspaces/w1/artifacts/a1/discover') return reply({body: {discover: {}}});
+    const detail = /^\/v1\/workspaces\/w1\/artifacts\/([^/]+)(\/(shares|versions|discover))?$/.exec(path);
+    if (detail && method === 'GET') {
+      if (detail[3] === 'shares') return reply({body: {items: []}});
+      if (detail[3] === 'versions') return reply({body: {items: []}});
+      if (detail[3] === 'discover') return reply({body: {discover: {}}});
+      if (detail[1] === target.id) return reply({body: {artifact: target}});
+      const row = listed.find(item => item.id === detail[1]);
+      if (row) return reply({body: {artifact: {...row, revision: 1, body: 'hello'}}});
+    }
     if (path === '/v1/workspaces/w1/artifacts/a1/remove') {
       listed = [];
       return reply({status: 200});
@@ -417,6 +422,126 @@ test('switching workspace retires a delete question aimed at the workspace it le
       page.calls.filter((call) => call.method === 'POST').map((call) => call.path),
       [],
       'switching workspace while the question is open must delete nothing',
+    );
+  } finally {
+    page.close();
+  }
+});
+
+test('returning to the list retires the delete question', async () => {
+  const page = await openArtifactsPage({
+    items: [{id: 'a1', title: '每日简报', kind: 'document', created_by: 'alice'}],
+    artifact: {id: 'a1', title: '每日简报', kind: 'document', revision: 1, body: 'hello', created_by: 'alice'},
+  });
+  try {
+    await openEditorOn(page);
+    void page.elements.get('remove-artifact').dispatch('click');
+    assert.equal(page.alertdialog().length, 1, 'clicking remove asks the user first');
+
+    await page.elements.get('cancel-editor').dispatch('click');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(
+      page.alertdialog().length,
+      0,
+      'going back to the list must not leave the delete question hanging over it',
+    );
+    assert.deepEqual(
+      page.calls.filter((call) => call.method === 'POST').map((call) => call.path),
+      [],
+      'nothing is deleted by leaving the editor',
+    );
+  } finally {
+    page.close();
+  }
+});
+
+test('opening another artifact never inherits the previous delete question', async () => {
+  const page = await openArtifactsPage({
+    items: [
+      {id: 'a1', title: '每日简报', kind: 'document', created_by: 'alice'},
+      {id: 'a2', title: '周报', kind: 'document', created_by: 'alice'},
+    ],
+    artifact: {id: 'a1', title: '每日简报', kind: 'document', revision: 1, body: 'hello', created_by: 'alice'},
+  });
+  try {
+    const list = page.elements.get('artifact-list');
+    await list.children[0].children[0].dispatch('click');
+    void page.elements.get('remove-artifact').dispatch('click');
+    assert.equal(page.alertdialog().length, 1, 'clicking remove asks the user first');
+
+    await page.elements.get('cancel-editor').dispatch('click');
+    await new Promise((resolve) => setImmediate(resolve));
+    await list.children[1].children[0].dispatch('click');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(
+      page.alertdialog().length,
+      0,
+      'the question about the first artifact must not follow the editor into the second one',
+    );
+    const posts = page.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/remove'));
+    assert.equal(posts.length, 0, 'opening a second artifact deletes nothing');
+    const form = page.elements.get('editor-form');
+    assert.equal(form.hidden, false, 'the second artifact is open in the editor');
+  } finally {
+    page.close();
+  }
+});
+
+test('the confirmation keeps the target it captured even if the picker moves without an event', async () => {
+  const page = await openArtifactsPage({
+    items: [{id: 'a1', title: '每日简报', kind: 'document', created_by: 'alice'}],
+    artifact: {id: 'a1', title: '每日简报', kind: 'document', revision: 1, body: 'hello', created_by: 'alice'},
+    workspaces: [{id: 'w1', name: 'Desk'}, {id: 'w2', name: 'Studio'}],
+  });
+  try {
+    await openEditorOn(page);
+    void page.elements.get('remove-artifact').dispatch('click');
+    const box = page.alertdialog()[0];
+    assert.ok(box, 'clicking remove asks the user first');
+
+    page.elements.get('workspace').value = 'w2';
+    box.children.filter(child => child.tagName === 'BUTTON')[1].dispatch('click');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const posts = page.calls.filter((call) => call.method === 'POST');
+    assert.deepEqual(
+      posts.map((call) => call.path),
+      ['/v1/workspaces/w1/artifacts/a1/remove'],
+      'the answer must delete the artifact the question named, in the workspace it named',
+    );
+  } finally {
+    page.close();
+  }
+});
+
+test('opening an artifact straight from a stale list clears the question', async () => {
+  const page = await openArtifactsPage({
+    items: [
+      {id: 'a1', title: '每日简报', kind: 'document', created_by: 'alice'},
+      {id: 'a2', title: '周报', kind: 'document', created_by: 'alice'},
+    ],
+    artifact: {id: 'a1', title: '每日简报', kind: 'document', revision: 1, body: 'hello', created_by: 'alice'},
+  });
+  try {
+    const list = page.elements.get('artifact-list');
+    await list.children[0].children[0].dispatch('click');
+    void page.elements.get('remove-artifact').dispatch('click');
+    assert.equal(page.alertdialog().length, 1, 'clicking remove asks the user first');
+
+    await list.children[1].children[0].dispatch('click');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(
+      page.alertdialog().length,
+      0,
+      'opening another artifact must clear a question the editor still holds',
+    );
+    assert.equal(
+      page.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/remove')).length,
+      0,
+      'opening another artifact deletes nothing',
     );
   } finally {
     page.close();
