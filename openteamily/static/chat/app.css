@@ -1337,3 +1337,25 @@ html[data-theme-resolved="dark"] { --ot-bubble-mine: var(--ot-accent-soft); }
 @media (max-width: 700px) {
   .group-info { position: fixed; top: auto; left: .5rem; right: .5rem; bottom: .5rem; width: auto; max-height: 80vh; }
 }
+
+/* Parity (2026-11-19) message right-click menu (01b2): reaction row then actions;
+   translate, save-to-space and delete stay disabled until their APIs exist. */
+.message-menu {
+  position: fixed; z-index: 60; min-width: 11.5rem; padding: .3125rem; display: grid; gap: .0625rem;
+  border-radius: .875rem; background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line), 0 16px 36px rgba(20, 40, 30, .16);
+}
+.message-menu[hidden] { display: none; }
+.message-menu > button {
+  height: 2rem; min-height: 0; padding: 0 .625rem; border: 0; border-radius: .5rem; background: transparent; box-shadow: none;
+  color: var(--ot-ink); font-size: .8125rem; text-align: left;
+}
+.message-menu > button[hidden] { display: none; }
+.message-menu > button:hover:not(:disabled), .message-menu > button:focus-visible { background: var(--ot-surface-2); outline: none; }
+.message-menu > button:disabled { color: var(--ot-muted); opacity: 1; cursor: not-allowed; }
+.message-menu .message-menu-danger:not(:disabled) { color: #b42318; }
+.message-menu hr { margin: .25rem .375rem; border: 0; border-top: 1px solid var(--ot-line); }
+.message-menu-reactions { display: flex; justify-content: space-between; gap: .125rem; padding: .125rem .125rem .3125rem; margin-bottom: .1875rem; border-bottom: 1px solid var(--ot-line); }
+.message-menu-reactions button { width: 1.875rem; height: 1.875rem; min-height: 0; padding: 0; border: 0; border-radius: 50%; background: transparent; box-shadow: none; font-size: 1.05rem; line-height: 1; }
+.message-menu-reactions button:hover, .message-menu-reactions button:focus-visible { background: var(--ot-surface-2); outline: none; transform: scale(1.08); }
+.message-menu > button:disabled { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.message-menu > button:disabled::after { content: "未接通"; font-size: .6875rem; color: var(--ot-muted); }

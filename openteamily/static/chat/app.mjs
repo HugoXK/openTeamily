@@ -756,6 +756,82 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     bar.append(add, picker);
   }
 
+  let messageMenuTarget = null;
+  function closeMessageMenu() {
+    const menu = document.getElementById('message-context-menu');
+    if (menu) menu.hidden = true;
+    messageMenuTarget = null;
+  }
+
+  function openMessageMenu(item, li, mine, x, y) {
+    const menu = document.getElementById('message-context-menu');
+    if (!menu) return;
+    messageMenuTarget = {item, li, mine};
+    const reactions = document.getElementById('message-menu-reactions');
+    reactions.replaceChildren(...MESSAGE_REACTIONS.map(emoji => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.setAttribute('role', 'menuitem');
+      button.textContent = emoji;
+      button.setAttribute('aria-label', '回应 ' + emoji);
+      button.dataset.emoji = emoji;
+      return button;
+    }));
+    const pin = menu.querySelector('[data-menu="pin"]');
+    pin.textContent = pinnedIds.has(item.id) ? '取消置顶' : '置顶';
+    menu.querySelector('[data-menu="retract"]').hidden = !mine;
+    menu.querySelector('[data-menu="forward"]').disabled = forwardTargets(socialConversations, currentConversation && currentConversation.id).length === 0;
+    menu.hidden = false;
+    const width = menu.offsetWidth || 200, height = menu.offsetHeight || 360;
+    const left = Math.max(8, Math.min(x, globalThis.innerWidth - width - 8));
+    const top = Math.max(8, Math.min(y, globalThis.innerHeight - height - 8));
+    menu.style.setProperty('left', left + 'px');
+    menu.style.setProperty('top', top + 'px');
+    const first = menu.querySelector('button:not(:disabled)');
+    if (first) first.focus();
+  }
+
+  const messageMenu = document.getElementById('message-context-menu');
+  if (messageMenu) {
+    messageMenu.addEventListener('click', async event => {
+      const button = event.target.closest('button');
+      if (!button || button.disabled || !messageMenuTarget) return;
+      const {item, li} = messageMenuTarget;
+      const action = button.dataset.menu;
+      closeMessageMenu();
+      if (button.dataset.emoji) {
+        const choice = li.querySelector(`.reaction-picker button[aria-label="回应 ${button.dataset.emoji}"]`);
+        if (choice) choice.click();
+      } else if (action === 'reply') {
+        const input = document.getElementById('chat-body');
+        const author = (li.querySelector('.role') || {}).textContent || '';
+        const excerpt = String(item.body || '').replace(/\s+/g, ' ').slice(0, 80);
+        input.value = `> ${author}：${excerpt}\n` + input.value;
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+        input.focus();
+      } else if (action === 'copy') {
+        try { await navigator.clipboard.writeText(item.body || ''); show('ok', '已复制。'); }
+        catch { show('error', '浏览器不允许复制，请手动选择文本。'); }
+      } else if (action === 'forward' || action === 'select') {
+        setSelecting(true);
+        if (action === 'forward') { selectedMessages.add(item.id); syncForwardBar(); renderSocialMessages(lastSocialItems); }
+      } else if (action === 'pin') {
+        const pinButton = li.querySelector('.message-tools button');
+        if (pinButton) pinButton.click();
+      } else if (action === 'retract') {
+        const retract = Array.from(li.querySelectorAll(':scope > button')).find(node => node.textContent === '撤回');
+        if (retract) retract.click();
+      }
+    });
+    document.addEventListener('click', event => {
+      if (!messageMenu.hidden && !messageMenu.contains(event.target)) closeMessageMenu();
+    });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape' && !messageMenu.hidden) closeMessageMenu(); });
+    globalThis.addEventListener('resize', closeMessageMenu);
+    const scroller = document.getElementById('message-scroller');
+    if (scroller) scroller.addEventListener('scroll', closeMessageMenu, {passive: true});
+  }
+
   let lastSocialItems = [];
   function renderSocialMessages(items) {
     lastSocialItems = items || [];
@@ -826,6 +902,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       if (item.role !== 'agent' && !item.retracted) li.append(messageTools(item));
       if (item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
+      if (item.role !== 'agent' && !item.retracted) {
+        li.addEventListener('contextmenu', event => {
+          if (selecting) return;
+          event.preventDefault();
+          openMessageMenu(item, li, mine, event.clientX, event.clientY);
+        });
+      }
       list.append(li);
     }
     const scroller = document.getElementById('message-scroller');

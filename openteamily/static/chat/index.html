@@ -223,6 +223,19 @@
         <ul id="group-info-people" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-people" hidden></ul>
       </section>
     </aside>
+    <div id="message-context-menu" class="message-menu" role="menu" aria-label="消息操作" hidden>
+      <div class="message-menu-reactions" id="message-menu-reactions"></div>
+      <button type="button" role="menuitem" data-menu="reply">回复</button>
+      <button type="button" role="menuitem" data-menu="save" disabled title="未接通：群聊消息还不能保存到资料空间">保存到资料空间</button>
+      <button type="button" role="menuitem" data-menu="translate" disabled title="未接通：没有翻译服务">翻译</button>
+      <button type="button" role="menuitem" data-menu="copy">复制</button>
+      <button type="button" role="menuitem" data-menu="forward">转发</button>
+      <button type="button" role="menuitem" data-menu="pin">置顶</button>
+      <button type="button" role="menuitem" data-menu="select">选择消息</button>
+      <hr>
+      <button type="button" role="menuitem" data-menu="retract">撤回</button>
+      <button type="button" role="menuitem" data-menu="delete" class="message-menu-danger" disabled title="未接通：还没有删除消息接口">删除</button>
+    </div>
     <section id="conversation-search-panel" hidden aria-label="会话内搜索">
       <form id="conversation-search-form"><label>搜索当前会话<input id="conversation-search-query" maxlength="80"></label><button type="submit">搜索</button><button type="button" id="conversation-search-close">关闭</button></form>
       <p id="conversation-search-status" role="status"></p><ul id="conversation-search-results"></ul><button type="button" id="conversation-search-more" hidden>加载更多</button>
