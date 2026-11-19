@@ -2213,6 +2213,53 @@ async function main() {
       await page.reload({waitUntil:'load'});
       await waitForLocatorText(page,'#skills-list','历史任务已有加载回执');
       record('skills_daemon_loaded',await page.evaluate(async id=>{const d=await(await fetch('/v1/skills/bindings')).json();return d.items.some(i=>i.skill_id==='meeting-notes'&&i.last_loaded_task===id)},task),'Upgraded daemon verified exact package digests and acknowledged context loading before successful synthetic inference; Python tests inspect model request content');
+      await page.locator('.skill-card').filter({has:page.locator('button[data-skill="meeting-notes"]')}).locator('.skill-use').click();
+      await page.waitForFunction(()=>!document.getElementById('skill-run-submit').disabled);
+      // Computed enabled primary states, not token-only or mixed-theme inference.
+      const skillContrasts=[];
+      for(const theme of ['light','dark']) {
+        await page.evaluate(value=>{document.documentElement.dataset.themeResolved=value},theme);
+        for(const state of ['normal','hover']) {
+          if(state==='hover')await page.locator('#skill-run-submit').hover();else await page.mouse.move(0,0);
+          const measured=await page.locator('#skill-run-submit').evaluate(e=>{
+            for(const animation of e.getAnimations())animation.finish();
+            const s=getComputedStyle(e),lum=color=>{const c=color.match(/[\d.]+/g).slice(0,3).map(Number).map(n=>{n/=255;return n<=.04045?n/12.92:((n+.055)/1.055)**2.4});return .2126*c[0]+.7152*c[1]+.0722*c[2]};
+            const a=lum(s.color),b=lum(s.backgroundColor);
+            return {ratio:(Math.max(a,b)+.05)/(Math.min(a,b)+.05),color:s.color,background:s.backgroundColor,image:s.backgroundImage,opacity:s.opacity};
+          });
+          skillContrasts.push({theme,state,...measured});
+        }
+        if(theme==='dark')screenshots.push(path.basename(await shot(page,outDir,'107-skills-run-dark-hover.png')));
+      }
+      record('skills_run_primary_contrast',skillContrasts.every(s=>s.ratio>=4.5&&s.image==='none'&&s.opacity==='1'),'Actual enabled normal/hover, light/dark primary contrast: '+JSON.stringify(skillContrasts));
+      await page.evaluate(()=>{document.documentElement.dataset.themeResolved='light'});
+      await page.mouse.move(0,0);
+      await page.locator('#skill-run-prompt').fill('[SYNTHETIC CI] Use only the selected meeting skill on: We decided to test the full run and document path.');
+      await page.locator('#skill-run-submit').click();
+      await waitForApi(page,'/v1/skills/runs',d=>d.items?.some(r=>r.verified&&r.task.prompt.includes('full run and document path')));
+      await page.locator('#skills-refresh').click();
+      await waitForLocatorText(page,'#skill-run-history',ready.provider_text);
+      record('skills_explicit_run_verified',true,'Real selected-skill task completed in the daemon with exact material receipt; synthetic provider only, no tools or vendor acceptance');
+      await page.locator('.skills-execution').scrollIntoViewIfNeeded();
+      screenshots.push(path.basename(await shot(page,outDir,'104-skills-explicit-run.png')));
+      await page.reload({waitUntil:'load'});
+      await waitForLocatorText(page,'#skill-run-history',ready.provider_text);
+      record('skills_run_history_reload',true,'Actual selected-skill result and load proof survive reload');
+      await page.locator('#skill-result-workspace').selectOption(ready.workspace_id);
+      await page.getByRole('button',{name:'保存结果为工作区文档',exact:true}).first().click();
+      const savedSkill=page.locator('#skill-run-history a').first();await savedSkill.waitFor({state:'visible'});
+      record('skills_result_document',await savedSkill.getAttribute('href')!=='','Explicit result save returned a real authorized document, not a simulated download');
+      screenshots.push(path.basename(await shot(page,outDir,'105-skills-result-document.png')));
+      const savedHref=await savedSkill.getAttribute('href');
+      await page.goto(origin+savedHref,{waitUntil:'load'});
+      await page.locator('#editor-form').waitFor({state:'visible'});
+      await waitForStoredValue(page,'#editor-form textarea[name="body"]',ready.provider_text);
+      record('skills_saved_document_real_editor',true,'Saved-result deep link selected the authorized workspace and loaded the actual persisted text in the rich editor');
+      screenshots.push(path.basename(await shot(page,outDir,'106-skills-result-editor.png')));
+      await page.goto(origin+'/skills',{waitUntil:'load'});
+      await page.waitForFunction(()=>document.querySelector('button[data-skill="meeting-notes"]')?.textContent==='卸载');
+
+      await page.locator('.skill-card').filter({has:page.locator('button[data-skill="meeting-notes"]')}).scrollIntoViewIfNeeded();
       await page.locator('.skill-card').filter({has:page.locator('button[data-skill="meeting-notes"]')}).locator('summary').click();
       screenshots.push(path.basename(await shot(page,outDir,'97-skills-loaded-content.png')));
       await page.setViewportSize({width:390,height:844});

@@ -118,5 +118,69 @@ class MessageToolTests(unittest.TestCase):
                                          key)['status'], 409)
 
 
+    def test_delete_hides_a_message_only_for_the_deleting_account(self):
+        first = self.send(self.alice, '只对我隐藏')
+        second = self.send(self.bob, '对方仍然可见')
+        base = f'{self.base}/{self.source}'
+        self.assertEqual(self.bob.call('DELETE', f'{base}/messages/{second}', parse='raw')['status'], 204)
+        self.assertEqual([m['body'] for m in self.bob.call('GET', base)['body']['items']], ['只对我隐藏'])
+        self.assertEqual(self.bob.call('GET', base)['body']['conversation']['preview'], '只对我隐藏')
+        self.assertEqual([m['body'] for m in self.alice.call('GET', base)['body']['items']],
+                         ['只对我隐藏', '对方仍然可见'])
+        self.assertEqual(self.alice.call('DELETE', f'{base}/messages/{first}', parse='raw')['status'], 204)
+        self.assertEqual([m['body'] for m in self.alice.call('GET', base)['body']['items']], ['对方仍然可见'])
+        self.assertEqual(self.alice.call('GET', base)['body']['conversation']['preview'], '对方仍然可见')
+        self.assertEqual(self.alice.call('DELETE', f'{base}/messages/{first}', parse='raw')['status'], 404)
+        self.assertEqual(self.bob.call('DELETE', f'{base}/messages/{first}')['status'], 403)
+        self.assertEqual(self.carol.call('DELETE', f'{base}/messages/{first}')['status'], 404)
+
+    def test_bare_message_post_is_rejected_without_mutation(self):
+        mid = self.send(self.alice, 'keep this message')
+        path = f'{self.base}/{self.source}/messages/{mid}'
+        result = self.alice.call('POST', path, {'revision': 1, 'body': 'not an edit'})
+        self.assertEqual(result['status'], 400, result)
+        items = self.alice.call('GET', f'{self.base}/{self.source}')['body']['items']
+        self.assertEqual([(m['id'], m['body'], m['revision']) for m in items],
+                         [(mid, 'keep this message', 1)])
+
+    def test_delete_operation_subresources_are_rejected_without_hiding(self):
+        mid = self.send(self.alice, 'must remain visible')
+        base = f'{self.base}/{self.source}'
+        for operation in ('edit', 'retract', 'pin', 'reactions', 'save'):
+            with self.subTest(operation=operation):
+                result = self.alice.call('DELETE', f'{base}/messages/{mid}/{operation}', parse='raw')
+                self.assertEqual(result['status'], 400, result)
+                for client in (self.alice, self.bob):
+                    items = client.call('GET', base)['body']['items']
+                    self.assertEqual([(m['id'], m['body']) for m in items],
+                                     [(mid, 'must remain visible')])
+        with self.app.store.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM social_message_deletions').fetchone()[0], 0)
+
+    def test_message_edit_and_delete_keep_author_membership_and_csrf_checks(self):
+        mid = self.send(self.alice, 'before edit')
+        base = f'{self.base}/{self.source}'
+        path = f'{base}/messages/{mid}'
+        payload = {'revision': 1, 'body': 'after edit'}
+        # Bob is in the conversation, Carol only in its workspace; neither is the author.
+        for client, status in ((self.bob, 403), (self.carol, 404)):
+            self.assertEqual(client.call('POST', path + '/edit', payload)['status'], status)
+            self.assertEqual(client.call('DELETE', path)['status'], status)
+        anonymous = Client(self.app, peer='127.0.0.4')
+        self.assertEqual(anonymous.call('POST', path + '/edit', payload)['status'], 401)
+        self.assertEqual(anonymous.call('DELETE', path)['status'], 401)
+        self.assertEqual(self.alice.call('POST', path + '/edit', payload, csrf=False)['status'], 403)
+        self.assertEqual(self.alice.call('DELETE', path, csrf=False)['status'], 403)
+        edited = self.alice.call('POST', path + '/edit', payload)
+        self.assertEqual(edited['status'], 200, edited)
+        self.assertEqual((edited['body']['message']['body'], edited['body']['message']['revision']),
+                         ('after edit', 2))
+        self.assertEqual(self.alice.call('DELETE', path, parse='raw')['status'], 204)
+        self.assertEqual(self.alice.call('GET', base)['body']['items'], [])
+        self.assertEqual([m['body'] for m in self.bob.call('GET', base)['body']['items']], ['after edit'])
+        self.assertEqual(self.alice.call('DELETE', path, parse='raw')['status'], 404)
+
+
+
 if __name__ == '__main__':
     unittest.main()
