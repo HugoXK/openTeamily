@@ -75,3 +75,26 @@ completed editor status (no assertion/timeout relaxation), and keeps the mobile
 new-account agent-use/reload scene at471px rather than switching it to desktop.
 The independent desktop account still exercises1280px. Latest-head CI remains
 the merge authority; production and real-provider acceptance are not claimed.
+
+## Exact red upstream check and independently reproduced cleanup repair
+Head6be221e produced119 screenshots /153 strict passing checks, including the
+full471px mobile and independent1280px desktop registration/session/normal-use
+flows, imported-v2 run/version upgrade/revoke and real live-document exports.
+It was NOT merged: push Node22 job135712288221 / run44567134948 failed the
+pinned restart test's after hook at rounds.test.js:1488 with ENOTEMPTY.
+All test assertions had completed; the fixture registered rmSync before its
+restarted runtime's asynchronous stop hook. Actual Node hook-order reproduction
+and execution of the exact pinned cleanup fragments demonstrate that ordering.
+
+The owned test-only loader now hash-pins that one complete source file and
+orders the same awaited restarted disposer before the same rmSync/options.
+Every assertion byte is unchanged; source round-trip, unrelated-module no-op,
+delayed-stop ordering and propagation of both stop/removal failures are tested.
+No vendor bytes, test assertions, cleanup retries, gate requirements or runtime
+production code are changed. The existing annotation completion overlay remains
+intact. CI adds the lifecycle overlay's tests to the existing façade job.
+The old red job was not rerun. A meaningful new fix head must independently pass
+the original dual-event14-check gate. A local attempt at the actual pinned
+restart test stopped during module loading because @deepseek-ai/dsh-llm is not
+installed here; no dependency installation/workaround was attempted. That
+actual upstream execution is therefore still pending the normal CI runner.
