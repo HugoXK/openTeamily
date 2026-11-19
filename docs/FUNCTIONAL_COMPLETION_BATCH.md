@@ -1,6 +1,6 @@
 # Owned functional completion aggregate
 
-Base: ef71b3d1, after merged342; ordinary-synced main9a7aa53c including contributors332 and348. Local branch: feat/functional-completion-big. Not a claim of Teamily parity or all controls complete.
+Base: ef71b3d1, after merged342; ordinary-synced main54222f7 including contributors332,348,363 and340. Local branch: feat/functional-completion-big. Not a claim of Teamily parity or all controls complete.
 
 | Gap/control | Implementation and state | Automated proof | Acceptance still required |
 |---|---|---|---|
@@ -98,3 +98,14 @@ the original dual-event14-check gate. A local attempt at the actual pinned
 restart test stopped during module loading because @deepseek-ai/dsh-llm is not
 installed here; no dependency installation/workaround was attempted. That
 actual upstream execution is therefore still pending the normal CI runner.
+
+## Ordinary sync after the green functional head
+Headc671e98 automatic upstream push and PR workflows both passed the actual
+pinned Node22/24 suites after the independently reproduced lifecycle repair.
+Its latest push UI also passed119 images /153 checks. Before merge, the shared
+gate correctly blocked because main advanced with contributors363 memory
+history/restore and340 followed-public-work notifications, conflicting in the
+generated inventory. Those landed changes are ordinarily merged, not rebased,
+force-pushed, duplicated or edited on their branches. The census is regenerated
+from the combined source. The newly synchronized head requires the original
+full gate again; a previously green parent is not sufficient.
