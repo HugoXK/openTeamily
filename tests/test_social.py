@@ -223,6 +223,33 @@ class SocialMessengerTests(unittest.TestCase):
         self.assertEqual(self.eve.call('GET', self.base())['status'], 404)
 
 
+    def test_conversation_detail_names_the_first_unread_message(self):
+        cid = self.create(self.alice, 'dm', [self.bob_id])['body']['conversation']['id']
+        base = self.base() + '/' + cid
+        first = self.alice.call('POST', base + '/messages', {'body': 'first unread boundary'},
+                                {'HTTP_IDEMPOTENCY_KEY': 'unread-from-0001'})['body']['message']['id']
+        second = self.alice.call('POST', base + '/messages', {'body': 'second unread boundary'},
+                                 {'HTTP_IDEMPOTENCY_KEY': 'unread-from-0002'})['body']['message']['id']
+        # Nothing read yet: the whole loaded tail counts as unread.
+        detail = self.bob.call('GET', base)['body']
+        self.assertEqual(detail['conversation']['unread_count'], 2)
+        self.assertEqual(detail['unread_from'], first)
+        ack = self.bob.call('POST', base + '/read', {'message_id': first})
+        self.assertEqual(ack['status'], 200, ack)
+        detail = self.bob.call('GET', base)['body']
+        self.assertEqual(detail['conversation']['unread_count'], 1)
+        self.assertEqual(detail['unread_from'], second)
+        # A fully read conversation has no boundary to draw.
+        self.bob.call('POST', base + '/read', {'message_id': second})
+        self.assertIsNone(self.bob.call('GET', base)['body']['unread_from'])
+        # Your own messages never move the reader's boundary.
+        self.bob.call('POST', base + '/messages', {'body': 'bob writes back'},
+                      {'HTTP_IDEMPOTENCY_KEY': 'unread-from-0003'})
+        detail = self.bob.call('GET', base)['body']
+        self.assertEqual(detail['conversation']['unread_count'], 0)
+        self.assertIsNone(detail['unread_from'])
+
+
 if __name__ == '__main__':
     unittest.main()
 
