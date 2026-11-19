@@ -117,10 +117,22 @@ def generate():
     }
 
 
+def render(data):
+    """One census record per line keeps the exhaustive JSON reviewable on GitHub."""
+    fields = []
+    for key, value in data.items():
+        if isinstance(value, list):
+            encoded = '[\n' + ',\n'.join('    ' + json.dumps(row, ensure_ascii=False) for row in value) + '\n  ]'
+        else:
+            encoded = json.dumps(value, ensure_ascii=False, indent=2).replace('\n', '\n  ')
+        fields.append('  ' + json.dumps(key) + ': ' + encoded)
+    return '{\n' + ',\n'.join(fields) + '\n}\n'
+
+
 if __name__ == '__main__':
     data = generate()
     destination = ROOT / 'docs/inventory/visible-controls.json'
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
+    destination.write_text(render(data))
     print(len(data['controls']), 'static controls;', len(data['dynamic_sites']), 'dynamic sites;',
           len(data['server_template_controls']), 'server-template controls;', len(data['routes']), 'HTML surfaces')
