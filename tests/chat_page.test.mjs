@@ -1367,6 +1367,15 @@ test('inlineBold splits text into plain and bold runs', () => {
   assert.deepEqual(inlineBold(''), []);
 });
 
+test('the message menu offers delete that hides the message only for this account', () => {
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../openteamily/static/chat/app.mjs', import.meta.url), 'utf8');
+  assert.match(html, /data-menu="delete"/);
+  assert.doesNotMatch(html, /data-menu="delete"[^>]*disabled/);
+  assert.doesNotMatch(html, /还没有删除消息接口/);
+  assert.match(app, /request\('DELETE', `\$\{socialBase\(\)\}\/\$\{cid\}\/messages\/\$\{item\.id\}`\)/);
+});
+
 test('folding preserves complete message and link preview preference never fetches or executes markup', async () => {
   const {renderMessageText}=await import('../openteamily/static/chat/utilities.mjs');
   const document={createElement:tag=>new FakeElement(tag)}, root=new FakeElement('div');
@@ -1443,4 +1452,61 @@ test('new dialog and document-card surfaces use actual theme tokens, not undefin
   assert.match(css, /#message-assist-dialog, #announcement-dialog \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
   assert.match(css, /#resource-picker \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
   assert.match(css, /\.chat-document-card \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
+});
+
+
+for (const phase of ['directory', 'fanout']) for (const target of ['ws-1','ws-2']) {
+  test(`deferred ${phase} from an older load cannot overwrite the latest ${target} session list`, async () => {
+    const {doc, el} = fakeChatDocument(chatHtml()); const restore = installChatGlobals();
+    let release, first=true; const requests=[];
+    const row=id=>({id,kind:'group',title:id,updated:30,members:[]});
+    const fetcher=async path=>{
+      requests.push(path);
+      if(path==='/v1/auth/session')return json(200,{user:{id:'user-1',username:'alice'}});
+      if(path==='/v1/onboarding')return json(200,{onboarding:{completed:true}});
+      if(path==='/v1/personal-agent')return json(200,{personal_agent:{workspace:{id:'ws-1'}}});
+      if(path==='/v1/workspaces?limit=100')return json(200,{items:[{id:'ws-1',name:'First'},{id:'ws-2',name:'Second'}]});
+      if(path==='/v1/settings')return json(200,{settings:{values:{}}});
+      if(path.endsWith('/agents?limit=100')){
+        if(first){first=false;
+          if(phase==='directory')return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'old-agent',name:'old'}]}));});
+          return json(200,{items:[{id:'old-agent',name:'old'}]});
+        }
+        return json(200,{items:[]});
+      }
+      if(path.includes('/agents/old-agent/conversations?'))return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'stale-agent-conversation',title:'stale',updated:40}]}));});
+      if(path.endsWith('/social/conversations?limit=100'))return json(200,{items:[row(release?'new-current':'old-stale')]});
+      if(path.endsWith('/members')||path.endsWith('/artifacts?limit=100'))return json(200,{items:[]});
+      return json(404,{error:{message:'not in synthetic fixture'}});
+    };
+    try{
+      mount(doc,{fetcher}); await settle(); assert.equal(typeof release,'function','first real request is pending');
+      el('workspace').value=target; await fire(el('workspace'),'change'); await settle();
+      const ids=()=>el('conversation-list').children.map(li=>li.children[0]?.dataset.conversation).filter(Boolean);
+      assert.deepEqual(ids(),['new-current']);
+      release(); await settle(); assert.deepEqual(ids(),['new-current'],'late old data must not overwrite a newer successful load');
+      if(phase==='directory')assert.equal(requests.some(path=>path.includes('/agents/old-agent/')),false,'stale directory must not trigger new fanout');
+    }finally{restore();}
+  });
+}
+
+
+test('initial SSE cannot supersede an uncommitted session directory and lose a conversation deep link',async()=>{
+ const {doc,el}=fakeChatDocument(chatHtml()),restore=installChatGlobals();const saved=globalThis.EventSource;
+ const sources=[];let release,first=true;
+ class Source{constructor(){this.handlers={};sources.push(this)}addEventListener(n,fn){this.handlers[n]=fn}close(){}}
+ globalThis.EventSource=Source;globalThis.location.hash='#workspace=ws-1&agent=agent-1&conversation=conv-1';
+ const fallback=chatFetcher().fetcher;
+ const fetcher=async(path,options)=>{
+  if(path.endsWith('/agents?limit=100')){if(first){first=false;return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'agent-1',name:'Deep link agent'}]}));});}return json(200,{items:[{id:'agent-1',name:'Deep link agent'}]});}
+  if(path.endsWith('/agents/agent-1/conversations?limit=100'))return json(200,{items:[{id:'conv-1',title:'Stored conversation'}]});
+  if(path.endsWith('/agents/agent-1/conversations/conv-1'))return json(200,{conversation:{id:'conv-1',title:'Stored conversation'},items:[{id:'m-1',role:'assistant',body:'Stored actual response',status:'succeeded'}]});
+  return fallback(path,options);
+ };
+ try{
+  mount(doc,{fetcher});await settle();assert.equal(typeof release,'function');assert.equal(sources.length,0,'subscribe only after the initial directory commits');
+  release();await settle();assert.equal(sources.length,1);
+  sources[0].handlers.invalidate({data:JSON.stringify({version:'f'.repeat(64),domains:{social:'a'.repeat(64),artifacts:'b'.repeat(64),notifications:'c'.repeat(64)}})});
+  await settle();assert.match(el('chat-title').textContent,/Deep link agent/);assert.ok(el('message-list').children.length>0,'initial snapshot refresh retains the deep-linked history');
+ }finally{if(saved===undefined)delete globalThis.EventSource;else globalThis.EventSource=saved;restore();}
 });

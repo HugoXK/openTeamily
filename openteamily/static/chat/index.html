@@ -86,6 +86,7 @@
     </div>
     <label class="workspace-pick">工作区
       <select id="workspace"></select>
+      <span id="workspace-events-status" class="note" role="status" aria-live="polite">实时更新未连接</span><button type="button" id="workspace-events-retry">重连更新</button>
     </label>
     <p id="whoami"></p>
     <section id="notifications-panel" class="notifications-panel" hidden aria-labelledby="notifications-heading">
@@ -172,7 +173,7 @@
   <section id="login-panel" hidden>
     <h2>登录</h2>
     <form id="login-form" method="post" action="/v1/auth/login">
-      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>用户名 <input type="text" id="username" name="username" required autocomplete="username" maxlength="64"></label>
       <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
       <button type="submit">登录</button>
     </form>
@@ -241,7 +242,7 @@
       <hr>
       <button type="button" role="menuitem" data-menu="edit">编辑</button>
       <button type="button" role="menuitem" data-menu="retract">撤回</button>
-      <button type="button" role="menuitem" data-menu="delete" class="message-menu-danger" disabled title="未接通：还没有删除消息接口">删除</button>
+      <button type="button" role="menuitem" data-menu="delete" class="message-menu-danger">删除</button>
     </div>
     <section id="conversation-search-panel" hidden aria-label="会话内搜索">
       <form id="conversation-search-form"><label><span class="sr-only">搜索当前会话</span><input id="conversation-search-query" type="search" maxlength="80" placeholder="搜索当前会话" autocomplete="off"></label><button type="submit">搜索</button><button type="button" id="conversation-search-close" aria-label="关闭搜索">×</button></form>
@@ -249,6 +250,7 @@
       <p id="conversation-search-status" role="status"></p><ul id="conversation-search-results"></ul><button type="button" id="conversation-search-more" hidden>加载更多</button>
     </section>
     <p id="social-agent-members" class="gap-note group-agent-note" hidden></p>
+    <p id="conversation-live-update" class="note" hidden>此会话可能有新内容。<button type="button" id="conversation-live-load">加载会话更新（保留输入草稿）</button></p>
     <section id="pinned-messages" class="chat-strip" hidden aria-labelledby="pinned-messages-heading">
       <h2 id="pinned-messages-heading">置顶消息</h2>
       <ul id="pinned-message-list"></ul>

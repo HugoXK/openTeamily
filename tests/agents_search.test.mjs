@@ -238,3 +238,27 @@ test('the saved Personal Agent look replaces the monogram in the directory', asy
   assert.equal(other.className, 'avatar');
   assert.equal(other.textContent, 'O');
 });
+
+
+test('create form retains its element after DOM dispatch clears currentTarget during await', async () => {
+  const {doc,el}=fakeDocument();const requests=[],agents=[];let release,reset=0;
+  const ordinary=directoryFetcher(requests,{agents,conversations:[]});
+  const fetcher=async(path,options={})=>{
+    if(path==='/v1/workspaces/ws-1/agents'&&options.method==='POST'){
+      const agent={id:'new-agent',...JSON.parse(options.body),revision:1};
+      agents.push(agent);return await new Promise(resolve=>{release=()=>resolve(json(201,{agent}));});
+    }
+    return ordinary(path,options);
+  };
+  mount(doc,{fetcher});await tick();
+  const form=el('create-form');form.elements.name.value='Actually persisted';form.reset=()=>{reset++;};
+  const saved=globalThis.FormData;
+  globalThis.FormData=class{constructor(form){this.form=form}get(name){return this.form.elements[name]?.value||''}};
+  try{
+    const event={currentTarget:form,preventDefault(){}};
+    const pending=form.handlers.submit(event);assert.equal(typeof release,'function');
+    event.currentTarget=null;release();await pending;await tick();
+    assert.equal(reset,1);assert.equal(el('agent-list').children.length,1);
+    assert.equal(el('agents-count').textContent,'显示 1 个智能体');
+  }finally{globalThis.FormData=saved;}
+});
