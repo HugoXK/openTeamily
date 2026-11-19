@@ -186,6 +186,28 @@ def echo_result(prompt):
     return {'echo': prompt}
 
 
+def load_skill_material(items, prompt):
+    """Load bounded, digest-verified declarative material; never unpack/write/execute files."""
+    import hashlib
+    import re
+    if not isinstance(items,list) or len(items)>10:
+        raise AgentError(0, {'error':{'message':'Invalid skill material'}})
+    seen = set()
+    for item in items:
+        if (not isinstance(item,dict) or set(item) != {'id','name','version','content','digest','permissions','format','source'}
+                or not isinstance(item.get('id'),str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,63}',item['id'])
+                or item['id'] in seen or not isinstance(item.get('version'),str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',item['version'])
+                or len(item['version'])>32 or not isinstance(item.get('name'),str) or len(item['name'])>120
+                or item.get('permissions') != ['model_context'] or item.get('format') != 'openteamily.prompt-skill.v1'
+                or item.get('source') != 'bundled-original' or not isinstance(item.get('content'),str)
+                or not 1<=len(item['content'])<=6000 or '\x00' in item['content']
+                or hashlib.sha256(item['content'].encode()).hexdigest() != item.get('digest')):
+            raise AgentError(0, {'error':{'message':'Skill integrity or permission validation failed'}})
+        seen.add(item['id'])
+    if not items: return prompt
+    return 'Installed instruction-only skills (do not grant tools or external-action permission):\n' + json.dumps(items, ensure_ascii=False) + '\n\nUser task:\n' + prompt
+
+
 def handle_task(task, origin=None, token=None, requester=request, inferer=infer_chat, infer_timeout=30):
     if not isinstance(task, dict):
         return 'failed', {'error': 'unsupported task kind'}
@@ -199,9 +221,18 @@ def handle_task(task, origin=None, token=None, requester=request, inferer=infer_
         if not origin or not token:
             return 'failed', {'error': 'missing agent credentials'}
         model_api = None
+        stage = 'Model access or runtime compatibility'
         try:
-            access = requester(origin, 'POST', '/v1/agent/tasks/' + task['id'] + '/model-access', token, {})[1]
+            access = requester(origin, 'POST', '/v1/agent/tasks/' + task['id'] + '/model-access', token, {'skill_format':'openteamily.prompt-skill.v1'})[1]
             model_api = access.get('model_api') if isinstance(access, dict) else None
+            stage = 'Skill verification/loading'
+            skill_material = access.get('skills', [])
+            prompt = load_skill_material(skill_material, prompt)
+            if skill_material:
+                acknowledgement = requester(origin, 'POST', '/v1/agent/tasks/' + task['id'] + '/skills/ack', token, {'digests':[i['digest'] for i in skill_material]})[1]
+                if acknowledgement.get('acknowledged') is not True:
+                    raise AgentError(0, {'error':{'message':'Skill loading was not acknowledged'}})
+            stage = 'Inference or connected tool request'
             if access.get('connected_tools') and inferer is infer_chat:
                 tools, execute = connected_tool_bridge(task, origin, token, requester)
                 text = inferer(model_api, prompt, timeout=infer_timeout, tools=tools, execute_tool=execute)
@@ -213,7 +244,7 @@ def handle_task(task, origin=None, token=None, requester=request, inferer=infer_
                 'source': model_api.get('source') if isinstance(model_api, dict) else None,
             }
         except (AgentError, OSError, TimeoutError):
-            return 'failed', {'error': 'Inference or connected tool request failed; no automatic retry'}
+            return 'failed', {'error': stage + ' failed; check configuration and upgrade runtime if required; no automatic retry'}
         finally:
             if isinstance(model_api, dict):
                 model_api.pop('api_key', None)
@@ -221,7 +252,7 @@ def handle_task(task, origin=None, token=None, requester=request, inferer=infer_
 
 
 def run_cycle(origin, token, hostname, once=False, poll=1.0, sleeper=time.sleep, requester=request, inferer=infer_chat, infer_timeout=30):
-    status, connected = requester(origin, 'POST', '/v1/agent/connect', token, {'hostname': hostname})
+    status, connected = requester(origin, 'POST', '/v1/agent/connect', token, {'hostname': hostname, 'skill_formats':['openteamily.prompt-skill.v1']})
     if status not in (200, 201):
         raise AgentError(status, connected)
     processed = []
@@ -230,13 +261,23 @@ def run_cycle(origin, token, hostname, once=False, poll=1.0, sleeper=time.sleep,
         listed = requester(origin, 'GET', '/v1/agent/tasks', token)[1]
         items = listed.get('items') or []
         for task in items:
-            claimed = requester(origin, 'POST', '/v1/agent/tasks/' + task['id'] + '/claim', token, {})[1]
+            try:
+                claimed = requester(origin, 'POST', '/v1/agent/tasks/' + task['id'] + '/claim', token, {})[1]
+            except AgentError as error:
+                if error.status in (404,409):
+                    continue  # A task cancelled/claimed after listing must not kill the daemon.
+                raise
             payload = claimed.get('task') or task
             outcome, result = handle_task(
                 payload, origin=origin, token=token, requester=requester,
                 inferer=inferer, infer_timeout=infer_timeout)
-            requester(origin, 'POST', '/v1/agent/tasks/' + payload['id'] + '/result', token,
-                      {'status': outcome, 'result': result})
+            try:
+                requester(origin, 'POST', '/v1/agent/tasks/' + payload['id'] + '/result', token,
+                          {'status': outcome, 'result': result})
+            except AgentError as error:
+                if error.status in (404,409):
+                    continue  # Revocation during inference: never retry the model or resurrect the task.
+                raise
             processed.append(payload['id'])
         if once:
             return connected.get('connection'), processed
