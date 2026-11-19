@@ -28,7 +28,7 @@ export async function mountToolApprovals(document, fetcher = globalThis.fetch, s
       if (raw === previous) return
       previous = raw
       list.replaceChildren()
-      if (!pending.length) list.textContent = '暂无待确认调用。请在私人聊天中请求智能体使用你已连接的应用；群聊、定时任务和对外 API 尚未接通个人工具。'
+      if (!pending.length) list.textContent = '暂无待确认调用。请在私人聊天中请求智能体使用你授权的应用；群聊、定时任务和对外 API 尚未接通个人工具。'
       for (const item of pending) {
         const row = document.createElement('div')
         const label = document.createElement('strong')
