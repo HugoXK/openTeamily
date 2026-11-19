@@ -107,6 +107,16 @@ export function queryForView(kind, scope) {
   return '';
 }
 
+export function artifactDeletePrompt(artifact) {
+  const title = artifact && typeof artifact.title === 'string' ? artifact.title.trim() : '';
+  return {
+    question: title ? `删除「${title}」？` : '删除这个作品？',
+    detail: '删除后不能恢复。',
+    cancelLabel: '取消',
+    confirmLabel: '确认',
+  };
+}
+
 export function applyDirectoryCollapsed(root, collapsed) {
   const next = Boolean(collapsed);
   const dir = root.getElementById('artifact-dir');
@@ -163,6 +173,19 @@ export function applyArtifactLayout(list, layout) {
   return list.dataset.layout;
 }
 
+export function canSendArtifactToChat(item) {
+  return Boolean(item && item.id && item.kind === 'media');
+}
+
+export function conversationLabel(item) {
+  if (!item) return '未命名会话';
+  const title = (item.title || '').trim();
+  if (title) return title;
+  const names = (item.members || []).map(row => row.username).filter(Boolean);
+  if (names.length) return names.join('、');
+  return item.kind === 'dm' ? '单聊' : '群聊';
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -184,6 +207,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let filterCreators = [];
   let filterSessions = [];
   let allItems = [];
+  // A delete question is bound to the workspace and artifact it was asked about;
+  // leaving that workspace retires it instead of letting the answer land elsewhere.
+  let pendingDeleteCancel = null;
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -679,6 +705,85 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  const sendDialog = document.getElementById('send-to-chat-dialog');
+  const sendList = document.getElementById('send-to-chat-list');
+  const sendEmpty = document.getElementById('send-to-chat-empty');
+  const sendError = document.getElementById('send-to-chat-error');
+  const sendLead = document.getElementById('send-to-chat-lead');
+  let sendingArtifact = null;
+
+  function closeSendDialog() {
+    if (!sendDialog) return;
+    sendDialog.hidden = true;
+    sendingArtifact = null;
+  }
+
+  async function openSendDialog(item) {
+    if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
+    sendingArtifact = item;
+    sendDialog.hidden = false;
+    if (sendLead) sendLead.textContent = '将「' + item.title + '」发送到：';
+    if (sendError) { sendError.hidden = true; sendError.textContent = ''; }
+    if (sendList) sendList.textContent = '';
+    if (sendEmpty) {
+      sendEmpty.hidden = false;
+      sendEmpty.textContent = '正在读取会话…';
+    }
+    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations?limit=100`);
+    if (sendingArtifact !== item) return;
+    if (listed.status !== 200) {
+      if (sendEmpty) {
+        sendEmpty.hidden = false;
+        sendEmpty.textContent = messageFor(listed.body.error, '无法读取会话列表。');
+      }
+      return;
+    }
+    const items = listed.body.items || [];
+    if (sendList) sendList.textContent = '';
+    if (sendEmpty) {
+      sendEmpty.hidden = items.length > 0;
+      sendEmpty.textContent = '这个工作区还没有可发送的群或单聊。';
+    }
+    for (const conversation of items) {
+      const row = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = conversationLabel(conversation);
+      button.addEventListener('click', () => sendArtifactToConversation(item, conversation));
+      row.appendChild(button);
+      sendList.appendChild(row);
+    }
+  }
+
+  async function sendArtifactToConversation(item, conversation) {
+    if (!workspaceId() || !item || !conversation || !conversation.id) return;
+    const result = await request(
+      'POST',
+      `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages`,
+      {body: '', artifact_id: item.id},
+      {'Idempotency-Key': idempotencyKey()},
+    );
+    if (result.status !== 200 && result.status !== 201) {
+      if (sendError) {
+        sendError.hidden = false;
+        sendError.textContent = messageFor(result.body.error, '发送失败。');
+      }
+      show('error', messageFor(result.body.error, '发送到聊天失败。'));
+      return;
+    }
+    closeSendDialog();
+    show('ok', '已发送到「' + conversationLabel(conversation) + '」。');
+  }
+
+  if (document.getElementById('send-to-chat-cancel')) {
+    document.getElementById('send-to-chat-cancel').addEventListener('click', closeSendDialog);
+  }
+  if (sendDialog) {
+    sendDialog.addEventListener('click', event => {
+      if (event.target === sendDialog) closeSendDialog();
+    });
+  }
+
   let openItemMenu = null;
   function closeItemMenu() {
     if (!openItemMenu) return;
@@ -709,9 +814,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     send.type = 'button';
     send.setAttribute('role', 'menuitem');
     send.className = 'artifact-menu-send';
-    send.disabled = true;
-    send.title = '未接通：还没有把作品发送到聊天的接口';
     send.textContent = '发送到聊天';
+    if (canSendArtifactToChat(item)) {
+      send.disabled = false;
+      send.title = '把这件媒体作品发到一个群或单聊';
+      send.addEventListener('click', () => {
+        closeItemMenu();
+        openSendDialog(item);
+      });
+    } else {
+      send.disabled = true;
+      send.title = '未接通：社交会话附件目前只接受媒体作品，文档和其他类型还不能发送';
+    }
     const rename = document.createElement('button');
     rename.type = 'button';
     rename.setAttribute('role', 'menuitem');
@@ -797,6 +911,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       badge.setAttribute('aria-hidden', 'true');
       badge.textContent = kindBadge(item.kind);
       row.appendChild(badge);
+      const bookmark = document.createElement('button');
+      bookmark.type = 'button';
+      bookmark.className = 'artifact-bookmark';
+      bookmark.disabled = true;
+      bookmark.title = '未接通：还没有收藏作品接口';
+      bookmark.setAttribute('aria-label', '收藏（未接通）');
+      bookmark.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10v16l-5-3-5 3V4Z"/></svg>';
+      row.appendChild(bookmark);
       const created = document.createElement('span');
       created.className = 'artifact-created';
       created.textContent = artifactTime(item.created);
@@ -809,6 +931,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openEditor(item) {
+    if (pendingDeleteCancel) pendingDeleteCancel();
     closeNewMenu();
     current = item;
     listPanel.hidden = true;
@@ -1037,7 +1160,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  workspaceSelect.addEventListener('change', () => loadList());
+  workspaceSelect.addEventListener('change', () => {
+    if (pendingDeleteCancel) pendingDeleteCancel();
+    loadList();
+  });
   search.addEventListener('input', () => loadList());
 
   document.getElementById('new-artifact').addEventListener('click', () => {
@@ -1203,6 +1329,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
+    if (pendingDeleteCancel) pendingDeleteCancel();
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
@@ -1340,9 +1467,66 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadDiscover();
   });
 
+  function askDeleteConfirmation() {
+    const trigger = document.getElementById('remove-artifact');
+    const target = {workspace: workspaceId(), id: current && current.id};
+    const prompt = artifactDeletePrompt(current);
+    const box = document.createElement('div');
+    box.className = 'inline-confirm';
+    box.setAttribute('role', 'alertdialog');
+    box.setAttribute('aria-labelledby', 'remove-artifact-question');
+    const question = document.createElement('span');
+    question.id = 'remove-artifact-question';
+    question.textContent = prompt.question;
+    const detail = document.createElement('span');
+    detail.className = 'note';
+    detail.textContent = prompt.detail;
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = prompt.cancelLabel;
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.textContent = prompt.confirmLabel;
+    box.appendChild(question);
+    box.appendChild(detail);
+    box.appendChild(cancel);
+    box.appendChild(confirm);
+    trigger.hidden = true;
+    const parent = trigger.parentNode;
+    if (parent && typeof parent.insertBefore === 'function') parent.insertBefore(box, trigger.nextSibling || null);
+    else form.appendChild(box);
+    if (typeof cancel.focus === 'function') cancel.focus();
+
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = answer => {
+        if (settled) return;
+        settled = true;
+        pendingDeleteCancel = null;
+        document.removeEventListener('keydown', onKey);
+        box.remove();
+        trigger.hidden = false;
+        if (!answer && typeof trigger.focus === 'function') trigger.focus();
+        resolve(answer ? target : null);
+      };
+      const onKey = event => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          finish(false);
+        }
+      };
+      pendingDeleteCancel = () => finish(false);
+      cancel.addEventListener('click', () => finish(false));
+      confirm.addEventListener('click', () => finish(true));
+      document.addEventListener('keydown', onKey);
+    });
+  }
+
   document.getElementById('remove-artifact').addEventListener('click', async () => {
     if (!current || !current.id || !workspaceId()) return;
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/remove`, {});
+    const target = await askDeleteConfirmation();
+    if (!target) return;
+    const result = await request('POST', `/v1/workspaces/${target.workspace}/artifacts/${target.id}/remove`, {});
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '删除失败。'));
       return;

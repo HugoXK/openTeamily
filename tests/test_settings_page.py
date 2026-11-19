@@ -120,20 +120,25 @@ class SettingsPageTests(unittest.TestCase):
         account = html.find('id="group-account"')
         ai = html.find('id="group-ai"')
         prefs = html.find('id="group-prefs"')
-        self.assertTrue(-1 < account < ai < prefs)
+        support = html.find('id="group-support"')
+        self.assertTrue(-1 < account < ai < prefs < support)
+        self.assertIn('支持与法律', html)
+        support_html = html[support:]
+        self.assertIn('href="/about"', support_html)
+        self.assertIn('href="/guide"', support_html)
         self.assertIn('href="/profile"', html)
         self.assertIn('href="/settings/language"', html)
         self.assertIn('href="/settings/channels"', html)
         self.assertIn('href="/settings/agent-access"', html)
         self.assertIn('href="#model-api"', html)
-        self.assertIn('href="#skill-secrets"', html)
+        self.assertIn('href="/settings/skill-configuration"', html)
         self.assertIn('href="/settings/connectors"', html)
         self.assertIn('href="/runtimes"', html)
         language = html.find('href="/settings/language"')
         channels = html.find('href="/settings/channels"')
         agent_api = html.find('href="/settings/agent-access"')
         model_api = html.find('href="#model-api"')
-        skills = html.find('href="#skill-secrets"')
+        skills = html.find('href="/settings/skill-configuration"')
         connectors = html.find('href="/settings/connectors"')
         runtimes = html.find('href="/runtimes"')
         self.assertTrue(-1 < language < channels < agent_api < model_api < skills < connectors < runtimes)
@@ -170,7 +175,8 @@ class SettingsPageTests(unittest.TestCase):
         for path in ('/settings/appearance', '/settings/language',
                      '/settings/message-folding', '/settings/privacy',
                      '/settings/shortcuts', '/settings/channels',
-                     '/settings/agent-access', '/settings/connectors'):
+                     '/settings/agent-access', '/settings/connectors',
+                     '/settings/skill-configuration'):
             page = self.raw.call('GET', path)
             self.assertEqual(page['status'], 200, path)
             html = page['body'].decode()

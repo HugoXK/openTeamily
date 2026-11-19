@@ -783,3 +783,141 @@ details.memory-disclaimer p { margin: .25rem 0 0; }
   body #main-panel > details.memory-disclaimer:not(.x) { grid-column: 1 / -1; }
 }
 #overview-panel .graph-stage { background-image: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ot-line-strong) 28%, transparent) 1px, transparent 0); }
+
+/* Page parity follow-up: number-column stats and wiki-like editor. */
+.memory-view-title {
+  margin: 0 auto 0 0;
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--ot-ink);
+}
+.memory-top .memory-counts {
+  display: flex;
+  align-items: stretch;
+  gap: 0.15rem 1.1rem;
+  margin: 0;
+  color: var(--ot-muted);
+  font-size: 0.7rem;
+}
+.memory-count {
+  display: grid;
+  justify-items: center;
+  gap: 0.1rem;
+  min-width: 2rem;
+}
+.memory-count strong {
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--ot-ink);
+  line-height: 1.1;
+}
+#overview-panel .graph-stage {
+  background: var(--ot-surface);
+  box-shadow: 0 0 0 1px var(--ot-line);
+}
+.memory-editor {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem 2rem;
+  background: var(--ot-surface);
+  border-radius: 0;
+}
+.memory-editor .editor-title-field input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 1.85rem;
+  font-weight: 650;
+  padding: 0.15rem 0;
+  box-shadow: none;
+}
+.memory-editor .editor-topics-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--ot-muted);
+}
+.memory-editor .editor-topics-field input {
+  flex: 1;
+  border: 1px dashed var(--ot-line);
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  background: transparent;
+}
+.memory-editor .editor-body-field textarea {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  padding: 0.25rem 0;
+  box-shadow: none;
+  resize: vertical;
+  min-height: 18rem;
+}
+.memory-editor .actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--ot-line);
+}
+
+.memory-center { background: var(--ot-surface); }
+.memory-center .graph-stage,
+body.app-workspace #overview-panel .graph-stage,
+#overview-panel .graph-stage {
+  background-color: #ffffff !important;
+  background-image: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ot-line-strong) 28%, transparent) 1px, transparent 0) !important;
+  background-size: 22px 22px !important;
+}
+@media (prefers-color-scheme: dark) {
+  .memory-center .graph-stage,
+  #overview-panel .graph-stage { background-color: var(--ot-surface) !important; }
+}
+#editor-form.memory-editor .editor-title-field input {
+  font-size: 1.85rem !important; font-weight: 650; border: 0 !important; box-shadow: none !important;
+  background: transparent !important; padding: 0.15rem 0 !important;
+}
+#editor-form.memory-editor .editor-body-field textarea {
+  font-size: 0.95rem !important; line-height: 1.65; border: 0 !important; box-shadow: none !important;
+  background: transparent !important;
+}
+
+#graph-canvas {
+  background-color: #ffffff !important;
+  background-image: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ot-line-strong) 28%, transparent) 1px, transparent 0) !important;
+  background-size: 22px 22px !important;
+}
+
+.memory-editor { position: relative; padding-top: 0.5rem; }
+.editor-topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.75rem; margin-bottom: 0.25rem;
+}
+.editor-saved { margin: 0; font-size: 0.75rem; color: var(--ot-muted); }
+.editor-top-actions { display: flex; gap: 0.35rem; margin-left: auto; }
+.editor-top-actions button {
+  height: 1.85rem; padding: 0 0.65rem; border-radius: 999px;
+  border: 1px solid var(--ot-line); background: var(--ot-surface);
+  color: var(--ot-muted); font-size: 0.75rem;
+}
+.editor-top-actions button:disabled { opacity: 0.7; cursor: not-allowed; }
+.editor-toolbar {
+  display: flex; flex-wrap: wrap; gap: 0.2rem;
+  padding: 0.25rem 0; border-top: 1px solid var(--ot-line);
+  border-bottom: 1px solid var(--ot-line);
+}
+.editor-toolbar button {
+  min-width: 1.85rem; height: 1.85rem; padding: 0 0.4rem;
+  border: 0; border-radius: 0.35rem; background: transparent;
+  color: var(--ot-ink); font-size: 0.75rem; font-weight: 650;
+}
+.editor-toolbar button:hover { background: var(--ot-bg-accent); }
+.memory-editor .editor-title-field input { font-size: 2rem; font-weight: 700; letter-spacing: -0.03em; }
+#editor-form.memory-editor .editor-title-field input { font-size: 2rem !important; font-weight: 700; }

@@ -115,7 +115,10 @@ class ShellPageTests(unittest.TestCase):
             self.assertIn('class="skip-link"', html, path)
             self.assertIn('href="#main"', html, path)
             self.assertIn('id="main"', html, path)
-            self.assertIn('OpenTeamily / FlyBot', html, path)
+            self.assertIn('OpenTeamily', html, path)
+            self.assertIn('class="brand-mark"', html, path)
+            self.assertIn('brand-glyph', html, path)
+            self.assertNotIn('>FB</a>', html, path)
             self.assertTrue(
                 'aria-label="管理导航"' in html or 'aria-label="应用导航"' in html, path)
             self.assertIn('<nav', html, path)
