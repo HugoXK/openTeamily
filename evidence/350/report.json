@@ -1,16 +1,16 @@
 {
   "slug": "account-delete",
   "issue": 350,
-  "capturedAt": "2026-11-19T16:04:57.889Z",
+  "capturedAt": "2026-11-19T16:11:00.563Z",
   "locale": "zh-CN",
   "arms": [
     {
       "name": "before",
-      "sha": "a04f955e8156152f946e6cbd9395978834895122"
+      "sha": "13641eb9cedbddf550fdd257a5008480f4506ca1"
     },
     {
       "name": "after",
-      "sha": "6fe8920ae0eea430f1b3945c378545b1594d518e"
+      "sha": "45765a2943d77c5c1e918d32e50906c1bf659596"
     }
   ],
   "notes": [
@@ -22,12 +22,12 @@
   "rows": [
     {
       "arm": "before",
-      "armSha": "a04f955e8156152f946e6cbd9395978834895122",
+      "armSha": "13641eb9cedbddf550fdd257a5008480f4506ca1",
       "state": "light__1440x900__profile__delete-account.png",
       "viewport": "1440x900",
       "file": "before/zh-CN__light__1440x900__profile__delete-account.png",
-      "bytes": 56840,
-      "sha256": "7f0f23bf969dc7fe2bee20b224f98b7c3d5852fcc15e465d96a5d872d4f61934",
+      "bytes": 56845,
+      "sha256": "5232e14121c7dd83187eea0651525adeb6fa3b29a03db8c12c326fa419702d70",
       "png": {
         "width": 1440,
         "height": 900
@@ -63,7 +63,7 @@
     },
     {
       "arm": "before",
-      "armSha": "a04f955e8156152f946e6cbd9395978834895122",
+      "armSha": "13641eb9cedbddf550fdd257a5008480f4506ca1",
       "state": "light__390x844__profile__delete-account.png",
       "viewport": "390x844",
       "file": "before/zh-CN__light__390x844__profile__delete-account.png",
@@ -104,12 +104,12 @@
     },
     {
       "arm": "after",
-      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "armSha": "45765a2943d77c5c1e918d32e50906c1bf659596",
       "state": "light__1440x900__profile__delete-account.png",
       "viewport": "1440x900",
       "file": "after/zh-CN__light__1440x900__profile__delete-account.png",
-      "bytes": 52544,
-      "sha256": "644e9ac39da993f2239f47c9df5dea7d2d48a742a47cc87667e6ee8318cc50f8",
+      "bytes": 57036,
+      "sha256": "5e0e45fbb526e8234401574b5f6bcc787f075d2132e080153c6c8690b6842f96",
       "png": {
         "width": 1440,
         "height": 900
@@ -123,17 +123,17 @@
       "expectedName": null,
       "buttonRect": {
         "x": 702.9375,
-        "y": 837.8125,
+        "y": 817.8125,
         "width": 90.125,
         "height": 33.875,
-        "top": 837.8125,
+        "top": 817.8125,
         "right": 793.0625,
-        "bottom": 871.6875,
+        "bottom": 851.6875,
         "left": 702.9375
       },
       "dialogRect": null,
       "privateVisible": {
-        "top": 697,
+        "top": 677,
         "height": 175,
         "onScreen": true
       },
@@ -145,12 +145,12 @@
     },
     {
       "arm": "after",
-      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "armSha": "45765a2943d77c5c1e918d32e50906c1bf659596",
       "state": "light__1440x900__profile__delete-account-dialog.png",
       "viewport": "1440x900",
       "file": "after/zh-CN__light__1440x900__profile__delete-account-dialog.png",
-      "bytes": 90952,
-      "sha256": "eec76104054e89aff8d098e3e4ef8148c762fc8a4943f0ba2dfe61aeff073d73",
+      "bytes": 90862,
+      "sha256": "59715ab152a10ea260a251f57edf1e6dd9a99b7b5a3c09a6803129ed7d35365d",
       "png": {
         "width": 1440,
         "height": 900
@@ -164,12 +164,12 @@
       "expectedName": "cifixture",
       "buttonRect": {
         "x": 702.9375,
-        "y": 837.8125,
+        "y": 817.8125,
         "width": 90.125,
         "height": 33.875,
-        "top": 837.8125,
+        "top": 817.8125,
         "right": 793.0625,
-        "bottom": 871.6875,
+        "bottom": 851.6875,
         "left": 702.9375
       },
       "dialogRect": {
@@ -183,7 +183,7 @@
         "left": 494.40625
       },
       "privateVisible": {
-        "top": 697,
+        "top": 677,
         "height": 175,
         "onScreen": true
       },
@@ -195,12 +195,12 @@
     },
     {
       "arm": "after",
-      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "armSha": "45765a2943d77c5c1e918d32e50906c1bf659596",
       "state": "light__1440x900__profile__delete-account-mismatch.png",
       "viewport": "1440x900",
       "file": "after/zh-CN__light__1440x900__profile__delete-account-mismatch.png",
-      "bytes": 97027,
-      "sha256": "7733bfac6956062e8b282092d139f34474123095b3dcefb3808549dabca611cb",
+      "bytes": 95133,
+      "sha256": "eea2851ce73e9de778abf9c3ef628a9e86e899640d0bc971b7a8d4aacadb5563",
       "png": {
         "width": 1440,
         "height": 900
@@ -214,12 +214,12 @@
       "expectedName": "cifixture",
       "buttonRect": {
         "x": 702.9375,
-        "y": 837.8125,
+        "y": 817.8125,
         "width": 90.125,
         "height": 33.875,
-        "top": 837.8125,
+        "top": 817.8125,
         "right": 793.0625,
-        "bottom": 871.6875,
+        "bottom": 851.6875,
         "left": 702.9375
       },
       "dialogRect": {
@@ -233,7 +233,7 @@
         "left": 494.40625
       },
       "privateVisible": {
-        "top": 697,
+        "top": 677,
         "height": 175,
         "onScreen": true
       },
@@ -245,12 +245,12 @@
     },
     {
       "arm": "after",
-      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "armSha": "45765a2943d77c5c1e918d32e50906c1bf659596",
       "state": "light__1440x900__profile__delete-account-blocked.png",
       "viewport": "1440x900",
       "file": "after/zh-CN__light__1440x900__profile__delete-account-blocked.png",
-      "bytes": 108496,
-      "sha256": "845cce20c8ef8d88e66da3b7aaf79d803ab43381b47cd859f0fa49c67a5e3426",
+      "bytes": 107028,
+      "sha256": "c1c54690d04b30e76f969a625a4ebd8d348f7bdeeb2adb318145efdda69805d2",
       "png": {
         "width": 1440,
         "height": 900
@@ -264,12 +264,12 @@
       "expectedName": "cifixture",
       "buttonRect": {
         "x": 702.9375,
-        "y": 886.40625,
+        "y": 866.40625,
         "width": 90.125,
         "height": 33.875,
-        "top": 886.40625,
+        "top": 866.40625,
         "right": 793.0625,
-        "bottom": 920.28125,
+        "bottom": 900.28125,
         "left": 702.9375
       },
       "dialogRect": {
@@ -283,7 +283,7 @@
         "left": 494.40625
       },
       "privateVisible": {
-        "top": 745,
+        "top": 725,
         "height": 175,
         "onScreen": true
       },
@@ -297,7 +297,7 @@
     },
     {
       "arm": "after",
-      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "armSha": "45765a2943d77c5c1e918d32e50906c1bf659596",
       "state": "light__390x844__profile__delete-account.png",
       "viewport": "390x844",
       "file": "after/zh-CN__light__390x844__profile__delete-account.png",
@@ -338,7 +338,7 @@
     },
     {
       "arm": "after",
-      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "armSha": "45765a2943d77c5c1e918d32e50906c1bf659596",
       "state": "light__390x844__profile__delete-account-dialog.png",
       "viewport": "390x844",
       "file": "after/zh-CN__light__390x844__profile__delete-account-dialog.png",
@@ -388,12 +388,12 @@
     },
     {
       "arm": "after",
-      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "armSha": "45765a2943d77c5c1e918d32e50906c1bf659596",
       "state": "dark__1440x900__profile__delete-account-dialog.png",
       "viewport": "1440x900",
       "file": "after/zh-CN__dark__1440x900__profile__delete-account-dialog.png",
-      "bytes": 107377,
-      "sha256": "6d4f41d43e8d87e1609464f56340010d91e423e00196e5f1372aaf5e3ff074f2",
+      "bytes": 107390,
+      "sha256": "95722d38dda196f2be70cdbcde89a5a63507fed1f6d5fc23d8e55dad34aae3c2",
       "png": {
         "width": 1440,
         "height": 900
