@@ -65,3 +65,13 @@ the unique form's details summary rather than two ambiguous summaries. Existing
 assertions/timeouts remain; exact new-head capture results are still required.
 The first head's document live/export scene and older conversation scenes also
 failed, so their acceptance remains blocked until the follow-up proves them.
+
+Second headf92e39d strict CI passed registration/session/normal-use/reload on
+both new accounts, existing conversation history/send, actual imported-v2 model
+execution, document draft-preserving SSE and real DOCX/PDF downloads. Its sole
+remaining failure was the capture parsing the version editor before its async
+management read had filled the textarea. The follow-up waits for the actual
+completed editor status (no assertion/timeout relaxation), and keeps the mobile
+new-account agent-use/reload scene at471px rather than switching it to desktop.
+The independent desktop account still exercises1280px. Latest-head CI remains
+the merge authority; production and real-provider acceptance are not claimed.

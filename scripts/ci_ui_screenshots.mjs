@@ -245,7 +245,7 @@ async function main() {
       const spaces=await(await anonymous.request.get(origin+'/v1/workspaces?limit=100')).json();
       record('registration_real_session_first_workspace',session.user?.username==='ci-new-account'&&spaces.items?.length===1,'Form registration verified cookie session before navigating; personal initialization completed before the first workspace listing. Not an operator-admin grant.');
       screenshots.push(path.basename(await shot(loginPage,outDir,'110-new-account-first-home.png')));
-      await loginPage.setViewportSize({width:1280,height:900});
+      // Keep the new mobile account at471px through normal agent use/reload.
       await loginPage.goto(origin+'/agents#workspace='+spaces.items[0].id,{waitUntil:'load'});
       await loginPage.locator('#open-create').click();
       await loginPage.locator('#create-form input[name="name"]').fill('New account persisted agent');
@@ -2374,6 +2374,7 @@ async function main() {
       record('imported_skill_actual_runtime_v2',true,'Original user-imported JSON persisted through reload, separately installed, loaded/acknowledged by the actual daemon and used by the controlled model. Python asserts exact imported model context. No executable or publisher-signature claim.');
       screenshots.push(path.basename(await shot(page,outDir,'112-imported-skill-real-run.png')));
       await imported.getByRole('button',{name:'管理版本',exact:true}).click();
+      await waitForLocatorText(page,'#skill-import-status','编辑已有包');
       const newer=JSON.parse(await page.locator('#skill-import-json').inputValue());newer.version='1.1.0';newer.content+=' Version two evidence requires explicit renewed consent.';delete newer.digest;
       await page.locator('#skill-import-json').fill(JSON.stringify(newer,null,2));
       await page.locator('#skill-import-consent').check();await page.locator('#skill-import-submit').click();
