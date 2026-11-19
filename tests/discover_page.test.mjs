@@ -534,3 +534,25 @@ test('feed cover patterns are stable for a title and stay in 0-7', () => {
   assert.match(coverPattern('Site'), /^[0-7]$/);
   assert.notEqual(coverPattern('Site'), coverPattern('Other title completely different'));
 });
+
+import { thumbModel } from '../openteamily/static/shell/thumb.mjs';
+import { feedPreviewPath, attachFeedThumb } from '../openteamily/static/discover/app.mjs';
+
+test('thumbModel keeps only bounded text and validated shapes from the preview', () => {
+  assert.equal(thumbModel(null), null);
+  assert.equal(thumbModel({type: 'unknown'}), null);
+  const doc = thumbModel({type: 'document', heading: '  标题  ', lines: ['a', '', 'b', 'c', 'd', 'e']});
+  assert.deepEqual(doc, {type: 'document', heading: '标题', lines: ['a', 'b', 'c', 'd']});
+  assert.equal(thumbModel({type: 'website', heading: '', lines: []}).empty, true);
+  const slides = thumbModel({type: 'slides', title: '首页', bullets: ['1', '2', '3', '4'], count: 5});
+  assert.equal(slides.bullets.length, 3);
+  assert.equal(slides.count, 5);
+});
+
+test('feed covers load from the public work preview path, never for images or odd slugs', () => {
+  assert.equal(feedPreviewPath({slug: 'public-note', kind: 'document'}), '/w/public-note/preview');
+  assert.equal(feedPreviewPath({slug: 'photo-1', kind: 'image'}), '');
+  assert.equal(feedPreviewPath({slug: '../x', kind: 'document'}), '');
+  assert.equal(feedPreviewPath(null), '');
+  assert.equal(attachFeedThumb({}, null, {type: 'document'}), false);
+});

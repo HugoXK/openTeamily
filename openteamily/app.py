@@ -496,10 +496,12 @@ class App:
             if method != 'GET':
                 refuse(405, 'method', 'Only GET is supported')
             return self.discover_works(query)
-        work_path = re.fullmatch(r'/w/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])(/file)?', path)
+        work_path = re.fullmatch(r'/w/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])(/file|/preview)?', path)
         if work_path:
             if method != 'GET' or query:
                 refuse(400, 'invalid', 'Invalid public work request')
+            if work_path[2] == '/preview':
+                return self.public_work_preview(work_path[1])
             return self.render_public_work(work_path[1], bool(work_path[2]))
         if path in ('/v1/auth/register', '/v1/auth/login') and method == 'POST':
             self.origin_check(env)  # Login/registration CSRF protection before a session exists.
@@ -3370,6 +3372,18 @@ class App:
             return listed(db)
         with self.store.connect() as connection:
             return listed(connection)
+
+    def public_work_preview(self, slug):
+        # Text-only cover model for a listed work. It exposes no more than the
+        # public /w/<slug> page already shows, and keeps the feed listing itself
+        # a body-free projection.
+        if not discover.valid_slug(slug):
+            refuse(404, 'not_found', 'Work not found')
+        with self.store.connect() as db:
+            row = discover.load_listed_work(db, slug)
+        if row is None:
+            refuse(404, 'not_found', 'Work not found')
+        return 200, {'preview': artifacts.preview(row)}, []
 
     def render_public_work(self, slug, media_file=False):
         if not discover.valid_slug(slug):

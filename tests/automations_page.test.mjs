@@ -199,3 +199,11 @@ test('list rows describe the schedule instead of printing the internal kind', as
   assert.doesNotMatch(joined, /(?:^|\s)(?:now|later|once|daily|weekly|monthly|weekdays)(?=\s|$)/u,
     `the list must not print an internal schedule kind: ${joined}`);
 });
+
+import { templateFromSearch } from '../openteamily/static/automations/app.mjs';
+
+test('?template= accepts only a plain template id', () => {
+  assert.equal(templateFromSearch('?template=daily_brief'), 'daily_brief');
+  assert.equal(templateFromSearch('?template=../x'), '');
+  assert.equal(templateFromSearch(''), '');
+});

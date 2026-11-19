@@ -1,3 +1,16 @@
+import { renderThumb } from '../shell/thumb.mjs';
+
+// `/space?new=<kind>` opens the matching 新建 editor once the page has loaded
+// (used by the chat composer's 创建 grid). Unknown values are ignored.
+const NEW_KIND_BUTTONS = {document: 'new-artifact', website: 'new-website', slides: 'new-slides', dashboard: 'new-dashboard', whiteboard: 'new-board'};
+export function newKindFromSearch(search) {
+  const value = new URLSearchParams(search || '').get('new') || '';
+  return Object.prototype.hasOwnProperty.call(NEW_KIND_BUTTONS, value) ? value : '';
+}
+export function newKindButtonId(kind) {
+  return NEW_KIND_BUTTONS[kind] || '';
+}
+
 export function csrfCookie(raw) {
   const parts = String(raw || '').split(';');
   for (const part of parts) {
@@ -891,7 +904,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const cover = document.createElement('span');
       cover.className = 'artifact-cover';
       cover.setAttribute('aria-hidden', 'true');
-      cover.textContent = kindLabel(item.kind);
+      const mime = item.media && item.media.mime ? String(item.media.mime) : '';
+      const thumb = item.preview ? renderThumb(document, item.preview) : null;
+      if (thumb) {
+        cover.classList.add('has-thumb');
+        cover.append(thumb);
+      } else if (item.kind === 'media' && /^image\//.test(mime) && item.id && workspaceId()) {
+        const img = document.createElement('img');
+        img.className = 'artifact-cover-img';
+        img.alt = '';
+        img.loading = 'lazy';
+        img.src = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/file`;
+        cover.classList.add('has-thumb');
+        cover.append(img);
+      } else {
+        cover.textContent = kindLabel(item.kind);
+      }
       row.appendChild(cover);
       const badge = document.createElement('span');
       badge.className = 'artifact-kind';
@@ -1607,7 +1635,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       applyView(next.kind, next.scope, {sync: false});
     });
   }
-  return load();
+  return load().then(() => {
+    const kind = newKindFromSearch(view && view.location && view.location.search);
+    if (!kind || mainPanel.hidden || !workspaceId()) return;
+    const button = document.getElementById(newKindButtonId(kind));
+    if (button) button.click();
+    if (view && view.history && view.location) {
+      const params = new URLSearchParams(view.location.search);
+      params.delete('new');
+      const rest = params.toString();
+      view.history.replaceState(null, '', view.location.pathname + (rest ? '?' + rest : '') + view.location.hash);
+    }
+  });
 }
 
 if (globalThis.document && globalThis.document.getElementById('editor-form')) {

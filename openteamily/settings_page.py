@@ -47,11 +47,13 @@ class SettingsPage:
         '/agents/app.css': ('agents', 'app.css', 'text/css; charset=utf-8'),
         '/memory': ('memory', 'index.html', 'text/html; charset=utf-8'),
         '/memory/app.mjs': ('memory', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/memory/rich.mjs': ('memory', 'rich.mjs', 'text/javascript; charset=utf-8'),
         '/memory/app.css': ('memory', 'app.css', 'text/css; charset=utf-8'),
         '/install/flybot.sh': ('install', 'flybot.sh', 'text/plain; charset=utf-8'),
         '/install/flybot.ps1': ('install', 'flybot.ps1', 'text/plain; charset=utf-8'),
         '/shell/app.css': ('shell', 'app.css', 'text/css; charset=utf-8'),
         '/shell/app.mjs': ('shell', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.css': ('chat', 'app.css', 'text/css; charset=utf-8'),
@@ -154,7 +156,15 @@ class SettingsPage:
         if not query:
             return True
         if path in ('/space', '/artifacts'):
-            return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings')
+            # new=<kind> opens that 新建 editor (chat composer 创建 grid).
+            return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings',
+                             'new=document', 'new=website', 'new=slides', 'new=dashboard',
+                             'new=whiteboard')
+        if path == '/automations':
+            # template=<id> opens the editor prefilled from a known template.
+            from .automations import TEMPLATES
+            template = query[len('template='):] if query.startswith('template=') else ''
+            return template in TEMPLATES and template != 'custom'
         if path == '/discover':
             return query in ('tab=agents', 'tab=agents&section=groups')
         if path == '/agents':

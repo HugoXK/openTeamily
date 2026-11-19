@@ -1,4 +1,5 @@
 import { csrfCookie } from '../agents/app.mjs';
+import { renderThumb } from '../shell/thumb.mjs';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 
@@ -102,6 +103,22 @@ export function coverPattern(title) {
 
 const KIND_LABELS = {document:'文档',website:'网页',slides:'幻灯片',audio:'音频',video:'视频',whiteboard:'白板',dashboard:'看板',media:'媒体'};
 
+// Covers come from /w/<slug>/preview (same exposure as the public work page),
+// so the feed listing itself stays a body-free projection.
+export function attachFeedThumb(document, cover, preview) {
+  if (!cover || !preview || cover.classList.contains('has-thumb')) return false;
+  const thumb = renderThumb(document, preview);
+  if (!thumb) return false;
+  cover.classList.add('has-thumb');
+  cover.append(thumb);
+  return true;
+}
+
+export function feedPreviewPath(item) {
+  if (!item || item.kind === 'image' || !/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(String(item.slug || ''))) return '';
+  return '/w/' + item.slug + '/preview';
+}
+
 export function renderFeedCard(document, item) {
   const card = document.createElement('a');
   card.className = 'feed-card';
@@ -115,6 +132,7 @@ export function renderFeedCard(document, item) {
     cover.alt = ''; cover.loading = 'lazy';
   } else {
     cover.setAttribute('aria-hidden', 'true');
+    attachFeedThumb(document, cover, item.preview);
   }
   const kind = document.createElement('p');
   kind.className = 'kind';
@@ -308,12 +326,29 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       ? FEED_SEARCH_EMPTY_NOTE : (feedState.items.length ? FEED_ACTIVITY_LISTED_NOTE : FEED_ACTIVITY_EMPTY_NOTE);
   }
 
+  const previewCache = new Map();
+  function hydrateThumb(card, item) {
+    const path = feedPreviewPath(item);
+    if (!path || typeof fetch !== 'function') return;
+    const key = path + '@' + (item.updated || '');
+    if (!previewCache.has(key)) {
+      previewCache.set(key, fetch(path, {credentials: 'same-origin', headers: {Accept: 'application/json'}})
+        .then(response => response.ok ? response.json() : null)
+        .then(body => (body && body.preview) || null)
+        .catch(() => null));
+    }
+    const cover = typeof card.querySelector === 'function' ? card.querySelector('.work-cover') : null;
+    if (!cover) return;
+    previewCache.get(key).then(preview => attachFeedThumb(document, cover, preview)).catch(() => {});
+  }
+
   function renderFeed() {
     const grid = document.getElementById('feed-grid');
     if (!grid) return;
     grid.replaceChildren();
     for (const item of feedState.items) {
       const card = renderFeedCard(document, item);
+      hydrateThumb(card, item);
       if (!currentUser) { grid.append(card); continue; }
       const entry = document.createElement('article'); entry.append(card);
       const actions = document.createElement('div');

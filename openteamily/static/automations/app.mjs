@@ -66,6 +66,13 @@ export function runResultText(run) {
 }
 
 
+// `/automations?template=<id>` opens the editor prefilled from that template
+// (used by the chat composer's 自动化 shortcuts).
+export function templateFromSearch(search) {
+  const value = new URLSearchParams(search || '').get('template') || '';
+  return /^[a-z0-9_-]{1,64}$/.test(value) ? value : '';
+}
+
 export function catalogItems(templates, category, search) {
   const tab = tabCategory(category);
   if (tab !== 'work' && tab !== 'life') return [];
@@ -657,7 +664,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  return load();
+  return load().then(() => {
+    const view = document.defaultView;
+    const wanted = templateFromSearch(view && view.location && view.location.search);
+    if (!wanted || mainPanel.hidden || !workspaceId()) return;
+    const template = templates.find(item => item.id === wanted);
+    if (!template) return;
+    openEditor(draftFromTemplate(template, currentUser && currentUser.username));
+  });
 }
 
 if (globalThis.document && globalThis.document.getElementById('editor-form')) {

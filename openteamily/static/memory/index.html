@@ -185,7 +185,6 @@
         </article>
         <button type="submit" id="save-memory-profile">保存画像</button><p id="memory-profile-status" role="status"></p></form>
       </section>
-    </section>
     <form id="editor-form" class="memory-editor" method="post" action="/v1/workspaces" hidden>
       <div class="editor-topbar">
         <p id="editor-saved" class="editor-saved" hidden></p>
@@ -198,28 +197,41 @@
       <label class="editor-title-field"><span class="visually-hidden">标题</span> <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="标题"></label>
       <label class="editor-topics-field">话题 <input type="text" name="topics" maxlength="400" autocomplete="off" placeholder="添加标签"></label>
       <div class="editor-toolbar" role="toolbar" aria-label="正文格式">
-        <button type="button" data-md="bold" title="粗体"><strong>B</strong></button>
-        <button type="button" data-md="italic" title="斜体"><em>I</em></button>
-        <button type="button" data-md="strike" title="删除线"><s>S</s></button>
-        <button type="button" data-md="h1" title="一级标题">H1</button>
-        <button type="button" data-md="h2" title="二级标题">H2</button>
-        <button type="button" data-md="ul" title="列表">列表</button>
-        <button type="button" data-md="quote" title="引用">引用</button>
-        <button type="button" data-md="code" title="代码">代码</button>
-        <button type="button" data-md="link" title="链接">链接</button>
+        <button type="button" data-rich="undo" title="撤销" aria-label="撤销"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5 M4 9h10a6 6 0 0 1 0 12h-3"/></svg></button>
+        <button type="button" data-rich="redo" title="重做" aria-label="重做"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5 M20 9H10a6 6 0 0 0 0 12h3"/></svg></button>
+        <span class="editor-tool-sep" aria-hidden="true"></span>
+        <button type="button" data-rich="bold" title="粗体" aria-label="粗体"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5h6a3.5 3.5 0 0 1 0 7H7z M7 12h7a3.5 3.5 0 0 1 0 7H7z"/></svg></button>
+        <button type="button" data-rich="italic" title="斜体" aria-label="斜体"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5h-4 M14 19h-4 M14 5l-4 14"/></svg></button>
+        <button type="button" data-rich="strike" title="删除线" aria-label="删除线"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14 M16 7a4 3 0 0 0-4-2c-2.2 0-4 1.2-4 3s1.5 2.4 4 3 M8 17a4 3 0 0 0 4 2c2.2 0 4-1.2 4-3"/></svg></button>
+        <button type="button" data-rich="code" title="行内代码" aria-label="行内代码"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 8-4 4 4 4 M15 8l4 4-4 4"/></svg></button>
+        <span class="editor-tool-sep" aria-hidden="true"></span>
+        <button type="button" data-rich="h1" title="一级标题" aria-label="一级标题">H1</button>
+        <button type="button" data-rich="h2" title="二级标题" aria-label="二级标题">H2</button>
+        <button type="button" data-rich="h3" title="三级标题" aria-label="三级标题">H3</button>
+        <span class="editor-tool-sep" aria-hidden="true"></span>
+        <button type="button" data-rich="ul" title="无序列表" aria-label="无序列表"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11 M9 12h11 M9 18h11 M4.5 6h.01 M4.5 12h.01 M4.5 18h.01"/></svg></button>
+        <button type="button" data-rich="ol" title="有序列表" aria-label="有序列表"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6h10 M10 12h10 M10 18h10 M4 5l1.5-1v5 M3.5 14.5c.3-.9 2.5-1 2.5.3 0 1-2.5 1.7-2.5 3.2h2.6"/></svg></button>
+        <button type="button" data-rich="quote" title="引用" aria-label="引用"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h4v4c0 3-1.5 5-4 6 M15 7h4v4c0 3-1.5 5-4 6"/></svg></button>
+        <button type="button" data-rich="hr" title="分隔线" aria-label="分隔线"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16"/></svg></button>
+        <button type="button" data-rich="link" title="链接" aria-label="链接"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1 M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></svg></button>
+        <button type="button" id="editor-source-toggle" class="editor-source-toggle" aria-pressed="false" title="切换 Markdown 源码；保存的正文始终是 Markdown">Markdown</button>
       </div>
-      <label class="editor-body-field"><span class="visually-hidden">正文</span>
+      <div id="editor-rich" class="editor-rich" contenteditable="true" role="textbox" aria-multiline="true" aria-label="正文" data-placeholder="开始写作…" spellcheck="true"></div>
+      <label class="editor-body-field" hidden><span class="visually-hidden">正文（Markdown）</span>
         <textarea name="body" maxlength="8000" rows="16" placeholder="开始写作…"></textarea>
       </label>
+      <p id="editor-length" class="note editor-length" hidden></p>
       <p class="note">正文里用 [[已有标题]] 可以连到同工作区的记忆页。</p>
       <p id="editor-meta" class="note"></p>
       <div id="page-links"></div>
-      <label>添加连接
-        <select id="link-target">
-          <option value="">选择记忆页</option>
-        </select>
-      </label>
-      <button type="button" id="add-link">添加连接</button>
+      <div class="editor-link-row">
+        <label>添加连接
+          <select id="link-target">
+            <option value="">选择记忆页</option>
+          </select>
+        </label>
+        <button type="button" id="add-link">添加连接</button>
+      </div>
       <div class="actions">
         <button type="submit" id="save-page">保存</button>
         <button type="button" id="delete-page">删除</button>
@@ -248,6 +260,7 @@
         <button type="button" id="close-action-editor">返回列表</button>
       </div>
     </form>
+    </section>
   </section>
   </main>
 </body>

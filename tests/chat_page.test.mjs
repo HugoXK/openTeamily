@@ -1138,3 +1138,20 @@ test('in-chat search highlights every case-insensitive match without HTML', asyn
     { text: 'Test', match: true }, { text: ' a ', match: false }, { text: 'test', match: true }]);
   assert.deepEqual(highlightParts('<b>x</b>', ''), [{ text: '<b>x</b>', match: false }]);
 });
+
+import { plusAttachAccept } from '../openteamily/static/chat/app.mjs';
+
+test('composer + attach shortcuts narrow the file picker without widening it', () => {
+  const all = 'image/png, image/jpeg,video/mp4,application/pdf';
+  assert.equal(plusAttachAccept('image', all), 'image/png,image/jpeg');
+  assert.equal(plusAttachAccept('video', all), 'video/mp4');
+  assert.equal(plusAttachAccept('any', all), 'image/png,image/jpeg,video/mp4,application/pdf');
+  assert.equal(plusAttachAccept('image', ''), '');
+});
+
+test('composer + creation grid deep-links real editors and labels the rest 未接通', () => {
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  for (const kind of ['website', 'document', 'slides', 'dashboard']) assert.ok(html.includes(`/space?new=${kind}`), kind);
+  for (const id of ['meeting_prep', 'daily_brief', 'expert_research', 'advance_goals']) assert.ok(html.includes(`/automations?template=${id}`), id);
+  assert.ok((html.match(/未接通/g) || []).length >= 5);
+});

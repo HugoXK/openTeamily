@@ -1,3 +1,4 @@
+import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
 export function recentlyUpdatedCount(pages, now = Date.now(), days = 7) {
   const since = now / 1000 - days * 86400;
   return (pages || []).filter((page) => Number(page.updated || 0) >= since).length;
@@ -69,7 +70,10 @@ export function applyMarkdown(textarea, kind) {
     code: ['`', '`', '代码'],
     h1: ['# ', '', '标题'],
     h2: ['## ', '', '小标题'],
+    h3: ['### ', '', '小标题'],
     ul: ['- ', '', '列表项'],
+    ol: ['1. ', '', '列表项'],
+    hr: ['\n---\n', '', ''],
     quote: ['> ', '', '引用'],
     link: ['[', '](https://)', '链接文字'],
   };
@@ -562,6 +566,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   function showView(name, {sync = true} = {}) {
     currentView = name || 'overview';
+    if (editor) editor.hidden = true;
+    if (actionEditor) actionEditor.hidden = true;
     const workspace = document.getElementById('list-panel');
     if (workspace) workspace.dataset.view = currentView;
     const title = document.getElementById('view-title');
@@ -935,6 +941,98 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     showView(currentView);
   }
 
+  // While a page or action is open the directory column stays visible (as in
+  // the recorded editor); only the overview/side/actions/profile panels hide.
+  function showPageMode() {
+    listPanel.hidden = false;
+    listPanel.dataset.view = 'page';
+    for (const id of ['overview-panel', 'memory-side', 'actions-panel', 'profile-panel']) {
+      const panel = document.getElementById(id);
+      if (panel) panel.hidden = true;
+    }
+  }
+
+  const rich = document.getElementById('editor-rich');
+  const sourceToggle = document.getElementById('editor-source-toggle');
+  let sourceMode = false;
+  // Only an edited rich body is re-serialised, so opening and saving a page
+  // without touching the text keeps its stored markdown byte-for-byte.
+  let richDirty = false;
+  function syncBodyFromRich() {
+    if (!rich || sourceMode || !richDirty) return;
+    const markdown = domToMarkdown(rich);
+    editor.elements.body.value = markdown;
+    const length = document.getElementById('editor-length');
+    if (length) {
+      const over = markdown.length > 8000;
+      length.hidden = !over;
+      length.textContent = over ? `正文 ${markdown.length} / 8000 字符，超出上限，保存会被拒绝。` : '';
+    }
+  }
+  function loadRichBody(markdown) {
+    if (!rich) return;
+    renderMarkdown(document, rich, markdown);
+    richDirty = false;
+  }
+  function setSourceMode(next) {
+    if (!rich) return;
+    if (next === sourceMode) return;
+    if (next) syncBodyFromRich();
+    sourceMode = next;
+    const field = editor.querySelector('.editor-body-field');
+    if (field) field.hidden = !next;
+    rich.hidden = next;
+    if (!next) loadRichBody(editor.elements.body.value);
+    if (sourceToggle) sourceToggle.setAttribute('aria-pressed', next ? 'true' : 'false');
+  }
+  if (rich) {
+    try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch { /* older engines */ }
+    rich.addEventListener('input', () => { richDirty = true; syncBodyFromRich(); });
+    rich.addEventListener('paste', (event) => {
+      // Paste as plain text so foreign HTML never enters the page.
+      const text = event.clipboardData && event.clipboardData.getData('text/plain');
+      if (text == null) return;
+      event.preventDefault();
+      document.execCommand('insertText', false, text);
+    });
+  }
+  if (sourceToggle) sourceToggle.addEventListener('click', () => setSourceMode(!sourceMode));
+
+  function richCommand(kind) {
+    if (!rich) return;
+    rich.focus();
+    const block = (tag) => {
+      const current = String(document.queryCommandValue('formatBlock') || '').toLowerCase();
+      document.execCommand('formatBlock', false, current === tag ? 'p' : tag);
+    };
+    const simple = {undo: 'undo', redo: 'redo', bold: 'bold', italic: 'italic', strike: 'strikeThrough',
+      ul: 'insertUnorderedList', ol: 'insertOrderedList', hr: 'insertHorizontalRule'};
+    if (simple[kind]) document.execCommand(simple[kind], false, null);
+    else if (kind === 'h1' || kind === 'h2' || kind === 'h3') block(kind);
+    else if (kind === 'quote') block('blockquote');
+    else if (kind === 'code') {
+      const selection = document.getSelection();
+      if (selection && selection.rangeCount && rich.contains(selection.anchorNode)) {
+        const range = selection.getRangeAt(0);
+        const code = document.createElement('code');
+        code.textContent = range.toString() || '代码';
+        range.deleteContents();
+        range.insertNode(code);
+        selection.removeAllRanges();
+        const after = document.createRange();
+        after.selectNodeContents(code);
+        selection.addRange(after);
+      }
+    } else if (kind === 'link') {
+      const answer = globalThis.prompt ? globalThis.prompt('链接地址（https://、mailto: 或站内 /路径）', 'https://') : '';
+      const href = safeHref(answer);
+      if (href) document.execCommand('createLink', false, href);
+      else if (answer) show('error', '只支持 https://、http://、mailto: 或站内路径的链接。');
+    }
+    richDirty = true;
+    syncBodyFromRich();
+  }
+
   async function openPage(pageId) {
     hideGraphHoverCard(document.getElementById('graph-hover-card'));
     const id = workspaceId();
@@ -946,11 +1044,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentPage = seen.body.page;
     currentAction = null;
-    listPanel.hidden = true;
+    showPageMode();
     if (actionEditor) actionEditor.hidden = true;
     editor.hidden = false;
     editor.elements.title.value = currentPage.title;
     editor.elements.body.value = currentPage.body || '';
+    loadRichBody(currentPage.body || '');
     editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
@@ -974,7 +1073,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentAction = seen.body.action;
     currentPage = null;
-    listPanel.hidden = true;
+    showPageMode();
     editor.hidden = true;
     actionEditor.hidden = false;
     actionEditor.elements.title.value = currentAction.title;
@@ -1160,11 +1259,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const toolbar = editor.querySelector('.editor-toolbar');
   if (toolbar) {
+    toolbar.addEventListener('mousedown', (event) => {
+      // Keep the text selection inside the editor when a tool is pressed.
+      if (event.target.closest('[data-rich]')) event.preventDefault();
+    });
     toolbar.addEventListener('click', (event) => {
-      const button = event.target.closest('[data-md]');
+      const button = event.target.closest('[data-rich]');
       if (!button) return;
-      applyMarkdown(editor.elements.body, button.getAttribute('data-md'));
-      editor.elements.body.focus();
+      const kind = button.getAttribute('data-rich');
+      if (sourceMode || !rich) {
+        if (kind !== 'undo' && kind !== 'redo') applyMarkdown(editor.elements.body, kind);
+        editor.elements.body.focus();
+        return;
+      }
+      richCommand(kind);
     });
   }
 
@@ -1172,6 +1280,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     event.preventDefault();
     const id = workspaceId();
     if (!id || !currentPage) return;
+    syncBodyFromRich();
     const saved = await request('POST', `/v1/workspaces/${id}/memory/${currentPage.id}`, {
       revision: currentPage.revision,
       changes: {

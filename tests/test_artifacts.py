@@ -167,3 +167,28 @@ class ArtifactTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ArtifactPreviewTests(unittest.TestCase):
+    def row(self, **fields):
+        base = {'body': '', 'render': None, 'media_mime': None, 'board_json': None,
+                'slides_json': None, 'dashboard_json': None, 'title': 'T'}
+        base.update(fields)
+        return base
+
+    def test_preview_is_text_only_and_bounded(self):
+        from openteamily import artifacts
+        kind = artifacts.public_kind
+        try:
+            artifacts.public_kind = lambda row: row['kind']
+            doc = artifacts.preview(self.row(kind='document', body='# 标题\n\n' + '很长的一行' * 80 + '\n\n第二段'))
+            self.assertEqual(doc['type'], 'document')
+            self.assertEqual(doc['heading'], '标题')
+            self.assertTrue(all(len(line) <= artifacts.PREVIEW_LINE_MAX for line in doc['lines']))
+            site = artifacts.preview(self.row(kind='website', body='<title>站点</title><script>alert(1)</script><h1>欢迎</h1><p>正文</p>'))
+            self.assertEqual(site['type'], 'website')
+            self.assertNotIn('alert', str(site))
+            self.assertNotIn('<', str(site))
+            self.assertIsNone(artifacts.preview(self.row(kind='media')))
+        finally:
+            artifacts.public_kind = kind

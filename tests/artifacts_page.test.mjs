@@ -174,3 +174,14 @@ test('canSendArtifactToChat is only true for media with an id', async () => {
   assert.equal(conversationLabel({kind: 'group'}), '群聊');
   assert.equal(conversationLabel({kind: 'dm'}), '单聊');
 });
+
+import { newKindFromSearch, newKindButtonId } from '../openteamily/static/artifacts/app.mjs';
+
+test('?new= only opens known 新建 editors', () => {
+  assert.equal(newKindFromSearch('?new=document'), 'document');
+  assert.equal(newKindButtonId('document'), 'new-artifact');
+  assert.equal(newKindButtonId(newKindFromSearch('?new=whiteboard')), 'new-board');
+  assert.equal(newKindFromSearch('?new=constructor'), '');
+  assert.equal(newKindFromSearch(''), '');
+  assert.equal(newKindButtonId('image'), '');
+});

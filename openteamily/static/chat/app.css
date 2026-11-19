@@ -1491,25 +1491,58 @@ html[data-theme-resolved="dark"] #message-list li[data-state="failed"] > p.faile
 .composer-plus > summary::-webkit-details-marker { display: none; }
 .composer-plus[open] > summary { background: var(--ot-accent); color: var(--ot-on-accent); }
 .composer-plus-sheet {
-  position: absolute; left: 0; bottom: calc(100% + 0.5rem);
-  width: min(26rem, 72vw); max-height: min(24rem, 60vh); overflow: auto;
-  padding: 0.85rem 0.9rem; border-radius: 1rem;
+  position: absolute; left: -0.4rem; bottom: calc(100% + 0.65rem);
+  width: min(30rem, 82vw); max-height: min(34rem, 72vh); overflow: auto;
+  padding: 0.35rem 0; border-radius: 1rem;
   background: var(--ot-surface); color: var(--ot-ink);
-  box-shadow: 0 8px 28px rgb(16 32 24 / 16%), 0 0 0 1px var(--ot-line);
+  box-shadow: 0 12px 36px rgb(16 32 24 / 14%), 0 0 0 1px var(--ot-line);
   z-index: 8;
 }
-.plus-heading { margin: 0.65rem 0 0.35rem; font-size: 0.7rem; font-weight: 650; color: var(--ot-muted); letter-spacing: 0.04em; }
-.plus-heading:first-child { margin-top: 0; }
-.plus-grid { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-.plus-create { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.composer-plus-sheet :is(a, button) {
-  display: inline-flex; align-items: center; justify-content: center; gap: 0.3rem;
-  min-height: 2.25rem; padding: 0.3rem 0.55rem; border-radius: 0.7rem;
-  border: 1px solid var(--ot-line); background: var(--ot-surface-2);
-  color: var(--ot-ink); text-decoration: none; font: inherit; font-size: 0.75rem;
+/* Creation grid laid out after the private reference 01d: bold section
+   titles, a three-up action row, a four-up icon grid, two-up automation
+   shortcuts and hairline dividers. Icons are original strokes. */
+.plus-section { padding: 0.7rem 1rem 0.6rem; }
+.plus-section + .plus-section { border-top: 1px solid var(--ot-line); }
+.plus-section-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.plus-heading { margin: 0 0 0.45rem; font-size: 0.8125rem; font-weight: 650; color: var(--ot-ink); letter-spacing: 0; }
+.plus-more { display: inline-flex; align-items: center; gap: 0.15rem; margin-bottom: 0.45rem; font-size: 0.75rem; color: var(--ot-muted); text-decoration: none; }
+.plus-more:hover { color: var(--ot-accent); }
+.plus-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.15rem; }
+.plus-auto { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.15rem 0.5rem; }
+.plus-create { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.25rem; }
+.composer-plus-sheet :is(.plus-row, .plus-auto) > :is(a, button) {
+  width: auto; min-width: 0; box-shadow: none;
+  display: flex; align-items: center; justify-content: flex-start; gap: 0.55rem;
+  min-height: 2.25rem; padding: 0.3rem 0.5rem; border: 0; border-radius: 0.6rem;
+  background: transparent; color: var(--ot-ink); text-decoration: none;
+  font: inherit; font-size: 0.8125rem; text-align: left; cursor: pointer;
 }
-.composer-plus-sheet :is(a, button):hover { background: var(--ot-bg-accent); }
-.composer-plus-sheet button:disabled { opacity: 0.55; cursor: not-allowed; }
+.plus-auto > a { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plus-create > :is(a, button) {
+  width: auto; min-width: 0; box-shadow: none;
+  position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.35rem;
+  min-height: 4.1rem; padding: 0.5rem 0.25rem; border: 0; border-radius: 0.75rem;
+  background: transparent; color: var(--ot-ink); text-decoration: none;
+  font: inherit; font-size: 0.8125rem; cursor: pointer;
+}
+.composer-plus-sheet :is(a, button):not(:disabled):hover { background: var(--ot-bg-accent); }
+.composer-plus-sheet :is(a, button):focus-visible { outline: 2px solid var(--ot-focus); outline-offset: -2px; }
+.composer-plus-sheet button:disabled { cursor: not-allowed; color: var(--ot-muted); opacity: 1; }
+.composer-plus-sheet button:disabled .plus-ico { opacity: 0.55; }
+.plus-ico { flex: 0 0 auto; color: var(--ot-muted); }
+.plus-create .plus-ico { width: 1.5rem; height: 1.5rem; }
+.plus-create [data-tone="web"] .plus-ico { color: #2f6fd6; }
+.plus-create [data-tone="doc"] .plus-ico { color: #2b3530; }
+.plus-create [data-tone="slides"] .plus-ico { color: #d9661f; }
+.plus-create [data-tone="table"] .plus-ico { color: #11804c; }
+.plus-create [data-tone="image"] .plus-ico { color: #9a4fd0; }
+.plus-create [data-tone="camera"] .plus-ico { color: #d23f7a; }
+.plus-create [data-tone="music"] .plus-ico { color: #6a4fd0; }
+.plus-create [data-tone="cube"] .plus-ico { color: #138a9c; }
+html[data-theme-resolved="dark"] .plus-create [data-tone="doc"] .plus-ico { color: var(--ot-ink); }
+.plus-tag { position: absolute; top: 0.3rem; right: 0.3rem; padding: 0 0.3rem; border-radius: 999px; background: var(--ot-bg-accent); color: var(--ot-muted); font-size: 0.625rem; line-height: 1.1rem; }
+.plus-row .plus-tag { position: static; margin-left: auto; }
+.plus-hint { margin: 0.35rem 0.5rem 0; font-size: 0.75rem; color: var(--ot-muted); }
 .composer-tools { display: flex; align-items: center; gap: 0.1rem; margin-top: 0.1rem; }
 .composer-send {
   width: 2.15rem !important; min-width: 2.15rem !important; height: 2.15rem !important;
@@ -1530,3 +1563,34 @@ html[data-theme-resolved="dark"] #message-list li[data-state="failed"] > p.faile
   padding: 0.55rem 0; color: var(--ot-ink);
 }
 .group-agent-sheet[open] { padding-bottom: 0.75rem; }
+
+/* Polish 5: fieldsets inside the new-group dialog and the group-agent panel are
+   plain groups (legend + rows), not boxed cards inside the card. */
+#compose-dialog fieldset,
+#group-agent-form fieldset,
+#social-agent-members fieldset { margin: 0; padding: 0 .5rem; border: 0; border-radius: 0; background: transparent; box-shadow: none; min-width: 0; }
+#compose-dialog fieldset > legend,
+#group-agent-form fieldset > legend,
+#social-agent-members fieldset > legend { padding: 0; margin: 0 0 .35rem; font-size: .75rem; font-weight: 600; color: var(--ot-muted); }
+.plus-tag { font-size: .6875rem; }
+@media (min-width: 701px) {
+  /* New-group dialog: the picker and name column are split by a hairline, not
+     two boxed cards inside the dialog card. */
+  #compose-member-picker { padding: 0 1rem 0 0; border-radius: 0; background: transparent; box-shadow: none; border-right: 1px solid var(--ot-line); }
+  #compose-dialog #compose-title-label { padding: 0; border-radius: 0; box-shadow: none; }
+}
+
+/* Polish 5: the group-agent tools are one quiet collapsible line above the thread
+   (like Teamily's centred system lines), not a card wrapped around a card. */
+#group-agent-action.group-agent-panel { margin: 0 1rem; padding: .5rem 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+#group-agent-action .group-agent-sheet { width: min(46rem, 100%); margin: 0 auto; padding: 0 .75rem; border: 0; border-radius: .75rem; background: transparent; }
+#group-agent-action .group-agent-sheet > summary { width: max-content; margin: 0 auto; padding: .25rem .75rem; border-radius: 999px; font-size: .75rem; font-weight: 600; color: var(--ot-muted); }
+#group-agent-action .group-agent-sheet > summary:hover { background: var(--ot-bg-accent); color: var(--ot-ink); }
+#group-agent-action .group-agent-sheet[open] { padding: 0 .75rem .75rem; background: var(--ot-bg-accent); }
+
+/* A message with no reactions yet should not grow a row just for the hover "+😊". */
+#message-list li { position: relative; }
+#message-list li .message-reactions:not(:has(.reaction-chip)):not(:has(.reaction-picker:not([hidden]))) {
+  position: absolute; right: .5rem; bottom: -.625rem; margin: 0; z-index: 2;
+}
+#message-list li .message-reactions:not(:has(.reaction-chip)) .reaction-add { background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line); }
