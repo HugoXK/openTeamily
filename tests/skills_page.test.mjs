@@ -1,7 +1,9 @@
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  SKILLS, filterSkills, mountSkills, skillCountLabel,
+  filterSkills, mountSkills, skillCountLabel,
 } from '../openteamily/static/skills/app.mjs';
 
 class Element {
@@ -12,6 +14,7 @@ class Element {
     this.dataset = {};
     this.handlers = {};
     this.className = '';
+    this.style = {};
     this.textContent = '';
     this.hidden = false;
     this.value = '';
@@ -38,50 +41,55 @@ function fakeDocument() {
   return {doc, el: (id) => doc.getElementById(id)};
 }
 
-test('the catalogue has 8-12 unique self-written skills', () => {
-  assert.ok(SKILLS.length >= 8 && SKILLS.length <= 12);
-  assert.equal(new Set(SKILLS.map((item) => item.id)).size, SKILLS.length);
-  for (const item of SKILLS) {
-    assert.ok(item.id && item.name && item.description && item.mark);
+const SKILLS = JSON.parse(execFileSync('python3', ['-c', 'import json;from openteamily.skill_packages import catalogue;print(json.dumps(catalogue()))'], {encoding:'utf8'}));
+function service({failWrite=false} = {}) {
+  let bindings=[];const calls=[];
+  return {calls, fetcher:async(path, options) => {
+    calls.push({path,options});
+    if(options.method==='POST') {
+      if(failWrite)return {status:403,ok:false,json:async()=>({error:{message:'permission denied'}})};
+      const b=JSON.parse(options.body);bindings=b.enabled ? [{scope:b.scope,skill_id:b.skill_id,version:b.version,digest:b.digest,last_loaded_task:null}] : [];
+      return {status:200,ok:true,json:async()=>({enabled:b.enabled})};
+    }
+    return {status:200,ok:true,json:async()=>path.endsWith('/catalog') ? {items:SKILLS} : path.endsWith('/bindings') ? {items:bindings} : {items:[]}};
+  }};
+}
+
+test('authoritative catalogue has real bounded version-pinned prompt packages', () => {
+  assert.equal(SKILLS.length,10);
+  assert.equal(new Set(SKILLS.map(i=>i.id)).size,10);
+  for(const item of SKILLS) {
+    assert.ok(item.content.length>100);
+    assert.equal(createHash('sha256').update(item.content).digest('hex'),item.digest);
+    assert.deepEqual(item.permissions,['model_context']);
   }
 });
 
-test('filterSkills matches names and descriptions without inventing data', () => {
-  assert.equal(filterSkills(SKILLS, '').length, SKILLS.length);
-  assert.deepEqual(filterSkills(SKILLS, '会议').map((item) => item.id), ['meeting-notes']);
-  assert.deepEqual(filterSkills(SKILLS, '表格').map((item) => item.id), ['data-brief']);
-  assert.deepEqual(filterSkills(SKILLS, '找不到的技能'), []);
-  assert.deepEqual(filterSkills(SKILLS, '  邮件 ').map((item) => item.id), ['email-draft']);
+test('filter searches actual server content and counts it', () => {
+  assert.equal(filterSkills(SKILLS,'').length,10);
+  assert.deepEqual(filterSkills(SKILLS,'会议').map(i=>i.id),['meeting-notes']);
+  assert.equal(filterSkills(SKILLS,'找不到的技能').length,0);
+  assert.equal(skillCountLabel(1,10),'显示 1 / 10 个技能');
 });
 
-test('skill counts reflect actual catalogue matches', () => {
-  assert.equal(skillCountLabel(SKILLS.length, SKILLS.length), `共 ${SKILLS.length} 个技能`);
-  assert.equal(skillCountLabel(1, SKILLS.length), `显示 1 / ${SKILLS.length} 个技能`);
+test('installation needs permission, persists through service reload, and uninstall revokes', async () => {
+  const svc=service();const {doc,el}=fakeDocument();doc.cookie='__Host-ot_csrf=synthetic-csrf';el('skills-scope').value='account';
+  const mounted=mountSkills(doc,{fetcher:svc.fetcher});await mounted.ready;
+  assert.equal(el('skills-list').children.length,10);
+  let button=el('skills-list').children[0].children[2];await button.handlers.click();
+  assert.match(el('skills-error').textContent,/勾选/);assert.equal(svc.calls.filter(c=>c.options.method==='POST').length,0);
+  el('skills-permission').checked=true;await button.handlers.click();
+  assert.equal(el('skills-list').children[0].children[2].textContent,'卸载');
+  assert.match(el('skills-list').children[0].children[1].children[1].textContent,/等待/);
+  const posted=svc.calls.find(c=>c.options.method==='POST');assert.equal(posted.options.headers['X-CSRF-Token'],'synthetic-csrf');
+  const next=fakeDocument();next.doc.cookie='__Host-ot_csrf=x';next.el('skills-scope').value='account';await mountSkills(next.doc,{fetcher:svc.fetcher}).ready;
+  assert.equal(next.el('skills-list').children[0].children[2].textContent,'卸载');
+  await next.el('skills-list').children[0].children[2].handlers.click();
+  assert.equal(next.el('skills-list').children[0].children[2].textContent,'安装');
 });
 
-test('mountSkills searches and never pretends to install a skill', () => {
-  const {doc, el} = fakeDocument();
-  const mounted = mountSkills(doc);
-  assert.equal(el('skills-list').children.length, SKILLS.length);
-  assert.equal(el('skills-count').textContent, `共 ${SKILLS.length} 个技能`);
-  assert.equal(el('skills-empty').hidden, true);
-
-  el('skills-search').value = '会议';
-  el('skills-search').handlers.input();
-  assert.equal(el('skills-list').children.length, 1);
-  assert.equal(el('skills-count').textContent, `显示 1 / ${SKILLS.length} 个技能`);
-  const card = el('skills-list').children[0];
-  assert.equal(card.children[1].children[0].textContent, '会议纪要');
-  const install = card.children[2];
-  assert.equal(install.textContent, '未接通');
-  assert.equal(install.disabled, true);
-  assert.equal(install.handlers.click, undefined);
-  assert.equal(card.className.includes('is-installed'), false);
-  mounted.render();
-  assert.equal(el('skills-list').children[0].children[2].disabled, true);
-
-  el('skills-search').value = '找不到的技能';
-  el('skills-search').handlers.input();
-  assert.equal(el('skills-list').children.length, 0);
-  assert.equal(el('skills-empty').hidden, false);
+test('server refusal never invents installed or runtime-loaded state', async () => {
+  const svc=service({failWrite:true}),{doc,el}=fakeDocument();doc.cookie='';el('skills-scope').value='account';el('skills-permission').checked=true;
+  await mountSkills(doc,{fetcher:svc.fetcher}).ready;await el('skills-list').children[0].children[2].handlers.click();
+  assert.equal(el('skills-list').children[0].children[2].textContent,'安装');assert.equal(el('skills-error').textContent,'permission denied');
 });
