@@ -119,6 +119,101 @@ function mount() {
     }
   }
 
+  function renderChecklist(steps) {
+    const list = document.getElementById('onboarding-checklist');
+    if (!list) return;
+    list.replaceChildren();
+    for (const [index, step] of steps.entries()) {
+      const row = document.createElement('li');
+      row.dataset.state = step.state;
+      row.className = step.state === 'done' ? 'note' : '';
+      const mark = document.createElement('span');
+      mark.setAttribute('aria-hidden', 'true');
+      mark.textContent = step.state === 'done' ? '✓ ' : (index + 1) + '. ';
+      const label = document.createElement('strong');
+      label.textContent = step.title;
+      row.append(mark, label, document.createTextNode(' — ' + step.detail));
+      list.append(row);
+    }
+    const ready = document.getElementById('onboarding-ready');
+    if (!ready) return;
+    const done = steps.every(step => step.state === 'done');
+    ready.hidden = !done;
+    if (!done) {
+      ready.replaceChildren();
+      return;
+    }
+    const link = document.createElement('a');
+    link.setAttribute('href', '/chat');
+    link.setAttribute('role', 'button');
+    link.textContent = '去聊天';
+    ready.replaceChildren(document.createTextNode('可以开始了：'), link);
+  }
+
+  async function loadChecklist() {
+    const steps = [
+      {title: '创建工作区', state: 'unknown', detail: ''},
+      {title: '邀请一位同事', state: 'unknown', detail: ''},
+      {title: '发出第一条消息', state: 'unknown', detail: ''},
+    ];
+    const listed = await request('GET', '/v1/workspaces?limit=100');
+    if (listed.status !== 200) {
+      for (const step of steps) step.detail = '读取工作区失败，需要登录一个有权限的账号才能判断。';
+      renderChecklist(steps);
+      return;
+    }
+    const workspaces = listed.body.items || [];
+    if (!workspaces.length) {
+      steps[0].state = 'pending';
+      steps[0].detail = '还没有工作区：到聊天页新建一个。';
+      steps[1].detail = '需要你先创建工作区才能判断。';
+      steps[2].detail = '需要你先创建工作区才能判断。';
+      renderChecklist(steps);
+      return;
+    }
+    const space = workspaces[0];
+    steps[0].state = 'done';
+    steps[0].detail = '已有工作区「' + (space.name || space.id) + '」。';
+    const members = await request('GET', '/v1/workspaces/' + space.id + '/members');
+    if (members.status !== 200) {
+      steps[1].detail = '读取成员失败，暂时无法判断。';
+    } else {
+      const count = (members.body.items || []).length;
+      steps[1].state = count > 1 ? 'done' : 'pending';
+      steps[1].detail = count > 1
+        ? '已有 ' + count + ' 位成员。'
+        : '目前只有你：邀请一位同事加入这个工作区。';
+    }
+    let messagesKnown = false;
+    let hasMessages = false;
+    const agents = await request('GET', '/v1/workspaces/' + space.id + '/agents?limit=100');
+    if (agents.status === 200) {
+      messagesKnown = true;
+      for (const agent of (agents.body.items || []).slice(0, 5)) {
+        const talks = await request('GET', '/v1/workspaces/' + space.id + '/agents/' + agent.id + '/conversations?limit=1');
+        if (talks.status === 200 && (talks.body.items || []).length) {
+          hasMessages = true;
+          break;
+        }
+      }
+    }
+    const social = await request('GET', '/v1/workspaces/' + space.id + '/social/conversations?limit=1');
+    if (social.status === 200) {
+      messagesKnown = true;
+      if ((social.body.items || []).length) hasMessages = true;
+    }
+    if (!messagesKnown) {
+      steps[2].detail = '读取消息失败，暂时无法判断。';
+    } else if (hasMessages) {
+      steps[2].state = 'done';
+      steps[2].detail = '已经有消息了。';
+    } else {
+      steps[2].state = 'pending';
+      steps[2].detail = '还没有消息：到聊天页发出第一条。';
+    }
+    renderChecklist(steps);
+  }
+
   async function load() {
     const session = await request('GET', '/v1/auth/session');
     if (session.status === 401) {
@@ -135,6 +230,7 @@ function mount() {
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = session.body.user.username;
     document.getElementById('whoami').dataset.username = session.body.user.username;
+    loadChecklist();
     const result = await request('GET', '/v1/onboarding');
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法读取工作背景。'));
