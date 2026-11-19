@@ -1342,3 +1342,37 @@ test('removing a group agent sends nothing until the explicit confirmation', asy
     assert.equal(posts.length,1);
   } finally {restore();}
 });
+
+test('image attachments render as an image, other files keep the download link', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations/conv-1')) {
+        body.items = [
+          {id: 'img-1', user_id: bob, body: 'photo', created: '2026-01-01T00:00:00Z', attachment: {
+            id: 'a1', title: 'Photo', mime: 'image/png',
+            path: '/v1/workspaces/ws-1/artifacts/a1/file',
+          }},
+          {id: 'doc-1', user_id: bob, body: 'notes', created: '2026-01-01T00:00:01Z', attachment: {
+            id: 'a2', title: 'Notes', mime: 'text/plain',
+            path: '/v1/workspaces/ws-1/artifacts/a2/file',
+          }},
+        ];
+      }
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    const rows = el('message-list').children;
+    const image = descendants(rows[0]).find(node => node.tagName === 'IMG');
+    assert.ok(image, 'an image attachment is rendered as <img>, not a DOC card');
+    assert.equal(image.getAttribute('src'), '/v1/workspaces/ws-1/artifacts/a1/file');
+    assert.equal(image.getAttribute('alt'), 'Photo');
+    assert.equal(descendants(rows[1]).some(node => node.tagName === 'IMG'), false,
+      'a non-image attachment is not rendered as an image');
+    assert.ok(descendants(rows[1]).some(node => node.tagName === 'A' && node.textContent.includes('下载附件')),
+      'a non-image attachment keeps the download link');
+  } finally { restore(); }
+});

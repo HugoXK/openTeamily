@@ -1448,6 +1448,8 @@ html[data-theme-resolved="dark"] #message-list li[data-state="failed"] > p.faile
   font-weight: 650;
 }
 .stream-artifact-copy { display: grid; gap: 0.2rem; min-width: 0; }
+.stream-artifact-photo-card { grid-template-columns: minmax(0, 1fr); max-width: 22rem; }
+.stream-artifact-photo { display: block; width: 100%; max-height: 18rem; border-radius: 0.5rem; object-fit: cover; background: var(--ot-surface); }
 .stream-artifact-copy strong { font-size: 0.8125rem; font-weight: 650; }
 .stream-artifact-copy a { font-size: 0.75rem; }
 #social-agent-members.group-agent-note,

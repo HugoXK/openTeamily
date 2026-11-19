@@ -88,6 +88,7 @@ class FunctionalCompletionTests(unittest.TestCase):
         self.assertEqual(second['status'], 200)
         self.assertEqual(second['body']['message']['id'], first['body']['message']['id'])
         path = self.bob.call('GET', base)['body']['items'][0]['attachment']['path']
+        self.assertEqual(self.bob.call('GET', base)['body']['items'][0]['attachment']['mime'], 'image/png')
         self.assertEqual(self.bob.call('GET', path, parse='raw')['body'], PNG)
         self.assertEqual(self.eve.call('GET', path)['status'], 404)
         self.assertEqual(self.alice.call('POST', base + '/preferences', {'pinned': True})['status'], 200)

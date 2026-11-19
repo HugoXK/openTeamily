@@ -984,11 +984,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.textContent = formatTime(item.created);
       li.append(role, body, time);
       if (item.attachment && !item.retracted) {
+        const isImage = /^image\//.test(item.attachment.mime || '');
         const card = document.createElement('article');
-        card.className = 'stream-artifact';
-        const cover = document.createElement('span');
-        cover.className = 'stream-artifact-cover';
-        cover.textContent = 'DOC';
+        card.className = 'stream-artifact' + (isImage ? ' stream-artifact-photo-card' : '');
+        let cover;
+        if (isImage) {
+          cover = document.createElement('img');
+          cover.className = 'stream-artifact-photo';
+          cover.setAttribute('src', item.attachment.path);
+          cover.setAttribute('alt', item.attachment.title || '图片附件');
+          cover.setAttribute('loading', 'lazy');
+        } else {
+          cover = document.createElement('span');
+          cover.className = 'stream-artifact-cover';
+          cover.textContent = 'DOC';
+        }
         const copy = document.createElement('span');
         copy.className = 'stream-artifact-copy';
         const heading = document.createElement('strong');
