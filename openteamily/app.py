@@ -620,10 +620,16 @@ class App:
                 if method == 'GET' and not query:
                     row = onboarding.load(db, session['user_id'])
                     return 200, {'onboarding': onboarding.view(row) if row is not None else None,
-                                 'industries': onboarding.industries_view()}, []
+                                 'industries': onboarding.industries_view(),
+                                 'steps': onboarding.steps_view(onboarding.load_steps(db, session['user_id']),
+                                                                row['industry'] if row is not None else '')}, []
                 if method == 'POST' and not query:
                     return self.save_onboarding(db, session, now, env)
                 refuse(400, 'invalid', 'Invalid onboarding request')
+            if path in ('/v1/onboarding/picks', '/v1/onboarding/look'):
+                if method != 'POST' or query:
+                    refuse(405, 'method', 'Only POST is supported')
+                return self.save_onboarding_step(db, session, now, env, path.rsplit('/', 1)[1])
 
             if path == '/v1/personal-agent':
                 if method == 'GET' and not query:
@@ -3203,6 +3209,30 @@ class App:
         except sqlite3.IntegrityError:
             refuse(409, 'conflict', 'Teamily ID is unavailable')
         return 200, {'profile': profiles.view(profiles.load(db, session['user_id']))}, []
+
+    def save_onboarding_step(self, db, session, now, env, step):
+        row = onboarding.load_steps(db, session['user_id'])
+        picks = json.loads(row['picks']) if row is not None else []
+        look = row['look'] if row is not None else None
+        if step == 'picks':
+            value = self.body(env, ['picks']).get('picks')
+            known = onboarding.all_recommendation_keys()
+            if (not isinstance(value, list) or len(value) > onboarding.PICK_MAX
+                    or any(not isinstance(key, str) or key not in known for key in value)
+                    or len(set(value)) != len(value)):
+                refuse(400, 'invalid', 'Pick at most six known suggestions')
+            picks = value
+        else:
+            value = self.body(env, ['look']).get('look')
+            if not onboarding.valid_look(value):
+                refuse(400, 'invalid', 'Provide color, expression, headwear, glasses and hand from the options')
+            look = json.dumps({name: value[name] for name in onboarding.LOOK_OPTIONS}, ensure_ascii=False)
+        db.execute('INSERT INTO user_onboarding_steps VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET '
+                   'picks=excluded.picks, look=excluded.look, updated=excluded.updated',
+                   (session['user_id'], json.dumps(picks), look, now))
+        base = onboarding.load(db, session['user_id'])
+        return 200, {'steps': onboarding.steps_view(onboarding.load_steps(db, session['user_id']),
+                                                    base['industry'] if base is not None else '')}, []
 
     def save_onboarding(self, db, session, now, env):
         body = self.body(env, ['industry', 'role', 'completed'])

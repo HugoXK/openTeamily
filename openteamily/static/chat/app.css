@@ -968,3 +968,22 @@
 }
 .message-tools button:hover, .message-tools button:focus-visible { border-color: var(--ot-line); color: var(--ot-ink); }
 #message-list .body[data-forwarded] { border-left: 3px solid var(--ot-line-strong, var(--ot-line)); padding-left: .5rem; }
+
+/* #232 surface polish: notification states, reaction counts, template cards. */
+.notifications-panel { box-shadow: var(--ot-shadow-sm); }
+.notification-item { border-left: 3px solid transparent; transition: background-color .12s ease; }
+.notification-item.is-unread { background: color-mix(in srgb, var(--ot-accent-soft) 55%, transparent); border-left-color: var(--ot-accent); }
+.notification-item time { justify-self: end; }
+.reaction-chip { font-variant-numeric: tabular-nums; transition: border-color .12s ease, background-color .12s ease; }
+.reaction-chip.is-mine { color: var(--ot-accent-hover); font-weight: 600; }
+#team-template-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); gap: .5rem; }
+#team-template-choices label {
+  align-items: flex-start;
+  padding: .55rem .7rem;
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-sm);
+  background: var(--ot-surface);
+  cursor: pointer;
+}
+#team-template-choices label:has(input:checked) { border-color: var(--ot-accent); background: var(--ot-accent-soft); }
+.message-tools input[type="checkbox"] { accent-color: var(--ot-accent); }

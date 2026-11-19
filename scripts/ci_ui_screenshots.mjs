@@ -2010,6 +2010,23 @@ async function main() {
         && Boolean(personalState.personal_agent && personalState.personal_agent.agent),
         'Saved work context survives reload alongside the personal agent; no recommendations or connector claims');
       screenshots.push(path.basename(await shot(page, outDir, '86-onboarding-saved-context.png')));
+      try {
+        await page.locator('#onboarding-steps').waitFor({state: 'visible'});
+        const appsText = await visibleText(page.locator('#onboarding-apps'));
+        await page.locator('#onboarding-picks input[value="release-notes"]').check();
+        await page.locator('#onboarding-picks-form button[type="submit"]').click();
+        await waitForLocatorText(page, '#onboarding-steps-meta', '已选 1 项');
+        await page.locator('#onboarding-look select[name="color"]').selectOption('天空蓝');
+        await page.locator('#onboarding-look-form button[type="submit"]').click();
+        await waitForLocatorText(page, '#onboarding-look-preview', '颜色：天空蓝');
+        record('onboarding_steps_2_4',
+          appsText.includes('Gmail · 未连接') && !appsText.includes('已连接')
+          && (await visibleText(page.locator('#onboarding-steps-meta'))).includes('形象已保存'),
+          'Steps 2-4 functional flow: apps honestly unconnected, picks and look saved; not compared with Teamily');
+        screenshots.push(path.basename(await shot(page, outDir, '87-onboarding-steps.png')));
+      } catch (error) {
+        record('onboarding_steps_2_4', false, String(error));
+      }
       await page.locator('#industry').selectOption('其他');
       await page.locator('#custom-industry').fill('[CI FIXTURE] Independent research');
       await page.locator('#custom-role').fill('[CI FIXTURE] Analyst');
