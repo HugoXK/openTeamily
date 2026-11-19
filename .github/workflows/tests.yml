@@ -46,6 +46,9 @@ jobs:
       - run: node --test tests/profile_page.test.mjs
       - run: node --test tests/meetings_page.test.mjs
       - run: node --test tests/agents_creator_filter.test.mjs
+      - run: node --test tests/registration_page.test.mjs
+      - run: node --test tests/workspace_events.test.mjs
+      - run: node --test tests/skill_imports.test.mjs
       - run: node --test tests/skills_page.test.mjs
       - run: node --test tests/home_page.test.mjs
       - run: node --test tests/look_avatar.test.mjs

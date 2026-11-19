@@ -1,3 +1,4 @@
+import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
@@ -1171,32 +1172,51 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
 
+  const workspaceEvents=mountWorkspaceEvents(document,{onInvalidate:async(event)=>{
+    if(event.workspace!==workspaceId()||document.visibilityState==='hidden')return;
+    await loadSessions();
+    if(event.workspace!==workspaceId())return;
+    if(!event.initial&&event.changed.includes('social')&&currentSource==='social'&&currentConversation){
+      const banner=document.getElementById('conversation-live-update');if(banner)banner.hidden=false;
+    }
+  }});
+  document.getElementById('conversation-live-load')?.addEventListener('click',async()=>{
+    if(currentSource==='social'&&currentConversation)await openSocialConversation(currentConversation.id);
+    const banner=document.getElementById('conversation-live-update');if(banner)banner.hidden=true;
+  });
+  let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
   async function loadSessions() {
+    const sequence = ++sessionsRequest;
+    const user = currentUser;
     loadNotifications();
     const id = workspaceId();
-    sessions = [];
-    agents = [];
-    members = [];
-    artifacts = [];
-    socialConversations = [];
+    if (id !== sessionsWorkspace || user !== sessionsUser || !id) {
+      sessionsWorkspace = id; sessionsUser = user;
+      sessions = []; agents = []; members = []; artifacts = []; socialConversations = [];
+      renderSessions();
+    }
     if (!id) return;
+    const current = () => sequence === sessionsRequest && id === workspaceId() && user === currentUser;
     const [listed, social, people, works] = await Promise.all([
       request('GET', `/v1/workspaces/${id}/agents?limit=100`),
       request('GET', `/v1/workspaces/${id}/social/conversations?limit=100`),
       request('GET', `/v1/workspaces/${id}/members`),
       request('GET', `/v1/workspaces/${id}/artifacts?limit=100`),
     ]);
+    if (!current()) return;
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
       return;
     }
-    agents = listed.body.items || [];
-    if (people.status === 200) members = people.body.items || [];
-    if (works.status === 200) artifacts = works.body.items || [];
-    if (social.status === 200) socialConversations = social.body.items || [];
-    const results = await Promise.all(agents.map(agent =>
+    const nextAgents = listed.body.items || [];
+    const results = await Promise.all(nextAgents.map(agent =>
       request('GET', `/v1/workspaces/${id}/agents/${agent.id}/conversations?limit=100`)
         .then(result => ({agent, result}))));
+    if (!current()) return;
+    agents = nextAgents;
+    members = people.status === 200 ? people.body.items || [] : [];
+    artifacts = works.status === 200 ? works.body.items || [] : [];
+    socialConversations = social.status === 200 ? social.body.items || [] : [];
     const agentRows = [];
     for (const {agent, result} of results) {
       if (result.status !== 200) continue;
@@ -1206,6 +1226,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     sessions = mergeSessions(agentRows, socialConversations, currentUser && currentUser.id);
     renderSessions();
+    // The first SSE snapshot may immediately refresh; do not invalidate the
+    // initial directory before deep-link resolution has a committed snapshot.
+    workspaceEvents.start(id);
   }
 
   function memberRow(name, note, kind) {
