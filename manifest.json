@@ -1,0 +1,83 @@
+{
+  "rows": [
+    {
+      "state": "default",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "316-before-1440x900.png",
+      "bytes": 65358,
+      "width": 1440,
+      "height": 900,
+      "sha256": "a203107ddfa80483d6c692e6472bf19ddc3edfcf4ef3d67b7a10a4aabb4cb562",
+      "scrollWidth": 1440,
+      "cards": 1,
+      "toggle": false,
+      "archivedTags": 0
+    },
+    {
+      "state": "default",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "316-after-1440x900.png",
+      "bytes": 66816,
+      "width": 1440,
+      "height": 900,
+      "sha256": "277101ff45109e76846203fefb6eeed89614c4b8a12c3ff628d6af0a2b239b82",
+      "scrollWidth": 1440,
+      "cards": 1,
+      "toggle": true,
+      "archivedTags": 0
+    },
+    {
+      "state": "archived",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "316-after-archived-1440x900.png",
+      "bytes": 74774,
+      "width": 1440,
+      "height": 900,
+      "sha256": "dd1301be7ab3d7fedb8a2a00e4210e3a1b2066aa4fb79cedb63474888ef9e24f",
+      "scrollWidth": 1440,
+      "cards": 2,
+      "tags": 1,
+      "restore": 1
+    },
+    {
+      "state": "default-mobile",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "316-after-390x844.png",
+      "bytes": 62993,
+      "width": 390,
+      "height": 844,
+      "sha256": "e34889772179f21ea94fd3f65e7e02ec079a049ab0574355cbf7af3b41494828",
+      "scrollWidth": 390
+    }
+  ],
+  "facts": {
+    "chat": {
+      "bubble": {
+        "text": "你好，世界和团队都在这里",
+        "strongs": 2
+      },
+      "hasButton": true,
+      "wrap": {
+        "value": "你好**世界**",
+        "start": 4,
+        "end": 6
+      }
+    },
+    "agents": {
+      "baseList": {
+        "cards": 1,
+        "toggle": true,
+        "archivedTags": 0
+      },
+      "archived": {
+        "cards": 2,
+        "tags": 1,
+        "restore": 1
+      }
+    }
+  }
+}
