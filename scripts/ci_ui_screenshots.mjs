@@ -107,6 +107,19 @@ async function waitForLocatorText(page, selector, expected, timeout = 15000) {
 }
 
 
+// Poll completed JSON values in Node. An async predicate passed to browser
+// waitForFunction can be a truthy Promise rather than the API condition itself.
+async function waitForApi(page, apiPath, predicate, timeout = 20000) {
+  const deadline=Date.now()+timeout;
+  do {
+    const data=await page.evaluate(async apiPath=>{const response=await fetch(apiPath);if(!response.ok)throw Error('API status '+response.status);return response.json()},apiPath);
+    if(predicate(data))return data;
+    if(data.task && ['failed','cancelled','timed_out'].includes(data.task.status))throw Error('Runtime task ended '+data.task.status);
+    await new Promise(resolve=>setTimeout(resolve,100));
+  } while(Date.now()<deadline);
+  throw Error('Expected persisted API condition not reached: '+apiPath);
+}
+
 async function writeSendShortcut(page, value) {
   const result = await page.evaluate(async (value) => {
     const token = document.cookie.split(/;\s*/).map((part) => part.split('=')).find((pair) => (
@@ -2174,6 +2187,107 @@ async function main() {
     } catch (error) {
       record('onboarding_save_reopen', false, String(error));
     }
+
+    // Real management/runtime lifecycle, using only the labelled synthetic provider fixture.
+    try {
+      await page.goto(`${origin}/skills`, {waitUntil:'load'});
+      const install=page.locator('button[data-skill="meeting-notes"]');
+      await install.waitFor({state:'visible'});
+      await install.click();
+      await waitForLocatorText(page,'#skills-error','请先阅读');
+      record('skills_permission_required',await install.innerText()==='安装','No binding is created before explicit model-context permission');
+      await page.locator('#skills-permission').check();
+      await install.click();
+      await waitForLocatorText(page,'#skills-error','内容与绑定已安装');
+      await page.reload({waitUntil:'load'});
+      await page.waitForFunction(()=>document.querySelector('button[data-skill="meeting-notes"]')?.textContent==='卸载');
+      record('skills_binding_reload',true,'Actual SQLite-backed account binding survives page reload');
+      screenshots.push(path.basename(await shot(page,outDir,'96-skills-installed.png')));
+      const task=await page.evaluate(async()=>{
+        const csrf=document.cookie.split(/;\s*/).find(v=>v.startsWith('ot_dev_csrf=')).split('=')[1];
+        const response=await fetch('/v1/runtime/tasks',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({kind:'infer',prompt:'[SYNTHETIC CI] Summarize: We decided to test the skill lifecycle.'})});
+        const data=await response.json();if(!response.ok)throw Error(JSON.stringify(data));return data.task.id;
+      });
+      await waitForApi(page,'/v1/runtime/tasks/'+task,d=>d.task?.status==='succeeded');
+      await waitForApi(page,'/v1/skills/bindings',d=>d.items?.some(i=>i.skill_id==='meeting-notes'&&i.last_loaded_task===task));
+      await page.reload({waitUntil:'load'});
+      await waitForLocatorText(page,'#skills-list','历史任务已有加载回执');
+      record('skills_daemon_loaded',await page.evaluate(async id=>{const d=await(await fetch('/v1/skills/bindings')).json();return d.items.some(i=>i.skill_id==='meeting-notes'&&i.last_loaded_task===id)},task),'Upgraded daemon verified exact package digests and acknowledged context loading before successful synthetic inference; Python tests inspect model request content');
+      await page.locator('.skill-card').filter({has:page.locator('button[data-skill="meeting-notes"]')}).locator('summary').click();
+      screenshots.push(path.basename(await shot(page,outDir,'97-skills-loaded-content.png')));
+      await page.setViewportSize({width:390,height:844});
+      record('skills_narrow_no_overflow',await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Digest/content wrap at 390px; no hidden controls');
+      screenshots.push(path.basename(await shot(page,outDir,'98-skills-narrow.png')));
+      await page.setViewportSize({width:1280,height:900});
+      await page.locator('button[data-skill="meeting-notes"]').click();
+      await waitForLocatorText(page,'#skills-error','已撤销绑定');
+      await page.reload({waitUntil:'load'});
+      await page.waitForFunction(()=>document.querySelector('button[data-skill="meeting-notes"]')?.textContent==='安装');
+      record('skills_uninstall_reload',await page.evaluate(async()=>!(await(await fetch('/v1/skills/bindings')).json()).items.some(i=>i.skill_id==='meeting-notes')),'Actual binding removed; Python/container tests assert subsequent model prompts omit the removed skill');
+      screenshots.push(path.basename(await shot(page,outDir,'99-skills-uninstalled.png')));
+    } catch(error) { record('skills_runtime_lifecycle',false,String(error)+'; '+await page.locator('#skills-error').textContent().catch(()=>'(not on skill page)')+'; '+(await page.locator('#skills-list').textContent().catch(()=>''))); }
+
+    try {
+      await page.goto(`${origin}/chat#workspace=${ready.workspace_id}&social=${ready.social_group_id}`,{waitUntil:'load'});
+      await waitForLocatorText(page,'#chat-title',ready.social_group_title);
+      await waitForLocatorText(page,'#message-list',ready.social_message_text);
+      const countBefore=await page.evaluate(async({wid,cid})=>(await(await fetch(`/v1/workspaces/${wid}/social/conversations/${cid}`)).json()).items.length,{wid:ready.workspace_id,cid:ready.social_group_id});
+      const source=page.locator('#message-list > li').filter({hasText:ready.social_message_text}).first();
+      await source.locator('.message-more').click({force:true});
+      await page.locator('[data-menu="translate"]').click();
+      await page.locator('#message-assist-instruction').fill('English');
+      await page.locator('#message-assist-submit').click();
+      await waitForLocatorText(page,'#message-assist-history',ready.provider_text,20000);
+      record('message_translation_actual_runtime',true,'Private persisted task returned through the configured synthetic provider; no hardcoded translation');
+      screenshots.push(path.basename(await shot(page,outDir,'100-chat-translation-result.png')));
+      await page.locator('#message-assist-close').click();
+      await source.locator('.message-more').click({force:true});
+      await page.locator('[data-menu="ask"]').click();
+      await page.locator('#message-assist-instruction').fill('Summarize the key point without taking action.');
+      await page.locator('#message-assist-submit').click();
+      await waitForApi(page,`/v1/workspaces/${ready.workspace_id}/social/conversations/${ready.social_group_id}/assists`,d=>d.items?.some(i=>i.operation==='ask'&&i.status==='succeeded'));
+      await waitForLocatorText(page,'#message-assist-history','问 AI');
+      record('message_ask_ai_actual_runtime',true,'Separate persisted ask task completed through real runtime path with synthetic provider');
+      await page.locator('#message-assist-close').click();
+      const countAfter=await page.evaluate(async({wid,cid})=>(await(await fetch(`/v1/workspaces/${wid}/social/conversations/${cid}`)).json()).items.length,{wid:ready.workspace_id,cid:ready.social_group_id});
+      record('message_assistance_never_posts',countBefore===countAfter,'Model assistance does not create or send a group message');
+      await page.locator('#group-info-toggle').click();
+      await page.locator('#group-announcement-open').click();
+      await page.waitForFunction(()=>!document.getElementById('announcement-save').disabled);
+      await page.locator('#announcement-body').fill('[SYNTHETIC CI] Review before sending external messages.');
+      await page.locator('#announcement-save').click();
+      await waitForLocatorText(page,'#group-announcement-preview','[SYNTHETIC CI]');
+      await page.reload({waitUntil:'load'});
+      await waitForLocatorText(page,'#chat-title',ready.social_group_title);
+      await page.locator('#group-info-toggle').click();
+      await page.locator('#group-announcement-open').click();
+      await page.waitForFunction(()=>document.getElementById('announcement-body').value.includes('[SYNTHETIC CI]'));
+      record('group_announcement_reload',true,'Real revisioned group announcement survives reload and editor reopening');
+      screenshots.push(path.basename(await shot(page,outDir,'101-group-announcement-editor.png')));
+      await page.evaluate(()=>{document.documentElement.dataset.themeResolved='dark'});
+      const contrast=await page.locator('#announcement-save').evaluate(async e=>{
+        getComputedStyle(e).color;await Promise.all(e.getAnimations().map(a=>a.finished.catch(()=>{})));
+        const s=getComputedStyle(e),lum=color=>color.match(/[0-9.]+/g).slice(0,3).map(Number).map(n=>{n/=255;return n<=.04045?n/12.92:((n+.055)/1.055)**2.4}).reduce((a,n,i)=>a+n*[.2126,.7152,.0722][i],0),a=lum(s.color),b=lum(s.backgroundColor);
+        return s.backgroundImage==='none'?(Math.max(a,b)+.05)/(Math.min(a,b)+.05):0;
+      });
+      record('new_modal_dark_primary_contrast',contrast>=4.5,'Actual settled dark submit contrast '+contrast.toFixed(2)+':1; opaque background, no mixed-theme inference');
+      screenshots.push(path.basename(await shot(page,outDir,'101b-group-announcement-dark.png')));
+      await page.evaluate(()=>{document.documentElement.dataset.themeResolved='light'});
+      await page.locator('#announcement-close').click();
+      await page.locator('#group-info-close').click();
+      await page.locator('#composer-memory-open').click();
+      await page.locator('#resource-picker-list button').first().waitFor({state:'visible'});
+      screenshots.push(path.basename(await shot(page,outDir,'102-chat-resource-picker.png')));
+      await page.locator('#resource-picker-list button').first().click();
+      await page.waitForFunction(()=>!document.getElementById('resource-picker').open);
+      record('composer_saved_resource_insert',/参考资料：.+（修订 \d+）/u.test(await page.locator('#chat-body').inputValue()),'Authorized saved memory content is inserted for review, not auto-sent');
+      await page.locator('#chat-body').fill('');
+      await page.locator('#composer-emoji-open').click();
+      await page.locator('#composer-emoji-list button').first().click();
+      record('composer_emoji_insert',await page.locator('#chat-body').inputValue()==='😀','Native emoji changes the draft only');
+      screenshots.push(path.basename(await shot(page,outDir,'103-chat-composer-functional.png')));
+      await page.locator('#chat-body').fill('');
+    } catch(error) { record('visible_message_utilities',false,String(error)); }
 
     await context.close();
   } finally {

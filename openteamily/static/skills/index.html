@@ -61,7 +61,7 @@
         <span class="skills-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg></span>
         技能库
       </h1>
-      <p class="note">这是本页自带的技能清单。安装与运行时加载未接通，按钮不可用，不会显示虚假的安装成功。</p>
+      <p class="note">原创建议型技能包含真实内容和版本摘要。安装绑定持久化，运行时校验并加载后才显示加载回执；不是执行脚本、自动联网或发送消息的权限。</p>
     </header>
     <div class="skills-toolbar">
       <label class="skills-search-label" for="skills-search">
@@ -70,7 +70,8 @@
       </label>
     </div>
     <p id="skills-count" class="skills-count" role="status" aria-live="polite"></p>
-    <ul id="skills-list" class="skills-grid"></ul>
+    <p id="skills-error" role="status" aria-live="polite"></p><label>安装范围<select id="skills-scope"><option value="account">我的账户（自己的管理任务运行时）</option></select></label><label><input type="checkbox" id="skills-permission">我已阅读内容，允许将所选技能加入模型上下文；不授权联网、文件执行或对外操作。</label><p class="note skills-runtime-note">需要<a href="/runtimes">自己的在线运行时</a>和<a href="/settings#model-api-form">模型配置</a>。智能体范围需工作区管理权限；旧运行时须升级，独立 DSH 会话尚未接入。</p>
+<ul id="skills-list" class="skills-grid"></ul>
     <p id="skills-empty" class="note skills-empty" hidden>没有匹配的技能</p>
   </section>
   </main>

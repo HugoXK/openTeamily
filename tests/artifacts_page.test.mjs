@@ -582,11 +582,11 @@ test('library item badges and times are derived from real artifact fields', asyn
 });
 
 
-test('canSendArtifactToChat is only true for media with an id', async () => {
+test('canSendArtifactToChat enables every persisted work type, not missing IDs', async () => {
   const {canSendArtifactToChat, conversationLabel} = await import('../openteamily/static/artifacts/app.mjs');
   assert.equal(canSendArtifactToChat({id: 'a', kind: 'media'}), true);
-  assert.equal(canSendArtifactToChat({id: 'a', kind: 'document'}), false);
-  assert.equal(canSendArtifactToChat({id: 'a', kind: 'website'}), false);
+  assert.equal(canSendArtifactToChat({id: 'a', kind: 'document'}), true);
+  assert.equal(canSendArtifactToChat({id: 'a', kind: 'website'}), true);
   assert.equal(canSendArtifactToChat({kind: 'media'}), false);
   assert.equal(conversationLabel({title: 'Project room'}), 'Project room');
   assert.equal(conversationLabel({kind: 'dm', members: [{username: 'alice'}, {username: 'bob'}]}), 'alice、bob');
