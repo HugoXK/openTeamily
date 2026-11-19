@@ -249,7 +249,7 @@ function reply({status = 200, body = {}} = {}) {
   return {status, json: async () => body};
 }
 
-async function openArtifactsPage({items = [], artifact} = {}) {
+async function openArtifactsPage({items = [], artifact, workspaces = [{id: 'w1', name: 'Desk'}]} = {}) {
   const {doc, elements, created, form} = fakeDocument();
   const calls = [];
   let listed = items.slice();
@@ -259,7 +259,8 @@ async function openArtifactsPage({items = [], artifact} = {}) {
     calls.push({method, path, headers: options.headers || {}, body: options.body});
     if (path === '/v1/auth/session') return reply({body: {user: {id: 'u1', username: 'alice'}}});
     if (path === '/v1/auth/providers') return reply({body: {items: []}});
-    if (path === '/v1/workspaces?limit=100') return reply({body: {items: [{id: 'w1', name: 'Desk'}]}});
+    if (path === '/v1/workspaces?limit=100') return reply({body: {items: workspaces}});
+    if (path === '/v1/workspaces/w2/artifacts') return reply({body: {items: []}});
     if (path === '/v1/workspaces/w1/artifacts') return reply({body: {items: listed}});
     if (path === '/v1/workspaces/w1/artifacts/a1') return reply({body: {artifact: target}});
     if (path === '/v1/workspaces/w1/artifacts/a1/shares') return reply({body: {items: []}});
@@ -372,6 +373,51 @@ test('confirming deletes the artifact exactly once and clears it from the list',
     assert.equal(page.elements.get('artifact-list').children.length, 0);
     assert.equal(page.elements.get('editor-form').hidden, true);
     assert.equal(page.elements.get('list-panel').hidden, false);
+  } finally {
+    page.close();
+  }
+});
+
+test('library layout applies actual grid/list presentation state without changing data', async () => {
+  const {applyArtifactLayout} = await import('../openteamily/static/artifacts/app.mjs');
+  const row = {id: 'persisted-work'};
+  const list = {dataset: {}, children: [row]};
+  assert.equal(applyArtifactLayout(list, 'grid'), 'grid');
+  assert.equal(list.dataset.layout, 'grid');
+  assert.equal(applyArtifactLayout(list, 'list'), 'list');
+  assert.equal(list.dataset.layout, 'list');
+  assert.equal(applyArtifactLayout(list, 'unknown'), 'grid');
+  assert.equal(list.children[0], row);
+});
+
+test('switching workspace retires a delete question aimed at the workspace it left', async () => {
+  const page = await openArtifactsPage({
+    items: [{id: 'a1', title: 'W1 作品', kind: 'document', created_by: 'alice'}],
+    artifact: {id: 'a1', title: 'W1 作品', kind: 'document', revision: 1, body: 'hello', created_by: 'alice'},
+    workspaces: [{id: 'w1', name: 'Desk'}, {id: 'w2', name: 'Studio'}],
+  });
+  try {
+    await openEditorOn(page);
+    page.elements.get('remove-artifact').dispatch('click');
+    const box = page.alertdialog()[0];
+    assert.ok(box, 'clicking remove asks the user first');
+    const question = box.children.find((node) => node.id === 'remove-artifact-question');
+    assert.equal(question.textContent, '删除「W1 作品」？');
+
+    page.elements.get('workspace').value = 'w2';
+    await page.elements.get('workspace').dispatch('change');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(
+      page.alertdialog().length,
+      0,
+      'the question must not keep asking about a workspace the page has left',
+    );
+    assert.deepEqual(
+      page.calls.filter((call) => call.method === 'POST').map((call) => call.path),
+      [],
+      'switching workspace while the question is open must delete nothing',
+    );
   } finally {
     page.close();
   }

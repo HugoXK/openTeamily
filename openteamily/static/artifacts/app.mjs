@@ -153,6 +153,11 @@ export function suggestedDiscoverSlug(title) {
   return /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug) ? slug : '';
 }
 
+export function applyArtifactLayout(list, layout) {
+  list.dataset.layout = layout === 'list' ? 'list' : 'grid';
+  return list.dataset.layout;
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -174,6 +179,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let filterCreators = [];
   let filterSessions = [];
   let allItems = [];
+  // A delete question is bound to the workspace and artifact it was asked about;
+  // leaving that workspace retires it instead of letting the answer land elsewhere.
+  let pendingDeleteCancel = null;
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -673,6 +681,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const list = document.getElementById('artifact-list');
     const empty = document.getElementById('list-empty');
     list.textContent = '';
+    applyArtifactLayout(list, catalogLayout);
     if (empty) empty.hidden = items.length > 0;
     for (const item of items) {
       const row = document.createElement('li');
@@ -687,6 +696,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       meta.textContent = `${kindLabel(item.kind)} · ${item.created_by || ''}${source}`;
       row.appendChild(open);
       row.appendChild(meta);
+      const cover = document.createElement('span');
+      cover.className = 'artifact-cover';
+      cover.setAttribute('aria-hidden', 'true');
+      cover.textContent = kindLabel(item.kind);
+      row.appendChild(cover);
       list.appendChild(row);
     }
   }
@@ -920,7 +934,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  workspaceSelect.addEventListener('change', () => loadList());
+  workspaceSelect.addEventListener('change', () => {
+    if (pendingDeleteCancel) pendingDeleteCancel();
+    loadList();
+  });
   search.addEventListener('input', () => loadList());
 
   document.getElementById('new-artifact').addEventListener('click', () => {
@@ -1225,6 +1242,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function askDeleteConfirmation() {
     const trigger = document.getElementById('remove-artifact');
+    const target = {workspace: workspaceId(), id: current && current.id};
     const prompt = artifactDeletePrompt(current);
     const box = document.createElement('div');
     box.className = 'inline-confirm';
@@ -1257,11 +1275,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const finish = answer => {
         if (settled) return;
         settled = true;
+        pendingDeleteCancel = null;
         document.removeEventListener('keydown', onKey);
         box.remove();
         trigger.hidden = false;
         if (!answer && typeof trigger.focus === 'function') trigger.focus();
-        resolve(answer);
+        resolve(answer ? target : null);
       };
       const onKey = event => {
         if (event.key === 'Escape') {
@@ -1269,6 +1288,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           finish(false);
         }
       };
+      pendingDeleteCancel = () => finish(false);
       cancel.addEventListener('click', () => finish(false));
       confirm.addEventListener('click', () => finish(true));
       document.addEventListener('keydown', onKey);
@@ -1277,8 +1297,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('remove-artifact').addEventListener('click', async () => {
     if (!current || !current.id || !workspaceId()) return;
-    if (!await askDeleteConfirmation()) return;
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/remove`, {});
+    const target = await askDeleteConfirmation();
+    if (!target) return;
+    const result = await request('POST', `/v1/workspaces/${target.workspace}/artifacts/${target.id}/remove`, {});
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '删除失败。'));
       return;

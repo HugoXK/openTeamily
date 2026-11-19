@@ -611,3 +611,33 @@ a.settings-row:focus-visible {
   background: var(--ot-bg-accent);
   color: var(--ot-ink);
 }
+
+/* Captured narrow settings column, grouped rows and left-label/right-control rhythm. */
+body.app-workspace > main > #settings-panel { width: 100%; max-width: 42rem; margin: 0 auto; padding: 1rem 1.25rem 3rem; box-sizing: border-box; }
+.settings-index { gap: 1.1rem; }
+.settings-group, .settings-card { box-shadow: none; border: 0; background: var(--ot-surface); border-radius: .8rem; }
+.settings-row, .settings-toggle { padding: .65rem .85rem; min-height: 2.8rem; border-bottom-color: var(--ot-bg-accent); font-size: .9rem; }
+.settings-row:hover { background: var(--ot-bg-accent); }
+.settings-cluster > h2 { font-size: .75rem; margin-bottom: .2rem; }
+.settings-row-icon { color: var(--ot-muted); }
+.settings-row-meta { font-size: .78rem; color: var(--ot-muted); }
+.settings-row-label, .settings-row-copy { min-width: 0; }
+.settings-row-meta { overflow-wrap: anywhere; }
+.settings-card { padding: .4rem .9rem; }
+.settings-subhead { margin: .5rem 0 1rem; }
+.settings-back { font-size: 1rem; }
+#language-section label, .settings-shortcut-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; text-align: left; }
+#language-section select { width: auto; max-width: 60%; min-width: 8rem; margin-left: auto; }
+.settings-shortcut-row select, .shortcut-keys { margin-left: auto; }
+.settings-lead { font-size: .85rem; line-height: 1.6; }
+.connector-row { border: 0; border-bottom: 1px solid var(--ot-line); box-shadow: none; padding: .75rem .25rem; border-radius: 0; }
+.connector-mark { border-radius: .55rem; color: var(--ot-accent-hover); background: var(--ot-accent-soft); }
+.connector-status { color: var(--ot-muted); font-size: .75rem; }
+.connector-about { line-height: 1.5; }
+@media (max-width: 600px) {
+  body.app-workspace > main > #settings-panel { padding: .75rem .8rem 2rem; }
+  .settings-row { gap: .5rem; padding: .65rem .55rem; }
+  #language-section label { flex-wrap: wrap; }
+  #language-section select { max-width: 100%; }
+  .settings-shortcut-row { flex-wrap: wrap; }
+}
