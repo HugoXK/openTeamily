@@ -2147,10 +2147,19 @@ async function main() {
         await page.locator('#onboarding-look select[name="color"]').selectOption('天空蓝');
         await page.locator('#onboarding-look-form button[type="submit"]').click();
         await waitForLocatorText(page, '#onboarding-look-preview', '颜色：天空蓝');
+        // Step 2 reads the user's real Composio connections now. With no personal
+        // Composio key the list cannot be read at all, so every row says 未接入 --
+        // 未连接 would claim the app is known to be disconnected, which nobody
+        // asked. Pin both sides: the unreadable wording and the absence of a
+        // fake 已连接.
+        const appsUnreadable = appsText.includes('Gmail · 未接入');
         record('onboarding_steps_2_4',
-          appsText.includes('Gmail · 未连接') && !appsText.includes('已连接') && connectDisabled
+          appsUnreadable && !appsText.includes('已连接') && connectDisabled
           && (await visibleText(page.locator('#onboarding-steps-meta'))).includes('形象已保存'),
-          'Steps 2-4 wizard: apps honestly unconnected with disabled connect buttons, picks and look saved');
+          `Steps 2-4 wizard: apps honestly unread (未接入) with disabled connect buttons, picks and look saved: ${(appsText || 'apps empty').slice(0, 200)}`);
+        record('onboarding_connectors_honest',
+          appsUnreadable && !appsText.includes('已连接'),
+          'Connector rows read the real Composio state: with no readable connection list every app says 未接入 and none claims 已连接');
         screenshots.push(path.basename(await shot(page, outDir, '87-onboarding-steps.png')));
         await page.locator('#onboarding-enter').click();
         await page.waitForURL(url => url.pathname === '/chat');

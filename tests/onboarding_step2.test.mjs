@@ -57,3 +57,15 @@ test('the recorded step-2 copy no longer claims app connections are unimplemente
   assert.match(source, /已连接/);
   assert.match(source, /未接入/);
 });
+
+// Changing the wording on the page without changing the wording the repository's
+// own screenshot script asserts is a silent CI red: the script keeps looking for
+// the retired string. Pin both files to the same contract here.
+test('the screenshot script pins the same step-2 wording as the page', () => {
+  const script = readFileSync(path.join(root, 'scripts/ci_ui_screenshots.mjs'), 'utf8');
+  assert.doesNotMatch(script, /Gmail · 未连接/,
+    'ci_ui_screenshots.mjs still asserts the retired "Gmail · 未连接" wording');
+  assert.match(script, /Gmail · 未接入/, 'the step-2 record must pin the unreadable case as 未接入');
+  assert.match(script, /!appsText\.includes\('已连接'\)/, 'the step-2 record must also reject a fake 已连接');
+  assert.match(script, /onboarding_connectors_honest/, 'the honesty check needs its own named record');
+});
