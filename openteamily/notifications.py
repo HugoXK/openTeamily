@@ -4,8 +4,12 @@ Self-written for OpenTeamily; no upstream or Teamily source. A notification is
 created only when a human message names another human member of the same
 conversation as ``@username``. Visibility is re-checked on every read: a
 recipient who left the conversation or a retracted message stops showing.
-Group agent request completion is also listed for the requester. User-agent
-conversation unread aggregation and server push are not implemented here; do not describe this as Teamily notification parity.
+Group agent request completion is also listed for the requester. A follower
+who turned on 作品通知 for a creator they follow is told once per newly listed
+public work; that source reuses ``discover_follows`` and hides an item again
+when the work stops being listed. User-agent conversation unread aggregation
+and server push are not implemented here; do not describe this as Teamily
+notification parity.
 """
 import re
 from uuid import uuid4
@@ -25,6 +29,25 @@ CREATE TABLE IF NOT EXISTS social_notifications (
  UNIQUE(message_id, user_id, kind));
 CREATE INDEX IF NOT EXISTS social_notification_inbox
  ON social_notifications(workspace_id, user_id, seq);
+CREATE TABLE IF NOT EXISTS social_follow_work_subs (
+ follower_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ creator_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+ updated INTEGER NOT NULL,
+ PRIMARY KEY(follower_id, creator_id));
+CREATE TABLE IF NOT EXISTS social_follow_work_notifications (
+ id TEXT PRIMARY KEY,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ actor_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+ slug TEXT NOT NULL,
+ title TEXT NOT NULL,
+ seq INTEGER NOT NULL,
+ created INTEGER NOT NULL,
+ read INTEGER NOT NULL DEFAULT 0 CHECK(read IN (0,1)),
+ UNIQUE(artifact_id, user_id));
+CREATE INDEX IF NOT EXISTS social_follow_work_inbox
+ ON social_follow_work_notifications(user_id, seq);
 CREATE TABLE IF NOT EXISTS social_reply_notification_reads (
  reply_id TEXT NOT NULL REFERENCES social_agent_replies(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -113,6 +136,83 @@ def reply_view(row):
             'created': row['updated'], 'read': row['is_read'] == 1}
 
 
+FOLLOW_WORK = '''
+ FROM social_follow_work_notifications n
+ JOIN artifact_discover d ON d.artifact_id=n.artifact_id AND d.listed=1
+ JOIN users a ON a.id=n.actor_id
+ WHERE n.user_id=?
+'''
+
+
+def follow_work_view(row):
+    return {'id': row['id'], 'kind': 'follow_work', 'actor_id': row['actor_id'],
+            'actor_username': row['actor_username'], 'artifact_id': row['artifact_id'],
+            'title': row['title'], 'slug': row['slug'], 'path': '/w/' + row['slug'],
+            'created': row['created'], 'read': bool(row['read'])}
+
+
+def follow_work_listing(db, user_id, unread_only=False):
+    rows = db.execute(
+        'SELECT n.*, a.username AS actor_username' + FOLLOW_WORK
+        + (' AND n.read=0' if unread_only else '')
+        + ' ORDER BY n.created DESC, n.id DESC LIMIT ?', (user_id, LIMIT)).fetchall()
+    return [follow_work_view(row) for row in rows]
+
+
+SWITCH = '''
+ FROM discover_follows f
+ JOIN users u ON u.id=f.creator_id
+ LEFT JOIN user_profiles p ON p.user_id=f.creator_id
+ LEFT JOIN social_follow_work_subs s ON s.follower_id=f.follower_id AND s.creator_id=f.creator_id
+'''
+
+
+def follow_work_switches(db, user_id):
+    return db.execute(
+        'SELECT f.creator_id, u.username, p.handle, p.name, COALESCE(s.enabled,0) AS enabled'
+        + SWITCH + ' WHERE f.follower_id=? ORDER BY u.username', (user_id,)).fetchall()
+
+
+def follow_work_switch_view(row):
+    return {'creator_id': row['creator_id'], 'username': row['username'],
+            'handle': row['handle'] or '', 'name': row['name'] or row['username'],
+            'enabled': row['enabled'] == 1}
+
+
+def set_follow_work(db, follower_id, creator_id, enabled, now):
+    """Turn one followed creator's 作品通知 on or off; follow the creator first."""
+    if follower_id == creator_id:
+        return None
+    row = db.execute('SELECT 1' + SWITCH + ' WHERE f.follower_id=? AND f.creator_id=?',
+                     (follower_id, creator_id)).fetchone()
+    if row is None:
+        return None
+    db.execute('INSERT INTO social_follow_work_subs(follower_id,creator_id,enabled,updated) VALUES(?,?,?,?) '
+               'ON CONFLICT(follower_id,creator_id) DO UPDATE SET enabled=excluded.enabled, updated=excluded.updated',
+               (follower_id, creator_id, 1 if enabled else 0, now))
+    return follow_work_switch_view(db.execute(
+        'SELECT f.creator_id, u.username, p.handle, p.name, s.enabled'
+        + SWITCH + ' WHERE f.follower_id=? AND f.creator_id=?', (follower_id, creator_id)).fetchone())
+
+
+def deliver_follow_work(db, artifact_id, slug, title, creator_id, now):
+    """One unread item per subscribed follower when a work becomes publicly listed."""
+    subs = db.execute('SELECT follower_id FROM social_follow_work_subs '
+                      'WHERE creator_id=? AND enabled=1 AND follower_id<>?',
+                      (creator_id, creator_id)).fetchall()
+    if not subs:
+        return 0
+    seq = db.execute('SELECT COALESCE(MAX(seq),0) FROM social_follow_work_notifications').fetchone()[0]
+    added = 0
+    for row in subs:
+        seq += 1
+        added += db.execute(
+            'INSERT OR IGNORE INTO social_follow_work_notifications '
+            '(id,user_id,actor_id,artifact_id,slug,title,seq,created,read) VALUES(?,?,?,?,?,?,?,?,0)',
+            (uuid4().hex, row['follower_id'], creator_id, artifact_id, slug, title, seq, now)).rowcount
+    return added
+
+
 def listing(db, workspace_id, user_id, unread_only=False):
     rows = db.execute(
         'SELECT n.*, msg.body AS body, c.kind AS conversation_kind, c.title AS conversation_title, '
@@ -122,7 +222,8 @@ def listing(db, workspace_id, user_id, unread_only=False):
         'SELECT r.*, c.kind AS conversation_kind, c.title AS conversation_title, '
         '(rr.reply_id IS NOT NULL) AS is_read' + REPLIES + (' AND rr.reply_id IS NULL' if unread_only else '')
         + ' ORDER BY r.updated DESC, r.id DESC LIMIT ?', (workspace_id, user_id, LIMIT)).fetchall()
-    items = [view(row) for row in rows] + [reply_view(row) for row in replies]
+    items = ([view(row) for row in rows] + [reply_view(row) for row in replies]
+             + follow_work_listing(db, user_id, unread_only))
     items.sort(key=lambda item: item['created'], reverse=True)
     return items[:LIMIT]
 
@@ -130,7 +231,8 @@ def listing(db, workspace_id, user_id, unread_only=False):
 def unread_count(db, workspace_id, user_id):
     mentions = db.execute('SELECT COUNT(*)' + VISIBLE + ' AND n.read=0', (workspace_id, user_id)).fetchone()[0]
     replies = db.execute('SELECT COUNT(*)' + REPLIES + ' AND rr.reply_id IS NULL', (workspace_id, user_id)).fetchone()[0]
-    return mentions + replies
+    follows = db.execute('SELECT COUNT(*)' + FOLLOW_WORK + ' AND n.read=0', (user_id,)).fetchone()[0]
+    return mentions + replies + follows
 
 
 def _mark_replies(db, workspace_id, user_id, extra='', args=()):
@@ -143,10 +245,14 @@ def mark_read(db, workspace_id, user_id, notification_id=None):
         db.execute('UPDATE social_notifications SET read=1 WHERE workspace_id=? AND user_id=? AND read=0',
                    (workspace_id, user_id))
         _mark_replies(db, workspace_id, user_id)
+        db.execute('UPDATE social_follow_work_notifications SET read=1 WHERE user_id=? AND read=0', (user_id,))
         return True
     cursor = db.execute('UPDATE social_notifications SET read=1 WHERE id=? AND workspace_id=? AND user_id=?',
                         (notification_id, workspace_id, user_id))
     if cursor.rowcount == 1:
+        return True
+    if db.execute('UPDATE social_follow_work_notifications SET read=1 WHERE id=? AND user_id=?',
+                  (notification_id, user_id)).rowcount == 1:
         return True
     if db.execute('SELECT 1' + REPLIES + ' AND r.id=?', (workspace_id, user_id, notification_id)).fetchone():
         _mark_replies(db, workspace_id, user_id, ' AND r.id=?', (notification_id,))

@@ -633,6 +633,9 @@ class App:
             memory_profile = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/memory/profile', path)
             if memory_profile:
                 return self.memory_profile_dispatch(db, session, method, query, now, env, memory_profile[1])
+            if path == '/v1/profile/follow-work':
+                if method in ('GET', 'POST') and not query:
+                    return self.profile_follow_work(db, session, method, now, env)
             if path == '/v1/profile':
                 if method == 'GET' and not query:
                     row = profiles.load(db, session['user_id'])
@@ -3246,6 +3249,20 @@ class App:
             db, artifact_id, workspace['id'], now, row['id'], message['id'], row['agent_id'])
         return self.artifact_saved(db, workspace['id'], artifact_id, 201)
 
+    def profile_follow_work(self, db, session, method, now, env):
+        if method == 'GET':
+            return 200, {'items': [notifications.follow_work_switch_view(row) for row in
+                                   notifications.follow_work_switches(db, session['user_id'])]}, []
+        body = self.body(env, ['creator_id', 'enabled'])
+        creator_id, enabled = body.get('creator_id'), body.get('enabled')
+        if (not isinstance(creator_id, str) or not notifications.HEX32.fullmatch(creator_id)
+                or type(enabled) is not bool):
+            refuse(400, 'invalid', 'Provide creator_id and a boolean enabled')
+        item = notifications.set_follow_work(db, session['user_id'], creator_id, enabled, now)
+        if item is None:
+            refuse(400, 'invalid', 'Follow the creator first')
+        return 200, {'item': item}, []
+
     def save_profile(self, db, session, now, env):
         body = self.body(env, ['revision', 'changes'])
         revision, changes = body.get('revision'), body.get('changes')
@@ -3648,6 +3665,7 @@ class App:
                     created = False
             except sqlite3.IntegrityError:
                 refuse(409, 'conflict', 'That discover slug is already in use')
+            notifications.deliver_follow_work(db, row['id'], slug, row['title'] or '', row['created_by'], now)
             return (201 if created else 200), {'discover': discover.work_metadata_view(discover.load_work(db, row['id']))}, []
         refuse(400, 'invalid', 'Invalid discover request')
 
