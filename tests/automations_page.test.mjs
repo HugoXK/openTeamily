@@ -566,6 +566,9 @@ test('matchesRunFilter keeps only the requested stored statuses', () => {
   assert.equal(matchesRunFilter({status: 'failed'}, 'failed'), true);
   assert.equal(matchesRunFilter({status: 'queued'}, 'failed'), false);
   assert.equal(matchesRunFilter({status: 'succeeded'}, 'failed'), false);
+  assert.equal(matchesRunFilter({status: 'cancelled'}, 'failed'), true,
+    'run_view reports a cancelled run as cancelled; the server stores it as failed');
+  assert.equal(matchesRunFilter({status: 'timeout'}, 'failed'), true);
   assert.equal(matchesRunFilter({status: 'succeeded'}, 'succeeded'), true);
   assert.equal(matchesRunFilter({status: 'failed'}, 'succeeded'), false);
   assert.equal(matchesRunFilter({}, 'succeeded'), false);

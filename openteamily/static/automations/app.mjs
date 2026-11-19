@@ -98,11 +98,12 @@ export function runFilterSearchText(filter) {
   return filter === 'succeeded' || filter === 'failed' ? `?runs=${filter}` : '';
 }
 
-// The server already filters, but the list must never show a row the chosen
-// filter does not name if an older server ignores the parameter.
+// The server filters on the stored status, and run_view reports cancelled and
+// timed-out runs as their own status. 失败 therefore names all three, so the
+// mirror here can never hide a row the server sent back for status=failed.
 export function matchesRunFilter(item, filter) {
   if (filter === 'succeeded') return item.status === 'succeeded';
-  if (filter === 'failed') return item.status === 'failed';
+  if (filter === 'failed') return item.status === 'failed' || item.status === 'cancelled' || item.status === 'timeout';
   return true;
 }
 
