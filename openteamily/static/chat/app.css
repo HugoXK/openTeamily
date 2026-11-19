@@ -1680,6 +1680,8 @@ html[data-theme-resolved="dark"] position: absolute; right: .5rem; bottom: -.625
 #message-list li .message-edit-controls { display: block; }
 #message-list li .message-edit-controls:empty { display: none; }
 #message-list li .message-edit-controls textarea { min-width: 12rem; width: 100%; margin-top: .5rem; }
+#message-list li .message-edit-note { display: block; margin-top: .5rem; font-size: .8125rem; line-height: 1.5; color: var(--ot-muted); }
+#message-list li .message-edit-note + button { margin-top: .5rem; }
 #message-list li > .message-more { position: absolute; top: .25rem; right: -1.875rem; width: 1.625rem; height: 1.625rem; padding: 0; margin: 0; display: grid; place-items: center; background: var(--ot-surface); color: var(--ot-muted); box-shadow: 0 0 0 1px var(--ot-line); }
 #message-list li.mine > .message-more { right: auto; left: -1.875rem; }
 #message-list li > .message-more:focus-visible { opacity: 1; }
