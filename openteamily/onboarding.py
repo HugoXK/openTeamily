@@ -141,6 +141,18 @@ def load_steps(db, user_id):
     return db.execute('SELECT * FROM user_onboarding_steps WHERE user_id=?', (user_id,)).fetchone()
 
 
+def load_look(db, user_id):
+    """Return the saved Personal Agent look only when it still matches the options."""
+    row = load_steps(db, user_id)
+    if row is None or not row['look']:
+        return None
+    try:
+        look = json.loads(row['look'])
+    except (TypeError, ValueError):
+        return None
+    return look if valid_look(look) else None
+
+
 def steps_view(row, industry):
     return {
         'apps': [{'key': key, 'name': name, 'connected': False} for key, name in APPS],
