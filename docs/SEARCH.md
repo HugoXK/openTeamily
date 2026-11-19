@@ -11,7 +11,7 @@ This slice adds a **server-side, authorization-scoped** message search across th
 - Requires a session. The caller must belong to the workspace; outsiders get `404`.
 - `q`: 1–80 characters, no control characters. Required.
 - `limit`: `1..50` (default 20).
-- `cursor`: optional 32-hex message id; keyset order is by UUID, not chronological, matching the workspace listing convention.
+- `cursor`: optional 32-hex message id; keyset order is creation time, then message id (oldest hit first), so paging follows the conversation's history instead of uuid order. The cursor is the last returned message id and the next page resumes after that message's `(created, id)` position; a cursor for a message the caller may not read, or for one that no longer exists, restarts from the first page.
 - Only `GET`; a query on `POST` is already rejected by the API-wide rule.
 
 Returns `{items:[{kind, conversation_id, message_id, title, snippet, created}], cursor}`.

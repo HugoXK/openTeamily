@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyResolvedTheme, resolveTheme } from '../openteamily/static/shell/app.mjs';
+import {
+  applyResolvedTheme,
+  CHANNELS_MENU_HREF,
+  CHANNELS_MENU_LABEL,
+  CONNECTORS_MENU_HREF,
+  CONNECTORS_MENU_LABEL,
+  ensureChannelsAndConnectorsMenuItems,
+  ensureOnboardingMenuItem,
+  ONBOARDING_MENU_HREF,
+  ONBOARDING_MENU_LABEL,
+  resolveTheme,
+} from '../openteamily/static/shell/app.mjs';
 
 function at(hours, minutes = 0) {
   return new Date(2026, 10, 16, hours, minutes, 0);
@@ -76,4 +87,160 @@ test('applyResolvedTheme records the resolved theme on the document', () => {
   assert.equal(applyResolvedTheme(doc, {appearance: 'dark'}), 'dark');
   assert.equal(doc.documentElement.dataset.themeResolved, 'dark');
   assert.equal(doc.body.dataset.themeResolved, 'dark');
+});
+
+
+class MenuNode {
+  constructor(tag = 'div', attrs = {}) {
+    this.tagName = String(tag).toUpperCase();
+    this.children = [];
+    this.parentNode = null;
+    this.attributes = {...attrs};
+    this.className = attrs.class || '';
+    this.href = attrs.href || '';
+    this.textContent = attrs.text || '';
+  }
+  getAttribute(key) { return this.attributes[key]; }
+  setAttribute(key, value) {
+    this.attributes[key] = value;
+    if (key === 'href') this.href = value;
+    if (key === 'class') this.className = value;
+  }
+  appendChild(node) {
+    if (node.parentNode) node.parentNode.removeChild(node);
+    node.parentNode = this;
+    this.children.push(node);
+    return node;
+  }
+  removeChild(node) {
+    this.children = this.children.filter((child) => child !== node);
+    node.parentNode = null;
+    return node;
+  }
+  insertBefore(node, reference) {
+    if (!reference) return this.appendChild(node);
+    if (node.parentNode) node.parentNode.removeChild(node);
+    const index = this.children.indexOf(reference);
+    if (index === -1) return this.appendChild(node);
+    node.parentNode = this;
+    this.children.splice(index, 0, node);
+    return node;
+  }
+}
+
+function accountMenu(items) {
+  const menu = new MenuNode('div', {id: 'account-menu'});
+  for (const item of items) {
+    if (item.kind === 'sub') {
+      const sub = new MenuNode('div', {class: 'account-sub'});
+      menu.appendChild(sub);
+    } else {
+      const link = new MenuNode('a', {href: item.href, role: 'menuitem', text: item.text});
+      link.textContent = item.text;
+      menu.appendChild(link);
+    }
+  }
+  const doc = {
+    getElementById(id) { return id === 'account-menu' ? menu : null; },
+    createElement(tag) { return new MenuNode(tag); },
+  };
+  return {doc, menu};
+}
+
+function labels(menu) {
+  return menu.children.map((node) => node.textContent || node.className);
+}
+
+test('ensureOnboardingMenuItem does nothing when the account menu is missing', () => {
+  assert.equal(ensureOnboardingMenuItem({getElementById() { return null; }}), null);
+});
+
+test('ensureOnboardingMenuItem inserts 工作背景 before help, after 创建团队', () => {
+  const {doc, menu} = accountMenu([
+    {href: '/profile', text: '查看我的资料'},
+    {href: '/team', text: '创建团队'},
+    {kind: 'sub'},
+    {href: '/settings', text: '所有设置'},
+  ]);
+  const link = ensureOnboardingMenuItem(doc);
+  assert.equal(link.getAttribute('href'), ONBOARDING_MENU_HREF);
+  assert.equal(link.getAttribute('role'), 'menuitem');
+  assert.equal(link.textContent, ONBOARDING_MENU_LABEL);
+  assert.match(link.getAttribute('title'), /新手引导/);
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', '工作背景', 'account-sub', '所有设置']);
+});
+
+test('ensureOnboardingMenuItem moves an existing link into the recorded slot and does not duplicate it', () => {
+  const {doc, menu} = accountMenu([
+    {href: '/profile', text: '查看我的资料'},
+    {href: '/onboarding', text: '新手引导'},
+    {href: '/team', text: '创建团队'},
+    {kind: 'sub'},
+    {href: '/settings', text: '所有设置'},
+  ]);
+  ensureOnboardingMenuItem(doc);
+  const again = ensureOnboardingMenuItem(doc);
+  const matches = menu.children.filter((node) => node.getAttribute && node.getAttribute('href') === '/onboarding');
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0], again);
+  assert.equal(again.textContent, '工作背景');
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', '工作背景', 'account-sub', '所有设置']);
+});
+
+test('ensureChannelsAndConnectorsMenuItems does nothing when the account menu is missing', () => {
+  assert.equal(ensureChannelsAndConnectorsMenuItems({getElementById() { return null; }}), null);
+});
+
+test('ensureChannelsAndConnectorsMenuItems inserts Agent 渠道 and 应用连接器 after 创建团队 and before 工作背景', () => {
+  const {doc, menu} = accountMenu([
+    {href: '/profile', text: '查看我的资料'},
+    {href: '/team', text: '创建团队'},
+    {href: '/onboarding', text: '工作背景'},
+    {kind: 'sub'},
+    {href: '/settings', text: '所有设置'},
+  ]);
+  const items = ensureChannelsAndConnectorsMenuItems(doc);
+  assert.equal(items.channels.getAttribute('href'), CHANNELS_MENU_HREF);
+  assert.equal(items.channels.getAttribute('role'), 'menuitem');
+  assert.equal(items.channels.textContent, CHANNELS_MENU_LABEL);
+  assert.match(items.channels.getAttribute('title'), /Teamily Agent 渠道/);
+  assert.equal(items.connectors.getAttribute('href'), CONNECTORS_MENU_HREF);
+  assert.equal(items.connectors.getAttribute('role'), 'menuitem');
+  assert.equal(items.connectors.textContent, CONNECTORS_MENU_LABEL);
+  assert.match(items.connectors.getAttribute('title'), /仍未接通/);
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '工作背景', 'account-sub', '所有设置']);
+});
+
+test('ensureChannelsAndConnectorsMenuItems moves existing links into the recorded slot and does not duplicate them', () => {
+  const {doc, menu} = accountMenu([
+    {href: '/profile', text: '查看我的资料'},
+    {href: '/settings/connectors', text: '应用连接器'},
+    {href: '/team', text: '创建团队'},
+    {href: '/settings/channels', text: '渠道'},
+    {kind: 'sub'},
+    {href: '/settings', text: '所有设置'},
+  ]);
+  ensureOnboardingMenuItem(doc);
+  const first = ensureChannelsAndConnectorsMenuItems(doc);
+  const again = ensureChannelsAndConnectorsMenuItems(doc);
+  const channelLinks = menu.children.filter((node) => node.getAttribute && node.getAttribute('href') === CHANNELS_MENU_HREF);
+  const connectorLinks = menu.children.filter((node) => node.getAttribute && node.getAttribute('href') === CONNECTORS_MENU_HREF);
+  assert.equal(channelLinks.length, 1);
+  assert.equal(connectorLinks.length, 1);
+  assert.equal(channelLinks[0], again.channels);
+  assert.equal(connectorLinks[0], again.connectors);
+  assert.equal(first.channels, again.channels);
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '工作背景', 'account-sub', '所有设置']);
+});
+
+test('calling both menu helpers without an existing 工作背景 link keeps the recorded order', () => {
+  const {doc, menu} = accountMenu([
+    {href: '/profile', text: '查看我的资料'},
+    {href: '/team', text: '创建团队'},
+    {kind: 'sub'},
+    {href: '/settings', text: '所有设置'},
+  ]);
+  ensureOnboardingMenuItem(doc);
+  ensureChannelsAndConnectorsMenuItems(doc);
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '工作背景', 'account-sub', '所有设置']);
 });

@@ -467,11 +467,14 @@ async function main() {
       await page.locator('#help-menu').waitFor({ state: 'visible', timeout: 8000 });
       const menuText = await visibleText(page.locator('#account-menu'));
       const settingsHref = await page.locator('#account-menu a[href="/settings"]').getAttribute('href');
+      const onboardingHref = await page.locator('#account-menu a[href="/onboarding"]').getAttribute('href');
+      const channelsHref = await page.locator('#account-menu a[href="/settings/channels"]').getAttribute('href');
+      const connectorsHref = await page.locator('#account-menu a[href="/settings/connectors"]').getAttribute('href');
       const initials = String(ready.username || '').slice(0, 2).toUpperCase();
       const settingsButton = (await visibleText(page.locator('#account-menu-button'))).trim();
       record(
         'account_menu',
-        menuText.includes('所有设置') && menuText.includes('退出登录') && menuText.includes('创建团队') && menuText.includes('查看我的资料') && menuText.includes('帮助中心') && menuText.includes('下载') && settingsHref === '/settings' && settingsButton === initials && !/积分|套餐|升级/.test(menuText) && !/contact@teamily\.ai/.test(menuText),
+        menuText.includes('所有设置') && menuText.includes('退出登录') && menuText.includes('创建团队') && menuText.includes('查看我的资料') && menuText.includes('帮助中心') && menuText.includes('下载') && menuText.includes('工作背景') && menuText.includes('Agent 渠道') && menuText.includes('应用连接器') && settingsHref === '/settings' && onboardingHref === '/onboarding' && channelsHref === '/settings/channels' && connectorsHref === '/settings/connectors' && settingsButton === initials && !/积分|套餐|升级/.test(menuText) && !/contact@teamily\.ai/.test(menuText),
         `button=${settingsButton}; ${menuText || 'account menu empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '23-account-menu.png')));
@@ -1358,6 +1361,52 @@ async function main() {
       dirText || 'memory directory chrome missing',
     );
     screenshots.push(path.basename(await shot(page, outDir, '18-memory-list.png')));
+    try {
+      const emptyHint = page.locator('#graph-empty');
+      await emptyHint.waitFor({ state: 'visible', timeout: 8000 });
+      const emptyText = ((await visibleText(emptyHint)) || '').trim();
+      const createLabel = ((await visibleText(page.locator('#graph-empty-new'))) || '').trim();
+      record(
+        'memory_graph_empty',
+        emptyText.includes('创建两个或更多记忆页后，这里会把它们连成图谱')
+          && createLabel === '新建记忆页'
+          && await page.locator('#graph-empty-new').isEnabled(),
+        emptyText || 'memory graph empty hint missing',
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '90-memory-graph-empty.png')));
+      const previous = page.viewportSize();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await emptyHint.waitFor({ state: 'visible', timeout: 8000 });
+      await emptyHint.scrollIntoViewIfNeeded();
+      const viewport = page.viewportSize();
+      const inViewport = (box) => Boolean(box && viewport && box.x >= 0 && box.y >= 0
+        && box.x + box.width <= viewport.width && box.y + box.height <= viewport.height);
+      const hintBox = await emptyHint.boundingBox();
+      const zoomBox = await page.locator('.graph-zoom').boundingBox();
+      const zoomVisible = await page.locator('.graph-zoom').isVisible();
+      const overlaps = Boolean(
+        hintBox && zoomBox
+          && hintBox.x < zoomBox.x + zoomBox.width
+          && hintBox.x + hintBox.width > zoomBox.x
+          && hintBox.y < zoomBox.y + zoomBox.height
+          && hintBox.y + hintBox.height > zoomBox.y,
+      );
+      record(
+        'memory_graph_empty_narrow',
+        zoomVisible && hintBox && zoomBox && hintBox.width >= 180
+          && inViewport(hintBox) && inViewport(zoomBox) && !overlaps,
+        `overlap=${overlaps}; hintInViewport=${inViewport(hintBox)}; zoomInViewport=${inViewport(zoomBox)}; hint=${JSON.stringify(hintBox)}; zoom=${JSON.stringify(zoomBox)}`,
+      );
+      screenshots.push(path.basename(await shot(page, outDir, '91-memory-graph-empty-390.png')));
+      await page.setViewportSize(previous || { width: 1440, height: 900 });
+    } catch (error) {
+      record('memory_graph_empty', false, String(error));
+      try {
+        await page.setViewportSize({ width: 1440, height: 900 });
+      } catch {
+        // Keep going so later memory shots still use the default viewport.
+      }
+    }
     record(
       'memory_dir_previews',
       await page.locator('#memory-list .memory-page-preview').count() === 1
@@ -1838,8 +1887,9 @@ async function main() {
       const statusLabel = ((await page.locator('p.status').textContent()) || '').trim();
       const talkHeading = ((await page.locator('.section h2').first().textContent()) || '').trim();
       const sendDisabled = await page.locator('.composer button').isDisabled();
-      const createDisabled = await page.locator('.create-agent').isDisabled();
+      const createHref = await page.locator('.create-agent').getAttribute('href');
       const composerDisabled = await page.locator('#public-composer').isDisabled();
+      const quickStartsHeading = ((await page.locator('.quick-starts h3').textContent()) || '').trim();
       const token = homepagePath.slice(3);
       record(
         'agent_public_homepage',
@@ -1849,13 +1899,21 @@ async function main() {
           && homeText.includes(ready.agent_name)
           && homeText.includes('Synthetic CI directory entry.')
           && talkHeading === 'Talk via'
+          && homeText.includes('Start a conversation')
           && homeText.includes('Web conversation')
+          && homeText.includes('Ask how this fixture agent is organized')
+          && homeText.includes('Request a walkthrough of the directory')
+          && homeText.includes('List what this fixture assistant covers')
+          && quickStartsHeading === 'Quick starts'
           && homeText.includes('Built with FlyBot')
           && homeText.includes('Create your own Agent')
           && homeText.includes('未接通')
           && sendDisabled
-          && createDisabled
+          && createHref === '/agents'
           && composerDisabled
+          && !homeText.includes("Help me organize today's priorities")
+          && !homeText.includes('Create something with my team')
+          && !homeText.includes('Connect a messaging channel')
           && !/(?<!Open)Teamily|AVAILABLE NOW|\bLIVE\b/.test(homeText)
           && !homeText.includes(ready.workspace_id)
           && !homeText.includes(ready.agent_id)

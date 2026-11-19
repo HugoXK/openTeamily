@@ -40,7 +40,12 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('总览', html)
         self.assertIn('我的资料', html)
         self.assertIn('我的作品', html)
+        self.assertIn('href="/space"', html)
         self.assertIn('我的会议', html)
+        self.assertIn('href="/space?view=meetings"', html)
+        self.assertNotIn('data-view="meetings"', html)
+        self.assertNotIn('id="meetings-panel"', html)
+        self.assertNotIn('<button type="button" data-view="meetings"', html)
         self.assertIn('话题亮点', html)
         self.assertIn('未实现', html)
         self.assertIn('未接通', html)
@@ -67,6 +72,11 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('已读状态接口', html)
         self.assertIn('data-filter="updated"', html)
         self.assertIn('id="graph-canvas"', html)
+        self.assertIn('id="graph-empty"', html)
+        self.assertIn('id="graph-empty" class="graph-empty" hidden', html)
+        self.assertIn('创建两个或更多记忆页后，这里会把它们连成图谱', html)
+        self.assertIn('id="graph-empty-new"', html)
+        self.assertIn('新建记忆页', html)
         self.assertIn('class="graph-hint"', html)
         self.assertIn('单击查看 · 双击打开 · 悬停预览', html)
         self.assertIn('id="graph-hover-card"', html)
@@ -98,6 +108,8 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('export function topicTag', js)
         self.assertIn('export function memoryPageMeta', js)
         self.assertIn('export function graphPreviewModel', js)
+        self.assertIn('export function graphEmptyStateVisible', js)
+        self.assertIn('GRAPH_EMPTY_MESSAGE', js)
         self.assertIn('export function bindGraphNodeGestures', js)
         self.assertIn('GRAPH_HOVER_DELAY_MS', js)
         self.assertIn('dir-collapse', js)
@@ -113,6 +125,8 @@ class MemoryPageServingTests(unittest.TestCase):
         self.assertIn('memory-page-preview', css)
         self.assertIn('memory-page-icon', css)
         self.assertIn('.graph-hint', css)
+        self.assertIn('.graph-empty', css)
+        self.assertIn('.graph-empty[hidden]', css)
         self.assertIn('.graph-hover-card', css)
         self.assertEqual(self.raw.call('GET', '/memory/missing')['status'], 404)
 
@@ -159,6 +173,20 @@ class MemoryPageServingTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         result = subprocess.run(
             ['node', '--test', 'tests/memory_search.test.mjs'],
+            cwd=root, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_graph_empty_state_explains_how_to_get_a_graph(self):
+        page = self.raw.call('GET', '/memory')
+        html = page['body'].decode()
+        self.assertIn('id="graph-empty" class="graph-empty" hidden', html)
+        self.assertIn('创建两个或更多记忆页后，这里会把它们连成图谱', html)
+        js = self.raw.call('GET', '/memory/app.mjs')['body'].decode()
+        self.assertIn('export function graphEmptyStateVisible', js)
+        self.assertIn("getElementById('graph-empty-new')", js)
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            ['node', '--test', 'tests/memory_graph_empty.test.mjs'],
             cwd=root, capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

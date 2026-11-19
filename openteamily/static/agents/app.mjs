@@ -61,6 +61,40 @@ export function matchesCategory(item, slug) {
   return !slug || slug === 'all' || (item && item.category === slug);
 }
 
+export function matchesCreator(item, creatorId) {
+  return !creatorId || (item && item.created_by === creatorId);
+}
+
+export function creatorChoices(items, names) {
+  const seen = new Map();
+  for (const item of items || []) {
+    const id = item && item.created_by;
+    if (id && !seen.has(id)) seen.set(id, (names && names.get(id)) || '用户 ' + String(id).slice(0, 8));
+  }
+  return [...seen.entries()]
+    .sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]))
+    .map(([id, label]) => ({id, label}));
+}
+
+export function fillCreatorOptions(select, items, names, doc) {
+  if (!select) return;
+  const chosen = select.value;
+  const producer = doc || select.ownerDocument;
+  const choices = creatorChoices(items, names);
+  select.replaceChildren();
+  const all = producer.createElement('option');
+  all.value = '';
+  all.textContent = '全部';
+  select.append(all);
+  for (const choice of choices) {
+    const option = producer.createElement('option');
+    option.value = choice.id;
+    option.textContent = choice.label;
+    select.append(option);
+  }
+  select.value = choices.some((choice) => choice.id === chosen) ? chosen : '';
+}
+
 export function fillCategoryOptions(select, doc) {
   if (!select || !select.options || select.options.length > 1) return;
   for (const entry of AGENT_CATEGORIES) {
@@ -110,7 +144,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   fillCategoryOptions(createForm.elements.category, document);
   fillCategoryOptions(editForm.elements.category, document);
   const categoryButtons = [...document.querySelectorAll('.filter-row .pill[data-category]')];
+  const creatorFilter = document.getElementById('creator-filter');
   let selectedCategory = categoryFromSearch(globalThis.location && globalThis.location.search);
+  let selectedCreator = '';
+  let memberNames = new Map();
 
   function renderCategoryFilter() {
     for (const button of categoryButtons) {
@@ -203,6 +240,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (!workspaces.length) {
       directoryAgents = [];
+      fillCreatorOptions(creatorFilter, [], memberNames, document);
+      selectedCreator = '';
       document.getElementById('role-note').textContent = '还没有可访问的工作区。';
       document.getElementById('agent-list').replaceChildren();
       const empty = document.getElementById('agents-empty');
@@ -237,7 +276,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     list.replaceChildren();
     let shown = 0;
     for (const item of directoryAgents) {
-      if (!matchesDirectoryQuery(item, query) || !matchesCategory(item, selectedCategory)) continue;
+      if (!matchesDirectoryQuery(item, query) || !matchesCategory(item, selectedCategory)
+          || !matchesCreator(item, selectedCreator)) continue;
       shown += 1;
       const li = document.createElement('li');
       li.className = 'agent-card';
@@ -275,9 +315,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         ? '这个工作区还没有智能体。'
         : query
         ? '没有匹配的智能体。试试其他关键词。'
-        : selectedCategory !== 'all' && directoryAgents.length
-          ? '「' + categoryLabel(selectedCategory) + '」类目下还没有智能体。选「全部」查看其余智能体。'
-          : '这个工作区还没有智能体。';
+        : selectedCreator
+          ? '没有符合筛选的智能体'
+          : selectedCategory !== 'all' && directoryAgents.length
+            ? '「' + categoryLabel(selectedCategory) + '」类目下还没有智能体。选「全部」查看其余智能体。'
+            : '这个工作区还没有智能体。';
     }
     if (count) count.textContent = '显示 ' + shown + ' 个智能体';
   }
@@ -296,6 +338,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const members = await request('GET', `/v1/workspaces/${id}/members`);
+    memberNames = new Map(members.status === 200
+      ? (members.body.items || []).map(row => [row.user_id, row.username])
+      : []);
     const self = members.status === 200
       ? (members.body.items || []).find(row => row.user_id === currentUser.id)
       : null;
@@ -314,6 +359,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     directoryAgents = listed.body.items || [];
     directoryLoaded = true;
+    fillCreatorOptions(creatorFilter, directoryAgents, memberNames, document);
+    selectedCreator = creatorFilter ? creatorFilter.value : '';
     renderDirectory();
     show('', '');
   }
@@ -739,6 +786,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (canManage(actor)) createForm.hidden = false;
   });
   const search = document.getElementById('agent-search');
+  if (creatorFilter) creatorFilter.addEventListener('change', () => {
+    selectedCreator = creatorFilter.value || '';
+    renderDirectory();
+  });
   if (search) {
     search.addEventListener('input', () => renderDirectory());
     search.addEventListener('keydown', event => {

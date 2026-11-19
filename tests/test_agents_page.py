@@ -95,6 +95,24 @@ class AgentsPageTests(unittest.TestCase):
             cwd=root, capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_directory_creator_filter_is_enabled_and_filters_by_creator(self):
+        page = self.raw.call('GET', '/agents')
+        self.assertEqual(page['status'], 200)
+        html = page['body'].decode()
+        self.assertIn('id="creator-filter"', html)
+        self.assertNotIn('id="creator-filter" disabled', html)
+        self.assertNotIn('未实现：创建者筛选', html)
+        script = self.raw.call('GET', '/agents/app.mjs')
+        self.assertEqual(script['status'], 200)
+        source = script['body'].decode()
+        self.assertIn("getElementById('creator-filter')", source)
+        self.assertIn('没有符合筛选的智能体', source)
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            ['node', '--test', 'tests/agents_creator_filter.test.mjs'],
+            cwd=root, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

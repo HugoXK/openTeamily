@@ -71,7 +71,7 @@
       </label>
       <p id="graph-counts" class="memory-counts"></p>
     </header>
-    <p class="note memory-disclaimer">对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。画像、会议、分享和导出尚未实现。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
+    <p class="note memory-disclaimer">对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。空图谱说明、新建入口和窄屏图谱优先布局是 OpenTeamily 补充，未经目标站对照。画像、分享和导出尚未实现。我的会议进入已有的作品库会议空态，仍没有会议作品接口。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
     <section id="list-panel" class="memory-workspace" data-view="overview">
       <aside class="memory-dir" id="memory-dir">
         <div class="dir-header">
@@ -99,7 +99,7 @@
           <a href="/memory?page=profile" data-view="profile"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm0 10c4.4 0 8 2.1 8 4.7V21H4v-2.3C4 16.1 7.6 14 12 14z"/></svg></span>我的资料</a>
           <a href="/memory?page=todos" data-view="actions"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 5h14v2H5V5zm0 4h14v2H5V9zm0 4h9v2H5v-2zm0 4h9v2H5v-2zm11.2-3.2 1.4-1.4 2.1 2.1 3.5-3.5 1.4 1.4-4.9 4.9-3.5-3.5z"/></svg></span>下一步行动</a>
           <a href="/space"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M4 8.5 12 5l8 3.5-8 3.5L4 8.5zm0 4.2 8 3.5 8-3.5v1.8L12 18 4 14.5v-1.8z"/></svg></span>我的作品</a>
-          <button type="button" data-view="meetings"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 10h2.2v4H5v-4zm4-3h2.2v10H9V7zm4-3h2.2v16H13V4zm4 5h2.2v6H17V9z"/></svg></span>我的会议</button>
+          <a href="/space?view=meetings"><span class="view-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 10h2.2v4H5v-4zm4-3h2.2v10H9V7zm4-3h2.2v16H13V4zm4 5h2.2v6H17V9z"/></svg></span>我的会议</a>
         </nav>
         <ul id="memory-list"></ul>
         <p id="list-empty" class="note" hidden>这个工作区还没有记忆页。</p>
@@ -110,6 +110,10 @@
         </label>
         <div class="graph-stage">
           <svg id="graph-canvas" viewBox="0 0 640 400" role="img" aria-label="记忆图谱"></svg>
+          <div id="graph-empty" class="graph-empty" hidden>
+            <p>创建两个或更多记忆页后，这里会把它们连成图谱</p>
+            <button type="button" id="graph-empty-new">新建记忆页</button>
+          </div>
           <p class="graph-hint">单击查看 · 双击打开 · 悬停预览</p>
           <div id="graph-hover-card" class="graph-hover-card" hidden role="tooltip">
             <p class="graph-hover-title"></p>
@@ -179,10 +183,6 @@
           <h3>Communication &amp; Writing Style</h3>
           <p class="memory-profile-empty">还没有这份画像。</p>
         </article>
-      </section>
-      <section id="meetings-panel" hidden>
-        <h2>我的会议</h2>
-        <p class="note">未实现：对照里说明这是「你参加或组织过的录音会议」，但没有留下完整列表版式。OpenTeamily 还没有会议作品接口。</p>
       </section>
     </section>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>

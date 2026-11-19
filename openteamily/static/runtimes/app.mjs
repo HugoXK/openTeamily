@@ -334,6 +334,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
     button.addEventListener('click', () => showInstallOs(button.getAttribute('data-os')));
   }
   const copyInstall = document.getElementById('copy-install');
+  const copyInstallFeedback = document.getElementById('copy-install-feedback');
+  let copyInstallTimer = null;
+  function markCopied() {
+    if (!copyInstall) return;
+    copyInstall.textContent = '已复制';
+    if (copyInstallFeedback) {
+      copyInstallFeedback.textContent = '已复制安装命令';
+      copyInstallFeedback.hidden = false;
+    }
+    if (copyInstallTimer) clearTimeout(copyInstallTimer);
+    copyInstallTimer = setTimeout(() => {
+      copyInstall.textContent = '复制';
+      if (copyInstallFeedback) {
+        copyInstallFeedback.textContent = '';
+        copyInstallFeedback.hidden = true;
+      }
+      copyInstallTimer = null;
+    }, 2000);
+  }
   if (copyInstall) {
     copyInstall.addEventListener('click', async () => {
       const unix = document.getElementById('install-unix');
@@ -346,6 +365,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), or
           return;
         }
         await navigator.clipboard.writeText(text);
+        markCopied();
         show('ok', '已复制安装命令。');
       } catch {
         show('error', '无法复制，请手动复制命令。');

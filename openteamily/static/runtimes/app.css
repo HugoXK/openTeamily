@@ -272,10 +272,21 @@ body.app-workspace #connect-panel {
   color: var(--ot-muted);
 }
 
-#copy-install {
+.copy-row {
   position: absolute;
   top: 0.45rem;
   right: 0.45rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.copy-feedback {
+  font-size: 0.78rem;
+  color: var(--ot-accent);
+}
+
+#copy-install {
   width: auto;
   padding: 0.2rem 0.55rem;
 }
