@@ -76,8 +76,10 @@ browser, and connection records are scoped to the OpenTeamily account.
 
 ## Follow-ups
 
-- Expose a user's connected tools to FlyBot runtime containers (Composio
-  session MCP URL or tool execution) — not wired yet.
+- Connected tool execution is now available for management-dispatched personal
+  tasks via the credential-isolated approval broker: see [CONNECTED_TOOLS.md](CONNECTED_TOOLS.md).
+  Real Composio/model verification, group/automation/gateway tools and standalone
+  DSH session integration remain follow-ups.
 - Custom auth configs for toolkits without a Composio-managed OAuth app.
 - Optional callback identity verification (`complete_auth`) for projects that
   enable it.
