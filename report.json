@@ -1,0 +1,1023 @@
+{
+  "slug": "226",
+  "page": "automations",
+  "route": "/automations",
+  "before": "e47477cd2ad3384c4bdbd9d677bbf754b983e498",
+  "after": "41acc258c1f038052231713a9f29f096f1eb019c",
+  "states": [
+    "automations-idle",
+    "automations-remove-confirm",
+    "automations-remove-dismissed",
+    "automations-removed",
+    "run-cancel",
+    "run-cancelled"
+  ],
+  "combos": [
+    {
+      "viewport": "1440x900",
+      "locales": [
+        "zh-CN",
+        "en"
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "viewport": "390x844",
+      "locales": [
+        "zh-CN",
+        "en"
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    }
+  ],
+  "capture": "scripts/shots.mjs URL mode, two seeded fixture servers (base 8111 = e47477c, tip 8112 = 41acc25); each state restored the seeded automation and one queued run first, so a state that deletes or cancels cannot leak into the next capture",
+  "checks": {
+    "png": 96,
+    "expectedPng": 96,
+    "viewportPng": {
+      "1440x900": 48,
+      "390x844": 48
+    },
+    "horizontalOverflow": "each state asserts document.documentElement.scrollWidth <= innerWidth and that its focus element is inside the viewport before the shot"
+  },
+  "observations": [
+    {
+      "port": 8111,
+      "side": "before",
+      "state": "automations-idle",
+      "dialogText": "",
+      "focusText": "跳到主要内容\n  \n    \n    聊天\n    智能体\n        技能",
+      "statusText": "",
+      "automationRows": [
+        "[[CI FIXTURE] Sample briefing立即运行 · 已启用已启用"
+      ],
+      "runRows": [],
+      "emptyText": "",
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    },
+    {
+      "port": 8111,
+      "side": "before",
+      "state": "automations-remove-confirm",
+      "dialogText": "",
+      "focusText": "跳到主要内容\n  \n    \n    聊天\n    智能体\n        技能",
+      "statusText": "已删除。",
+      "automationRows": [],
+      "runRows": [
+        "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+        "运行中queued取消这次运行"
+      ],
+      "emptyText": "这个分类下还没有自动化。",
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    },
+    {
+      "port": 8111,
+      "side": "before",
+      "state": "automations-remove-dismissed",
+      "dialogText": "",
+      "focusText": "跳到主要内容\n  \n    \n    聊天\n    智能体\n        技能",
+      "statusText": "已删除。",
+      "automationRows": [],
+      "runRows": [
+        "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+        "运行中queued取消这次运行"
+      ],
+      "emptyText": "这个分类下还没有自动化。",
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    },
+    {
+      "port": 8111,
+      "side": "before",
+      "state": "automations-removed",
+      "dialogText": "",
+      "focusText": "跳到主要内容\n  \n    \n    聊天\n    智能体\n        技能",
+      "statusText": "已删除。",
+      "automationRows": [],
+      "runRows": [
+        "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+        "运行中queued取消这次运行"
+      ],
+      "emptyText": "这个分类下还没有自动化。",
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    },
+    {
+      "port": 8111,
+      "side": "before",
+      "state": "run-cancel",
+      "dialogText": "",
+      "focusText": "跳到主要内容\n  \n    \n    聊天\n    智能体\n        技能",
+      "statusText": "已取消。",
+      "automationRows": [
+        "[[CI FIXTURE] Sample briefing立即运行 · 已启用已启用"
+      ],
+      "runRows": [
+        "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+        "已取消cancelledcancelled"
+      ],
+      "emptyText": "",
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    },
+    {
+      "port": 8111,
+      "side": "before",
+      "state": "run-cancelled",
+      "dialogText": "",
+      "focusText": "跳到主要内容\n  \n    \n    聊天\n    智能体\n        技能",
+      "statusText": "已取消。",
+      "automationRows": [
+        "[[CI FIXTURE] Sample briefing立即运行 · 已启用已启用"
+      ],
+      "runRows": [
+        "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+        "已取消cancelledcancelled"
+      ],
+      "emptyText": "",
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    },
+    {
+      "port": 8112,
+      "side": "after",
+      "state": "automations-idle",
+      "dialogText": "",
+      "focusText": "跳到主要内容\n  \n    \n    聊天\n    智能体\n        技能",
+      "statusText": "",
+      "automationRows": [
+        "[[CI FIXTURE] Sample briefing立即运行 · 已启用已启用"
+      ],
+      "runRows": [],
+      "emptyText": "",
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    },
+    {
+      "port": 8112,
+      "side": "after",
+      "state": "automations-remove-confirm",
+      "dialogText": "删除这条自动化？取消确认",
+      "focusText": "取消",
+      "statusText": "",
+      "automationRows": [
+        "[[CI FIXTURE] Sample briefing立即运行 · 已启用已启用"
+      ],
+      "runRows": [
+        "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+        "运行中queued取消这次运行"
+      ],
+      "emptyText": "",
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    },
+    {
+      "port": 8112,
+      "side": "after",
+      "state": "automations-remove-dismissed",
+      "dialogText": "",
+      "focusText": "跳到主要内容\n  \n    \n    聊天\n    智能体\n        技能",
+      "statusText": "",
+      "automationRows": [
+        "[[CI FIXTURE] Sample briefing立即运行 · 已启用已启用"
+      ],
+      "runRows": [
+        "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+        "运行中queued取消这次运行"
+      ],
+      "emptyText": "",
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    },
+    {
+      "port": 8112,
+      "side": "after",
+      "state": "automations-removed",
+      "dialogText": "",
+      "focusText": "跳到主要内容\n  \n    \n    聊天\n    智能体\n        技能",
+      "statusText": "已删除。",
+      "automationRows": [],
+      "runRows": [
+        "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+        "运行中queued取消这次运行"
+      ],
+      "emptyText": "这个分类下还没有自动化。",
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    },
+    {
+      "port": 8112,
+      "side": "after",
+      "state": "run-cancel",
+      "dialogText": "取消这次运行？取消确认取消",
+      "focusText": "取消",
+      "statusText": "",
+      "automationRows": [
+        "[[CI FIXTURE] Sample briefing立即运行 · 已启用已启用"
+      ],
+      "runRows": [
+        "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+        "运行中queued取消这次运行取消这次运行？取消确认取消"
+      ],
+      "emptyText": "",
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    },
+    {
+      "port": 8112,
+      "side": "after",
+      "state": "run-cancelled",
+      "dialogText": "",
+      "focusText": "跳到主要内容\n  \n    \n    聊天\n    智能体\n        技能",
+      "statusText": "已取消。",
+      "automationRows": [
+        "[[CI FIXTURE] Sample briefing立即运行 · 已启用已启用"
+      ],
+      "runRows": [
+        "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+        "已取消cancelledcancelled"
+      ],
+      "emptyText": "",
+      "scrollWidth": 1440,
+      "innerWidth": 1440
+    }
+  ],
+  "files": [
+    {
+      "side": "before",
+      "file": "before/en__dark__1440x900__automations__automations-idle.png",
+      "bytes": 36873,
+      "sha256": "a74fa5d1cb02e3ea27e6302795c640ef3a2434fec3d9a8d9ab53b0e4c8029a6e",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/en__dark__1440x900__automations__automations-remove-confirm.png",
+      "bytes": 38820,
+      "sha256": "95353d3d6b636ed4c819f2af32966ca9849f99897890f8888333e25e1d0787c5",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/en__dark__1440x900__automations__automations-remove-dismissed.png",
+      "bytes": 38820,
+      "sha256": "95353d3d6b636ed4c819f2af32966ca9849f99897890f8888333e25e1d0787c5",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/en__dark__1440x900__automations__automations-removed.png",
+      "bytes": 38820,
+      "sha256": "95353d3d6b636ed4c819f2af32966ca9849f99897890f8888333e25e1d0787c5",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/en__dark__1440x900__automations__run-cancel.png",
+      "bytes": 78193,
+      "sha256": "a1cb893d6b347c41e20b442f5a735087bb6cf7802d276d7a6f6767051c38c284",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/en__dark__1440x900__automations__run-cancelled.png",
+      "bytes": 78193,
+      "sha256": "a1cb893d6b347c41e20b442f5a735087bb6cf7802d276d7a6f6767051c38c284",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/en__dark__390x844__automations__automations-idle.png",
+      "bytes": 31555,
+      "sha256": "5fded6cc35ba7ffc1f05da1caf743128f582fc92bed17c9f22e16505d9193979",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/en__dark__390x844__automations__automations-remove-confirm.png",
+      "bytes": 32327,
+      "sha256": "4cdd4159cbb89d99b40b29a8911017e8976d55c65f81df057feecc7541160a44",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/en__dark__390x844__automations__automations-remove-dismissed.png",
+      "bytes": 32327,
+      "sha256": "4cdd4159cbb89d99b40b29a8911017e8976d55c65f81df057feecc7541160a44",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/en__dark__390x844__automations__automations-removed.png",
+      "bytes": 32327,
+      "sha256": "4cdd4159cbb89d99b40b29a8911017e8976d55c65f81df057feecc7541160a44",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/en__dark__390x844__automations__run-cancel.png",
+      "bytes": 60579,
+      "sha256": "a2f67d310e02b96983ad8da35278c249052effb67fe8e182dbe220b3291696cf",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/en__dark__390x844__automations__run-cancelled.png",
+      "bytes": 60579,
+      "sha256": "a2f67d310e02b96983ad8da35278c249052effb67fe8e182dbe220b3291696cf",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/en__light__1440x900__automations__automations-idle.png",
+      "bytes": 36189,
+      "sha256": "dd2b35c2dc96f534ee907c71f5644216fd6753c2d17444a6d0fc346438ce46ff",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/en__light__1440x900__automations__automations-remove-confirm.png",
+      "bytes": 37057,
+      "sha256": "52279adcdf1f56a2f8a278f10c6452bb3d663dd7cd7d97174d0ac3d82f42d908",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/en__light__1440x900__automations__automations-remove-dismissed.png",
+      "bytes": 37057,
+      "sha256": "52279adcdf1f56a2f8a278f10c6452bb3d663dd7cd7d97174d0ac3d82f42d908",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/en__light__1440x900__automations__automations-removed.png",
+      "bytes": 37057,
+      "sha256": "52279adcdf1f56a2f8a278f10c6452bb3d663dd7cd7d97174d0ac3d82f42d908",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/en__light__1440x900__automations__run-cancel.png",
+      "bytes": 76244,
+      "sha256": "93135109f47df7265043576ea6e324ef302e6e23ee70aab5cea2a8798be59942",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/en__light__1440x900__automations__run-cancelled.png",
+      "bytes": 76244,
+      "sha256": "93135109f47df7265043576ea6e324ef302e6e23ee70aab5cea2a8798be59942",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/en__light__390x844__automations__automations-idle.png",
+      "bytes": 30599,
+      "sha256": "bd679e72a2f5e21928047519665c2dd363f1dafc3979a6cc702ccc07a526b150",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/en__light__390x844__automations__automations-remove-confirm.png",
+      "bytes": 31114,
+      "sha256": "878f2d8e08b7c529d15e7f12ac8737c2473af0c983367d2b72101f7c50482a83",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/en__light__390x844__automations__automations-remove-dismissed.png",
+      "bytes": 31114,
+      "sha256": "878f2d8e08b7c529d15e7f12ac8737c2473af0c983367d2b72101f7c50482a83",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/en__light__390x844__automations__automations-removed.png",
+      "bytes": 31114,
+      "sha256": "878f2d8e08b7c529d15e7f12ac8737c2473af0c983367d2b72101f7c50482a83",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/en__light__390x844__automations__run-cancel.png",
+      "bytes": 58637,
+      "sha256": "c3138f35d3f2b95897f1ce6df7df544aa6e00fcea41e30ec5c68469f2d21f219",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/en__light__390x844__automations__run-cancelled.png",
+      "bytes": 58637,
+      "sha256": "c3138f35d3f2b95897f1ce6df7df544aa6e00fcea41e30ec5c68469f2d21f219",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__dark__1440x900__automations__automations-idle.png",
+      "bytes": 36873,
+      "sha256": "a74fa5d1cb02e3ea27e6302795c640ef3a2434fec3d9a8d9ab53b0e4c8029a6e",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__dark__1440x900__automations__automations-remove-confirm.png",
+      "bytes": 38820,
+      "sha256": "95353d3d6b636ed4c819f2af32966ca9849f99897890f8888333e25e1d0787c5",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__dark__1440x900__automations__automations-remove-dismissed.png",
+      "bytes": 38820,
+      "sha256": "95353d3d6b636ed4c819f2af32966ca9849f99897890f8888333e25e1d0787c5",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__dark__1440x900__automations__automations-removed.png",
+      "bytes": 38820,
+      "sha256": "95353d3d6b636ed4c819f2af32966ca9849f99897890f8888333e25e1d0787c5",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__dark__1440x900__automations__run-cancel.png",
+      "bytes": 78193,
+      "sha256": "a1cb893d6b347c41e20b442f5a735087bb6cf7802d276d7a6f6767051c38c284",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__dark__1440x900__automations__run-cancelled.png",
+      "bytes": 78193,
+      "sha256": "a1cb893d6b347c41e20b442f5a735087bb6cf7802d276d7a6f6767051c38c284",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__dark__390x844__automations__automations-idle.png",
+      "bytes": 31555,
+      "sha256": "5fded6cc35ba7ffc1f05da1caf743128f582fc92bed17c9f22e16505d9193979",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__dark__390x844__automations__automations-remove-confirm.png",
+      "bytes": 32333,
+      "sha256": "08dbe7f129b06b7553a5ebf149cf697ea48e862258015b9f8dbde6cd0f341927",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__dark__390x844__automations__automations-remove-dismissed.png",
+      "bytes": 32333,
+      "sha256": "08dbe7f129b06b7553a5ebf149cf697ea48e862258015b9f8dbde6cd0f341927",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__dark__390x844__automations__automations-removed.png",
+      "bytes": 32333,
+      "sha256": "08dbe7f129b06b7553a5ebf149cf697ea48e862258015b9f8dbde6cd0f341927",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__dark__390x844__automations__run-cancel.png",
+      "bytes": 60580,
+      "sha256": "d78314777b9291acfd9ade40331cab2fd3cf7952bd335fc4b4ad5e2f5e154dfa",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__dark__390x844__automations__run-cancelled.png",
+      "bytes": 60579,
+      "sha256": "a2f67d310e02b96983ad8da35278c249052effb67fe8e182dbe220b3291696cf",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__light__1440x900__automations__automations-idle.png",
+      "bytes": 36174,
+      "sha256": "f1647dbc91fe1cf4cb3cb93783c06659789471f6811c7a899f7ba9adaa6717d6",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__light__1440x900__automations__automations-remove-confirm.png",
+      "bytes": 37057,
+      "sha256": "52279adcdf1f56a2f8a278f10c6452bb3d663dd7cd7d97174d0ac3d82f42d908",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__light__1440x900__automations__automations-remove-dismissed.png",
+      "bytes": 37057,
+      "sha256": "52279adcdf1f56a2f8a278f10c6452bb3d663dd7cd7d97174d0ac3d82f42d908",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__light__1440x900__automations__automations-removed.png",
+      "bytes": 37057,
+      "sha256": "52279adcdf1f56a2f8a278f10c6452bb3d663dd7cd7d97174d0ac3d82f42d908",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__light__1440x900__automations__run-cancel.png",
+      "bytes": 76244,
+      "sha256": "93135109f47df7265043576ea6e324ef302e6e23ee70aab5cea2a8798be59942",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__light__1440x900__automations__run-cancelled.png",
+      "bytes": 76244,
+      "sha256": "93135109f47df7265043576ea6e324ef302e6e23ee70aab5cea2a8798be59942",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__light__390x844__automations__automations-idle.png",
+      "bytes": 30611,
+      "sha256": "b40fb462b2f6ddb69be25d438305886f974382f72ee374b79d5790e271c92be0",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__light__390x844__automations__automations-remove-confirm.png",
+      "bytes": 31104,
+      "sha256": "32f8df6cfe2c1129800b74d97e1051ea651d33e3116367318feed5b167eea861",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__light__390x844__automations__automations-remove-dismissed.png",
+      "bytes": 31104,
+      "sha256": "32f8df6cfe2c1129800b74d97e1051ea651d33e3116367318feed5b167eea861",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__light__390x844__automations__automations-removed.png",
+      "bytes": 31104,
+      "sha256": "32f8df6cfe2c1129800b74d97e1051ea651d33e3116367318feed5b167eea861",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__light__390x844__automations__run-cancel.png",
+      "bytes": 58634,
+      "sha256": "ec63a7022c7f007c9bea43302274f0261c6c1bb6447df97a94842b121a5c5cce",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "before",
+      "file": "before/zh-CN__light__390x844__automations__run-cancelled.png",
+      "bytes": 58634,
+      "sha256": "ec63a7022c7f007c9bea43302274f0261c6c1bb6447df97a94842b121a5c5cce",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/en__dark__1440x900__automations__automations-idle.png",
+      "bytes": 36873,
+      "sha256": "a74fa5d1cb02e3ea27e6302795c640ef3a2434fec3d9a8d9ab53b0e4c8029a6e",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/en__dark__1440x900__automations__automations-remove-confirm.png",
+      "bytes": 80563,
+      "sha256": "8030319e163a07292a4a8053fdc13a00b2aa37d0c33a4ef7010e6302086922b0",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/en__dark__1440x900__automations__automations-remove-dismissed.png",
+      "bytes": 36846,
+      "sha256": "46396b8ffa058f8ee58351efae0f78f0439229f1a8d9ade0637a88ccde184a5c",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/en__dark__1440x900__automations__automations-removed.png",
+      "bytes": 38820,
+      "sha256": "95353d3d6b636ed4c819f2af32966ca9849f99897890f8888333e25e1d0787c5",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/en__dark__1440x900__automations__run-cancel.png",
+      "bytes": 80006,
+      "sha256": "db8fa4737121c382665425931014e39445b2917d1a05c75efce5e02022d399fb",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/en__dark__1440x900__automations__run-cancelled.png",
+      "bytes": 78193,
+      "sha256": "a1cb893d6b347c41e20b442f5a735087bb6cf7802d276d7a6f6767051c38c284",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/en__dark__390x844__automations__automations-idle.png",
+      "bytes": 31555,
+      "sha256": "5fded6cc35ba7ffc1f05da1caf743128f582fc92bed17c9f22e16505d9193979",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/en__dark__390x844__automations__automations-remove-confirm.png",
+      "bytes": 63435,
+      "sha256": "2fc695f706a9d47bbb34d69504a6a054bab165a1c00d41d93cf26ec1122f7d1f",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/en__dark__390x844__automations__automations-remove-dismissed.png",
+      "bytes": 31536,
+      "sha256": "4703530eda55b29488128f2ee78b56631491fc6d19c3eb2fc83b7c05ba250286",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/en__dark__390x844__automations__automations-removed.png",
+      "bytes": 32327,
+      "sha256": "4cdd4159cbb89d99b40b29a8911017e8976d55c65f81df057feecc7541160a44",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/en__dark__390x844__automations__run-cancel.png",
+      "bytes": 62869,
+      "sha256": "5fdbfb5bc8d2c52c9a7003bcfc8301045894db34dfb456e6a9f59b7470ae55cc",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/en__dark__390x844__automations__run-cancelled.png",
+      "bytes": 60579,
+      "sha256": "a2f67d310e02b96983ad8da35278c249052effb67fe8e182dbe220b3291696cf",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/en__light__1440x900__automations__automations-idle.png",
+      "bytes": 36174,
+      "sha256": "f1647dbc91fe1cf4cb3cb93783c06659789471f6811c7a899f7ba9adaa6717d6",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/en__light__1440x900__automations__automations-remove-confirm.png",
+      "bytes": 78609,
+      "sha256": "098ca80b59bdda07f1aa26f39a7c681043e38f48b6c37cc96cd87a068556f927",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/en__light__1440x900__automations__automations-remove-dismissed.png",
+      "bytes": 36189,
+      "sha256": "dd2b35c2dc96f534ee907c71f5644216fd6753c2d17444a6d0fc346438ce46ff",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/en__light__1440x900__automations__automations-removed.png",
+      "bytes": 37057,
+      "sha256": "52279adcdf1f56a2f8a278f10c6452bb3d663dd7cd7d97174d0ac3d82f42d908",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/en__light__1440x900__automations__run-cancel.png",
+      "bytes": 78034,
+      "sha256": "f3e1401cef39b6694652258b3ac5549df7f34e7420a2683483547ebae1f7a7ca",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/en__light__1440x900__automations__run-cancelled.png",
+      "bytes": 76244,
+      "sha256": "93135109f47df7265043576ea6e324ef302e6e23ee70aab5cea2a8798be59942",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/en__light__390x844__automations__automations-idle.png",
+      "bytes": 30599,
+      "sha256": "bd679e72a2f5e21928047519665c2dd363f1dafc3979a6cc702ccc07a526b150",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/en__light__390x844__automations__automations-remove-confirm.png",
+      "bytes": 61386,
+      "sha256": "4f5559190db8b2835aca020d87910414bd99300f59082f9999d3f35e6aff89bb",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/en__light__390x844__automations__automations-remove-dismissed.png",
+      "bytes": 30611,
+      "sha256": "b40fb462b2f6ddb69be25d438305886f974382f72ee374b79d5790e271c92be0",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/en__light__390x844__automations__automations-removed.png",
+      "bytes": 31104,
+      "sha256": "32f8df6cfe2c1129800b74d97e1051ea651d33e3116367318feed5b167eea861",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/en__light__390x844__automations__run-cancel.png",
+      "bytes": 60742,
+      "sha256": "90e233fbe71a76a18949c3c5f540236c72aac081715c9da247a1e17544bb3820",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/en__light__390x844__automations__run-cancelled.png",
+      "bytes": 58634,
+      "sha256": "ec63a7022c7f007c9bea43302274f0261c6c1bb6447df97a94842b121a5c5cce",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__dark__1440x900__automations__automations-idle.png",
+      "bytes": 36871,
+      "sha256": "90470aff43f98f800b3cc93e59167c30c18c930fae69fadee20c31e7bae12339",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__dark__1440x900__automations__automations-remove-confirm.png",
+      "bytes": 80563,
+      "sha256": "8030319e163a07292a4a8053fdc13a00b2aa37d0c33a4ef7010e6302086922b0",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__dark__1440x900__automations__automations-remove-dismissed.png",
+      "bytes": 36846,
+      "sha256": "46396b8ffa058f8ee58351efae0f78f0439229f1a8d9ade0637a88ccde184a5c",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__dark__1440x900__automations__automations-removed.png",
+      "bytes": 38820,
+      "sha256": "95353d3d6b636ed4c819f2af32966ca9849f99897890f8888333e25e1d0787c5",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__dark__1440x900__automations__run-cancel.png",
+      "bytes": 80006,
+      "sha256": "db8fa4737121c382665425931014e39445b2917d1a05c75efce5e02022d399fb",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__dark__1440x900__automations__run-cancelled.png",
+      "bytes": 78193,
+      "sha256": "a1cb893d6b347c41e20b442f5a735087bb6cf7802d276d7a6f6767051c38c284",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__dark__390x844__automations__automations-idle.png",
+      "bytes": 31555,
+      "sha256": "5fded6cc35ba7ffc1f05da1caf743128f582fc92bed17c9f22e16505d9193979",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__dark__390x844__automations__automations-remove-confirm.png",
+      "bytes": 63435,
+      "sha256": "2fc695f706a9d47bbb34d69504a6a054bab165a1c00d41d93cf26ec1122f7d1f",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__dark__390x844__automations__automations-remove-dismissed.png",
+      "bytes": 31536,
+      "sha256": "4703530eda55b29488128f2ee78b56631491fc6d19c3eb2fc83b7c05ba250286",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__dark__390x844__automations__automations-removed.png",
+      "bytes": 32327,
+      "sha256": "4cdd4159cbb89d99b40b29a8911017e8976d55c65f81df057feecc7541160a44",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__dark__390x844__automations__run-cancel.png",
+      "bytes": 62869,
+      "sha256": "5fdbfb5bc8d2c52c9a7003bcfc8301045894db34dfb456e6a9f59b7470ae55cc",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__dark__390x844__automations__run-cancelled.png",
+      "bytes": 60579,
+      "sha256": "a2f67d310e02b96983ad8da35278c249052effb67fe8e182dbe220b3291696cf",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__light__1440x900__automations__automations-idle.png",
+      "bytes": 36174,
+      "sha256": "f1647dbc91fe1cf4cb3cb93783c06659789471f6811c7a899f7ba9adaa6717d6",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__light__1440x900__automations__automations-remove-confirm.png",
+      "bytes": 78609,
+      "sha256": "098ca80b59bdda07f1aa26f39a7c681043e38f48b6c37cc96cd87a068556f927",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__light__1440x900__automations__automations-remove-dismissed.png",
+      "bytes": 36189,
+      "sha256": "dd2b35c2dc96f534ee907c71f5644216fd6753c2d17444a6d0fc346438ce46ff",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__light__1440x900__automations__automations-removed.png",
+      "bytes": 37057,
+      "sha256": "52279adcdf1f56a2f8a278f10c6452bb3d663dd7cd7d97174d0ac3d82f42d908",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__light__1440x900__automations__run-cancel.png",
+      "bytes": 78034,
+      "sha256": "f3e1401cef39b6694652258b3ac5549df7f34e7420a2683483547ebae1f7a7ca",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__light__1440x900__automations__run-cancelled.png",
+      "bytes": 76244,
+      "sha256": "93135109f47df7265043576ea6e324ef302e6e23ee70aab5cea2a8798be59942",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__light__390x844__automations__automations-idle.png",
+      "bytes": 30599,
+      "sha256": "bd679e72a2f5e21928047519665c2dd363f1dafc3979a6cc702ccc07a526b150",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__light__390x844__automations__automations-remove-confirm.png",
+      "bytes": 61386,
+      "sha256": "4f5559190db8b2835aca020d87910414bd99300f59082f9999d3f35e6aff89bb",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__light__390x844__automations__automations-remove-dismissed.png",
+      "bytes": 30611,
+      "sha256": "b40fb462b2f6ddb69be25d438305886f974382f72ee374b79d5790e271c92be0",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__light__390x844__automations__automations-removed.png",
+      "bytes": 31104,
+      "sha256": "32f8df6cfe2c1129800b74d97e1051ea651d33e3116367318feed5b167eea861",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__light__390x844__automations__run-cancel.png",
+      "bytes": 60742,
+      "sha256": "90e233fbe71a76a18949c3c5f540236c72aac081715c9da247a1e17544bb3820",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "side": "after",
+      "file": "after/zh-CN__light__390x844__automations__run-cancelled.png",
+      "bytes": 58634,
+      "sha256": "ec63a7022c7f007c9bea43302274f0261c6c1bb6447df97a94842b121a5c5cce",
+      "width": 390,
+      "height": 844
+    }
+  ]
+}
