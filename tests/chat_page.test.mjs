@@ -892,7 +892,9 @@ test('independent conversation search uses current id and pages without opening 
     assert.equal(el('conversation-search-panel').hidden, false);
     el('conversation-search-query').value = 'needle';
     await fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
-    assert.equal(el('conversation-search-results').children[0].textContent, 'Scoped result');
+    const firstHit = el('conversation-search-results').children[0];
+    assert.equal(firstHit.className, 'search-hit');
+    assert.ok(descendants(firstHit).some(node => node.textContent === 'Scoped result'), 'snippet is rendered in the hit row');
     assert.equal(el('conversation-search-more').hidden, false);
     await fire(el('conversation-search-more'), 'click');
     assert.equal(calls.length, 2);
@@ -1128,4 +1130,11 @@ test('group info panel counts members and agents honestly and picks a readable g
   const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
   for (const label of ['视频通话', '语音通话', 'Agent 主动性', '自动翻译', '消息免打扰']) assert.ok(html.includes(label));
   assert.match(html, /aria-label="自动翻译（未接通）"/);
+});
+
+test('in-chat search highlights every case-insensitive match without HTML', async () => {
+  const { highlightParts } = await import('../openteamily/static/chat/app.mjs');
+  assert.deepEqual(highlightParts('Test a test', 'test'), [
+    { text: 'Test', match: true }, { text: ' a ', match: false }, { text: 'test', match: true }]);
+  assert.deepEqual(highlightParts('<b>x</b>', ''), [{ text: '<b>x</b>', match: false }]);
 });

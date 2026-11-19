@@ -237,7 +237,8 @@
       <button type="button" role="menuitem" data-menu="delete" class="message-menu-danger" disabled title="未接通：还没有删除消息接口">删除</button>
     </div>
     <section id="conversation-search-panel" hidden aria-label="会话内搜索">
-      <form id="conversation-search-form"><label>搜索当前会话<input id="conversation-search-query" maxlength="80"></label><button type="submit">搜索</button><button type="button" id="conversation-search-close">关闭</button></form>
+      <form id="conversation-search-form"><label><span class="sr-only">搜索当前会话</span><input id="conversation-search-query" type="search" maxlength="80" placeholder="搜索当前会话" autocomplete="off"></label><button type="submit">搜索</button><button type="button" id="conversation-search-close" aria-label="关闭搜索">×</button></form>
+      <p class="conversation-search-scope">消息 <span class="conversation-search-scope-note">· 资料、照片和文件搜索尚未接通</span></p>
       <p id="conversation-search-status" role="status"></p><ul id="conversation-search-results"></ul><button type="button" id="conversation-search-more" hidden>加载更多</button>
     </section>
     <p id="social-agent-members" class="gap-note" hidden></p>

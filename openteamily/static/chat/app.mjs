@@ -217,6 +217,22 @@ export function leadGlyph(text, fallback = '?') {
   return match ? match[0].toUpperCase() : fallback;
 }
 
+export function highlightParts(text, query) {
+  const source = String(text || '');
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return [{text: source, match: false}];
+  const parts = [];
+  const lower = source.toLowerCase();
+  let at = 0;
+  for (let index = lower.indexOf(needle); index !== -1; index = lower.indexOf(needle, at)) {
+    if (index > at) parts.push({text: source.slice(at, index), match: false});
+    parts.push({text: source.slice(index, index + needle.length), match: true});
+    at = index + needle.length;
+  }
+  if (at < source.length) parts.push({text: source.slice(at), match: false});
+  return parts.length ? parts : [{text: source, match: false}];
+}
+
 export function groupInfoCounts(conversation) {
   const people = (conversation && conversation.members || []).length;
   const agents = (conversation && conversation.agent_members || []).length;
@@ -1798,14 +1814,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (workspaceId() !== wid || !currentConversation || currentConversation.id !== conversation.id) return;
     const list = document.getElementById('conversation-search-results'); list.replaceChildren();
     for (const hit of state.hits) {
-      const li = document.createElement('li'); li.textContent = hit.snippet || hit.preview || ''; list.append(li);
+      list.append(searchHitRow(hit, (document.getElementById('conversation-search-query').value || '').trim()));
     }
     document.getElementById('conversation-search-status').textContent = state.error || ('已显示 ' + state.hits.length + ' 条消息');
     document.getElementById('conversation-search-more').hidden = !state.cursor;
   }
+  function searchHitRow(hit, query) {
+    const li = document.createElement('li');
+    li.className = 'search-hit';
+    const avatar = document.createElement('span');
+    avatar.className = 'search-hit-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    const who = hit.role === 'agent' ? (hit.agent_name || '智能体') : (hit.title || '消息');
+    avatar.textContent = leadGlyph(who);
+    const head = document.createElement('span');
+    head.className = 'search-hit-head';
+    const name = document.createElement('strong');
+    name.textContent = who;
+    const when = document.createElement('time');
+    when.textContent = hit.created ? formatSessionTime(hit.created) : '';
+    head.append(name, when);
+    const text = document.createElement('span');
+    text.className = 'search-hit-text';
+    text.append(...highlightParts(hit.snippet || hit.preview || '', query).map(part => {
+      if (!part.match) return document.createTextNode(part.text);
+      const mark = document.createElement('mark'); mark.textContent = part.text; return mark;
+    }));
+    li.append(avatar, head, text);
+    return li;
+  }
   const groupInfoToggle = document.getElementById('group-info-toggle');
   if (groupInfoToggle) {
-    groupInfoToggle.addEventListener('click', () => setGroupInfoOpen(groupInfoToggle.getAttribute('aria-expanded') !== 'true'));
+    groupInfoToggle.addEventListener('click', () => {
+      const open = groupInfoToggle.getAttribute('aria-expanded') !== 'true';
+      if (open) document.getElementById('conversation-search-panel').hidden = true;
+      setGroupInfoOpen(open);
+    });
     document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
     document.getElementById('group-info-search').addEventListener('click', () => {
       setGroupInfoOpen(false);
@@ -1832,7 +1876,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const inChatOpen = document.getElementById('conversation-search-open');
   if (inChatOpen) inChatOpen.addEventListener('click', () => {
     if (!currentConversation) { show('error', '请先打开一个会话。'); return; }
+    setGroupInfoOpen(false);
     document.getElementById('conversation-search-panel').hidden = false;
+    const field = document.getElementById('conversation-search-query'); if (field) field.focus();
   });
   const inChatClose = document.getElementById('conversation-search-close');
   if (inChatClose) inChatClose.addEventListener('click', () => { document.getElementById('conversation-search-panel').hidden = true; });
