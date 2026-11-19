@@ -371,6 +371,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let sideTab = 'topics';
   let graphZoom = 1;
   let topicQuery = '';
+  let pendingDelete = null;
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -900,6 +901,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function loadWorkspace() {
+    closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     currentPage = null;
     currentAction = null;
@@ -937,6 +939,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openPage(pageId) {
+    closeDeleteConfirm({restoreFocus: false});
     hideGraphHoverCard(document.getElementById('graph-hover-card'));
     const id = workspaceId();
     if (!id) return;
@@ -966,6 +969,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openAction(actionId) {
+    closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     if (!id) return;
     const seen = await request('GET', `/v1/workspaces/${id}/memory/actions/${actionId}`);
@@ -1171,6 +1175,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const zoomOut = document.getElementById('graph-zoom-out');
   const zoomReset = document.getElementById('graph-zoom-reset');
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && pendingDelete) {
+      closeDeleteConfirm();
+      return;
+    }
     if (event.key === 'Escape') hideGraphHoverCard(document.getElementById('graph-hover-card'));
   });
   if (zoomIn) zoomIn.addEventListener('click', () => { graphZoom = Math.min(2.4, graphZoom + 0.2); renderGraph(currentGraph); });
@@ -1241,6 +1249,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(saved.body.error, '无法保存记忆页。'));
       return;
     }
+    closeDeleteConfirm({restoreFocus: false});
     currentPage = saved.body.page;
     editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
@@ -1257,17 +1266,79 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     show('ok', '已保存。');
   });
 
-  document.getElementById('delete-page').addEventListener('click', async () => {
-    const id = workspaceId();
-    if (!id || !currentPage) return;
-    const removed = await request('POST', `/v1/workspaces/${id}/memory/${currentPage.id}/remove`, {});
+  const deleteParts = {
+    page: {
+      trigger: document.getElementById('delete-page'),
+      dialog: document.getElementById('page-delete-confirm'),
+      question: document.getElementById('page-delete-question'),
+      confirm: document.getElementById('page-delete-confirm-submit'),
+      cancel: document.getElementById('page-delete-confirm-cancel'),
+    },
+    action: {
+      trigger: document.getElementById('delete-action'),
+      dialog: document.getElementById('action-delete-confirm'),
+      question: document.getElementById('action-delete-question'),
+      confirm: document.getElementById('action-delete-confirm-submit'),
+      cancel: document.getElementById('action-delete-confirm-cancel'),
+    },
+  };
+
+  function deleteRemovePath(kind, workspace, id) {
+    return kind === 'page'
+      ? `/v1/workspaces/${workspace}/memory/${id}/remove`
+      : `/v1/workspaces/${workspace}/memory/actions/${id}/remove`;
+  }
+
+  function closeDeleteConfirm({restoreFocus = true} = {}) {
+    const pending = pendingDelete;
+    if (!pending) return;
+    pendingDelete = null;
+    const parts = deleteParts[pending.kind];
+    if (parts.question) parts.question.textContent = '';
+    if (parts.dialog) parts.dialog.hidden = true;
+    if (parts.trigger) {
+      parts.trigger.hidden = false;
+      if (restoreFocus && parts.trigger.focus) parts.trigger.focus();
+    }
+  }
+
+  function openDeleteConfirm(kind, target) {
+    const workspace = workspaceId();
+    if (!workspace || !target || !target.id) return;
+    const parts = deleteParts[kind];
+    if (!parts.dialog || !parts.question) return;
+    closeDeleteConfirm({restoreFocus: false});
+    // The question owns the target it names: confirming must not re-read the
+    // editor's current row or the current workspace.
+    pendingDelete = {kind, workspace, id: target.id};
+    parts.question.textContent =
+      `${kind === 'page' ? '删除这条记忆页' : '删除这条下一步行动'}「${String(target.title || '')}」？`;
+    if (parts.trigger) parts.trigger.hidden = true;
+    parts.dialog.hidden = false;
+    if (parts.cancel && parts.cancel.focus) parts.cancel.focus();
+  }
+
+  async function removePending(kind) {
+    const pending = pendingDelete;
+    if (!pending || pending.kind !== kind) return;
+    closeDeleteConfirm({restoreFocus: false});
+    const removed = await request('POST', deleteRemovePath(kind, pending.workspace, pending.id), {});
     if (removed.status !== 200) {
-      show('error', messageFor(removed.body.error, '无法删除记忆页。'));
+      show('error', messageFor(removed.body.error,
+        kind === 'page' ? '无法删除记忆页。' : '无法删除下一步行动。'));
       return;
     }
     show('ok', '已删除。');
     await loadWorkspace();
+  }
+
+  document.getElementById('delete-page').addEventListener('click', () => {
+    openDeleteConfirm('page', currentPage);
   });
+  for (const [kind, parts] of Object.entries(deleteParts)) {
+    if (parts.confirm) parts.confirm.addEventListener('click', () => removePending(kind));
+    if (parts.cancel) parts.cancel.addEventListener('click', () => closeDeleteConfirm());
+  }
 
   const addLink = document.getElementById('add-link');
   if (addLink) {
@@ -1362,22 +1433,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(saved.body.error, '无法保存下一步行动。'));
       return;
     }
+    closeDeleteConfirm({restoreFocus: false});
     currentAction = saved.body.action;
     document.getElementById('action-editor-meta').textContent =
       `修订 ${currentAction.revision} · 作者 ${currentAction.created_by} · 最近更新 ${currentAction.updated_by}`;
     show('ok', '已保存。');
   });
 
-  document.getElementById('delete-action').addEventListener('click', async () => {
-    const id = workspaceId();
-    if (!id || !currentAction) return;
-    const removed = await request('POST', `/v1/workspaces/${id}/memory/actions/${currentAction.id}/remove`, {});
-    if (removed.status !== 200) {
-      show('error', messageFor(removed.body.error, '无法删除下一步行动。'));
-      return;
-    }
-    show('ok', '已删除。');
-    await loadWorkspace();
+  document.getElementById('delete-action').addEventListener('click', () => {
+    openDeleteConfirm('action', currentAction);
   });
 
   document.getElementById('close-action-editor').addEventListener('click', () => loadWorkspace());
