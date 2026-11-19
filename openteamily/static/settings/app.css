@@ -935,11 +935,8 @@ html[data-theme-resolved="dark"] #settings-panel :is(a.settings-row, .settings-r
   background: currentColor;
   vertical-align: .08em;
 }
-.connector-status[data-state="failed"],
-.connector-status[data-state="inactive"] { color: var(--ot-danger); }
-#composio-key-state[data-state="configured"] { color: var(--ot-ok); font-weight: 600; }
-/* Aurora Glass: settings */
-#settings-panel > section {
+html[data-theme-resolved="dark"] .connector-status[data-state="failed"], html[data-theme-resolved="dark"] .connector-status[data-state="inactive"]{ color: var(--ot-danger); }html[data-theme-resolved="dark"] #composio-key-state[data-state="configured"]{ color: var(--ot-ok); font-weight: 600; }html[data-theme-resolved="dark"] /* Aurora Glass: settings */
+#settings-panel > section{
   background: var(--ot-surface);
   border: 1px solid var(--ot-line);
   border-radius: var(--ot-radius-lg);

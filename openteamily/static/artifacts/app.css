@@ -1019,8 +1019,7 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
   background: var(--ot-surface-2);
   border-radius: 0.75rem;
 }
-
-#send-to-chat-cancel {
+html[data-theme-resolved="dark"] #send-to-chat-cancel{
   border-radius: 999px;
   padding: 0.4rem 0.95rem;
 /* Aurora Glass: works library */
@@ -1041,4 +1040,4 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
   -webkit-backdrop-filter: var(--ot-blur);
   backdrop-filter: var(--ot-blur);
   border-radius: var(--ot-radius);
-}
+}}
