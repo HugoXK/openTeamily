@@ -1,0 +1,2348 @@
+{
+  "slug": "236",
+  "page": "guide",
+  "route": "/guide",
+  "states": [
+    "search-marks",
+    "dialog-marks",
+    "no-match"
+  ],
+  "shots": [
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "search-marks",
+      "file": "base/zh-CN__light__1440x900__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "dialog-marks",
+      "file": "base/zh-CN__light__1440x900__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 900,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "no-match",
+      "file": "base/zh-CN__light__1440x900__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的指引。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 257,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 257,
+            "bottom": 311,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 220
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "search-marks",
+      "file": "guide/zh-CN__light__1440x900__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天"
+        ],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "dialog-marks",
+      "file": "guide/zh-CN__light__1440x900__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天",
+          "聊天",
+          "聊天"
+        ],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 900,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "no-match",
+      "file": "guide/zh-CN__light__1440x900__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的条目。换个词，或按 Esc 清空搜索。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 257,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 257,
+            "bottom": 311,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 236
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "search-marks",
+      "file": "base/zh-CN__dark__1440x900__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "dialog-marks",
+      "file": "base/zh-CN__dark__1440x900__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 900,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "no-match",
+      "file": "base/zh-CN__dark__1440x900__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的指引。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 257,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 257,
+            "bottom": 311,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 220
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "search-marks",
+      "file": "guide/zh-CN__dark__1440x900__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天"
+        ],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "dialog-marks",
+      "file": "guide/zh-CN__dark__1440x900__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天",
+          "聊天",
+          "聊天"
+        ],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 900,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "no-match",
+      "file": "guide/zh-CN__dark__1440x900__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的条目。换个词，或按 Esc 清空搜索。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 257,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 257,
+            "bottom": 311,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 236
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "search-marks",
+      "file": "base/en__light__1440x900__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "dialog-marks",
+      "file": "base/en__light__1440x900__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 900,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "no-match",
+      "file": "base/en__light__1440x900__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的指引。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 257,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 257,
+            "bottom": 311,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 220
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "search-marks",
+      "file": "guide/en__light__1440x900__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天"
+        ],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "dialog-marks",
+      "file": "guide/en__light__1440x900__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天",
+          "聊天",
+          "聊天"
+        ],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 900,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "no-match",
+      "file": "guide/en__light__1440x900__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的条目。换个词，或按 Esc 清空搜索。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 257,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 257,
+            "bottom": 311,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 236
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "search-marks",
+      "file": "base/en__dark__1440x900__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "dialog-marks",
+      "file": "base/en__dark__1440x900__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 900,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "no-match",
+      "file": "base/en__dark__1440x900__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的指引。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 257,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 257,
+            "bottom": 311,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 220
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "search-marks",
+      "file": "guide/en__dark__1440x900__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天"
+        ],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "dialog-marks",
+      "file": "guide/en__dark__1440x900__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天",
+          "聊天",
+          "聊天"
+        ],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 611,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 900,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "no-match",
+      "file": "guide/en__dark__1440x900__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的条目。换个词，或按 Esc 清空搜索。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 257,
+            "bottom": 257,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 257,
+            "bottom": 311,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 236
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "search-marks",
+      "file": "base/zh-CN__light__390x844__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 424,
+            "bottom": 778,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "dialog-marks",
+      "file": "base/zh-CN__light__390x844__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 1019,
+            "inViewport": true,
+            "fullyVisible": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 844,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "no-match",
+      "file": "base/zh-CN__light__390x844__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的指引。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 742,
+            "bottom": 742,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 742,
+            "bottom": 795,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 220
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "search-marks",
+      "file": "guide/zh-CN__light__390x844__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天"
+        ],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 424,
+            "bottom": 778,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "dialog-marks",
+      "file": "guide/zh-CN__light__390x844__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天",
+          "聊天",
+          "聊天"
+        ],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 1019,
+            "inViewport": true,
+            "fullyVisible": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 844,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "no-match",
+      "file": "guide/zh-CN__light__390x844__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的条目。换个词，或按 Esc 清空搜索。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 719,
+            "bottom": 719,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 719,
+            "bottom": 795,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 236
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "search-marks",
+      "file": "base/zh-CN__dark__390x844__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 424,
+            "bottom": 778,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "dialog-marks",
+      "file": "base/zh-CN__dark__390x844__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 1019,
+            "inViewport": true,
+            "fullyVisible": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 844,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "no-match",
+      "file": "base/zh-CN__dark__390x844__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的指引。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 742,
+            "bottom": 742,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 742,
+            "bottom": 795,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 220
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "search-marks",
+      "file": "guide/zh-CN__dark__390x844__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天"
+        ],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 424,
+            "bottom": 778,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "dialog-marks",
+      "file": "guide/zh-CN__dark__390x844__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天",
+          "聊天",
+          "聊天"
+        ],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 1019,
+            "inViewport": true,
+            "fullyVisible": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 844,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "no-match",
+      "file": "guide/zh-CN__dark__390x844__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的条目。换个词，或按 Esc 清空搜索。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 719,
+            "bottom": 719,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 719,
+            "bottom": 795,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 236
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "search-marks",
+      "file": "base/en__light__390x844__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 424,
+            "bottom": 778,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "dialog-marks",
+      "file": "base/en__light__390x844__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 1019,
+            "inViewport": true,
+            "fullyVisible": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 844,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "no-match",
+      "file": "base/en__light__390x844__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的指引。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 742,
+            "bottom": 742,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 742,
+            "bottom": 795,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 220
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "search-marks",
+      "file": "guide/en__light__390x844__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天"
+        ],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 424,
+            "bottom": 778,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "dialog-marks",
+      "file": "guide/en__light__390x844__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天",
+          "聊天",
+          "聊天"
+        ],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 1019,
+            "inViewport": true,
+            "fullyVisible": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 844,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "no-match",
+      "file": "guide/en__light__390x844__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的条目。换个词，或按 Esc 清空搜索。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 719,
+            "bottom": 719,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 719,
+            "bottom": 795,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 236
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "search-marks",
+      "file": "base/en__dark__390x844__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 424,
+            "bottom": 778,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "dialog-marks",
+      "file": "base/en__dark__390x844__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 1019,
+            "inViewport": true,
+            "fullyVisible": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 844,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "no-match",
+      "file": "base/en__dark__390x844__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的指引。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 742,
+            "bottom": 742,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 742,
+            "bottom": 795,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 220
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "search-marks",
+      "file": "guide/en__dark__390x844__guide__search-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天"
+        ],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 424,
+            "bottom": 778,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 257
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "dialog-marks",
+      "file": "guide/en__dark__390x844__guide__dialog-marks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [
+          "聊天",
+          "聊天",
+          "聊天"
+        ],
+        "dialogOpen": true,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 1019,
+            "inViewport": true,
+            "fullyVisible": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": true,
+            "top": 0,
+            "bottom": 844,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 329
+      }
+    },
+    {
+      "side": "guide",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "no-match",
+      "file": "guide/en__dark__390x844__guide__no-match.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": true,
+        "emptyText": "没有匹配的条目。换个词，或按 Esc 清空搜索。",
+        "localStatus": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": true,
+            "top": 719,
+            "bottom": 719,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": true,
+            "top": 719,
+            "bottom": 795,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          }
+        ],
+        "textLength": 236
+      }
+    }
+  ]
+}
