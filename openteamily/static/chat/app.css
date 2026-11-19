@@ -1600,6 +1600,11 @@ html[data-theme-resolved="dark"] .plus-create [data-tone="doc"] .plus-ico { colo
   border-right: 1px solid var(--ot-line);
   -webkit-backdrop-filter: var(--ot-blur);
   backdrop-filter: var(--ot-blur);
+  /* The glass layer gives the pane its own stacking context; the compose menu
+     inside it must still paint above the message column, as it does on the
+     un-glassed shell. */
+  position: relative;
+  z-index: 5;
 }
 .session-search { background: var(--ot-surface-solid); border-color: var(--ot-line); }
 .session-search:focus-within {
