@@ -16,7 +16,7 @@ Do not edit other branches or count these as landed:352/271 old search hit loadi
 ## Remaining complete scope
 See FUNCTIONAL_COMPLETION_PLAN.md and VISIBLE_FUNCTIONS_INVENTORY.md for all six categories and source census. None is silently hidden or called credential-blocked wholesale. No operator/model/Composio credentials discovered or reused; Composio remains each user's own key; model platform default+user override retained. No production, user computer, :3320 or :3786 changes. No npm installation, external invitations/sends/payments, cloud sessions, proprietary assets, or upstream vendor byte edits. All current tests/captures are synthetic, not real-vendor or Teamily acceptance.
 
-Latest refresh additionally protects363 memory history84d3f736f,362 self-delete45765a294,361 memory preferencesd139d5dde,356 memory dream24a7590e4,358 unread dividercafded7a0,354 attachment search913480e28. Updated28449de89563,34967691d71a,348e838eec41 remain separate. Registration293410c6a45c covers email-code identity, not this same-origin form for the existing username/password endpoint.
+Latest refresh additionally protects363 memory history84d3f736f,362 self-delete45765a294,361 memory preferencesd139d5dde,356 memory dream24a7590e4,358 unread dividercafded7a0,354 attachment search913480e28. Updated28449de89563 and34967691d71a remain separate;348e838eec41 is now landed via ordinary main sync. Registration293410c6a45c covers email-code identity, not this same-origin form for the existing username/password endpoint.
 
 ## Public HTTP model policy: reviewed, not integrated or enabled
 The independent operator-policy draft is not production-ready. Python's
