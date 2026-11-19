@@ -638,11 +638,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const heading = document.createElement('p');
         heading.className = 'reply-state';
         heading.textContent = item.status === 'running' ? '正在生成回复' : '正在准备回复';
-        const dots = document.createElement('span');
-        dots.className = 'reply-dots';
-        dots.setAttribute('aria-hidden', 'true');
-        dots.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
-        heading.append(dots);
         li.append(role, heading, body);
       } else {
         li.append(role, body);
