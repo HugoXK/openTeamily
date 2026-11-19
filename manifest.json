@@ -1,0 +1,62 @@
+{
+  "rows": [
+    {
+      "state": "after",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "328-after-1440x900.png",
+      "bytes": 83295,
+      "width": 1440,
+      "height": 900,
+      "sha256": "9f282069d38afbdd39a4fe45c7564cef47a235f701c094a2aa284e50485ec698",
+      "scrollWidth": 1440
+    },
+    {
+      "state": "after-mobile",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "328-after-390x844.png",
+      "bytes": 55966,
+      "width": 390,
+      "height": 844,
+      "sha256": "73c976da668f70548ba8c708e5ae94cacfd98db56b1799830923dc63dbd1917e",
+      "scrollWidth": 390
+    },
+    {
+      "state": "affected-menu",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "328-after-menu-1440x900.png",
+      "bytes": 106789,
+      "width": 1440,
+      "height": 900,
+      "sha256": "8802435dbd9ff392b3f9a2c762889f19319b97bf350026223eede42da5c3f46a",
+      "scrollWidth": 1440
+    },
+    {
+      "state": "before",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "328-before-1440x900.png",
+      "bytes": 89169,
+      "width": 1440,
+      "height": 900,
+      "sha256": "281be89ac7f59b88e6d95108a814a62b399e40ebd72681d25bbf30c053398eec",
+      "scrollWidth": 1440
+    }
+  ],
+  "facts": {
+    "delete": {
+      "deleteState": {
+        "hidden": false,
+        "disabled": false,
+        "title": "",
+        "text": "删除"
+      },
+      "seen": [
+        "你好，**世界**和**团队**都在这里",
+        "附件我先放在作品库，**周三**前给你"
+      ]
+    }
+  }
+}
