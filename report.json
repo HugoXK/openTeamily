@@ -1,0 +1,1659 @@
+{
+  "slug": "244",
+  "page": "runtimes",
+  "route": "/runtimes",
+  "states": [
+    "last-seen",
+    "empty"
+  ],
+  "shots": [
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "last-seen",
+      "file": "base/zh-CN__light__1440x900__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线",
+          "studio离线",
+          "desk离线",
+          "laptop离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 620,
+            "bottom": 832,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 264,
+            "bottom": 374,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 642
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "base/zh-CN__light__1440x900__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 767,
+            "bottom": 767,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 388,
+            "bottom": 521,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 707
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "last-seen",
+      "file": "rt/zh-CN__light__1440x900__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线已连接（刚刚有活动）",
+          "studio离线最后在线 5 分钟前",
+          "desk离线最后在线 1 小时前",
+          "laptop离线最后在线 1 天前"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 563,
+            "bottom": 775,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 207,
+            "bottom": 317,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 741
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "rt/zh-CN__light__1440x900__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 710,
+            "bottom": 710,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 331,
+            "bottom": 464,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 763
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "last-seen",
+      "file": "base/zh-CN__dark__1440x900__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线",
+          "studio离线",
+          "desk离线",
+          "laptop离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 620,
+            "bottom": 832,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 264,
+            "bottom": 374,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 642
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "base/zh-CN__dark__1440x900__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 767,
+            "bottom": 767,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 388,
+            "bottom": 521,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 707
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "last-seen",
+      "file": "rt/zh-CN__dark__1440x900__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线已连接（刚刚有活动）",
+          "studio离线最后在线 5 分钟前",
+          "desk离线最后在线 1 小时前",
+          "laptop离线最后在线 1 天前"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 563,
+            "bottom": 775,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 207,
+            "bottom": 317,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 741
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "rt/zh-CN__dark__1440x900__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 710,
+            "bottom": 710,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 331,
+            "bottom": 464,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 763
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "last-seen",
+      "file": "base/en__light__1440x900__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线",
+          "studio离线",
+          "desk离线",
+          "laptop离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 620,
+            "bottom": 832,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 264,
+            "bottom": 374,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 642
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "base/en__light__1440x900__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 767,
+            "bottom": 767,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 388,
+            "bottom": 521,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 707
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "last-seen",
+      "file": "rt/en__light__1440x900__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线已连接（刚刚有活动）",
+          "studio离线最后在线 5 分钟前",
+          "desk离线最后在线 1 小时前",
+          "laptop离线最后在线 1 天前"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 563,
+            "bottom": 775,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 207,
+            "bottom": 317,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 741
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "rt/en__light__1440x900__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 710,
+            "bottom": 710,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 331,
+            "bottom": 464,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 763
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "last-seen",
+      "file": "base/en__dark__1440x900__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线",
+          "studio离线",
+          "desk离线",
+          "laptop离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 620,
+            "bottom": 832,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 264,
+            "bottom": 374,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 642
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "base/en__dark__1440x900__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 767,
+            "bottom": 767,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 388,
+            "bottom": 521,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 707
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "last-seen",
+      "file": "rt/en__dark__1440x900__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线已连接（刚刚有活动）",
+          "studio离线最后在线 5 分钟前",
+          "desk离线最后在线 1 小时前",
+          "laptop离线最后在线 1 天前"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 563,
+            "bottom": 775,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 207,
+            "bottom": 317,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 741
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "rt/en__dark__1440x900__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 710,
+            "bottom": 710,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": 331,
+            "bottom": 464,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 763
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "last-seen",
+      "file": "base/zh-CN__light__390x844__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线",
+          "studio离线",
+          "desk离线",
+          "laptop离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 564,
+            "bottom": 776,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -139,
+            "bottom": -7,
+            "inViewport": false,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 642
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "base/zh-CN__light__390x844__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 665,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -84,
+            "bottom": 94,
+            "inViewport": true,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 707
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "last-seen",
+      "file": "rt/zh-CN__light__390x844__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线已连接（刚刚有活动）",
+          "studio离线最后在线 5 分钟前",
+          "desk离线最后在线 1 小时前",
+          "laptop离线最后在线 1 天前"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 455,
+            "bottom": 697,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -248,
+            "bottom": -116,
+            "inViewport": false,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 741
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "rt/zh-CN__light__390x844__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 586,
+            "bottom": 586,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -163,
+            "bottom": 15,
+            "inViewport": true,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 763
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "last-seen",
+      "file": "base/zh-CN__dark__390x844__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线",
+          "studio离线",
+          "desk离线",
+          "laptop离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 564,
+            "bottom": 776,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -139,
+            "bottom": -7,
+            "inViewport": false,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 642
+      }
+    },
+    {
+      "side": "base",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "base/zh-CN__dark__390x844__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 665,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -84,
+            "bottom": 94,
+            "inViewport": true,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 707
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "last-seen",
+      "file": "rt/zh-CN__dark__390x844__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线已连接（刚刚有活动）",
+          "studio离线最后在线 5 分钟前",
+          "desk离线最后在线 1 小时前",
+          "laptop离线最后在线 1 天前"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 455,
+            "bottom": 697,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -248,
+            "bottom": -116,
+            "inViewport": false,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 741
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "rt/zh-CN__dark__390x844__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 586,
+            "bottom": 586,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -163,
+            "bottom": 15,
+            "inViewport": true,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 763
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "last-seen",
+      "file": "base/en__light__390x844__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线",
+          "studio离线",
+          "desk离线",
+          "laptop离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 564,
+            "bottom": 776,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -139,
+            "bottom": -7,
+            "inViewport": false,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 642
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "base/en__light__390x844__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 665,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -84,
+            "bottom": 94,
+            "inViewport": true,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 707
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "last-seen",
+      "file": "rt/en__light__390x844__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线已连接（刚刚有活动）",
+          "studio离线最后在线 5 分钟前",
+          "desk离线最后在线 1 小时前",
+          "laptop离线最后在线 1 天前"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 455,
+            "bottom": 697,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -248,
+            "bottom": -116,
+            "inViewport": false,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 741
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "rt/en__light__390x844__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 586,
+            "bottom": 586,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -163,
+            "bottom": 15,
+            "inViewport": true,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 763
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "last-seen",
+      "file": "base/en__dark__390x844__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线",
+          "studio离线",
+          "desk离线",
+          "laptop离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 564,
+            "bottom": 776,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -139,
+            "bottom": -7,
+            "inViewport": false,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 642
+      }
+    },
+    {
+      "side": "base",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "base/en__dark__390x844__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 665,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -84,
+            "bottom": 94,
+            "inViewport": true,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 707
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "last-seen",
+      "file": "rt/en__dark__390x844__runtimes__last-seen.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "build-01在线已连接（刚刚有活动）",
+          "studio离线最后在线 5 分钟前",
+          "desk离线最后在线 1 小时前",
+          "laptop离线最后在线 1 天前"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 455,
+            "bottom": 697,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -248,
+            "bottom": -116,
+            "inViewport": false,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 741
+      }
+    },
+    {
+      "side": "rt",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "rt/en__dark__390x844__runtimes__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "尚未连接本机或远程设备",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": true,
+            "top": 586,
+            "bottom": 586,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": true,
+            "top": -163,
+            "bottom": 15,
+            "inViewport": true,
+            "fullyVisible": false
+          }
+        ],
+        "textLength": 763
+      }
+    }
+  ]
+}
