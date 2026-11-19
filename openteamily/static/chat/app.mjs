@@ -248,6 +248,13 @@ export function groupAgentSummary(conversation) {
     + '。可明确请求一次回复。未接通：群内自动回复、@Agent 和任务委派。' : '';
 }
 
+export function mergeConversationSettings(conversation, body) {
+  // The conversation detail carries its switches next to the conversation, not inside it.
+  const merged = {...conversation};
+  if (body && body.auto_reply) merged.auto_reply = body.auto_reply;
+  return merged;
+}
+
 export function autoReplyNote(auto) {
   if (!auto) return '未接通。';
   if (!auto.can_manage) {
@@ -1342,7 +1349,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
-    currentConversation = result.body.conversation;
+    currentConversation = mergeConversationSettings(result.body.conversation, result.body);
     setSessionsOpen(false);
     const pin = document.getElementById('pin-conversation');
     if (pin) { pin.hidden = false; pin.textContent = sessions.find(item => item.id === conversationId && item.pinned) ? '取消置顶' : '置顶会话'; }
