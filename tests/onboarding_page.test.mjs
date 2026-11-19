@@ -66,10 +66,19 @@ function json(status, body) {
 
 function fetcherFor(state) {
   const calls = [];
+  // A workspace may answer differently from the others: the checklist must
+  // judge every workspace, so a fixture has to be able to make the first one
+  // empty and a later one hold the real activity.
+  const perWorkspace = (id, field) => {
+    const own = state.byWorkspace && state.byWorkspace[id];
+    if (own && field in own) return own[field];
+    return state[field];
+  };
   return {
     calls,
     fetch: async (path) => {
       calls.push(path);
+      if (state.throwOn && path.indexOf(state.throwOn) === 0) throw new Error('network down');
       if (path === '/v1/auth/session') return json(200, {user: {username: 'alice'}});
       if (path === '/v1/onboarding') return json(200, {industries: [], onboarding: null});
       if (path === '/v1/workspaces?limit=100') {
@@ -78,8 +87,9 @@ function fetcherFor(state) {
       }
       const agents = /^\/v1\/workspaces\/([^/]+)\/agents\?limit=100$/.exec(path);
       if (agents) {
-        if (state.agents === 'error') return json(500, {error: {message: 'agent listing failed'}});
-        return json(200, {items: state.agents || []});
+        const value = perWorkspace(agents[1], 'agents');
+        if (value === 'error') return json(500, {error: {message: 'agent listing failed'}});
+        return json(200, {items: value || []});
       }
       if (path === '/v1/runtime/connections') {
         if (state.runtimes === 'error') return json(500, {error: {message: 'runtime listing failed'}});
@@ -87,13 +97,15 @@ function fetcherFor(state) {
       }
       const automations = /^\/v1\/workspaces\/([^/]+)\/automations$/.exec(path);
       if (automations) {
-        if (state.automations === 'error') return json(500, {error: {message: 'automation listing failed'}});
-        return json(200, {items: (state.automations || []).map(id => ({id}))});
+        const value = perWorkspace(automations[1], 'automations');
+        if (value === 'error') return json(500, {error: {message: 'automation listing failed'}});
+        return json(200, {items: (value || []).map(id => ({id}))});
       }
       const runs = /^\/v1\/workspaces\/([^/]+)\/automations\/([^/]+)\/runs\?limit=20$/.exec(path);
       if (runs) {
-        if (state.runs === 'error') return json(500, {error: {message: 'run listing failed'}});
-        return json(200, {items: (state.runs || []).map(status => ({status}))});
+        const value = perWorkspace(runs[1], 'runs');
+        if (value === 'error') return json(500, {error: {message: 'run listing failed'}});
+        return json(200, {items: (value || []).map(status => ({status}))});
       }
       throw new Error('unexpected ' + path);
     },
@@ -200,5 +212,36 @@ test('a failing run listing reports the automation step as unknown, not done', a
   const rows = steps(doc);
   assert.deepEqual(rows.map((row) => row.done), [true, true, false]);
   assert.match(rows[2].text, /读取运行记录失败/);
+  assert.equal(doc.getElementById('onboarding-ready').hidden, true);
+});
+
+test('a second workspace with the agent and the finished run completes the steps it proves', async () => {
+  const {doc, calls} = await mountOnboarding({
+    workspaces: [{id: 'ws-1', name: 'Desk'}, {id: 'ws-2', name: 'Team'}],
+    byWorkspace: {
+      'ws-1': {agents: [], automations: []},
+      'ws-2': {agents: [{id: 'ag-2', name: 'Second'}], automations: ['au-2'], runs: ['succeeded']},
+    },
+    runtimes: ['online'],
+  });
+  const rows = steps(doc);
+  assert.deepEqual(rows.map((row) => row.done), [true, true, true],
+    'a second workspace holds the agent and the finished run, but the checklist judged the first workspace only');
+  assert.match(rows[0].text, /Second/, 'the agent step does not name the agent found in the second workspace');
+  assert.match(rows[2].text, /执行记录/, 'the automation step does not see the run finished in the second workspace');
+  assert.ok(calls.includes('/v1/workspaces/ws-2/agents?limit=100'), 'the checklist never read the second workspace agents');
+  assert.ok(calls.includes('/v1/workspaces/ws-2/automations'), 'the checklist never read the second workspace automations');
+  assert.equal(doc.getElementById('onboarding-ready').hidden, false);
+});
+
+test('a thrown workspace request still renders three honest unknown rows', async () => {
+  const {doc} = await mountOnboarding({workspaces: [], runtimes: ['online'], throwOn: '/v1/workspaces?limit=100'});
+  const rows = steps(doc);
+  assert.equal(rows.length, 3, 'expected 3 onboarding steps after a thrown request, got ' + rows.length);
+  assert.deepEqual(rows.map((row) => row.done), [false, false, false],
+    'a thrown request must not tick a step');
+  const text = rows.map((row) => row.text).join('\n');
+  assert.doesNotMatch(text, /✓/, 'a thrown request rendered a tick');
+  for (const row of rows) assert.match(row.text, /无法判断|失败|出错/, 'a row gives no reason after a thrown request: ' + row.text);
   assert.equal(doc.getElementById('onboarding-ready').hidden, true);
 });
