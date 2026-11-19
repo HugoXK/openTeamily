@@ -4,10 +4,13 @@ Self-written for OpenTeamily; no upstream, Timeline, Project, or Teamily
 source, fonts or marketing copy. Pages, next actions, topics and links are
 workspace-scoped. Pages and actions persist on create and can be edited or
 deleted. The graph is derived from optional page topics, [[Title]] mentions
-in page bodies, and optional manual links. This is not a profile, share/export,
-or Teamily memory parity, and it is not browser E2E acceptance.
+in page bodies, and optional manual links. Export covers one saved page as a
+Markdown file; it is not a workspace export, a share link, a profile, or
+Teamily memory parity, and it is not browser E2E acceptance.
 """
+from datetime import datetime, timezone
 import re
+from urllib.parse import quote
 
 from .search import snippet
 from .security import digest
@@ -354,3 +357,46 @@ def graph(db, workspace_id):
         'topics': topics,
         'counts': {'nodes': len(nodes), 'edges': len(edges), 'topics': len(topics)},
     }
+
+
+EXPORT_NAME_MAX = 60
+EXPORT_STAMP = '%Y-%m-%dT%H:%M:%SZ'
+
+
+def export_flat(value):
+    """One front-matter line: whitespace folds so a title cannot add keys."""
+    return ' '.join(str(value or '').split())
+
+
+def export_quoted(value):
+    return '"' + export_flat(value).replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def export_filename(title):
+    """An ASCII-safe attachment name; the exact title travels in filename*."""
+    flat = re.sub(r'[^A-Za-z0-9._-]+', '-', export_flat(title))
+    flat = flat.strip('-._')[:EXPORT_NAME_MAX].strip('-._')
+    return (flat or 'memory') + '.md'
+
+
+def export_disposition(title):
+    """Content-Disposition with an ASCII fallback and an RFC 5987 name."""
+    return ('attachment; filename="' + export_filename(title) + '"; filename*=UTF-8\'\''
+            + quote(export_flat(title)[:TITLE_MAX] or 'memory', safe='') + '.md')
+
+
+def export_document(row, topics):
+    """One saved page as Markdown: YAML front matter, then the body verbatim."""
+    lines = ['---', 'title: ' + export_quoted(row['title'])]
+    names = [name for name in (export_flat(topic) for topic in topics or []) if name]
+    if names:
+        lines.append('topics:')
+        lines.extend('  - ' + export_quoted(name) for name in names)
+    else:
+        lines.append('topics: []')
+    lines.append('revision: %d' % row['revision'])
+    lines.append('updated: ' + datetime.fromtimestamp(row['updated'], timezone.utc).strftime(EXPORT_STAMP))
+    lines.append('---')
+    body = row['body']
+    document = '\n'.join(lines) + '\n\n' + body
+    return document if document.endswith('\n') else document + '\n'

@@ -13,6 +13,7 @@ This slice stores workspace-scoped **memory pages**, **next actions**, optional 
 | GET | `/v1/workspaces/{id}/memory/{id}` | One page, including body and topics |
 | POST | `/v1/workspaces/{id}/memory/{id}` | Revisioned `{revision, changes: {title?, body?, topics?}}` |
 | POST | `/v1/workspaces/{id}/memory/{id}/remove` | Delete the page |
+| GET | `/v1/workspaces/{id}/memory/{id}/export` | The saved page as a `text/markdown` attachment: YAML front matter (title, topics, revision, updated) then the body verbatim. Read-only; any workspace member may download |
 | GET | `/v1/workspaces/{id}/memory/graph` | Nodes (pages), edges, topics and counts for this workspace |
 | POST | `/v1/workspaces/{id}/memory/links` | Create an undirected manual link `{source, target}` between two pages. Requires an Idempotency-Key |
 | POST | `/v1/workspaces/{id}/memory/links/{id}/remove` | Delete a manual link |
@@ -36,9 +37,13 @@ Workspace members may list, read and create pages and actions, read the graph, a
 
 ## Not in this slice
 
-The profile page now uses the revisioned save API below. 「做梦」 was not opened in the recapture and is not implemented. Versions beyond the revision number and share or export links remain later slices on issue 8 and issue 9. "我的作品" already links to `/space`. "我的会议" now follows the same pattern and opens the existing `/space?view=meetings` empty chrome; there is still no meeting-artifact API, and this is not a Teamily/Impeccable comparison. Timeline and Project are not used as a memory implementation.
+The profile page now uses the revisioned save API below. 「做梦」 was not opened in the recapture and is not implemented. Versions beyond the revision number and share links remain later slices on issue 8 and issue 9; the export control downloads one page as Markdown and is not a workspace archive. "我的作品" already links to `/space`. "我的会议" now follows the same pattern and opens the existing `/space?view=meetings` empty chrome; there is still no meeting-artifact API, and this is not a Teamily/Impeccable comparison. Timeline and Project are not used as a memory implementation.
 
 No Teamily comparison and no browser E2E are claimed. Issue 8 stays open.
+
+## Page export
+
+The editor's「导出」control downloads the page that is saved on the server, so an unsaved draft is never what leaves the page. It reads `GET /v1/workspaces/{id}/memory/{id}/export`, which answers `text/markdown; charset=utf-8` with `Content-Disposition: attachment`, an ASCII fallback file name and an RFC 5987 `filename*` carrying the title. The document is YAML front matter — `title`, `topics` (or `[]`), `revision`, `updated` in UTC — followed by a blank line and the stored body byte-for-byte, with one trailing newline added only when the body does not end in one. Front-matter values are whitespace-folded and quote/backslash escaped, so a title or topic cannot add a key. Nothing is versioned by exporting, and the route writes nothing. This is one page, not a workspace archive, and it is not Teamily export parity.
 
 ## Private editable memory profile
 

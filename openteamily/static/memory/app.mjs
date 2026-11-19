@@ -327,6 +327,13 @@ export function queryForMemoryPage(view) {
   return '';
 }
 
+export function exportDownloadName(title) {
+  const flat = String(title == null ? '' : title).replace(/[\s\u0000-\u001f]+/g, ' ').trim();
+  const safe = flat.replace(/[\\/:*?"<>|]+/g, '-').replace(/^[.\s-]+|[.\s-]+$/g, '');
+  const limited = safe.slice(0, 60).replace(/[.\s-]+$/, '');
+  return (limited || '记忆页') + '.md';
+}
+
 export function graphLayout(nodes, width = 640, height = 400, padding = 56) {
   const list = [...(nodes || [])].sort((a, b) => String(a.id).localeCompare(String(b.id)));
   const cx = width / 2;
@@ -911,6 +918,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const id = workspaceId();
     currentPage = null;
     currentAction = null;
+    syncExportButton();
     editor.hidden = true;
     if (actionEditor) actionEditor.hidden = true;
     listPanel.hidden = false;
@@ -1036,6 +1044,70 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncBodyFromRich();
   }
 
+  const exportButton = document.getElementById('page-export');
+  const exportStatus = document.getElementById('page-export-status');
+
+  // Export reads the saved page from the server, so it never ships an unsaved
+  // draft and it stays identical to what a later reader would find.
+  function syncExportButton() {
+    if (!exportButton) return;
+    const ready = Boolean(currentPage && workspaceId());
+    exportButton.disabled = !ready;
+    exportButton.title = ready
+      ? '把这页已保存的标题、话题和正文导出为 Markdown 文件。'
+      : '打开一页记忆后才能导出为 Markdown。';
+    if (!ready && exportStatus) {
+      exportStatus.hidden = true;
+      exportStatus.textContent = '';
+    }
+  }
+
+  async function exportCurrentPage() {
+    if (!currentPage) return;
+    const id = workspaceId();
+    if (!id) return;
+    const url = `/v1/workspaces/${id}/memory/${currentPage.id}/export`;
+    const name = exportDownloadName(currentPage.title);
+    exportButton.disabled = true;
+    try {
+      const response = await fetcher(url, {
+        method: 'GET', headers: {'Accept': 'text/markdown'}, credentials: 'same-origin',
+      });
+      if (response.status !== 200) {
+        let parsed = {};
+        try { parsed = await response.json(); } catch { parsed = {}; }
+        show('error', messageFor(parsed.error, '无法导出这页记忆。'));
+        return;
+      }
+      const markdown = await response.text();
+      if (exportStatus) {
+        exportStatus.hidden = false;
+        exportStatus.textContent = '已导出 ' + name + ' · 修订 ' + currentPage.revision;
+      }
+      const objectUrl = globalThis.URL && globalThis.URL.createObjectURL
+        ? globalThis.URL.createObjectURL(new Blob([markdown], {type: 'text/markdown;charset=utf-8'}))
+        : '';
+      if (!objectUrl) {
+        globalThis.location.assign(url);
+        show('ok', '已开始下载 ' + name + '。');
+        return;
+      }
+      const download = document.createElement('a');
+      download.href = objectUrl;
+      download.download = name;
+      download.rel = 'noopener';
+      document.body.appendChild(download);
+      download.click();
+      download.remove();
+      globalThis.URL.revokeObjectURL(objectUrl);
+      show('ok', '已导出 ' + name + '。');
+    } finally {
+      syncExportButton();
+    }
+  }
+
+  if (exportButton) exportButton.addEventListener('click', exportCurrentPage);
+
   async function openPage(pageId) {
     closeDeleteConfirm({restoreFocus: false});
     hideGraphHoverCard(document.getElementById('graph-hover-card'));
@@ -1065,6 +1137,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
 
     renderPageLinks();
+    syncExportButton();
   }
 
   async function openAction(actionId) {
@@ -1078,6 +1151,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentAction = seen.body.action;
     currentPage = null;
+    syncExportButton();
     showPageMode();
     editor.hidden = true;
     actionEditor.hidden = false;
@@ -1114,6 +1188,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = null;
     currentPage = null;
     currentAction = null;
+    syncExportButton();
     show('ok', '已退出登录。');
     await loadSession();
   });
@@ -1360,6 +1435,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     closeDeleteConfirm({restoreFocus: false});
     currentPage = saved.body.page;
+    syncExportButton();
     editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;

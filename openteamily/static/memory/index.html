@@ -74,7 +74,7 @@
       </label>
       <p id="graph-counts" class="memory-counts"></p>
     </header>
-    <details class="note memory-disclaimer"><summary>对照说明</summary><p>对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。空图谱说明、新建入口和窄屏图谱优先布局是 OpenTeamily 补充，未经目标站对照。画像、分享和导出尚未实现。我的会议进入已有的作品库会议空态，仍没有会议作品接口。还不能写成已经功能对等，也还没有浏览器端到端验收。</p></details>
+    <details class="note memory-disclaimer"><summary>对照说明</summary><p>对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。空图谱说明、新建入口和窄屏图谱优先布局是 OpenTeamily 补充，未经目标站对照。画像和分享尚未实现；导出只把当前这一页已保存的标题、话题和正文下载成 Markdown 文件，没有整库导出。我的会议进入已有的作品库会议空态，仍没有会议作品接口。还不能写成已经功能对等，也还没有浏览器端到端验收。</p></details>
     <section id="list-panel" class="memory-workspace" data-view="overview">
       <aside class="memory-dir" id="memory-dir">
         <div class="dir-header">
@@ -204,6 +204,8 @@
           <button type="button" disabled title="未接通：还没有整理记忆的接口。">做梦</button>
           <button type="button" disabled title="未接通：还没有分享记忆页的接口。">分享</button>
           <button type="button" disabled title="未接通：还没有页内历史记录接口。">历史</button>
+          <button type="button" id="page-export" disabled title="打开一页记忆后才能导出为 Markdown。">导出</button>
+          <p id="page-export-status" class="note editor-export-status" hidden></p>
         </div>
       </div>
       <label class="editor-title-field"><span class="visually-hidden">标题</span> <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="标题"></label>
