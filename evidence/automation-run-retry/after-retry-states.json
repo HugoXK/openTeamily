@@ -1,0 +1,76 @@
+[
+  {
+    "file": "failed-run-after-1440x900.png",
+    "label": "failed run row before retry",
+    "overflow": 0,
+    "rows": [
+      "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+      "已超时timeouttimeout重新运行上一次运行超时，没有产生正文。"
+    ],
+    "errors": []
+  },
+  {
+    "file": null,
+    "label": "retry button count",
+    "count": 1
+  },
+  {
+    "file": "after-retry-after-1440x900.png",
+    "label": "new queued run listed, source run unchanged",
+    "overflow": 0,
+    "rows": [
+      "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+      "运行中queued取消这次运行",
+      "已超时timeouttimeout重新运行上一次运行超时，没有产生正文。"
+    ],
+    "errors": []
+  },
+  {
+    "file": "after-retry-reloaded-after-1440x900.png",
+    "label": "after reopening the automation",
+    "overflow": 0,
+    "rows": [
+      "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+      "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+      "已超时timeouttimeout重新运行上一次运行超时，没有产生正文。"
+    ],
+    "errors": []
+  },
+  {
+    "file": "failed-run-after-390x844.png",
+    "label": "narrow width, failed run row",
+    "overflow": 0,
+    "rows": [
+      "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+      "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+      "已超时timeouttimeout重新运行上一次运行超时，没有产生正文。"
+    ],
+    "errors": []
+  },
+  {
+    "file": "after-retry-after-390x844.png",
+    "label": "narrow width after retry",
+    "overflow": 0,
+    "rows": [
+      "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+      "运行中queued取消这次运行",
+      "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+      "已超时timeouttimeout重新运行上一次运行超时，没有产生正文。"
+    ],
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "retryPosts": [
+      {
+        "url": "http://127.0.0.1:18825/v1/workspaces/3c806b88329d410096a5d826942e6cb0/automations/6644106e3f3d4cc4b254886cea5bd868/runs/ffffffffffffffffffffffffffffffff/retry",
+        "key": "xRLPu_NdtoZfOd62_DKemOU1"
+      },
+      {
+        "url": "http://127.0.0.1:18825/v1/workspaces/3c806b88329d410096a5d826942e6cb0/automations/6644106e3f3d4cc4b254886cea5bd868/runs/ffffffffffffffffffffffffffffffff/retry",
+        "key": "_Y3YVZV2QuPSit9izB_5Ka2a"
+      }
+    ],
+    "errors": []
+  }
+]

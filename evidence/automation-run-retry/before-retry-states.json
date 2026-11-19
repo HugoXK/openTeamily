@@ -1,0 +1,32 @@
+[
+  {
+    "file": "failed-run-before-1440x900.png",
+    "label": "failed run row before retry",
+    "overflow": 0,
+    "rows": [
+      "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+      "已超时timeouttimeout上一次运行超时，没有产生正文。"
+    ],
+    "errors": []
+  },
+  {
+    "file": null,
+    "label": "retry button count",
+    "count": 0
+  },
+  {
+    "file": "failed-run-before-390x844.png",
+    "label": "narrow width, failed run row",
+    "overflow": 0,
+    "rows": [
+      "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+      "已超时timeouttimeout上一次运行超时，没有产生正文。"
+    ],
+    "errors": []
+  },
+  {
+    "phase": "before",
+    "retryPosts": [],
+    "errors": []
+  }
+]
