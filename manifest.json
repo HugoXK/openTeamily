@@ -1,0 +1,78 @@
+{
+  "rows": [
+    {
+      "state": "before",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "329-before-1440x900.png",
+      "bytes": 145183,
+      "width": 1440,
+      "height": 900,
+      "sha256": "17301d8da594bd796aaa70750d5cd5b8cb05af48ee3b7833358bf993d3f17944",
+      "scrollWidth": 1440,
+      "before": {
+        "text": "群公告发布 暂无群公告。",
+        "publishDisabled": true,
+        "publishHidden": false,
+        "formPresent": false
+      }
+    },
+    {
+      "state": "after",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "329-after-1440x900.png",
+      "bytes": 134974,
+      "width": 1440,
+      "height": 900,
+      "sha256": "f31c24ed78f5b6060bc8ac2ae5f56f60522a8b6033e581e16fb2c06e3cfca5a6",
+      "scrollWidth": 1440,
+      "start": {
+        "text": "暂无群公告。",
+        "publishHidden": false
+      }
+    },
+    {
+      "state": "affected-published",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "329-after-published-1440x900.png",
+      "bytes": 139783,
+      "width": 1440,
+      "height": 900,
+      "sha256": "0b34afb104c762a3d1bb2c42330d1a772b5f849f28ab2b9a316beb654dac9a84",
+      "scrollWidth": 1440,
+      "published": {
+        "text": "周五 18:00 线上复盘，请把本周进展先发到群里。",
+        "meta": "alice · 11/19 21:47",
+        "metaHidden": false,
+        "formHidden": true
+      }
+    },
+    {
+      "state": "after-mobile",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "329-after-390x844.png",
+      "bytes": 69941,
+      "width": 390,
+      "height": 844,
+      "sha256": "fa1b7ce25aca18f92453f2afbbb80c6b68c2dd6c41f6bc1b10dd04793332cdfd",
+      "scrollWidth": 390
+    }
+  ],
+  "facts": {
+    "before": {
+      "text": "群公告发布 暂无群公告。",
+      "publishDisabled": true,
+      "publishHidden": false,
+      "formPresent": false
+    },
+    "published": {
+      "text": "周五 18:00 线上复盘，请把本周进展先发到群里。",
+      "meta": "alice · 11/19 21:47",
+      "metaHidden": false,
+      "formHidden": true
+    }
+  }
+}
