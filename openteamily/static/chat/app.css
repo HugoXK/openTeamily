@@ -1598,11 +1598,10 @@ html[data-theme-resolved="dark"] .plus-create [data-tone="doc"] .plus-ico { colo
 .session-pane {
   background: var(--ot-surface);
   border-right: 1px solid var(--ot-line);
-  -webkit-backdrop-filter: var(--ot-blur);
-  backdrop-filter: var(--ot-blur);
-  /* The glass layer gives the pane its own stacking context; the compose menu
-     inside it must still paint above the message column, as it does on the
-     un-glassed shell. */
+  /* No backdrop-filter here on purpose: it would make the pane a containing
+     block for the fixed compose dialog inside it, so the dialog would cover
+     the pane's own controls instead of the viewport and never close. The
+     glass is carried by the surfaces inside the pane, not by the pane. */
   position: relative;
   z-index: 5;
 }
