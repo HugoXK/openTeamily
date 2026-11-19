@@ -4398,7 +4398,7 @@ class App:
                 'automations': db.execute('SELECT COUNT(*) FROM automations WHERE workspace_id=?',
                                           (workspace_id,)).fetchone()[0],
             },
-            'unread_notifications': notifications.unread_count(db, workspace_id, uid),
+            'unread_notifications': notifications.unread_count(db, workspace_id, uid, int(self.clock())),
             'limit': limit,
         }, []
 
@@ -4415,20 +4415,20 @@ class App:
                     "WHERE r.workspace_id=? AND r.requested_by=? AND r.status IN ('queued','running') LIMIT 20",
                     (workspace['id'], uid)).fetchall():
                 self.reconcile_group_replies(db, conv, now)
-            return 200, {'items': notifications.listing(db, workspace['id'], uid, query == 'filter=unread'),
-                         'unread_count': notifications.unread_count(db, workspace['id'], uid),
+            return 200, {'items': notifications.listing(db, workspace['id'], uid, query == 'filter=unread', now),
+                         'unread_count': notifications.unread_count(db, workspace['id'], uid, now),
                          'limit': notifications.LIMIT}, []
         if reading and method == 'POST' and not query:
             body = self.body(env, ['notification_id', 'all'])
             nid, every = body.get('notification_id'), body.get('all')
             if every is True and nid is None:
-                notifications.mark_read(db, workspace['id'], uid)
+                notifications.mark_read(db, workspace['id'], uid, now=now)
             elif every is None and isinstance(nid, str) and notifications.HEX32.fullmatch(nid):
-                if not notifications.mark_read(db, workspace['id'], uid, nid):
+                if not notifications.mark_read(db, workspace['id'], uid, nid, now):
                     refuse(404, 'not_found', 'Notification not found')
             else:
                 refuse(400, 'invalid', 'Provide notification_id or all=true')
-            return 200, {'unread_count': notifications.unread_count(db, workspace['id'], uid)}, []
+            return 200, {'unread_count': notifications.unread_count(db, workspace['id'], uid, now)}, []
         refuse(400, 'invalid', 'Invalid notification request')
 
     def send_social_message(self, db, workspace, session, row, now, env):
@@ -4810,7 +4810,12 @@ class App:
             'SELECT * FROM automations WHERE workspace_id=? AND key_hash=?', (workspace['id'], key_hash)
         ).fetchone()
         if existing:
-            if existing['request_hash'] != request_hash:
+            # A reminder is identified by the message it was set on, so picking another
+            # time for the same message answers "already set" instead of a 409 and never
+            # stores a second automation.
+            reminder_replay = (existing['template_id'] == automations.REMINDER
+                               and template_id == automations.REMINDER)
+            if existing['request_hash'] != request_hash and not reminder_replay:
                 refuse(409, 'conflict', 'Idempotency key was used for a different request')
             return 200, {'automation': self.automation_view(db, existing)}, []
         titled = db.execute(
@@ -4822,12 +4827,13 @@ class App:
                 >= self.config.max_automations_per_workspace):
             refuse(429, 'quota', 'Automation capacity reached')
         aid = uuid4().hex
+        enabled = 1 if template_id == automations.REMINDER else 0
         db.execute(
-            'INSERT INTO automations VALUES(?,?,?,?,?,?,?,?,0,1,?,?,?,?)',
+            'INSERT INTO automations VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?)',
             (aid, workspace['id'], title, title_hash, prompt, template_id,
              json.dumps(schedule, sort_keys=True, separators=(',', ':')),
              json.dumps(participants, sort_keys=True, separators=(',', ':')),
-             now, now, key_hash, request_hash),
+             enabled, now, now, key_hash, request_hash),
         )
         self.write_editor(db, aid, intent, scope, [name.strip() for name in agents], compiled)
         row = db.execute('SELECT * FROM automations WHERE id=?', (aid,)).fetchone()

@@ -93,9 +93,9 @@
         <h2 id="notifications-heading">通知</h2>
         <button type="button" id="notifications-read-all" disabled>全部已读</button>
       </div>
-      <p class="note">包含会话里对你的 @ 提及，以及你在群里请求的智能体任务完成情况；每 30 秒刷新一次。智能体单聊未读和服务器推送尚未接通。</p>
+      <p class="note">包含会话里对你的 @ 提及、你在群里请求的智能体任务完成情况，以及你在消息上设的提醒到点；每 30 秒刷新一次。智能体单聊未读和服务器推送尚未接通。</p>
       <ul id="notification-list"></ul>
-      <p id="notifications-empty" class="note" hidden>暂无通知（@提及和智能体任务完成）。</p>
+      <p id="notifications-empty" class="note" hidden>暂无通知（@提及、智能体任务完成和消息提醒到点）。</p>
     </section>
     <section id="search-panel" hidden>
       <div class="search-tabs" role="tablist" aria-label="搜索范围">
@@ -237,6 +237,8 @@
       <button type="button" role="menuitem" data-menu="copy">复制</button>
       <button type="button" role="menuitem" data-menu="forward">转发</button>
       <button type="button" role="menuitem" data-menu="pin">置顶</button>
+      <button type="button" role="menuitem" data-menu="remind-1h">提醒我：1 小时后</button>
+      <button type="button" role="menuitem" data-menu="remind-tomorrow">提醒我：明天 9 点</button>
       <button type="button" role="menuitem" data-menu="select">选择消息</button>
       <hr>
       <button type="button" role="menuitem" data-menu="edit">编辑</button>
