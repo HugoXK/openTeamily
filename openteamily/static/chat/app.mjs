@@ -1105,19 +1105,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (item.attachment && !item.retracted) {
         const card = document.createElement('article');
         card.className = 'stream-artifact';
-        const cover = document.createElement('span');
-        cover.className = 'stream-artifact-cover';
-        cover.textContent = 'DOC';
         const copy = document.createElement('span');
         copy.className = 'stream-artifact-copy';
         const heading = document.createElement('strong');
         heading.textContent = item.attachment.title || '附件';
         const file = document.createElement('a');
         file.href = item.attachment.path;
-        if (chatPreferences.document_cards) { file.className = 'chat-document-card'; file.setAttribute('aria-label', '作品卡片：' + item.attachment.title); }
-        file.textContent = '下载作品：' + item.attachment.title + (item.attachment.revision ? ' · 修订 ' + item.attachment.revision : '');
-        copy.append(heading, file);
-        card.append(cover, copy);
+        // An attachment is a workspace media artifact, so a picture can be
+        // shown as a picture. Before this, every attachment was a document
+        // card: the sender saw a DOC cover instead of the photo they shared.
+        if (String(item.attachment.mime || '').startsWith('image/')) {
+          card.classList.add('stream-artifact-picture');
+          const image = document.createElement('img');
+          image.className = 'stream-artifact-image';
+          image.src = item.attachment.path;
+          image.alt = item.attachment.title || '聊天图片';
+          image.setAttribute('loading', 'lazy');
+          file.textContent = '查看原图：' + (item.attachment.title || '图片');
+          copy.append(heading, file);
+          card.append(image, copy);
+        } else {
+          const cover = document.createElement('span');
+          cover.className = 'stream-artifact-cover';
+          cover.textContent = 'DOC';
+          if (chatPreferences.document_cards) { file.className = 'chat-document-card'; file.setAttribute('aria-label', '作品卡片：' + item.attachment.title); }
+          file.textContent = '下载作品：' + item.attachment.title + (item.attachment.revision ? ' · 修订 ' + item.attachment.revision : '');
+          copy.append(heading, file);
+          card.append(cover, copy);
+        }
         li.append(card);
       }
       if (mine && !item.retracted) {
