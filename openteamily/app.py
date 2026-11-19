@@ -657,13 +657,20 @@ class App:
             if memory_preference_path:
                 return self.memory_preference_dispatch(
                     db, session, method, query, now, env, *memory_preference_path.groups())
+            if path == '/v1/profile/avatar':
+                if method == 'GET':
+                    return self.profile_avatar(db, session, query)
+                if method == 'POST' and not query:
+                    return self.save_avatar(db, session, now, env)
+                refuse(400, 'invalid', 'Invalid avatar request')
             if path == '/v1/profile/follow-work':
                 if method in ('GET', 'POST') and not query:
                     return self.profile_follow_work(db, session, method, now, env)
             if path == '/v1/profile':
                 if method == 'GET' and not query:
                     row = profiles.load(db, session['user_id'])
-                    return 200, {'profile': profiles.view(row) if row is not None else None}, []
+                    return 200, {'profile': profiles.view(row) if row is not None else None,
+                                 'avatar': profiles.avatar_view(profiles.load_avatar(db, session['user_id']))}, []
                 if method == 'POST' and not query:
                     return self.save_profile(db, session, now, env)
                 refuse(400, 'invalid', 'Invalid profile request')
@@ -2061,7 +2068,7 @@ class App:
             return 200, payload, artifacts.media_headers(row)
         return 200, artifacts.render_page(row).encode('utf-8'), artifacts.share_headers()
 
-    def _media_upload(self, env, limit=None):
+    def _media_upload(self, env, limit=None, mimes=None, unsupported=400):
         limit = artifacts.MAX_MEDIA_BYTES + 8192 if limit is None else limit
         if env.get('HTTP_TRANSFER_ENCODING'):
             refuse(400, 'invalid', 'Transfer encoding is not supported')
@@ -2083,8 +2090,9 @@ class App:
             refuse(413 if data and len(data) > artifacts.MAX_MEDIA_BYTES else 400, 'invalid',
                    'Media file is missing or too large' if not data else 'Request body is too large')
         mime = artifacts.sniff_mime(data)
-        if mime is None or mime not in artifacts.MEDIA_MIMES:
-            refuse(400, 'invalid', 'Unsupported or unrecognizable media type')
+        allowed = artifacts.MEDIA_MIMES if mimes is None else mimes
+        if mime is None or mime not in allowed:
+            refuse(unsupported, 'invalid', 'Unsupported or unrecognizable media type')
         filename = artifacts.clean_filename(upload['filename'])
         title = parsed['fields'].get('title')
         return parsed['fields'], data, mime, filename, title
@@ -3480,6 +3488,47 @@ class App:
         except sqlite3.IntegrityError:
             refuse(409, 'conflict', 'Teamily ID is unavailable')
         return 200, {'profile': profiles.view(profiles.load(db, session['user_id']))}, []
+
+    def save_avatar(self, db, session, now, env):
+        _fields, data, mime, filename, _title = self._media_upload(
+            env, mimes=profiles.AVATAR_MIMES, unsupported=415)
+        namespace = profiles.avatar_namespace(session['user_id'])
+        try:
+            digest_hex = artifacts.write_media(self.store.data_dir, namespace, data)
+        except OSError:
+            refuse(503, 'unavailable', 'Storage is temporarily unavailable')
+        previous = profiles.load_avatar(db, session['user_id'])
+        db.execute(
+            'INSERT INTO user_avatars VALUES(?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET '
+            'mime=excluded.mime, byte_count=excluded.byte_count, sha256=excluded.sha256, '
+            'filename=excluded.filename, updated=excluded.updated',
+            (session['user_id'], mime, len(data), digest_hex, filename, now))
+        if previous is not None and previous['sha256'] != digest_hex:
+            still_used = db.execute(
+                'SELECT COUNT(*) FROM user_avatars WHERE sha256=?', (previous['sha256'],)).fetchone()[0]
+            if not still_used:
+                artifacts.unlink_media(self.store.data_dir, namespace, previous['sha256'], db)
+        return 200, {'avatar': profiles.avatar_view(profiles.load_avatar(db, session['user_id']))}, []
+
+    def profile_avatar(self, db, session, query):
+        if query and not re.fullmatch(r'v=[0-9a-f]{6,64}', query):
+            refuse(400, 'invalid', 'Invalid avatar request')
+        row = profiles.load_avatar(db, session['user_id'])
+        if row is None:
+            refuse(404, 'not_found', 'Avatar not set')
+        namespace = profiles.avatar_namespace(session['user_id'])
+        try:
+            payload = artifacts.read_media_bytes(
+                self.store.data_dir, namespace, row['sha256'], row['byte_count'])
+        except (OSError, ValueError):
+            refuse(404, 'not_found', 'Avatar not set')
+        return 200, payload, [
+            ('Content-Type', row['mime']),
+            ('Content-Security-Policy', "default-src 'none'; sandbox; frame-ancestors 'self'; object-src 'none'"),
+            ('Cross-Origin-Resource-Policy', 'same-origin'),
+            ('X-Content-Type-Options', 'nosniff'),
+            ('Cache-Control', 'private, max-age=31536000, immutable'),
+        ]
 
     def save_onboarding_step(self, db, session, now, env, step):
         row = onboarding.load_steps(db, session['user_id'])

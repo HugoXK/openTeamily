@@ -70,6 +70,7 @@
           <div class="profile-hero-row">
             <div class="profile-hero-id">
               <span id="profile-avatar" class="profile-avatar avatar" data-tone="1" aria-hidden="true"></span>
+              <img id="profile-avatar-image" class="profile-avatar avatar-image" alt="头像" width="80" height="80" hidden>
               <div class="profile-hero-copy">
                 <h1 class="profile-display-name"><span id="profile-username"></span></h1>
                 <ul class="profile-stats">
@@ -119,7 +120,10 @@
     <form id="profile-form" class="profile-form">
       <div class="profile-edit-avatar">
         <span id="profile-edit-avatar" class="profile-avatar avatar" data-tone="1" aria-hidden="true"></span>
-        <button type="button" id="profile-change-avatar" class="profile-change-avatar" disabled title="未接通：还没有头像上传接口">更换头像</button>
+        <img id="profile-edit-avatar-image" class="profile-avatar avatar-image" alt="当前头像" width="88" height="88" hidden>
+        <button type="button" id="profile-change-avatar" class="profile-change-avatar">更换头像</button>
+        <input type="file" id="profile-avatar-input" accept="image/png,image/jpeg" hidden aria-label="选择头像图片">
+        <p class="note profile-avatar-hint">支持 PNG 或 JPG，最大 2 MB；保存后所有页面都会更新。</p>
       </div>
       <p class="profile-section-label">公开信息</p>
       <label class="profile-field">昵称

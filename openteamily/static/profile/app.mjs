@@ -53,6 +53,31 @@ export function monogram(name) {
   return (letters[0] + letters[1]).toUpperCase();
 }
 
+export const AVATAR_LIMIT = 2 * 1024 * 1024;
+
+// The server owns the rules (2 MB cap, PNG/JPG only, session required); the page
+// only turns its status codes into Chinese, and never reports success on failure.
+export function avatarNotice(status, error) {
+  if (status === 413) return '头像不能超过 2 MB。';
+  if (status === 415) return '头像只支持 PNG 或 JPG。';
+  if (status === 400) return '这张图片无法识别，请换一张 PNG 或 JPG。';
+  if (status === 401) return '登录状态已失效，请重新登录。';
+  if (status === 403) return '页面已过期，请刷新后重试。';
+  return messageFor(error, '头像上传失败，请稍后重试。');
+}
+
+export function paintAvatarImage(node, avatar) {
+  if (!node) return false;
+  if (avatar && avatar.url) {
+    node.setAttribute('src', avatar.url);
+    node.hidden = false;
+    return true;
+  }
+  node.setAttribute('src', '');
+  node.hidden = true;
+  return false;
+}
+
 function $(id) {
   return typeof document !== 'undefined' && document.getElementById ? document.getElementById(id) : null;
 }
@@ -152,6 +177,17 @@ function mount() {
     if (!node) return;
     node.textContent = monogram(name);
     if (node.dataset) node.dataset.tone = avatarTone(name);
+  }
+
+  function applyAvatar(avatar) {
+    const home = document.querySelector && document.querySelector('#profile-avatar-image');
+    const edit = document.querySelector && document.querySelector('#profile-edit-avatar-image');
+    const homeTone = document.querySelector && document.querySelector('#profile-avatar');
+    const editTone = document.querySelector && document.querySelector('#profile-edit-avatar');
+    const shown = paintAvatarImage(home, avatar);
+    paintAvatarImage(edit, avatar);
+    if (homeTone) homeTone.hidden = shown;
+    if (editTone) editTone.hidden = shown;
   }
 
   function updateCounters() {
@@ -414,7 +450,46 @@ function mount() {
       return;
     }
     fill(result.body.profile, username);
+    applyAvatar(result.body.avatar);
     if (hasHome()) await loadAgents();
+  }
+
+  const changeAvatar = document.getElementById('profile-change-avatar');
+  const avatarInput = document.getElementById('profile-avatar-input');
+  if (changeAvatar && avatarInput) {
+    changeAvatar.addEventListener('click', () => {
+      if (changeAvatar.disabled) return;
+      avatarInput.click();
+    });
+    avatarInput.addEventListener('change', async () => {
+      const file = avatarInput.files && avatarInput.files[0];
+      avatarInput.value = '';
+      if (!file || changeAvatar.disabled) return;
+      changeAvatar.disabled = true;
+      show('', '正在上传头像…');
+      try {
+        const form = new FormData();
+        form.append('file', file, file.name || 'avatar.png');
+        const response = await fetch('/v1/profile/avatar', {
+          method: 'POST',
+          headers: {Accept: 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)},
+          credentials: 'same-origin',
+          body: form,
+        });
+        let payload = {};
+        try { payload = await response.json(); } catch { payload = {}; }
+        if (response.status !== 200 || !payload.avatar) {
+          show('error', avatarNotice(response.status, payload && payload.error));
+          return;
+        }
+        applyAvatar(payload.avatar);
+        show('ok', '头像已更新。');
+      } catch {
+        show('error', '头像上传失败，请检查网络后重试。');
+      } finally {
+        changeAvatar.disabled = false;
+      }
+    });
   }
 
   const save = document.getElementById('profile-save');
