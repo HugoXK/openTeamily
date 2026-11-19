@@ -222,6 +222,22 @@ class App:
         if blocked:
             refuse(429, 'rate_limited', 'Authentication request limit reached; try later')
 
+    def homepage_cookie_name(self):
+        prefix = 'ot_dev_' if self.config.insecure_local else '__Host-ot_'
+        return prefix + 'homepage'
+
+    def homepage_cookie_header(self, token, expires=False):
+        cookie = SimpleCookie()
+        name = self.homepage_cookie_name()
+        cookie[name] = token or ''
+        item = cookie[name]
+        item['path'], item['samesite'] = '/', 'Strict'
+        item['max-age'] = 0 if expires or not token else self.config.session_seconds
+        if not self.config.insecure_local:
+            item['secure'] = True
+        item['httponly'] = True
+        return ('Set-Cookie', item.OutputString())
+
     def session_headers(self, token, csrf, expires=False):
         headers = []
         for name, value, http_only in zip(self.config.cookie_names, [token, csrf], [True, False]):
@@ -806,6 +822,8 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/discover(?:/(revoke))?', path)
             if discover_path:
                 return self.agent_discover_dispatch(db, session, method, query, now, env, *discover_path.groups())
+            if path == '/v1/agent-homepages/start':
+                return self.start_homepage_conversation(db, session, method, query, now, env)
             homepage_api = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/homepage(?:/(revoke))?', path)
             if homepage_api:
@@ -2197,7 +2215,109 @@ class App:
             starts = agents.load_quick_starts(db, row['id']) if row is not None else None
         if row is None:
             refuse(404, 'not_found', 'Homepage not found')
-        return 200, agents.render_homepage(row, starts).encode('utf-8'), agents.homepage_headers()
+        return (
+            200,
+            agents.render_homepage(row, starts).encode('utf-8'),
+            agents.homepage_headers() + [self.homepage_cookie_header(token)],
+        )
+
+    def start_homepage_conversation(self, db, session, method, query, now, env):
+        if method != 'POST' or query:
+            refuse(400, 'invalid', 'Invalid homepage start request')
+        body = self.body(env, ['quick_start'])
+        index = body.get('quick_start')
+        if type(index) is not int or not 0 <= index <= 4:
+            refuse(400, 'invalid', 'Provide a quick start index')
+        token = self.cookies(env).get(self.homepage_cookie_name(), '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{43}', token):
+            refuse(400, 'invalid', 'Open the public homepage first')
+        agent = agents.load_homepage_by_token(db, token)
+        if agent is None:
+            refuse(404, 'not_found', 'Homepage not found')
+        workspace = members.load(db, agent['workspace_id'], session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Homepage not found')
+        starts = agents.load_quick_starts(db, agent['id'])
+        if index >= len(starts):
+            refuse(400, 'invalid', 'Provide a quick start index')
+        text = starts[index]
+        if not conversations.valid_message(text):
+            refuse(400, 'invalid', 'Provide a message')
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        payload = {'agent_id': agent['id'], 'quick_start': index, 'source': 'homepage'}
+        key_hash, request_hash = digest('homepage-start:' + key), digest(
+            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+        )
+
+        def started(status, row):
+            user_row = db.execute(
+                'SELECT * FROM agent_messages WHERE conversation_id=? AND role=? ORDER BY seq LIMIT 1',
+                (row['id'], 'user'),
+            ).fetchone()
+            assistant = db.execute(
+                'SELECT * FROM agent_messages WHERE conversation_id=? AND role=? ORDER BY seq LIMIT 1',
+                (row['id'], 'assistant'),
+            ).fetchone()
+            return status, {
+                'conversation': conversations.conversation_item(db, row),
+                'message': self.public_message(db, conversations.load_message(db, row['id'], user_row['id']))
+                if user_row else None,
+                'reply': self.public_message(db, conversations.load_message(db, row['id'], assistant['id']))
+                if assistant else None,
+            }, []
+
+        prior = db.execute(
+            'SELECT * FROM agent_conversations WHERE workspace_id=? AND key_hash=?',
+            (workspace['id'], key_hash),
+        ).fetchone()
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            self.reconcile_conversation(db, prior, now)
+            return started(200, conversations.load_conversation(db, workspace['id'], prior['id']))
+        if (db.execute(
+                'SELECT COUNT(*) FROM agent_conversations WHERE workspace_id=? AND user_id=?',
+                (workspace['id'], session['user_id'])).fetchone()[0]
+                >= self.config.max_conversations_per_user):
+            refuse(429, 'quota', 'Conversation capacity reached')
+        conversation_id = uuid4().hex
+        title = conversations.default_title(text)
+        db.execute(
+            'INSERT INTO agent_conversations VALUES(?,?,?,?,?,?,?,?,?)',
+            (conversation_id, workspace['id'], agent['id'], session['user_id'], title,
+             now, now, key_hash, request_hash),
+        )
+        row = conversations.load_conversation(db, workspace['id'], conversation_id)
+        history = conversations.history_for_prompt(db, row['id'])
+        prompt = conversations.compose_prompt(agent, history, text)
+        if not runtime_connect.valid_prompt(prompt):
+            refuse(400, 'invalid', 'Provide a message')
+        if (db.execute('SELECT COUNT(*) FROM agent_messages WHERE conversation_id=?',
+                       (row['id'],)).fetchone()[0] + 2
+                > self.config.max_messages_per_conversation):
+            refuse(429, 'quota', 'Conversation message capacity reached')
+        user_id = uuid4().hex
+        assistant_id = uuid4().hex
+        db.execute(
+            'INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (user_id, row['id'], workspace['id'], agent['id'], session['user_id'], 'user',
+             text, 'succeeded', None, None, agent['revision'], now, now, digest('message:' + key),
+             digest(json.dumps({'body': text}, sort_keys=True, separators=(',', ':'), ensure_ascii=False)),
+             1),
+        )
+        task_id, error_code, dispatch = self.queue_infer_task(
+            db, session['user_id'], now, prompt, workspace['id'], agent['id'])
+        db.execute(
+            'INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (assistant_id, row['id'], workspace['id'], agent['id'], session['user_id'], 'assistant',
+             '', 'queued', task_id, error_code, agent['revision'], now, now, None, None, 2),
+        )
+        if dispatch:
+            agent_runtime.attach_dispatch(
+                db, assistant_id, dispatch['source'], dispatch.get('instance_id'), dispatch.get('connection_id'))
+        return started(201, conversations.load_conversation(db, workspace['id'], conversation_id))
 
     def agent_homepage_dispatch(self, db, session, method, query, now, env, workspace_id, agent_id, revoking):
         workspace = members.load(db, workspace_id, session['user_id'])
