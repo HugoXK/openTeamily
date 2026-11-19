@@ -1,6 +1,7 @@
 # Screenshots — PR #215, meetings page
 
-- after `3f7ad676f1e6ea225f5a995ee87c48092fc4b9fe` (the tip after merging live main into the branch)
+- after `fdf0591` (PR tip after merging live main `49659586` into the branch)
+- also valid for `47a497ef` and `3f7ad67`: `git diff fdf0591 47a497ef -- openteamily/static/meetings` is empty, so these pixels are what both tips render
 - no before set: `/meetings` does not exist on the base; the page itself is the new surface.
 
 16 PNGs, zh-CN, light and dark, 1440×900 and 390×844, four states:
