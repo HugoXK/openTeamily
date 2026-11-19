@@ -1,0 +1,135 @@
+{
+  "slug": "download-platform",
+  "issue": 338,
+  "pr": 364,
+  "capturedAt": "2026-11-19T16:31:13.295Z",
+  "locale": "zh-CN",
+  "arms": [
+    {
+      "name": "before",
+      "sha": "13641eb9cedbddf550fdd257a5008480f4506ca1"
+    },
+    {
+      "name": "after",
+      "sha": "112243da7043a929d017d03b710d26aed26e33d7"
+    }
+  ],
+  "notes": [
+    "before: no 当前平台 line and no command-source line.",
+    "after: the page names the visitor platform read from navigator (not from the server) and cites openteamily/flybot.py for the one command it prints.",
+    "the unknown-platform state is a real browser context with an unparseable UA, so the page must say 未知平台 instead of guessing.",
+    "fixture data is synthetic and on loopback; the provider is a local fake, not a vendor."
+  ],
+  "rows": [
+    {
+      "arm": "before",
+      "armSha": "13641eb9cedbddf550fdd257a5008480f4506ca1",
+      "state": "light__1440x900__download.png",
+      "viewport": "1440x900",
+      "file": "before/zh-CN__light__1440x900__download.png",
+      "bytes": 100299,
+      "sha256": "266438af807d0c38df62b255cf1aafa742212f1cf35bfd7e2cc6d876888a0ae1",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "platform": null,
+      "platformNote": null,
+      "command": "python3 flybot.pyz daemon start --origin http://127.0.0.1:18772 --key-file ./runtime-key",
+      "citation": null,
+      "bodyTail": "理端。请显式下载 zipapp 再启动，不要把安装脚本管道给 shell。这里没有 Teamily 的地址。 下载 flybot.pyz 下载后显式启动，例如： python3 flybot.pyz daemon start --origin http://127.0.0.1:18772 --key-file ./runtime-key 也可以使用源码树里的 python3 -m openteamily.flybot。运行时密钥在「运行时」页生成。 打开运行时页 尚未提供 未实现：没有 OpenTeamily 的 iOS、Android、macOS 或 Windows 官方客户端。 iOS Android macOS Windows",
+      "themeResolved": "light",
+      "scrollWidth": 1440,
+      "scrollHeight": 900,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "13641eb9cedbddf550fdd257a5008480f4506ca1",
+      "state": "light__390x844__download.png",
+      "viewport": "390x844",
+      "file": "before/zh-CN__light__390x844__download.png",
+      "bytes": 65594,
+      "sha256": "d20809bb3708b77559e36bb9347948078490be2295a629de958789c9ccfe26e3",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "platform": null,
+      "platformNote": null,
+      "command": "python3 flybot.pyz daemon start --origin http://127.0.0.1:18772 --key-file ./runtime-key",
+      "citation": null,
+      "bodyTail": "理端。请显式下载 zipapp 再启动，不要把安装脚本管道给 shell。这里没有 Teamily 的地址。 下载 flybot.pyz 下载后显式启动，例如： python3 flybot.pyz daemon start --origin http://127.0.0.1:18772 --key-file ./runtime-key 也可以使用源码树里的 python3 -m openteamily.flybot。运行时密钥在「运行时」页生成。 打开运行时页 尚未提供 未实现：没有 OpenTeamily 的 iOS、Android、macOS 或 Windows 官方客户端。 iOS Android macOS Windows",
+      "themeResolved": "light",
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "112243da7043a929d017d03b710d26aed26e33d7",
+      "state": "light__1440x900__download.png",
+      "viewport": "1440x900",
+      "file": "after/zh-CN__light__1440x900__download.png",
+      "bytes": 121282,
+      "sha256": "c913699d755922b4645fd6fa21ec0ab2ad3834575891d9e130a468e54c468ef9",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "platform": "Linux · Chrome",
+      "platformNote": "当前平台：Linux · Chrome（按浏览器信息识别，不是服务端上报）。",
+      "command": "python3 flybot.pyz daemon start --origin http://127.0.0.1:18773 --key-file ./runtime-key",
+      "citation": "这条命令的出处是仓库里的 openteamily/flybot.py（daemon start --origin --key-file 都在它的命令行帮助里）；本页没有别的安装命令，也没有别的客户端可下。",
+      "bodyTail": "mon start --origin http://127.0.0.1:18773 --key-file ./runtime-key 这条命令的出处是仓库里的 openteamily/flybot.py（daemon start --origin --key-file 都在它的命令行帮助里）；本页没有别的安装命令，也没有别的客户端可下。 也可以使用源码树里的 python3 -m openteamily.flybot。运行时密钥在「运行时」页生成。 打开运行时页 尚未提供 未实现：没有 OpenTeamily 的 iOS、Android、macOS 或 Windows 官方客户端。 iOS Android macOS Windows",
+      "themeResolved": "light",
+      "scrollWidth": 1440,
+      "scrollHeight": 900,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "112243da7043a929d017d03b710d26aed26e33d7",
+      "state": "light__1440x900__download__unknown-platform.png",
+      "viewport": "1440x900",
+      "file": "after/zh-CN__light__1440x900__download__unknown-platform.png",
+      "bytes": 120791,
+      "sha256": "2ebd1d7502b44fc8e38fb2e1a909a95a037bd57c7fd6762ef0042ac29f7f9c89",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "platform": "未知平台",
+      "platformNote": "当前平台：未知平台（按浏览器信息识别，不是服务端上报）。",
+      "command": "python3 flybot.pyz daemon start --origin http://127.0.0.1:18773 --key-file ./runtime-key",
+      "citation": "这条命令的出处是仓库里的 openteamily/flybot.py（daemon start --origin --key-file 都在它的命令行帮助里）；本页没有别的安装命令，也没有别的客户端可下。",
+      "bodyTail": "mon start --origin http://127.0.0.1:18773 --key-file ./runtime-key 这条命令的出处是仓库里的 openteamily/flybot.py（daemon start --origin --key-file 都在它的命令行帮助里）；本页没有别的安装命令，也没有别的客户端可下。 也可以使用源码树里的 python3 -m openteamily.flybot。运行时密钥在「运行时」页生成。 打开运行时页 尚未提供 未实现：没有 OpenTeamily 的 iOS、Android、macOS 或 Windows 官方客户端。 iOS Android macOS Windows",
+      "themeResolved": "light",
+      "scrollWidth": 1440,
+      "scrollHeight": 900,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "112243da7043a929d017d03b710d26aed26e33d7",
+      "state": "light__390x844__download.png",
+      "viewport": "390x844",
+      "file": "after/zh-CN__light__390x844__download.png",
+      "bytes": 77505,
+      "sha256": "0f8c30baea4e9f04fce1b069e1f50caecaccd6f50d02b8b71b854e7ff0b8b67d",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "platform": "Linux · Chrome",
+      "platformNote": "当前平台：Linux · Chrome（按浏览器信息识别，不是服务端上报）。",
+      "command": "python3 flybot.pyz daemon start --origin http://127.0.0.1:18773 --key-file ./runtime-key",
+      "citation": "这条命令的出处是仓库里的 openteamily/flybot.py（daemon start --origin --key-file 都在它的命令行帮助里）；本页没有别的安装命令，也没有别的客户端可下。",
+      "bodyTail": "mon start --origin http://127.0.0.1:18773 --key-file ./runtime-key 这条命令的出处是仓库里的 openteamily/flybot.py（daemon start --origin --key-file 都在它的命令行帮助里）；本页没有别的安装命令，也没有别的客户端可下。 也可以使用源码树里的 python3 -m openteamily.flybot。运行时密钥在「运行时」页生成。 打开运行时页 尚未提供 未实现：没有 OpenTeamily 的 iOS、Android、macOS 或 Windows 官方客户端。 iOS Android macOS Windows",
+      "themeResolved": "light",
+      "scrollWidth": 390,
+      "scrollHeight": 844,
+      "consoleErrors": []
+    }
+  ]
+}
