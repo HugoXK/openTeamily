@@ -62,6 +62,15 @@ async function shot(page, outDir, name) {
   return file;
 }
 
+
+async function openGroupAgentSheet(page) {
+  const sheet = page.locator('#group-agent-action details.group-agent-sheet');
+  if (!(await sheet.count())) return;
+  if (await sheet.getAttribute('open') === null) {
+    await sheet.locator(':scope > summary').click();
+  }
+}
+
 async function openListItem(page, title, listSelector = '#main-panel') {
   const button = page.locator(`${listSelector} button.link`, { hasText: title }).first();
   await button.waitFor({ state: 'visible', timeout: 15000 });
@@ -70,6 +79,17 @@ async function openListItem(page, title, listSelector = '#main-panel') {
 
 async function waitForInputValue(page, selector, expected, timeout = 15000) {
   await page.locator(selector).waitFor({ state: 'visible', timeout });
+  await page.waitForFunction(
+    ({ selector, expected }) => document.querySelector(selector)?.value === expected,
+    { selector, expected },
+    { timeout },
+  );
+}
+
+// The memory editor keeps its markdown in a hidden field behind the WYSIWYG
+// surface, so this waits on the stored value without requiring visibility.
+async function waitForStoredValue(page, selector, expected, timeout = 15000) {
+  await page.locator(selector).waitFor({ state: 'attached', timeout });
   await page.waitForFunction(
     ({ selector, expected }) => document.querySelector(selector)?.value === expected,
     { selector, expected },
@@ -604,6 +624,15 @@ async function main() {
         `avatar=${identity || 'empty'} hidden=${identityHidden} expected=${expectedInitial} order=${[filterBox && Math.round(filterBox.x), searchBox && Math.round(searchBox.x), addBox && Math.round(addBox.x)].join(',')}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '16-agents-conversation.png')));
+      const chrome = await page.evaluate(() => ({
+        rail: document.querySelector('.app-rail').getBoundingClientRect().width,
+        sessions: document.getElementById('session-pane').getBoundingClientRect().width,
+        icons: document.querySelectorAll('.chat-actions svg').length,
+        shellOverflow: document.documentElement.scrollWidth > innerWidth,
+      }));
+      record('ui_chat_compact_chrome', chrome.rail <= 64 && chrome.sessions <= 320 && chrome.icons >= 3 && !chrome.shellOverflow,
+        JSON.stringify(chrome));
+
       screenshots.push(path.basename(await shot(page, outDir, '22-chat-desktop.png')));
       screenshots.push(path.basename(await shot(page, outDir, '62-chat-list-previews.png')));
       screenshots.push(path.basename(await shot(page, outDir, '68-chat-header-identity.png')));
@@ -762,8 +791,13 @@ async function main() {
           && (await visibleText(page.locator('#member-choices'))).includes('AI 智能体（自动回复未接通）'),
         'An existing human and agent are selected; custom group create is enabled');
       await page.locator('#compose-mode-team').click();
-      record('chat_group_agent_team_unconnected', await page.locator('#compose-dialog-submit').isDisabled(),
-        'Agent selections do not enable the unconnected AI-team mode');
+      await page.locator('#team-template-choices input[value="product-squad"]').waitFor({state: 'visible', timeout: 8000});
+      const disabledBeforePick = await page.locator('#compose-dialog-submit').isDisabled();
+      await page.locator('#team-template-choices input[value="product-squad"]').check();
+      record('chat_group_agent_team_template',
+        disabledBeforePick && await page.locator('#compose-dialog-submit').isEnabled()
+          && (await visibleText(page.locator('#team-template-choices'))).includes('产品研发小队'),
+        'AI-team mode requires picking a real template before create is enabled');
       await page.locator('#compose-mode-custom').click();
       screenshots.push(path.basename(await shot(page, outDir, '79-chat-group-agent-picker.png')));
       await page.locator('#compose-dialog-submit').click();
@@ -793,6 +827,7 @@ async function main() {
     try {
       await page.locator('#conversation-list button').filter({hasText: '[CI FIXTURE] Agent members group'}).click();
       await page.locator('#group-agent-action').waitFor({state: 'visible', timeout: 8000});
+      await openGroupAgentSheet(page);
       const groupAgentChoice = page.locator(`#group-agent-choices input[name="group-agent"][value="${ready.agent_id}"]`);
       await groupAgentChoice.waitFor({state: 'visible', timeout: 8000});
       await groupAgentChoice.check();
@@ -964,6 +999,15 @@ async function main() {
         await waitForLocatorText(page, '#artifact-list', title);
       }
       artifacts = await visibleText(page.locator('#artifact-list'));
+      const libraryLayout = () => page.locator('#artifact-list').evaluate(node => ({layout: node.dataset.layout, display: getComputedStyle(node).display}));
+      const initialLayout = await libraryLayout();
+      await page.locator('#layout-toggle [data-layout="list"]').click();
+      const listLayout = await libraryLayout();
+      await page.locator('#layout-toggle [data-layout="grid"]').click();
+      const restoredLayout = await libraryLayout();
+      record('ui_library_real_layout_toggle', initialLayout.layout === 'grid' && initialLayout.display === 'grid'
+        && listLayout.layout === 'list' && restoredLayout.layout === 'grid', JSON.stringify({initialLayout,listLayout,restoredLayout}));
+
     } catch (error) {
       artifacts = String(error);
     }
@@ -1270,11 +1314,16 @@ async function main() {
       await page.locator('#wizard-form input[name="name"]').fill('CI Fixture Preview Team');
       await page.locator('#wizard-form input[name="slug"]').fill('ci-preview-team');
       await page.locator('#next').click();
-      await page.locator('#step-later').waitFor({ state: 'visible', timeout: 10000 });
+      await page.locator('#step-2').waitFor({ state: 'visible', timeout: 10000 });
+      const step2Text = await visibleText(page.locator('#step-2'));
       record(
         'team_wizard_continuation',
-        await page.locator('#step-later').isVisible() && await page.locator('#submit').isVisible(),
-        'name and slug accepted; unverified continuation visible, not submitted',
+        await page.locator('#step-2').isVisible()
+          && await page.locator('#invite-role').isVisible()
+          && await page.locator('#invite-skip').isVisible()
+          && await page.locator('#submit').isVisible()
+          && step2Text.includes('邀请成员'),
+        'name and slug accepted; invite step visible, not submitted',
         { soft: true },
       );
       screenshots.push(path.basename(await shot(page, outDir, '13b-team-wizard-continuation.png')));
@@ -1592,7 +1641,7 @@ async function main() {
     try {
       await page.locator('#memory-list button', { hasText: ready.memory_title }).first().click();
       await waitForInputValue(page, '#editor-form input[name="title"]', ready.memory_title);
-      await waitForInputValue(page, '#editor-form textarea[name="body"]', ready.memory_body);
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', ready.memory_body);
       record('memory_editor_seeded', true, await visibleText(page.locator('#editor-meta')));
       await page.locator('#close-editor').click();
       await page.locator('#list-panel').waitFor({ state: 'visible', timeout: 15000 });
@@ -1605,17 +1654,25 @@ async function main() {
       await waitForInputValue(page, '#editor-form input[name="title"]', '未命名页面');
       await waitForLocatorText(page, '#status', '已创建记忆页');
       await page.locator('#editor-form input[name="title"]').fill(ready.memory_create_title);
-      await page.locator('#editor-form textarea[name="body"]').fill(ready.memory_create_body);
+      // WYSIWYG first: typing into the rich surface must land as markdown in the saved field.
+      await page.locator('#editor-rich').fill(ready.memory_create_body);
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', ready.memory_create_body);
       await page.locator('#save-page').click();
       await waitForLocatorText(page, '#status', '已保存');
       await waitForLocatorText(page, '#editor-meta', '修订 2');
       await page.locator('#editor-form input[name="title"]').fill(ready.memory_edited_title);
+      // Then the Markdown source toggle edits the same stored body directly.
+      if ((await page.locator('#editor-source-toggle').getAttribute('aria-pressed')) !== 'true') {
+        await page.locator('#editor-source-toggle').click();
+      }
       await page.locator('#editor-form textarea[name="body"]').fill(ready.memory_edited_body);
       await page.locator('#save-page').click();
       await waitForLocatorText(page, '#status', '已保存');
       await waitForLocatorText(page, '#editor-meta', '修订 3');
       await waitForInputValue(page, '#editor-form input[name="title"]', ready.memory_edited_title);
-      await waitForInputValue(page, '#editor-form textarea[name="body"]', ready.memory_edited_body);
+      await waitForStoredValue(page, '#editor-form textarea[name="body"]', ready.memory_edited_body);
+      await page.locator('#editor-source-toggle').click();
+      await waitForLocatorText(page, '#editor-rich', ready.memory_edited_body);
       const memoryMeta = await visibleText(page.locator('#editor-meta'));
       record(
         'memory_create_edit',
@@ -1629,6 +1686,8 @@ async function main() {
 
     try {
       await page.locator('#delete-page').click();
+      await page.locator('#page-delete-confirm').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#page-delete-confirm-submit').click();
       await waitForLocatorText(page, '#status', '已删除');
       await page.locator('#list-panel').waitFor({ state: 'visible', timeout: 15000 });
       await waitForLocatorText(page, '#memory-list', ready.memory_title);
@@ -1673,6 +1732,8 @@ async function main() {
 
     try {
       await page.locator('#delete-action').click();
+      await page.locator('#action-delete-confirm').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#action-delete-confirm-submit').click();
       await waitForLocatorText(page, '#status', '已删除');
       await page.locator('#list-panel').waitFor({ state: 'visible', timeout: 15000 });
       await waitForLocatorText(page, '#action-list', ready.action_title);
@@ -1936,7 +1997,7 @@ async function main() {
       const token = homepagePath.slice(3);
       record(
         'agent_public_homepage',
-        homeText.includes('OpenTeamily / FlyBot')
+        homeText.includes('OpenTeamily')
           && homeText.includes('Agent profile')
           && statusLabel === 'Public page'
           && homeText.includes(ready.agent_name)
@@ -1975,7 +2036,11 @@ async function main() {
       await page.locator('#industry').selectOption('科技与软件');
       await page.locator('#role-choices input[value="产品经理"]').check();
       await page.locator('#onboarding-save').click();
-      await page.waitForURL(url => url.pathname === '/chat');
+      // Step 1 now continues to step 2 like the recorded wizard; the saved context must already
+      // clear the chat banner even if the user leaves the wizard here (进入 OpenTeamily sits on step 4).
+      await page.locator('#onboarding-steps').waitFor({state: 'visible'});
+      await page.locator('[data-step="2"]').waitFor({state: 'visible'});
+      await page.goto(`${origin}/chat`, {waitUntil: 'load'});
       await page.locator('#main-panel').waitFor({state: 'visible'});
       await page.waitForFunction(() => document.getElementById('onboarding-banner').hidden);
       const personalResponse = await page.request.get(`${origin}/v1/personal-agent`);
@@ -1987,11 +2052,37 @@ async function main() {
         && Boolean(personalState.personal_agent && personalState.personal_agent.agent),
         'Saved work context survives reload alongside the personal agent; no recommendations or connector claims');
       screenshots.push(path.basename(await shot(page, outDir, '86-onboarding-saved-context.png')));
+      try {
+        await page.locator('#onboarding-save').click();
+        await page.locator('#onboarding-steps').waitFor({state: 'visible'});
+        const appsText = await visibleText(page.locator('#onboarding-apps'));
+        const connectDisabled = await page.locator('#onboarding-apps .app-connect').evaluateAll(
+          (buttons) => buttons.length > 0 && buttons.every((button) => button.disabled));
+        await page.locator('[data-step="2"] button[data-go="3"]:not(.onboarding-later)').click();
+        await page.locator('#onboarding-picks input[value="release-notes"]').check();
+        await page.locator('#onboarding-picks-form button[type="submit"]').click();
+        await waitForLocatorText(page, '#onboarding-steps-meta', '已选 1 项');
+        await page.locator('#onboarding-look select[name="color"]').selectOption('天空蓝');
+        await page.locator('#onboarding-look-form button[type="submit"]').click();
+        await waitForLocatorText(page, '#onboarding-look-preview', '颜色：天空蓝');
+        record('onboarding_steps_2_4',
+          appsText.includes('Gmail · 未连接') && !appsText.includes('已连接') && connectDisabled
+          && (await visibleText(page.locator('#onboarding-steps-meta'))).includes('形象已保存'),
+          'Steps 2-4 wizard: apps honestly unconnected with disabled connect buttons, picks and look saved');
+        screenshots.push(path.basename(await shot(page, outDir, '87-onboarding-steps.png')));
+        await page.locator('#onboarding-enter').click();
+        await page.waitForURL(url => url.pathname === '/chat');
+        record('onboarding_enter_chat', true, 'Step 4 进入 OpenTeamily opens chat');
+      } catch (error) {
+        record('onboarding_steps_2_4', false, String(error));
+      }
+      await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
+      await page.locator('#industry option[value="其他"]').waitFor({state: 'attached'});
       await page.locator('#industry').selectOption('其他');
       await page.locator('#custom-industry').fill('[CI FIXTURE] Independent research');
       await page.locator('#custom-role').fill('[CI FIXTURE] Analyst');
       await page.locator('#onboarding-save').click();
-      await page.waitForURL(url => url.pathname === '/chat');
+      await page.locator('#onboarding-steps').waitFor({state: 'visible'});
       await page.goto(`${origin}/onboarding`, {waitUntil: 'load'});
       await waitForLocatorText(page, '#onboarding-meta', '[CI FIXTURE] Independent research');
       record('onboarding_custom_reopen',

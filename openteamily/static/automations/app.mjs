@@ -66,6 +66,13 @@ export function runResultText(run) {
 }
 
 
+// `/automations?template=<id>` opens the editor prefilled from that template
+// (used by the chat composer's 自动化 shortcuts).
+export function templateFromSearch(search) {
+  const value = new URLSearchParams(search || '').get('template') || '';
+  return /^[a-z0-9_-]{1,64}$/.test(value) ? value : '';
+}
+
 export function catalogItems(templates, category, search) {
   const tab = tabCategory(category);
   if (tab !== 'work' && tab !== 'life') return [];
@@ -179,22 +186,55 @@ function fillEditor(form, item, templates, username) {
   form.elements.title.value = (item && item.title) || (templates.find(row => row.id === form.elements.template_id.value) || {}).title || '';
 }
 
+
+function setBusy(node, busy) {
+  if (!node) return;
+  if (busy) {
+    if (typeof node.setAttribute === 'function') node.setAttribute('aria-busy', 'true');
+    return;
+  }
+  if (typeof node.removeAttribute === 'function') node.removeAttribute('aria-busy');
+}
+
+function monogram(name) {
+  const text = String(name || '').trim();
+  const chars = Array.from(text);
+  const label = (chars.slice(0, chars[0] && /[A-Za-z]/.test(chars[0]) ? 2 : 1).join('') || '?');
+  let tone = 0;
+  for (const ch of chars) tone += ch.codePointAt(0) || 0;
+  return {label, tone: (tone % 6) + 1};
+}
+
 function renderList(items, list, empty, onOpen) {
   list.textContent = '';
   list.classList.remove('template-catalog');
+  setBusy(list, false);
   empty.hidden = items.length > 0;
   for (const item of items) {
     const row = document.createElement('li');
+    const mark = monogram(item.title);
+    const avatar = document.createElement('span');
+    avatar.className = 'avatar';
+    avatar.dataset.tone = String(mark.tone);
+    avatar.textContent = mark.label;
+    const copy = document.createElement('div');
+    copy.className = 'item-meta';
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'link';
     open.textContent = item.title;
     open.addEventListener('click', () => onOpen(item));
     const meta = document.createElement('span');
-    meta.className = 'note';
+    meta.className = 'item-schedule';
     meta.textContent = scheduleSummary(item.schedule, item.enabled);
-    row.appendChild(open);
-    row.appendChild(meta);
+    copy.appendChild(open);
+    copy.appendChild(meta);
+    const state = document.createElement('span');
+    state.className = 'status-pill' + (item.enabled ? ' is-on' : '');
+    state.textContent = item.enabled ? '已启用' : '未启用';
+    row.appendChild(avatar);
+    row.appendChild(copy);
+    row.appendChild(state);
     list.appendChild(row);
   }
 }
@@ -203,6 +243,7 @@ function renderList(items, list, empty, onOpen) {
 function renderCatalog(items, list, empty, onOpen) {
   list.textContent = '';
   list.classList.add('template-catalog');
+  setBusy(list, false);
   empty.hidden = items.length > 0;
   for (const item of items) {
     const row = document.createElement('li');
@@ -280,10 +321,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       head.className = 'run-head';
       const status = document.createElement('strong');
       status.textContent = runStatusLabel(item);
+      const pill = document.createElement('span');
+      pill.className = 'status-pill' + (item.status === 'succeeded' ? ' is-on' : '');
+      pill.textContent = item.status || '';
       const meta = document.createElement('span');
       meta.className = 'note';
       meta.textContent = item.error_code ? item.error_code : '';
       head.appendChild(status);
+      head.appendChild(pill);
       head.appendChild(meta);
       if (item.status === 'queued' && current && current.id) {
         const cancel = document.createElement('button');
@@ -384,6 +429,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = item;
     listPanel.hidden = true;
     form.hidden = false;
+    mainPanel.classList.add('is-editing');
     fillEditor(form, item, templates, currentUser && currentUser.username);
     document.getElementById('remove-automation').hidden = !item || !item.id;
     document.getElementById('tick-automation').hidden = !item || !item.id;
@@ -405,12 +451,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       );
       return;
     }
-    empty.textContent = '这个分类下还没有自动化。';
+    setBusy(list, true);
+    list.textContent = '';
+    empty.hidden = false;
+    setBusy(empty, true);
+    empty.textContent = '正在加载自动化…';
     const listed = await request('GET', `/v1/workspaces/${id}/automations${listQuery(category, search.value)}`);
+    setBusy(empty, false);
+    setBusy(list, false);
     if (listed.status !== 200) {
+      empty.hidden = false;
+      empty.textContent = messageFor(listed.body.error, '无法读取自动化列表。');
       show('error', messageFor(listed.body.error, '无法读取自动化列表。'));
       return;
     }
+    empty.textContent = '这个分类下还没有自动化。';
     renderList(listed.body.items || [], list, empty, item => openEditor(item));
   }
 
@@ -462,6 +517,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('list-empty').textContent = '这个分类下还没有自动化。';
     form.hidden = true;
     listPanel.hidden = false;
+    mainPanel.classList.remove('is-editing');
     await loadList();
   }
 
@@ -489,6 +545,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       form.hidden = true;
       listPanel.hidden = false;
+      mainPanel.classList.remove('is-editing');
       const runPanel = document.getElementById('run-panel');
       if (runPanel) runPanel.hidden = true;
       stopRunPoll();
@@ -510,6 +567,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
+    mainPanel.classList.remove('is-editing');
     const runPanel = document.getElementById('run-panel');
     if (runPanel) runPanel.hidden = true;
     stopRunPoll();
@@ -586,6 +644,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
+    mainPanel.classList.remove('is-editing');
     const runPanel = document.getElementById('run-panel');
     if (runPanel) runPanel.hidden = true;
     stopRunPoll();
@@ -605,7 +664,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  return load();
+  return load().then(() => {
+    const view = document.defaultView;
+    const wanted = templateFromSearch(view && view.location && view.location.search);
+    if (!wanted || mainPanel.hidden || !workspaceId()) return;
+    const template = templates.find(item => item.id === wanted);
+    if (!template) return;
+    openEditor(draftFromTemplate(template, currentUser && currentUser.username));
+  });
 }
 
 if (globalThis.document && globalThis.document.getElementById('editor-form')) {
