@@ -29,7 +29,10 @@ class SkillsPageTests(unittest.TestCase):
         for ident in ('main-panel', 'skills-search', 'skills-list', 'skills-empty', 'skills-error'):
             self.assertIn('id="%s"' % ident, html)
         self.assertIn('技能库', html)
-        self.assertIn('安装状态保存在你的账户里', html)
+        self.assertIn('校验并加载后才显示加载回执', html)
+        self.assertIn('技能包含真实内容和版本摘要', html)
+        self.assertIn('id="skills-permission"', html)
+        self.assertIn('「我的技能库」标记只保存在你的账户里', html)
         self.assertIn('未登录', html)
         self.assertIn('没有匹配的技能', html)
         self.assertIn('aria-label="搜索技能"', html)
@@ -42,10 +45,14 @@ class SkillsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('POST', '/skills')['status'], 405)
         self.assertEqual(self.raw.call('GET', '/skills/missing')['status'], 404)
         script = self.raw.call('GET', '/skills/app.mjs')['body'].decode()
-        self.assertIn('export const SKILLS', script)
+        self.assertIn('/v1/skills/catalog', script)
+        self.assertIn('/v1/skills/bindings', script)
         self.assertIn('export function filterSkills', script)
         self.assertIn('/v1/skills/installed', script)
         self.assertIn('X-CSRF-Token', script)
+        self.assertNotIn('export function toggleSkill', script)
+        self.assertIn('permission && permission.checked', script)
+        self.assertIn('csrfCookie(document.cookie)', script)
         self.assertNotIn('innerHTML', script)
 
     def test_every_shell_page_links_the_skills_entry(self):
@@ -58,13 +65,11 @@ class SkillsPageTests(unittest.TestCase):
                 continue
             self.assertIn('href="/skills"', html, name)
 
-    def test_the_server_catalogue_matches_the_page_catalogue(self):
-        from openteamily import skill_installs
-        script = Path(__file__).absolute().parent.parent.joinpath(
-            'openteamily', 'static', 'skills', 'app.mjs').read_text(encoding='utf-8')
-        ids = re.findall(r"\{id: '([a-z0-9-]+)'", script)
+    def test_the_install_allowlist_matches_the_authoritative_catalogue(self):
+        from openteamily import skill_installs, skill_packages
+        ids = sorted(item['id'] for item in skill_packages.catalogue())
         self.assertEqual(len(ids), len(set(ids)))
-        self.assertEqual(sorted(ids), sorted(skill_installs.SKILL_IDS))
+        self.assertEqual(sorted(skill_installs.SKILL_IDS), ids)
 
     def test_install_round_trips_and_survives_a_fresh_app(self):
         installed = self.client.call('POST', '/v1/skills/installed', {'skill': 'meeting-notes'})

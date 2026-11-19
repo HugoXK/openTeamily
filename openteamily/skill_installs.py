@@ -1,8 +1,9 @@
 """Per-account installed skills.
 
-The catalogue itself lives in `static/skills/app.mjs`; this module only keeps the
-server-side allowlist and the rows that say which account installed which skill.
-Tests assert both catalogues stay in step.
+The authoritative catalogue lives in `skill_packages.py`; this module keeps the
+server-side allowlist for the per-account library rows and the rows that say which
+account put which skill in its library. A test asserts the allowlist stays equal to
+the catalogue, so the two can never drift.
 """
 
 SCHEMA = '''
@@ -14,7 +15,7 @@ CREATE TABLE IF NOT EXISTS skill_installs (
 CREATE INDEX IF NOT EXISTS skill_install_user ON skill_installs(user_id, installed);
 '''
 
-# Mirrors SKILLS in openteamily/static/skills/app.mjs, in the same order.
+# Must equal the ids in openteamily/skill_packages.py (asserted by tests).
 SKILL_IDS = (
     'meeting-notes', 'web-summary', 'slide-draft', 'data-brief', 'email-draft',
     'doc-rewrite', 'code-review', 'market-watch', 'trip-plan', 'know-how',

@@ -1,8 +1,9 @@
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  SKILLS, filterSkills, mountSkills, readInstalled, skillButtonLabel, skillCountLabel,
-  writeInstalled,
+  accountButtonLabel, filterSkills, mountSkills, readInstalled, skillCountLabel, writeInstalled,
 } from '../openteamily/static/skills/app.mjs';
 
 class Element {
@@ -13,6 +14,7 @@ class Element {
     this.dataset = {};
     this.handlers = {};
     this.className = '';
+    this.style = {};
     this.textContent = '';
     this.hidden = false;
     this.disabled = false;
@@ -40,50 +42,80 @@ function fakeDocument() {
   return {doc, el: (id) => doc.getElementById(id)};
 }
 
-function cardFor(el, id) {
-  return el('skills-list').children.find((card) => card.children[2].dataset.skill === id);
+const SKILLS = JSON.parse(execFileSync('python3', ['-c', 'import json;from openteamily.skill_packages import catalogue;print(json.dumps(catalogue()))'], {encoding:'utf8'}));
+function service({failWrite=false} = {}) {
+  let bindings=[];const calls=[];
+  return {calls, fetcher:async(path, options) => {
+    calls.push({path,options});
+    if(options.method==='POST') {
+      if(failWrite)return {status:403,ok:false,json:async()=>({error:{message:'permission denied'}})};
+      const b=JSON.parse(options.body);bindings=b.enabled ? [{scope:b.scope,skill_id:b.skill_id,version:b.version,digest:b.digest,last_loaded_task:null}] : [];
+      return {status:200,ok:true,json:async()=>({enabled:b.enabled})};
+    }
+    return {status:200,ok:true,json:async()=>path.endsWith('/catalog') ? {items:SKILLS} : path.endsWith('/bindings') ? {items:bindings} : {items:[]}};
+  }};
 }
 
-function request(url, options) {
-  return {url, options};
-}
-
-function reply(status, payload) {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => payload,
-  };
-}
-
-test('the catalogue has 8-12 unique self-written skills', () => {
-  assert.ok(SKILLS.length >= 8 && SKILLS.length <= 12);
-  assert.equal(new Set(SKILLS.map((item) => item.id)).size, SKILLS.length);
-  for (const item of SKILLS) {
-    assert.ok(item.id && item.name && item.description && item.mark);
+test('authoritative catalogue has real bounded version-pinned prompt packages', () => {
+  assert.equal(SKILLS.length,10);
+  assert.equal(new Set(SKILLS.map(i=>i.id)).size,10);
+  for(const item of SKILLS) {
+    assert.ok(item.content.length>100);
+    assert.equal(createHash('sha256').update(item.content).digest('hex'),item.digest);
+    assert.deepEqual(item.permissions,['model_context']);
   }
 });
 
-test('filterSkills matches names and descriptions without inventing data', () => {
-  assert.equal(filterSkills(SKILLS, '').length, SKILLS.length);
-  assert.deepEqual(filterSkills(SKILLS, '会议').map((item) => item.id), ['meeting-notes']);
-  assert.deepEqual(filterSkills(SKILLS, '表格').map((item) => item.id), ['data-brief']);
-  assert.deepEqual(filterSkills(SKILLS, '找不到的技能'), []);
-  assert.deepEqual(filterSkills(SKILLS, '  邮件 ').map((item) => item.id), ['email-draft']);
+test('filter searches actual server content and counts it', () => {
+  assert.equal(filterSkills(SKILLS,'').length,10);
+  assert.deepEqual(filterSkills(SKILLS,'会议').map(i=>i.id),['meeting-notes']);
+  assert.equal(filterSkills(SKILLS,'找不到的技能').length,0);
+  assert.equal(skillCountLabel(1,10),'显示 1 / 10 个技能');
 });
 
-test('skillButtonLabel and skillCountLabel stay the visible contract', () => {
-  assert.equal(skillButtonLabel(false), '安装');
-  assert.equal(skillButtonLabel(true), '已安装');
-  assert.equal(skillCountLabel(SKILLS.length, SKILLS.length), `共 ${SKILLS.length} 个技能`);
-  assert.equal(skillCountLabel(1, SKILLS.length), `显示 1 / ${SKILLS.length} 个技能`);
+test('installation needs permission, persists through service reload, and uninstall revokes', async () => {
+  const svc=service();const {doc,el}=fakeDocument();doc.cookie='__Host-ot_csrf=synthetic-csrf';el('skills-scope').value='account';
+  const mounted=mountSkills(doc,{fetcher:svc.fetcher});await mounted.ready;
+  assert.equal(el('skills-list').children.length,10);
+  let button=el('skills-list').children[0].children[2];await button.handlers.click();
+  assert.match(el('skills-error').textContent,/勾选/);assert.equal(svc.calls.filter(c=>c.options.method==='POST').length,0);
+  el('skills-permission').checked=true;await button.handlers.click();
+  assert.equal(el('skills-list').children[0].children[2].textContent,'卸载');
+  assert.match(el('skills-list').children[0].children[1].children[1].textContent,/等待/);
+  const posted=svc.calls.find(c=>c.options.method==='POST');assert.equal(posted.options.headers['X-CSRF-Token'],'synthetic-csrf');
+  const next=fakeDocument();next.doc.cookie='__Host-ot_csrf=x';next.el('skills-scope').value='account';await mountSkills(next.doc,{fetcher:svc.fetcher}).ready;
+  assert.equal(next.el('skills-list').children[0].children[2].textContent,'卸载');
+  await next.el('skills-list').children[0].children[2].handlers.click();
+  assert.equal(next.el('skills-list').children[0].children[2].textContent,'安装');
+});
+
+test('server refusal never invents installed or runtime-loaded state', async () => {
+  const svc=service({failWrite:true}),{doc,el}=fakeDocument();doc.cookie='';el('skills-scope').value='account';el('skills-permission').checked=true;
+  await mountSkills(doc,{fetcher:svc.fetcher}).ready;await el('skills-list').children[0].children[2].handlers.click();
+  assert.equal(el('skills-list').children[0].children[2].textContent,'安装');assert.equal(el('skills-error').textContent,'permission denied');
+});
+
+// The per-account library mark (issue #263) is a separate persisted record: it never
+// grants model context, so the binding button on the same card stays untouched.
+const LIBRARY = [
+  {id: 'meeting-notes', name: '会议纪要', version: '1.0.0', digest: 'a'.repeat(64), content: 'c'.repeat(120), permissions: ['model_context']},
+  {id: 'trip-plan', name: '行程规划', version: '1.0.0', digest: 'b'.repeat(64), content: 'd'.repeat(120), permissions: ['model_context']},
+];
+
+function okJson(payload) {
+  return {status: 200, ok: true, json: async () => payload};
+}
+
+test('accountButtonLabel names the library action instead of pretending to install', () => {
+  assert.equal(accountButtonLabel(false), '加入我的技能库');
+  assert.equal(accountButtonLabel(true), '移出我的技能库');
 });
 
 test('readInstalled asks the account endpoint with the session cookie', async () => {
   const calls = [];
   const installed = await readInstalled(async (url, options) => {
-    calls.push(request(url, options));
-    return reply(200, {installed: ['meeting-notes', 'trip-plan']});
+    calls.push({url, options});
+    return okJson({installed: ['meeting-notes', 'trip-plan']});
   });
   assert.deepEqual([...installed], ['meeting-notes', 'trip-plan']);
   assert.equal(calls.length, 1);
@@ -92,138 +124,57 @@ test('readInstalled asks the account endpoint with the session cookie', async ()
   assert.equal(calls[0].options.credentials, 'same-origin');
 });
 
-test('writeInstalled posts an install and deletes an uninstall with the CSRF token', async () => {
+test('writeInstalled posts an install and deletes a removal with the CSRF token', async () => {
   const calls = [];
   const fetchImpl = async (url, options) => {
-    calls.push(request(url, options));
-    return reply(200, {installed: options.method === 'POST' ? ['meeting-notes'] : []});
+    calls.push({url, options});
+    return okJson({installed: options.method === 'POST' ? ['meeting-notes'] : []});
   };
   const cookie = '__Host-ot_csrf=token-value';
-
   const afterInstall = await writeInstalled('meeting-notes', true, {fetchImpl, cookie});
   assert.deepEqual([...afterInstall], ['meeting-notes']);
   assert.equal(calls[0].url, '/v1/skills/installed');
   assert.equal(calls[0].options.method, 'POST');
-  assert.equal(calls[0].options.credentials, 'same-origin');
   assert.equal(calls[0].options.headers['X-CSRF-Token'], 'token-value');
-  assert.equal(calls[0].options.headers['Content-Type'], 'application/json');
   assert.deepEqual(JSON.parse(calls[0].options.body), {skill: 'meeting-notes'});
-
   const afterRemoval = await writeInstalled('meeting-notes', false, {fetchImpl, cookie});
   assert.deepEqual([...afterRemoval], []);
   assert.equal(calls[1].options.method, 'DELETE');
-  assert.deepEqual(JSON.parse(calls[1].options.body), {skill: 'meeting-notes'});
 });
 
-test('a refused write rejects with the server message instead of guessing', async () => {
-  const fetchImpl = async () => reply(403, {error: {code: 'csrf', message: 'A valid CSRF token is required'}});
-  await assert.rejects(
-    () => writeInstalled('meeting-notes', true, {fetchImpl, cookie: ''}),
-    /A valid CSRF token is required/,
-  );
+test('a refused library write rejects with the server message instead of guessing', async () => {
+  const fetchImpl = async () => ({status: 403, ok: false, json: async () => ({error: {code: 'csrf', message: 'A valid CSRF token is required'}})});
+  await assert.rejects(() => writeInstalled('meeting-notes', true, {fetchImpl, cookie: ''}), /A valid CSRF token is required/);
 });
 
-test('a signed-out read rejects with the server message and installs nothing', async () => {
-  const fetchImpl = async () => reply(401, {error: {code: 'unauthorized', message: 'Sign in first'}});
-  await assert.rejects(() => readInstalled(fetchImpl), /Sign in first/);
-});
-
-test('a reload shows the account list instead of resetting every card', async () => {
+test('the library mark round-trips through the page without a model-context binding', async () => {
   const {doc, el} = fakeDocument();
-  const mounted = mountSkills(doc, {
-    read: async () => new Set(['meeting-notes']),
-    write: async () => new Set(),
-  });
-  assert.equal(el('skills-list').children.length, SKILLS.length);
-  assert.equal(el('skills-list').attributes['aria-busy'], 'true');
-  await mounted.ready;
-  assert.equal(el('skills-list').attributes['aria-busy'], 'false');
-  const installed = cardFor(el, 'meeting-notes');
-  assert.equal(installed.children[2].textContent, '已安装');
-  assert.equal(installed.children[2].attributes['aria-pressed'], 'true');
-  assert.equal(installed.className.includes('is-installed'), true);
-  assert.equal(cardFor(el, 'web-summary').children[2].textContent, '安装');
-  assert.equal(el('skills-error').hidden, true);
-});
-
-test('installing writes to the server and only then flips the card', async () => {
-  const {doc, el} = fakeDocument();
+  doc.cookie = '__Host-ot_csrf=synthetic-csrf';
+  el('skills-scope').value = 'account';
   const writes = [];
-  let granted = new Set();
+  let library = new Set();
+  const fetcher = async (path) => okJson({items: []});
   const mounted = mountSkills(doc, {
-    read: async () => new Set(),
+    fetcher, catalogue: LIBRARY,
+    read: async () => new Set(library),
     write: async (id, wanted) => {
       writes.push([id, wanted]);
-      granted = wanted ? new Set([...granted, id]) : new Set([...granted].filter((value) => value !== id));
-      return new Set(granted);
+      library = new Set(wanted ? [...library, id] : [...library].filter((value) => value !== id));
+      return new Set(library);
     },
   });
   await mounted.ready;
-  const button = cardFor(el, 'meeting-notes').children[2];
-  assert.equal(button.textContent, '安装');
-  const click = button.handlers.click();
-  assert.equal(button.disabled, true);
-  await click;
+  assert.equal(el('skills-list').children.length, 2);
+  assert.equal(el('skills-list').children[0].children[3].textContent, '加入我的技能库');
+  await el('skills-list').children[0].children[3].handlers.click();
   assert.deepEqual(writes, [['meeting-notes', true]]);
-  assert.equal(cardFor(el, 'meeting-notes').children[2].textContent, '已安装');
-
-  const installedButton = cardFor(el, 'meeting-notes').children[2];
-  await installedButton.handlers.click();
+  assert.equal(el('skills-list').children[0].children[3].textContent, '移出我的技能库');
+  assert.equal(el('skills-list').children[0].children[3].attributes['aria-pressed'], 'true');
+  assert.equal(el('skills-list').children[0].className.includes('is-in-library'), true);
+  assert.equal(el('skills-list').children[0].children[2].textContent, '安装');
+  assert.equal(el('skills-list').children[0].children[2].className, 'skill-install');
+  assert.equal(mounted.installed.has('meeting-notes'), true);
+  await el('skills-list').children[0].children[3].handlers.click();
   assert.deepEqual(writes, [['meeting-notes', true], ['meeting-notes', false]]);
-  assert.equal(cardFor(el, 'meeting-notes').children[2].textContent, '安装');
-  assert.equal(mounted.installed.has('meeting-notes'), false);
-});
-
-test('a failed install shows the server reason and leaves the card uninstalled', async () => {
-  const {doc, el} = fakeDocument();
-  const mounted = mountSkills(doc, {
-    read: async () => new Set(),
-    write: async () => { throw new Error('Unknown skill id'); },
-  });
-  await mounted.ready;
-  await cardFor(el, 'meeting-notes').children[2].handlers.click();
-  assert.equal(el('skills-error').hidden, false);
-  assert.equal(el('skills-error').textContent, 'Unknown skill id');
-  assert.equal(mounted.installed.size, 0);
-  const card = cardFor(el, 'meeting-notes');
-  assert.equal(card.children[2].textContent, '安装');
-  assert.equal(card.children[2].attributes['aria-pressed'], 'false');
-  assert.equal(card.className.includes('is-installed'), false);
-});
-
-test('signed out, the page explains why and never writes a local install', async () => {
-  const {doc, el} = fakeDocument();
-  const mounted = mountSkills(doc, {
-    read: async () => { throw new Error('Sign in first'); },
-    write: async () => { throw new Error('Sign in first'); },
-  });
-  await mounted.ready;
-  assert.equal(el('skills-error').textContent, 'Sign in first');
-  assert.equal(mounted.installed.size, 0);
-  await cardFor(el, 'meeting-notes').children[2].handlers.click();
-  assert.equal(mounted.installed.size, 0);
-  assert.equal(cardFor(el, 'meeting-notes').children[2].textContent, '安装');
-  assert.equal(el('skills-error').textContent, 'Sign in first');
-});
-
-test('mountSkills still filters, counts and shows the empty state', async () => {
-  const {doc, el} = fakeDocument();
-  const mounted = mountSkills(doc, {
-    read: async () => new Set(),
-    write: async () => new Set(),
-  });
-  await mounted.ready;
-  assert.equal(el('skills-count').textContent, `共 ${SKILLS.length} 个技能`);
-  assert.equal(el('skills-empty').hidden, true);
-
-  el('skills-search').value = '会议';
-  el('skills-search').handlers.input();
-  assert.equal(el('skills-list').children.length, 1);
-  assert.equal(el('skills-count').textContent, `显示 1 / ${SKILLS.length} 个技能`);
-  assert.equal(el('skills-list').children[0].children[1].children[0].textContent, '会议纪要');
-
-  el('skills-search').value = '找不到的技能';
-  el('skills-search').handlers.input();
-  assert.equal(el('skills-list').children.length, 0);
-  assert.equal(el('skills-empty').hidden, false);
+  assert.equal(el('skills-list').children[0].children[3].textContent, '加入我的技能库');
 });

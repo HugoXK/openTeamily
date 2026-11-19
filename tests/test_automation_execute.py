@@ -87,6 +87,31 @@ class AutomationExecuteTests(unittest.TestCase):
         self.assertEqual(done['status'], 200, done)
         return done
 
+    def test_run_list_filters_by_stored_status(self):
+        aid = self.create()
+        self.tick()
+        token, agent = self.online_agent()
+        assigned = self.tick()
+        task_id = assigned['body']['items'][0]['dispatch']['task_id']
+        self.assertEqual(agent.call('POST', f'/v1/agent/tasks/{task_id}/claim', {})['status'], 200)
+        failed_result = agent.call('POST', f'/v1/agent/tasks/{task_id}/result', {'status': 'failed', 'result': {'error': 'boom'}})
+        self.assertEqual(failed_result['status'], 200, failed_result)
+        url = f'/v1/workspaces/{self.wid}/automations/{aid}/runs'
+        failed = self.alice.call('GET', url + '?status=failed')
+        self.assertEqual(failed['status'], 200, failed)
+        self.assertEqual([item['status'] for item in failed['body']['items']], ['failed'], failed['body'])
+        succeeded = self.alice.call('GET', url + '?status=succeeded')
+        self.assertEqual(succeeded['status'], 200, succeeded)
+        self.assertEqual(succeeded['body']['items'], [])
+        queued = self.alice.call('GET', url + '?status=queued')
+        self.assertEqual(queued['status'], 200, queued)
+        self.assertEqual(queued['body']['items'], [])
+        every = self.alice.call('GET', url + '?limit=20')
+        self.assertEqual(every['status'], 200, every)
+        self.assertEqual(len(every['body']['items']), 1)
+        bogus = self.alice.call('GET', url + '?status=bogus')
+        self.assertEqual(bogus['status'], 400, bogus)
+
     def test_no_agent_stays_queued_and_retries_when_connected(self):
         aid = self.create()
         first = self.tick()

@@ -58,7 +58,7 @@
 
 .skills-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
   gap: 0.75rem;
   margin: 0;
   padding: 0;
@@ -150,3 +150,17 @@
   .skill-card { grid-template-columns: 2.25rem minmax(0, 1fr); }
   .skill-install { grid-column: 2; justify-self: start; }
 }
+
+#skills-scope { display: block; max-width: 100%; margin: .35rem 0 .75rem; font: inherit; }
+#skills-permission { margin: 0 .4rem 0 0; }
+.skills-runtime-note { margin: .65rem 0 1rem; }
+.skill-copy p { margin: .25rem 0; font-size: .75rem; line-height: 1.5; color: var(--ot-muted); }
+.skill-copy details { font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere; }
+.skill-copy summary { cursor: pointer; color: var(--ot-accent-hover); }
+.skill-copy pre { max-height: 22rem; overflow: auto; font: inherit; overflow-wrap: anywhere; }
+.skill-copy small { overflow-wrap: anywhere; }
+.skill-install { align-self: start; min-height: 2rem; }
+.skill-install:focus-visible, .skill-copy summary:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 3px; }
+.skills-grid { align-items: start; }
+.skill-card { align-items: start; }
+#skills-error:empty { display: none; }
