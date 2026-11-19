@@ -788,3 +788,22 @@
   align-items: center;
   font-size: 0.85rem;
 }
+
+/* Durable per-user unread count from the social conversation API. */
+.unread-badge {
+  min-width: 1.25rem;
+  padding: .1rem .35rem;
+  border-radius: 1rem;
+  background: var(--ot-accent, #285b45);
+  color: #fff;
+  font-size: .75rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+#conversation-list .time {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: .25rem;
+}

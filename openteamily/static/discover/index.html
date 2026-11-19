@@ -72,17 +72,18 @@
         <nav class="feed-tabs" aria-label="动态类型">
           <button type="button" id="feed-tab-following" data-feed-tab="following" aria-selected="false">关注</button>
           <button type="button" id="feed-tab-activity" data-feed-tab="activity" aria-selected="true">动态</button>
+          <button type="button" id="feed-tab-collected" data-feed-tab="collected" aria-selected="false">已收录</button>
         </nav>
       </header>
       <div class="feed-filters" aria-label="内容分类">
-        <button type="button" class="feed-filter-all" aria-current="true" title="当前显示全部已公开作品。其他分类筛选仍未接通。">全部</button>
+        <button type="button" class="feed-filter-all" id="feed-kind-all" aria-current="true" title="显示全部已公开作品。">全部</button>
         <button type="button" disabled title="未接通：没有动态分类接口">热门</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">网页</button>
+        <button type="button" id="feed-kind-website" aria-current="false" title="筛选已公开的网页作品">网页</button>
         <button type="button" disabled title="未接通：没有动态分类接口">小游戏</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">图片</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">音乐</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">幻灯片</button>
-        <button type="button" disabled title="未接通：没有动态分类接口">视频</button>
+        <button type="button" id="feed-kind-image" aria-current="false" title="筛选已公开的图片作品">图片</button>
+        <button type="button" id="feed-kind-audio" aria-current="false" title="筛选已公开的音乐作品">音乐</button>
+        <button type="button" id="feed-kind-slides" aria-current="false" title="筛选已公开的幻灯片作品">幻灯片</button>
+        <button type="button" id="feed-kind-video" aria-current="false" title="筛选已公开的视频作品">视频</button>
         <button type="button" disabled title="未接通：没有动态分类接口">3D 作品</button>
         <button type="button" disabled title="未接通：没有动态分类接口">短剧</button>
         <button type="button" disabled title="未接通：没有动态分类接口">文章</button>
@@ -106,7 +107,7 @@
       <p id="feed-count" role="status" aria-live="polite"></p>
       <p id="feed-error" role="alert" hidden></p>
       <button type="button" id="feed-more" hidden>加载更多</button>
-      <p id="feed-note" class="note">还没有公开作品，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。点赞、关注和分类筛选仍未接通。</p>
+      <p id="feed-note" class="note">还没有公开作品，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。支持点赞、收录和关注作者；其他分类尚未接通。</p>
       <p id="feed-search-note" class="note" hidden></p>
       <p class="note">公共智能体目录在 <a href="/discover?tab=agents">/discover?tab=agents</a>。</p>
     </section>

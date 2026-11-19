@@ -52,9 +52,10 @@
   <section id="session-pane" class="session-pane">
     <div class="session-toolbar">
       <button type="button" id="search-close" hidden title="关闭搜索">‹</button>
-      <button type="button" id="session-filter" class="toolbar-icon" disabled title="未实现：会话筛选（全部/群聊/单聊/已读/未读）" aria-label="筛选">
+      <button type="button" id="session-filter" class="toolbar-icon" title="会话筛选" aria-label="筛选">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 6h16v2H4V6zm3 5h10v2H7v-2zm3 5h4v2h-4v-2z"/></svg>
-      </button>
+      </button><label id="session-filter-label" hidden>会话类型
+      <select id="session-filter-value"><option value="all">全部</option><option value="group">群聊</option><option value="dm">单聊</option><option value="unread">未读（单聊/群聊）</option><option value="read">已读（单聊/群聊）</option><option value="pinned">已置顶（单聊/群聊）</option></select></label>
       <label class="session-search">
         <span class="visually-hidden">搜索</span>
         <span class="search-icon" aria-hidden="true">
@@ -165,11 +166,18 @@
         <button type="button" id="chat-back" title="返回会话列表" aria-label="返回会话列表">‹</button>
         <button type="button" disabled title="未实现：邀请">邀请</button>
         <button type="button" disabled title="未实现：语音或视频通话">通话</button>
+        <button type="button" id="pin-conversation" hidden>置顶会话</button>
+        <button type="button" id="conversation-search-open">会话内搜索</button>
         <button type="button" id="message-search" title="搜索消息">搜索</button>
         <a id="open-agent-dir" href="/agents">资料</a>
       </div>
     </header>
+    <section id="conversation-search-panel" hidden aria-label="会话内搜索">
+      <form id="conversation-search-form"><label>搜索当前会话<input id="conversation-search-query" maxlength="80"></label><button type="submit">搜索</button><button type="button" id="conversation-search-close">关闭</button></form>
+      <p id="conversation-search-status" role="status"></p><ul id="conversation-search-results"></ul><button type="button" id="conversation-search-more" hidden>加载更多</button>
+    </section>
     <p id="social-agent-members" class="gap-note" hidden></p>
+    <label>上传到工作区作品库并发送附件（单聊/群聊；工作区成员可在作品库查看）<input type="file" id="chat-attachment" accept="image/png,image/jpeg,image/gif,image/webp,audio/mpeg,audio/wav,video/mp4,video/webm"></label>
     <p id="onboarding-banner" class="note" hidden>完善<strong>工作背景</strong>，让自动化推荐更贴合你。<a href="/onboarding">去设置</a></p>
     <section id="group-agent-action" class="gap-note" hidden>
       <h2>群内智能体</h2>
