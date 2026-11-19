@@ -66,6 +66,27 @@ export function messageSearchQuery(query, conversationId = '', cursor = '') {
   return params.toString();
 }
 
+export function homepageStartIndex(search) {
+  const source = search === undefined
+    ? ((typeof location !== 'undefined' && location.search) || '')
+    : search;
+  const params = new URLSearchParams(String(source).startsWith('?') ? String(source).slice(1) : source);
+  const raw = params.get('start');
+  if (!/^(0|[1-4])$/.test(raw || '')) return null;
+  return Number(raw);
+}
+
+export function stripHomepageStartQuery(pathname, search, hash) {
+  const params = new URLSearchParams(String(search || '').replace(/^\?/, ''));
+  if (!params.has('start')) {
+    return {changed: false, href: (pathname || '') + (search || '') + (hash || '')};
+  }
+  params.delete('start');
+  const next = params.toString();
+  const href = (pathname || '') + (next ? '?' + next : '') + (hash || '');
+  return {changed: true, href};
+}
+
 function searchHitKey(hit) {
   return [hit.kind || '', hit.conversationId || '', hit.messageId || hit.id || '', hit.preview || '']
     .join('\u0000');
@@ -932,6 +953,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     );
   }
 
+  async function startHomepageConversation(index) {
+    const result = await request('POST', '/v1/agent-homepages/start', {quick_start: index}, {
+      'Idempotency-Key': idempotencyKey('home-start-'),
+    });
+    if (result.status !== 200 && result.status !== 201) {
+      show('error', messageFor(
+        result.body && result.body.error,
+        result.status === 401
+          ? '请先登录，再从公开主页发起对话。'
+          : '无法从公开主页发起对话。只有工作区成员可以，且需要先打开该公开主页。',
+      ));
+      return false;
+    }
+    const conversation = result.body && result.body.conversation;
+    if (!conversation || !conversation.id || !conversation.agent_id || !conversation.workspace_id) {
+      show('error', '无法从公开主页发起对话。');
+      return false;
+    }
+    if ([...workspaceSelect.options].some(option => option.value === conversation.workspace_id)) {
+      workspaceSelect.value = conversation.workspace_id;
+    }
+    await loadSessions();
+    await openAgentConversation(conversation.agent_id, conversation.id);
+    return true;
+  }
+
   async function load() {
     const session = await request('GET', '/v1/auth/session');
     if (session.status !== 200) {
@@ -985,6 +1032,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     await loadSessions();
+    const homepageStart = homepageStartIndex();
+    if (homepageStart !== null) {
+      const started = await startHomepageConversation(homepageStart);
+      const stripped = stripHomepageStartQuery(location.pathname, location.search, location.hash);
+      if (stripped.changed) history.replaceState(null, '', stripped.href);
+      if (started) {
+        show('', '');
+        return;
+      }
+    }
     const start = hashParams();
     if (start.social) {
       await openSocialConversation(start.social);

@@ -261,8 +261,10 @@ body{margin:0;font-family:system-ui,sans-serif;background:var(--bg);color:var(--
 a.create-agent{text-decoration:none;display:inline-block}
 .talk-chip[disabled],.composer button[disabled],.composer textarea[disabled]{opacity:.65;cursor:not-allowed}
 .start-list{margin:0;padding:0;list-style:none}
-.start-list li{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.55rem 0;border-bottom:1px solid var(--line);color:var(--ink)}
-.start-list .chevron{color:var(--muted)}
+.start-list li{padding:0;border-bottom:1px solid var(--line);color:var(--ink)}
+.start-list a,.quick-start-cards a{display:flex;align-items:center;justify-content:space-between;gap:.75rem;padding:.55rem 0;color:inherit;text-decoration:none}
+.quick-start-cards a{padding:.7rem .9rem;width:100%;box-sizing:border-box}
+.start-list .chevron,.quick-start-cards .chevron{color:var(--muted)}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:1.25rem;padding:1.25rem;min-height:28rem;display:flex;flex-direction:column;gap:1rem}
 .panel h2{margin:0;font-size:1rem}
 .panel .lead{margin:0;color:var(--muted);font-size:.9rem}
@@ -270,8 +272,7 @@ a.create-agent{text-decoration:none;display:inline-block}
 .intro-bubble{align-self:flex-start;max-width:22rem;margin:0;background:var(--bg);border-radius:1rem;padding:.75rem 1rem}
 .quick-starts h3{margin:0 0 .5rem;font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
 .quick-start-cards{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:.5rem}
-.quick-start-cards li{display:flex;align-items:center;justify-content:space-between;gap:.75rem;border:1px solid var(--line);border-radius:.9rem;padding:.7rem .9rem;background:var(--bg)}
-.quick-start-cards .chevron{color:var(--muted)}
+.quick-start-cards li{border:1px solid var(--line);border-radius:.9rem;padding:0;background:var(--bg)}
 .composer{display:flex;gap:.5rem;align-items:flex-end}
 .composer textarea{flex:1;min-height:3.5rem;resize:none;border:1px solid var(--line);border-radius:.9rem;padding:.75rem .9rem;font:inherit;background:var(--bg)}
 .composer button{flex:0 0 auto;border:1px solid var(--line);border-radius:999px;padding:.55rem .9rem;font:inherit;background:var(--card)}
@@ -291,13 +292,16 @@ def render_homepage(row, quick_starts=None):
     placeholder = escape('Message ' + (row['name'] or '智能体') + ' on the web…')
     starts = list(quick_starts if quick_starts is not None else row.get('quick_starts') or ())
     start_items = ''.join(
-        '<li><span>' + escape(item) + '</span><span class="chevron" aria-hidden="true">→</span></li>'
-        for item in starts
+        '<li><a class="quick-start-link" href="/chat?start=' + str(index) + '">'
+        '<span>' + escape(item) + '</span><span class="chevron" aria-hidden="true">→</span></a></li>'
+        for index, item in enumerate(starts)
     )
     if starts:
         start_block = (
             '<ul class="start-list">' + start_items + '</ul>'
-            '<p class="note">未接通：这些开场提示只作展示。公开主页不会发送消息，也不会调用模型。</p>'
+            '<p class="note">登录且属于该工作区后，点击开场会在聊天里发起对话并发送这条提示。'
+            '未接通：输入框仍不能在此页发送，公开主页本身不会调用模型。'
+            '未登录或不属于该工作区时不会创建会话。</p>'
         )
         cards = (
             '<div class="quick-starts"><h3>Quick starts</h3>'
@@ -309,8 +313,14 @@ def render_homepage(row, quick_starts=None):
         )
         cards = ''
     intro = (
-        '<p class="intro-bubble">Start a conversation with ' + heading
-        + '. This panel is typography only and does not run a conversation or call a model.</p>'
+        '<p class="intro-bubble">Start a conversation with ' + heading + '. '
+        + (
+            'Click a quick start to continue in chat if you are a signed-in workspace member. '
+            'This page does not call a model itself.'
+            if starts else
+            'This panel is typography only and does not run a conversation or call a model.'
+        )
+        + '</p>'
     )
     return (
         '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
