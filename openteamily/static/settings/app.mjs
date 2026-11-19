@@ -559,7 +559,50 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     await renderSkillSecrets();
+    await renderNotificationPrefs();
     await syncComposio();
+  }
+
+  // One switch per notification category. The server enforces the choice: a
+  // failed save puts the switch back and shows the reason the server returned,
+  // and a category that is off produces no item on the next read.
+  const NOTIFY_PREFS = [
+    ['mentions', 'notify-mentions'],
+    ['task_completion', 'notify-task-completion'],
+    ['artifacts', 'notify-artifacts'],
+  ];
+
+  async function renderNotificationPrefs() {
+    const state = document.getElementById('notification-prefs-state');
+    const inputs = NOTIFY_PREFS
+      .map(([category, id]) => [category, document.getElementById(id)])
+      .filter(([, input]) => input);
+    if (!inputs.length) return;
+    const listed = await request('GET', '/v1/notification-prefs');
+    if (listed.status !== 200) {
+      for (const [, input] of inputs) input.disabled = true;
+      if (state) state.textContent = '通知偏好读取失败，请稍后重试。';
+      return;
+    }
+    const prefs = listed.body.prefs || {};
+    for (const [category, input] of inputs) {
+      input.disabled = false;
+      input.checked = prefs[category] !== false;
+      input.onchange = async () => {
+        const wanted = input.checked;
+        input.disabled = true;
+        const saved = await request('PUT', '/v1/notification-prefs', {changes: {[category]: wanted}});
+        input.disabled = false;
+        if (saved.status !== 200) {
+          input.checked = !wanted;
+          if (state) state.textContent = '没保存：' + messageFor(saved.body.error, '稍后再试。');
+          return;
+        }
+        const stored = (saved.body.prefs || {})[category];
+        input.checked = stored !== false;
+        if (state) state.textContent = input.checked ? '这类通知已开启。' : '这类通知已关闭，服务端不再产生这类通知。';
+      };
+    }
   }
 
   async function renderProviders() {

@@ -10,6 +10,8 @@ conversation unread aggregation and server push are not implemented here; do not
 import re
 from uuid import uuid4
 
+from . import notification_prefs
+
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS social_notifications (
  id TEXT PRIMARY KEY,
@@ -25,6 +27,10 @@ CREATE TABLE IF NOT EXISTS social_notifications (
  UNIQUE(message_id, user_id, kind));
 CREATE INDEX IF NOT EXISTS social_notification_inbox
  ON social_notifications(workspace_id, user_id, seq);
+CREATE TABLE IF NOT EXISTS social_artifact_notification_reads (
+ artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ PRIMARY KEY(artifact_id, user_id));
 CREATE TABLE IF NOT EXISTS social_reply_notification_reads (
  reply_id TEXT NOT NULL REFERENCES social_agent_replies(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -33,6 +39,10 @@ CREATE TABLE IF NOT EXISTS social_reply_notification_reads (
 
 # Task-completion notifications are derived from the requester's own group agent
 # requests that reached a terminal state; only the read marker is stored.
+# Saved-work notifications are derived the same way from artifact_chat_sources:
+# a work another member saved in a conversation the reader belongs to. The
+# per-user preferences in :mod:`openteamily.notification_prefs` are enforced
+# here, on the server, so turning a category off really stops the item.
 
 LIMIT = 100
 EXCERPT = 140
@@ -62,14 +72,20 @@ def record_mentions(db, workspace_id, conversation_id, message_id, actor_id, tex
         f'WHERE m.conversation_id=? AND m.workspace_id=? AND u.id<>? AND u.username IN ({placeholders}) '
         'ORDER BY u.id', (conversation_id, workspace_id, actor_id, *names)).fetchall()
     seq = db.execute('SELECT COALESCE(MAX(seq),0) FROM social_notifications').fetchone()[0]
+    inserted = 0
     for row in rows:
+        # The mention preference is enforced at the write point: a recipient who
+        # turned @mentions off never gets a row, so no later read can show one.
+        if not notification_prefs.enabled(db, row['id'], 'mentions'):
+            continue
         seq += 1
+        inserted += 1
         db.execute('INSERT OR IGNORE INTO social_notifications '
                    '(id,workspace_id,user_id,actor_id,conversation_id,message_id,kind,seq,created,read) '
                    'VALUES(?,?,?,?,?,?,?,?,?,0)',
                    (uuid4().hex, workspace_id, row['id'], actor_id, conversation_id, message_id,
                     'mention', seq, now))
-    return len(rows)
+    return inserted
 
 
 VISIBLE = '''
@@ -113,24 +129,77 @@ def reply_view(row):
             'created': row['updated'], 'read': row['is_read'] == 1}
 
 
+ARTIFACT_VISIBLE = '''
+ FROM artifact_chat_sources s
+ JOIN artifacts a ON a.id=s.artifact_id
+ JOIN social_conversations c ON c.id=s.conversation_id
+ JOIN users u ON u.id=a.created_by
+ JOIN social_members sm ON sm.conversation_id=s.conversation_id AND sm.user_id=?
+ LEFT JOIN social_artifact_notification_reads rr ON rr.artifact_id=s.artifact_id AND rr.user_id=?
+ WHERE s.workspace_id=? AND a.created_by<>?
+'''
+
+
+def _artifact_rows(db, workspace_id, user_id, extra='', args=(), limit=LIMIT):
+    return db.execute(
+        'SELECT a.id AS id, a.title AS title, a.created AS created, a.created_by AS created_by, '
+        's.conversation_id AS conversation_id, s.message_id AS message_id, '
+        'c.kind AS conversation_kind, c.title AS conversation_title, u.username AS actor_username, '
+        '(rr.artifact_id IS NOT NULL) AS is_read' + ARTIFACT_VISIBLE + extra
+        + ' ORDER BY a.created DESC, a.id DESC LIMIT ?',
+        (user_id, user_id, workspace_id, user_id, *args, limit)).fetchall()
+
+
+def artifact_view(row):
+    return {'id': row['id'], 'kind': 'artifact', 'conversation_id': row['conversation_id'],
+            'conversation_kind': row['conversation_kind'], 'conversation_title': row['conversation_title'],
+            'message_id': row['message_id'], 'actor_id': row['created_by'],
+            'actor_username': row['actor_username'],
+            'excerpt': '保存了作品「' + row['title'] + '」',
+            'created': row['created'], 'read': row['is_read'] == 1}
+
+
+def _mark_artifacts(db, workspace_id, user_id, extra='', args=()):
+    db.execute('INSERT OR IGNORE INTO social_artifact_notification_reads(artifact_id,user_id) SELECT a.id, ?'
+               + ARTIFACT_VISIBLE + ' AND rr.artifact_id IS NULL' + extra,
+               (user_id, user_id, user_id, workspace_id, user_id, *args))
+
+
 def listing(db, workspace_id, user_id, unread_only=False):
-    rows = db.execute(
-        'SELECT n.*, msg.body AS body, c.kind AS conversation_kind, c.title AS conversation_title, '
-        'a.username AS actor_username' + VISIBLE + (' AND n.read=0' if unread_only else '')
-        + ' ORDER BY n.seq DESC LIMIT ?', (workspace_id, user_id, LIMIT)).fetchall()
-    replies = db.execute(
-        'SELECT r.*, c.kind AS conversation_kind, c.title AS conversation_title, '
-        '(rr.reply_id IS NOT NULL) AS is_read' + REPLIES + (' AND rr.reply_id IS NULL' if unread_only else '')
-        + ' ORDER BY r.updated DESC, r.id DESC LIMIT ?', (workspace_id, user_id, LIMIT)).fetchall()
-    items = [view(row) for row in rows] + [reply_view(row) for row in replies]
+    prefs = notification_prefs.load(db, user_id)
+    items = []
+    if prefs['mentions']:
+        rows = db.execute(
+            'SELECT n.*, msg.body AS body, c.kind AS conversation_kind, c.title AS conversation_title, '
+            'a.username AS actor_username' + VISIBLE + (' AND n.read=0' if unread_only else '')
+            + ' ORDER BY n.seq DESC LIMIT ?', (workspace_id, user_id, LIMIT)).fetchall()
+        items += [view(row) for row in rows]
+    if prefs['task_completion']:
+        replies = db.execute(
+            'SELECT r.*, c.kind AS conversation_kind, c.title AS conversation_title, '
+            '(rr.reply_id IS NOT NULL) AS is_read' + REPLIES + (' AND rr.reply_id IS NULL' if unread_only else '')
+            + ' ORDER BY r.updated DESC, r.id DESC LIMIT ?', (workspace_id, user_id, LIMIT)).fetchall()
+        items += [reply_view(row) for row in replies]
+    if prefs['artifacts']:
+        items += [artifact_view(row) for row in _artifact_rows(
+            db, workspace_id, user_id, ' AND rr.artifact_id IS NULL' if unread_only else '')]
     items.sort(key=lambda item: item['created'], reverse=True)
     return items[:LIMIT]
 
 
 def unread_count(db, workspace_id, user_id):
-    mentions = db.execute('SELECT COUNT(*)' + VISIBLE + ' AND n.read=0', (workspace_id, user_id)).fetchone()[0]
-    replies = db.execute('SELECT COUNT(*)' + REPLIES + ' AND rr.reply_id IS NULL', (workspace_id, user_id)).fetchone()[0]
-    return mentions + replies
+    prefs = notification_prefs.load(db, user_id)
+    count = 0
+    if prefs['mentions']:
+        count += db.execute('SELECT COUNT(*)' + VISIBLE + ' AND n.read=0',
+                            (workspace_id, user_id)).fetchone()[0]
+    if prefs['task_completion']:
+        count += db.execute('SELECT COUNT(*)' + REPLIES + ' AND rr.reply_id IS NULL',
+                            (workspace_id, user_id)).fetchone()[0]
+    if prefs['artifacts']:
+        count += db.execute('SELECT COUNT(*)' + ARTIFACT_VISIBLE + ' AND rr.artifact_id IS NULL',
+                            (user_id, user_id, workspace_id, user_id)).fetchone()[0]
+    return count
 
 
 def _mark_replies(db, workspace_id, user_id, extra='', args=()):
@@ -143,6 +212,7 @@ def mark_read(db, workspace_id, user_id, notification_id=None):
         db.execute('UPDATE social_notifications SET read=1 WHERE workspace_id=? AND user_id=? AND read=0',
                    (workspace_id, user_id))
         _mark_replies(db, workspace_id, user_id)
+        _mark_artifacts(db, workspace_id, user_id)
         return True
     cursor = db.execute('UPDATE social_notifications SET read=1 WHERE id=? AND workspace_id=? AND user_id=?',
                         (notification_id, workspace_id, user_id))
@@ -150,6 +220,10 @@ def mark_read(db, workspace_id, user_id, notification_id=None):
         return True
     if db.execute('SELECT 1' + REPLIES + ' AND r.id=?', (workspace_id, user_id, notification_id)).fetchone():
         _mark_replies(db, workspace_id, user_id, ' AND r.id=?', (notification_id,))
+        return True
+    if db.execute('SELECT 1' + ARTIFACT_VISIBLE + ' AND a.id=?',
+                  (user_id, user_id, workspace_id, user_id, notification_id)).fetchone():
+        _mark_artifacts(db, workspace_id, user_id, ' AND a.id=?', (notification_id,))
         return True
     return False
 
@@ -161,3 +235,7 @@ def mark_conversation_read(db, workspace_id, user_id, conversation_id, up_to_seq
                (workspace_id, user_id, conversation_id, conversation_id, up_to_seq))
     _mark_replies(db, workspace_id, user_id, ' AND r.conversation_id=? AND (r.seq IS NULL OR r.seq<=?)',
                   (conversation_id, up_to_seq))
+    _mark_artifacts(db, workspace_id, user_id,
+                    ' AND s.conversation_id=? AND s.message_id IN '
+                    '(SELECT id FROM social_messages WHERE conversation_id=? AND seq<=?)',
+                    (conversation_id, conversation_id, up_to_seq))

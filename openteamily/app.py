@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, composio, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, composio, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notification_prefs, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -455,9 +455,9 @@ class App:
         method, path, query = env.get('REQUEST_METHOD'), env.get('PATH_INFO', ''), env.get('QUERY_STRING', '')
         if len(path) > 256 or len(query) > 512:
             refuse(400, 'invalid', 'Request target is too long')
-        if method not in ('GET', 'POST'):
-            refuse(405, 'method', 'Only GET and POST are supported')
-        if method == 'POST' and query:
+        if method not in ('GET', 'POST', 'PUT'):
+            refuse(405, 'method', 'Only GET, POST and PUT are supported')
+        if method in ('POST', 'PUT') and query:
             refuse(400, 'invalid', 'Query parameters are not accepted for writes')
         now = int(self.clock())
         share_path = re.fullmatch(r'/share/([A-Za-z0-9_-]{43})', path)
@@ -557,7 +557,7 @@ class App:
         if path == '/v1/composio' or path.startswith('/v1/composio/'):
             with self.store.connect() as db:
                 session = self.authenticated(db, env, now)
-            if method == 'POST':
+            if method in ('POST', 'PUT'):
                 self.csrf_check(env, session)
             return self.composio_dispatch(env, session['user_id'], method, path, query, now)
         if path.startswith('/v1/admin/'):
@@ -594,12 +594,12 @@ class App:
                 return self.manager_dispatch(env, manager, method, path, query)
             with self.store.connect() as db:
                 session = self.authenticated(db, env, now)
-            if method == 'POST':
+            if method in ('POST', 'PUT'):
                 self.csrf_check(env, session)
             return self.runtime_dispatch(env, session['user_id'], method, path, query)
         with self.store.transaction() as db:
             session = self.authenticated(db, env, now)
-            if method == 'POST':
+            if method in ('POST', 'PUT'):
                 self.csrf_check(env, session)
             if path == '/v1/auth/session' and method == 'GET' and not query:
                 return 200, {'user': {'id': session['user_id'], 'username': session['username']},
@@ -661,6 +661,16 @@ class App:
                 if method == 'POST' and not query:
                     return self.personal_agent_ensure(db, session, now)
                 refuse(400, 'invalid', 'Invalid personal agent request')
+            if path == '/v1/notification-prefs' and not query:
+                if method == 'GET':
+                    return 200, notification_prefs.payload(db, session['user_id']), []
+                if method == 'PUT':
+                    body = self.body(env, ['changes'])
+                    try:
+                        return 200, notification_prefs.update(db, session['user_id'], body.get('changes'), now), []
+                    except ValueError as error:
+                        refuse(400, 'invalid', str(error))
+                refuse(405, 'method', 'Only GET and PUT are supported')
             if path == '/v1/settings' and method == 'GET' and not query:
                 row = db.execute('SELECT * FROM user_settings WHERE user_id=?', (session['user_id'],)).fetchone()
                 return 200, {'settings': settings.view(row)}, []
