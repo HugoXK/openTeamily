@@ -1,3 +1,4 @@
+import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
@@ -1149,7 +1150,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
 
+  const workspaceEvents=mountWorkspaceEvents(document,{onInvalidate:async(event)=>{
+    if(event.workspace!==workspaceId()||document.visibilityState==='hidden')return;
+    await loadSessions();
+    if(event.workspace!==workspaceId())return;
+    if(!event.initial&&event.changed.includes('social')&&currentSource==='social'&&currentConversation){
+      const banner=document.getElementById('conversation-live-update');if(banner)banner.hidden=false;
+    }
+  }});
+  document.getElementById('conversation-live-load')?.addEventListener('click',async()=>{
+    if(currentSource==='social'&&currentConversation)await openSocialConversation(currentConversation.id);
+    const banner=document.getElementById('conversation-live-update');if(banner)banner.hidden=true;
+  });
   async function loadSessions() {
+    workspaceEvents.start(workspaceId());
     loadNotifications();
     const id = workspaceId();
     sessions = [];
