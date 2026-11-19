@@ -120,7 +120,12 @@ class SettingsPageTests(unittest.TestCase):
         account = html.find('id="group-account"')
         ai = html.find('id="group-ai"')
         prefs = html.find('id="group-prefs"')
-        self.assertTrue(-1 < account < ai < prefs)
+        support = html.find('id="group-support"')
+        self.assertTrue(-1 < account < ai < prefs < support)
+        self.assertIn('支持与法律', html)
+        support_html = html[support:]
+        self.assertIn('href="/about"', support_html)
+        self.assertIn('href="/guide"', support_html)
         self.assertIn('href="/profile"', html)
         self.assertIn('href="/settings/language"', html)
         self.assertIn('href="/settings/channels"', html)
