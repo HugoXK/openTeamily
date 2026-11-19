@@ -252,7 +252,7 @@ def handle_task(task, origin=None, token=None, requester=request, inferer=infer_
 
 
 def run_cycle(origin, token, hostname, once=False, poll=1.0, sleeper=time.sleep, requester=request, inferer=infer_chat, infer_timeout=30):
-    status, connected = requester(origin, 'POST', '/v1/agent/connect', token, {'hostname': hostname})
+    status, connected = requester(origin, 'POST', '/v1/agent/connect', token, {'hostname': hostname, 'skill_formats':['openteamily.prompt-skill.v1']})
     if status not in (200, 201):
         raise AgentError(status, connected)
     processed = []
@@ -261,13 +261,23 @@ def run_cycle(origin, token, hostname, once=False, poll=1.0, sleeper=time.sleep,
         listed = requester(origin, 'GET', '/v1/agent/tasks', token)[1]
         items = listed.get('items') or []
         for task in items:
-            claimed = requester(origin, 'POST', '/v1/agent/tasks/' + task['id'] + '/claim', token, {})[1]
+            try:
+                claimed = requester(origin, 'POST', '/v1/agent/tasks/' + task['id'] + '/claim', token, {})[1]
+            except AgentError as error:
+                if error.status in (404,409):
+                    continue  # A task cancelled/claimed after listing must not kill the daemon.
+                raise
             payload = claimed.get('task') or task
             outcome, result = handle_task(
                 payload, origin=origin, token=token, requester=requester,
                 inferer=inferer, infer_timeout=infer_timeout)
-            requester(origin, 'POST', '/v1/agent/tasks/' + payload['id'] + '/result', token,
-                      {'status': outcome, 'result': result})
+            try:
+                requester(origin, 'POST', '/v1/agent/tasks/' + payload['id'] + '/result', token,
+                          {'status': outcome, 'result': result})
+            except AgentError as error:
+                if error.status in (404,409):
+                    continue  # Revocation during inference: never retry the model or resurrect the task.
+                raise
             processed.append(payload['id'])
         if once:
             return connected.get('connection'), processed
