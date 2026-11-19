@@ -1286,6 +1286,91 @@ test('composer + creation grid deep-links real editors and labels the rest 未�
   assert.ok((html.match(/未接通/g) || []).length >= 5);
 });
 
+// Media shared in a chat is uploaded to the workspace library before the
+// message is sent, so the message carries an attachment with a mime type. The
+// message list has to show an image as an image: the document card with a DOC
+// cover and a download link is what an attachment used to look like for every
+// file type, and it hides the picture a user just sent.
+
+function attachmentFetcher(item) {
+  const aliceRow = {user_id: alice, username: 'alice'};
+  const conversation = {
+    id: 'conv-1', kind: 'dm', title: 'bob', updated: 30,
+    members: [aliceRow, {user_id: bob, username: 'bob'}],
+  };
+  const fetcher = async (path) => {
+    if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
+    if (path === '/v1/onboarding') return json(200, {onboarding: {completed: true}});
+    if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
+    if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
+    if (path === '/v1/settings') return json(200, {settings: {values: {}}});
+    if (path === '/v1/workspaces/ws-1/agents?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/members') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/artifacts?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/social/conversations?limit=100') return json(200, {items: [conversation]});
+    if (path === '/v1/workspaces/ws-1/social/conversations/conv-1') {
+      return json(200, {conversation, items: [item]});
+    }
+    throw new Error('unexpected ' + path);
+  };
+  return {fetcher};
+}
+
+const imageAttachment = {
+  id: 'a'.repeat(32), title: '日落.png', mime: 'image/png',
+  path: '/v1/workspaces/ws-1/artifacts/' + 'a'.repeat(32) + '/file',
+};
+
+function attachmentMessage(attachment) {
+  return {
+    id: 'm-1', conversation_id: 'conv-1', workspace_id: 'ws-1', user_id: bob,
+    body: '附件：' + attachment.title, created: '2026-01-01T00:00:00Z', attachment,
+  };
+}
+
+test('a picture shared in a chat renders as an image, not a document card', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher: attachmentFetcher(attachmentMessage(imageAttachment)).fetcher});
+    await settle();
+    const row = el('message-list').children[0];
+    assert.ok(row, 'the fixture conversation renders its message');
+    const image = descendants(row).find((node) => node.tagName === 'IMG');
+    assert.ok(image, 'an image attachment must render as an <img>, otherwise the picture is invisible in chat');
+    assert.equal(image.src, imageAttachment.path, 'the image reads the attachment the message points at');
+    assert.equal(image.alt, '日落.png', 'the image alt text is the attachment title');
+    assert.equal(image.getAttribute('loading'), 'lazy', 'a shared picture is not loaded before it is seen');
+    assert.ok(
+      !descendants(row).some((node) => String(node.textContent).trim() === 'DOC'),
+      'the document cover must not label an image attachment',
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('an audio attachment keeps the document card instead of becoming an image', async () => {
+  const attachment = {id: 'b'.repeat(32), title: '备忘.m4a', mime: 'audio/mp4', path: '/v1/workspaces/ws-1/artifacts/' + 'b'.repeat(32) + '/file'};
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher: attachmentFetcher(attachmentMessage(attachment)).fetcher});
+    await settle();
+    const row = el('message-list').children[0];
+    assert.ok(
+      !descendants(row).some((node) => node.tagName === 'IMG'),
+      'a non-image attachment must not be forced into an image element',
+    );
+    assert.ok(
+      descendants(row).some((node) => String(node.textContent).trim() === 'DOC'),
+      'a non-image attachment keeps the document card',
+    );
+  } finally {
+    restore();
+  }
+});
+
 test('in-chat search jumps to loaded messages, explains unloaded hits, and restores scroll on close', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
