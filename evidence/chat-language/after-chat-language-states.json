@@ -1,0 +1,63 @@
+[
+  {
+    "file": null,
+    "label": "settings 1440x900",
+    "noteExists": true,
+    "note": "发消息时会带上「English」：智能体按这个语言回复。",
+    "selected": "en",
+    "selectedLabel": "English",
+    "noteBox": {
+      "top": 223,
+      "height": 20
+    },
+    "viewportHeight": 900,
+    "overflow": 0
+  },
+  {
+    "file": "settings-language-after-1440x900.png",
+    "label": "settings language 1440x900",
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "file": null,
+    "label": "settings 390x844",
+    "noteExists": true,
+    "note": "发消息时会带上「English」：智能体按这个语言回复。",
+    "selected": "en",
+    "selectedLabel": "English",
+    "noteBox": {
+      "top": 223,
+      "height": 39
+    },
+    "viewportHeight": 844,
+    "overflow": 0
+  },
+  {
+    "file": "settings-language-after-390x844.png",
+    "label": "settings language 390x844",
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "file": "chat-send-after-1440x900.png",
+    "label": "chat after sending one message",
+    "overflow": 0,
+    "errors": []
+  },
+  {
+    "phase": "after",
+    "posts": [
+      {
+        "body": "[CI FIXTURE] 这条消息用来观察请求体里的聊天语言。",
+        "chat_language": "en"
+      }
+    ],
+    "reply": "[CI FIXTURE] Directory assistant[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+    "chatOverflow": 0,
+    "errors": []
+  },
+  {
+    "runtime_task_prompt": "You are [CI FIXTURE] Directory assistant.\nReply in English.\nSynthetic CI directory entry.\nKeep replies short. This agent is fixture data only.\nUser: [CI FIXTURE] Please reply with one labeled sentence.\nAssistant: [CI FIXTURE] Fake provider briefing. Not a real vendor response.\nUser: [CI FIXTURE] 这条消息用来观察请求体里的聊天语言。"
+  }
+]
