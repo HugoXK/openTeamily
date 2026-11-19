@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {mount} from '../openteamily/static/memory/app.mjs';
 import test from 'node:test';
 import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, fillGraphHoverCard, formatTopics, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, listQuery, matchingMemoryPages, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
 
@@ -288,4 +289,175 @@ test('bindGraphNodeGestures does not open a hover card when hover is not allowed
   await new Promise((resolve) => setTimeout(resolve, 15));
   assert.equal(card.hidden, true);
   assert.equal(card.getAttribute('data-id'), undefined);
+});
+
+// The 「偏好」 block sits in the 我的资料 view and keeps its rows in local
+// page state: adding and deleting must change the list without any request.
+
+class PrefElement {
+  constructor(tag = 'div') {
+    this.tagName = String(tag).toUpperCase();
+    this.children = [];
+    this.parent = null;
+    this.attributes = {};
+    this.handlers = {};
+    this.dataset = {};
+    this.hidden = false;
+    this.disabled = false;
+    this.value = '';
+    this.textContent = '';
+    this.className = '';
+    this.type = '';
+    this.options = [];
+    this.elements = {};
+    this.focused = false;
+  }
+  append(...nodes) {
+    for (const node of nodes) {
+      node.parent = this;
+      this.children.push(node);
+    }
+    if (this.tagName === 'SELECT') {
+      this.options = this.children;
+      if (!this.value && this.children[0]) this.value = this.children[0].value;
+    }
+  }
+  appendChild(node) { this.append(node); return node; }
+  replaceChildren(...nodes) {
+    for (const child of this.children) child.parent = null;
+    this.children = [];
+    if (this.tagName === 'SELECT' && !nodes.length) this.value = '';
+    this.append(...nodes);
+  }
+  setAttribute(key, value) { this.attributes[key] = value; }
+  getAttribute(key) { return this.attributes[key]; }
+  removeAttribute(key) { delete this.attributes[key]; }
+  addEventListener(type, handler) { this.handlers[type] = handler; }
+  querySelector(selector) {
+    return this.children.find((child) => child.attributes.class === selector || child.className === selector) || null;
+  }
+  getBoundingClientRect() { return {left: 0, top: 0, width: 0, height: 0}; }
+  focus() { this.focused = true; }
+  click() { if (this.handlers.click) this.handlers.click({target: this, preventDefault() {}}); }
+}
+
+function prefDocument() {
+  const elements = new Map();
+  const body = new PrefElement('body');
+  const doc = {
+    cookie: '',
+    body,
+    defaultView: {location: {pathname: '/memory', search: '?page=profile'}, history: {replaceState() {}}},
+    getElementById(id) {
+      if (!elements.has(id)) {
+        const tag = id === 'workspace' || id === 'action-filter' || id === 'new-action-page' || id === 'link-target' ? 'select'
+          : id.endsWith('-form') ? 'form'
+          : id === 'search' || id === 'topic-search' ? 'input'
+          : id === 'graph-canvas' || id === 'graph-hover-card' ? 'svg'
+          : 'div';
+        const el = new PrefElement(tag);
+        if (id === 'editor-form') {
+          el.hidden = true;
+          el.elements = {title: new PrefElement('input'), body: new PrefElement('textarea'), topics: new PrefElement('input')};
+        }
+        if (id === 'action-editor-form') {
+          el.hidden = true;
+          el.elements = {
+            title: new PrefElement('input'), notes: new PrefElement('textarea'),
+            status: new PrefElement('select'), due: new PrefElement('input'),
+            memory_page_id: new PrefElement('select'),
+          };
+        }
+        elements.set(id, el);
+      }
+      return elements.get(id);
+    },
+    createElement(tag) { return new PrefElement(tag); },
+    createElementNS(_ns, tag) { return new PrefElement(tag); },
+    querySelectorAll() { return []; },
+    addEventListener() {},
+  };
+  return {doc, el: (id) => doc.getElementById(id)};
+}
+
+const prefFlush = () => new Promise((resolve) => setImmediate(resolve));
+const prefSettle = async (times = 8) => {
+  for (let i = 0; i < times; i += 1) await prefFlush();
+};
+const prefJson = (status, body) => ({status, json: async () => body});
+
+function prefFetcher(calls) {
+  return async (path, options = {}) => {
+    calls.push({path, method: options.method || 'GET'});
+    if (path === '/v1/auth/session') return prefJson(200, {user: {id: 'user-1', username: 'alice'}});
+    if (path === '/v1/settings') return prefJson(404, {});
+    if (path === '/v1/workspaces') return prefJson(200, {items: [{id: 'ws-1', name: 'Desk', owner_id: 'user-1'}]});
+    if (path === '/v1/workspaces/ws-1/memory') return prefJson(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/memory/actions') return prefJson(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/memory/graph') {
+      return prefJson(200, {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}});
+    }
+    if (path === '/v1/workspaces/ws-1/memory/profile') {
+      return prefJson(200, {profile: {revision: 0, professional: '', work_style: '', communication: ''}});
+    }
+    throw new Error('unexpected ' + path);
+  };
+}
+
+async function mountPreferences() {
+  const {doc, el} = prefDocument();
+  const calls = [];
+  await mount(doc, {fetcher: prefFetcher(calls)});
+  await prefSettle();
+  return {doc, el, calls};
+}
+
+test('the 偏好 block starts empty and says how to fill it', async () => {
+  const {el, calls} = await mountPreferences();
+  assert.equal(el('profile-panel').hidden, false);
+  assert.equal(el('preferences-empty').hidden, false);
+  assert.equal(el('preferences-empty').textContent, '还没有偏好，加一条试试');
+  assert.equal(el('preference-list').children.length, 0);
+  assert.deepEqual(calls.filter((call) => call.method !== 'GET'), []);
+});
+
+test('adding a preference appends one row, clears the field and hides the empty state', async () => {
+  const {el, calls} = await mountPreferences();
+  el('preference-input').value = '回复用中文';
+  el('add-preference').click();
+  assert.equal(el('preference-list').children.length, 1);
+  const row = el('preference-list').children[0];
+  assert.equal(row.children[0].textContent, '回复用中文');
+  assert.equal(row.children[1].textContent, '删除');
+  assert.equal(el('preferences-empty').hidden, true);
+  assert.equal(el('preference-input').value, '');
+  assert.equal(el('preference-status').textContent, '已添加偏好。');
+  assert.deepEqual(calls.filter((call) => call.method !== 'GET'), []);
+});
+
+test('an empty preference is not added and the status line says why', async () => {
+  const {el} = await mountPreferences();
+  el('preference-input').value = '   ';
+  el('add-preference').click();
+  assert.equal(el('preference-list').children.length, 0);
+  assert.equal(el('preferences-empty').hidden, false);
+  assert.equal(el('preference-status').textContent, '请先写一条偏好。');
+});
+
+test('deleting removes only that preference and brings the empty state back', async () => {
+  const {el, calls} = await mountPreferences();
+  for (const text of ['回复用中文', '会议纪要控制在 200 字']) {
+    el('preference-input').value = text;
+    el('add-preference').click();
+  }
+  assert.equal(el('preference-list').children.length, 2);
+  el('preference-list').children[0].children[1].click();
+  assert.equal(el('preference-list').children.length, 1);
+  assert.equal(el('preference-list').children[0].children[0].textContent, '会议纪要控制在 200 字');
+  assert.equal(el('preferences-empty').hidden, true);
+  el('preference-list').children[0].children[1].click();
+  assert.equal(el('preference-list').children.length, 0);
+  assert.equal(el('preferences-empty').hidden, false);
+  assert.equal(el('preference-status').textContent, '已删除偏好。');
+  assert.deepEqual(calls.filter((call) => call.method !== 'GET'), []);
 });
