@@ -9,7 +9,7 @@
   --ot-muted: #5a6861;
   --ot-line: #e3e9e5;
   --ot-line-strong: #cbd6cf;
-  --ot-accent: #0a7c48;
+  --ot-accent: #097845;
   --ot-accent-hover: #076a3d;
   --ot-accent-soft: #e0f3e7;
   --ot-ok: #0f766e;
@@ -17,7 +17,7 @@
   --ot-danger: #be123c;
   --ot-danger-bg: #ffe4e6;
   --ot-warn-bg: #fff7ed;
-  --ot-focus: #0a7c48;
+  --ot-focus: #097845;
   --ot-shadow-sm: 0 1px 2px rgb(15 23 42 / 6%);
   --ot-shadow: 0 1px 2px rgb(15 23 42 / 6%), 0 12px 32px rgb(15 23 42 / 8%);
   --ot-shadow-lg: 0 18px 48px rgb(15 23 42 / 14%);
@@ -70,7 +70,7 @@ html[data-theme-resolved="light"] {
   --ot-muted: #5a6861;
   --ot-line: #e3e9e5;
   --ot-line-strong: #cbd6cf;
-  --ot-accent: #0a7c48;
+  --ot-accent: #097845;
   --ot-accent-hover: #076a3d;
   --ot-accent-soft: #e0f3e7;
   --ot-ok: #0f766e;
@@ -78,7 +78,7 @@ html[data-theme-resolved="light"] {
   --ot-danger: #be123c;
   --ot-danger-bg: #ffe4e6;
   --ot-warn-bg: #fff7ed;
-  --ot-focus: #0a7c48;
+  --ot-focus: #097845;
   --ot-shadow-sm: 0 1px 2px rgb(15 23 42 / 6%);
   --ot-shadow: 0 1px 2px rgb(15 23 42 / 6%), 0 12px 32px rgb(15 23 42 / 8%);
   --ot-shadow-lg: 0 18px 48px rgb(15 23 42 / 14%);
