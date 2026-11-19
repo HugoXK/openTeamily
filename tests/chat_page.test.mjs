@@ -60,7 +60,7 @@ test('mergeSessions combines agent and social rows without inventing pins', () =
     ['social', 's2', '产品群'],
     ['agent', 'c1', 'Helper'],
   ]);
-  assert.equal(sessions.every((row) => row.pinned == null), true);
+  assert.equal(sessions.every((row) => !row.pinned), true);
   assert.deepEqual(sessions.map((row) => row.preview), [
     '单聊 · 2 人',
     '群聊 · 2 人',
@@ -841,3 +841,97 @@ for (const mode of ['visible', 'hidden', 'failed']) {
     } finally { restore(); }
   });
 }
+
+
+test('social pinned state sorts before recency and unread filter uses server state', () => {
+  const rows = mergeSessions([], [
+    {id: 'new', kind: 'dm', updated: 20, unread_count: 1},
+    {id: 'old', kind: 'group', updated: 1, pinned: true},
+  ], alice);
+  assert.equal(rows[0].id, 'old');
+  assert.equal(rows[1].unread_count, 1);
+});
+
+test('session filter selects only real unread social rows', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations?limit=100')) body.items[0].unread_count = 2;
+      return json(result.status, body);
+    }});
+    el('session-filter-value').value = 'unread';
+    await fire(el('session-filter-value'), 'change');
+    assert.equal(sessionRows(el).length, 1);
+    assert.equal(sessionRows(el)[0].dataset.conversation, 'conv-1');
+    el('session-filter-value').value = 'all';
+    await fire(el('session-filter-value'), 'change');
+    assert.equal(sessionRows(el).length, 2);
+  } finally { restore(); }
+});
+
+test('independent conversation search uses current id and pages without opening sidebar search', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const calls = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.includes('/search/messages?')) {
+        calls.push(path);
+        const url = new URL(path, 'https://management.test');
+        assert.equal(url.searchParams.get('conversation_id'), 'conv-1');
+        return json(200, {items: [{kind: 'social', conversation_id: 'conv-1', message_id: url.searchParams.get('cursor') ? 'second' : 'first', snippet: 'Scoped result'}], cursor: url.searchParams.get('cursor') ? null : 'next-id'});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('conversation-search-open'), 'click');
+    assert.equal(el('conversation-search-panel').hidden, false);
+    el('conversation-search-query').value = 'needle';
+    await fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
+    assert.equal(el('conversation-search-results').children[0].textContent, 'Scoped result');
+    assert.equal(el('conversation-search-more').hidden, false);
+    await fire(el('conversation-search-more'), 'click');
+    assert.equal(calls.length, 2);
+    assert.equal(el('conversation-search-results').children.length, 2);
+    assert.match(calls[1], /cursor=next-id/);
+  } finally { restore(); }
+});
+
+test('own message editing and confirmed retraction call versioned endpoints', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  let text = 'Original', revision = 1, retracted = false;
+  const posts = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.includes('/messages/mine-1/')) {
+        const payload = JSON.parse(options.body); posts.push([path, payload]);
+        assert.equal(payload.revision, revision);
+        revision += 1;
+        if (path.endsWith('/edit')) text = payload.body;
+        else { text = ''; retracted = true; }
+        return json(200, {message: {}});
+      }
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations/conv-1')) body.items = [{id: 'mine-1', user_id: alice, body: text, revision, retracted}];
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    let li = el('message-list').children[0];
+    await fire(li.children[3], 'click'); // edit opens inline controls
+    li.children[5].children[0].value = 'Edited';
+    await fire(li.children[5].children[1], 'click');
+    assert.equal(text, 'Edited');
+    li = el('message-list').children[0];
+    await fire(li.children[4], 'click'); // only opens confirmation
+    assert.equal(posts.length, 1);
+    await fire(li.children[5].children[0], 'click');
+    assert.equal(posts.length, 2);
+    assert.equal(el('message-list').children[0].children[1].textContent, '此消息已撤回');
+  } finally { restore(); }
+});

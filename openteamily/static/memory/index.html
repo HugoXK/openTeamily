@@ -170,19 +170,20 @@
           <h2>我的资料</h2>
           <button type="button" id="dream-profile" disabled title="未实现：对照里未点开「做梦」。OpenTeamily 还没有整理记忆的接口。">做梦</button>
         </header>
-        <p class="note">未接通：对照里这一页是可编辑的画像正文，但 OpenTeamily 还没有画像接口，不能保存。下面只摆出已记录的三个小节标题，没有写入对照账户里的正文。</p>
+        <p class="note">这些资料仅属于当前工作区中的你，可编辑并保存。尚未自动注入模型；做梦整理尚未实现。</p><form id="memory-profile-form">
         <article class="memory-profile-section">
           <h3>Professional Profile</h3>
-          <p class="memory-profile-empty">还没有这份画像。</p>
+          <label>编辑正文<textarea id="profile-professional" maxlength="10000" rows="5"></textarea></label>
         </article>
         <article class="memory-profile-section">
           <h3>Work Style</h3>
-          <p class="memory-profile-empty">还没有这份画像。</p>
+          <label>编辑正文<textarea id="profile-work_style" maxlength="10000" rows="5"></textarea></label>
         </article>
         <article class="memory-profile-section">
           <h3>Communication &amp; Writing Style</h3>
-          <p class="memory-profile-empty">还没有这份画像。</p>
+          <label>编辑正文<textarea id="profile-communication" maxlength="10000" rows="5"></textarea></label>
         </article>
+        <button type="submit" id="save-memory-profile">保存画像</button><p id="memory-profile-status" role="status"></p></form>
       </section>
     </section>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>

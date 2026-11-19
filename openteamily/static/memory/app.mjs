@@ -505,6 +505,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     view.history.replaceState({}, '', path + queryForMemoryPage(currentView));
   }
 
+  let profileRevision = null;
+  let profileRequest = 0;
+  async function loadMemoryProfile() {
+    profileRevision = null;
+    const token = ++profileRequest, wid = workspaceId();
+    const save = document.getElementById('save-memory-profile'); if (save) save.disabled = true;
+    if (!wid) return;
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/profile`);
+    if (token !== profileRequest || workspaceId() !== wid) return;
+    const status = document.getElementById('memory-profile-status');
+    if (result.status !== 200) { if (status) status.textContent = '无法读取画像。'; return; }
+    const profile = result.body.profile;
+    profileRevision = profile.revision;
+    if (save) save.disabled = false;
+    for (const field of ['professional', 'work_style', 'communication']) {
+      const input = document.getElementById('profile-' + field); if (input) input.value = profile[field];
+    }
+    if (status) status.textContent = '';
+  }
   function showView(name, {sync = true} = {}) {
     currentView = name || 'overview';
     const workspace = document.getElementById('list-panel');
@@ -520,6 +539,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (side) side.hidden = currentView !== 'overview';
     if (actions) actions.hidden = currentView !== 'actions';
     if (profile) profile.hidden = currentView !== 'profile';
+    if (currentView === 'profile') loadMemoryProfile();
     for (const button of document.querySelectorAll('.memory-views [data-view]')) {
       if (button.getAttribute('data-view') === currentView) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
@@ -933,7 +953,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadSession();
   });
 
-  workspaceSelect.addEventListener('change', () => loadWorkspace());
+  const profileForm = document.getElementById('memory-profile-form');
+  if (profileForm) profileForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (profileRevision === null) return;
+    const wid = workspaceId();
+    const payload = {revision: profileRevision};
+    for (const field of ['professional', 'work_style', 'communication']) payload[field] = document.getElementById('profile-' + field).value;
+    const status = document.getElementById('memory-profile-status');
+    const result = await request('POST', `/v1/workspaces/${wid}/memory/profile`, payload);
+    if (workspaceId() !== wid) return;
+    if (result.status !== 200) { status.textContent = result.status === 409 ? '画像已在别处更新，请重新打开后重试。' : '画像未保存。'; return; }
+    profileRevision = result.body.profile.revision; status.textContent = '画像已保存。';
+  });
+  workspaceSelect.addEventListener('change', async () => { await loadWorkspace(); if (currentView === 'profile') await loadMemoryProfile(); });
   document.getElementById('search').addEventListener('input', () => renderDirectory());
   document.getElementById('search').addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;

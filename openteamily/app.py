@@ -496,11 +496,11 @@ class App:
             if method != 'GET':
                 refuse(405, 'method', 'Only GET is supported')
             return self.discover_works(query)
-        work_path = re.fullmatch(r'/w/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])', path)
+        work_path = re.fullmatch(r'/w/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])(/file)?', path)
         if work_path:
             if method != 'GET' or query:
                 refuse(400, 'invalid', 'Invalid public work request')
-            return self.render_public_work(work_path[1])
+            return self.render_public_work(work_path[1], bool(work_path[2]))
         if path in ('/v1/auth/register', '/v1/auth/login') and method == 'POST':
             self.origin_check(env)  # Login/registration CSRF protection before a session exists.
             body = self.body(env, ['username', 'password'])
@@ -582,6 +582,19 @@ class App:
                 self.body(env, [])
                 db.execute('DELETE FROM sessions WHERE token_hash=?', (session['token_hash'],))
                 return 200, {'logged_out': True}, self.session_headers('', '', expires=True)
+            discover_me = path == '/v1/discover/me/works'
+            discover_action = re.fullmatch(r'/v1/discover/works/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])/engagement', path)
+            if discover_me:
+                if method != 'GET':
+                    refuse(405, 'method', 'Only GET is supported')
+                return self.discover_works(query, db, session['user_id'])
+            if discover_action:
+                if method != 'POST' or query:
+                    refuse(400, 'invalid', 'Invalid engagement request')
+                return self.discover_engagement(db, session, discover_action[1], env)
+            memory_profile = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/memory/profile', path)
+            if memory_profile:
+                return self.memory_profile_dispatch(db, session, method, query, now, env, memory_profile[1])
             if path == '/v1/profile':
                 if method == 'GET' and not query:
                     row = profiles.load(db, session['user_id'])
@@ -823,12 +836,15 @@ class App:
                 r'(?:/([0-9a-f]{32})(?:/(messages(?:/([0-9a-f]{32})(?:/(artifact))?)?))?)?', path)
             if conversation_path:
                 return self.conversation_dispatch(db, session, method, query, now, env, *conversation_path.groups())
+            resource_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/search/resources', path)
+            if resource_path:
+                return self.search_resources(db, session, method, query, resource_path[1])
             search_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/search/messages', path)
             if search_path:
                 return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}/(?:edit|retract))?|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -3113,16 +3129,19 @@ class App:
             return 200, {'items': [discover.public_view(row) for row in rows[:int(limit)]],
                          'cursor': rows[int(limit) - 1]['slug'] if len(rows) > int(limit) else None}, []
 
-    def discover_works(self, query):
+    def discover_works(self, query, db=None, viewer_id=''):
         try:
-            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=4) if query else {}
-            if set(args) - {'q', 'limit', 'cursor', 'kind'} or any(len(v) != 1 for v in args.values()):
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=5) if query else {}
+            if set(args) - ({'q', 'limit', 'cursor', 'kind', 'tab'} if viewer_id else {'q', 'limit', 'cursor', 'kind'}) or any(len(v) != 1 for v in args.values()):
                 raise ValueError()
             text = args.get('q', [''])[0]
             if len(text) > 80 or any(ord(ch) < 32 for ch in text):
                 raise ValueError()
             limit = args.get('limit', ['20'])[0]
             if not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 50:
+                raise ValueError()
+            tab = args.get('tab', ['all'])[0]
+            if tab not in ('all', 'following', 'collected'):
                 raise ValueError()
             kind = args.get('kind', [''])[0]
             if kind and kind not in discover.WORK_FILTER_KINDS:
@@ -3132,18 +3151,30 @@ class App:
                 raise ValueError()
         except ValueError:
             refuse(400, 'invalid', 'Invalid discover parameters')
-        with self.store.connect() as db:
-            rows = discover.work_listing(db, text, cursor, int(limit) + 1, kind)
-            return 200, {'items': [discover.work_public_view(row) for row in rows[:int(limit)]],
+        def listed(connection):
+            rows = discover.work_listing(connection, text, cursor, int(limit) + 1, kind, viewer_id, tab)
+            return 200, {'items': [discover.engaged_work_view(connection, row, viewer_id) for row in rows[:int(limit)]],
                          'cursor': discover.work_cursor(rows[int(limit) - 1]) if len(rows) > int(limit) else None}, []
+        if db is not None:
+            return listed(db)
+        with self.store.connect() as connection:
+            return listed(connection)
 
-    def render_public_work(self, slug):
+    def render_public_work(self, slug, media_file=False):
         if not discover.valid_slug(slug):
             refuse(404, 'not_found', 'Work not found')
         with self.store.connect() as db:
             row = discover.load_listed_work(db, slug)
         if row is None:
             refuse(404, 'not_found', 'Work not found')
+        if media_file:
+            if artifacts.public_kind(row) != 'media':
+                refuse(404, 'not_found', 'Media not found')
+            return self.artifact_content(row, preview=False)
+        if artifacts.public_kind(row) == 'media':
+            headers = [(key, value) for key, value in artifacts.share_headers() if key != 'Content-Security-Policy']
+            headers.append(('Content-Security-Policy', "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox allow-same-origin; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"))
+            return 200, artifacts.render_listed_media(row, '/w/' + slug + '/file').encode('utf-8'), headers
         return 200, artifacts.render_page(row).encode('utf-8'), artifacts.share_headers()
 
     def artifact_discover_dispatch(self, db, session, method, query, now, env, workspace_id,
@@ -3241,6 +3272,7 @@ class App:
                 items = social.conversation_items(db, rows[:limit])
                 for item in items:
                     item['unread_count'] = social.unread_count(db, item['id'], session['user_id'])
+                    item.update(social.preference(db, item['id'], session['user_id']))
                 return 200, {'items': items,
                              'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
             if method == 'POST' and not query:
@@ -3256,6 +3288,38 @@ class App:
                 refuse(400, 'invalid', 'Invalid group agent membership request')
             return self.edit_group_agents(db, workspace, session, row, action, now, env)
         self.reconcile_group_replies(db, row, now)
+        if action == 'preferences' and method == 'POST' and not query:
+            pinned = self.body(env, ['pinned']).get('pinned')
+            if type(pinned) is not bool:
+                refuse(400, 'invalid', 'Provide pinned as a boolean')
+            db.execute('INSERT INTO social_preferences VALUES(?,?,?) ON CONFLICT(conversation_id,user_id) '
+                       'DO UPDATE SET pinned=excluded.pinned', (row['id'], session['user_id'], int(pinned)))
+            return 200, social.preference(db, row['id'], session['user_id']), []
+        if action and action.startswith('messages/') and method == 'POST' and not query:
+            message_id, operation = action.split('/')[1:]
+            message = db.execute('SELECT * FROM social_messages WHERE conversation_id=? AND id=?',
+                                 (row['id'], message_id)).fetchone()
+            if message is None:
+                refuse(404, 'not_found', 'Message not found')
+            if message['user_id'] != session['user_id']:
+                refuse(403, 'forbidden', 'Only the author can change a message')
+            body = self.body(env, ['revision', 'body'] if operation == 'edit' else ['revision'])
+            revision = body.get('revision')
+            state = db.execute('SELECT * FROM social_message_state WHERE message_id=?', (message_id,)).fetchone()
+            current_revision = state['revision'] if state else 1
+            if type(revision) is not int or revision != current_revision:
+                refuse(409, 'conflict', 'Message changed; reload and retry')
+            if state and state['retracted']:
+                refuse(409, 'conflict', 'Retracted messages cannot be edited')
+            text = body.get('body') if operation == 'edit' else ''
+            if operation == 'edit' and not social.valid_body(text):
+                refuse(400, 'invalid', 'Provide a valid message body')
+            db.execute('UPDATE social_messages SET body=? WHERE id=?', (text, message_id))
+            db.execute('INSERT INTO social_message_state VALUES(?,?,?,?) ON CONFLICT(message_id) DO UPDATE SET '
+                       'revision=excluded.revision,edited=excluded.edited,retracted=excluded.retracted',
+                       (message_id, current_revision + 1, now, int(operation == 'retract')))
+            updated = db.execute(f'SELECT * FROM ({social.MESSAGE_ROWS}) WHERE id=?', (message_id,)).fetchone()
+            return 200, {'message': social.message_view(updated)}, []
         if action == 'read' and method == 'POST' and not query:
             message_id = self.body(env, ['message_id']).get('message_id')
             if not isinstance(message_id, str) or not social.HEX32.fullmatch(message_id):
@@ -3494,20 +3558,33 @@ class App:
         return 201, {'conversation': social.conversation_item(db, row)}, []
 
     def send_social_message(self, db, workspace, session, row, now, env):
-        body = self.body(env, ['body'])
+        body = self.body(env, ['body', 'artifact_id'])
         text = body.get('body')
+        artifact_id = body.get('artifact_id')
+        attachment = None
+        if artifact_id is not None:
+            if not isinstance(artifact_id, str) or not social.HEX32.fullmatch(artifact_id):
+                refuse(400, 'invalid', 'Provide an artifact id')
+            attachment = artifacts.load(db, workspace['id'], artifact_id)
+            if attachment is None or artifacts.public_kind(attachment) != 'media':
+                refuse(404, 'not_found', 'Workspace media not found')
+            if not text:
+                text = '附件：' + attachment['title']
         if not social.valid_body(text):
             refuse(400, 'invalid', 'Provide a message')
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        request_document = {'body': text}
+        if artifact_id is not None:
+            request_document['artifact_id'] = artifact_id
         key_hash, request_hash = digest('social-message:' + key), digest(
-            json.dumps({'body': text}, sort_keys=True, separators=(',', ':'), ensure_ascii=False))
+            json.dumps(request_document, sort_keys=True, separators=(',', ':'), ensure_ascii=False))
         prior = social.load_message_by_key(db, row['id'], key_hash)
         if prior:
             if prior['request_hash'] != request_hash:
                 refuse(409, 'conflict', 'Idempotency key was used for a different request')
-            return 200, {'message': social.message_view(prior)}, []
+            return 200, {'message': social.message_view(db.execute(f'SELECT * FROM ({social.MESSAGE_ROWS}) WHERE id=?', (prior['id'],)).fetchone())}, []
         if (social.message_slots(db, row['id'])
                 >= self.config.max_social_messages_per_conversation):
             refuse(429, 'quota', 'Message capacity reached')
@@ -3516,8 +3593,10 @@ class App:
             'INSERT INTO social_messages VALUES(?,?,?,?,?,?,?,?,?)',
             (message_id, row['id'], workspace['id'], session['user_id'], text,
              social.next_seq(db, row['id']), now, key_hash, request_hash))
+        if attachment is not None:
+            db.execute('INSERT INTO social_attachments VALUES(?,?)', (message_id, artifact_id))
         db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, row['id']))
-        message = db.execute('SELECT * FROM social_messages WHERE id=?', (message_id,)).fetchone()
+        message = db.execute(f'SELECT * FROM ({social.MESSAGE_ROWS}) WHERE id=?', (message_id,)).fetchone()
         return 201, {'message': social.message_view(message)}, []
 
     def invite_dispatch(self, db, session, method, query, now, env, workspace_id, invite_id, revoking):
@@ -4049,3 +4128,100 @@ class App:
             handler = runtime.observe if match[2] == 'observe' else runtime.heartbeat
             return 200, handler(manager, match[1], **body), []
         refuse(404, 'not_found', 'Route not found')
+
+
+    def discover_engagement(self, db, session, slug, env):
+        listing = discover.load_work_by_slug(db, slug)
+        if listing is None or not listing['listed']:
+            refuse(404, 'not_found', 'Work not found')
+        work = artifacts.load(db, listing['workspace_id'], listing['artifact_id'])
+        if work is None:
+            refuse(404, 'not_found', 'Work not found')
+        body = self.body(env, ['action', 'enabled'])
+        action, enabled = body.get('action'), body.get('enabled')
+        if action not in ('like', 'collect', 'follow') or type(enabled) is not bool:
+            refuse(400, 'invalid', 'Provide like/collect/follow and a boolean enabled')
+        uid = session['user_id']
+        if action == 'follow':
+            if uid == work['created_by']:
+                refuse(400, 'invalid', 'Cannot follow yourself')
+            table, columns, values = 'discover_follows', 'follower_id,creator_id', (uid, work['created_by'])
+        else:
+            table = 'discover_likes' if action == 'like' else 'discover_collections'
+            columns, values = 'artifact_id,user_id', (work['id'], uid)
+        if enabled:
+            db.execute('INSERT OR IGNORE INTO ' + table + '(' + columns + ') VALUES(?,?)', values)
+        else:
+            first, second = columns.split(',')
+            db.execute('DELETE FROM ' + table + ' WHERE ' + first + '=? AND ' + second + '=?', values)
+        return 200, discover.engagement(db, work['id'], work['created_by'], uid), []
+
+    def memory_profile_dispatch(self, db, session, method, query, now, env, workspace_id):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        row = db.execute('SELECT professional,work_style,communication,revision,updated FROM memory_profiles '
+                         'WHERE workspace_id=? AND user_id=?', (workspace_id, session['user_id'])).fetchone()
+        current = dict(row) if row else dict(professional='', work_style='', communication='', revision=0, updated=None)
+        if method == 'GET' and not query:
+            return 200, {'profile': current}, []
+        if method != 'POST' or query:
+            refuse(400, 'invalid', 'Invalid profile request')
+        fields = ('professional', 'work_style', 'communication')
+        body = self.body(env, ['revision', *fields])
+        if type(body.get('revision')) is not int or body['revision'] != current['revision']:
+            refuse(409, 'conflict', 'Profile changed; reload and retry')
+        if any(not isinstance(body.get(k), str) or len(body[k]) > 10000 or '\x00' in body[k] for k in fields):
+            refuse(400, 'invalid', 'Provide profile sections up to 10000 characters each')
+        values = [body[k] for k in fields]
+        db.execute('INSERT INTO memory_profiles VALUES(?,?,?,?,?,?,?) ON CONFLICT(workspace_id,user_id) '
+                   'DO UPDATE SET professional=excluded.professional,work_style=excluded.work_style,'
+                   'communication=excluded.communication,revision=excluded.revision,updated=excluded.updated',
+                   (workspace_id, session['user_id'], *values, current['revision']+1, now))
+        return 200, {'profile': dict(zip(fields, values), revision=current['revision']+1, updated=now)}, []
+
+
+    def search_resources(self, db, session, method, query, workspace_id):
+        if members.load(db, workspace_id, session['user_id']) is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        if method != 'GET':
+            refuse(405, 'method', 'Only GET is supported')
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=4)
+            if set(args) - {'q', 'kind', 'cursor', 'limit'} or any(len(v) != 1 for v in args.values()):
+                raise ValueError()
+            text, kind = args.get('q', [''])[0], args.get('kind', [''])[0]
+            cursor, limit = args.get('cursor', [''])[0], args.get('limit', ['20'])[0]
+            if kind not in ('files', 'links') or len(text) > 80 or any(ord(c) < 32 for c in text):
+                raise ValueError()
+            if not re.fullmatch(r'[0-9]{1,2}', limit) or not 1 <= int(limit) <= 50:
+                raise ValueError()
+            if cursor and not re.fullmatch(r'[0-9a-f]{32}', cursor):
+                raise ValueError()
+            limit = int(limit)
+            if kind == 'files':
+                rows = db.execute('SELECT a.id,a.title,md.filename,md.mime FROM artifacts a JOIN artifact_media md '
+                                  'ON md.artifact_id=a.id WHERE a.workspace_id=? AND a.id>? '
+                                  "AND instr(lower(a.title || ' ' || md.filename),lower(?))>0 ORDER BY a.id LIMIT ?",
+                                  (workspace_id, cursor, text, limit + 1)).fetchall()
+                items = [{'id': row['id'], 'title': row['title'], 'preview': row['filename'] + ' · ' + row['mime'],
+                          'href': '/v1/workspaces/' + workspace_id + '/artifacts/' + row['id'] + '/file'} for row in rows[:limit]]
+                return 200, {'items': items, 'cursor': rows[limit-1]['id'] if len(rows) > limit else None}, []
+            seat = search.cursor_seat(db, workspace_id, session['user_id'], cursor)
+            if cursor and seat is None:
+                raise ValueError()
+            rows = list(search.agent_rows(db, workspace_id, session['user_id'], text or 'http', cursor, limit+1, seat=seat))
+            rows += list(search.social_rows(db, workspace_id, session['user_id'], text or 'http', cursor, limit+1, seat=seat))
+            rows.sort(key=lambda row: (row['created'], row['id']))
+            page = rows[:limit]
+            items = []
+            for row in page:
+                urls = re.findall(r"https?://[^\s<>\"']+", row['body'])
+                if urls:
+                    url = urls[0].rstrip('.,;:!?)]}，。')
+                    items.append({'id': row['id'], 'title': row['title'] or '消息链接', 'preview': url, 'href': url})
+            # Cursor advances through scanned authorized messages even when a page
+            # has no URLs; no private conversation is scanned or fetched remotely.
+            return 200, {'items': items, 'cursor': page[-1]['id'] if len(rows) > limit else None}, []
+        except ValueError:
+            refuse(400, 'invalid', 'Invalid resource search parameters')

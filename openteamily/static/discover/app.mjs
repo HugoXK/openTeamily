@@ -50,13 +50,13 @@ export const TEAMS_NOTE = '公开 AI 团队目录还没有接口，所以这里�
 export const TEAMS_SEARCH_NOTE = '搜索 AI 团队尚未接通：没有对应的公开接口。';
 export const TEAMS_SEARCH_PLACEHOLDER = '搜索 AI 团队......';
 
-export const FEED_ACTIVITY_EMPTY_NOTE = '还没有公开作品，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。点赞、关注和其他分类仍未接通。';
-export const FEED_ACTIVITY_LISTED_NOTE = '以下是工作区自愿公开的作品，不是推荐或奖励内容。点赞、关注和其他分类仍未接通。';
+export const FEED_ACTIVITY_EMPTY_NOTE = '还没有公开作品，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。支持点赞、收录和关注作者；其他分类尚未接通。';
+export const FEED_ACTIVITY_LISTED_NOTE = '以下是工作区自愿公开的作品，不是推荐或奖励内容。支持点赞、收录和关注作者；其他分类尚未接通。';
 export const FEED_ACTIVITY_NOTE = FEED_ACTIVITY_EMPTY_NOTE;
 export const FEED_FOLLOWING_EMPTY_TITLE = '关注列表暂无动态';
 export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显示在这里。';
-export const FEED_FOLLOWING_NOTE = '关注关系还没有接口，所以这里保持对照里的空态，不会列出动态，也不会展示奖励活动。';
-export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。点赞、关注和其他分类仍未接通。';
+export const FEED_FOLLOWING_NOTE = '这里只展示你关注的作者已公开的作品，不是推荐或奖励活动。';
+export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。支持点赞、收录和关注作者；其他分类尚未接通。';
 
 export const FEED_KINDS = ['', 'website', 'image', 'audio', 'slides', 'video'];
 
@@ -233,55 +233,63 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     applyCatalogChrome();
   }
 
-  const feedState = {items: [], cursor: '', query: '', kind: '', loading: false};
+  const feedState = {items: [], cursor: '', query: '', kind: '', tab: 'activity', loading: false};
+  let feedRequest = 0;
 
   function setFeedTab(tab) {
-    const following = tab === 'following';
-    const followingBtn = document.getElementById('feed-tab-following');
-    const activityBtn = document.getElementById('feed-tab-activity');
-    if (followingBtn) followingBtn.setAttribute('aria-selected', following ? 'true' : 'false');
-    if (activityBtn) activityBtn.setAttribute('aria-selected', following ? 'false' : 'true');
-    const empty = document.getElementById('feed-following-empty');
-    if (empty) empty.hidden = !following;
-    const activityEmpty = document.getElementById('feed-activity-empty');
-    if (activityEmpty) activityEmpty.hidden = following;
-    const searchNote = document.getElementById('feed-search-note');
-    if (following && searchNote) searchNote.hidden = true;
-    const more = document.getElementById('feed-more');
-    if (more) more.hidden = following || !feedState.cursor || feedState.loading;
-    const count = document.getElementById('feed-count');
-    const error = document.getElementById('feed-error');
-    if (following) {
-      if (count) count.textContent = '';
-      if (error) error.hidden = true;
-      const note = document.getElementById('feed-note');
-      if (note) note.textContent = FEED_FOLLOWING_NOTE;
-    } else {
-      applyFeedNote();
+    feedState.tab = tab;
+    for (const name of ['following', 'activity', 'collected']) {
+      const button = document.getElementById('feed-tab-' + name);
+      if (button) button.setAttribute('aria-selected', name === tab ? 'true' : 'false');
     }
+    applyFeedNote();
   }
 
   function applyFeedNote() {
     const note = document.getElementById('feed-note');
+    const followingEmpty = document.getElementById('feed-following-empty');
+    const gridSection = document.getElementById('feed-activity-empty');
     const searchNote = document.getElementById('feed-search-note');
+    if (followingEmpty) followingEmpty.hidden = !(currentUser && feedState.tab === 'following' && !feedState.items.length && !feedState.loading);
+    if (gridSection) gridSection.hidden = false;
+    if (searchNote) searchNote.hidden = true;
     if (!note) return;
-    if ((feedState.query || feedState.kind) && !feedState.items.length && !feedState.loading) {
-      note.textContent = FEED_SEARCH_EMPTY_NOTE;
-      if (searchNote) {
-        searchNote.hidden = false;
-        searchNote.textContent = FEED_SEARCH_EMPTY_NOTE;
-      }
-    } else {
-      if (searchNote) searchNote.hidden = true;
-      note.textContent = feedState.items.length ? FEED_ACTIVITY_LISTED_NOTE : FEED_ACTIVITY_EMPTY_NOTE;
-    }
+    if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
+    else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
+    else if (feedState.tab === 'collected') note.textContent = '这里只展示你收录且仍公开的作品。';
+    else note.textContent = (feedState.query || feedState.kind) && !feedState.items.length && !feedState.loading
+      ? FEED_SEARCH_EMPTY_NOTE : (feedState.items.length ? FEED_ACTIVITY_LISTED_NOTE : FEED_ACTIVITY_EMPTY_NOTE);
   }
 
   function renderFeed() {
     const grid = document.getElementById('feed-grid');
     if (!grid) return;
     grid.replaceChildren();
-    for (const item of feedState.items) grid.append(renderFeedCard(document, item));
+    for (const item of feedState.items) {
+      const card = renderFeedCard(document, item);
+      if (!currentUser) { grid.append(card); continue; }
+      const entry = document.createElement('article'); entry.append(card);
+      const actions = document.createElement('div');
+      for (const [action, flag, label] of [['like','liked','点赞'], ['collect','collected','收录'], ['follow','following','关注作者']]) {
+        if (action === 'follow' && item.own_work) continue;
+        const button = document.createElement('button'); button.type = 'button';
+        button.textContent = (item[flag] ? '取消' : '') + label + (action === 'like' ? ' · ' + (item.likes || 0) : '');
+        button.setAttribute('aria-pressed', item[flag] ? 'true' : 'false');
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          let result;
+          try { result = await request('POST', `/v1/discover/works/${item.slug}/engagement`, {action, enabled: !item[flag]}); }
+          catch { result = {status: 0}; }
+          button.disabled = false;
+          if (result.status !== 200) {
+            const error = document.getElementById('feed-error'); error.hidden = false; error.textContent = '操作未保存，请重试。'; return;
+          }
+          await loadFeed();
+        });
+        actions.append(button);
+      }
+      entry.append(actions); grid.append(entry);
+    }
     grid.dataset.empty = feedState.items.length ? 'false' : 'true';
     const count = document.getElementById('feed-count');
     if (count) {
@@ -295,7 +303,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   async function loadFeed({append = false} = {}) {
-    if (feedState.loading) return;
+    if (feedState.loading && append) return;
+    const seq = ++feedRequest;
     const input = document.getElementById('feed-query');
     const query = input ? (input.value || '').trim() : '';
     if (!append) {
@@ -309,7 +318,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       error.hidden = true;
       error.textContent = '';
     }
-    const result = await request('GET', `/v1/discover/works?${feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind)}`);
+    const privateFeed = currentUser || feedState.tab !== 'activity';
+    const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind);
+    const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
+    const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
+    let result;
+    try { result = await request('GET', path); }
+    catch { result = {status: 0, body: {}}; }
+    if (seq !== feedRequest) return;
     feedState.loading = false;
     if (result.status !== 200) {
       if (error) {
@@ -566,7 +582,6 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const button = document.getElementById('feed-kind-' + (kind || 'all'));
     if (!button) continue;
     button.addEventListener('click', () => {
-      if (feedState.loading) return;
       feedState.kind = kind;
       for (const candidate of FEED_KINDS) {
         const node = document.getElementById('feed-kind-' + (candidate || 'all'));
@@ -589,17 +604,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (feedState.cursor && !feedState.loading) loadFeed({append: true});
     });
   }
-  for (const tab of ['following', 'activity']) {
-    const button = document.getElementById(tab === 'following' ? 'feed-tab-following' : 'feed-tab-activity');
+  for (const tab of ['following', 'activity', 'collected']) {
+    const button = document.getElementById('feed-tab-' + tab);
     if (button) button.addEventListener('click', () => {
       setFeedTab(tab);
-      if (tab === 'activity' && !feedState.items.length && !feedState.loading) loadFeed();
+      return loadFeed();
     });
-  }
-  const starting = [load()];
-  if (!catalogView) {
-    setFeedTab('activity');
-    starting.push(loadFeed());
   }
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
@@ -608,7 +618,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     await load();
   });
 
-  return Promise.all(starting);
+  return load().then(() => { if (!catalogView) { setFeedTab('activity'); return loadFeed(); } });
 }
 
 if (globalThis.document && globalThis.document.getElementById('manage-list')) {

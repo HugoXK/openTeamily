@@ -1483,8 +1483,8 @@ async function main() {
           && profileView.includes('Professional Profile')
           && profileView.includes('Work Style')
           && profileView.includes('Communication & Writing Style')
-          && profileView.includes('还没有这份画像')
-          && profileView.includes('未接通')
+          && profileView.includes('保存画像')
+          && profileView.includes('尚未自动注入模型')
           && profileDir.includes(ready.memory_title)
           && profileDir.includes(`${ready.memory_topic} 1`)
           && profileDir.includes(ready.memory_body)
@@ -1496,6 +1496,19 @@ async function main() {
         profileView || 'memory profile empty',
       );
       screenshots.push(path.basename(await shot(page, outDir, '42-memory-profile.png')));
+      await page.waitForFunction(() => !document.getElementById('save-memory-profile').disabled);
+      await page.locator('#profile-professional').fill('[CI FIXTURE] Personal professional context');
+      await page.locator('#profile-work_style').fill('[CI FIXTURE] Async work style');
+      await page.locator('#profile-communication').fill('[CI FIXTURE] Concise communication');
+      await page.locator('#save-memory-profile').click();
+      await waitForLocatorText(page, '#memory-profile-status', '画像已保存');
+      await page.reload({waitUntil: 'load'});
+      await page.locator('#profile-panel').waitFor({state: 'visible'});
+      await page.waitForFunction(() => !document.getElementById('save-memory-profile').disabled);
+      record('memory_profile_persists', (await page.locator('#profile-professional').inputValue()) === '[CI FIXTURE] Personal professional context'
+        && (await page.locator('#profile-work_style').inputValue()) === '[CI FIXTURE] Async work style',
+        'synthetic personal profile persisted after reload; no model injection');
+
     } catch (error) {
       record('memory_profile_layout', false, String(error));
     }
@@ -1760,7 +1773,7 @@ async function main() {
           && discoverText.includes('搜索动态、创作者')
           && discoverText.includes('[CI FIXTURE] Document')
           && discoverText.includes('文档')
-          && discoverText.includes('点赞、关注和其他分类仍未接通')
+          && discoverText.includes('支持点赞、收录和关注作者')
           && !discoverText.includes('动态信息流还没有接口')
           && discoverText.includes('热门')
           && discoverText.includes('/discover?tab=agents')
@@ -1788,12 +1801,23 @@ async function main() {
           && (await page.locator('#feed-following-empty').isVisible())
           && followingText.includes('关注列表暂无动态')
           && followingText.includes('你关注的人发布动态后会显示在这里。')
-          && followingText.includes('关注关系还没有接口')
+          && followingText.includes('你关注的作者已公开')
           && !followingText.includes('没有对照截图')
           && !/积分|套餐|升级|CREDITS/.test(followingText),
         followingText.slice(0, 240) || 'following empty',
       );
       screenshots.push(path.basename(await shot(page, outDir, '63-discover-following.png')));
+      await page.locator('#feed-tab-activity').click();
+      await waitForLocatorText(page, '#feed-count', '已显示 2 件公开作品');
+      await page.locator('#feed-grid article button').filter({hasText: /^点赞/}).first().click();
+      await page.locator('#feed-grid article button[aria-pressed="true"]').first().waitFor({state: 'visible'});
+      record('discover_like_persists', await page.locator('#feed-grid article button').filter({hasText: /取消点赞/}).count() === 1,
+        'a synthetic fixture work was liked through the real CSRF-protected endpoint');
+      await page.locator('#feed-grid article button').filter({hasText: /^收录/}).first().click();
+      await page.locator('#feed-tab-collected').click();
+      await waitForLocatorText(page, '#feed-count', '已显示 1 件公开作品');
+      record('discover_collection_feed', await page.locator('#feed-grid article').count() === 1,
+        'private collection feed contains the saved synthetic work');
       await page.goto(`${origin}/discover?tab=agents`, { waitUntil: 'load' });
       await page.locator('#catalog-view').waitFor({ state: 'visible', timeout: 15000 });
       await page.locator('#discover-list article').first().waitFor({state: 'visible'});

@@ -55,7 +55,7 @@ class DiscoverWorksTests(unittest.TestCase):
         self.assertEqual(listed['status'], 200)
         self.assertEqual(len(listed['body']['items']), 1)
         item = listed['body']['items'][0]
-        self.assertEqual(item, {
+        self.assertEqual({k:v for k,v in item.items() if k not in ('likes','collections','liked','collected','following','own_work')}, {
             'slug': 'public-note',
             'title': '公开笔记',
             'kind': 'document',
