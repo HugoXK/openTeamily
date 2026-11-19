@@ -64,7 +64,7 @@
     <header class="memory-top">
       <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏（收起后的版式未经对照核实）">展开侧边栏</button>
       <h1 class="visually-hidden">记忆</h1>
-      <p id="view-title" class="visually-hidden">总览</p>
+      <p id="view-title" class="memory-view-title">总览</p>
       <p id="whoami" class="visually-hidden"></p>
       <label class="workspace-picker">工作区
         <select id="workspace"></select>
@@ -186,12 +186,12 @@
         <button type="submit" id="save-memory-profile">保存画像</button><p id="memory-profile-status" role="status"></p></form>
       </section>
     </section>
-    <form id="editor-form" method="post" action="/v1/workspaces" hidden>
-      <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
-      <label>正文
-        <textarea name="body" maxlength="8000" rows="16"></textarea>
+    <form id="editor-form" class="memory-editor" method="post" action="/v1/workspaces" hidden>
+      <label class="editor-title-field"><span class="visually-hidden">标题</span> <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="标题"></label>
+      <label class="editor-topics-field">话题 <input type="text" name="topics" maxlength="400" autocomplete="off" placeholder="添加标签"></label>
+      <label class="editor-body-field"><span class="visually-hidden">正文</span>
+        <textarea name="body" maxlength="8000" rows="16" placeholder="开始写作…"></textarea>
       </label>
-      <label>话题 <input type="text" name="topics" maxlength="400" autocomplete="off" placeholder="用逗号分隔"></label>
       <p class="note">正文里用 [[已有标题]] 可以连到同工作区的记忆页。</p>
       <p id="editor-meta" class="note"></p>
       <div id="page-links"></div>

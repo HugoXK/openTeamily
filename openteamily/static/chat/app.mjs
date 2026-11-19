@@ -348,7 +348,35 @@ export function chatIdentity(name) {
   return {title, initial: placeholder ? '' : initial(title), showAvatar: !placeholder};
 }
 
-export function applyChatIdentity(document, name) {
+export function applyChatAvatarStack(document, conversation) {
+  const stack = document.getElementById('chat-avatar-stack');
+  const avatar = document.getElementById('chat-avatar');
+  if (!stack) return false;
+  stack.replaceChildren();
+  const faces = [];
+  for (const member of (conversation && conversation.members) || []) {
+    faces.push(member.username || member.name || '');
+  }
+  for (const agent of (conversation && conversation.agent_members) || []) {
+    faces.push(agent.name || '');
+  }
+  const names = faces.filter(Boolean).slice(0, 4);
+  const grouped = Boolean(conversation && conversation.kind === 'group' && names.length);
+  stack.hidden = !grouped;
+  if (grouped) {
+    if (avatar) avatar.hidden = true;
+    for (const name of names) {
+      const face = document.createElement('span');
+      face.className = 'avatar stack-face';
+      face.textContent = initial(name);
+      if (face.dataset) face.dataset.tone = avatarTone(name);
+      stack.appendChild(face);
+    }
+  }
+  return grouped;
+}
+
+export function applyChatIdentity(document, name, conversation) {
   const identity = chatIdentity(name);
   const title = document.getElementById('chat-title');
   const avatar = document.getElementById('chat-avatar');
@@ -360,6 +388,9 @@ export function applyChatIdentity(document, name) {
     avatar.hidden = !identity.showAvatar;
     if (avatar.dataset) avatar.dataset.tone = avatarTone(identity.title);
   }
+  const stacked = applyChatAvatarStack(document, conversation);
+  if (stacked && avatar) avatar.hidden = true;
+  if (!stacked && avatar && identity.showAvatar) avatar.hidden = false;
   return identity;
 }
 
@@ -896,8 +927,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.textContent = formatTime(item.created);
       li.append(role, body, time);
       if (item.attachment && !item.retracted) {
-        const file = document.createElement('a'); file.href = item.attachment.path;
-        file.textContent = '下载附件：' + item.attachment.title; li.append(file);
+        const card = document.createElement('article');
+        card.className = 'stream-artifact';
+        const cover = document.createElement('span');
+        cover.className = 'stream-artifact-cover';
+        cover.textContent = 'DOC';
+        const copy = document.createElement('span');
+        copy.className = 'stream-artifact-copy';
+        const heading = document.createElement('strong');
+        heading.textContent = item.attachment.title || '附件';
+        const file = document.createElement('a');
+        file.href = item.attachment.path;
+        file.textContent = '下载附件：' + item.attachment.title;
+        copy.append(heading, file);
+        card.append(cover, copy);
+        li.append(card);
       }
       if (mine && !item.retracted) {
         const edit = document.createElement('button');
@@ -1208,7 +1252,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentNote.textContent = groupAgentSummary(currentConversation);
     agentNote.hidden = !agentNote.textContent;
     applyChatIdentity(document, conversationLabel(
-      currentConversation, currentUser && currentUser.id));
+      currentConversation, currentUser && currentUser.id), currentConversation);
     setDirectoryLink({source: 'social'});
     writeHash({workspace: workspaceId(), social: conversationId});
     if (selecting && (!lastSocialItems.length || lastSocialItems[0].conversation_id !== conversationId)) {

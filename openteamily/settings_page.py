@@ -22,6 +22,7 @@ class SettingsPage:
         '/settings/channels': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/agent-access': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/connectors': ('settings', 'index.html', 'text/html; charset=utf-8'),
+        '/settings/skill-configuration': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/app.mjs': ('settings', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/settings/app.css': ('settings', 'app.css', 'text/css; charset=utf-8'),
         '/automations': ('automations', 'index.html', 'text/html; charset=utf-8'),
@@ -61,6 +62,7 @@ class SettingsPage:
         '/discover/app.mjs': ('discover', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/discover/app.css': ('discover', 'app.css', 'text/css; charset=utf-8'),
         '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
+        '/profile/edit': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/app.mjs': ('profile', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/onboarding': ('onboarding', 'index.html', 'text/html; charset=utf-8'),
         '/onboarding/app.mjs': ('onboarding', 'app.mjs', 'text/javascript; charset=utf-8'),
@@ -71,8 +73,10 @@ class SettingsPage:
         '/guide': ('guide', 'index.html', 'text/html; charset=utf-8'),
         '/guide/app.mjs': ('guide', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/guide/app.css': ('guide', 'app.css', 'text/css; charset=utf-8'),
+        '/about': ('about', 'index.html', 'text/html; charset=utf-8'),
+        '/about/app.css': ('about', 'app.css', 'text/css; charset=utf-8'),
     }
-    PREFIXES = ('/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/download', '/guide')
+    PREFIXES = ('/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/download', '/guide', '/about')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")
