@@ -146,7 +146,7 @@
         <span class="visually-hidden">通知</span>
       </button>
     </header>
-    <p id="layout-note" class="note" hidden>当前网格使用真实作品标题和类型，不生成虚构缩略图；有数据的网格版式尚未完成 Teamily 对照。</p>
+    <p id="layout-note" class="note" hidden>封面只显示作品类型，不生成虚构缩略图；“发送到聊天”尚未接通。</p>
     <p id="whoami" class="visually-hidden"></p>
     <section id="list-panel" class="artifacts-workspace">
       <aside class="artifact-dir" id="artifact-dir">
@@ -307,12 +307,12 @@
         <h2>公开到发现页</h2>
         <p class="note">发布后会出现在公开发现动态里，并用短地址 /w/… 打开。不会自动发布。发布后任何访问者可查看作品；媒体内容也可公开查看和下载。推荐尚未接通。</p>
         <p id="discover-status" class="note" hidden></p>
-        <form id="discover-form">
+        <div id="discover-form" class="discover-form" role="group" aria-label="公开到发现页">
           <label for="discover-slug">公开短地址</label>
           <input id="discover-slug" name="slug" maxlength="30" autocomplete="off" spellcheck="false" inputmode="latin">
-          <button type="submit" id="publish-discover">发布到发现页</button>
+          <button type="button" id="publish-discover">发布到发现页</button>
           <button type="button" id="revoke-discover" hidden>从发现页撤回</button>
-        </form>
+        </div>
       </section>
       <button type="submit" id="save-artifact">保存</button>
       <button type="button" id="cancel-editor">返回列表</button>

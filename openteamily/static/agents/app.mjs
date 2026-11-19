@@ -1,3 +1,18 @@
+// Two-letter card monogram ("Slides Assistant" -> "SA"; CJK names keep one glyph).
+export function agentMonogram(name) {
+  const text = String(name || '').replace(/^\s*\[[^\]]*\]\s*/, '');
+  const words = text.match(/[\p{L}\p{N}]+/gu) || [];
+  if (!words.length) return '?';
+  if (/^\p{Script=Han}/u.test(words[0])) return words[0].slice(0, 1);
+  return words.slice(0, 2).map((word) => word[0].toUpperCase()).join('');
+}
+
+export function agentTone(name) {
+  let hash = 0;
+  for (const ch of String(name || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  return String((hash % 6) + 1);
+}
+
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -283,7 +298,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       li.className = 'agent-card';
       const avatar = document.createElement('span');
       avatar.className = 'avatar';
-      avatar.textContent = (item.name || '?').slice(0, 1);
+      avatar.textContent = agentMonogram(item.name);
+      avatar.dataset.tone = agentTone(item.name);
       const copy = document.createElement('div');
       copy.className = 'copy';
       const button = document.createElement('button');

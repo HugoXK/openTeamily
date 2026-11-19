@@ -211,6 +211,34 @@ export function groupPickerChoices(members, currentUserId, agents = []) {
   ];
 }
 
+export function leadGlyph(text, fallback = '?') {
+  const cleaned = String(text || '').replace(/^\s*\[[^\]]*\]\s*/, '');
+  const match = cleaned.match(/[\p{L}\p{N}]/u) || String(text || '').match(/[\p{L}\p{N}]/u);
+  return match ? match[0].toUpperCase() : fallback;
+}
+
+export function highlightParts(text, query) {
+  const source = String(text || '');
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return [{text: source, match: false}];
+  const parts = [];
+  const lower = source.toLowerCase();
+  let at = 0;
+  for (let index = lower.indexOf(needle); index !== -1; index = lower.indexOf(needle, at)) {
+    if (index > at) parts.push({text: source.slice(at, index), match: false});
+    parts.push({text: source.slice(index, index + needle.length), match: true});
+    at = index + needle.length;
+  }
+  if (at < source.length) parts.push({text: source.slice(at), match: false});
+  return parts.length ? parts : [{text: source, match: false}];
+}
+
+export function groupInfoCounts(conversation) {
+  const people = (conversation && conversation.members || []).length;
+  const agents = (conversation && conversation.agent_members || []).length;
+  return {people, agents, text: `${people + agents} 位成员 · ${people} 位真人 · ${agents} 位智能体`};
+}
+
 export function groupAgentSummary(conversation) {
   const list = conversation && conversation.agent_members || [];
   return list.length ? '群内智能体：' + list.map(agent => agent.name).join('、')
@@ -301,6 +329,13 @@ export function formatSessionTime(value, now = Date.now()) {
   return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', year: 'numeric', month: 'numeric', day: 'numeric'}).format(date);
 }
 
+// Six original pastel tones so neighbouring avatars are distinguishable; stable per name.
+export function avatarTone(name) {
+  let hash = 0;
+  for (const ch of String(name || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  return String((hash % 6) + 1);
+}
+
 export function initial(name) {
   const text = (name || '').trim();
   const match = text.match(/\p{L}|\p{N}/u);
@@ -318,9 +353,12 @@ export function applyChatIdentity(document, name) {
   const title = document.getElementById('chat-title');
   const avatar = document.getElementById('chat-avatar');
   if (title) title.textContent = identity.title;
+  const subtitle = document.getElementById('chat-subtitle');
+  if (subtitle) { subtitle.textContent = ''; subtitle.hidden = true; }
   if (avatar) {
     avatar.textContent = identity.initial;
     avatar.hidden = !identity.showAvatar;
+    if (avatar.dataset) avatar.dataset.tone = avatarTone(identity.title);
   }
   return identity;
 }
@@ -537,6 +575,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const avatar = document.createElement('span');
       avatar.className = 'avatar';
       avatar.textContent = initial(session.title);
+      avatar.dataset.tone = avatarTone(session.title);
+      avatar.dataset.kind = session.kind || session.source || '';
       const copy = document.createElement('span');
       copy.className = 'copy';
       const title = document.createElement('span');
@@ -569,6 +609,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  function setChatSubtitle(text, busy = false) {
+    const line = document.getElementById('chat-subtitle');
+    if (!line) return;
+    line.textContent = text || '';
+    line.hidden = !text;
+    if (busy) line.dataset.busy = '1'; else delete line.dataset.busy;
+  }
+
   function renderAgentMessages(items) {
     const list = document.getElementById('message-list');
     list.replaceChildren();
@@ -579,13 +627,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       li.className = item.role === 'user' ? 'user' : 'assistant';
       const role = document.createElement('p');
       role.className = 'role';
-      role.textContent = item.role === 'user' ? '你' : '智能体';
+      role.textContent = item.role === 'user' ? '你' : ((currentAgent && currentAgent.name) || '智能体');
       const body = document.createElement('p');
       const waiting = item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
       const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
       body.className = waiting ? 'pending' : (failed ? 'failed' : '');
       body.textContent = item.role === 'user' ? (item.body || '') : statusLabel(item);
-      li.append(role, body);
+      if (waiting || failed) li.dataset.state = waiting ? item.status : 'failed';
+      if (waiting) {
+        const heading = document.createElement('p');
+        heading.className = 'reply-state';
+        heading.textContent = item.status === 'running' ? '正在生成回复' : '正在准备回复';
+        li.append(role, heading, body);
+      } else {
+        li.append(role, body);
+      }
       if (item.role === 'assistant' && item.status === 'succeeded' && item.body) {
         const save = document.createElement('button');
         save.type = 'button';
@@ -596,6 +652,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       list.append(li);
       if (waiting) pending = true;
     }
+    setChatSubtitle(pending ? '正在回复…' : 'AI 智能体 · 经运行时回复', pending);
     const scroller = document.getElementById('message-scroller');
     scroller.scrollTop = scroller.scrollHeight;
     return pending;
@@ -734,6 +791,82 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     bar.append(add, picker);
   }
 
+  let messageMenuTarget = null;
+  function closeMessageMenu() {
+    const menu = document.getElementById('message-context-menu');
+    if (menu) menu.hidden = true;
+    messageMenuTarget = null;
+  }
+
+  function openMessageMenu(item, li, mine, x, y) {
+    const menu = document.getElementById('message-context-menu');
+    if (!menu) return;
+    messageMenuTarget = {item, li, mine};
+    const reactions = document.getElementById('message-menu-reactions');
+    reactions.replaceChildren(...MESSAGE_REACTIONS.map(emoji => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.setAttribute('role', 'menuitem');
+      button.textContent = emoji;
+      button.setAttribute('aria-label', '回应 ' + emoji);
+      button.dataset.emoji = emoji;
+      return button;
+    }));
+    const pin = menu.querySelector('[data-menu="pin"]');
+    pin.textContent = pinnedIds.has(item.id) ? '取消置顶' : '置顶';
+    menu.querySelector('[data-menu="retract"]').hidden = !mine;
+    menu.querySelector('[data-menu="forward"]').disabled = forwardTargets(socialConversations, currentConversation && currentConversation.id).length === 0;
+    menu.hidden = false;
+    const width = menu.offsetWidth || 200, height = menu.offsetHeight || 360;
+    const left = Math.max(8, Math.min(x, globalThis.innerWidth - width - 8));
+    const top = Math.max(8, Math.min(y, globalThis.innerHeight - height - 8));
+    menu.style.setProperty('left', left + 'px');
+    menu.style.setProperty('top', top + 'px');
+    const first = menu.querySelector('button:not(:disabled)');
+    if (first) first.focus();
+  }
+
+  const messageMenu = document.getElementById('message-context-menu');
+  if (messageMenu) {
+    messageMenu.addEventListener('click', async event => {
+      const button = event.target.closest('button');
+      if (!button || button.disabled || !messageMenuTarget) return;
+      const {item, li} = messageMenuTarget;
+      const action = button.dataset.menu;
+      closeMessageMenu();
+      if (button.dataset.emoji) {
+        const choice = li.querySelector(`.reaction-picker button[aria-label="回应 ${button.dataset.emoji}"]`);
+        if (choice) choice.click();
+      } else if (action === 'reply') {
+        const input = document.getElementById('chat-body');
+        const author = (li.querySelector('.role') || {}).textContent || '';
+        const excerpt = String(item.body || '').replace(/\s+/g, ' ').slice(0, 80);
+        input.value = `> ${author}：${excerpt}\n` + input.value;
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+        input.focus();
+      } else if (action === 'copy') {
+        try { await navigator.clipboard.writeText(item.body || ''); show('ok', '已复制。'); }
+        catch { show('error', '浏览器不允许复制，请手动选择文本。'); }
+      } else if (action === 'forward' || action === 'select') {
+        setSelecting(true);
+        if (action === 'forward') { selectedMessages.add(item.id); syncForwardBar(); renderSocialMessages(lastSocialItems); }
+      } else if (action === 'pin') {
+        const pinButton = li.querySelector('.message-tools button');
+        if (pinButton) pinButton.click();
+      } else if (action === 'retract') {
+        const retract = Array.from(li.querySelectorAll(':scope > button')).find(node => node.textContent === '撤回');
+        if (retract) retract.click();
+      }
+    });
+    document.addEventListener('click', event => {
+      if (!messageMenu.hidden && !messageMenu.contains(event.target)) closeMessageMenu();
+    });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape' && !messageMenu.hidden) closeMessageMenu(); });
+    globalThis.addEventListener('resize', closeMessageMenu);
+    const scroller = document.getElementById('message-scroller');
+    if (scroller) scroller.addEventListener('scroll', closeMessageMenu, {passive: true});
+  }
+
   let lastSocialItems = [];
   function renderSocialMessages(items) {
     lastSocialItems = items || [];
@@ -804,6 +937,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       if (item.role !== 'agent' && !item.retracted) li.append(messageTools(item));
       if (item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
+      if (item.role !== 'agent' && !item.retracted) {
+        li.addEventListener('contextmenu', event => {
+          if (selecting) return;
+          event.preventDefault();
+          openMessageMenu(item, li, mine, event.clientX, event.clientY);
+        });
+      }
       list.append(li);
     }
     const scroller = document.getElementById('message-scroller');
@@ -926,6 +1066,70 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderSessions();
   }
 
+  function memberRow(name, note, kind) {
+    const row = document.createElement('li');
+    row.className = 'group-info-member';
+    row.dataset.kind = kind;
+    const avatar = document.createElement('span');
+    avatar.className = 'group-info-member-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    avatar.textContent = kind === 'empty' ? '+' : leadGlyph(name);
+    const text = document.createElement('span');
+    const strong = document.createElement('strong');
+    strong.textContent = name;
+    const small = document.createElement('small');
+    small.textContent = note;
+    text.append(strong, small);
+    row.append(avatar, text);
+    return row;
+  }
+
+  function setGroupInfoTab(which) {
+    const agentsTab = document.getElementById('group-info-tab-agents');
+    const peopleTab = document.getElementById('group-info-tab-people');
+    agentsTab.setAttribute('aria-selected', String(which === 'agents'));
+    peopleTab.setAttribute('aria-selected', String(which === 'people'));
+    document.getElementById('group-info-agents').hidden = which !== 'agents';
+    document.getElementById('group-info-people').hidden = which !== 'people';
+  }
+
+  function setGroupInfo(conversation) {
+    const toggle = document.getElementById('group-info-toggle');
+    const panel = document.getElementById('group-info-panel');
+    if (!toggle || !panel) return;
+    const group = Boolean(conversation && conversation.kind === 'group');
+    toggle.hidden = !group;
+    if (!group) {
+      panel.hidden = true;
+      toggle.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    const title = conversationLabel(conversation, currentUser && currentUser.id);
+    const counts = groupInfoCounts(conversation);
+    document.getElementById('group-info-title').textContent = title;
+    document.getElementById('group-info-avatar').textContent = leadGlyph(title, '群');
+    document.getElementById('group-info-count').textContent = counts.text;
+    document.getElementById('group-info-tab-agents').textContent = `智能体 (${counts.agents})`;
+    document.getElementById('group-info-tab-people').textContent = `成员 (${counts.people})`;
+    const agentList = document.getElementById('group-info-agents');
+    agentList.replaceChildren(...(conversation.agent_members || []).map(agent =>
+      memberRow(agent.name, agent.archived ? '已归档' : '可明确请求一次回复', 'agent')));
+    if (!agentList.children.length) agentList.append(memberRow('还没有智能体', '创建群聊时可以加入工作区智能体', 'empty'));
+    const peopleList = document.getElementById('group-info-people');
+    peopleList.replaceChildren(...(conversation.members || []).map(member =>
+      memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你' : '工作区成员', 'person')));
+    const pinned = sessions.some(item => item.source === 'social' && item.id === conversation.id && item.pinned);
+    document.getElementById('group-info-pin').setAttribute('aria-checked', String(pinned));
+  }
+
+  function setGroupInfoOpen(open) {
+    const toggle = document.getElementById('group-info-toggle');
+    const panel = document.getElementById('group-info-panel');
+    if (!toggle || !panel) return;
+    panel.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+  }
+
   function setSocialHeaderTools(social) {
     const invite = document.getElementById('chat-invite');
     const unavailable = document.getElementById('chat-invite-unavailable');
@@ -942,6 +1146,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function openAgentConversation(agentId, conversationId) {
     setSocialHeaderTools(false);
+    setGroupInfo(null);
     const pin = document.getElementById('pin-conversation');
     if (pin) pin.hidden = true;
     const agent = agents.find(item => item.id === agentId);
@@ -1011,6 +1216,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     renderPinned(result.body.pinned_messages || []);
     setSocialHeaderTools(true);
+    setGroupInfo(currentConversation);
+    setChatSubtitle(currentConversation.kind === 'group' ? groupInfoCounts(currentConversation).text
+      : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
     renderSocialMessages(result.body.items);
     renderGroupReplyAction(result.body.agent_replies || []);
     // Acknowledge only the last message actually rendered, not messages that
@@ -1149,7 +1357,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       box.type = single ? 'radio' : 'checkbox';
       box.name = member.kind === 'agent' ? 'agent-member' : 'member';
       box.value = member.id;
-      label.append(box, document.createTextNode(member.label));
+      const text = document.createElement('span');
+      text.className = 'choice-label';
+      text.textContent = member.label;
+      label.append(box, text);
       holder.append(label);
     }
     applyMemberFilter();
@@ -1624,15 +1835,71 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (workspaceId() !== wid || !currentConversation || currentConversation.id !== conversation.id) return;
     const list = document.getElementById('conversation-search-results'); list.replaceChildren();
     for (const hit of state.hits) {
-      const li = document.createElement('li'); li.textContent = hit.snippet || hit.preview || ''; list.append(li);
+      list.append(searchHitRow(hit, (document.getElementById('conversation-search-query').value || '').trim()));
     }
     document.getElementById('conversation-search-status').textContent = state.error || ('已显示 ' + state.hits.length + ' 条消息');
     document.getElementById('conversation-search-more').hidden = !state.cursor;
   }
+  function searchHitRow(hit, query) {
+    const li = document.createElement('li');
+    li.className = 'search-hit';
+    const avatar = document.createElement('span');
+    avatar.className = 'search-hit-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    const who = hit.role === 'agent' ? (hit.agent_name || '智能体') : (hit.title || '消息');
+    avatar.textContent = leadGlyph(who);
+    const head = document.createElement('span');
+    head.className = 'search-hit-head';
+    const name = document.createElement('strong');
+    name.textContent = who;
+    const when = document.createElement('time');
+    when.textContent = hit.created ? formatSessionTime(hit.created) : '';
+    head.append(name, when);
+    const text = document.createElement('span');
+    text.className = 'search-hit-text';
+    text.append(...highlightParts(hit.snippet || hit.preview || '', query).map(part => {
+      if (!part.match) return document.createTextNode(part.text);
+      const mark = document.createElement('mark'); mark.textContent = part.text; return mark;
+    }));
+    li.append(avatar, head, text);
+    return li;
+  }
+  const groupInfoToggle = document.getElementById('group-info-toggle');
+  if (groupInfoToggle) {
+    groupInfoToggle.addEventListener('click', () => {
+      const open = groupInfoToggle.getAttribute('aria-expanded') !== 'true';
+      if (open) document.getElementById('conversation-search-panel').hidden = true;
+      setGroupInfoOpen(open);
+    });
+    document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
+    document.getElementById('group-info-search').addEventListener('click', () => {
+      setGroupInfoOpen(false);
+      document.getElementById('conversation-search-open').click();
+    });
+    document.getElementById('group-info-tab-agents').addEventListener('click', () => setGroupInfoTab('agents'));
+    document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
+    document.getElementById('group-info-pin').addEventListener('click', async () => {
+      const pin = document.getElementById('pin-conversation');
+      if (!pin || pin.hidden) return;
+      pin.click();
+      const switchButton = document.getElementById('group-info-pin');
+      const wanted = switchButton.getAttribute('aria-checked') !== 'true';
+      for (let tries = 0; tries < 20; tries += 1) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        const now = pin.textContent === '取消置顶';
+        if (now === wanted) { switchButton.setAttribute('aria-checked', String(now)); break; }
+      }
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !document.getElementById('group-info-panel').hidden) setGroupInfoOpen(false);
+    });
+  }
   const inChatOpen = document.getElementById('conversation-search-open');
   if (inChatOpen) inChatOpen.addEventListener('click', () => {
     if (!currentConversation) { show('error', '请先打开一个会话。'); return; }
+    setGroupInfoOpen(false);
     document.getElementById('conversation-search-panel').hidden = false;
+    const field = document.getElementById('conversation-search-query'); if (field) field.focus();
   });
   const inChatClose = document.getElementById('conversation-search-close');
   if (inChatClose) inChatClose.addEventListener('click', () => { document.getElementById('conversation-search-panel').hidden = true; });
