@@ -540,6 +540,8 @@ html[data-theme-resolved="dark"] .profile-feed{ place-items: start center; paddi
   -webkit-backdrop-filter: var(--ot-blur);
   backdrop-filter: var(--ot-blur);
 }
+.profile-share-fallback { margin: .75rem 0 0; overflow-wrap: anywhere; }
+.profile-share-fallback code { font: inherit; color: var(--ot-text); }
 
 #follow-work-dialog-title {
   margin: 0;

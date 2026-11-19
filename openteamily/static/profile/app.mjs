@@ -91,6 +91,7 @@ function mount() {
   let revision = 0;
   let snapshot = '';
   let currentUsername = '';
+  let currentHandle = '';
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -104,6 +105,47 @@ function mount() {
     const editing = isEditPath();
     if (home) home.hidden = editing;
     if (edit) edit.hidden = !editing;
+  }
+
+  function publicProfileUrl(handle) {
+    const origin = (typeof location !== 'undefined' && location.origin) || '';
+    return origin + '/p/' + encodeURIComponent(handle);
+  }
+
+  function openEditView() {
+    if (typeof history === 'undefined' || typeof history.pushState !== 'function') return;
+    if (!isEditPath()) history.pushState({}, '', '/profile/edit');
+    syncView();
+  }
+
+  function showShareFallback(url) {
+    const box = document.querySelector && document.querySelector('#profile-share-fallback');
+    const code = document.querySelector && document.querySelector('#profile-share-link');
+    if (code) code.textContent = url;
+    if (box) box.hidden = false;
+  }
+
+  async function shareProfile() {
+    if (!currentHandle) {
+      show('', '先设置 Teamily ID 才能分享。');
+      openEditView();
+      const input = document.getElementById('profile-handle');
+      if (input && typeof input.focus === 'function') input.focus();
+      return;
+    }
+    const url = publicProfileUrl(currentHandle);
+    const clipboard = typeof navigator !== 'undefined' && navigator.clipboard;
+    if (clipboard && typeof clipboard.writeText === 'function') {
+      try {
+        await clipboard.writeText(url);
+        show('ok', '公开主页链接已复制。');
+        return;
+      } catch {
+        // The browser refused the clipboard; fall through to the manual-copy line.
+      }
+    }
+    show('error', '浏览器没有给出剪贴板权限，请手动复制下面的链接。');
+    showShareFallback(url);
   }
 
   function paintAvatar(node, name) {
@@ -168,6 +210,7 @@ function mount() {
       if (input) input.value = (value.goals && value.goals[key]) || '';
     }
     revision = Number(value.revision || 0);
+    currentHandle = value.handle || '';
     const meta = document.getElementById('profile-meta');
     meta.textContent = revision
       ? '修订 ' + revision + ' · Teamily ID 可用于公开资料地址'
@@ -512,6 +555,8 @@ function mount() {
     const tabR = document.querySelector('#dialog-tab-followers');
     if (tabF) tabF.addEventListener('click', () => openFollowers('following'));
     if (tabR) tabR.addEventListener('click', () => openFollowers('followers'));
+    const share = document.querySelector('#profile-share');
+    if (share) share.addEventListener('click', shareProfile);
     const notifyOpen = document.querySelector('#profile-notify-open');
     if (notifyOpen) notifyOpen.addEventListener('click', () => {
       const dialog = document.querySelector('#follow-work-dialog');
