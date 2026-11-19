@@ -237,7 +237,8 @@ body.app-workspace #main-panel {
 
 .empty-state,
 #list-empty,
-#run-empty {
+#run-empty,
+#run-filter-empty {
   margin: 1.5rem 0;
   padding: 1.25rem 1rem;
   text-align: center;
@@ -248,7 +249,8 @@ body.app-workspace #main-panel {
 }
 
 #list-empty[hidden],
-#run-empty[hidden] {
+#run-empty[hidden],
+#run-filter-empty[hidden] {
   display: none;
 }
 
@@ -363,6 +365,31 @@ body.app-workspace #main-panel {
 
 #run-panel h2 {
   margin: 0 0 0.4rem;
+}
+
+.run-filters {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 0.25rem 0 1rem;
+}
+
+.run-filters button {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 0.2rem 0;
+  color: var(--ot-muted);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.run-filters button[aria-current="true"] {
+  color: var(--ot-ink);
+  border-bottom-color: var(--ot-accent);
+  font-weight: 650;
 }
 
 #run-list {

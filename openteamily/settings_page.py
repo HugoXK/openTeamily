@@ -175,7 +175,11 @@ class SettingsPage:
                              'new=document', 'new=website', 'new=slides', 'new=dashboard',
                              'new=whiteboard')
         if path == '/automations':
-            # template=<id> opens the editor prefilled from a known template.
+            # template=<id> opens the editor prefilled from a known template;
+            # runs=<filter> keeps the run-history filter shareable. The two are
+            # one-shot and permanent respectively, so they never share a URL.
+            if query in ('runs=all', 'runs=succeeded', 'runs=failed'):
+                return True
             from .automations import TEMPLATES
             template = query[len('template='):] if query.startswith('template=') else ''
             return template in TEMPLATES and template != 'custom'
