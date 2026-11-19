@@ -124,3 +124,22 @@ class GroupAutoReplyTests(unittest.TestCase):
         self.assertEqual(detail['agent_replies'], [])
         self.assertEqual(detail['auto_reply']['used'], 0)
         self.assertEqual([item['body'] for item in detail['items']], ['没有运行时连接'])
+
+    def test_member_message_uses_the_runtime_the_workspace_already_has(self):
+        path = self.group()
+        agent = self.connect()
+        self.toggle(path, True)
+        sent = self.bob.call('POST', path + '/messages', {'body': '成员发的一条未点名消息'},
+                             {'HTTP_IDEMPOTENCY_KEY': 'auto-msg-bob-00001'})
+        self.assertEqual(sent['status'], 201, sent)
+        replies = self.snapshot(path)['body']['agent_replies']
+        self.assertEqual(len(replies), 1, replies)
+        self.assertEqual(replies[0]['status'], 'queued')
+        tid = replies[0]['task_id']
+        self.assertEqual(agent.call('POST', f'/v1/agent/tasks/{tid}/claim', {})['status'], 200)
+        self.assertEqual(agent.call('POST', f'/v1/agent/tasks/{tid}/result', {
+            'status': 'succeeded', 'result': {'text': '自动回复：收到成员的消息'}})['status'], 200)
+        detail = self.snapshot(path)['body']
+        self.assertEqual([item['body'] for item in detail['items'] if item.get('role') == 'agent'],
+                         ['自动回复：收到成员的消息'])
+        self.assertEqual(detail['auto_reply']['used'], 1)

@@ -4520,6 +4520,11 @@ class App:
         prompt = conversations.compose_prompt(agent, [], text)
         task_id, _error, _dispatch = self.queue_infer_task(
             db, session['user_id'], now, prompt, workspace['id'], agent['id'])
+        if not task_id and workspace['owner_id'] != session['user_id']:
+            # A member may write in a group where only the owner keeps a runtime
+            # connected; the automatic reply still belongs to that group.
+            task_id, _error, _dispatch = self.queue_infer_task(
+                db, workspace['owner_id'], now, prompt, workspace['id'], agent['id'])
         if not task_id:
             return None
         reply_id = uuid4().hex
