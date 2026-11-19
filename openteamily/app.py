@@ -1016,6 +1016,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/agents(?:/([0-9a-f]{32})(?:/(archive))?)?', path)
             if agent_path:
                 return self.workspace_agent_dispatch(db, session, method, query, now, env, *agent_path.groups())
+            meeting_export = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/meetings/([0-9a-f]{32})/export', path)
+            if meeting_export:
+                return self.meeting_export(db, session, method, query, *meeting_export.groups())
             meeting_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/meetings(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if meeting_path:
@@ -3690,6 +3694,23 @@ class App:
                 for item in personal.builtins(db, row['workspace_id'])
             ],
         }
+
+    def meeting_export(self, db, session, method, query, workspace_id, meeting_id):
+        if method != 'GET':
+            refuse(405, 'method', 'Only GET is supported')
+        if query:
+            refuse(400, 'invalid', 'Queries are not supported')
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        row = meetings.load(db, workspace['id'], meeting_id)
+        if row is None:
+            refuse(404, 'not_found', 'Meeting not found')
+        data = meetings.markdown(row).encode('utf-8')
+        return 200, data, [
+            ('Content-Type', 'text/markdown; charset=utf-8'),
+            ('Content-Disposition', 'attachment; filename="meeting-' + meeting_id + '.md"'),
+        ]
 
     def meeting_dispatch(self, db, session, method, query, now, env, workspace_id, meeting_id, removing):
         workspace = members.load(db, workspace_id, session['user_id'])
