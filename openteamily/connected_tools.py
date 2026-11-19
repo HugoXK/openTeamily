@@ -9,7 +9,7 @@ import json
 import re
 from uuid import uuid4
 
-from . import composio, runtime_connect, members
+from . import composio, composio_principals, runtime_connect, members
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS connected_tool_owners (
@@ -48,21 +48,21 @@ def authorize(db, connection, task_id, now):
     if runtime_key is None or runtime_key['revoked'] or (runtime_key['expires'] is not None and runtime_key['expires'] <= now):
         fail(401, 'unauthorized', 'Runtime key expired or revoked')
     task = runtime_connect.load_task(db, task_id, connection_id=connection['id'])
-    owner = db.execute('SELECT user_id FROM connected_tool_owners WHERE task_id=?', (task_id,)).fetchone()
     meta = runtime_connect.load_meta(db, task_id)
     if task is None:
         fail(404, 'not_found', 'Runtime task not found')
     if task['kind'] != 'infer' or task['status'] != 'claimed' or meta is None or meta['deadline'] <= now:
         fail(409, 'task_inactive', 'Task is not active')
-    # Only the same user's personal runtime may consume their app credentials.
-    if owner is None or owner['user_id'] != connection['user_id']:
+    # Only the same user's runtime may consume their own app credentials.
+    user_id = composio_principals.authorized_user(db, task_id, connection['user_id'])
+    if user_id is None:
         fail(403, 'tools_unavailable', 'Personal connected tools are not enabled for this task')
-    if meta['workspace_id'] and members.load(db, meta['workspace_id'], owner['user_id']) is None:
+    if meta['workspace_id'] and members.load(db, meta['workspace_id'], user_id) is None:
         fail(403, 'forbidden', 'Workspace access was revoked')
-    row = composio.load_key_row(db, owner['user_id'])
+    row = composio.load_key_row(db, user_id)
     if row is None:
         fail(409, 'composio_not_configured', 'Add your own Composio API key first')
-    return owner['user_id'], row, meta
+    return user_id, row, meta
 
 
 def grant(db, task_id, user_id):
@@ -71,8 +71,12 @@ def grant(db, task_id, user_id):
 
 
 def available(db, task_id):
-    return db.execute('SELECT 1 FROM connected_tool_owners o JOIN composio_keys k ON k.user_id=o.user_id WHERE task_id=?',
-                      (task_id,)).fetchone() is not None
+    owner = db.execute('SELECT user_id FROM connected_tool_owners WHERE task_id=?', (task_id,)).fetchone()
+    if owner is not None and composio.load_key_row(db, owner['user_id']) is not None:
+        return True
+    principal = composio_principals.load(db, task_id)
+    return (principal is not None and composio_principals.live(db, principal)
+            and composio.load_key_row(db, principal['user_id']) is not None)
 
 
 def scrub(value, secret):
