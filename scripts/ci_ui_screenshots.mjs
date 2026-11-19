@@ -1652,6 +1652,8 @@ async function main() {
 
     try {
       await page.locator('#delete-page').click();
+      await page.locator('#page-delete-confirm').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#page-delete-confirm-submit').click();
       await waitForLocatorText(page, '#status', '已删除');
       await page.locator('#list-panel').waitFor({ state: 'visible', timeout: 15000 });
       await waitForLocatorText(page, '#memory-list', ready.memory_title);
@@ -1696,6 +1698,8 @@ async function main() {
 
     try {
       await page.locator('#delete-action').click();
+      await page.locator('#action-delete-confirm').waitFor({ state: 'visible', timeout: 15000 });
+      await page.locator('#action-delete-confirm-submit').click();
       await waitForLocatorText(page, '#status', '已删除');
       await page.locator('#list-panel').waitFor({ state: 'visible', timeout: 15000 });
       await waitForLocatorText(page, '#action-list', ready.action_title);
