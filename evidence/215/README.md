@@ -1,6 +1,6 @@
 # Screenshots — PR #215, meetings page
 
-- after `47a497ef6a8b46f98dcc0505b351c457d140462c` (this PR's tip)
+- after `3f7ad676f1e6ea225f5a995ee87c48092fc4b9fe` (the tip after merging live main into the branch)
 - no before set: `/meetings` does not exist on the base; the page itself is the new surface.
 
 16 PNGs, zh-CN, light and dark, 1440×900 and 390×844, four states:
