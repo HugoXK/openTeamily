@@ -1112,3 +1112,54 @@ body.app-workspace > .app-rail #appearance-toggle { font-size: .6875rem; }
 .avatar[data-tone="6"], #conversation-list .avatar[data-tone="6"] { background: #e6f3f4; color: #1f6168; }
 html[data-theme-resolved="dark"] .avatar[data-tone], html[data-theme-resolved="dark"] #conversation-list .avatar[data-tone] { background: var(--ot-accent-soft); color: var(--ot-ink); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+/* OpenTeamily original mark (not a Teamily or vendor logo).
+   An open ring with a companion node, used on the rail at the
+   same size and top alignment as the captured shell mark. */
+body.app-workspace > .app-rail .brand-mark {
+  width: 2.15rem;
+  min-width: 2.15rem;
+  min-height: 2.15rem;
+  height: 2.15rem;
+  margin: 0 0 0.7rem;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--ot-accent);
+  color: var(--ot-on-accent);
+  box-shadow: none;
+  overflow: hidden;
+}
+body.app-workspace > .app-rail .brand-mark .brand-glyph {
+  display: block;
+  width: 1.35rem;
+  height: 1.35rem;
+}
+html[data-theme-resolved="dark"] body.app-workspace > .app-rail > a.brand-mark:hover {
+  background: #1f6b4a;
+  color: #ffffff;
+}
+body.app-workspace > .app-rail > a.brand-mark:hover {
+  background: var(--ot-accent);
+  color: var(--ot-on-accent);
+}
+.brand-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: inherit;
+  text-decoration: none;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+.brand-wordmark .brand-mark,
+.about-wordmark .about-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  background: #097845;
+  color: #ffffff;
+}
+.brand-wordmark-text { font-size: 1rem; font-weight: 700; letter-spacing: -0.03em; }

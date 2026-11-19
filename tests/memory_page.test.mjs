@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import test from 'node:test';
-import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, fillGraphHoverCard, formatTopics, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, listQuery, matchingMemoryPages, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, mount, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
+import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, fillGraphHoverCard, formatTopics, applyMarkdown, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, listQuery, matchingMemoryPages, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, mount, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -594,4 +594,13 @@ test('deleting a next action asks first and only confirms the captured action', 
   assert.deepEqual(posted(), ['POST /v1/workspaces/ws1/memory/actions/a1/remove']);
   assert.equal(el('status').textContent, '已删除。');
   assert.equal(el('action-delete-confirm').hidden, true);
+});
+
+test('applyMarkdown wraps or prefixes the selected textarea text', () => {
+  const area = {value: 'hello world', selectionStart: 0, selectionEnd: 5, setSelectionRange() {}, dispatchEvent() {}};
+  assert.equal(applyMarkdown(area, 'bold'), '**hello** world');
+  const empty = {value: '', selectionStart: 0, selectionEnd: 0, setSelectionRange() {}, dispatchEvent() {}};
+  assert.equal(applyMarkdown(empty, 'h1'), '# 标题');
+  const link = {value: 'docs', selectionStart: 0, selectionEnd: 4, setSelectionRange() {}, dispatchEvent() {}};
+  assert.equal(applyMarkdown(link, 'link'), '[docs](https://)');
 });

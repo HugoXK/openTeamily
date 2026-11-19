@@ -240,6 +240,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+
+  function monogram(name) {
+    const text = String(name || '').trim();
+    const chars = Array.from(text);
+    const label = (chars.slice(0, chars[0] && /[A-Za-z]/.test(chars[0]) ? 2 : 1).join('') || '?');
+    let tone = 0;
+    for (const ch of chars) tone += ch.codePointAt(0) || 0;
+    return {label, tone: (tone % 6) + 1};
+  }
+
+  function identity(name, detail) {
+    const wrap = document.createElement('span');
+    wrap.className = 'member-id';
+    const mark = monogram(name);
+    const avatar = document.createElement('span');
+    avatar.className = 'avatar';
+    avatar.dataset.tone = String(mark.tone);
+    avatar.textContent = mark.label;
+    const label = document.createElement('span');
+    label.className = 'member-name';
+    label.textContent = detail ? `${name} · ${detail}` : (name || '');
+    wrap.appendChild(avatar);
+    wrap.appendChild(label);
+    // Fake-DOM tests read textContent on the wrap itself; keep a copy of the
+    // visible name there when the getter does not walk children.
+    if (Object.prototype.hasOwnProperty.call(wrap, '_text')) wrap._text = label.textContent;
+    return wrap;
+  }
+
   function renderMembers(items) {
     const list = document.getElementById('member-list');
     const empty = document.getElementById('members-empty');
@@ -250,9 +279,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const selfId = currentUser && currentUser.id;
     for (const item of items) {
       const row = document.createElement('li');
-      const label = document.createElement('span');
-      label.textContent = `${item.username} · ${ROLE_LABELS[item.role] || item.role}${item.suspended ? ' · 已停用' : ''}`;
-      row.appendChild(label);
+      const roleText = (ROLE_LABELS[item.role] || item.role) + (item.suspended ? ' · 已停用' : '');
+      row.appendChild(identity(item.username, roleText));
+      const role = document.createElement('span');
+      role.className = 'role-pill' + (item.role === 'owner' ? ' is-owner' : '');
+      role.textContent = ROLE_LABELS[item.role] || item.role;
+      row.appendChild(role);
       if (canSuspend(actor, item, selfId)) {
         const suspend = document.createElement('button');
         suspend.type = 'button';
@@ -290,9 +322,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const item of items) {
       const row = document.createElement('li');
       const state = inviteState(item);
-      const meta = document.createElement('span');
-      meta.textContent = `${ROLE_LABELS[item.role] || item.role} · ${state} · 已用 ${item.use_count}/${item.max_uses}`;
-      row.appendChild(meta);
+      const detail = `${ROLE_LABELS[item.role] || item.role} · ${state} · 已用 ${item.use_count}/${item.max_uses}`;
+      row.appendChild(identity('邀请', detail));
+      const role = document.createElement('span');
+      role.className = 'role-pill';
+      role.textContent = ROLE_LABELS[item.role] || item.role;
+      row.appendChild(role);
       if (!item.revoked) {
         const revoke = document.createElement('button');
         revoke.type = 'button';
@@ -367,9 +402,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (empty) empty.hidden = items.length > 0;
     for (const item of items) {
       const row = document.createElement('li');
-      const meta = document.createElement('span');
-      meta.textContent = `${item.username} · 申请成为${ROLE_LABELS[item.role] || item.role}`;
-      row.appendChild(meta);
+      row.appendChild(identity(item.username, '申请成为' + (ROLE_LABELS[item.role] || item.role)));
       for (const [decision, label] of [['approve', '批准'], ['reject', '拒绝']]) {
         const button = document.createElement('button');
         button.type = 'button';
