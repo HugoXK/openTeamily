@@ -860,6 +860,12 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/memory/links(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if memory_link_path:
                 return self.memory_link_dispatch(db, session, method, query, now, env, *memory_link_path.groups())
+            memory_page_version_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/memory/([0-9a-f]{32})/versions(?:/(\d{1,8})(?:/(restore))?)?',
+                path)
+            if memory_page_version_path:
+                return self.memory_page_version_dispatch(
+                    db, session, method, query, now, env, *memory_page_version_path.groups())
             memory_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/memory(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if memory_path:
@@ -2265,6 +2271,7 @@ class App:
              session['user_id'], session['user_id'], key_hash, request_hash),
         )
         memory.replace_topics(db, workspace['id'], page_id, topics)
+        memory.record_version(db, workspace['id'], page_id, 1, title, content, now, session['user_id'])
         return 201, {'page': memory.decorate(db, memory.load(db, workspace['id'], page_id))}, []
 
     def update_memory_page(self, db, workspace, session, actor, row, now, body):
@@ -2302,15 +2309,71 @@ class App:
             (workspace['id'], title_digest, row['id']),
         ).fetchone():
             refuse(409, 'conflict', 'A memory page with this title already exists')
+        # Pages created before this slice have no snapshot yet; record what is
+        # about to be replaced so the first edit already has a version to show.
+        if not db.execute('SELECT 1 FROM memory_page_versions WHERE page_id=? LIMIT 1',
+                          (row['id'],)).fetchone():
+            memory.record_version(db, workspace['id'], row['id'], row['revision'],
+                                  row['title'], row['body'], row['updated'], row['updated_by'])
         db.execute(
             'UPDATE memory_pages SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
             (title, title_digest, content, row['revision'] + 1, now, session['user_id'], row['id']),
         )
+        memory.record_version(db, workspace['id'], row['id'], row['revision'] + 1,
+                              title, content, now, session['user_id'])
         if 'topics' in changes:
             memory.replace_topics(db, workspace['id'], row['id'], topics)
         return 200, {'page': memory.decorate(db, memory.load(db, workspace['id'], row['id']))}, []
 
-
+    def memory_page_version_dispatch(self, db, session, method, query, now, env,
+                                     workspace_id, page_id, revision, restoring):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        row = memory.load(db, workspace['id'], page_id)
+        if row is None:
+            refuse(404, 'not_found', 'Memory page not found')
+        number = int(revision) if revision else None
+        if method == 'GET' and not restoring and not query:
+            if number is None:
+                rows = memory.version_rows(db, workspace['id'], page_id, row['revision'], 20)
+                return 200, {'current': row['revision'],
+                             'items': [memory.version_view(item) for item in rows]}, []
+            seen = memory.load_version(db, workspace['id'], page_id, number)
+            if seen is None:
+                refuse(404, 'not_found', 'Version not found')
+            return 200, {'version': memory.version_body_view(seen)}, []
+        if query:
+            refuse(400, 'invalid', 'Invalid version request')
+        if method != 'POST' or number is None or restoring != 'restore':
+            refuse(400, 'invalid', 'Invalid version request')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if not memory.can_edit(actor, session['user_id'], row):
+            refuse(403, 'forbidden', 'Not allowed to change this memory page')
+        body = self.body(env, ['revision'])
+        current = body.get('revision')
+        if type(current) is not int or current != row['revision']:
+            raise RuntimeFault(409, 'conflict', 'Memory page changed elsewhere; reload and retry',
+                               memory.decorate(db, row))
+        seen = memory.load_version(db, workspace['id'], page_id, number)
+        if seen is None:
+            refuse(404, 'not_found', 'Version not found')
+        title, content = seen['title'], seen['body']
+        title_digest = memory.title_hash(title)
+        if title != row['title'] and db.execute(
+            'SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=? AND id!=?',
+            (workspace['id'], title_digest, row['id']),
+        ).fetchone():
+            refuse(409, 'conflict', 'A memory page with this title already exists')
+        # A restore is a normal forward edit: the old revision stays, and the
+        # restored content is written as a new revision with its own snapshot.
+        db.execute(
+            'UPDATE memory_pages SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
+            (title, title_digest, content, row['revision'] + 1, now, session['user_id'], row['id']),
+        )
+        memory.record_version(db, workspace['id'], row['id'], row['revision'] + 1,
+                              title, content, now, session['user_id'])
+        return 200, {'page': memory.decorate(db, memory.load(db, workspace['id'], row['id']))}, []
 
     def memory_graph(self, db, session, method, query, workspace_id):
         workspace = members.load(db, workspace_id, session['user_id'])
