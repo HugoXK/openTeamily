@@ -1,2 +1,20 @@
 #steps { display: flex; gap: .8rem; margin: 0 0 1rem; }
 #steps span[aria-current="step"] { font-weight: 600; }
+
+/* Join approval queue and team directory, using the shared #220 tokens. */
+#join-requests-panel, #team-directory-panel, #directory-listing-form fieldset {
+  margin-top: 1rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius);
+  background: var(--ot-surface);
+  box-shadow: var(--ot-shadow-sm);
+}
+#join-requests-panel h2, #team-directory-panel h2 { margin: 0 0 .5rem; font-size: 1rem; }
+#join-request-list li span:first-child, #directory-results li strong { flex: 1 1 12rem; }
+#join-request-list li button:first-of-type { background: var(--ot-accent); color: #fff; border-color: var(--ot-accent); }
+#join-request-list li button + button { background: transparent; color: var(--ot-danger); }
+#directory-search-form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+#directory-search-form input { min-width: 14rem; }
+#directory-results li .note { margin: 0; }
+#directory-results li button:disabled { opacity: .65; cursor: default; }

@@ -22,6 +22,13 @@ async function request(method, path, body) {
   return { status: response.status, body: payload };
 }
 
+const LOOK_LABELS = {color: '颜色', expression: '表情', headwear: '头饰', glasses: '眼镜', hand: '手持'};
+
+export function lookSummary(look) {
+  if (!look) return '还没有选择形象。';
+  return Object.keys(LOOK_LABELS).map(name => `${LOOK_LABELS[name]}：${look[name]}`).join(' · ');
+}
+
 function mount() {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -262,7 +269,80 @@ function mount() {
     industries = result.body.industries || [];
     populateIndustries();
     fill(result.body.onboarding);
+    renderSteps(result.body.steps, result.body.onboarding);
   }
+
+  function renderSteps(steps, state) {
+    const section = document.getElementById('onboarding-steps');
+    if (!section) return;
+    section.hidden = !steps || !state || !state.completed;
+    if (section.hidden) return;
+    const apps = document.getElementById('onboarding-apps');
+    apps.textContent = '';
+    for (const app of steps.apps || []) {
+      const li = document.createElement('li');
+      li.textContent = `${app.name} · 未连接`;
+      apps.appendChild(li);
+    }
+    const picks = document.getElementById('onboarding-picks');
+    picks.textContent = '';
+    for (const item of steps.recommendations || []) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.name = 'pick';
+      box.value = item.key;
+      box.checked = (steps.picks || []).includes(item.key);
+      label.append(box, ` ${item.title}（${item.kind === 'routine' ? '例行' : '一次性'}）`);
+      label.title = item.summary;
+      picks.appendChild(label);
+    }
+    const look = document.getElementById('onboarding-look');
+    look.textContent = '';
+    for (const [name, options] of Object.entries(steps.look_options || {})) {
+      const label = document.createElement('label');
+      const choice = document.createElement('select');
+      choice.name = name;
+      for (const value of options) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        choice.appendChild(option);
+      }
+      if (steps.look && steps.look[name]) choice.value = steps.look[name];
+      label.append(`${LOOK_LABELS[name] || name} `, choice);
+      look.appendChild(label);
+    }
+    document.getElementById('onboarding-look-preview').textContent = lookSummary(steps.look);
+    document.getElementById('onboarding-steps-meta').textContent =
+      `已选 ${(steps.picks || []).length} 项 · ` + (steps.look ? '形象已保存' : '形象未保存');
+  }
+
+  async function saveStep(path, body, okText) {
+    const result = await request('POST', path, body);
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '保存失败。'));
+      return;
+    }
+    renderSteps(result.body.steps, current || {completed: true});
+    show('ok', okText);
+  }
+
+  const picksForm = document.getElementById('onboarding-picks-form');
+  if (picksForm) picksForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const chosen = [...document.getElementById('onboarding-picks').querySelectorAll('input[name="pick"]')]
+      .filter(box => box.checked).map(box => box.value);
+    saveStep('/v1/onboarding/picks', {picks: chosen}, '已保存选择（不会自动创建例行任务）。');
+  });
+
+  const lookForm = document.getElementById('onboarding-look-form');
+  if (lookForm) lookForm.addEventListener('submit', event => {
+    event.preventDefault();
+    const look = {};
+    for (const choice of document.getElementById('onboarding-look').querySelectorAll('select')) look[choice.name] = choice.value;
+    saveStep('/v1/onboarding/look', {look}, '已保存 Agent 形象。');
+  });
 
   select.addEventListener('change', () => {
     current = null;
