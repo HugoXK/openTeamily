@@ -72,7 +72,7 @@
       </label>
       <p id="graph-counts" class="memory-counts"></p>
     </header>
-    <p class="note memory-disclaimer">对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。空图谱说明、新建入口和窄屏图谱优先布局是 OpenTeamily 补充，未经目标站对照。画像、分享和导出尚未实现。我的会议进入已有的作品库会议空态，仍没有会议作品接口。还不能写成已经功能对等，也还没有浏览器端到端验收。</p>
+    <details class="note memory-disclaimer"><summary>对照说明</summary><p>对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。空图谱说明、新建入口和窄屏图谱优先布局是 OpenTeamily 补充，未经目标站对照。画像、分享和导出尚未实现。我的会议进入已有的作品库会议空态，仍没有会议作品接口。还不能写成已经功能对等，也还没有浏览器端到端验收。</p></details>
     <section id="list-panel" class="memory-workspace" data-view="overview">
       <aside class="memory-dir" id="memory-dir">
         <div class="dir-header">
@@ -88,7 +88,7 @@
         </label>
         <div class="memory-filters" role="group" aria-label="筛选">
           <button type="button" data-filter="all" aria-pressed="true">全部 <span id="filter-all-count" class="filter-count">0</span></button>
-          <button type="button" data-filter="updated" title="未实现：对照里「更新」带未读条数，但 OpenTeamily 还没有已读状态接口，所以不显示条数。">更新</button>
+          <button type="button" data-filter="updated" title="按最近更新排序；数字是最近 7 天更新过的页面数（还没有已读状态接口，所以不是未读数）。">更新 <span id="filter-updated-count" class="filter-count">0</span></button>
           <button type="button" data-filter="topics">标签 <span class="filter-caret" aria-hidden="true">▾</span></button>
         </div>
         <div id="topic-filter-box" hidden>
