@@ -353,6 +353,8 @@ export function applyChatIdentity(document, name) {
   const title = document.getElementById('chat-title');
   const avatar = document.getElementById('chat-avatar');
   if (title) title.textContent = identity.title;
+  const subtitle = document.getElementById('chat-subtitle');
+  if (subtitle) { subtitle.textContent = ''; subtitle.hidden = true; }
   if (avatar) {
     avatar.textContent = identity.initial;
     avatar.hidden = !identity.showAvatar;
@@ -607,6 +609,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  function setChatSubtitle(text, busy = false) {
+    const line = document.getElementById('chat-subtitle');
+    if (!line) return;
+    line.textContent = text || '';
+    line.hidden = !text;
+    if (busy) line.dataset.busy = '1'; else delete line.dataset.busy;
+  }
+
   function renderAgentMessages(items) {
     const list = document.getElementById('message-list');
     list.replaceChildren();
@@ -617,13 +627,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       li.className = item.role === 'user' ? 'user' : 'assistant';
       const role = document.createElement('p');
       role.className = 'role';
-      role.textContent = item.role === 'user' ? '你' : '智能体';
+      role.textContent = item.role === 'user' ? '你' : ((currentAgent && currentAgent.name) || '智能体');
       const body = document.createElement('p');
       const waiting = item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
       const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
       body.className = waiting ? 'pending' : (failed ? 'failed' : '');
       body.textContent = item.role === 'user' ? (item.body || '') : statusLabel(item);
-      li.append(role, body);
+      if (waiting || failed) li.dataset.state = waiting ? item.status : 'failed';
+      if (waiting) {
+        const heading = document.createElement('p');
+        heading.className = 'reply-state';
+        heading.textContent = item.status === 'running' ? '正在生成回复' : '正在准备回复';
+        const dots = document.createElement('span');
+        dots.className = 'reply-dots';
+        dots.setAttribute('aria-hidden', 'true');
+        dots.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
+        heading.append(dots);
+        li.append(role, heading, body);
+      } else {
+        li.append(role, body);
+      }
       if (item.role === 'assistant' && item.status === 'succeeded' && item.body) {
         const save = document.createElement('button');
         save.type = 'button';
@@ -634,6 +657,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       list.append(li);
       if (waiting) pending = true;
     }
+    setChatSubtitle(pending ? '正在回复…' : 'AI 智能体 · 经运行时回复', pending);
     const scroller = document.getElementById('message-scroller');
     scroller.scrollTop = scroller.scrollHeight;
     return pending;
@@ -1198,6 +1222,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderPinned(result.body.pinned_messages || []);
     setSocialHeaderTools(true);
     setGroupInfo(currentConversation);
+    setChatSubtitle(currentConversation.kind === 'group' ? groupInfoCounts(currentConversation).text
+      : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
     renderSocialMessages(result.body.items);
     renderGroupReplyAction(result.body.agent_replies || []);
     // Acknowledge only the last message actually rendered, not messages that
