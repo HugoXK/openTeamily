@@ -1056,3 +1056,57 @@ test('team mode needs a selected template', () => {
   assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', selectedCount: 3}), false);
   assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', templateSelected: true}), true);
 });
+
+import {forwardTargets, forwardCountLabel} from '../openteamily/static/chat/app.mjs';
+
+test('forward target list excludes the current conversation', () => {
+  assert.deepEqual(forwardTargets([{id: 'a', kind: 'dm', title: 'bob'}, {id: 'b', kind: 'group', title: '群'}], 'a'),
+    [{id: 'b', label: '群聊 · 群'}]);
+  assert.equal(forwardCountLabel(3), '已选 3 条');
+});
+
+test('pin a message and multi-select forward call the real endpoints', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const posts = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.endsWith('/messages/m-1/pin')) {
+        posts.push([path, JSON.parse(options.body)]);
+        return json(200, {pinned_messages: [{message_id: 'm-1', excerpt: '你好', pinned_by_username: 'alice'}]});
+      }
+      if (path.endsWith('/conv-1/forward')) {
+        posts.push([path, JSON.parse(options.body)]);
+        return json(201, {items: [{id: 'f-1'}]});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    assert.equal(el('chat-invite').hidden, false);
+    assert.equal(el('multi-select-toggle').hidden, false);
+    let li = el('message-list').children[0];
+    const tools = li.children[li.children.length - 2];
+    assert.equal(tools.className, 'message-tools');
+    await fire(tools.children[0], 'click');
+    await settle();
+    assert.deepEqual(posts[0][1], {pinned: true});
+    assert.equal(el('pinned-messages').hidden, false);
+    li = el('message-list').children[0];
+    assert.equal(li.children[li.children.length - 2].children[0].textContent, '取消置顶');
+    await fire(el('multi-select-toggle'), 'click');
+    assert.equal(el('forward-bar').hidden, false);
+    li = el('message-list').children[0];
+    const box = li.children[li.children.length - 2].children[0].children[0];
+    box.checked = true;
+    await fire(box, 'change');
+    assert.equal(el('forward-count').textContent, '已选 1 条');
+    el('forward-target').value = 'conv-2';
+    await fire(el('forward-target'), 'change');
+    assert.equal(el('forward-submit').disabled, false);
+    await fire(el('forward-submit'), 'click');
+    await settle();
+    assert.deepEqual(posts[1][1], {message_ids: ['m-1'], target_conversation_id: 'conv-2'});
+    assert.equal(el('forward-bar').hidden, true);
+  } finally { restore(); }
+});

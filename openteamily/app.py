@@ -866,7 +866,7 @@ class App:
                 return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}/(?:edit|retract|reactions))?|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}/(?:edit|retract|reactions|pin))?|forward|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -3317,6 +3317,10 @@ class App:
             db.execute('INSERT INTO social_preferences VALUES(?,?,?) ON CONFLICT(conversation_id,user_id) '
                        'DO UPDATE SET pinned=excluded.pinned', (row['id'], session['user_id'], int(pinned)))
             return 200, social.preference(db, row['id'], session['user_id']), []
+        if action and action.endswith('/pin') and method == 'POST' and not query:
+            return self.pin_social_message(db, session, row, action.split('/')[1], now, env)
+        if action == 'forward' and method == 'POST' and not query:
+            return self.forward_social_messages(db, workspace, session, row, now, env)
         if action and action.endswith('/reactions') and method == 'POST' and not query:
             return self.react_social_message(db, session, row, action.split('/')[1], now, env)
         if action and action.startswith('messages/') and method == 'POST' and not query:
@@ -3362,20 +3366,95 @@ class App:
             conversation['unread_count'] = social.unread_count(db, row['id'], session['user_id'])
             return 200, {'conversation': conversation,
                          'agent_replies': [social.reply_view(item) for item in social.reply_requests(db, row['id'])],
-                         'items': social.with_reactions(db, [social.message_view(item) for item in items[:100]],
-                                                        session['user_id']),
+                         'pinned_messages': social.pinned_messages(db, row['id']),
+                         'items': social.forward_info(db, social.with_reactions(
+                             db, [social.message_view(item) for item in items[:100]], session['user_id'])),
                          'cursor': items[99]['id'] if len(items) > 100 else None}, []
         if action == 'messages' and method == 'GET':
             limit, cursor, _ = self.pagination(query)
             rows = social.messages(db, row['id'], cursor, limit + 1)
             if rows is None:
                 refuse(400, 'invalid', 'Invalid pagination parameters')
-            return 200, {'items': social.with_reactions(db, [social.message_view(item) for item in rows[:limit]],
-                                                        session['user_id']),
+            return 200, {'items': social.forward_info(db, social.with_reactions(
+                             db, [social.message_view(item) for item in rows[:limit]], session['user_id'])),
                          'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
         if action == 'messages' and method == 'POST' and not query:
             return self.send_social_message(db, workspace, session, row, now, env)
         refuse(400, 'invalid', 'Invalid messenger request')
+
+    def pin_social_message(self, db, session, row, message_id, now, env):
+        pinned = self.body(env, ['pinned']).get('pinned')
+        if type(pinned) is not bool:
+            refuse(400, 'invalid', 'Provide pinned as a boolean')
+        message = db.execute(f'SELECT * FROM ({social.MESSAGE_ROWS}) WHERE conversation_id=? AND id=?',
+                             (row['id'], message_id)).fetchone()
+        if message is None or message['agent_id']:
+            refuse(404, 'not_found', 'Message not found')
+        if message['retracted']:
+            refuse(409, 'conflict', 'Retracted messages cannot be pinned')
+        if pinned:
+            exists = db.execute('SELECT 1 FROM social_message_pins WHERE conversation_id=? AND message_id=?',
+                                (row['id'], message_id)).fetchone()
+            if not exists and len(social.pinned_messages(db, row['id'])) >= social.PIN_LIMIT:
+                refuse(429, 'quota', 'Pinned message limit reached')
+            db.execute('INSERT OR IGNORE INTO social_message_pins VALUES(?,?,?,?)',
+                       (row['id'], message_id, session['user_id'], now))
+        else:
+            db.execute('DELETE FROM social_message_pins WHERE conversation_id=? AND message_id=?',
+                       (row['id'], message_id))
+        return 200, {'pinned_messages': social.pinned_messages(db, row['id'])}, []
+
+    def forward_social_messages(self, db, workspace, session, row, now, env):
+        body = self.body(env, ['message_ids', 'target_conversation_id'])
+        ids, target_id = body.get('message_ids'), body.get('target_conversation_id')
+        if (not isinstance(ids, list) or not 1 <= len(ids) <= social.FORWARD_LIMIT or len(set(ids)) != len(ids)
+                or not all(isinstance(i, str) and social.HEX32.fullmatch(i) for i in ids)):
+            refuse(400, 'invalid', f'Provide 1–{social.FORWARD_LIMIT} unique message ids')
+        if not isinstance(target_id, str) or not social.HEX32.fullmatch(target_id):
+            refuse(400, 'invalid', 'Provide a target conversation id')
+        target = social.load(db, workspace['id'], target_id)
+        if target is None or not social.is_member(db, target['id'], workspace['id'], session['user_id']):
+            refuse(404, 'not_found', 'Target conversation not found')
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        sources = []
+        for mid in ids:
+            message = db.execute(f'SELECT * FROM ({social.MESSAGE_ROWS}) WHERE conversation_id=? AND id=?',
+                                 (row['id'], mid)).fetchone()
+            if message is None:
+                refuse(404, 'not_found', 'Message not found')
+            if message['retracted']:
+                refuse(409, 'conflict', 'Retracted messages cannot be forwarded')
+            sources.append(message)
+        sources.sort(key=lambda m: m['seq'])
+        request_hash = digest(json.dumps({'from': row['id'], 'to': target['id'], 'ids': sorted(ids)}, sort_keys=True))
+        first_key = digest(f'social-forward:{key}:0')
+        prior = social.load_message_by_key(db, target['id'], first_key)
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            rows = [social.load_message_by_key(db, target['id'], digest(f'social-forward:{key}:{n}'))
+                    for n in range(len(sources))]
+            views = [social.message_view(db.execute(f'SELECT * FROM ({social.MESSAGE_ROWS}) WHERE id=?',
+                                                    (r['id'],)).fetchone()) for r in rows if r]
+            return 200, {'items': social.forward_info(db, views)}, []
+        if social.message_slots(db, target['id']) + len(sources) > self.config.max_social_messages_per_conversation:
+            refuse(429, 'quota', 'Message capacity reached')
+        created = []
+        for n, source in enumerate(sources):
+            author = source['agent_name'] if source['agent_id'] else (social.username(db, source['user_id']) or '成员')
+            message_id = uuid4().hex
+            db.execute('INSERT INTO social_messages VALUES(?,?,?,?,?,?,?,?,?)',
+                       (message_id, target['id'], workspace['id'], session['user_id'], source['body'],
+                        social.next_seq(db, target['id']), now, digest(f'social-forward:{key}:{n}'), request_hash))
+            # Only the original author's display name travels; the source conversation stays private.
+            db.execute('INSERT INTO social_forwards VALUES(?,?,?)', (message_id, source['id'], author))
+            created.append(message_id)
+        db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, target['id']))
+        views = [social.message_view(db.execute(f'SELECT * FROM ({social.MESSAGE_ROWS}) WHERE id=?', (mid,)).fetchone())
+                 for mid in created]
+        return 201, {'items': social.forward_info(db, views)}, []
 
     def react_social_message(self, db, session, row, message_id, now, env):
         body = self.body(env, ['emoji', 'active'])

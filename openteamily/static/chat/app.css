@@ -930,3 +930,41 @@
 .reaction-chip:focus-visible, .reaction-add:focus-visible, .reaction-picker button:focus-visible { border-color: var(--ot-accent); }
 .reaction-picker { display: inline-flex; gap: .2rem; }
 .reaction-picker[hidden] { display: none; }
+
+/* Message tools: pinned strip, invite panel and multi-select forward bar. */
+.chat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .4rem .6rem;
+  margin: .35rem .75rem;
+  padding: .45rem .65rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 10px;
+  background: var(--ot-surface);
+  font-size: .85rem;
+}
+.chat-strip[hidden] { display: none; }
+.chat-strip h2 { margin: 0; font-size: .85rem; font-weight: 600; }
+.chat-strip form { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+#pinned-message-list { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+#pinned-message-list li {
+  max-width: 18rem;
+  padding: .15rem .5rem;
+  border-radius: 999px;
+  background: var(--ot-accent-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#chat-invite-result { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+.message-tools { display: inline-flex; gap: .3rem; margin-top: .15rem; font-size: .78rem; }
+.message-tools button {
+  padding: .05rem .45rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ot-muted);
+}
+.message-tools button:hover, .message-tools button:focus-visible { border-color: var(--ot-line); color: var(--ot-ink); }
+#message-list .body[data-forwarded] { border-left: 3px solid var(--ot-line-strong, var(--ot-line)); padding-left: .5rem; }
