@@ -771,8 +771,13 @@ async function main() {
           && (await visibleText(page.locator('#member-choices'))).includes('AI 智能体（自动回复未接通）'),
         'An existing human and agent are selected; custom group create is enabled');
       await page.locator('#compose-mode-team').click();
-      record('chat_group_agent_team_unconnected', await page.locator('#compose-dialog-submit').isDisabled(),
-        'Agent selections do not enable the unconnected AI-team mode');
+      await page.locator('#team-template-choices input[value="product-squad"]').waitFor({state: 'visible', timeout: 8000});
+      const disabledBeforePick = await page.locator('#compose-dialog-submit').isDisabled();
+      await page.locator('#team-template-choices input[value="product-squad"]').check();
+      record('chat_group_agent_team_template',
+        disabledBeforePick && await page.locator('#compose-dialog-submit').isEnabled()
+          && (await visibleText(page.locator('#team-template-choices'))).includes('产品研发小队'),
+        'AI-team mode requires picking a real template before create is enabled');
       await page.locator('#compose-mode-custom').click();
       screenshots.push(path.basename(await shot(page, outDir, '79-chat-group-agent-picker.png')));
       await page.locator('#compose-dialog-submit').click();

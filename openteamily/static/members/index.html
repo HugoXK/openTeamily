@@ -99,6 +99,7 @@
         </label>
         <label>有效天数 <input type="number" name="expires_days" min="1" max="30" value="7"></label>
         <label>最多使用次数 <input type="number" name="max_uses" min="1" max="50" value="1"></label>
+        <label class="check-row"><input type="checkbox" name="requires_approval"> 加入前需要所有者或管理员审批</label>
         <button type="submit">生成</button>
         <p id="issued-token" class="note" hidden></p>
       </fieldset>
@@ -107,6 +108,11 @@
       <h2>已发出的邀请</h2>
       <ul id="invite-list"></ul>
       <p id="invites-empty" class="note" hidden>还没有有效或已记录的邀请。</p>
+    </section>
+    <section id="join-requests-panel" hidden>
+      <h2>待审批的加入申请</h2>
+      <ul id="join-request-list"></ul>
+      <p id="join-requests-empty" class="note" hidden>没有待审批的申请。</p>
     </section>
     <form id="accept-form" method="post" action="/v1/invites/accept">
       <fieldset>

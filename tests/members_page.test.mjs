@@ -36,3 +36,11 @@ test('readAddMember and readInvite map form fields', () => {
     globalThis.FormData = original;
   }
 });
+
+test('invite approval option and state labels', async () => {
+  const {inviteState} = await import('../openteamily/static/members/app.mjs');
+  assert.equal(inviteState({revoked: 1, frozen: true}), '已撤销');
+  assert.equal(inviteState({revoked: 0, frozen: true}), '已冻结');
+  assert.equal(inviteState({revoked: 0, requires_approval: true}), '有效 · 需审批');
+  assert.equal(inviteState({revoked: 0}), '有效');
+});

@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_templates, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -592,6 +592,18 @@ class App:
                 if method != 'POST' or query:
                     refuse(400, 'invalid', 'Invalid engagement request')
                 return self.discover_engagement(db, session, discover_action[1], env)
+            if path == '/v1/team-templates':
+                if method != 'GET' or query:
+                    refuse(400, 'invalid', 'Invalid template request')
+                return 200, {'items': [team_templates.view(item) for item in team_templates.TEMPLATES]}, []
+            template_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/team-templates/([a-z0-9-]{3,40})', path)
+            if template_path:
+                if method != 'POST' or query:
+                    refuse(400, 'invalid', 'Invalid template request')
+                return self.apply_team_template(db, session, now, env, *template_path.groups())
+            notification_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/notifications(/read)?', path)
+            if notification_path:
+                return self.notification_dispatch(db, session, method, query, env, *notification_path.groups())
             memory_profile = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/memory/profile', path)
             if memory_profile:
                 return self.memory_profile_dispatch(db, session, method, query, now, env, memory_profile[1])
@@ -819,8 +831,18 @@ class App:
                 return self.memory_dispatch(db, session, method, query, now, env, *memory_path.groups())
             if path == '/v1/invites/accept' and method == 'POST' and not query:
                 return self.accept_invite(db, session, now, self.body(env, ['token']))
+            if path == '/v1/join-requests' and method == 'GET' and not query:
+                rows = db.execute(
+                    'SELECT r.*, w.name AS workspace_name FROM workspace_join_requests r '
+                    'JOIN workspaces w ON w.id=r.workspace_id WHERE r.user_id=? ORDER BY r.created DESC, r.id',
+                    (session['user_id'],)).fetchall()
+                return 200, {'items': [invites.request_view(row) for row in rows]}, []
+            join_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/join-requests(?:/([0-9a-f]{32})/(approve|reject))?', path)
+            if join_path:
+                return self.join_request_dispatch(db, session, method, query, now, env, *join_path.groups())
             invite_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/invites(?:/([0-9a-f]{32})(/revoke)?)?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/invites(?:/([0-9a-f]{32})(/revoke|/freeze|/unfreeze)?)?', path)
             if invite_path:
                 return self.invite_dispatch(db, session, method, query, now, env, *invite_path.groups())
             member_path = re.fullmatch(
@@ -844,7 +866,7 @@ class App:
                 return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}/(?:edit|retract))?|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}/(?:edit|retract|reactions))?|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -3295,6 +3317,8 @@ class App:
             db.execute('INSERT INTO social_preferences VALUES(?,?,?) ON CONFLICT(conversation_id,user_id) '
                        'DO UPDATE SET pinned=excluded.pinned', (row['id'], session['user_id'], int(pinned)))
             return 200, social.preference(db, row['id'], session['user_id']), []
+        if action and action.endswith('/reactions') and method == 'POST' and not query:
+            return self.react_social_message(db, session, row, action.split('/')[1], now, env)
         if action and action.startswith('messages/') and method == 'POST' and not query:
             message_id, operation = action.split('/')[1:]
             message = db.execute('SELECT * FROM social_messages WHERE conversation_id=? AND id=?',
@@ -3326,6 +3350,9 @@ class App:
                 refuse(400, 'invalid', 'Provide a message id from this conversation')
             if not social.mark_read(db, row['id'], session['user_id'], message_id):
                 refuse(404, 'not_found', 'Message not found')
+            read_seq = db.execute('SELECT read_seq FROM social_reads WHERE conversation_id=? AND user_id=?',
+                                  (row['id'], session['user_id'])).fetchone()['read_seq']
+            notifications.mark_conversation_read(db, workspace['id'], session['user_id'], row['id'], read_seq)
             return 200, {'unread_count': social.unread_count(db, row['id'], session['user_id'])}, []
         if action == 'agent-replies' and method == 'POST' and not query:
             return self.request_group_reply(db, workspace, session, row, now, env)
@@ -3335,18 +3362,40 @@ class App:
             conversation['unread_count'] = social.unread_count(db, row['id'], session['user_id'])
             return 200, {'conversation': conversation,
                          'agent_replies': [social.reply_view(item) for item in social.reply_requests(db, row['id'])],
-                         'items': [social.message_view(item) for item in items[:100]],
+                         'items': social.with_reactions(db, [social.message_view(item) for item in items[:100]],
+                                                        session['user_id']),
                          'cursor': items[99]['id'] if len(items) > 100 else None}, []
         if action == 'messages' and method == 'GET':
             limit, cursor, _ = self.pagination(query)
             rows = social.messages(db, row['id'], cursor, limit + 1)
             if rows is None:
                 refuse(400, 'invalid', 'Invalid pagination parameters')
-            return 200, {'items': [social.message_view(item) for item in rows[:limit]],
+            return 200, {'items': social.with_reactions(db, [social.message_view(item) for item in rows[:limit]],
+                                                        session['user_id']),
                          'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
         if action == 'messages' and method == 'POST' and not query:
             return self.send_social_message(db, workspace, session, row, now, env)
         refuse(400, 'invalid', 'Invalid messenger request')
+
+    def react_social_message(self, db, session, row, message_id, now, env):
+        body = self.body(env, ['emoji', 'active'])
+        emoji, active = body.get('emoji'), body.get('active')
+        if emoji not in social.REACTIONS or type(active) is not bool:
+            refuse(400, 'invalid', 'Choose a supported reaction and active true/false')
+        message = db.execute(f'SELECT * FROM ({social.MESSAGE_ROWS}) WHERE conversation_id=? AND id=?',
+                             (row['id'], message_id)).fetchone()
+        if message is None or message['agent_id']:
+            refuse(404, 'not_found', 'Message not found')
+        if message['retracted']:
+            refuse(409, 'conflict', 'Retracted messages cannot be reacted to')
+        if active:
+            db.execute('INSERT OR IGNORE INTO social_reactions VALUES(?,?,?,?)',
+                       (message_id, session['user_id'], emoji, now))
+        else:
+            db.execute('DELETE FROM social_reactions WHERE message_id=? AND user_id=? AND emoji=?',
+                       (message_id, session['user_id'], emoji))
+        return 200, {'message_id': message_id,
+                     'reactions': social.reactions_for(db, [message_id], session['user_id'])[message_id]}, []
 
     def edit_group_agents(self, db, workspace, session, row, action, now, env):
         # Workspace administration alone never grants access to a private group:
@@ -3557,6 +3606,97 @@ class App:
         row = social.load(db, workspace['id'], conversation_id)
         return 201, {'conversation': social.conversation_item(db, row)}, []
 
+    def apply_team_template(self, db, session, now, env, workspace_id, slug):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        template = team_templates.BY_SLUG.get(slug)
+        if template is None:
+            refuse(404, 'not_found', 'Template not found')
+        if not agents.can_manage(members.role_of(db, workspace, session['user_id'])):
+            refuse(403, 'forbidden', 'Only workspace owners and admins can create agent teams')
+        body = self.body(env, ['title', 'member_ids'])
+        title = body.get('title') or template['name']
+        if not social.valid_title(title):
+            refuse(400, 'invalid', 'Provide a valid conversation title')
+        title = title.strip()
+        member_ids = body.get('member_ids', [])
+        if not isinstance(member_ids, list) or (member_ids and not social.valid_member_ids(member_ids)):
+            refuse(400, 'invalid', 'Provide up to 49 member ids')
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        humans = {session['user_id'], *member_ids}
+        if not humans.issubset(social.workspace_member_ids(db, workspace)):
+            refuse(400, 'invalid', 'Every member must belong to the workspace')
+        key_hash = digest('team-template:' + key)
+        request_hash = digest(json.dumps({'slug': slug, 'title': title, 'member_ids': sorted(member_ids)},
+                                         sort_keys=True, separators=(',', ':'), ensure_ascii=False))
+        prior = social.load_by_key(db, workspace['id'], key_hash)
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'conversation': social.conversation_item(db, prior), 'created_agents': []}, []
+        if len(humans) + len(template['agents']) > self.config.max_social_members_per_conversation:
+            refuse(429, 'quota', 'Conversation member limit reached')
+        if (db.execute('SELECT COUNT(*) FROM social_conversations WHERE workspace_id=?',
+                       (workspace['id'],)).fetchone()[0] >= self.config.max_social_conversations_per_workspace):
+            refuse(429, 'quota', 'Conversation capacity reached')
+        agent_ids, created = [], []
+        for index, spec in enumerate(template['agents']):
+            existing = db.execute('SELECT * FROM workspace_agents WHERE workspace_id=? AND name_hash=?',
+                                  (workspace['id'], agents.name_hash(spec['name']))).fetchone()
+            if existing is not None:
+                if existing['archived']:
+                    refuse(409, 'conflict', 'An archived agent already uses a template agent name: ' + spec['name'])
+                agent_ids.append(existing['id'])
+                continue
+            if (db.execute('SELECT COUNT(*) FROM workspace_agents WHERE workspace_id=?',
+                           (workspace['id'],)).fetchone()[0] >= self.config.max_agents_per_workspace):
+                refuse(429, 'quota', 'Agent capacity reached')
+            agent_id = uuid4().hex
+            payload = {'name': spec['name'], 'summary': spec['summary'], 'instructions': spec['instructions'],
+                       'category': spec['category']}
+            db.execute('INSERT INTO workspace_agents VALUES(?,?,?,?,?,?,1,?,?,?,0,?,?)',
+                       (agent_id, workspace['id'], spec['name'], agents.name_hash(spec['name']), spec['summary'],
+                        spec['instructions'], now, now, session['user_id'],
+                        digest(f'team-template-agent:{key}:{index}'),
+                        digest(json.dumps(payload, sort_keys=True, ensure_ascii=False))))
+            agents.store_category(db, agent_id, spec['category'], now)
+            agent_ids.append(agent_id)
+            created.append(agent_id)
+        conversation_id = uuid4().hex
+        db.execute('INSERT INTO social_conversations VALUES(?,?,?,?,?,?,?,?,?)',
+                   (conversation_id, workspace['id'], 'group', title, None, now, now, key_hash, request_hash))
+        for user_id in sorted(humans):
+            db.execute('INSERT INTO social_members VALUES(?,?,?,?)', (conversation_id, workspace['id'], user_id, now))
+        for agent_id in agent_ids:
+            db.execute('INSERT INTO social_agent_members VALUES(?,?,?)', (conversation_id, agent_id, now))
+        row = social.load(db, workspace['id'], conversation_id)
+        return 201, {'conversation': social.conversation_item(db, row), 'created_agents': created}, []
+
+    def notification_dispatch(self, db, session, method, query, env, workspace_id, reading):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        uid = session['user_id']
+        if not reading and method == 'GET' and query in ('', 'filter=unread', 'filter=all'):
+            return 200, {'items': notifications.listing(db, workspace['id'], uid, query == 'filter=unread'),
+                         'unread_count': notifications.unread_count(db, workspace['id'], uid),
+                         'limit': notifications.LIMIT}, []
+        if reading and method == 'POST' and not query:
+            body = self.body(env, ['notification_id', 'all'])
+            nid, every = body.get('notification_id'), body.get('all')
+            if every is True and nid is None:
+                notifications.mark_read(db, workspace['id'], uid)
+            elif every is None and isinstance(nid, str) and notifications.HEX32.fullmatch(nid):
+                if not notifications.mark_read(db, workspace['id'], uid, nid):
+                    refuse(404, 'not_found', 'Notification not found')
+            else:
+                refuse(400, 'invalid', 'Provide notification_id or all=true')
+            return 200, {'unread_count': notifications.unread_count(db, workspace['id'], uid)}, []
+        refuse(400, 'invalid', 'Invalid notification request')
+
     def send_social_message(self, db, workspace, session, row, now, env):
         body = self.body(env, ['body', 'artifact_id'])
         text = body.get('body')
@@ -3595,6 +3735,7 @@ class App:
              social.next_seq(db, row['id']), now, key_hash, request_hash))
         if attachment is not None:
             db.execute('INSERT INTO social_attachments VALUES(?,?)', (message_id, artifact_id))
+        notifications.record_mentions(db, workspace['id'], row['id'], message_id, session['user_id'], text, now)
         db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, row['id']))
         message = db.execute(f'SELECT * FROM ({social.MESSAGE_ROWS}) WHERE id=?', (message_id,)).fetchone()
         return 201, {'message': social.message_view(message)}, []
@@ -3610,9 +3751,10 @@ class App:
             rows = db.execute(
                 'SELECT * FROM workspace_invites WHERE workspace_id=? ORDER BY id', (workspace['id'],)
             ).fetchall()
-            return 200, {'items': [invites.view(row) for row in rows]}, []
+            return 200, {'items': [invites.view(row, db) for row in rows]}, []
         if invite_id is None and method == 'POST' and not query:
-            return self.create_invite(db, workspace, actor, session['user_id'], now, self.body(env, ['role', 'expires_in', 'max_uses']))
+            return self.create_invite(db, workspace, actor, session['user_id'], now,
+                                      self.body(env, ['role', 'expires_in', 'max_uses', 'requires_approval']))
         if invite_id is None or method != 'POST' or query or not revoking:
             refuse(400, 'invalid', 'Invalid invite request')
         self.body(env, [])
@@ -3622,15 +3764,63 @@ class App:
         ).fetchone()
         if row is None:
             refuse(404, 'not_found', 'Invite not found')
-        db.execute('UPDATE workspace_invites SET revoked=1 WHERE id=?', (row['id'],))
-        row = dict(row)
-        row['revoked'] = 1
-        return 200, {'invite': invites.view(row)}, []
+        if actor == 'admin' and row['role'] != 'member':
+            refuse(403, 'forbidden', 'Admins can only manage member invites')
+        if revoking == '/revoke':
+            db.execute('UPDATE workspace_invites SET revoked=1 WHERE id=?', (row['id'],))
+        else:
+            if row['revoked']:
+                refuse(409, 'conflict', 'Revoked invites cannot be frozen or resumed')
+            db.execute('INSERT INTO workspace_invite_policies(invite_id,requires_approval,frozen) VALUES(?,0,?) '
+                       'ON CONFLICT(invite_id) DO UPDATE SET frozen=excluded.frozen',
+                       (row['id'], int(revoking == '/freeze')))
+        row = db.execute('SELECT * FROM workspace_invites WHERE id=?', (row['id'],)).fetchone()
+        return 200, {'invite': invites.view(row, db)}, []
+
+    def join_request_dispatch(self, db, session, method, query, now, env, workspace_id, request_id, decision):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if actor not in ('owner', 'admin'):
+            refuse(404, 'not_found', 'Workspace not found')
+        if request_id is None and method == 'GET' and query in ('', 'status=pending', 'status=all'):
+            rows = db.execute(
+                'SELECT r.*, u.username FROM workspace_join_requests r JOIN users u ON u.id=r.user_id '
+                "WHERE r.workspace_id=?" + (" AND r.status='pending'" if query != 'status=all' else '')
+                + ' ORDER BY r.created, r.id', (workspace['id'],)).fetchall()
+            return 200, {'items': [invites.request_view(row) for row in rows]}, []
+        if request_id is None or method != 'POST' or query:
+            refuse(400, 'invalid', 'Invalid join request')
+        self.body(env, [])
+        row = db.execute('SELECT r.*, u.username FROM workspace_join_requests r JOIN users u ON u.id=r.user_id '
+                         'WHERE r.id=? AND r.workspace_id=?', (request_id, workspace['id'])).fetchone()
+        if row is None:
+            refuse(404, 'not_found', 'Join request not found')
+        if row['status'] != 'pending':
+            refuse(409, 'conflict', 'Join request was already decided')
+        if actor == 'admin' and row['role'] != 'member':
+            refuse(403, 'forbidden', 'Admins can only approve member requests')
+        if decision == 'approve':
+            occupied = 1 + db.execute('SELECT COUNT(*) FROM workspace_members WHERE workspace_id=?',
+                                      (workspace['id'],)).fetchone()[0]
+            if occupied >= self.config.max_members_per_workspace:
+                refuse(429, 'quota', 'Workspace member capacity reached')
+            db.execute('INSERT OR IGNORE INTO workspace_members VALUES(?,?,?,?,?)',
+                       (workspace['id'], row['user_id'], row['role'], now, session['user_id']))
+        db.execute('UPDATE workspace_join_requests SET status=?, decided=?, decided_by=? WHERE id=?',
+                   ('approved' if decision == 'approve' else 'rejected', now, session['user_id'], row['id']))
+        row = db.execute('SELECT r.*, u.username FROM workspace_join_requests r JOIN users u ON u.id=r.user_id '
+                         'WHERE r.id=?', (row['id'],)).fetchone()
+        return 200, {'join_request': invites.request_view(row)}, []
 
     def create_invite(self, db, workspace, actor, actor_id, now, body):
         role = body.get('role')
         expires_in = body.get('expires_in', 604800)
         max_uses = body.get('max_uses', 1)
+        requires_approval = body.get('requires_approval', False)
+        if type(requires_approval) is not bool:
+            refuse(400, 'invalid', 'requires_approval must be a boolean')
         if role not in members.ASSIGNABLE:
             refuse(400, 'invalid', 'Provide a role of admin or member')
         if type(expires_in) is not int or not 60 <= expires_in <= 2592000:
@@ -3647,8 +3837,10 @@ class App:
             'INSERT INTO workspace_invites VALUES(?,?,?,?,?,?,?,?,0,0)',
             (invite_id, workspace['id'], digest(token), role, now, now + expires_in, actor_id, max_uses),
         )
+        if requires_approval:
+            db.execute('INSERT INTO workspace_invite_policies VALUES(?,1,0)', (invite_id,))
         row = db.execute('SELECT * FROM workspace_invites WHERE id=?', (invite_id,)).fetchone()
-        return 201, {'invite': invites.view(row), 'token': token}, []
+        return 201, {'invite': invites.view(row, db), 'token': token}, []
 
     def accept_invite(self, db, session, now, body):
         token = body.get('token')
@@ -3673,6 +3865,11 @@ class App:
             if existing['role'] != row['role']:
                 refuse(409, 'conflict', 'Member already exists with a different role')
             return 200, {'workspace': teams.attach(db, workspace), 'member': members.view(existing)}, []
+        policy = invites.policy(db, row['id'])
+        if policy['frozen']:
+            refuse(409, 'conflict', 'This invite is paused by the workspace')
+        if policy['requires_approval']:
+            return self.request_to_join(db, workspace, row, user_id, now)
         if row['use_count'] >= row['max_uses']:
             refuse(404, 'not_found', 'Invite not found')
         occupied = 1 + db.execute(
@@ -3690,6 +3887,28 @@ class App:
         )
         member = {'user_id': user_id, 'username': username, 'role': row['role'], 'created': now}
         return 201, {'workspace': teams.attach(db, workspace), 'member': members.view(member)}, []
+
+    def request_to_join(self, db, workspace, invite, user_id, now):
+        prior = db.execute('SELECT * FROM workspace_join_requests WHERE workspace_id=? AND user_id=?',
+                           (workspace['id'], user_id)).fetchone()
+        if prior is not None and prior['status'] == 'pending':
+            status = 200
+        else:
+            if invite['use_count'] >= invite['max_uses']:
+                refuse(404, 'not_found', 'Invite not found')
+            # Requesting reserves one use; a rejected user may ask again with a still-usable invite.
+            db.execute('UPDATE workspace_invites SET use_count=use_count+1 WHERE id=?', (invite['id'],))
+            if prior is None:
+                db.execute('INSERT INTO workspace_join_requests VALUES(?,?,?,?,?,?,?,NULL,NULL)',
+                           (uuid4().hex, workspace['id'], invite['id'], user_id, invite['role'], 'pending', now))
+            else:
+                db.execute("UPDATE workspace_join_requests SET status='pending', invite_id=?, role=?, created=?, "
+                           'decided=NULL, decided_by=NULL WHERE id=?', (invite['id'], invite['role'], now, prior['id']))
+            status = 202
+        row = db.execute('SELECT r.*, w.name AS workspace_name FROM workspace_join_requests r '
+                         'JOIN workspaces w ON w.id=r.workspace_id WHERE r.workspace_id=? AND r.user_id=?',
+                         (workspace['id'], user_id)).fetchone()
+        return status, {'join_request': invites.request_view(row)}, []
 
     def resolve_participants(self, db, workspace, names):
         allowed = {workspace['owner_id']}

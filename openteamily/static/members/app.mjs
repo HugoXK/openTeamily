@@ -19,7 +19,14 @@ export function readInvite(form) {
     role: data.get('role') === 'admin' ? 'admin' : 'member',
     expires_in: Math.round(days * 86400),
     max_uses: uses,
+    ...(data.get('requires_approval') ? {requires_approval: true} : {}),
   };
+}
+
+export function inviteState(item) {
+  if (item.revoked) return '已撤销';
+  if (item.frozen) return '已冻结';
+  return item.requires_approval ? '有效 · 需审批' : '有效';
 }
 
 export function readAccept(form) {
@@ -155,7 +162,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     empty.hidden = items.length > 0;
     for (const item of items) {
       const row = document.createElement('li');
-      const state = item.revoked ? '已撤销' : '有效';
+      const state = inviteState(item);
       const meta = document.createElement('span');
       meta.textContent = `${ROLE_LABELS[item.role] || item.role} · ${state} · 已用 ${item.use_count}/${item.max_uses}`;
       row.appendChild(meta);
@@ -164,6 +171,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         revoke.type = 'button';
         revoke.textContent = '撤销';
         revoke.addEventListener('click', () => revokeInvite(item));
+        const freeze = document.createElement('button');
+        freeze.type = 'button';
+        freeze.textContent = item.frozen ? '恢复' : '冻结';
+        freeze.title = item.frozen ? '恢复后邀请可再次使用' : '暂停这条邀请，不撤销，可随时恢复';
+        freeze.addEventListener('click', () => inviteAction(item, item.frozen ? 'unfreeze' : 'freeze'));
+        row.appendChild(freeze);
         row.appendChild(revoke);
       }
       list.appendChild(row);
@@ -192,6 +205,52 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     show('ok', item.user_id === currentUser.id ? '已退出工作区。' : '已移除。');
     await load();
+  }
+
+  async function inviteAction(item, action) {
+    const id = workspaceId();
+    if (!id) return;
+    const result = await request('POST', `/v1/workspaces/${id}/invites/${item.id}/${action}`, {});
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法更新邀请。'));
+      return;
+    }
+    show('ok', action === 'freeze' ? '已冻结邀请。' : '已恢复邀请。');
+    await loadWorkspace();
+  }
+
+  function renderJoinRequests(items) {
+    const list = document.getElementById('join-request-list');
+    const empty = document.getElementById('join-requests-empty');
+    if (!list) return;
+    list.textContent = '';
+    if (empty) empty.hidden = items.length > 0;
+    for (const item of items) {
+      const row = document.createElement('li');
+      const meta = document.createElement('span');
+      meta.textContent = `${item.username} · 申请成为${ROLE_LABELS[item.role] || item.role}`;
+      row.appendChild(meta);
+      for (const [decision, label] of [['approve', '批准'], ['reject', '拒绝']]) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = label;
+        button.addEventListener('click', () => decideJoin(item, decision));
+        row.appendChild(button);
+      }
+      list.appendChild(row);
+    }
+  }
+
+  async function decideJoin(item, decision) {
+    const id = workspaceId();
+    if (!id) return;
+    const result = await request('POST', `/v1/workspaces/${id}/join-requests/${item.id}/${decision}`, {});
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法处理申请。'));
+      return;
+    }
+    show('ok', decision === 'approve' ? '已批准，对方已加入。' : '已拒绝申请。');
+    await loadWorkspace();
   }
 
   async function revokeInvite(item) {
@@ -241,6 +300,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const invites = await request('GET', `/v1/workspaces/${id}/invites`);
       if (invites.status === 200) renderInvites(invites.body.items || []);
       else renderInvites([]);
+      const joins = await request('GET', `/v1/workspaces/${id}/join-requests`);
+      const joinPanel = document.getElementById('join-requests-panel');
+      if (joinPanel) joinPanel.hidden = false;
+      renderJoinRequests(joins.status === 200 ? (joins.body.items || []) : []);
+    } else {
+      const joinPanel = document.getElementById('join-requests-panel');
+      if (joinPanel) joinPanel.hidden = true;
     }
   }
 
@@ -353,11 +419,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const result = await request('POST', '/v1/invites/accept', values);
-    if (result.status !== 200 && result.status !== 201) {
+    if (![200, 201, 202].includes(result.status)) {
       show('error', messageFor(result.body.error, '无法接受邀请。'));
       return;
     }
     event.currentTarget.reset();
+    if (result.status === 202 || (result.body.join_request && result.body.join_request.status === 'pending')) {
+      show('ok', '已提交加入申请，等待所有者或管理员审批。');
+      return;
+    }
     show('ok', '已加入工作区。');
     await load();
   });
