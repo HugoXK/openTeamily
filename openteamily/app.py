@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
+from . import skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -101,8 +101,9 @@ class App:
         # Tests inject a fake Composio HTTP transport; production uses urllib.
         self.composio_transport = composio_transport
         self.lifecycle, self.manager_auth = lifecycle, manager_auth
-        self.automation_backend = automation_backend or AgentAutomationBackend(
+        inner_backend = automation_backend or AgentAutomationBackend(
             stale=config.runtime_heartbeat_seconds, timeout=config.runtime_task_timeout_seconds)
+        self.automation_backend = composio_principals.ScheduledToolBackend(inner_backend)
         self.operator_admin = operator_admin
         self.oidc_registry = oidc_registry
         self._automation_worker = None
@@ -754,8 +755,8 @@ class App:
                     items.append(runtime_connect.view_with_meta(db, row))
                 return 200, {'items': items}, []
             if path == '/v1/runtime/tasks' and method == 'POST' and not query:
-                return self.dispatch_runtime_task(db, session['user_id'], now, self.body(env, ['kind', 'prompt', 'connection_id', 'workspace_id']))
-            task_path = re.fullmatch(r'/v1/runtime/tasks/([0-9a-f]{32})(/(cancel|artifact))?', path)
+                return self.dispatch_runtime_task(db, session['user_id'], now, self.body(env, ['kind', 'prompt', 'connection_id', 'workspace_id', 'connected_tools']))
+            task_path = re.fullmatch(r'/v1/runtime/tasks/([0-9a-f]{32})(/(cancel|artifact|connected-tools))?', path)
             if task_path:
                 row = runtime_connect.load_task(db, task_path[1], user_id=session['user_id'])
                 if row is None:
@@ -768,6 +769,8 @@ class App:
                     return 200, {'task': runtime_connect.view_with_meta(db, cancelled)}, []
                 if task_path[3] == 'artifact' and method == 'POST' and not query:
                     return self.save_task_artifact(db, session, row, now, self.body(env, ['title', 'workspace_id']))
+                if task_path[3] == 'connected-tools':
+                    return self.runtime_connected_tools(db, session, method, query, now, env, row)
                 if not task_path[3] and method == 'GET' and not query:
                     row = runtime_connect.expire_task(db, row, now)
                     return 200, {'task': runtime_connect.view_with_meta(db, row)}, []
@@ -858,6 +861,10 @@ class App:
                 return self.workspace_overview(db, session, method, query, overview_path.group(1))
             if path == '/v1/automation-templates' and method == 'GET' and not query:
                 return 200, {'items': automations.templates()}, []
+            auto_tools_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/automations/([0-9a-f]{32})/connected-tools', path)
+            if auto_tools_path:
+                return self.automation_connected_tools(db, session, method, query, now, env, *auto_tools_path.groups())
             auto_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel|artifact))?)?)?))?', path)
             if auto_path:
@@ -1255,9 +1262,20 @@ class App:
                 self.config.runtime_task_timeout_seconds, workspace_id)
         except ValueError:
             refuse(429, 'quota', 'Runtime task capacity reached')
+        want_tools = body.get('connected_tools')
+        if want_tools not in (None, True, False):
+            refuse(400, 'invalid', 'connected_tools must be a boolean')
         if kind == 'infer' and workspace_id is None:
             db.execute('INSERT OR REPLACE INTO skill_task_owners VALUES(?,?,?)', (row['id'], user_id, 'account'))
             connected_tools.grant(db, row['id'], user_id)
+        elif kind == 'infer' and want_tools is True and workspace_id is not None:
+            # Explicit standalone/workspace DSH principal: same-user runtime only.
+            try:
+                composio_principals.attach(db, row['id'], user_id, 'dsh', row['id'], now, target['user_id'])
+            except composio_principals.Fault as error:
+                refuse(error.status, error.code, error.message)
+        elif want_tools is True:
+            refuse(400, 'invalid', 'Connected tools can only be requested for infer tasks')
         return 201, {'task': runtime_connect.view_with_meta(db, row)}, []
 
     def issue_model_access(self, db, connection, task_id, now, skill_format=None):
@@ -1497,6 +1515,64 @@ class App:
         self._automation_worker = None
         if worker is not None:
             worker.stop()
+
+
+    def automation_connected_tools(self, db, session, method, query, now, env, workspace_id, automation_id):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        row = db.execute('SELECT * FROM automations WHERE id=? AND workspace_id=?',
+                         (automation_id, workspace['id'])).fetchone()
+        if row is None:
+            refuse(404, 'not_found', 'Automation not found')
+        if query:
+            refuse(400, 'invalid', 'Invalid automation request')
+        if method == 'GET':
+            return 200, {'grant': composio_principals.scheduled_view(
+                composio_principals.scheduled_grant(db, row['id'], session['user_id']), session['user_id'])}, []
+        if method != 'POST':
+            refuse(400, 'invalid', 'Invalid automation request')
+        body = self.body(env, ['enabled', 'revision'])
+        try:
+            view = composio_principals.save_scheduled(
+                db, row['id'], session['user_id'], body.get('enabled'), body.get('revision'), now)
+        except composio_principals.Fault as error:
+            refuse(error.status, error.code, error.message)
+        return 200, {'grant': view}, []
+
+    def runtime_connected_tools(self, db, session, method, query, now, env, row):
+        if query:
+            refuse(400, 'invalid', 'Invalid runtime request')
+        principal = composio_principals.load(db, row['id'])
+        if method == 'GET':
+            attached = principal is not None and principal['user_id'] == session['user_id']
+            live = attached and composio_principals.live(db, principal) and not principal['revoked']
+            return 200, {'principal': (
+                {'scope': principal['scope'], 'source_type': principal['source_type'],
+                 'attached': True, 'revoked': bool(principal['revoked']), 'live': live}
+                if attached else {'attached': False, 'live': False})}, []
+        if method != 'POST':
+            refuse(400, 'invalid', 'Invalid runtime request')
+        body = self.body(env, ['action', 'scope'])
+        action = body.get('action')
+        if action == 'revoke':
+            try:
+                composio_principals.revoke(db, row['id'], session['user_id'], now)
+            except composio_principals.Fault as error:
+                refuse(error.status, error.code, error.message)
+            return 200, {'principal': {'attached': False, 'live': False, 'revoked': True}}, []
+        if action != 'attach':
+            refuse(400, 'invalid', 'Choose attach or revoke')
+        if body.get('scope', 'dsh') != 'dsh':
+            refuse(400, 'invalid', 'Only an explicit dsh principal can be attached to a submitted task')
+        meta = runtime_connect.load_meta(db, row['id'])
+        if row['kind'] != 'infer' or row['status'] not in ('queued', 'claimed') or meta is None:
+            refuse(409, 'conflict', 'Task is not eligible for a tool principal')
+        try:
+            composio_principals.attach(db, row['id'], session['user_id'], 'dsh', row['id'], now, row['user_id'])
+        except composio_principals.Fault as error:
+            refuse(error.status, error.code, error.message)
+        return 200, {'principal': {'scope': 'dsh', 'source_type': 'runtime_task', 'attached': True, 'revoked': False, 'live': True}}, []
 
     def automation_dispatch(self, db, session, method, query, now, env, workspace_id, ticking, target_id, removing, runs, run_id, cancelling):
         workspace = members.load(db, workspace_id, session['user_id'])
@@ -1882,7 +1958,7 @@ class App:
                 args=parse_qs(query,strict_parsing=True,keep_blank_values=True,max_num_fields=1) if query else {}
             except ValueError:
                 refuse(400,'invalid','Provide only one export format')
-            if set(args)-{'format'} or len(args.get('format',['original']))!=1 or args.get('format',['original'])[0] not in ('original','docx','pdf','xlsx'):
+            if set(args)-{'format'} or len(args.get('format',['original']))!=1 or args.get('format',['original'])[0] not in ('original','docx','pdf','xlsx','pptx'):
                 refuse(400,'invalid','Unsupported export format')
             format=args.get('format',[None])[0]
             if format=='original':format=None
@@ -3252,7 +3328,7 @@ class App:
             'reply': self.public_message(db, conversations.load_message(db, row['id'], assistant_id)),
         }, []
 
-    def queue_infer_task(self, db, user_id, now, prompt, workspace_id, agent_id=None, personal_tools=False):
+    def queue_infer_task(self, db, user_id, now, prompt, workspace_id, agent_id=None, personal_tools=False, tool_principal=None):
         initiating_user = user_id
         stale = self.config.runtime_heartbeat_seconds
         target = None
@@ -3282,6 +3358,13 @@ class App:
             db.execute('INSERT OR REPLACE INTO skill_task_owners VALUES(?,?,?)', (row['id'], initiating_user, (workspace_id + ':' + agent_id) if agent_id and workspace_id else 'account'))
         if personal_tools and target['user_id'] == initiating_user:
             connected_tools.grant(db, row['id'], initiating_user)
+        if tool_principal and target['user_id'] == initiating_user:
+            scope, source_id = tool_principal
+            try:
+                composio_principals.attach(db, row['id'], initiating_user, scope, source_id, now, target['user_id'])
+            except composio_principals.Fault:
+                # The infer task still runs; tools stay unavailable rather than failing the reply.
+                pass
         return row['id'], None, dispatch
 
     def reconcile_conversation(self, db, row, now):
@@ -4382,7 +4465,8 @@ class App:
             agent = plan['agent']
             prompt = conversations.compose_prompt(agent, [], text)
             task_id, error, _dispatch = self.queue_infer_task(
-                db, session['user_id'], now, prompt, workspace['id'], plan['agent_id'])
+                db, session['user_id'], now, prompt, workspace['id'], plan['agent_id'],
+                tool_principal=('group', row['id']))
             rid = uuid4().hex
             db.execute(
                 'INSERT INTO social_agent_replies '

@@ -2428,6 +2428,21 @@ async function main() {
     }catch(error){record('document_live_export_path',false,String(error));}
 
     try {
+      const created=await page.evaluate(async wid=>{
+        const csrf=document.cookie.split(/;\s*/).find(v=>v.startsWith('ot_dev_csrf=')).split('=')[1];
+        const response=await fetch(`/v1/workspaces/${wid}/artifacts`,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':'functional-pptx-export001'},body:JSON.stringify({title:'PPTX evidence 中文',kind:'slides',slides:{schema:'openteamily.slides.v1',slides:[{title:'目标',bullets:['统一入口','中文 123']},{title:'下一步',bullets:['接入运行时']}]}})});
+        const data=await response.json();if(!response.ok)throw Error('Synthetic slides artifact creation failed: '+JSON.stringify(data));return data.artifact;
+      },ready.workspace_id);
+      await page.goto(origin+'/space?workspace='+ready.workspace_id+'&artifact='+created.id,{waitUntil:'load'});
+      await page.locator('#export-format').selectOption('pptx');
+      const downloadPromise=page.waitForEvent('download');await page.locator('#export-artifact').click();const download=await downloadPromise;
+      const file=path.join(outDir,'export-evidence.pptx');await download.saveAs(file);
+      const bytes=fs.readFileSync(file);
+      record('real_pptx_download',bytes.subarray(0,2).toString()==='PK','Actual browser PPTX attachment for a slides artifact; Python asserts title/bullet XML, history, and the absence of macros or external relationships.');
+      screenshots.push(path.basename(await shot(page,outDir,'116-real-pptx-export-controls.png')));
+    }catch(error){record('slides_pptx_export_path',false,String(error));}
+
+    try {
       await page.goto(`${origin}/chat#workspace=${ready.workspace_id}&social=${ready.social_group_id}`,{waitUntil:'load'});
       await waitForLocatorText(page,'#chat-title',ready.social_group_title);
       await waitForLocatorText(page,'#message-list',ready.social_message_text);

@@ -319,7 +319,7 @@
         <p class="note">每次保存会留下一版，可以导出或恢复到某一版。恢复会生成新的修订，不会改写历史。</p>
         <ul id="version-list"></ul>
         <p id="version-empty" class="note" hidden>还没有历史版本。</p>
-        <label for="export-format">当前版本导出格式</label><select id="export-format"><option value="original">原格式</option><option value="docx">Word DOCX（文档）</option><option value="pdf">文本 PDF（文档 / 幻灯片提纲 / 看板数据）</option><option value="xlsx">Excel XLSX（看板数据）</option></select><p class="note">DOCX 保留文本与标题，非完整 Office 编辑器；PDF 是分页文字，不是页面 / 媒体截图，暂不支持 emoji 等非 BMP 字符。XLSX 为实际数据，任何公式均按文本导出。历史版本下载仍为其原格式。</p>
+        <label for="export-format">当前版本导出格式</label><select id="export-format"><option value="original">原格式</option><option value="docx">Word DOCX（文档）</option><option value="pdf">文本 PDF（文档 / 幻灯片提纲 / 看板数据）</option><option value="xlsx">Excel XLSX（看板数据）</option><option value="pptx">PowerPoint PPTX（幻灯片标题与条目）</option></select><p class="note">DOCX 保留文本与标题，非完整 Office 编辑器；PDF 是分页文字，不是页面 / 媒体截图，暂不支持 emoji 等非 BMP 字符。XLSX 为实际数据，任何公式均按文本导出。PPTX 是实际幻灯片包，含标题与条目，不含宏、媒体或外部链接，也不是渲染缩略图或完整编辑器。历史版本下载仍为其原格式。</p>
         <p id="artifact-live-update" class="note" hidden>服务器作品版本已变化；本地草稿不会自动覆盖。<button type="button" id="artifact-live-load">读取服务器版本（需确认覆盖草稿）</button></p>
         <button type="button" id="export-artifact">导出当前版本</button>
       </section>
