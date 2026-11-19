@@ -1,13 +1,21 @@
 [
   {
     "file": "failed-run-before-1440x900.png",
-    "label": "failed run row before retry",
+    "label": "the failed run row, scrolled into view",
     "overflow": 0,
+    "retry": [],
     "rows": [
       "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
       "已超时timeouttimeout上一次运行超时，没有产生正文。"
     ],
     "errors": []
+  },
+  {
+    "file": "failed-row-crop-before-1440.png",
+    "label": "crop of the failed run row",
+    "rowCssWidth": 784,
+    "rowCssHeight": 104,
+    "rowText": "已超时timeouttimeout上一次运行超时，没有产生正文。"
   },
   {
     "file": null,
@@ -16,13 +24,21 @@
   },
   {
     "file": "failed-run-before-390x844.png",
-    "label": "narrow width, failed run row",
+    "label": "narrow width, the failed run row",
     "overflow": 0,
+    "retry": [],
     "rows": [
       "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
       "已超时timeouttimeout上一次运行超时，没有产生正文。"
     ],
     "errors": []
+  },
+  {
+    "file": "failed-row-crop-before-390.png",
+    "label": "narrow crop of the failed run row",
+    "rowCssWidth": 286,
+    "rowCssHeight": 104,
+    "rowText": "已超时timeouttimeout上一次运行超时，没有产生正文。"
   },
   {
     "phase": "before",

@@ -1,13 +1,33 @@
 [
   {
     "file": "failed-run-after-1440x900.png",
-    "label": "failed run row before retry",
+    "label": "the failed run row, scrolled into view",
     "overflow": 0,
+    "retry": [
+      {
+        "text": "重新运行",
+        "box": {
+          "x": 290,
+          "y": 738,
+          "w": 83,
+          "h": 36
+        },
+        "inViewport": true,
+        "painted": true
+      }
+    ],
     "rows": [
       "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
       "已超时timeouttimeout重新运行上一次运行超时，没有产生正文。"
     ],
     "errors": []
+  },
+  {
+    "file": "failed-row-crop-after-1440.png",
+    "label": "crop of the failed run row",
+    "rowCssWidth": 784,
+    "rowCssHeight": 119,
+    "rowText": "已超时timeouttimeout重新运行上一次运行超时，没有产生正文。"
   },
   {
     "file": null,
@@ -16,8 +36,21 @@
   },
   {
     "file": "after-retry-after-1440x900.png",
-    "label": "new queued run listed, source run unchanged",
+    "label": "the new queued run, source run unchanged above",
     "overflow": 0,
+    "retry": [
+      {
+        "text": "重新运行",
+        "box": {
+          "x": 290,
+          "y": 738,
+          "w": 83,
+          "h": 36
+        },
+        "inViewport": true,
+        "painted": true
+      }
+    ],
     "rows": [
       "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
       "运行中queued取消这次运行",
@@ -29,6 +62,19 @@
     "file": "after-retry-reloaded-after-1440x900.png",
     "label": "after reopening the automation",
     "overflow": 0,
+    "retry": [
+      {
+        "text": "重新运行",
+        "box": {
+          "x": 290,
+          "y": 738,
+          "w": 83,
+          "h": 36
+        },
+        "inViewport": true,
+        "painted": true
+      }
+    ],
     "rows": [
       "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
       "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
@@ -38,8 +84,21 @@
   },
   {
     "file": "failed-run-after-390x844.png",
-    "label": "narrow width, failed run row",
+    "label": "narrow width, the failed run row",
     "overflow": 0,
+    "retry": [
+      {
+        "text": "重新运行",
+        "box": {
+          "x": 97,
+          "y": 682,
+          "w": 83,
+          "h": 36
+        },
+        "inViewport": true,
+        "painted": true
+      }
+    ],
     "rows": [
       "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
       "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
@@ -48,12 +107,32 @@
     "errors": []
   },
   {
+    "file": "failed-row-crop-after-390.png",
+    "label": "narrow crop of the failed run row",
+    "rowCssWidth": 286,
+    "rowCssHeight": 148,
+    "rowText": "已超时timeouttimeout重新运行上一次运行超时，没有产生正文。"
+  },
+  {
     "file": "after-retry-after-390x844.png",
-    "label": "narrow width after retry",
+    "label": "narrow width, the new queued run",
     "overflow": 0,
+    "retry": [
+      {
+        "text": "重新运行",
+        "box": {
+          "x": 97,
+          "y": 937,
+          "w": 83,
+          "h": 36
+        },
+        "inViewport": false,
+        "painted": null
+      }
+    ],
     "rows": [
-      "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
       "运行中queued取消这次运行",
+      "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
       "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
       "已超时timeouttimeout重新运行上一次运行超时，没有产生正文。"
     ],
@@ -63,12 +142,12 @@
     "phase": "after",
     "retryPosts": [
       {
-        "url": "http://127.0.0.1:18825/v1/workspaces/3c806b88329d410096a5d826942e6cb0/automations/6644106e3f3d4cc4b254886cea5bd868/runs/ffffffffffffffffffffffffffffffff/retry",
-        "key": "xRLPu_NdtoZfOd62_DKemOU1"
+        "url": "http://127.0.0.1:8816/v1/workspaces/cf744eb767544e6bb1779383a1d7a050/automations/91cf7523b1194b4388f59bdbe30f219f/runs/ffffffffffffffffffffffffffffffff/retry",
+        "key": "CRrXbNhKf7VosSsserNBV4E-"
       },
       {
-        "url": "http://127.0.0.1:18825/v1/workspaces/3c806b88329d410096a5d826942e6cb0/automations/6644106e3f3d4cc4b254886cea5bd868/runs/ffffffffffffffffffffffffffffffff/retry",
-        "key": "_Y3YVZV2QuPSit9izB_5Ka2a"
+        "url": "http://127.0.0.1:8816/v1/workspaces/cf744eb767544e6bb1779383a1d7a050/automations/91cf7523b1194b4388f59bdbe30f219f/runs/ffffffffffffffffffffffffffffffff/retry",
+        "key": "EEM-X0QffEiWftKRccI4FZ0i"
       }
     ],
     "errors": []
