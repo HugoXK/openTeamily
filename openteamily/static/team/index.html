@@ -64,7 +64,7 @@
   <section id="main-panel" hidden>
     <p id="whoami" class="visually-hidden"></p>
     <div class="team-wizard">
-      <p id="wizard-progress" class="wizard-progress"><span class="wizard-dots" aria-hidden="true"><span class="is-current"></span><span></span><span></span></span>第 1 / 3 步</p>
+      <p id="wizard-progress" class="wizard-progress"><span class="wizard-dots" aria-hidden="true"><span class="is-current"></span><span></span><span></span></span><span id="wizard-step-label">第 1 / 3 步</span></p>
       <header class="wizard-header">
         <h1>创建团队</h1>
       </header>
@@ -101,19 +101,53 @@
               <span class="mode-check" aria-hidden="true">✓</span>
             </label>
           </fieldset>
-        </div>
-        <div id="step-later" class="step" hidden>
-          <h2>继续创建</h2>
-          <p class="note">对照只拍到第 1 / 3 步。第 2 步和第 3 步还没有截图，这里不会编造它们的版式。下面的提交沿用已有的创建接口，不能写成已经和 Teamily 对等。团队内的角色和邀请也还没有对照过。</p>
           <p id="convert-workspace-note" class="note" hidden>转化会作用到当前工作区。如果这个账号有多个可转换的工作区，才会出现下面这个 OpenTeamily 自己的选择框；对照里没有这一项。</p>
-          <label id="convert-workspace-field" hidden>要转换的工作区
+          <label id="convert-workspace-field" class="wizard-field" hidden>要转换的工作区
             <select name="workspace_id"></select>
           </label>
+        </div>
+        <div id="step-2" class="step" hidden>
+          <h2>邀请成员</h2>
+          <p class="wizard-lead">团队建好后，给第一位同事生成一条邀请。现在不邀请也可以跳过。</p>
+          <label class="wizard-field">对方在团队里的角色
+            <select id="invite-role" name="invite_role">
+              <option value="member" selected>成员</option>
+              <option value="admin">管理员</option>
+            </select>
+          </label>
+          <p class="wizard-hint">管理员也能管理成员和邀请。</p>
+          <label class="wizard-field">邀请有效期
+            <select id="invite-expiry" name="invite_expiry">
+              <option value="86400">1 天</option>
+              <option value="604800" selected>7 天</option>
+              <option value="2592000">30 天</option>
+            </select>
+          </label>
+          <label class="wizard-field">同事的邮箱（可选）
+            <input type="email" id="invite-email" name="invite_email" maxlength="254" autocomplete="off" placeholder="teammate@example.com">
+          </label>
+          <p class="wizard-hint">邮箱只用来拼一封由你本机邮件客户端发出的邀请；服务器不发送邮件，也不接收这个输入。邀请由服务端生成一次性令牌，点下面的按钮之后才出现，且只显示这一次。</p>
+          <p class="note">邀请接口 <code>POST /v1/workspaces/&lt;id&gt;/invites</code> 只接受角色、有效期、使用次数与是否需要审批，不接受邮箱；把令牌复制给同事，对方在 <a href="/members">成员页</a> 的「接受邀请」里粘贴即可。</p>
+          <section id="invite-result" hidden>
+            <h3>邀请已生成</h3>
+            <p id="invite-summary" class="wizard-hint"></p>
+            <p><code id="invite-token"></code></p>
+            <div class="actions">
+              <button type="button" id="copy-invite">复制令牌</button>
+              <a id="invite-mailto" href="#" hidden>写邮件邀请</a>
+              <a id="finish-members" href="/members">打开成员页</a>
+            </div>
+          </section>
+        </div>
+        <div id="step-3" class="step" hidden>
+          <h2>下一步</h2>
+          <p class="note">第 3 步（团队内的角色与批量邀请）还没有对照过 Teamily，这里不会编造版式。团队已经建好，可以去 <a href="/members">成员页</a> 管理成员和邀请，或去 <a href="/chat">聊天</a> 开始工作。</p>
         </div>
         <div class="actions">
           <button type="button" id="back" hidden>上一步</button>
           <button type="button" id="next" disabled>继续 <span aria-hidden="true">→</span></button>
-          <button type="submit" id="submit" hidden>创建团队</button>
+          <button type="button" id="invite-skip" hidden>跳过，只建团队</button>
+          <button type="submit" id="submit" hidden>创建团队并生成邀请</button>
         </div>
       </form>
     </div>
