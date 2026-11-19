@@ -1,0 +1,2235 @@
+{
+  "slug": "252",
+  "page": "runtimes-tasks",
+  "route": "/runtimes",
+  "states": [
+    "tasks",
+    "empty"
+  ],
+  "shots": [
+    {
+      "side": "base252",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "tasks",
+      "file": "base252/zh-CN__light__1440x900__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "base252/zh-CN__light__1440x900__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "tasks",
+      "file": "after252/zh-CN__light__1440x900__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [
+          "ping the desk runtime and report back测试 · 排队中取消",
+          "summarize last week's meeting notes推理 · 已完成",
+          "old echo task, cancelled earlier测试 · 已取消"
+        ],
+        "taskButtons": [
+          "取消"
+        ],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 672,
+            "bottom": 815,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 722,
+            "bottom": 801,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 1020
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "after252/zh-CN__light__1440x900__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "还没有发到运行时的任务。发一个测试任务后会出现在这里。",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 714,
+            "bottom": 814,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 764,
+            "bottom": 764,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": true,
+            "top": 764,
+            "bottom": 814,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 916
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "tasks",
+      "file": "base252/zh-CN__dark__1440x900__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "base252/zh-CN__dark__1440x900__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "tasks",
+      "file": "after252/zh-CN__dark__1440x900__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [
+          "ping the desk runtime and report back测试 · 排队中取消",
+          "summarize last week's meeting notes推理 · 已完成",
+          "old echo task, cancelled earlier测试 · 已取消"
+        ],
+        "taskButtons": [
+          "取消"
+        ],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 672,
+            "bottom": 815,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 722,
+            "bottom": 801,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 1020
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "after252/zh-CN__dark__1440x900__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "还没有发到运行时的任务。发一个测试任务后会出现在这里。",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 714,
+            "bottom": 814,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 764,
+            "bottom": 764,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": true,
+            "top": 764,
+            "bottom": 814,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 916
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "tasks",
+      "file": "base252/en__light__1440x900__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "base252/en__light__1440x900__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "tasks",
+      "file": "after252/en__light__1440x900__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [
+          "ping the desk runtime and report back测试 · 排队中取消",
+          "summarize last week's meeting notes推理 · 已完成",
+          "old echo task, cancelled earlier测试 · 已取消"
+        ],
+        "taskButtons": [
+          "取消"
+        ],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 672,
+            "bottom": 815,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 722,
+            "bottom": 801,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 1020
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "after252/en__light__1440x900__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "还没有发到运行时的任务。发一个测试任务后会出现在这里。",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 714,
+            "bottom": 814,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 764,
+            "bottom": 764,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": true,
+            "top": 764,
+            "bottom": 814,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 916
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "tasks",
+      "file": "base252/en__dark__1440x900__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "base252/en__dark__1440x900__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "tasks",
+      "file": "after252/en__dark__1440x900__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [
+          "ping the desk runtime and report back测试 · 排队中取消",
+          "summarize last week's meeting notes推理 · 已完成",
+          "old echo task, cancelled earlier测试 · 已取消"
+        ],
+        "taskButtons": [
+          "取消"
+        ],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 672,
+            "bottom": 815,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 722,
+            "bottom": 801,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 1020
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "empty",
+      "file": "after252/en__dark__1440x900__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "还没有发到运行时的任务。发一个测试任务后会出现在这里。",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 714,
+            "bottom": 814,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 764,
+            "bottom": 764,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": true,
+            "top": 764,
+            "bottom": 814,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 916
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "tasks",
+      "file": "base252/zh-CN__light__390x844__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "base252/zh-CN__light__390x844__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "tasks",
+      "file": "after252/zh-CN__light__390x844__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [
+          "ping the desk runtime and report back测试 · 排队中取消",
+          "summarize last week's meeting notes推理 · 已完成",
+          "old echo task, cancelled earlier测试 · 已取消"
+        ],
+        "taskButtons": [
+          "取消"
+        ],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 616,
+            "bottom": 759,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 745,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 1020
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "after252/zh-CN__light__390x844__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "还没有发到运行时的任务。发一个测试任务后会出现在这里。",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 658,
+            "bottom": 758,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 707,
+            "bottom": 707,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": true,
+            "top": 707,
+            "bottom": 758,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 916
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "tasks",
+      "file": "base252/zh-CN__dark__390x844__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "base252/zh-CN__dark__390x844__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "tasks",
+      "file": "after252/zh-CN__dark__390x844__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [
+          "ping the desk runtime and report back测试 · 排队中取消",
+          "summarize last week's meeting notes推理 · 已完成",
+          "old echo task, cancelled earlier测试 · 已取消"
+        ],
+        "taskButtons": [
+          "取消"
+        ],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 616,
+            "bottom": 759,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 745,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 1020
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "after252/zh-CN__dark__390x844__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "还没有发到运行时的任务。发一个测试任务后会出现在这里。",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 658,
+            "bottom": 758,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 707,
+            "bottom": 707,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": true,
+            "top": 707,
+            "bottom": 758,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 916
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "tasks",
+      "file": "base252/en__light__390x844__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "base252/en__light__390x844__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "tasks",
+      "file": "after252/en__light__390x844__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [
+          "ping the desk runtime and report back测试 · 排队中取消",
+          "summarize last week's meeting notes推理 · 已完成",
+          "old echo task, cancelled earlier测试 · 已取消"
+        ],
+        "taskButtons": [
+          "取消"
+        ],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 616,
+            "bottom": 759,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 745,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 1020
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "after252/en__light__390x844__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "还没有发到运行时的任务。发一个测试任务后会出现在这里。",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 658,
+            "bottom": 758,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 707,
+            "bottom": 707,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": true,
+            "top": 707,
+            "bottom": 758,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 916
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "tasks",
+      "file": "base252/en__dark__390x844__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "base252",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "base252/en__dark__390x844__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": false
+          },
+          {
+            "selector": "#task-list",
+            "shown": false
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 879
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "tasks",
+      "file": "after252/en__dark__390x844__runtimes-tasks__tasks.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [
+          "ping the desk runtime and report back测试 · 排队中取消",
+          "summarize last week's meeting notes推理 · 已完成",
+          "old echo task, cancelled earlier测试 · 已取消"
+        ],
+        "taskButtons": [
+          "取消"
+        ],
+        "tasksEmpty": "",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 616,
+            "bottom": 759,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 665,
+            "bottom": 745,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": false
+          }
+        ],
+        "textLength": 1020
+      }
+    },
+    {
+      "side": "after252",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "empty",
+      "file": "after252/en__dark__390x844__runtimes-tasks__empty.png",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "rows": [
+          "shot-desk · 在线",
+          "ci-fixture-desk · 离线"
+        ],
+        "marks": [],
+        "dialogOpen": false,
+        "emptyShown": false,
+        "emptyText": "",
+        "localStatus": "在线",
+        "statusText": "",
+        "dialogText": "",
+        "automationRows": [],
+        "runRows": [],
+        "taskRows": [],
+        "taskButtons": [],
+        "tasksEmpty": "还没有发到运行时的任务。发一个测试任务后会出现在这里。",
+        "boxes": [
+          {
+            "selector": "#detected-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-list",
+            "shown": false
+          },
+          {
+            "selector": "#guide-dialog",
+            "shown": false
+          },
+          {
+            "selector": "#guide-empty",
+            "shown": false
+          },
+          {
+            "selector": "#local-status-card",
+            "shown": false
+          },
+          {
+            "selector": "#task-history",
+            "shown": true,
+            "top": 658,
+            "bottom": 758,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#task-list",
+            "shown": true,
+            "top": 707,
+            "bottom": 707,
+            "inViewport": true,
+            "fullyVisible": true
+          },
+          {
+            "selector": "#tasks-empty",
+            "shown": true,
+            "top": 707,
+            "bottom": 758,
+            "inViewport": true,
+            "fullyVisible": true
+          }
+        ],
+        "textLength": 916
+      }
+    }
+  ]
+}
