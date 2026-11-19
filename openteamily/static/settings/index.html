@@ -466,6 +466,23 @@
         <header class="settings-subhead">
           <a href="/settings" class="settings-back" aria-label="返回设置">‹ 应用连接器</a>
         </header>
+        <section class="composio-key-card" id="composio-key-card" aria-labelledby="composio-key-title">
+          <div class="composio-key-head">
+            <span class="composio-key-mark" aria-hidden="true"></span>
+            <div class="composio-key-copy">
+              <h2 id="composio-key-title" class="composio-key-title">Composio API key</h2>
+              <p class="composio-key-lead">应用连接通过你自己的 Composio 项目授权。到 Composio 项目设置里复制 API key 填到这里。密钥只保存在本实例，保存后不再显示原文。每个人只用自己的 key。</p>
+            </div>
+            <span id="composio-key-state" class="connector-status" data-state="unconfigured">未配置 Composio</span>
+          </div>
+          <form id="composio-key-form" class="composio-key-form" autocomplete="off">
+            <label class="visually-hidden" for="composio-key-input">Composio API key</label>
+            <input id="composio-key-input" name="api_key" type="password" maxlength="512" placeholder="粘贴你的 Composio API key" autocomplete="off" spellcheck="false">
+            <button type="submit" id="composio-key-save">保存</button>
+            <button type="button" id="composio-key-remove" hidden>移除</button>
+          </form>
+          <p id="composio-key-message" class="composio-key-message" role="status" aria-live="polite"></p>
+        </section>
         <div class="connectors-toolbar">
           <label class="visually-hidden" for="connector-search">搜索应用</label>
           <div class="connector-search-field">
@@ -478,434 +495,434 @@
           <button type="button" id="add-mcp-server" aria-haspopup="dialog" aria-controls="mcp-dialog" aria-expanded="false">+ 添加 MCP 服务器</button>
         </div>
         <ul id="connectors-catalog" class="connector-list">
-          <li class="connector-row" data-connector-id="github" data-category="dev">
+          <li class="connector-row" data-connector-id="github" data-composio-toolkit="github" data-composio-managed="yes" data-category="dev">
             <span class="connector-mark" data-mark="github" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">GitHub</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Repositories, issues, and pull requests</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="notion" data-category="docs">
+          <li class="connector-row" data-connector-id="notion" data-composio-toolkit="notion" data-composio-managed="yes" data-category="docs">
             <span class="connector-mark" data-mark="notion" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Notion</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Pages, databases, and wiki content</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="linear" data-category="work">
+          <li class="connector-row" data-connector-id="linear" data-composio-toolkit="linear" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="linear" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Linear</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Issues, projects, and cycles</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="atlassian" data-category="work">
+          <li class="connector-row" data-connector-id="atlassian" data-composio-toolkit="jira" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="atlassian" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Atlassian</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Jira issues and Confluence pages</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="sentry" data-category="dev">
+          <li class="connector-row" data-connector-id="sentry" data-composio-toolkit="sentry" data-composio-managed="yes" data-category="dev">
             <span class="connector-mark" data-mark="sentry" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Sentry</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Errors, traces, and releases</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="stripe" data-category="commerce">
+          <li class="connector-row" data-connector-id="stripe" data-composio-toolkit="stripe" data-composio-managed="yes" data-category="commerce">
             <span class="connector-mark" data-mark="stripe" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Stripe</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Payments, invoices, and customers</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="paypal" data-category="commerce">
+          <li class="connector-row" data-connector-id="paypal" data-composio-toolkit="paypal" data-composio-managed="own" data-category="commerce">
             <span class="connector-mark" data-mark="paypal" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">PayPal</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Orders, payments, and invoices</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="square" data-category="commerce">
+          <li class="connector-row" data-connector-id="square" data-composio-toolkit="square" data-composio-managed="yes" data-category="commerce">
             <span class="connector-mark" data-mark="square" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Square</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Payments, orders, and catalog</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="cloudflare" data-category="dev">
+          <li class="connector-row" data-connector-id="cloudflare" data-composio-toolkit="cloudflare" data-composio-managed="key" data-category="dev">
             <span class="connector-mark" data-mark="cloudflare" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Cloudflare</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Workers, DNS, and account resources</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="vercel" data-category="dev">
+          <li class="connector-row" data-connector-id="vercel" data-composio-toolkit="vercel" data-composio-managed="own" data-category="dev">
             <span class="connector-mark" data-mark="vercel" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Vercel</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Projects, deployments, and logs</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="supabase" data-category="data">
+          <li class="connector-row" data-connector-id="supabase" data-composio-toolkit="supabase" data-composio-managed="yes" data-category="data">
             <span class="connector-mark" data-mark="supabase" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Supabase</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Databases, tables, and project settings</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="neon" data-category="data">
+          <li class="connector-row" data-connector-id="neon" data-composio-toolkit="neon" data-composio-managed="own" data-category="data">
             <span class="connector-mark" data-mark="neon" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Neon</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Postgres databases and branches</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="figma" data-category="design">
+          <li class="connector-row" data-connector-id="figma" data-composio-toolkit="figma" data-composio-managed="yes" data-category="design">
             <span class="connector-mark" data-mark="figma" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Figma</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Design files, components, and comments</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="canva" data-category="design">
+          <li class="connector-row" data-connector-id="canva" data-composio-toolkit="canva" data-composio-managed="yes" data-category="design">
             <span class="connector-mark" data-mark="canva" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Canva</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Designs, folders, and exports</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="intercom" data-category="work">
+          <li class="connector-row" data-connector-id="intercom" data-composio-toolkit="intercom" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="intercom" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Intercom</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Conversations, contacts, and articles</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="monday" data-category="work">
+          <li class="connector-row" data-connector-id="monday" data-composio-toolkit="monday" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="monday" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">monday.com</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Boards, items, and workflows</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="webflow" data-category="design">
+          <li class="connector-row" data-connector-id="webflow" data-composio-toolkit="webflow" data-composio-managed="own" data-category="design">
             <span class="connector-mark" data-mark="webflow" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Webflow</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Sites, pages, and CMS content</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="wix" data-category="design">
+          <li class="connector-row" data-connector-id="wix" data-composio-toolkit="wix" data-composio-managed="own" data-category="design">
             <span class="connector-mark" data-mark="wix" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Wix</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Sites, pages, and site content</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="netlify" data-category="dev">
             <span class="connector-mark" data-mark="netlify" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Netlify</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unavailable">未接通</span>
               </div>
               <p class="connector-about">Sites, deploys, and forms</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="airtable" data-category="data">
+          <li class="connector-row" data-connector-id="airtable" data-composio-toolkit="airtable" data-composio-managed="yes" data-category="data">
             <span class="connector-mark" data-mark="airtable" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Airtable</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Bases, tables, and records</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="dropbox" data-category="docs">
+          <li class="connector-row" data-connector-id="dropbox" data-composio-toolkit="dropbox" data-composio-managed="yes" data-category="docs">
             <span class="connector-mark" data-mark="dropbox" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Dropbox</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Files and folders</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="zapier" data-category="work">
             <span class="connector-mark" data-mark="zapier" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Zapier</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unavailable">未接通</span>
               </div>
               <p class="connector-about">Zaps and app actions</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="clickup" data-category="work">
+          <li class="connector-row" data-connector-id="clickup" data-composio-toolkit="clickup" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="clickup" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">ClickUp</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Tasks, lists, and docs</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="todoist" data-category="work">
+          <li class="connector-row" data-connector-id="todoist" data-composio-toolkit="todoist" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="todoist" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Todoist</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Tasks and projects</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="miro" data-category="design">
+          <li class="connector-row" data-connector-id="miro" data-composio-toolkit="miro" data-composio-managed="yes" data-category="design">
             <span class="connector-mark" data-mark="miro" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Miro</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Boards and whiteboard items</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="attio" data-category="work">
+          <li class="connector-row" data-connector-id="attio" data-composio-toolkit="attio" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="attio" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Attio</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">CRM records, lists, and notes</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="postman" data-category="dev">
+          <li class="connector-row" data-connector-id="postman" data-composio-toolkit="postman" data-composio-managed="key" data-category="dev">
             <span class="connector-mark" data-mark="postman" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Postman</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Collections, requests, and workspaces</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="asana" data-category="work">
+          <li class="connector-row" data-connector-id="asana" data-composio-toolkit="asana" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="asana" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Asana</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Tasks, projects, and workspaces</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="box" data-category="docs">
+          <li class="connector-row" data-connector-id="box" data-composio-toolkit="box" data-composio-managed="yes" data-category="docs">
             <span class="connector-mark" data-mark="box" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Box</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Files, folders, and metadata</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="hubspot" data-category="work">
+          <li class="connector-row" data-connector-id="hubspot" data-composio-toolkit="hubspot" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="hubspot" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">HubSpot</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Contacts, deals, and tickets</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="slack" data-category="work">
+          <li class="connector-row" data-connector-id="slack" data-composio-toolkit="slack" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="slack" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Slack</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Channels and messages</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="huggingface" data-category="data">
+          <li class="connector-row" data-connector-id="huggingface" data-composio-toolkit="hugging_face" data-composio-managed="yes" data-category="data">
             <span class="connector-mark" data-mark="huggingface" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Hugging Face</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Models, datasets, and Spaces</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
-          <li class="connector-row" data-connector-id="exa" data-category="search">
+          <li class="connector-row" data-connector-id="exa" data-composio-toolkit="exa" data-composio-managed="key" data-category="search">
             <span class="connector-mark" data-mark="exa" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Exa</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unconfigured">未配置 Composio</span>
               </div>
               <p class="connector-about">Web search for agents</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="deepwiki" data-category="docs">
             <span class="connector-mark" data-mark="deepwiki" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">DeepWiki</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unavailable">未接通</span>
               </div>
               <p class="connector-about">Documentation for public code repositories</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="context7" data-category="docs">
             <span class="connector-mark" data-mark="context7" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Context7</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unavailable">未接通</span>
               </div>
               <p class="connector-about">Library documentation and code examples</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="mslearn" data-category="docs">
             <span class="connector-mark" data-mark="mslearn" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Microsoft Learn</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unavailable">未接通</span>
               </div>
               <p class="connector-about">Microsoft product documentation</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="cloudflare-docs" data-category="docs">
             <span class="connector-mark" data-mark="cloudflare-docs" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Cloudflare Docs</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unavailable">未接通</span>
               </div>
               <p class="connector-about">Cloudflare product documentation</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="amap" data-category="search">
             <span class="connector-mark" data-mark="amap" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Amap</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unavailable">未接通</span>
               </div>
               <p class="connector-about">Maps, places, and routes in China</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="mail" data-category="mail">
             <span class="connector-mark" data-mark="mail" aria-hidden="true"></span>
             <div class="connector-copy">
               <div class="connector-title">
                 <span class="connector-name">Mailbox</span>
-                <span class="connector-status">未连接</span>
+                <span class="connector-status" data-state="unavailable">未接通</span>
               </div>
               <p class="connector-about">Read and send email over IMAP and SMTP</p>
             </div>
-            <button type="button" disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。">+ 连接</button>
+            <button type="button" disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接</button>
           </li>
         </ul>
         <p id="connectors-empty" class="settings-card settings-empty" hidden>没有匹配的应用。</p>

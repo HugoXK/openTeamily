@@ -219,9 +219,12 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('不会添加或连接服务器', connectors)
         self.assertIn('class="connector-search-icon"', connectors)
         self.assertEqual(connectors.count('class="connector-row"'), 39)
-        self.assertEqual(connectors.count('>未连接<'), 39)
-        self.assertEqual(connectors.count('不会真连。">+ 连接'), 39)
-        self.assertEqual(connectors.count('disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。"'), 39)
+        # Rows start disabled until the user's own Composio key is loaded.
+        self.assertEqual(connectors.count('>未配置 Composio<'), 32)  # 31 rows + key card badge
+        self.assertEqual(connectors.count('data-state="unavailable">未接通<'), 8)
+        self.assertEqual(connectors.count('disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接'), 31)
+        self.assertEqual(connectors.count('disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接'), 8)
+        self.assertIn('id="composio-key-form"', connectors)
         self.assertIn('id="connectors-catalog"', connectors)
         self.assertIn('没有匹配的应用。', connectors)
         self.assertIn('id="connectors-empty"', connectors)
