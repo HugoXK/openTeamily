@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, gateway, invites, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, composio, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -46,6 +46,7 @@ class Config:
     max_memory_actions_per_workspace: int = 200
     max_memory_links_per_workspace: int = 500
     max_agents_per_workspace: int = 50
+    max_meetings_per_workspace: int = 100
     max_conversations_per_user: int = 50
     max_messages_per_conversation: int = 200
     max_social_conversations_per_workspace: int = 200
@@ -95,8 +96,10 @@ def object_only(pairs):
 
 
 class App:
-    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None):
+    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None):
         self.store, self.config, self.clock = store, config, clock
+        # Tests inject a fake Composio HTTP transport; production uses urllib.
+        self.composio_transport = composio_transport
         self.lifecycle, self.manager_auth = lifecycle, manager_auth
         self.automation_backend = automation_backend or AgentAutomationBackend(
             stale=config.runtime_heartbeat_seconds, timeout=config.runtime_task_timeout_seconds)
@@ -133,7 +136,7 @@ class App:
         reasons = {200: 'OK', 201: 'Created', 202: 'Accepted', 302: 'Found', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
                    404: 'Not Found', 405: 'Method Not Allowed', 409: 'Conflict', 411: 'Length Required',
                    413: 'Content Too Large', 415: 'Unsupported Media Type', 429: 'Too Many Requests',
-                   500: 'Internal Server Error', 501: 'Not Implemented', 503: 'Service Unavailable'}
+                   500: 'Internal Server Error', 501: 'Not Implemented', 502: 'Bad Gateway', 503: 'Service Unavailable'}
         start_response(f'{status} {reasons[status]}', headers)
         return [data]
 
@@ -496,10 +499,12 @@ class App:
             if method != 'GET':
                 refuse(405, 'method', 'Only GET is supported')
             return self.discover_works(query)
-        work_path = re.fullmatch(r'/w/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])(/file)?', path)
+        work_path = re.fullmatch(r'/w/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])(/file|/preview)?', path)
         if work_path:
             if method != 'GET' or query:
                 refuse(400, 'invalid', 'Invalid public work request')
+            if work_path[2] == '/preview':
+                return self.public_work_preview(work_path[1])
             return self.render_public_work(work_path[1], bool(work_path[2]))
         if path in ('/v1/auth/register', '/v1/auth/login') and method == 'POST':
             self.origin_check(env)  # Login/registration CSRF protection before a session exists.
@@ -538,6 +543,23 @@ class App:
             return self.oidc_callback(env, now, query)
         if path == '/v1/auth/oidc/link' and method == 'POST' and not query:
             return self.oidc_link(env, now)
+        if path == '/v1/composio/callback':
+            # Composio redirects the browser here cross-site after sign-in.
+            # SameSite=Strict cookies are absent, so nothing is changed here:
+            # the page bounces to the connectors page, which re-reads status
+            # with the signed-in session. Query parameters are not trusted.
+            if method != 'GET':
+                refuse(405, 'method', 'Only GET is supported')
+            return 200, composio.CALLBACK_PAGE, [
+                ('Content-Type', 'text/html; charset=utf-8'),
+                ('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"),
+            ]
+        if path == '/v1/composio' or path.startswith('/v1/composio/'):
+            with self.store.connect() as db:
+                session = self.authenticated(db, env, now)
+            if method == 'POST':
+                self.csrf_check(env, session)
+            return self.composio_dispatch(env, session['user_id'], method, path, query, now)
         if path.startswith('/v1/admin/'):
             if self.operator_admin is None:
                 refuse(401, 'operator_auth', 'Separate loopback operator credentials required')
@@ -908,6 +930,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/agents(?:/([0-9a-f]{32})(?:/(archive))?)?', path)
             if agent_path:
                 return self.workspace_agent_dispatch(db, session, method, query, now, env, *agent_path.groups())
+            meeting_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/meetings(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
+            if meeting_path:
+                return self.meeting_dispatch(db, session, method, query, now, env, *meeting_path.groups())
             match = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})(/instances)?', path)
             if match:
                 row = members.load(db, match[1], session['user_id'])
@@ -3280,12 +3306,130 @@ class App:
             'personal_agent': {
                 'workspace': {'id': workspace['id'], 'name': workspace['name'], 'kind': 'personal'},
                 'agent': agents.snapshot(db, agent) if agent is not None else None,
+                'look': onboarding.load_look(db, session['user_id']),
             },
             'builtin_agents': [
                 {'key': item['builtin_key'], 'agent': agents.snapshot(db, item)}
                 for item in personal.builtins(db, row['workspace_id'])
             ],
         }
+
+    def meeting_dispatch(self, db, session, method, query, now, env, workspace_id, meeting_id, removing):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if meeting_id is None and removing is None:
+            if method == 'GET':
+                limit, cursor, _ = self.pagination(query)
+                rows = meetings.listing(db, workspace['id'], cursor, limit + 1)
+                return 200, {'items': [meetings.view(row, include_body=False) for row in rows[:limit]],
+                             'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
+            if method == 'POST' and not query:
+                return self.create_meeting(db, workspace, session, now, env)
+            refuse(400, 'invalid', 'Invalid meeting request')
+        if meeting_id is None:
+            refuse(404, 'not_found', 'Meeting not found')
+        row = meetings.load(db, workspace['id'], meeting_id)
+        if row is None:
+            refuse(404, 'not_found', 'Meeting not found')
+        if removing == 'remove':
+            if method != 'POST' or query:
+                refuse(400, 'invalid', 'Invalid meeting request')
+            self.body(env, [])
+            if actor not in ('owner', 'admin') and row['created_by'] != session['user_id']:
+                refuse(403, 'forbidden', 'Not allowed to change this meeting')
+            db.execute('DELETE FROM meetings WHERE id=?', (row['id'],))
+            return 200, {'removed': meetings.view(row, include_body=False)}, []
+        if method == 'GET' and not query:
+            return 200, {'meeting': meetings.view(row)}, []
+        if method == 'POST' and not query:
+            return self.update_meeting(db, session, actor, row, now,
+                                       self.body(env, ['revision', 'changes'], limit=70000))
+        refuse(400, 'invalid', 'Invalid meeting request')
+
+    def create_meeting(self, db, workspace, session, now, env):
+        body = self.body(env, ['title', 'started_at', 'attendees', 'transcript', 'summary', 'action_items'], limit=70000)
+        title = body.get('title')
+        started_at = body.get('started_at', now)
+        attendees = body.get('attendees', [])
+        transcript = body.get('transcript', '')
+        summary = body.get('summary', '')
+        actions = body.get('action_items', [])
+        if (not meetings.valid_title(title) or not meetings.valid_started_at(started_at)
+                or not meetings.valid_attendees(attendees) or not meetings.valid_transcript(transcript)
+                or not meetings.valid_summary(summary) or not meetings.valid_action_items(actions)):
+            refuse(400, 'invalid', 'Provide valid meeting fields')
+        title = title.strip()
+        attendees = [item.strip() for item in attendees]
+        actions = meetings.normalize_action_items(actions)
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        payload = {'title': title, 'started_at': started_at, 'attendees': sorted(attendees),
+                   'transcript': transcript, 'summary': summary, 'action_items': actions}
+        key_hash, request_hash = digest('meeting:' + key), digest(
+            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False))
+        prior = db.execute('SELECT * FROM meetings WHERE workspace_id=? AND key_hash=?',
+                           (workspace['id'], key_hash)).fetchone()
+        if prior is not None:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'meeting': meetings.view(prior)}, []
+        title_digest = meetings.title_hash(title)
+        if db.execute('SELECT id FROM meetings WHERE workspace_id=? AND title_hash=?',
+                      (workspace['id'], title_digest)).fetchone():
+            refuse(409, 'conflict', 'A meeting with this title already exists')
+        if (db.execute('SELECT COUNT(*) FROM meetings WHERE workspace_id=?',
+                       (workspace['id'],)).fetchone()[0]
+                >= self.config.max_meetings_per_workspace):
+            refuse(429, 'quota', 'Meeting capacity reached')
+        meeting_id = uuid4().hex
+        db.execute(
+            'INSERT INTO meetings VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?)',
+            (meeting_id, workspace['id'], title, title_digest, started_at,
+             meetings.serialize(attendees), transcript, summary, meetings.serialize(actions),
+             now, now, session['user_id'], session['user_id'], key_hash, request_hash))
+        return 201, {'meeting': meetings.view(meetings.load(db, workspace['id'], meeting_id))}, []
+
+    def update_meeting(self, db, session, actor, row, now, body):
+        revision, changes = body.get('revision'), body.get('changes')
+        if (type(revision) is not int or not isinstance(changes, dict) or not changes
+                or set(changes) - {'title', 'started_at', 'attendees', 'transcript', 'summary', 'action_items'}):
+            refuse(400, 'invalid', 'Provide the current revision and known changes')
+        if actor not in ('owner', 'admin') and row['created_by'] != session['user_id']:
+            refuse(403, 'forbidden', 'Not allowed to change this meeting')
+        if revision != row['revision']:
+            raise RuntimeFault(409, 'conflict', 'Meeting changed elsewhere; reload and retry',
+                               meetings.view(row))
+        title = changes.get('title', row['title'])
+        started_at = changes.get('started_at', row['started_at'])
+        attendees = changes.get('attendees', json.loads(row['attendees'] or '[]'))
+        transcript = changes.get('transcript', row['transcript'])
+        summary = changes.get('summary', row['summary'])
+        actions = changes.get('action_items', json.loads(row['action_items'] or '[]'))
+        if (not meetings.valid_title(title) or not meetings.valid_started_at(started_at)
+                or not meetings.valid_attendees(attendees) or not meetings.valid_transcript(transcript)
+                or not meetings.valid_summary(summary) or not meetings.valid_action_items(actions)):
+            refuse(400, 'invalid', 'Provide valid meeting fields')
+        title = title.strip()
+        attendees = [item.strip() for item in attendees]
+        actions = meetings.normalize_action_items(actions)
+        if (title, started_at, attendees, transcript, summary, actions) == (
+                row['title'], row['started_at'], json.loads(row['attendees'] or '[]'),
+                row['transcript'], row['summary'], json.loads(row['action_items'] or '[]')):
+            return 200, {'meeting': meetings.view(row)}, []
+        title_digest = meetings.title_hash(title)
+        if title != row['title'] and db.execute(
+                'SELECT id FROM meetings WHERE workspace_id=? AND title_hash=? AND id!=?',
+                (row['workspace_id'], title_digest, row['id'])).fetchone():
+            refuse(409, 'conflict', 'A meeting with this title already exists')
+        db.execute(
+            'UPDATE meetings SET title=?, title_hash=?, started_at=?, attendees=?, transcript=?, '
+            'summary=?, action_items=?, revision=?, updated=?, updated_by=? WHERE id=?',
+            (title, title_digest, started_at, meetings.serialize(attendees), transcript, summary,
+             meetings.serialize(actions), row['revision'] + 1, now, session['user_id'], row['id']))
+        return 200, {'meeting': meetings.view(meetings.load(db, row['workspace_id'], row['id']))}, []
 
     def search_messages(self, db, session, method, query, workspace_id):
         if method != 'GET':
@@ -3370,6 +3514,18 @@ class App:
             return listed(db)
         with self.store.connect() as connection:
             return listed(connection)
+
+    def public_work_preview(self, slug):
+        # Text-only cover model for a listed work. It exposes no more than the
+        # public /w/<slug> page already shows, and keeps the feed listing itself
+        # a body-free projection.
+        if not discover.valid_slug(slug):
+            refuse(404, 'not_found', 'Work not found')
+        with self.store.connect() as db:
+            row = discover.load_listed_work(db, slug)
+        if row is None:
+            refuse(404, 'not_found', 'Work not found')
+        return 200, {'preview': artifacts.preview(row)}, []
 
     def render_public_work(self, slug, media_file=False):
         if not discover.valid_slug(slug):
@@ -4453,6 +4609,161 @@ class App:
         updated = db.execute('SELECT * FROM automations WHERE id=?', (row['id'],)).fetchone()
         self.write_editor(db, updated['id'], intent, scope, agents, compiled)
         return 200, {'automation': self.automation_view(db, updated)}, []
+
+    def composio_client(self, user_id):
+        """A Composio client bound to this user's own key; no fallback key exists."""
+        with self.store.connect() as db:
+            try:
+                key = composio.user_key(self.store, db, user_id)
+            except ValueError:
+                key = None
+        if key is None:
+            refuse(409, 'composio_not_configured', 'Add your own Composio API key in settings first')
+        return composio.Client(key, transport=self.composio_transport)
+
+    def composio_dispatch(self, env, user_id, method, path, query, now):
+        cuid = composio.composio_user_id(user_id)
+        try:
+            if path == '/v1/composio':
+                if method != 'GET' or query:
+                    refuse(400, 'invalid', 'Invalid Composio request')
+                with self.store.connect() as db:
+                    view = composio.key_view(composio.load_key_row(db, user_id))
+                return 200, {'composio': view, 'catalog': composio.catalog_view()}, []
+            if path == '/v1/composio/key':
+                if method != 'POST':
+                    refuse(405, 'method', 'Only POST is supported')
+                body = self.body(env, ['api_key'], limit=2048)
+                if 'api_key' not in body:
+                    refuse(400, 'invalid', 'api_key is required (null removes it)')
+                api_key = body['api_key']
+                if api_key is not None and not composio.valid_api_key(api_key):
+                    refuse(400, 'invalid', 'Use an 8-512 character Composio API key without spaces')
+                with self.store.transaction() as db:
+                    view = composio.save_key(self.store, db, user_id, api_key, now)
+                return 200, {'composio': view}, []
+            if path == '/v1/composio/toolkits':
+                if method != 'GET':
+                    refuse(405, 'method', 'Only GET is supported')
+                params = {}
+                try:
+                    pairs = parse_qs(query, keep_blank_values=False, strict_parsing=bool(query), max_num_fields=4)
+                except ValueError:
+                    refuse(400, 'invalid', 'Invalid toolkit query')
+                for key, values in pairs.items():
+                    if key not in ('search', 'cursor') or len(values) != 1 or len(values[0]) > 200:
+                        refuse(400, 'invalid', 'Invalid toolkit query')
+                    params[key] = values[0]
+                client = self.composio_client(user_id)
+                page = client.list_toolkits(params.get('search'), params.get('cursor'))
+                items = page.get('items') if isinstance(page.get('items'), list) else []
+                views = [view for view in (composio.toolkit_view(item) for item in items[:100]) if view]
+                cursor = page.get('next_cursor') if isinstance(page.get('next_cursor'), str) else None
+                return 200, {'items': views, 'next_cursor': cursor}, []
+            if path == '/v1/composio/connections':
+                if method == 'GET':
+                    if query:
+                        refuse(400, 'invalid', 'Queries are not supported')
+                    return self.composio_sync(user_id, cuid, now)
+                if method != 'POST':
+                    refuse(405, 'method', 'Only GET and POST are supported')
+                body = self.body(env, ['toolkit'], limit=1024)
+                toolkit = body.get('toolkit')
+                if not isinstance(toolkit, str) or not composio.TOOLKIT.fullmatch(toolkit):
+                    refuse(400, 'invalid', 'Use a Composio toolkit slug')
+                with self.store.connect() as db:
+                    count = db.execute('SELECT COUNT(*) FROM composio_connections WHERE user_id=?', (user_id,)).fetchone()[0]
+                if count >= composio.MAX_CONNECTIONS:
+                    refuse(429, 'quota', 'Connection record limit reached; disconnect one first')
+                client = self.composio_client(user_id)
+                link = client.create_link(cuid, toolkit, self.config.origin + '/v1/composio/callback')
+                local_id = uuid4().hex
+                with self.store.transaction() as db:
+                    db.execute('DELETE FROM composio_connections WHERE user_id=? AND account_id=?', (user_id, link['account_id']))
+                    db.execute('INSERT INTO composio_connections VALUES(?,?,?,?,?,?,?,?)',
+                               (local_id, user_id, toolkit, link['account_id'], 'INITIATED', None, now, now))
+                    row = db.execute('SELECT * FROM composio_connections WHERE id=?', (local_id,)).fetchone()
+                return 201, {'connection': composio.connection_view(row), 'redirect_url': link['redirect_url']}, []
+            match = re.fullmatch(r'/v1/composio/connections/([0-9a-f]{32})(/disconnect)?', path)
+            if match:
+                with self.store.connect() as db:
+                    row = db.execute('SELECT * FROM composio_connections WHERE id=? AND user_id=?',
+                                     (match[1], user_id)).fetchone()
+                if row is None:
+                    refuse(404, 'not_found', 'Connection not found')
+                if match[2]:
+                    if method != 'POST':
+                        refuse(405, 'method', 'Only POST is supported')
+                    self.body(env, [], limit=64)
+                    client = self.composio_client(user_id)
+                    try:
+                        client.delete_account(row['account_id'])
+                    except composio.ComposioError as error:
+                        if error.code != 'composio_not_found':
+                            raise
+                    with self.store.transaction() as db:
+                        db.execute('DELETE FROM composio_connections WHERE id=? AND user_id=?', (row['id'], user_id))
+                    return 200, {'disconnected': True, 'id': row['id']}, []
+                if method != 'GET' or query:
+                    refuse(400, 'invalid', 'Invalid connection request')
+                client = self.composio_client(user_id)
+                try:
+                    account = client.get_account(row['account_id'])
+                    status = composio.normal_status(account.get('status'))
+                    reason = composio.reason_text(account.get('status_reason'))
+                except composio.ComposioError as error:
+                    if error.code != 'composio_not_found':
+                        raise
+                    status, reason = 'DELETED', 'Not found in Composio'
+                with self.store.transaction() as db:
+                    db.execute('UPDATE composio_connections SET status=?, status_reason=?, updated=? WHERE id=? AND user_id=?',
+                               (status, reason, now, row['id'], user_id))
+                    row = db.execute('SELECT * FROM composio_connections WHERE id=?', (row['id'],)).fetchone()
+                return 200, {'connection': composio.connection_view(row)}, []
+            refuse(404, 'not_found', 'Route not found')
+        except composio.ComposioError as error:
+            refuse(502, error.code, error.message)
+
+    def composio_sync(self, user_id, cuid, now):
+        """Merge this user's Composio connected accounts into local records."""
+        client = self.composio_client(user_id)
+        sync = 'ok'
+        try:
+            page = client.list_accounts(cuid)
+            items = page.get('items') if isinstance(page.get('items'), list) else []
+        except composio.ComposioError as error:
+            if error.code == 'composio_key_rejected':
+                raise
+            sync, items = 'failed', []
+        with self.store.transaction() as db:
+            if sync == 'ok':
+                seen = set()
+                for item in items[:composio.MAX_CONNECTIONS]:
+                    if not isinstance(item, dict):
+                        continue
+                    account = item.get('id')
+                    toolkit = item.get('toolkit', {}).get('slug') if isinstance(item.get('toolkit'), dict) else None
+                    if not isinstance(account, str) or not composio.ACCOUNT.fullmatch(account):
+                        continue
+                    if not isinstance(toolkit, str) or not composio.TOOLKIT.fullmatch(toolkit.lower()):
+                        continue
+                    seen.add(account)
+                    status = composio.normal_status(item.get('status'))
+                    reason = composio.reason_text(item.get('status_reason'))
+                    existing = db.execute('SELECT id FROM composio_connections WHERE user_id=? AND account_id=?',
+                                          (user_id, account)).fetchone()
+                    if existing:
+                        db.execute('UPDATE composio_connections SET status=?, status_reason=?, updated=? WHERE id=?',
+                                   (status, reason, now, existing['id']))
+                    elif db.execute('SELECT COUNT(*) FROM composio_connections WHERE user_id=?', (user_id,)).fetchone()[0] < composio.MAX_CONNECTIONS:
+                        db.execute('INSERT INTO composio_connections VALUES(?,?,?,?,?,?,?,?)',
+                                   (uuid4().hex, user_id, toolkit.lower(), account, status, reason, now, now))
+                for row in db.execute('SELECT id, account_id, status FROM composio_connections WHERE user_id=?', (user_id,)).fetchall():
+                    if row['account_id'] not in seen and row['status'] not in composio.PENDING:
+                        db.execute("UPDATE composio_connections SET status='DELETED', status_reason=?, updated=? WHERE id=?",
+                                   ('Not found in Composio', now, row['id']))
+            rows = db.execute('SELECT * FROM composio_connections WHERE user_id=? ORDER BY created, id', (user_id,)).fetchall()
+        return 200, {'items': [composio.connection_view(row) for row in rows], 'sync': sync}, []
 
     def save_model_api(self, db, user_id, now, workspace, body, scope=None):
         revision, changes = body.get('revision'), body.get('changes')
