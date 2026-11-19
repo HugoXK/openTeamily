@@ -2030,8 +2030,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     photos: '· 只读取当前会话消息里已有的图片附件。',
     files: '· 只读取当前会话消息里已有的文件附件。',
   };
-  const ATTACHMENT_PAGE_LIMIT = 200;
-  const ATTACHMENT_MAX_PAGES = 25;
+  const ATTACHMENT_PAGE_LIMIT = 100; // the messages endpoint caps limit at 100
+  const ATTACHMENT_MAX_PAGES = 50;
   let conversationScope = 'messages';
   function setConversationScope(tab) {
     conversationScope = tab;
