@@ -133,7 +133,7 @@ class App:
             headers.insert(0, ('Content-Type', 'application/json; charset=utf-8'))
             data = json.dumps(body, ensure_ascii=True, separators=(',', ':')).encode('utf-8')
         headers.append(('Content-Length', str(len(data))))
-        reasons = {200: 'OK', 201: 'Created', 202: 'Accepted', 302: 'Found', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
+        reasons = {200: 'OK', 201: 'Created', 202: 'Accepted', 204: 'No Content', 302: 'Found', 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
                    404: 'Not Found', 405: 'Method Not Allowed', 409: 'Conflict', 411: 'Length Required',
                    413: 'Content Too Large', 415: 'Unsupported Media Type', 429: 'Too Many Requests',
                    500: 'Internal Server Error', 501: 'Not Implemented', 502: 'Bad Gateway', 503: 'Service Unavailable'}
@@ -455,9 +455,9 @@ class App:
         method, path, query = env.get('REQUEST_METHOD'), env.get('PATH_INFO', ''), env.get('QUERY_STRING', '')
         if len(path) > 256 or len(query) > 512:
             refuse(400, 'invalid', 'Request target is too long')
-        if method not in ('GET', 'POST', 'PUT'):
-            refuse(405, 'method', 'Only GET, POST and PUT are supported')
-        if method in ('POST', 'PUT') and query:
+        if method not in ('GET', 'POST', 'PUT', 'DELETE'):
+            refuse(405, 'method', 'Only GET, POST, PUT and DELETE are supported')
+        if method in ('POST', 'PUT', 'DELETE') and query:
             refuse(400, 'invalid', 'Query parameters are not accepted for writes')
         now = int(self.clock())
         share_path = re.fullmatch(r'/share/([A-Za-z0-9_-]{43})', path)
@@ -599,7 +599,7 @@ class App:
             return self.runtime_dispatch(env, session['user_id'], method, path, query)
         with self.store.transaction() as db:
             session = self.authenticated(db, env, now)
-            if method in ('POST', 'PUT'):
+            if method in ('POST', 'PUT', 'DELETE'):
                 self.csrf_check(env, session)
             if path == '/v1/auth/session' and method == 'GET' and not query:
                 return 200, {'user': {'id': session['user_id'], 'username': session['username']},
@@ -926,6 +926,9 @@ class App:
             search_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/search/messages', path)
             if search_path:
                 return self.search_messages(db, session, method, query, search_path.group(1))
+            if path in ('/v1/skills/scopes','/v1/skills/readiness','/v1/skills/runs'):
+                from . import skill_execution
+                return skill_execution.dispatch(self,db,session,method,path,query,now,env,refuse)
             if path in ('/v1/skills/catalog', '/v1/skills/bindings'):
                 return self.skill_package_dispatch(db, session, method, query, now, env, path)
             utility_path = re.fullmatch(
@@ -934,7 +937,7 @@ class App:
                 return self.message_utility_dispatch(db, session, method, query, now, env, *utility_path.groups())
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}/(?:edit|retract|reactions|pin|save))?|forward|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}(?:/(?:edit|retract|reactions|pin|save))?)?|forward|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -1096,11 +1099,15 @@ class App:
         with self.store.transaction() as db:
             key = self._runtime_key_from_env(db, env, now)
             if path == '/v1/agent/connect' and method == 'POST' and not query:
-                body = self.body(env, ['hostname'])
+                body = self.body(env, ['hostname','skill_formats'])
+                formats = body.get('skill_formats',[])
+                if not isinstance(formats,list) or any(f != skill_packages.FORMAT for f in formats) or len(formats)>1:
+                    refuse(400,'invalid','Unsupported skill capability advertisement')
                 hostname = body.get('hostname', 'flybot')
                 if not runtime_connect.valid_hostname(hostname):
                     refuse(400, 'invalid', 'Provide a hostname')
                 row, created = runtime_connect.connect(db, key, now, hostname)
+                db.execute('INSERT OR REPLACE INTO runtime_skill_capabilities VALUES(?,?,?)',(row['id'],json.dumps(formats),now))
                 return (201 if created else 200), {
                     'connection': runtime_connect.connection_view(row, now, stale),
                 }, []
@@ -1163,6 +1170,10 @@ class App:
                     refuse(404, 'not_found', 'Runtime task not found')
                 task = runtime_connect.expire_task(db, task, now)
                 material = db.execute('SELECT * FROM skill_task_material WHERE task_id=?',(task['id'],)).fetchone()
+                if status == 'succeeded' and skill_packages.material(db,task['id']) and material is None:
+                    refuse(409,'conflict','Runtime must fetch and acknowledge required skill material before success')
+                if status == 'succeeded' and skill_packages.selection(db,task['id']) and skill_packages.material(db,task['id']) != skill_packages.selection(db,task['id']):
+                    refuse(409,'skill_revoked','Selected skill binding or permission was revoked')
                 if status == 'succeeded' and material and json.loads(material['manifest']) and not material['acknowledged']:
                     refuse(409,'conflict','Runtime has not acknowledged verified skill loading; upgrade runtime')
                 try:
@@ -1232,6 +1243,9 @@ class App:
         if public['provider'] not in ('openai', 'custom'):
             refuse(409, 'conflict', 'This agent only supports OpenAI-compatible model APIs')
         skill_material = skill_packages.material(db, task['id'])
+        expected = skill_packages.selection(db,task['id'])
+        if expected and skill_material != expected:
+            refuse(409,'skill_revoked','Selected skill is no longer available; no model access issued')
         if skill_material and skill_format != 'openteamily.prompt-skill.v1':
             refuse(409, 'runtime_upgrade_required', 'Installed skills require an upgraded runtime with verified skill loading')
         db.execute('INSERT OR REPLACE INTO skill_task_material VALUES(?,?,0)', (task['id'], json.dumps(skill_material, sort_keys=True)))
@@ -3728,18 +3742,13 @@ class App:
             refuse(409,'conflict','Package version/digest changed; reload catalogue')
         if body.get('permissions') != skill_packages.PERMISSIONS:
             refuse(400,'invalid','Only the explicit model_context permission is supported')
-        if scope != 'account':
-            match = re.fullmatch(r'([0-9a-f]{32}):([0-9a-f]{32})',scope)
-            if match is None:
-                refuse(400,'invalid','Invalid agent binding scope')
-            if body['enabled']:
-                workspace = members.load(db,match[1],uid)
-                agent = agents.load(db,match[1],match[2]) if workspace else None
-                if workspace is None or agent is None or agent['archived']:
-                    refuse(404,'not_found','Agent scope not available')
-                if members.role_of(db,workspace,uid) not in ('owner','admin'):
-                    refuse(403,'forbidden','Agent binding requires workspace administration')
-            # Revoking one's own binding must remain possible after agent/archive or role changes.
+        if scope != 'account' and re.fullmatch(r'(?:(automation):)?[0-9a-f]{32}:[0-9a-f]{32}',scope) is None:
+            refuse(400,'invalid','Invalid binding scope')
+        if body['enabled']:
+            if skill_packages.scope_context(db,uid,scope) is None:
+                refuse(403,'forbidden','Scope requires active workspace administration')
+            if scope.startswith('automation:') and db.execute('SELECT 1 FROM skill_bindings WHERE scope=? AND user_id<>?',(scope,uid)).fetchone():
+                refuse(409,'conflict','This automation already has another skill owner; revoke that binding before transferring')
         if body['enabled']:
             if db.execute('SELECT COUNT(*) FROM skill_bindings WHERE user_id=?',(uid,)).fetchone()[0] >= 200 and db.execute('SELECT 1 FROM skill_bindings WHERE user_id=? AND scope=? AND skill_id=?',(uid,scope,item['id'])).fetchone() is None:
                 refuse(429,'quota','Skill binding capacity reached')
@@ -3747,7 +3756,7 @@ class App:
         else:
             db.execute('DELETE FROM skill_bindings WHERE user_id=? AND scope=? AND skill_id=?',(uid,scope,item['id']))
             # Cancel loaded tasks; already transmitted provider input cannot be recalled.
-            for record in db.execute('SELECT m.task_id,m.manifest FROM skill_task_material m JOIN skill_task_owners o ON o.task_id=m.task_id WHERE o.user_id=?',(uid,)).fetchall():
+            for record in db.execute("SELECT o.task_id,COALESCE(s.manifest,m.manifest,'[]') AS manifest FROM skill_task_owners o LEFT JOIN skill_task_selection s ON s.task_id=o.task_id LEFT JOIN skill_task_material m ON m.task_id=o.task_id WHERE o.user_id=?",(uid,)).fetchall():
                 if any(i['id']==item['id'] for i in json.loads(record['manifest'])) and not any(i['id']==item['id'] for i in skill_packages.material(db,record['task_id'])):
                     task = runtime_connect.load_task(db,record['task_id'])
                     if task and task['status'] in ('queued','claimed'):
@@ -3847,7 +3856,7 @@ class App:
                 rows = social.listing(db, workspace['id'], session['user_id'], cursor, limit + 1)
                 for conversation in rows[:limit]:
                     self.reconcile_group_replies(db, conversation, now)
-                items = social.conversation_items(db, rows[:limit])
+                items = social.conversation_items(db, rows[:limit], session['user_id'])
                 for item in items:
                     item['unread_count'] = social.unread_count(db, item['id'], session['user_id'])
                     item.update(social.preference(db, item['id'], session['user_id']))
@@ -3881,7 +3890,9 @@ class App:
             return self.react_social_message(db, session, row, action.split('/')[1], now, env)
         if action and action.endswith('/save') and method == 'POST' and not query:
             return self.save_social_message(db, workspace, session, row, action.split('/')[1], now, env)
-        if action and action.startswith('messages/') and method == 'POST' and not query:
+        if action and re.fullmatch(r'messages/[0-9a-f]{32}', action) and method == 'DELETE' and not query:
+            return self.delete_social_message(db, session, row, action.split('/')[1], now)
+        if action and re.fullmatch(r'messages/[0-9a-f]{32}/(?:edit|retract)', action) and method == 'POST' and not query:
             message_id, operation = action.split('/')[1:]
             message = db.execute('SELECT * FROM social_messages WHERE conversation_id=? AND id=?',
                                  (row['id'], message_id)).fetchone()
@@ -3919,18 +3930,18 @@ class App:
         if action == 'agent-replies' and method == 'POST' and not query:
             return self.request_group_reply(db, workspace, session, row, now, env)
         if action is None and method == 'GET' and not query:
-            items = social.messages(db, row['id'], '', 101) or []
-            conversation = social.conversation_item(db, row)
+            items = social.messages(db, row['id'], '', 101, session['user_id']) or []
+            conversation = social.conversation_item(db, row, user_id=session['user_id'])
             conversation['unread_count'] = social.unread_count(db, row['id'], session['user_id'])
             return 200, {'conversation': conversation,
                          'agent_replies': [social.reply_view(item) for item in social.reply_requests(db, row['id'])],
-                         'pinned_messages': social.pinned_messages(db, row['id']),
+                         'pinned_messages': social.pinned_messages(db, row['id'], session['user_id']),
                          'items': social.forward_info(db, social.with_reactions(
                              db, [social.message_view(item) for item in items[:100]], session['user_id'])),
                          'cursor': items[99]['id'] if len(items) > 100 else None}, []
         if action == 'messages' and method == 'GET':
             limit, cursor, _ = self.pagination(query)
-            rows = social.messages(db, row['id'], cursor, limit + 1)
+            rows = social.messages(db, row['id'], cursor, limit + 1, session['user_id'])
             if rows is None:
                 refuse(400, 'invalid', 'Invalid pagination parameters')
             return 200, {'items': social.forward_info(db, social.with_reactions(
@@ -3984,14 +3995,30 @@ class App:
         if pinned:
             exists = db.execute('SELECT 1 FROM social_message_pins WHERE conversation_id=? AND message_id=?',
                                 (row['id'], message_id)).fetchone()
-            if not exists and len(social.pinned_messages(db, row['id'])) >= social.PIN_LIMIT:
+            if not exists and len(social.pinned_messages(db, row['id'], session['user_id'])) >= social.PIN_LIMIT:
                 refuse(429, 'quota', 'Pinned message limit reached')
             db.execute('INSERT OR IGNORE INTO social_message_pins VALUES(?,?,?,?)',
                        (row['id'], message_id, session['user_id'], now))
         else:
             db.execute('DELETE FROM social_message_pins WHERE conversation_id=? AND message_id=?',
                        (row['id'], message_id))
-        return 200, {'pinned_messages': social.pinned_messages(db, row['id'])}, []
+        return 200, {'pinned_messages': social.pinned_messages(db, row['id'], session['user_id'])}, []
+
+    def delete_social_message(self, db, session, row, message_id, now):
+        if not social.HEX32.fullmatch(message_id or ''):
+            refuse(404, 'not_found', 'Message not found')
+        message = db.execute('SELECT * FROM social_messages WHERE conversation_id=? AND id=?',
+                             (row['id'], message_id)).fetchone()
+        if message is None:
+            refuse(404, 'not_found', 'Message not found')
+        if message['user_id'] != session['user_id']:
+            refuse(403, 'forbidden', 'Only the author can delete a message')
+        hidden = db.execute('SELECT 1 FROM social_message_deletions WHERE message_id=? AND user_id=?',
+                            (message_id, session['user_id'])).fetchone()
+        if hidden is not None:
+            refuse(404, 'not_found', 'Message not found')
+        db.execute('INSERT INTO social_message_deletions VALUES(?,?,?)', (message_id, session['user_id'], now))
+        return 204, b'', []
 
     def forward_social_messages(self, db, workspace, session, row, now, env):
         body = self.body(env, ['message_ids', 'target_conversation_id'])
