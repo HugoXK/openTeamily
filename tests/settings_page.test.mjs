@@ -742,3 +742,12 @@ test('applyComposioRows updates status, button and connection id from server dat
   assert.equal(github.button.disabled, true);
   assert.equal(github.button.attrs['data-connection-id'], undefined);
 });
+
+
+test('connected-tool approvals do not imply a connected account before key setup', () => {
+  const source = readFileSync(fileURLToPath(new URL('../openteamily/static/settings/connected-tools.mjs', import.meta.url)), 'utf8');
+  assert.doesNotMatch(source, /已连接/);
+  assert.match(source, /允许此调用一次/);
+  assert.match(source, /decision/);
+  assert.doesNotMatch(source, /innerHTML/);
+});
