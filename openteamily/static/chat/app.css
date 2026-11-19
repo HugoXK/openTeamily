@@ -873,3 +873,42 @@
 #message-list li.mine .role, #message-list li.user .role { color: var(--ot-ink); }
 #message-list li.mine .time, #message-list li.user .time { color: var(--ot-muted); }
 .composer-tools button[title*="模式"] { margin-left: auto; }
+
+/* @mention notification center: compact list inside the session pane. */
+#notifications-toggle { position: relative; }
+#notification-count {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.45rem;
+  min-width: 1.1rem;
+  padding: 0 .25rem;
+  font-size: .68rem;
+  line-height: 1.1rem;
+}
+.notifications-panel {
+  margin: .5rem 0;
+  padding: .6rem;
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg, 12px);
+  background: var(--ot-surface);
+}
+.notifications-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.notifications-head h2 { margin: 0; font-size: .95rem; }
+#notification-list { list-style: none; margin: .4rem 0 0; padding: 0; display: grid; gap: .25rem; }
+.notification-item {
+  display: grid;
+  gap: .15rem;
+  width: 100%;
+  padding: .45rem .55rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ot-ink);
+  text-align: left;
+  font: inherit;
+}
+.notification-item:hover, .notification-item:focus-visible { background: var(--ot-accent-soft); }
+.notification-item.is-unread strong::before { content: '● '; color: var(--ot-accent); }
+.notification-item strong { font-size: .85rem; font-weight: 600; }
+.notification-excerpt { color: var(--ot-muted); font-size: .8rem; overflow-wrap: anywhere; }
+.notification-item time { color: var(--ot-muted); font-size: .72rem; }

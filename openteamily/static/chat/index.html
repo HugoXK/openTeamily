@@ -54,6 +54,9 @@
       <button type="button" id="search-close" hidden title="关闭搜索">‹</button>
       <button type="button" id="session-filter" class="toolbar-icon" title="会话筛选" aria-label="筛选">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 6h16v2H4V6zm3 5h10v2H7v-2zm3 5h4v2h-4v-2z"/></svg>
+      </button><button type="button" id="notifications-toggle" class="toolbar-icon" aria-expanded="false" aria-controls="notifications-panel" title="通知：在群聊或单聊里被 @ 提及" aria-label="通知">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3a6 6 0 0 0-6 6v3.6L4.3 16h15.4L18 12.6V9a6 6 0 0 0-6-6zm-2.2 15a2.3 2.3 0 0 0 4.4 0H9.8z"/></svg>
+        <span id="notification-count" class="unread-badge" hidden></span>
       </button><label id="session-filter-label" hidden>会话类型
       <select id="session-filter-value"><option value="all">全部</option><option value="group">群聊</option><option value="dm">单聊</option><option value="unread">未读（单聊/群聊）</option><option value="read">已读（单聊/群聊）</option><option value="pinned">已置顶（单聊/群聊）</option></select></label>
       <label class="session-search">
@@ -81,6 +84,15 @@
       <select id="workspace"></select>
     </label>
     <p id="whoami"></p>
+    <section id="notifications-panel" class="notifications-panel" hidden aria-labelledby="notifications-heading">
+      <div class="notifications-head">
+        <h2 id="notifications-heading">通知</h2>
+        <button type="button" id="notifications-read-all" disabled>全部已读</button>
+      </div>
+      <p class="note">只包含会话里对你的 @ 提及；任务完成、智能体会话未读和实时推送尚未接通。</p>
+      <ul id="notification-list"></ul>
+      <p id="notifications-empty" class="note" hidden>暂无提及通知。</p>
+    </section>
     <section id="search-panel" hidden>
       <div class="search-tabs" role="tablist" aria-label="搜索范围">
         <button type="button" role="tab" data-search-tab="all" aria-selected="true">全部</button>

@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -592,6 +592,9 @@ class App:
                 if method != 'POST' or query:
                     refuse(400, 'invalid', 'Invalid engagement request')
                 return self.discover_engagement(db, session, discover_action[1], env)
+            notification_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/notifications(/read)?', path)
+            if notification_path:
+                return self.notification_dispatch(db, session, method, query, env, *notification_path.groups())
             memory_profile = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/memory/profile', path)
             if memory_profile:
                 return self.memory_profile_dispatch(db, session, method, query, now, env, memory_profile[1])
@@ -3326,6 +3329,9 @@ class App:
                 refuse(400, 'invalid', 'Provide a message id from this conversation')
             if not social.mark_read(db, row['id'], session['user_id'], message_id):
                 refuse(404, 'not_found', 'Message not found')
+            read_seq = db.execute('SELECT read_seq FROM social_reads WHERE conversation_id=? AND user_id=?',
+                                  (row['id'], session['user_id'])).fetchone()['read_seq']
+            notifications.mark_conversation_read(db, workspace['id'], session['user_id'], row['id'], read_seq)
             return 200, {'unread_count': social.unread_count(db, row['id'], session['user_id'])}, []
         if action == 'agent-replies' and method == 'POST' and not query:
             return self.request_group_reply(db, workspace, session, row, now, env)
@@ -3557,6 +3563,28 @@ class App:
         row = social.load(db, workspace['id'], conversation_id)
         return 201, {'conversation': social.conversation_item(db, row)}, []
 
+    def notification_dispatch(self, db, session, method, query, env, workspace_id, reading):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        uid = session['user_id']
+        if not reading and method == 'GET' and query in ('', 'filter=unread', 'filter=all'):
+            return 200, {'items': notifications.listing(db, workspace['id'], uid, query == 'filter=unread'),
+                         'unread_count': notifications.unread_count(db, workspace['id'], uid),
+                         'limit': notifications.LIMIT}, []
+        if reading and method == 'POST' and not query:
+            body = self.body(env, ['notification_id', 'all'])
+            nid, every = body.get('notification_id'), body.get('all')
+            if every is True and nid is None:
+                notifications.mark_read(db, workspace['id'], uid)
+            elif every is None and isinstance(nid, str) and notifications.HEX32.fullmatch(nid):
+                if not notifications.mark_read(db, workspace['id'], uid, nid):
+                    refuse(404, 'not_found', 'Notification not found')
+            else:
+                refuse(400, 'invalid', 'Provide notification_id or all=true')
+            return 200, {'unread_count': notifications.unread_count(db, workspace['id'], uid)}, []
+        refuse(400, 'invalid', 'Invalid notification request')
+
     def send_social_message(self, db, workspace, session, row, now, env):
         body = self.body(env, ['body', 'artifact_id'])
         text = body.get('body')
@@ -3595,6 +3623,7 @@ class App:
              social.next_seq(db, row['id']), now, key_hash, request_hash))
         if attachment is not None:
             db.execute('INSERT INTO social_attachments VALUES(?,?)', (message_id, artifact_id))
+        notifications.record_mentions(db, workspace['id'], row['id'], message_id, session['user_id'], text, now)
         db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, row['id']))
         message = db.execute(f'SELECT * FROM ({social.MESSAGE_ROWS}) WHERE id=?', (message_id,)).fetchone()
         return 201, {'message': social.message_view(message)}, []

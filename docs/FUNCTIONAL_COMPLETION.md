@@ -33,7 +33,7 @@ repair PR follows functional review; controls here use existing components/nativ
 
 | Domain / audit gap | Already usable / this delivery | Still pending; dependency or boundary |
 |---|---|---|
-| Chat #4 #86 | Human/agent/group messaging; this PR adds social unread, pins/filters, edit/retract, media | User-agent unread; notification center, @mentions/task-completion aggregation, push/live delivery; reactions/emoji, translation, forwarding/multiselect, message-level pin and ask-AI; link-preview settings behavior; richer toolbar/agent attachment context |
+| Chat #4 #86 | Human/agent/group messaging; this PR adds social unread, pins/filters, edit/retract, media | @mention notification center (badge, list, mark one/all read, cleared by reading the conversation; retracted/left-conversation hidden) is now usable. Still pending: user-agent unread; task-completion aggregation, push/live delivery; reactions/emoji, translation, forwarding/multiselect, message-level pin and ask-AI; link-preview settings behavior; richer toolbar/agent attachment context |
 | Access/collaboration #5 | Workspace membership and invitation-link APIs exist | Full two-person invite/accept flow in chat; approval, freeze/revoke semantics and tests; no claim from invitation CRUD |
 | Agents/public conversation #6 #192 | Stored public starters can launch an authenticated member conversation (#206) | Anonymous typed public chat, external channels and full public composer; no unrequested model call |
 | Teams/groups #7 #89 | Stored groups and explicit selected-agent runtime requests | Public AI-team data/templates/search/create; complete collaboration execution; no import of competing #126/#131 protocol |

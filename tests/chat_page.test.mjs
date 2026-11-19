@@ -964,3 +964,52 @@ test('icon chat controls preserve accessible names, disabled truth and attachmen
   assert.match(html, /工作区成员可在作品库查看/);
   assert.match(html, /disabled title="未实现：语音消息"[\s\S]*?sr-only">语音/);
 });
+
+import {notificationBadgeText, notificationSummary} from '../openteamily/static/chat/app.mjs';
+
+test('notification badge and summary text', () => {
+  assert.equal(notificationBadgeText(0), '');
+  assert.equal(notificationBadgeText(3), '3');
+  assert.equal(notificationBadgeText(120), '99+');
+  assert.equal(notificationSummary({actor_username: 'bob', conversation_kind: 'group', conversation_title: '项目群'}),
+    'bob 在「项目群」提及了你');
+  assert.equal(notificationSummary({actor_username: 'bob', conversation_kind: 'dm', conversation_title: 'bob'}),
+    'bob 在「单聊」提及了你');
+});
+
+test('mention notifications show a badge, open the conversation and mark read', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals();
+  const posts = [];
+  let unread = 1;
+  const inbox = () => ({unread_count: unread, limit: 100, items: [{
+    id: 'n'.repeat(32), kind: 'mention', conversation_id: 'conv-1', conversation_kind: 'group',
+    conversation_title: '项目群', message_id: 'm-1', actor_username: 'bob', excerpt: '@alice 看一下',
+    created: 30, read: unread === 0}]});
+  try {
+    await mount(doc, {fetcher: async (path, init = {}) => {
+      if (path === '/v1/workspaces/ws-1/notifications') return json(200, inbox());
+      if (path === '/v1/workspaces/ws-1/notifications/read') {
+        posts.push(JSON.parse(init.body)); unread = 0; return json(200, {unread_count: 0});
+      }
+      if (path.endsWith('/conv-1/read')) return json(200, {unread_count: 0});
+      return original(path);
+    }});
+    await settle();
+    assert.equal(el('notification-count').hidden, false);
+    assert.equal(el('notification-count').textContent, '1');
+    await fire(el('notifications-toggle'), 'click');
+    await settle();
+    assert.equal(el('notifications-panel').hidden, false);
+    const item = el('notification-list').children[0] && el('notification-list').children[0].children[0];
+    assert.ok(item, 'the mention is listed');
+    assert.equal(item.children[0].textContent, 'bob 在「项目群」提及了你');
+    assert.equal(el('notifications-read-all').disabled, false);
+    await fire(item, 'click');
+    await settle();
+    assert.deepEqual(posts, [{notification_id: 'n'.repeat(32)}]);
+    assert.equal(el('notifications-panel').hidden, true);
+    assert.equal(el('notification-count').hidden, true);
+  } finally { restore(); }
+});

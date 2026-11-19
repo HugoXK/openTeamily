@@ -329,6 +329,17 @@ function matchesQuery(item, query) {
   return hay.includes(query.toLowerCase());
 }
 
+export function notificationBadgeText(count) {
+  const value = Number(count) || 0;
+  if (value <= 0) return '';
+  return value > 99 ? '99+' : String(value);
+}
+
+export function notificationSummary(item) {
+  const where = item.conversation_kind === 'dm' ? '单聊' : (item.conversation_title || '群聊');
+  return `${item.actor_username || '成员'} 在「${where}」提及了你`;
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -650,7 +661,61 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  let notificationSeq = 0;
+  function renderNotifications(body) {
+    const badge = document.getElementById('notification-count');
+    const toggle = document.getElementById('notifications-toggle');
+    const text = notificationBadgeText(body.unread_count);
+    if (badge) { badge.textContent = text; badge.hidden = !text; }
+    if (toggle) toggle.setAttribute('aria-label', text ? `通知，${body.unread_count} 条未读提及` : '通知');
+    const list = document.getElementById('notification-list');
+    if (!list) return;
+    const items = body.items || [];
+    list.replaceChildren(...items.map(item => {
+      const li = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'notification-item' + (item.read ? '' : ' is-unread');
+      button.dataset.notification = item.id;
+      const summary = document.createElement('strong'); summary.textContent = notificationSummary(item);
+      const excerpt = document.createElement('span'); excerpt.className = 'notification-excerpt'; excerpt.textContent = item.excerpt;
+      const time = document.createElement('time'); time.textContent = formatSessionTime(item.created);
+      button.append(summary, excerpt, time);
+      button.addEventListener('click', async () => {
+        const wid = workspaceId();
+        if (!item.read) await request('POST', `/v1/workspaces/${wid}/notifications/read`, {notification_id: item.id});
+        if (workspaceId() !== wid) return;
+        setNotificationsOpen(false);
+        await openSocialConversation(item.conversation_id);
+        await loadNotifications();
+      });
+      li.append(button);
+      return li;
+    }));
+    const empty = document.getElementById('notifications-empty'); if (empty) empty.hidden = items.length > 0;
+    const all = document.getElementById('notifications-read-all'); if (all) all.disabled = !(body.unread_count > 0);
+  }
+
+  async function loadNotifications() {
+    const wid = workspaceId();
+    if (!wid) return;
+    const token = ++notificationSeq;
+    let result;
+    // Notifications are auxiliary: a failed fetch must never break the session list.
+    try { result = await request('GET', `/v1/workspaces/${wid}/notifications`); } catch { return; }
+    if (token !== notificationSeq || workspaceId() !== wid || result.status !== 200) return;
+    renderNotifications(result.body);
+  }
+
+  function setNotificationsOpen(open) {
+    const panel = document.getElementById('notifications-panel');
+    const toggle = document.getElementById('notifications-toggle');
+    if (panel) panel.hidden = !open;
+    if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
   async function loadSessions() {
+    loadNotifications();
     const id = workspaceId();
     sessions = [];
     agents = [];
@@ -1222,6 +1287,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
+  const notificationsToggle = document.getElementById('notifications-toggle');
+  if (notificationsToggle) notificationsToggle.addEventListener('click', async () => {
+    const panel = document.getElementById('notifications-panel');
+    const open = Boolean(panel && panel.hidden);
+    setNotificationsOpen(open);
+    if (open) await loadNotifications();
+  });
+  const readAll = document.getElementById('notifications-read-all');
+  if (readAll) readAll.addEventListener('click', async () => {
+    const wid = workspaceId();
+    readAll.disabled = true;
+    const result = await request('POST', `/v1/workspaces/${wid}/notifications/read`, {all: true});
+    if (result.status !== 200) { show('error', '无法标记通知为已读。'); readAll.disabled = false; return; }
+    await loadNotifications();
+  });
   workspaceSelect.addEventListener('change', async () => {
     currentAgent = null;
     currentConversation = null;
