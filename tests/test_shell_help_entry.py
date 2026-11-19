@@ -62,7 +62,7 @@ def help_entries(page):
 
 class ShellHelpEntryTests(unittest.TestCase):
     def test_every_shell_page_links_the_guide_under_its_own_name(self):
-        self.assertEqual(len(PAGES), 15, f'expected the 15 shell pages, found {[str(p) for p in PAGES]}')
+        self.assertEqual(len(PAGES), 16, f'expected the 16 shell pages, found {[str(p) for p in PAGES]}')
         for page in PAGES:
             with self.subTest(page=page):
                 entries = help_entries(page)

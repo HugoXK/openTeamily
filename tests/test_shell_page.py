@@ -7,7 +7,7 @@ from tests import test_settings_page as settings_page_tests
 PAGES = (
     '/settings', '/agents', '/chat', '/automations', '/artifacts', '/space',
     '/members', '/team', '/runtimes', '/memory', '/discover',
-    '/profile', '/onboarding', '/download', '/guide',
+    '/profile', '/onboarding', '/meetings', '/download', '/guide',
 )
 
 CAPTURE_IDS = {
@@ -51,6 +51,8 @@ CAPTURE_IDS = {
 
     '/onboarding': ('main-panel', 'onboarding-form', 'industry', 'role-choices',
                     'onboarding-save', 'onboarding-skip'),
+    '/meetings': ('main-panel', 'meeting-list', 'meeting-form', 'meeting-title',
+                  'meeting-started-at', 'action-list', 'save-meeting'),
     '/download': ('main-panel', 'download-web', 'download-runtime',
                   'download-unavailable', 'daemon-command'),
     '/guide': ('main-panel', 'whoami', 'guide-search', 'guide-categories',

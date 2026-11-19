@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>会议 · OpenTeamily</title>
+  <link rel="stylesheet" href="/shell/app.css">
+  <link rel="stylesheet" href="/meetings/app.css">
+  <script type="module" src="/shell/app.mjs"></script>
+  <script type="module" src="/meetings/app.mjs"></script>
+</head>
+<body class="app-workspace">
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <nav class="app-rail" aria-label="应用导航">
+    <a class="brand-mark" href="/chat" title="OpenTeamily / FlyBot">FB</a>
+    <a href="/chat" title="聊天">聊天</a>
+    <a href="/agents" title="智能体">智能体</a>
+    <a href="/automations" title="自动化">自动化</a>
+    <a href="/memory" title="记忆">记忆</a>
+    <a href="/space" title="作品">作品</a>
+    <a href="/meetings" title="会议">会议</a>
+    <a href="/discover" title="发现">发现</a>
+    <span class="rail-spacer"></span>
+    <a href="/profile" class="rail-signed-in" hidden title="我的资料">我</a>
+    <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
+    <a href="/download" title="下载">下载</a>
+    <div class="account-slot" hidden>
+      <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
+      <div id="account-menu" class="account-menu" role="menu" hidden>
+        <p id="account-identity" class="account-identity"></p>
+        <a href="/profile" role="menuitem">查看我的资料</a>
+        <a href="/onboarding" role="menuitem">工作背景</a>
+        <a href="/team" role="menuitem">创建团队</a>
+        <div class="account-sub">
+          <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
+          <div id="help-menu" hidden>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 帮助中心页">帮助中心</button>
+            <a href="/guide" role="menuitem">功能指引</a>
+            <a href="/download" role="menuitem">下载</a>
+            <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
+            <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
+            <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
+          </div>
+        </div>
+        <a href="/settings" role="menuitem">所有设置</a>
+        <form id="logout-form" method="post" action="/v1/auth/logout">
+          <button type="submit">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </nav>
+  <p id="status" role="status"></p>
+  <main id="main">
+  <section id="login-panel" hidden>
+    <h2>登录</h2>
+    <form id="login-form" method="post" action="/v1/auth/login">
+      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
+      <button type="submit">登录</button>
+    </form>
+  </section>
+  <section id="main-panel" hidden>
+    <header class="page-top">
+      <h1>会议</h1>
+      <p class="note">手工记录会议纪要、参会人和行动项。音频/视频录制与自动转写尚未实现。</p>
+      <p id="whoami"></p>
+      <label class="workspace-pick">工作区
+        <select id="workspace"></select>
+      </label>
+    </header>
+    <div class="meeting-layout">
+      <section class="meeting-list-pane" aria-label="会议列表">
+        <div class="meeting-list-head">
+          <h2>会议记录</h2>
+          <button type="button" id="new-meeting">新建会议</button>
+        </div>
+        <ul id="meeting-list"></ul>
+        <p id="meetings-empty" class="note" hidden>还没有会议记录。点击「新建会议」开始。</p>
+      </section>
+      <section class="meeting-editor-pane" aria-label="会议详情">
+        <p id="meeting-empty" class="note">选择左侧的会议，或新建一个。</p>
+        <form id="meeting-form" hidden>
+          <label>标题 <input id="meeting-title" maxlength="120" required></label>
+          <label>开始时间 <input id="meeting-started-at" type="datetime-local" required></label>
+          <label>参会人 <input id="meeting-attendees" maxlength="2000" placeholder="用逗号分隔"></label>
+          <label>摘要 <textarea id="meeting-summary" maxlength="8000" rows="3"></textarea></label>
+          <label>转写/正文 <textarea id="meeting-transcript" maxlength="40000" rows="6"></textarea></label>
+          <fieldset>
+            <legend>行动项</legend>
+            <div id="action-list" class="action-list"></div>
+            <button type="button" id="add-action">添加行动项</button>
+          </fieldset>
+          <p id="meeting-meta" class="note"></p>
+          <div class="meeting-actions">
+            <button type="submit" id="save-meeting">保存</button>
+            <button type="button" id="cancel-meeting" class="secondary">取消</button>
+            <button type="button" id="remove-meeting" class="secondary" hidden>删除</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  </section>
+  </main>
+</body>
+</html>
