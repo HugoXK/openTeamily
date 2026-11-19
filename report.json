@@ -1,0 +1,2402 @@
+{
+  "slug": "guide-real-links",
+  "issue": 300,
+  "pr": 302,
+  "capturedAt": "2026-11-19T12:25:33.326Z",
+  "shots": 20,
+  "grid": "2 arms (before/after) x 2 states (guide-list / guide-dialog) x 2 viewports (1440x900, 390x844) x 2 themes (light/dark)",
+  "locale": "zh-CN",
+  "before": {
+    "sha": "0a1345677bc79060f67ad6871caf52dfeb327acf"
+  },
+  "after": {
+    "sha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8"
+  },
+  "jump": {
+    "before": {
+      "present": false
+    },
+    "after": {
+      "present": true,
+      "href": "/settings#send-shortcut",
+      "text": "去这里：发送快捷键"
+    },
+    "landed": {
+      "url": "/settings#send-shortcut",
+      "hasShortcut": true,
+      "scrollWidth": 1440,
+      "status": 200
+    }
+  },
+  "notes": [
+    "before has no group note line and no 去这里 link in the dialog; after renders one note per group and a link that carries the entry href.",
+    "The link was clicked for real on the after arm: /guide -> 发送快捷键 dialog -> 去这里 lands on /settings#send-shortcut with the anchor element present.",
+    "Theme is switched with the page own appearance control (#appearance-toggle -> POST /v1/settings)."
+  ],
+  "rows": [
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-list",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-guide-list-1440x900-light.png",
+      "bytes": 111757,
+      "sha256": "512ab5a03711658180a934a89e2bcb8246c19bf63db20122182dfa8aebb26897",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": null,
+      "dialogEmpty": "",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-dialog",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-guide-dialog-1440x900-light.png",
+      "bytes": 125421,
+      "sha256": "3c57747d9e5cd7b1a38da7e9829a64cfd838f41a290349396e7aebef4f612565",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": null,
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-list",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-guide-list-1440x900-dark.png",
+      "bytes": 112012,
+      "sha256": "919b06120f22ca6d5c6d21f3104bf52a412877aaa5c5090d33205cd694f28d58",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": null,
+      "dialogEmpty": "",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-dialog",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-guide-dialog-1440x900-dark.png",
+      "bytes": 133104,
+      "sha256": "01c341c8ec939c09822093ba8cefbf58225a9bf5acdacb295821df85122bb100",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": null,
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-list",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-guide-list-390x844-light.png",
+      "bytes": 74781,
+      "sha256": "058aec425e05e93400fbd7b822cabcf3bb8343d62c14ef38f64481dc1e92157c",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": null,
+      "dialogEmpty": "",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-dialog",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-guide-dialog-390x844-light.png",
+      "bytes": 74900,
+      "sha256": "0c21504cc9a8232e860fa2e70eea2deac6d421aef48ace6f32837baa230412bd",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": null,
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-list",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-guide-list-390x844-dark.png",
+      "bytes": 73379,
+      "sha256": "4135e3abefc49fb2466b514382aaecdd6d015c10ee9d3c49249931b663cb03a6",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": null,
+      "dialogEmpty": "",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-dialog",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-guide-dialog-390x844-dark.png",
+      "bytes": 88530,
+      "sha256": "e13e57496f085b30cf54913253df1d0af659fe9003eb1f01684edc89a2f7fa72",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": null,
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-list",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-guide-list-1440x900-light.png",
+      "bytes": 154093,
+      "sha256": "e61c438ae725f44d31b6402d6b2a60d477b63c3f8d29953b61e92bad943d3f59",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": "/chat",
+      "dialogEmpty": "",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-dialog",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-guide-dialog-1440x900-light.png",
+      "bytes": 166210,
+      "sha256": "66dbccf90f0546f3bba5c866e382eb9a182dc733a90fec15d817793bad47992a",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": "/settings#send-shortcut",
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-list",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-guide-list-1440x900-dark.png",
+      "bytes": 155770,
+      "sha256": "7e5986ef91f57faca6eaff1cb36a2bd28b0f6a3c7874ba1e8cbd12a211c4f3d7",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": "/chat",
+      "dialogEmpty": "",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-dialog",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-guide-dialog-1440x900-dark.png",
+      "bytes": 173260,
+      "sha256": "82cfd4b5469a163dc4ffe04e745bb409efaebed789071551b3c743913f72a887",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": "/settings#send-shortcut",
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-list",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-guide-list-390x844-light.png",
+      "bytes": 87512,
+      "sha256": "118df9ab1f16da635bfc8b76e9e5eb9e14ea606921201ef5967ffabb792c1c22",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": "/chat",
+      "dialogEmpty": "",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-dialog",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-guide-dialog-390x844-light.png",
+      "bytes": 75661,
+      "sha256": "c444fb8d56522c2a78cb80dc4f879439dbb8ca8e4ad606a5bb06fb9893f54894",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": "/settings#send-shortcut",
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-list",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-guide-list-390x844-dark.png",
+      "bytes": 84074,
+      "sha256": "8fef605a90ab3c4ea2104cb84ba3f8f43267694e882b5077d6e3a67b989185c8",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": "/chat",
+      "dialogEmpty": "",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-dialog",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-guide-dialog-390x844-dark.png",
+      "bytes": 94045,
+      "sha256": "b4d804358d901097dd629979ec04ff44c48b24d696ebed72c23ccc1c83e490d6",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": "/settings#send-shortcut",
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-jumped",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-guide-jumped-1440x900-light.png",
+      "bytes": 27347,
+      "sha256": "1cdd96cbcfaef4b1931d5169d89a5d4fdd9ad9f7c6e851121d2c9e097943ed1d",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "status": 200,
+      "url": "/settings#send-shortcut",
+      "hasShortcut": true,
+      "scrollWidth": 1440,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-jumped",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-guide-jumped-1440x900-dark.png",
+      "bytes": 26572,
+      "sha256": "d4615be080b8333b6b79ee1f362ac96c655a00a5cf7c37f5ee14e05d57727844",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "status": 200,
+      "url": "/settings#send-shortcut",
+      "hasShortcut": true,
+      "scrollWidth": 1440,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-jumped",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-guide-jumped-390x844-light.png",
+      "bytes": 22697,
+      "sha256": "8b0f060871875fdd2cf68a3c6f722b14d12235ff0ca6338d1eee5619d3f4abc0",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "status": 200,
+      "url": "/settings#send-shortcut",
+      "hasShortcut": true,
+      "scrollWidth": 390,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-jumped",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-guide-jumped-390x844-dark.png",
+      "bytes": 22167,
+      "sha256": "2a49fdf48ee02a977d58630b9b2a1489f66256be3a9e891114b1a8ff01eabc67",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "status": 200,
+      "url": "/settings#send-shortcut",
+      "hasShortcut": true,
+      "scrollWidth": 390,
+      "consoleErrors": []
+    }
+  ],
+  "files": {
+    "after/after-guide-dialog-1440x900-dark.png": {
+      "bytes": 173260,
+      "sha256": "82cfd4b5469a163dc4ffe04e745bb409efaebed789071551b3c743913f72a887",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-guide-dialog-1440x900-light.png": {
+      "bytes": 166210,
+      "sha256": "66dbccf90f0546f3bba5c866e382eb9a182dc733a90fec15d817793bad47992a",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-guide-dialog-390x844-dark.png": {
+      "bytes": 94045,
+      "sha256": "b4d804358d901097dd629979ec04ff44c48b24d696ebed72c23ccc1c83e490d6",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "after/after-guide-dialog-390x844-light.png": {
+      "bytes": 75661,
+      "sha256": "c444fb8d56522c2a78cb80dc4f879439dbb8ca8e4ad606a5bb06fb9893f54894",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "after/after-guide-jumped-1440x900-dark.png": {
+      "bytes": 26572,
+      "sha256": "d4615be080b8333b6b79ee1f362ac96c655a00a5cf7c37f5ee14e05d57727844",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-guide-jumped-1440x900-light.png": {
+      "bytes": 27347,
+      "sha256": "1cdd96cbcfaef4b1931d5169d89a5d4fdd9ad9f7c6e851121d2c9e097943ed1d",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-guide-jumped-390x844-dark.png": {
+      "bytes": 22167,
+      "sha256": "2a49fdf48ee02a977d58630b9b2a1489f66256be3a9e891114b1a8ff01eabc67",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "after/after-guide-jumped-390x844-light.png": {
+      "bytes": 22697,
+      "sha256": "8b0f060871875fdd2cf68a3c6f722b14d12235ff0ca6338d1eee5619d3f4abc0",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "after/after-guide-list-1440x900-dark.png": {
+      "bytes": 155770,
+      "sha256": "7e5986ef91f57faca6eaff1cb36a2bd28b0f6a3c7874ba1e8cbd12a211c4f3d7",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-guide-list-1440x900-light.png": {
+      "bytes": 154093,
+      "sha256": "e61c438ae725f44d31b6402d6b2a60d477b63c3f8d29953b61e92bad943d3f59",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "after/after-guide-list-390x844-dark.png": {
+      "bytes": 84074,
+      "sha256": "8fef605a90ab3c4ea2104cb84ba3f8f43267694e882b5077d6e3a67b989185c8",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "after/after-guide-list-390x844-light.png": {
+      "bytes": 87512,
+      "sha256": "118df9ab1f16da635bfc8b76e9e5eb9e14ea606921201ef5967ffabb792c1c22",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "before/before-guide-dialog-1440x900-dark.png": {
+      "bytes": 133104,
+      "sha256": "01c341c8ec939c09822093ba8cefbf58225a9bf5acdacb295821df85122bb100",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "before/before-guide-dialog-1440x900-light.png": {
+      "bytes": 125421,
+      "sha256": "3c57747d9e5cd7b1a38da7e9829a64cfd838f41a290349396e7aebef4f612565",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "before/before-guide-dialog-390x844-dark.png": {
+      "bytes": 88530,
+      "sha256": "e13e57496f085b30cf54913253df1d0af659fe9003eb1f01684edc89a2f7fa72",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "before/before-guide-dialog-390x844-light.png": {
+      "bytes": 74900,
+      "sha256": "0c21504cc9a8232e860fa2e70eea2deac6d421aef48ace6f32837baa230412bd",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "before/before-guide-list-1440x900-dark.png": {
+      "bytes": 112012,
+      "sha256": "919b06120f22ca6d5c6d21f3104bf52a412877aaa5c5090d33205cd694f28d58",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "before/before-guide-list-1440x900-light.png": {
+      "bytes": 111757,
+      "sha256": "512ab5a03711658180a934a89e2bcb8246c19bf63db20122182dfa8aebb26897",
+      "png": {
+        "width": 1440,
+        "height": 900
+      }
+    },
+    "before/before-guide-list-390x844-dark.png": {
+      "bytes": 73379,
+      "sha256": "4135e3abefc49fb2466b514382aaecdd6d015c10ee9d3c49249931b663cb03a6",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    },
+    "before/before-guide-list-390x844-light.png": {
+      "bytes": 74781,
+      "sha256": "058aec425e05e93400fbd7b822cabcf3bb8343d62c14ef38f64481dc1e92157c",
+      "png": {
+        "width": 390,
+        "height": 844
+      }
+    }
+  },
+  "states": [
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-list",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-guide-list-1440x900-light.png",
+      "bytes": 111757,
+      "sha256": "512ab5a03711658180a934a89e2bcb8246c19bf63db20122182dfa8aebb26897",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": null,
+      "dialogEmpty": "",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-dialog",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "before-guide-dialog-1440x900-light.png",
+      "bytes": 125421,
+      "sha256": "3c57747d9e5cd7b1a38da7e9829a64cfd838f41a290349396e7aebef4f612565",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": null,
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-list",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-guide-list-1440x900-dark.png",
+      "bytes": 112012,
+      "sha256": "919b06120f22ca6d5c6d21f3104bf52a412877aaa5c5090d33205cd694f28d58",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": null,
+      "dialogEmpty": "",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-dialog",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "before-guide-dialog-1440x900-dark.png",
+      "bytes": 133104,
+      "sha256": "01c341c8ec939c09822093ba8cefbf58225a9bf5acdacb295821df85122bb100",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": null,
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-list",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-guide-list-390x844-light.png",
+      "bytes": 74781,
+      "sha256": "058aec425e05e93400fbd7b822cabcf3bb8343d62c14ef38f64481dc1e92157c",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": null,
+      "dialogEmpty": "",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-dialog",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "before-guide-dialog-390x844-light.png",
+      "bytes": 74900,
+      "sha256": "0c21504cc9a8232e860fa2e70eea2deac6d421aef48ace6f32837baa230412bd",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": null,
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-list",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-guide-list-390x844-dark.png",
+      "bytes": 73379,
+      "sha256": "4135e3abefc49fb2466b514382aaecdd6d015c10ee9d3c49249931b663cb03a6",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": null,
+      "dialogEmpty": "",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "0a1345677bc79060f67ad6871caf52dfeb327acf",
+      "state": "guide-dialog",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "before-guide-dialog-390x844-dark.png",
+      "bytes": 88530,
+      "sha256": "e13e57496f085b30cf54913253df1d0af659fe9003eb1f01684edc89a2f7fa72",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": ""
+        },
+        {
+          "label": "智能体",
+          "note": ""
+        },
+        {
+          "label": "发现",
+          "note": ""
+        },
+        {
+          "label": "自动化",
+          "note": ""
+        },
+        {
+          "label": "记忆",
+          "note": ""
+        },
+        {
+          "label": "Artifacts",
+          "note": ""
+        },
+        {
+          "label": "我",
+          "note": ""
+        },
+        {
+          "label": "设置",
+          "note": ""
+        },
+        {
+          "label": "头像菜单",
+          "note": ""
+        },
+        {
+          "label": "其他",
+          "note": ""
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": null,
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-list",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-guide-list-1440x900-light.png",
+      "bytes": 154093,
+      "sha256": "e61c438ae725f44d31b6402d6b2a60d477b63c3f8d29953b61e92bad943d3f59",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": "/chat",
+      "dialogEmpty": "",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-dialog",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-guide-dialog-1440x900-light.png",
+      "bytes": 166210,
+      "sha256": "66dbccf90f0546f3bba5c866e382eb9a182dc733a90fec15d817793bad47992a",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": "/settings#send-shortcut",
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 1440,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-list",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-guide-list-1440x900-dark.png",
+      "bytes": 155770,
+      "sha256": "7e5986ef91f57faca6eaff1cb36a2bd28b0f6a3c7874ba1e8cbd12a211c4f3d7",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": "/chat",
+      "dialogEmpty": "",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-dialog",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-guide-dialog-1440x900-dark.png",
+      "bytes": 173260,
+      "sha256": "82cfd4b5469a163dc4ffe04e745bb409efaebed789071551b3c743913f72a887",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": "/settings#send-shortcut",
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 1440,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-list",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-guide-list-390x844-light.png",
+      "bytes": 87512,
+      "sha256": "118df9ab1f16da635bfc8b76e9e5eb9e14ea606921201ef5967ffabb792c1c22",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": "/chat",
+      "dialogEmpty": "",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-dialog",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-guide-dialog-390x844-light.png",
+      "bytes": 75661,
+      "sha256": "c444fb8d56522c2a78cb80dc4f879439dbb8ca8e4ad606a5bb06fb9893f54894",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": "/settings#send-shortcut",
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 390,
+      "themeResolved": "light",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-list",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-guide-list-390x844-dark.png",
+      "bytes": 84074,
+      "sha256": "8fef605a90ab3c4ea2104cb84ba3f8f43267694e882b5077d6e3a67b989185c8",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": false,
+      "dialogHref": "/chat",
+      "dialogEmpty": "",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-dialog",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-guide-dialog-390x844-dark.png",
+      "bytes": 94045,
+      "sha256": "b4d804358d901097dd629979ec04ff44c48b24d696ebed72c23ccc1c83e490d6",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "groups": [
+        {
+          "label": "聊天",
+          "note": "现在能做什么：应用栏打开「聊天」，会话列表、会话内搜索、Enter 或 Ctrl+Enter 发送都在这一页。已知边界：这里是人与智能体共用的会话页，不是全站搜索面板。"
+        },
+        {
+          "label": "智能体",
+          "note": "现在能做什么：智能体页列出本工作区的智能体，能创建，也能打开公开主页。已知边界：没接通的入口在页面里直接标着「未接通」。"
+        },
+        {
+          "label": "发现",
+          "note": "现在能做什么：发现页的动态流、关注、收录、点赞，以及?tab=agents 的智能体目录。已知边界：推荐排序不是 Teamily 的完整实现。"
+        },
+        {
+          "label": "自动化",
+          "note": "现在能做什么：自动化页有模板、列表、编辑表单和运行记录。已知边界：运行结果来自已连接的运行时，没有运行时运行会停在「等待已连接的代理」。"
+        },
+        {
+          "label": "记忆",
+          "note": "现在能做什么：记忆页有目录、图谱、最近更新，?page=profile 与 ?page=todos 直达两个子页。已知边界：画像正文还没有接口。"
+        },
+        {
+          "label": "Artifacts",
+          "note": "现在能做什么：作品页按类型和范围浏览，打开筛选面板筛文件类型、时间、创建人和来源会话。已知边界：有作品时的网格版式还没有对照实图。"
+        },
+        {
+          "label": "我",
+          "note": "现在能做什么：我的资料显示当前用户名。已知边界：头像、简介、标签和删除账户仍未实现。"
+        },
+        {
+          "label": "设置",
+          "note": "现在能做什么：设置页的外观、语言、发送快捷键、消息折叠、隐私和模型接口都能保存。已知边界：用量、套餐、积分按产品决定不做。"
+        },
+        {
+          "label": "头像菜单",
+          "note": "现在能做什么：应用栏底部的账户按钮里有资料、创建团队、帮助、所有设置和退出登录。已知边界：帮助中心、服务条款、隐私政策三个按钮仍是置灰的。"
+        },
+        {
+          "label": "其他",
+          "note": "现在能做什么：下载页说明网页版和 flybot.pyz 运行时的安装方式。已知边界：没有官方 iOS、Android、macOS 或 Windows 客户端。"
+        }
+      ],
+      "dialogOpen": true,
+      "dialogHref": "/settings#send-shortcut",
+      "dialogEmpty": "设置 › 发送快捷键",
+      "scrollWidth": 390,
+      "themeResolved": "dark",
+      "consoleErrors": [
+        "Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 "
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-jumped",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "after-guide-jumped-1440x900-light.png",
+      "bytes": 27347,
+      "sha256": "1cdd96cbcfaef4b1931d5169d89a5d4fdd9ad9f7c6e851121d2c9e097943ed1d",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "status": 200,
+      "url": "/settings#send-shortcut",
+      "hasShortcut": true,
+      "scrollWidth": 1440,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-jumped",
+      "viewport": "1440x900",
+      "theme": "dark",
+      "file": "after-guide-jumped-1440x900-dark.png",
+      "bytes": 26572,
+      "sha256": "d4615be080b8333b6b79ee1f362ac96c655a00a5cf7c37f5ee14e05d57727844",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "status": 200,
+      "url": "/settings#send-shortcut",
+      "hasShortcut": true,
+      "scrollWidth": 1440,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-jumped",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "after-guide-jumped-390x844-light.png",
+      "bytes": 22697,
+      "sha256": "8b0f060871875fdd2cf68a3c6f722b14d12235ff0ca6338d1eee5619d3f4abc0",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "status": 200,
+      "url": "/settings#send-shortcut",
+      "hasShortcut": true,
+      "scrollWidth": 390,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "b98f3c9c854abd4a0bba4177a5f0e62f44a11cf8",
+      "state": "guide-jumped",
+      "viewport": "390x844",
+      "theme": "dark",
+      "file": "after-guide-jumped-390x844-dark.png",
+      "bytes": 22167,
+      "sha256": "2a49fdf48ee02a977d58630b9b2a1489f66256be3a9e891114b1a8ff01eabc67",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "status": 200,
+      "url": "/settings#send-shortcut",
+      "hasShortcut": true,
+      "scrollWidth": 390,
+      "consoleErrors": []
+    }
+  ]
+}
