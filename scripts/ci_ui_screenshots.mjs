@@ -1178,10 +1178,20 @@ async function main() {
       await selectWorkspace(page, ready.workspace_name);
       await page.locator('#empty-starred').waitFor({ state: 'visible', timeout: 8000 });
       const starred = await visibleText(page.locator('#empty-starred'));
+      // The picture entry is a real link into /chat; the old disabled button
+      // claimed there was no way to save a chat picture, which was false.
+      const picture = await page.evaluate(() => {
+        const node = document.getElementById('empty-save-image');
+        if (!node) return null;
+        return {tag: node.tagName, href: node.getAttribute('href'),
+                disabled: node.hasAttribute('disabled'),
+                text: (node.textContent || '').replace(/\s+/g, ' ')};
+      });
       record(
         'artifacts_starred_empty',
-        starred.includes('暂无收藏') && starred.includes('保存聊天中的消息') && starred.includes('保存聊天中的图片') && starred.includes('保存智能体成果') && starred.includes('未实现'),
-        starred || 'starred empty missing',
+        starred.includes('暂无收藏') && starred.includes('保存聊天中的消息') && starred.includes('保存聊天中的图片') && starred.includes('保存智能体成果')
+          && picture !== null && picture.tag === 'A' && picture.href === '/chat' && !picture.disabled && !picture.text.includes('未实现'),
+        JSON.stringify({starred, picture}),
       );
       screenshots.push(path.basename(await shot(page, outDir, '34-space-starred-empty.png')));
     } catch (error) {
