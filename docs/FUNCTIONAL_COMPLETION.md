@@ -101,3 +101,29 @@ semantic document thumbnails; removal of fake skill-install success.
 The overall tracking issues stay open. Credits/points/plans/rewards and copying
 proprietary assets remain excluded by the owner; integrations, social capability,
 real inference and live media are tracked gaps, not silently excluded scope.
+
+## Visible-functions aggregate: skills-first correction (2026-11-19)
+
+The earlier skill “catalogue only / disabled” descriptions above are historical and superseded **only for the instruction-skill lifecycle now implemented**. The complete current route/control execution checklist and every unmet category are in [VISIBLE_FUNCTIONS_INVENTORY](VISIBLE_FUNCTIONS_INVENTORY.md) and the generated [source census](inventory/visible-controls.json). Neither is a blanket acceptance claim.
+
+Actual additions:
+- Ten original content/version/digest packages; account and per-agent SQLite bindings; explicit model-context permission; real Python/zipapp and container loading into actual model requests; compatibility handshake; verified loading acknowledgement; reload/restart persistence; scoped isolation; uninstall/revocation/cancellation. See [SKILLS](SKILLS.md) for the exact boundary. No archive extraction, installation scripts, arbitrary paths or fake installed booleans.
+- On-demand private translation and ask-AI dispatch actual tasks through the requesting user's configured model or platform fallback and their own online runtime. Source revision, membership, CSRF, replay and errors are enforced; history persists; no automatic group message or connected-tools grant.
+- Revisioned group announcement read/edit/unpublish with owner/admin membership and conflict handling.
+- All six saved work kinds can be sent as actual authorized, revision-pinned chat exports; forwarding retains the same version. Stable replay does not duplicate a send after an intervening document edit. No public share is created by chat sending.
+- Composer document/memory picker reads real workspace content and inserts it for review; emoji insertion does not send; skills/connectors navigate to their real management flows.
+- Saved folding/document-card/link-preview preferences now affect rendering without changing original text. Link-address cards do not fetch external metadata. New active #320 owns chat-language prompt behavior; this aggregate does not duplicate it.
+
+These do **not** complete all visible functionality. Automatic translation, complete locale/privacy/reminder consumers, delete/mute/voice/video/meeting/proactive/mode controls, agent binary attachments, advanced exports/collaboration/generation, push/delivery, executable/third-party/standalone-DSH/delegated skills, group/schedule tools and the explicitly listed contributor dependencies remain open. Real vendor/account validation still needs user-supplied configuration and is not replaced by synthetic tests. Credits remain excluded by owner instruction. #1/#14 and unverified tracking issues remain open.
+
+
+### Consolidated skills/runtime closure follow-up
+
+Real readiness/capability diagnosis, explicit isolated skill runs with durable proof and cancellation, result-to-document/editor navigation, and exclusively owned automation-scoped skill loading now extend #334. Fixes include ordinary-member account material loading and task-local cancellation races terminating both runtimes. Installed/advertised/acknowledged/succeeded/verified remain distinct states. External package/DSH/delegated integrations and other visible-function gaps remain engineering work, not universally blamed on credentials. Actual vendor/model quality and operator deployments still need configured services; controlled fixtures do not accept those scenarios. Complete controls and limits remain in VISIBLE_FUNCTIONS_INVENTORY.md.
+
+
+The first342 screenshot acceptance identified a real saved-editor HTTP400. The follow-up adds the exact HTML ID-pair allowlist and raw HTTP/authentication/workspace-isolation regressions; it does not weaken record authorization or merely wait longer. Enabled run-button normal/hover states are explicitly opaque and have computed light/dark CI contrast checks. Node22's dismissal failure is covered by a deterministic timer-order reproduction and source-hash-guarded test-helper overlay (vendor bytes and assertions unchanged); management cancellation is confirmed by the five-minute job-deadline annotation, with every full-suite case retained in a bounded10m budget. Exact-head CI and actual editor/uninstall screenshots remain required. The complete owner-expanded continuation matrix, including all six gap categories and contributor/infrastructure boundaries, is [FUNCTIONAL_COMPLETION_PLAN.md](FUNCTIONAL_COMPLETION_PLAN.md).
+
+
+#### Cross-realm completion correction
+The intermediate314a582 head passed all screenshot/management/build checks, including actual rich-editor opening, reload-persistent uninstall and all four enabled button contrasts (5.55:1 normal,6.69:1 hover), but its host-microtask clock overlay was insufficient for the component's **separate VM Promise realm**. Both Node22/24 still observed dismissal0. This is not treated as flakiness or rerun permission. The corrected owned fixture observes the actual `dismiss` or `reportError` callback and awaits that completion; unresolved sends cannot become completed, and no number of microtasks or milliseconds is assumed. Tests execute the real pinned async-send code in a VM, reproduce BOTH old helper failures and cover delayed/normal/error/pending sends. All original assertion bytes and vendor source remain intact; only test-bench completion/wait wiring changes. Exact-head first-run CI remains mandatory; no old job/head is rerun.

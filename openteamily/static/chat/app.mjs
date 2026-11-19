@@ -1,3 +1,4 @@
+import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
@@ -458,6 +459,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let personalAgentId = '';
   let personalLook = null;
   let currentConversation = null;
+  const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
   let pollTimer = 0;
   let searchTab = 'all';
@@ -471,6 +473,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let resourceCursor = '';
   let resourceItems = [];
   let sendShortcut = 'enter';
+  let chatPreferences = {message_folding:'standard', document_cards:false, link_previews:true};
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -675,11 +678,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const role = document.createElement('p');
       role.className = 'role';
       role.textContent = item.role === 'user' ? '你' : ((currentAgent && currentAgent.name) || '智能体');
-      const body = document.createElement('p');
+      const body = document.createElement('div');
       const waiting = item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
       const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
-      body.className = waiting ? 'pending' : (failed ? 'failed' : '');
-      body.textContent = item.role === 'user' ? (item.body || '') : statusLabel(item);
+      body.className = 'body ' + (waiting ? 'pending' : (failed ? 'failed' : ''));
+      renderMessageText(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences.message_folding, chatPreferences.link_previews);
       if (waiting || failed) li.dataset.state = waiting ? item.status : 'failed';
       if (waiting) {
         const heading = document.createElement('p');
@@ -863,6 +866,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pin = menu.querySelector('[data-menu="pin"]');
     pin.textContent = pinnedIds.has(item.id) ? '取消置顶' : '置顶';
     menu.querySelector('[data-menu="retract"]').hidden = !mine;
+    menu.querySelector('[data-menu="delete"]').hidden = !mine;
     const edit = menu.querySelector('[data-menu="edit"]');
     if (edit) edit.hidden = !mine;
     menu.querySelector('[data-menu="forward"]').disabled = forwardTargets(socialConversations, currentConversation && currentConversation.id).length === 0;
@@ -894,6 +898,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         input.value = `> ${author}：${excerpt}\n` + input.value;
         input.dispatchEvent(new Event('input', {bubbles: true}));
         input.focus();
+      } else if (action === 'translate' || action === 'ask') {
+        messageUtilities.open(item, action);
       } else if (action === 'save') {
         openSaveMessage(item);
       } else if (action === 'edit') {
@@ -911,6 +917,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       } else if (action === 'retract') {
         const retract = Array.from(li.querySelectorAll(':scope > button')).find(node => node.textContent === '撤回');
         if (retract) retract.click();
+      } else if (action === 'delete') {
+        const cid = currentConversation.id;
+        const result = await request('DELETE', `${socialBase()}/${cid}/messages/${item.id}`);
+        if (result.status !== 204) {
+          show('error', messageFor(result.body.error, '消息未删除，请重试。'));
+          return;
+        }
+        if (!currentConversation || currentConversation.id !== cid) return;
+        renderSocialMessages(lastSocialItems.filter(row => row.id !== item.id));
+        await loadSessions();
       }
     });
     document.addEventListener('click', event => {
@@ -971,9 +987,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const member = people.find(entry => entry.user_id === item.user_id);
       role.textContent = item.role === 'agent' ? (item.agent_name + ' · AI 智能体 · 运行时回复')
         : (mine ? '我' : ((member && member.username) || '成员'));
-      const body = document.createElement('p');
+      const body = document.createElement('div');
       body.className = 'body';
-      body.textContent = item.retracted ? '此消息已撤回' : (item.body || '');
+      renderMessageText(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences.message_folding, chatPreferences.link_previews);
       if (item.forwarded_from && !item.retracted) {
         body.dataset.forwarded = '1';
         body.title = '转发自 ' + item.forwarded_from.author;
@@ -995,7 +1011,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         heading.textContent = item.attachment.title || '附件';
         const file = document.createElement('a');
         file.href = item.attachment.path;
-        file.textContent = '下载附件：' + item.attachment.title;
+        if (chatPreferences.document_cards) { file.className = 'chat-document-card'; file.setAttribute('aria-label', '作品卡片：' + item.attachment.title); }
+        file.textContent = '下载作品：' + item.attachment.title + (item.attachment.revision ? ' · 修订 ' + item.attachment.revision : '');
         copy.append(heading, file);
         card.append(cover, copy);
         li.append(card);
@@ -1331,6 +1348,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderPinned(result.body.pinned_messages || []);
     setSocialHeaderTools(true);
     setGroupInfo(currentConversation);
+    messageUtilities.refreshAnnouncement();
     setChatSubtitle(currentConversation.kind === 'group' ? groupInfoCounts(currentConversation).text
       : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
     renderSocialMessages(result.body.items);
@@ -1789,6 +1807,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       request('GET', '/v1/workspaces?limit=100'),
       request('GET', '/v1/settings'),
     ]);
+    if (settings.status === 200 && settings.body?.settings?.values) chatPreferences = settings.body.settings.values;
     const stored = settings.status === 200 && settings.body && settings.body.settings
       && settings.body.settings.values && settings.body.settings.values.send_shortcut;
     sendShortcut = stored === 'mod_enter' ? 'mod_enter' : 'enter';
