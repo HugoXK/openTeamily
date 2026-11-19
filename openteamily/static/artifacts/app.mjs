@@ -163,6 +163,19 @@ export function applyArtifactLayout(list, layout) {
   return list.dataset.layout;
 }
 
+export function canSendArtifactToChat(item) {
+  return Boolean(item && item.id && item.kind === 'media');
+}
+
+export function conversationLabel(item) {
+  if (!item) return '未命名会话';
+  const title = (item.title || '').trim();
+  if (title) return title;
+  const names = (item.members || []).map(row => row.username).filter(Boolean);
+  if (names.length) return names.join('、');
+  return item.kind === 'dm' ? '单聊' : '群聊';
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -679,6 +692,85 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  const sendDialog = document.getElementById('send-to-chat-dialog');
+  const sendList = document.getElementById('send-to-chat-list');
+  const sendEmpty = document.getElementById('send-to-chat-empty');
+  const sendError = document.getElementById('send-to-chat-error');
+  const sendLead = document.getElementById('send-to-chat-lead');
+  let sendingArtifact = null;
+
+  function closeSendDialog() {
+    if (!sendDialog) return;
+    sendDialog.hidden = true;
+    sendingArtifact = null;
+  }
+
+  async function openSendDialog(item) {
+    if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
+    sendingArtifact = item;
+    sendDialog.hidden = false;
+    if (sendLead) sendLead.textContent = '将「' + item.title + '」发送到：';
+    if (sendError) { sendError.hidden = true; sendError.textContent = ''; }
+    if (sendList) sendList.textContent = '';
+    if (sendEmpty) {
+      sendEmpty.hidden = false;
+      sendEmpty.textContent = '正在读取会话…';
+    }
+    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations?limit=100`);
+    if (sendingArtifact !== item) return;
+    if (listed.status !== 200) {
+      if (sendEmpty) {
+        sendEmpty.hidden = false;
+        sendEmpty.textContent = messageFor(listed.body.error, '无法读取会话列表。');
+      }
+      return;
+    }
+    const items = listed.body.items || [];
+    if (sendList) sendList.textContent = '';
+    if (sendEmpty) {
+      sendEmpty.hidden = items.length > 0;
+      sendEmpty.textContent = '这个工作区还没有可发送的群或单聊。';
+    }
+    for (const conversation of items) {
+      const row = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = conversationLabel(conversation);
+      button.addEventListener('click', () => sendArtifactToConversation(item, conversation));
+      row.appendChild(button);
+      sendList.appendChild(row);
+    }
+  }
+
+  async function sendArtifactToConversation(item, conversation) {
+    if (!workspaceId() || !item || !conversation || !conversation.id) return;
+    const result = await request(
+      'POST',
+      `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages`,
+      {body: '', artifact_id: item.id},
+      {'Idempotency-Key': idempotencyKey()},
+    );
+    if (result.status !== 200 && result.status !== 201) {
+      if (sendError) {
+        sendError.hidden = false;
+        sendError.textContent = messageFor(result.body.error, '发送失败。');
+      }
+      show('error', messageFor(result.body.error, '发送到聊天失败。'));
+      return;
+    }
+    closeSendDialog();
+    show('ok', '已发送到「' + conversationLabel(conversation) + '」。');
+  }
+
+  if (document.getElementById('send-to-chat-cancel')) {
+    document.getElementById('send-to-chat-cancel').addEventListener('click', closeSendDialog);
+  }
+  if (sendDialog) {
+    sendDialog.addEventListener('click', event => {
+      if (event.target === sendDialog) closeSendDialog();
+    });
+  }
+
   let openItemMenu = null;
   function closeItemMenu() {
     if (!openItemMenu) return;
@@ -709,9 +801,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     send.type = 'button';
     send.setAttribute('role', 'menuitem');
     send.className = 'artifact-menu-send';
-    send.disabled = true;
-    send.title = '未接通：还没有把作品发送到聊天的接口';
     send.textContent = '发送到聊天';
+    if (canSendArtifactToChat(item)) {
+      send.disabled = false;
+      send.title = '把这件媒体作品发到一个群或单聊';
+      send.addEventListener('click', () => {
+        closeItemMenu();
+        openSendDialog(item);
+      });
+    } else {
+      send.disabled = true;
+      send.title = '未接通：社交会话附件目前只接受媒体作品，文档和其他类型还不能发送';
+    }
     const rename = document.createElement('button');
     rename.type = 'button';
     rename.setAttribute('role', 'menuitem');

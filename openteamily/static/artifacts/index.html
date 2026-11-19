@@ -146,7 +146,7 @@
         <span class="visually-hidden">通知</span>
       </button>
     </header>
-    <p id="layout-note" class="note" hidden>封面只显示作品类型，不生成虚构缩略图；“发送到聊天”尚未接通。</p>
+    <p id="layout-note" class="note" hidden>封面只显示作品类型，不生成虚构缩略图。媒体作品可以通过菜单发送到群或单聊；文档和其他类型仍未接通。</p>
     <p id="whoami" class="visually-hidden"></p>
     <section id="list-panel" class="artifacts-workspace">
       <aside class="artifact-dir" id="artifact-dir">
@@ -319,6 +319,16 @@
       <button type="button" id="remove-artifact">删除</button>
     </form>
   </section>
+  <div id="send-to-chat-dialog" class="send-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="send-to-chat-title">
+    <div class="send-dialog-card">
+      <h2 id="send-to-chat-title">发送到聊天</h2>
+      <p id="send-to-chat-lead" class="note"></p>
+      <ul id="send-to-chat-list"></ul>
+      <p id="send-to-chat-empty" class="empty-state" hidden>这个工作区还没有可发送的群或单聊。</p>
+      <p id="send-to-chat-error" class="note" hidden></p>
+      <button type="button" id="send-to-chat-cancel">取消</button>
+    </div>
+  </div>
   </main>
 </body>
 </html>
