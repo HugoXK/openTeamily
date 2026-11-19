@@ -988,7 +988,7 @@
 #team-template-choices label:has(input:checked) { border-color: var(--ot-accent); background: var(--ot-accent-soft); }
 .message-tools input[type="checkbox"] { accent-color: var(--ot-accent); }
 /* Aurora Glass: messenger surfaces */
-body.app-workspace.chat-open { grid-template-columns: 4.9rem 22rem minmax(0, 1fr); }
+body.app-workspace.chat-open { grid-template-columns: var(--ot-rail-width, 4.9rem) var(--ot-session-width, 22rem) minmax(0, 1fr); }
 .session-pane {
   background: var(--ot-surface);
   border-right: 1px solid var(--ot-line);
@@ -1084,5 +1084,5 @@ body.app-workspace.chat-open { grid-template-columns: 4.9rem 22rem minmax(0, 1fr
   box-shadow: var(--ot-shadow-sm);
 }
 @media (max-width: 900px) {
-  body.app-workspace.chat-open { grid-template-columns: 4.9rem minmax(0, 1fr); }
+  body.app-workspace.chat-open { grid-template-columns: var(--ot-rail-width, 4.9rem) minmax(0, 1fr); }
 }

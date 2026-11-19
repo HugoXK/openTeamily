@@ -1390,7 +1390,7 @@ fieldset, .step, .profile-card, .onboarding-card, .meeting-card,
 }
 
 body.app-workspace > .app-rail {
-  width: 4.9rem;
+  width: var(--ot-rail-width, 4.9rem);
   background: var(--ot-rail-bg);
   color: var(--ot-rail-ink);
   border-right: 1px solid rgba(255, 255, 255, 0.08);
@@ -1398,7 +1398,7 @@ body.app-workspace > .app-rail {
   backdrop-filter: blur(22px) saturate(150%);
   box-shadow: inset -1px 0 rgba(255, 255, 255, 0.06), 12px 0 40px rgba(3, 6, 15, 0.22);
 }
-body.app-workspace { grid-template-columns: 4.9rem minmax(0, 1fr); }
+body.app-workspace { grid-template-columns: var(--ot-rail-width, 4.9rem) minmax(0, 1fr); }
 body.app-workspace > .app-rail .brand-mark {
   background: var(--ot-grad);
   color: #ffffff;
@@ -1426,7 +1426,7 @@ body.app-workspace > .app-rail > a[aria-current="page"] {
   color: #ffffff;
   box-shadow: 0 12px 30px color-mix(in srgb, var(--ot-accent) 55%, transparent);
 }
-body.app-workspace.chat-open { grid-template-columns: 4.9rem 22rem minmax(0, 1fr); }
+body.app-workspace.chat-open { grid-template-columns: var(--ot-rail-width, 4.9rem) var(--ot-session-width, 22rem) minmax(0, 1fr); }
 
 #login-panel, body.app-workspace #login-panel {
   margin: clamp(2rem, 9vh, 5rem) auto;
