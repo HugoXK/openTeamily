@@ -82,3 +82,46 @@ test('container infer rejects hallucinated tools and caps model tool rounds', as
   ]}}]})})
   await assert.rejects(infer({model: 'fake', base_url: 'https://model.invalid', api_key: 'fake'}, 'x', bridge, fetcher), /not discovered/)
 })
+
+import {createHash} from 'node:crypto'
+import {loadSkillMaterial} from '../runtime/flybot-image/agent-loop.mjs'
+
+test('container verifies material, acknowledges loading, and model context loses revoked skills', async () => {
+  const content='Original skill: separate decisions from unsupported assumptions.'
+  const item={id:'meeting-notes',name:'Meeting notes',version:'1.0.0',content,digest:createHash('sha256').update(content).digest('hex'),permissions:['model_context'],format:'openteamily.prompt-skill.v1',source:'bundled-original'}
+  for(const installed of [true,false]) {
+    let ack=false, modelPrompt='', result
+    const requester=async(_origin,_token,_method,path,body) => {
+      if(path==='/v1/agent/tasks')return {items:[{id:'a'.repeat(32),kind:'infer',prompt:'Summarize the supplied meeting.'}]}
+      if(path.endsWith('/claim'))return {task:{id:'a'.repeat(32),kind:'infer',prompt:'Summarize the supplied meeting.'}}
+      if(path.endsWith('/model-access'))return {model_api:{model:'fake',base_url:'https://synthetic.invalid',api_key:'synthetic-only'},skills:installed?[item]:[]}
+      if(path.endsWith('/skills/ack')) {assert.deepEqual(body.digests,[item.digest]);ack=true;return {acknowledged:true}}
+      if(path.endsWith('/result')) {result=body;return {}}
+      return {}
+    }
+    await runCycle({origin:'https://manager.invalid',token:'synthetic-runtime',hostname:'synthetic'}, {requester,inferer:async(model,prompt) => {
+      assert.equal(ack,installed)
+      return infer(model,prompt,null,async(_url,options) => {modelPrompt=JSON.parse(options.body).messages[0].content;return {ok:true,json:async()=>({choices:[{message:{content:'synthetic result'}}]})}})
+    }})
+    assert.equal(modelPrompt.includes(content),installed)
+    assert.equal(result.status,'succeeded')
+  }
+  for(const delta of [{id:'../escape'},{version:'../1'},{content:content+'tampered'},{permissions:['shell']},{files:['../../x']},{archive:'x.zip'}])assert.throws(()=>loadSkillMaterial([{...item,...delta}],'task'))
+})
+
+test('container refuses inference when verified skill loading is not acknowledged',async()=>{
+  const content='Original bounded instruction material.';
+  const item={id:'meeting-notes',name:'Notes',version:'1.0.0',content,digest:createHash('sha256').update(content).digest('hex'),permissions:['model_context'],format:'openteamily.prompt-skill.v1',source:'bundled-original'};
+  let result,inferred=false;
+  const task={id:'b'.repeat(32),kind:'infer',prompt:'Supplied task'};
+  const requester=async(_origin,_token,_method,path,body)=>{
+    if(path==='/v1/agent/tasks')return {items:[task]};
+    if(path.endsWith('/claim'))return {task};
+    if(path.endsWith('/model-access')){assert.equal(body.skill_format,'openteamily.prompt-skill.v1');return {model_api:{api_key:'synthetic-only'},skills:[item]}};
+    if(path.endsWith('/skills/ack'))return {acknowledged:false};
+    if(path.endsWith('/result'))result=body;
+    return {};
+  };
+  await runCycle({origin:'https://manager.invalid',token:'synthetic',hostname:'synthetic'},{requester,inferer:async()=>{inferred=true}});
+  assert.equal(inferred,false);assert.equal(result.status,'failed');assert.match(result.result.error,/skill verification\/loading failed/);
+});
