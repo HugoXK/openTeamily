@@ -60,7 +60,7 @@ test('mergeSessions combines agent and social rows without inventing pins', () =
     ['social', 's2', '产品群'],
     ['agent', 'c1', 'Helper'],
   ]);
-  assert.equal(sessions.every((row) => row.pinned == null), true);
+  assert.equal(sessions.every((row) => !row.pinned), true);
   assert.deepEqual(sessions.map((row) => row.preview), [
     '单聊 · 2 人',
     '群聊 · 2 人',
@@ -782,4 +782,359 @@ test('a homepage start query opens the created conversation after a member start
       else globalThis[key] = saved[key];
     }
   }
+});
+
+
+test('message search tab switches await the in-flight query and newer queries win', async () => {
+  const {createMessageSearch} = await import('../openteamily/static/chat/app.mjs');
+  const resolvers = [];
+  const search = createMessageSearch(() => new Promise(resolve => resolvers.push(resolve)));
+  const first = search.load('old');
+  const same = search.load('old');
+  assert.equal(resolvers.length, 1, 'a tab switch reuses the pending search');
+  resolvers[0]({items: [{kind: 'social', message_id: 'old', snippet: 'old'}]});
+  await Promise.all([first, same]);
+  assert.equal(search.state.hits.length, 1);
+  const stale = search.load('stale');
+  const latest = search.load('latest');
+  resolvers[2]({items: [{kind: 'social', message_id: 'latest', snippet: 'latest'}]});
+  await latest;
+  resolvers[1]({items: [{kind: 'social', message_id: 'stale', snippet: 'stale'}]});
+  await stale;
+  assert.equal(search.state.hits[0].messageId, 'latest');
+});
+
+test('social sessions retain server unread counts without inventing agent unread state', () => {
+  const rows = mergeSessions([], [{id: 'social-unread', kind: 'group', title: 'Group', unread_count: 3}], 'alice');
+  assert.equal(rows[0].unread_count, 3);
+});
+
+
+for (const mode of ['visible', 'hidden', 'failed']) {
+  test('social unread acknowledgement is snapshot bounded: ' + mode, async () => {
+    const {doc, el} = fakeChatDocument(chatHtml());
+    const {fetcher: original} = sessionFetcher();
+    const posts = [];
+    doc.visibilityState = mode === 'hidden' ? 'hidden' : 'visible';
+    const fetcher = async (path, options = {}) => {
+      if (path.endsWith('/conv-1/read')) {
+        posts.push(JSON.parse(options.body));
+        return json(mode === 'failed' ? 500 : 200, {unread_count: 1});
+      }
+      const result = await original(path, options);
+      const body = await result.json();
+      if (path.endsWith('/social/conversations?limit=100')) body.items[0].unread_count = 2;
+      if (path.endsWith('/social/conversations/conv-1')) {
+        body.conversation.unread_count = 2;
+        body.items.push({id: 'm-2', user_id: bob, body: 'second', created: '2026-01-01T00:00:01Z'});
+      }
+      return json(result.status, body);
+    };
+    const restore = installChatGlobals({narrow: true});
+    try {
+      await mount(doc, {fetcher});
+      assert.equal(sessionRows(el)[0].children[2].children[0].textContent, '2');
+      await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+      if (mode === 'hidden') assert.equal(posts.length, 0);
+      else assert.deepEqual(posts, [{message_id: 'm-2'}]);
+      assert.equal(sessionRows(el)[0].children[2].children[0].textContent, mode === 'visible' ? '1' : '2');
+    } finally { restore(); }
+  });
+}
+
+
+test('social pinned state sorts before recency and unread filter uses server state', () => {
+  const rows = mergeSessions([], [
+    {id: 'new', kind: 'dm', updated: 20, unread_count: 1},
+    {id: 'old', kind: 'group', updated: 1, pinned: true},
+  ], alice);
+  assert.equal(rows[0].id, 'old');
+  assert.equal(rows[1].unread_count, 1);
+});
+
+test('session filter selects only real unread social rows', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations?limit=100')) body.items[0].unread_count = 2;
+      return json(result.status, body);
+    }});
+    el('session-filter-value').value = 'unread';
+    await fire(el('session-filter-value'), 'change');
+    assert.equal(sessionRows(el).length, 1);
+    assert.equal(sessionRows(el)[0].dataset.conversation, 'conv-1');
+    el('session-filter-value').value = 'all';
+    await fire(el('session-filter-value'), 'change');
+    assert.equal(sessionRows(el).length, 2);
+  } finally { restore(); }
+});
+
+test('independent conversation search uses current id and pages without opening sidebar search', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const calls = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.includes('/search/messages?')) {
+        calls.push(path);
+        const url = new URL(path, 'https://management.test');
+        assert.equal(url.searchParams.get('conversation_id'), 'conv-1');
+        return json(200, {items: [{kind: 'social', conversation_id: 'conv-1', message_id: url.searchParams.get('cursor') ? 'second' : 'first', snippet: 'Scoped result'}], cursor: url.searchParams.get('cursor') ? null : 'next-id'});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('conversation-search-open'), 'click');
+    assert.equal(el('conversation-search-panel').hidden, false);
+    el('conversation-search-query').value = 'needle';
+    await fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
+    const firstHit = el('conversation-search-results').children[0];
+    assert.equal(firstHit.className, 'search-hit');
+    assert.ok(descendants(firstHit).some(node => node.textContent === 'Scoped result'), 'snippet is rendered in the hit row');
+    assert.equal(el('conversation-search-more').hidden, false);
+    await fire(el('conversation-search-more'), 'click');
+    assert.equal(calls.length, 2);
+    assert.equal(el('conversation-search-results').children.length, 2);
+    assert.match(calls[1], /cursor=next-id/);
+  } finally { restore(); }
+});
+
+test('own message editing and confirmed retraction call versioned endpoints', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  let text = 'Original', revision = 1, retracted = false;
+  const posts = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.includes('/messages/mine-1/')) {
+        const payload = JSON.parse(options.body); posts.push([path, payload]);
+        assert.equal(payload.revision, revision);
+        revision += 1;
+        if (path.endsWith('/edit')) text = payload.body;
+        else { text = ''; retracted = true; }
+        return json(200, {message: {}});
+      }
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations/conv-1')) body.items = [{id: 'mine-1', user_id: alice, body: text, revision, retracted}];
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    let li = el('message-list').children[0];
+    await fire(li.children[3], 'click'); // edit opens inline controls
+    li.children[5].children[0].value = 'Edited';
+    await fire(li.children[5].children[1], 'click');
+    assert.equal(text, 'Edited');
+    li = el('message-list').children[0];
+    await fire(li.children[4], 'click'); // only opens confirmation
+    assert.equal(posts.length, 1);
+    await fire(li.children[5].children[0], 'click');
+    assert.equal(posts.length, 2);
+    assert.equal(el('message-list').children[0].children[1].textContent, '此消息已撤回');
+  } finally { restore(); }
+});
+
+
+test('visual session groups use real pins and preserve order within each group', async () => {
+  const {groupSessionsForDisplay, sessionDisplayGroup} = await import('../openteamily/static/chat/app.mjs');
+  const items = [{id: 'g', kind: 'group'}, {id: 'a', source: 'agent'}, {id: 'p', pinned: true, kind: 'group'}, {id: 'd', kind: 'dm'}];
+  assert.deepEqual(groupSessionsForDisplay(items).map(row => row.id), ['p', 'a', 'd', 'g']);
+  assert.deepEqual(items.map(row => row.id), ['g', 'a', 'p', 'd']);
+  assert.equal(sessionDisplayGroup(items[0]), '群聊');
+  assert.equal(sessionDisplayGroup(items[2]), '置顶');
+});
+
+test('session timestamps use Hong Kong calendar boundaries and never invent unread state', async () => {
+  const {formatSessionTime} = await import('../openteamily/static/chat/app.mjs');
+  const seconds = value => Date.parse(value) / 1000;
+  const now = Date.parse('2026-11-19T00:01:00+08:00');
+  assert.equal(formatSessionTime(seconds('2026-11-18T23:59:00+08:00'), now), '昨天');
+  assert.equal(formatSessionTime(seconds('2026-11-19T00:00:00+08:00'), now), '00:00');
+  assert.match(formatSessionTime(seconds('2026-11-10T12:00:00+08:00'), now), /2026/);
+  assert.equal(formatSessionTime('invalid', now), '');
+});
+
+test('icon chat controls preserve accessible names, disabled truth and attachment privacy', () => {
+  const html = chatHtml();
+  assert.match(html, /id="conversation-search-open"[^>]*aria-label="搜索当前会话"[\s\S]*?<svg/);
+  assert.match(html, /disabled title="未实现：语音或视频通话"/);
+  assert.match(html, /class="attachment-menu"[\s\S]*?id="chat-attachment"/);
+  assert.match(html, /工作区成员可在作品库查看/);
+  assert.match(html, /disabled title="未实现：语音消息"[\s\S]*?sr-only">语音/);
+});
+
+import {notificationBadgeText, notificationSummary} from '../openteamily/static/chat/app.mjs';
+
+test('notification badge and summary text', () => {
+  assert.equal(notificationBadgeText(0), '');
+  assert.equal(notificationBadgeText(3), '3');
+  assert.equal(notificationBadgeText(120), '99+');
+  assert.equal(notificationSummary({actor_username: 'bob', conversation_kind: 'group', conversation_title: '项目群'}),
+    'bob 在「项目群」提及了你');
+  assert.equal(notificationSummary({actor_username: 'bob', conversation_kind: 'dm', conversation_title: 'bob'}),
+    'bob 在「单聊」提及了你');
+});
+
+test('mention notifications show a badge, open the conversation and mark read', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals();
+  const posts = [];
+  let unread = 1;
+  const inbox = () => ({unread_count: unread, limit: 100, items: [{
+    id: 'n'.repeat(32), kind: 'mention', conversation_id: 'conv-1', conversation_kind: 'group',
+    conversation_title: '项目群', message_id: 'm-1', actor_username: 'bob', excerpt: '@alice 看一下',
+    created: 30, read: unread === 0}]});
+  try {
+    await mount(doc, {fetcher: async (path, init = {}) => {
+      if (path === '/v1/workspaces/ws-1/notifications') return json(200, inbox());
+      if (path === '/v1/workspaces/ws-1/notifications/read') {
+        posts.push(JSON.parse(init.body)); unread = 0; return json(200, {unread_count: 0});
+      }
+      if (path.endsWith('/conv-1/read')) return json(200, {unread_count: 0});
+      return original(path);
+    }});
+    await settle();
+    assert.equal(el('notification-count').hidden, false);
+    assert.equal(el('notification-count').textContent, '1');
+    await fire(el('notifications-toggle'), 'click');
+    await settle();
+    assert.equal(el('notifications-panel').hidden, false);
+    const item = el('notification-list').children[0] && el('notification-list').children[0].children[0];
+    assert.ok(item, 'the mention is listed');
+    assert.equal(item.children[0].textContent, 'bob 在「项目群」提及了你');
+    assert.equal(el('notifications-read-all').disabled, false);
+    await fire(item, 'click');
+    await settle();
+    assert.deepEqual(posts, [{notification_id: 'n'.repeat(32)}]);
+    assert.equal(el('notifications-panel').hidden, true);
+    assert.equal(el('notification-count').hidden, true);
+  } finally { restore(); }
+});
+
+import {MESSAGE_REACTIONS, reactionToggle} from '../openteamily/static/chat/app.mjs';
+
+test('reaction toggle turns my reaction off and others on', () => {
+  assert.equal(MESSAGE_REACTIONS.length, 6);
+  assert.deepEqual(reactionToggle([{emoji: '👍', count: 2, mine: true}], '👍'), {emoji: '👍', active: false});
+  assert.deepEqual(reactionToggle([{emoji: '👍', count: 1, mine: false}], '👍'), {emoji: '👍', active: true});
+  assert.deepEqual(reactionToggle([], '🎉'), {emoji: '🎉', active: true});
+});
+
+test('reaction chips post the toggle and re-render server counts', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const posts = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.endsWith('/messages/m-1/reactions')) {
+        const payload = JSON.parse(options.body); posts.push(payload);
+        return json(200, {message_id: 'm-1', reactions: payload.active ? [{emoji: payload.emoji, count: 2, mine: true}] : []});
+      }
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations/conv-1')) body.items[0].reactions = [{emoji: '👍', count: 1, mine: false}];
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    const li = el('message-list').children[0];
+    const bar = li.children[li.children.length - 1];
+    assert.equal(bar.className, 'message-reactions');
+    assert.equal(bar.children[0].textContent, '👍 1');
+    await fire(bar.children[0], 'click');
+    await settle();
+    assert.deepEqual(posts, [{emoji: '👍', active: true}]);
+    const next = li.children[li.children.length - 1];
+    assert.equal(next.children[0].textContent, '👍 2');
+    assert.equal(next.children[0].getAttribute('aria-pressed'), 'true');
+  } finally { restore(); }
+});
+
+test('team mode needs a selected template', () => {
+  assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', selectedCount: 3}), false);
+  assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', templateSelected: true}), true);
+});
+
+import {forwardTargets, forwardCountLabel} from '../openteamily/static/chat/app.mjs';
+
+test('forward target list excludes the current conversation', () => {
+  assert.deepEqual(forwardTargets([{id: 'a', kind: 'dm', title: 'bob'}, {id: 'b', kind: 'group', title: '群'}], 'a'),
+    [{id: 'b', label: '群聊 · 群'}]);
+  assert.equal(forwardCountLabel(3), '已选 3 条');
+});
+
+test('pin a message and multi-select forward call the real endpoints', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const posts = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.endsWith('/messages/m-1/pin')) {
+        posts.push([path, JSON.parse(options.body)]);
+        return json(200, {pinned_messages: [{message_id: 'm-1', excerpt: '你好', pinned_by_username: 'alice'}]});
+      }
+      if (path.endsWith('/conv-1/forward')) {
+        posts.push([path, JSON.parse(options.body)]);
+        return json(201, {items: [{id: 'f-1'}]});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    assert.equal(el('chat-invite').hidden, false);
+    assert.equal(el('multi-select-toggle').hidden, false);
+    let li = el('message-list').children[0];
+    const tools = li.children[li.children.length - 2];
+    assert.equal(tools.className, 'message-tools');
+    await fire(tools.children[0], 'click');
+    await settle();
+    assert.deepEqual(posts[0][1], {pinned: true});
+    assert.equal(el('pinned-messages').hidden, false);
+    li = el('message-list').children[0];
+    assert.equal(li.children[li.children.length - 2].children[0].textContent, '取消置顶');
+    await fire(el('multi-select-toggle'), 'click');
+    assert.equal(el('forward-bar').hidden, false);
+    li = el('message-list').children[0];
+    const box = li.children[li.children.length - 2].children[0].children[0];
+    box.checked = true;
+    await fire(box, 'change');
+    assert.equal(el('forward-count').textContent, '已选 1 条');
+    el('forward-target').value = 'conv-2';
+    await fire(el('forward-target'), 'change');
+    assert.equal(el('forward-submit').disabled, false);
+    await fire(el('forward-submit'), 'click');
+    await settle();
+    assert.deepEqual(posts[1][1], {message_ids: ['m-1'], target_conversation_id: 'conv-2'});
+    assert.equal(el('forward-bar').hidden, true);
+  } finally { restore(); }
+});
+
+test('agent task completion notifications have their own summary', () => {
+  assert.equal(notificationSummary({kind: 'agent_reply', status: 'succeeded', actor_username: '助理',
+    conversation_kind: 'group', conversation_title: '项目群'}), '助理 在「项目群」已完成你的请求');
+  assert.equal(notificationSummary({kind: 'agent_reply', status: 'failed', actor_username: '助理',
+    conversation_kind: 'group', conversation_title: '项目群'}), '助理 在「项目群」未能完成你的请求');
+});
+
+test('group info panel counts members and agents honestly and picks a readable glyph', async () => {
+  const { groupInfoCounts, leadGlyph } = await import('../openteamily/static/chat/app.mjs');
+  assert.equal(groupInfoCounts({ members: [{}, {}], agent_members: [{}] }).text, '3 位成员 · 2 位真人 · 1 位智能体');
+  assert.equal(groupInfoCounts({}).text, '0 位成员 · 0 位真人 · 0 位智能体');
+  assert.equal(leadGlyph('[CI FIXTURE] Group chat'), 'G');
+  assert.equal(leadGlyph('产品群'), '产');
+  assert.equal(leadGlyph('---', '群'), '群');
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  for (const label of ['视频通话', '语音通话', 'Agent 主动性', '自动翻译', '消息免打扰']) assert.ok(html.includes(label));
+  assert.match(html, /aria-label="自动翻译（未接通）"/);
+});
+
+test('in-chat search highlights every case-insensitive match without HTML', async () => {
+  const { highlightParts } = await import('../openteamily/static/chat/app.mjs');
+  assert.deepEqual(highlightParts('Test a test', 'test'), [
+    { text: 'Test', match: true }, { text: ' a ', match: false }, { text: 'test', match: true }]);
+  assert.deepEqual(highlightParts('<b>x</b>', ''), [{ text: '<b>x</b>', match: false }]);
 });
