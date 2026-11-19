@@ -1389,14 +1389,32 @@ async function main() {
     } catch {
       uiKeyListed = false;
     }
+    const listAfterCreate = await visibleText(page.locator('#key-list'));
     record(
       'runtimes_key_created_in_list',
       uiKeyListed
         && issuedText.includes('密钥只显示一次')
-        && !(await visibleText(page.locator('#key-list'))).includes(issuedText.replace('密钥只显示一次：', ''))
+        && !listAfterCreate.includes(issuedText.replace('密钥只显示一次：', ''))
         && await page.locator('#key-name').inputValue() === ''
         && await page.locator('#generate-key').isDisabled(),
-      `issued=${issuedText.slice(0, 24)}…; listed=${uiKeyListed}`,
+      `issued=${issuedText.slice(0, 16)}…; listed=${uiKeyListed}`,
+    );
+    // The one-time banner must not reach a screenshot, so the remaining shots
+    // reload first: the key persists on the server, the secret does not.
+    await page.reload({ waitUntil: 'load' });
+    await page.locator('#main-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await page.locator('[data-tab="connect"]').click();
+    await page.locator('#connect-panel').waitFor({ state: 'visible', timeout: 15000 });
+    await page.waitForFunction(
+      (wanted) => document.getElementById('key-list').innerText.includes(wanted),
+      uiKeyName,
+      { timeout: 15000 },
+    );
+    record(
+      'runtimes_key_survives_reload',
+      !(await page.locator('#issued-token').isVisible())
+        && (await visibleText(page.locator('#key-list'))).includes(uiKeyName),
+      (await visibleText(page.locator('#key-list'))).replace(/\n/g, ' | ').slice(0, 160),
     );
     screenshots.push(path.basename(await shot(page, outDir, '15b-runtimes-key-created.png')));
     const uiKeyRow = page.locator('#key-list li').filter({ hasText: uiKeyName });
