@@ -1159,7 +1159,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       box.type = single ? 'radio' : 'checkbox';
       box.name = member.kind === 'agent' ? 'agent-member' : 'member';
       box.value = member.id;
-      label.append(box, document.createTextNode(member.label));
+      const text = document.createElement('span');
+      text.className = 'choice-label';
+      text.textContent = member.label;
+      label.append(box, text);
       holder.append(label);
     }
     applyMemberFilter();
