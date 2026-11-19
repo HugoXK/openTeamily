@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {mount} from '../openteamily/static/memory/app.mjs';
 import test from 'node:test';
 import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, fillGraphHoverCard, formatTopics, applyMarkdown, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, listQuery, matchingMemoryPages, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
@@ -514,4 +515,309 @@ test('rich memory editor drops unsafe links and keeps a list nested in a paragra
   ul.appendChild(doc.createElement('li')).appendChild(doc.createTextNode('First point'));
   ul.appendChild(doc.createElement('li')).appendChild(doc.createTextNode('Second point'));
   assert.equal(domToMarkdown(root).trim(), '- First point\n- Second point');
+});
+
+// --- Issue #241: deleting a memory page or a next action must ask first. ---
+// These tests import only symbols that exist on main today, and they build the
+// fake document from the served HTML, so a control missing from the page cannot
+// be invented by the harness. On main the two delete buttons post immediately,
+// so the assertions fail as user-visible behaviour instead of as a missing
+// export.
+
+const memoryHtml = readFileSync(new URL('../openteamily/static/memory/index.html', import.meta.url), 'utf8');
+const memoryTick = () => new Promise((resolve) => setImmediate(resolve));
+
+class MemoryNode {
+  constructor(tag = 'div') {
+    this.tagName = String(tag).toUpperCase();
+    this.children = [];
+    this.parent = null;
+    this.attributes = {};
+    this.handlers = {};
+    this.dataset = {};
+    this.hidden = false;
+    this.disabled = false;
+    this.value = '';
+    this.checked = false;
+    this.name = '';
+    this.type = '';
+    this.id = '';
+    this.className = '';
+    this.focused = false;
+    this.scrollTop = 0;
+    this.scrollHeight = 0;
+    this._text = '';
+    this._named = {};
+  }
+  get textContent() {
+    if (this.children.length) return this.children.map((child) => child.textContent).join('');
+    return this._text;
+  }
+  set textContent(value) {
+    this.children = [];
+    this._text = String(value);
+  }
+  get classList() {
+    const element = this;
+    const names = () => element.className.split(/\s+/).filter(Boolean);
+    return {
+      add(name) { if (!names().includes(name)) element.className = [...names(), name].join(' '); },
+      remove(name) { element.className = names().filter((item) => item !== name).join(' '); },
+      contains(name) { return names().includes(name); },
+      toggle(name, force) {
+        const on = force === undefined ? !names().includes(name) : Boolean(force);
+        if (on) this.add(name); else this.remove(name);
+        return on;
+      },
+    };
+  }
+  get options() { return this.children.filter((child) => child.tagName === 'OPTION'); }
+  get elements() { return this._named; }
+  get parentElement() { return this.parent; }
+  append(...nodes) {
+    for (const node of nodes) {
+      node.parent = this;
+      this.children.push(node);
+      if (this.tagName === 'SELECT' && !this.value && node.value) this.value = node.value;
+    }
+  }
+  appendChild(node) { this.append(node); return node; }
+  replaceChildren(...nodes) {
+    for (const child of this.children) child.parent = null;
+    this.children = [];
+    this.append(...nodes);
+  }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name]; }
+  removeAttribute(name) { delete this.attributes[name]; }
+  addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
+  focus() { this.focused = true; }
+  reset() { this.resetCount = (this.resetCount || 0) + 1; }
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+  dispatch(type, event = {}) {
+    const handlers = this.handlers[type] || [];
+    return Promise.all(handlers.map((handler) => handler({
+      type, target: this, preventDefault() {}, stopPropagation() {}, ...event,
+    })));
+  }
+}
+
+function fakeMemoryDocument(html) {
+  const byId = new Map();
+  const forms = [];
+  for (const match of html.matchAll(/<(\/?)([a-z0-9-]+)\b([^>]*)>/gi)) {
+    const [, closing, rawTag, attrs] = match;
+    const tag = rawTag.toUpperCase();
+    if (closing) {
+      if (tag === 'FORM' && forms.length) forms.pop();
+      continue;
+    }
+    const id = /\bid="([^"]+)"/.exec(attrs);
+    const name = /\bname="([^"]+)"/.exec(attrs);
+    let node = null;
+    if (id || name) {
+      node = new MemoryNode(tag);
+      if (id) { node.id = id[1]; byId.set(id[1], node); }
+      if (name) {
+        node.name = name[1];
+        const type = /\btype="([^"]+)"/.exec(attrs);
+        if (type) node.type = type[1];
+        if (forms.length) forms[forms.length - 1]._named[name[1]] = node;
+      }
+      for (const attr of attrs.matchAll(/([a-z][a-z0-9-]*)="([^"]*)"/gi)) {
+        node.attributes[attr[1]] = attr[2];
+      }
+      node.hidden = /(^|\s)hidden(\s|$|=)/.test(attrs);
+      node.disabled = /(^|\s)disabled(\s|$|=)/.test(attrs);
+    }
+    if (tag === 'FORM') {
+      const form = node || new MemoryNode('FORM');
+      if (!form._named) form._named = {};
+      if (id) { form.id = id[1]; byId.set(id[1], form); }
+      forms.push(form);
+    }
+  }
+  const body = new MemoryNode('BODY');
+  const doc = {
+    cookie: '',
+    body,
+    defaultView: undefined,
+    handlers: {},
+    getElementById(id) { return byId.get(id) || null; },
+    createElement(tag) { return new MemoryNode(tag); },
+    createElementNS(_namespace, tag) { return new MemoryNode(tag); },
+    addEventListener(type, handler) { (doc.handlers[type] ||= []).push(handler); },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+  };
+  return {doc, el: (id) => byId.get(id) || null};
+}
+
+function jsonResponse(status, body) { return {status, json: async () => body}; }
+
+function memoryPage(id, title) {
+  return {
+    id, title, body: '', topics: [], revision: 1,
+    created_by: 'alice', updated_by: 'alice', updated: 1763000000,
+  };
+}
+
+function memoryFetcher() {
+  const requests = [];
+  const pages = {m1: memoryPage('m1', '项目简报'), m2: memoryPage('m2', '运维手册')};
+  const action = {
+    id: 'a1', title: '跟进客户', notes: '', status: 'open', due_at: null,
+    memory_page_id: null, revision: 1, created_by: 'alice', updated_by: 'alice',
+  };
+  const graph = {
+    nodes: Object.values(pages).map((page) => ({id: page.id, title: page.title})),
+    edges: [], topics: [], counts: {nodes: 2, edges: 0, topics: 0},
+  };
+  const fetcher = async (path, options = {}) => {
+    const method = options.method || 'GET';
+    requests.push(`${method} ${path}`);
+    if (path === '/v1/auth/session') return jsonResponse(200, {user: {username: 'alice'}});
+    if (path === '/v1/settings') return jsonResponse(200, {settings: {values: {}}});
+    if (path === '/v1/workspaces') {
+      return jsonResponse(200, {items: [{id: 'ws1', name: '团队'}, {id: 'ws2', name: '另一个'}]});
+    }
+    const listed = /^\/v1\/workspaces\/(ws[12])\/memory$/.exec(path);
+    if (listed) return jsonResponse(200, {items: Object.values(pages)});
+    const actions = /^\/v1\/workspaces\/(ws[12])\/memory\/actions$/.exec(path);
+    if (actions) return jsonResponse(200, {items: [action]});
+    const graphPath = /^\/v1\/workspaces\/(ws[12])\/memory\/graph$/.exec(path);
+    if (graphPath) return jsonResponse(200, graph);
+    const oneAction = /^\/v1\/workspaces\/(ws[12])\/memory\/actions\/([^/]+)$/.exec(path);
+    if (oneAction) return jsonResponse(200, {action});
+    const removePage = /^\/v1\/workspaces\/(ws[12])\/memory\/([^/]+)\/remove$/.exec(path);
+    if (removePage && method === 'POST') return jsonResponse(200, {});
+    const removeAction = /^\/v1\/workspaces\/(ws[12])\/memory\/actions\/([^/]+)\/remove$/.exec(path);
+    if (removeAction && method === 'POST') return jsonResponse(200, {});
+    const onePage = /^\/v1\/workspaces\/(ws[12])\/memory\/([^/]+)$/.exec(path);
+    if (onePage && pages[onePage[2]]) return jsonResponse(200, {page: pages[onePage[2]]});
+    return jsonResponse(404, {error: {message: 'unexpected ' + path}});
+  };
+  return {fetcher, requests};
+}
+
+async function mountMemory() {
+  const {doc, el} = fakeMemoryDocument(memoryHtml);
+  const {fetcher, requests} = memoryFetcher();
+  const saved = globalThis.document;
+  globalThis.document = doc;
+  try {
+    mount(doc, {fetcher});
+    for (let round = 0; round < 12; round += 1) await memoryTick();
+  } finally {
+    if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
+  }
+  const posted = () => requests.filter((line) => line.startsWith('POST'));
+  const openPageRow = async (index) => {
+    await el('memory-list').children[index].children[0].dispatch('click');
+    for (let round = 0; round < 6; round += 1) await memoryTick();
+  };
+  const openActionRow = async (index) => {
+    await el('action-list').children[index].children[0].dispatch('click');
+    for (let round = 0; round < 6; round += 1) await memoryTick();
+  };
+  return {doc, el, requests, posted, openPageRow, openActionRow};
+}
+
+test('the memory markup ships two labelled alert dialogs for its two deletes', () => {
+  for (const [dialogId, questionId] of [
+    ['page-delete-confirm', 'page-delete-question'],
+    ['action-delete-confirm', 'action-delete-question'],
+  ]) {
+    const present = (pattern, message) => assert.ok(pattern.test(memoryHtml), message);
+    present(new RegExp(`id="${dialogId}"[^>]*role="alertdialog"`), `${dialogId} is an alert dialog`);
+    present(new RegExp(`aria-labelledby="${questionId}"`), `${dialogId} is labelled by its question`);
+    present(new RegExp(`id="${questionId}"`), `${questionId} exists`);
+  }
+  assert.match(memoryHtml, /<button type="button" id="delete-page">删除<\/button>/);
+  assert.match(memoryHtml, /<button type="button" id="delete-action">删除<\/button>/);
+});
+
+test('deleting a memory page asks first, names the target and posts nothing yet', async () => {
+  const {el, posted, openPageRow} = await mountMemory();
+  await openPageRow(0);
+  await el('delete-page').dispatch('click');
+  for (let round = 0; round < 4; round += 1) await memoryTick();
+  assert.deepEqual(posted(), [], 'the delete button must ask before it sends the remove request');
+  const dialog = el('page-delete-confirm');
+  assert.ok(dialog, 'the page editor renders a confirmation dialog');
+  assert.equal(dialog.hidden, false);
+  assert.equal(dialog.getAttribute('role'), 'alertdialog');
+  assert.equal(el('delete-page').hidden, true, 'the trigger is hidden while the question is open');
+  assert.match(el('page-delete-question').textContent, /项目简报/);
+  assert.equal(el('page-delete-confirm-cancel').focused, true, 'focus moves into the question');
+});
+
+test('cancelling or pressing Escape closes the question with zero requests and restores focus', async () => {
+  const {doc, el, posted, openPageRow} = await mountMemory();
+  await openPageRow(0);
+  await el('delete-page').dispatch('click');
+  assert.deepEqual(posted(), [], 'opening the question must not post');
+  await el('page-delete-confirm-cancel').dispatch('click');
+  assert.equal(el('page-delete-confirm').hidden, true);
+  assert.equal(el('delete-page').hidden, false);
+  assert.equal(el('delete-page').focused, true, 'cancel returns focus to the trigger');
+
+  await el('delete-page').dispatch('click');
+  for (const handler of doc.handlers.keydown || []) {
+    handler({key: 'Escape', preventDefault() {}, stopPropagation() {}});
+  }
+  assert.equal(el('page-delete-confirm').hidden, true);
+  assert.equal(el('delete-page').focused, true, 'Escape returns focus to the trigger');
+  assert.deepEqual(posted(), []);
+});
+
+test('confirming posts exactly once to the page captured when the question opened', async () => {
+  const {el, posted, openPageRow} = await mountMemory();
+  await openPageRow(0);
+  await el('delete-page').dispatch('click');
+  assert.deepEqual(posted(), [], 'no request before the user confirms');
+  await el('page-delete-confirm-submit').dispatch('click');
+  for (let round = 0; round < 8; round += 1) await memoryTick();
+  assert.deepEqual(posted(), ['POST /v1/workspaces/ws1/memory/m1/remove']);
+  assert.equal(el('status').textContent, '已删除。');
+  assert.equal(el('page-delete-confirm').hidden, true);
+});
+
+test('a pending question is dropped when the workspace or the open entry changes', async () => {
+  const {el, posted, openPageRow} = await mountMemory();
+  await openPageRow(0);
+  await el('delete-page').dispatch('click');
+  assert.deepEqual(posted(), [], 'a pending question must not post before it is confirmed');
+  assert.equal(el('page-delete-confirm').hidden, false);
+  el('workspace').value = 'ws2';
+  await el('workspace').dispatch('change');
+  for (let round = 0; round < 8; round += 1) await memoryTick();
+  assert.equal(el('page-delete-confirm').hidden, true, 'a workspace switch closes the stale question');
+  assert.equal(el('delete-page').hidden, false);
+  assert.deepEqual(posted(), []);
+
+  await openPageRow(0);
+  await el('delete-page').dispatch('click');
+  assert.equal(el('page-delete-confirm').hidden, false);
+  await openPageRow(1);
+  assert.equal(el('page-delete-confirm').hidden, true, 'opening another page closes the stale question');
+  assert.equal(el('delete-page').hidden, false);
+  assert.deepEqual(posted(), []);
+});
+
+test('deleting a next action asks first and only confirms the captured action', async () => {
+  const {el, posted, openActionRow} = await mountMemory();
+  await openActionRow(0);
+  await el('delete-action').dispatch('click');
+  for (let round = 0; round < 4; round += 1) await memoryTick();
+  assert.deepEqual(posted(), [], 'the action delete button must ask before it sends the remove request');
+  assert.equal(el('action-delete-confirm').hidden, false);
+  assert.equal(el('delete-action').hidden, true);
+  assert.match(el('action-delete-question').textContent, /跟进客户/);
+  await el('action-delete-confirm-submit').dispatch('click');
+  for (let round = 0; round < 8; round += 1) await memoryTick();
+  assert.deepEqual(posted(), ['POST /v1/workspaces/ws1/memory/actions/a1/remove']);
+  assert.equal(el('status').textContent, '已删除。');
+  assert.equal(el('action-delete-confirm').hidden, true);
 });

@@ -247,6 +247,13 @@
         <button type="button" id="delete-page">删除</button>
         <button type="button" id="close-editor">返回列表</button>
       </div>
+      <div id="page-delete-confirm" role="alertdialog" aria-labelledby="page-delete-question" hidden>
+        <p id="page-delete-question"></p>
+        <div class="actions">
+          <button type="button" id="page-delete-confirm-submit">确认删除</button>
+          <button type="button" id="page-delete-confirm-cancel">取消</button>
+        </div>
+      </div>
     </form>
     <form id="action-editor-form" method="post" action="/v1/workspaces" hidden>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
@@ -268,6 +275,13 @@
         <button type="submit" id="save-action">保存</button>
         <button type="button" id="delete-action">删除</button>
         <button type="button" id="close-action-editor">返回列表</button>
+      </div>
+      <div id="action-delete-confirm" role="alertdialog" aria-labelledby="action-delete-question" hidden>
+        <p id="action-delete-question"></p>
+        <div class="actions">
+          <button type="button" id="action-delete-confirm-submit">确认删除</button>
+          <button type="button" id="action-delete-confirm-cancel">取消</button>
+        </div>
       </div>
     </form>
     </section>
