@@ -1366,3 +1366,81 @@ test('inlineBold splits text into plain and bold runs', () => {
   assert.deepEqual(inlineBold('**未闭合'), [{text: '**未闭合', bold: false}]);
   assert.deepEqual(inlineBold(''), []);
 });
+
+test('folding preserves complete message and link preview preference never fetches or executes markup', async () => {
+  const {renderMessageText}=await import('../openteamily/static/chat/utilities.mjs');
+  const document={createElement:tag=>new FakeElement(tag)}, root=new FakeElement('div');
+  const full='A'.repeat(900)+' <script>untrusted</script>';
+  renderMessageText(document,root,full,'compact');
+  assert.equal(root.children[0].tagName,'DETAILS');
+  assert.equal(root.children[0].children[1].textContent,full);
+  renderMessageText(document,root,full,'none');
+  assert.equal(root.children.length,0);
+  assert.equal(root.textContent,full);
+  const links='https://example.invalid/path?x=1 https://user:password@example.invalid/ javascript:alert(1)';
+  renderMessageText(document,root,links,'none',false);
+  assert.equal(root.children.length,0);
+  renderMessageText(document,root,links,'none',true);
+  assert.equal(root.children.length,1);
+  assert.equal(root.children[0].href,'https://example.invalid/path?x=1');
+  assert.equal(root.children[0].rel,'noopener noreferrer');
+  assert.match(root.children[0].title,/未抓取/);
+});
+
+function utilityDocument() {
+  const nodes=new Map();
+  const doc={createElement(tag){const e=new FakeElement(tag);e.style={};return e},getElementById(id){
+    if(!nodes.has(id)){
+      const e=doc.createElement('div');e.open=false;e.showModal=()=>{e.open=true};e.close=()=>{e.open=false;for(const h of e.handlers.close||[])h()};e.dispatchEvent=()=>{};nodes.set(id,e);
+    }
+    return nodes.get(id);
+  }};
+  return {doc,el:id=>doc.getElementById(id)};
+}
+
+test('resource picker cancels pending reads, inserts actual quoted content once, and never sends', async()=>{
+  const {mountMessageUtilities}=await import('../openteamily/static/chat/utilities.mjs');
+  const {doc,el}=utilityDocument();const posts=[];let finish,mode='defer';
+  const c={wid:'workspace',cid:'conversation',source:'social',kind:'group'};
+  mountMessageUtilities(doc,{context:()=>c,composerContext:()=>c,notify:()=>{},request:async(method,path,body)=>{
+    if(method==='POST'){posts.push(body);throw Error('no send expected')}
+    if(path.endsWith('/memory/note'))return mode==='defer'?await new Promise(resolve=>{finish=resolve}):{status:200,body:{page:{title:'Original note',revision:2,body:'<script>quoted, never executable</script>'}}};
+    return {status:200,body:{items:[{id:'note',title:'Original note'}]}};
+  }});
+  el('chat-body').value='Keep this draft';
+  await fire(el('composer-memory-open'),'click');await settle(2);
+  const pending=fire(el('resource-picker-list').children[0].children[0],'click');await settle(1);
+  el('resource-picker').close();finish({status:200,body:{page:{title:'stale',revision:1,body:'must not insert'}}});await pending;
+  assert.equal(el('chat-body').value,'Keep this draft');
+  mode='success';await fire(el('composer-memory-open'),'click');await settle(2);
+  await fire(el('resource-picker-list').children[0].children[0],'click');
+  assert.match(el('chat-body').value,/Original note（修订 2）/u);
+  assert.ok(el('chat-body').value.endsWith(JSON.stringify('<script>quoted, never executable</script>')));
+  assert.equal(el('resource-picker').open,false);assert.equal(posts.length,0);
+});
+
+test('model utility errors remain visible and retries retain identity without fake completion', async()=>{
+  const {mountMessageUtilities}=await import('../openteamily/static/chat/utilities.mjs');
+  const {doc,el}=utilityDocument();const writes=[];const c={wid:'w',cid:'c',kind:'group'};
+  const utility=mountMessageUtilities(doc,{context:()=>c,composerContext:()=>c,notify:()=>{},request:async(method,_path,body,headers)=>{
+    if(method==='GET')return {status:200,body:{items:[]}};
+    writes.push({body,headers});return {status:409,body:{error:{message:'Own runtime is offline'}}};
+  }});
+  utility.open({id:'message',revision:3},'translate');await settle(2);
+  el('message-assist-instruction').value='English';
+  await fire(el('message-assist-form'),'submit',{preventDefault(){}});
+  assert.equal(el('message-assist-status').textContent,'Own runtime is offline');
+  assert.equal(el('message-assist-submit').disabled,false);
+  await fire(el('message-assist-form'),'submit',{preventDefault(){}});
+  assert.equal(writes[0].headers['Idempotency-Key'],writes[1].headers['Idempotency-Key']);
+  assert.equal(writes[0].body.revision,3);assert.equal(el('message-assist-history').children.length,0);
+  el('message-assist-dialog').close();
+});
+
+
+test('new dialog and document-card surfaces use actual theme tokens, not undefined white fallbacks', () => {
+  const css = readFileSync(new URL('../openteamily/static/chat/app.css', import.meta.url), 'utf8');
+  assert.match(css, /#message-assist-dialog, #announcement-dialog \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
+  assert.match(css, /#resource-picker \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
+  assert.match(css, /\.chat-document-card \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
+});
