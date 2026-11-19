@@ -1594,3 +1594,37 @@ html[data-theme-resolved="dark"] .plus-create [data-tone="doc"] .plus-ico { colo
   position: absolute; right: .5rem; bottom: -.625rem; margin: 0; z-index: 2;
 }
 #message-list li .message-reactions:not(:has(.reaction-chip)) .reaction-add { background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line); }
+
+/* Functional 6: only emoji and an accessible overflow entry float beside a
+   message. Editing/retraction confirmations stay in-flow, never in a clipped menu. */
+#message-list li .message-tools:not(:has(input)) { display: none; }
+#message-list li .message-tools:has(input) { opacity: 1; }
+#message-list li .message-edit-controls { display: block; }
+#message-list li .message-edit-controls:empty { display: none; }
+#message-list li .message-edit-controls textarea { min-width: 12rem; width: 100%; margin-top: .5rem; }
+#message-list li > .message-more { position: absolute; top: .25rem; right: -1.875rem; width: 1.625rem; height: 1.625rem; padding: 0; margin: 0; display: grid; place-items: center; background: var(--ot-surface); color: var(--ot-muted); box-shadow: 0 0 0 1px var(--ot-line); }
+#message-list li.mine > .message-more { right: auto; left: -1.875rem; }
+#message-list li > .message-more:focus-visible { opacity: 1; }
+#message-list li .message-reactions:not(:has(.reaction-chip)):not(:has(.reaction-picker:not([hidden]))) { bottom: .125rem; right: -1.875rem; }
+#message-list li.mine .message-reactions:not(:has(.reaction-chip)):not(:has(.reaction-picker:not([hidden]))) { right: auto; left: -1.875rem; }
+#save-message-dialog { width: min(30rem, calc(100vw - 2rem)); padding: 1.5rem; border: 1px solid var(--ot-line); border-radius: 1rem; background: var(--ot-surface); color: var(--ot-ink); }
+#save-message-dialog::backdrop { background: rgb(0 0 0 / 25%); }
+#save-message-dialog form { border: 0; padding: 0; box-shadow: none; background: transparent; }
+#save-message-dialog h2 { margin: 0; font-size: 1.125rem; }
+#save-message-dialog p { font-size: .875rem; line-height: 1.65; }
+#save-message-dialog label { display: grid; gap: .5rem; font-size: .875rem; }
+#save-message-dialog .actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
+#save-message-dialog [role="alert"] { color: var(--ot-danger); }
+.search-hit[role="button"] { cursor: pointer; }
+.search-hit[role="button"]:hover, .search-hit[role="button"]:focus-visible { background: var(--ot-bg-accent); }
+#message-list li[data-search-jump="true"] { outline: 2px solid var(--ot-accent); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { #message-list { scroll-behavior: auto; } }
+.agent-remove-confirm { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; padding: .75rem .5rem; font-size: .8125rem; }
+.agent-remove-confirm > span { flex-basis: 100%; }
+.agent-remove-confirm button { min-height: 2rem; padding: .25rem .75rem; }
+@media (hover: hover) {
+  #message-list li .message-reactions .reaction-add { opacity: 0; }
+  #message-list li:hover .message-reactions .reaction-add,
+  #message-list li:focus-within .message-reactions .reaction-add,
+  #message-list li .message-reactions:has(.reaction-picker:not([hidden])) .reaction-add { opacity: 1; }
+}

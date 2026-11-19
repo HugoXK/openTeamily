@@ -114,3 +114,93 @@ Wired in this pass: media attach shortcuts, `/space?new=` and `/automations?temp
 Remaining visual gaps: per-message hover actions still sit in flow under the bubble (Teamily floats them); the new-document editor in space is plain; thumbnails are drawn from text, not rendered screenshots; connector marks remain original geometrics.
 
 `impeccable detect` (v4.9.2) on this pass’s changed pages and styles (chat, memory, discover, artifacts, settings, about, profile, automations, shell, thumb.mjs, rich.mjs): 2 findings, down from 11 in the previous pass. Both are nested-card reports for popovers that open inside a card (the session-pane compose menu and the composer’s +/attachment sheets) and were left as detector false positives. The onboarding page (not changed here) still has its pre-existing cramped-padding advisories.
+
+## Functional parity pass 6 (2026-11-19)
+
+This pass starts at `af18ab1a`, reads the existing private reference notes/images and
+tracking issues #9/#14/#86/#90/#231/#243/#264, and combines interaction repairs with
+real persistence. It is **not all-feature completion**, and no page is declared
+accepted merely because CI renders it. Earlier follow-up sections are historical;
+this section and `FUNCTIONAL_COMPLETION.md` describe the current boundaries.
+
+| Surface / evidence | Implemented and locally exercised | Still different / unverified |
+|---|---|---|
+| Chat message hover and menu — 01b/01b2 | Reaction/overflow controls float outside the bubble; hidden legacy edit/pin/retract controls no longer reserve a row. Keyboard overflow entry and Shift-F10 open the same real menu. Editing, reactions, copy, pin, forwarding, selection and author-only retraction retain their existing APIs. | Reference shows an emoji-only hover affordance; our extra keyboard-accessible overflow entry is deliberate. Agent-conversation messages still have a different action surface. Translate / ask-AI / personal delete remain disabled, not simulated. |
+| Save a social message — menu in 01b2 | A native dialog explains that **every workspace member can read the copy**, and retraction will not remove it. Explicit confirmation calls a membership-checked, revision-checked, idempotent save endpoint; it creates a versioned document and source record. Cancel sends nothing. Repeated saves return the same artifact. | Only text is copied, not attachments. The reference menu was captured without clicking this operation; its dialog and persistence semantics remain **unverified**. |
+| In-conversation search — 01c1/01c2, functional defect #264 | Click/Enter/Space jumps to a loaded message, outlines it briefly, and supports both agent and social message IDs. A hit outside the loaded window explains the limitation without fake navigation. No-hit text is explicit. Closing/Escape restores the pre-search scroll position and entry focus. 390px capture has no horizontal overflow. | No automatic loading of older windows; resource/attachment search tabs and cross-resource thumbnails remain incomplete. Reference hit-click/close behavior was not recorded: **unverified**. |
+| Group member operations — 10c/10d, #243 | Removing a group agent now asks in place; cancel sends nothing, confirm calls the existing API, and stale workspace/conversation state cannot issue the removal. #124's explicit selected-agent reply protocol is unchanged. | No captured removal operation; **unverified**. Group announcement, proactive agent policy, auto-translate, mute and A/V remain disabled. |
+| Library document — 11d, 05c for editor language only | New/existing documents use a WYSIWYG surface backed by the same markdown/revision/version/export/share APIs. Headings/lists/quote/code/basic emphasis/rules, plain-text paste, source toggle, author/revision metadata and an in-toolbar save action. Untouched source stays byte-for-byte; duplicate concurrent submits are blocked and failures do not show success. Websites still edit HTML source. | 11d records only a plain document view, not rich editing. Rich toolbar operation parity is **unverified**. Supported markdown subset, no collaborative editing, image/table editing or server autosave; opens in place rather than a new tab. |
+| Library bookmark — 11a–11c | Per-user, persistent favorite table/API; bookmark state survives reload and the 收藏 scope filters actual server flags. Authorization, CSRF, isolation and idempotency are tested. | Reference shows the icon but not its toggled result; interaction semantics **unverified**. This is separate from Discover public-work collections. |
+| Cover fidelity — 11a / previous pass | Document covers preserve the first six actual block shapes (heading, list, code, quote, text), with bounded text; safe DOM rendering only. Other supported cover models remain content-derived. | Not real browser-rendered website/document screenshots. No reference for all populated work kinds; **unverified**. |
+| Skill catalogue — no reference skill-library capture | Search is functional; pretend in-memory “已安装” toggles are removed. Install controls are disabled and say 未接通. | Real install/uninstall, skill files, execution and runtime loading are still missing. No claim of persistence or installation. |
+
+### CI investigation (no reruns)
+
+The original main screenshot run `44495861614` had three hard failures:
+
+- `artifacts_document`: a real product race. `loadList()` accepted an older workspace
+  response after the picker had moved to another workspace and could replace the
+  populated list with an old empty list. A deterministic local delayed-response
+  reproduction shows the seeded document missing before the change and present
+  after. A generation + workspace check now rejects stale responses (also protects
+  search requests). The original seeded-document assertion is retained.
+- `runtimes_connect_key_prefix_only` / `runtimes_connect_daemon_after_key` (and soft
+  `runtimes_connection`): fixture timing, not missing persistence. The page shows
+  `main-panel` before asynchronous key/connection loading completes. Delaying the
+  key response reproduces an empty list at panel visibility and the correct seeded
+  key afterwards. The screenshot harness now waits on the actual key, connection
+  and daemon state before applying the same assertions. No runtime backend changes.
+- Management (3.11), run `44495861780`: its log says **476 tests OK**, then “The
+  operation was canceled.” It is not evidence of a failing Python assertion; the
+  cancellation initiator is unknown. No job was rerun and no product change is
+  claimed to repair GitHub cancellation.
+
+### Merge-gate follow-up recommendation
+
+The body-only closing-keyword check misses closing references in older commits
+newly entering main. Coordinate a separate gate patch to inspect **every commit in
+base..head** (including merged-in commits) plus the PR body, and test mixed-case,
+qualified repository references and multiline messages. Fail closed and require a
+reviewed exact SHA. This pass neither modifies the shared gate nor rewrites history.
+
+### Evidence and remaining capture needs
+
+Private after-renders live outside the repository under
+`2026-11-19-parity-functional6-after/`; targeted shots cover hover/menu, the sharing
+warning, search jump/empty/narrow, rich/source document, favorites and honest skills.
+Impeccable 4.9.2: two existing nested-card advisories for the compose popovers, plus
+one pre-existing repeating-gradient advisory from the original avatar preview's
+scanline texture (`look/app.css`). The customizer is unchanged; no new contrast or
+cramped-padding finding on the document editor.
+
+Small fresh reference needs (not performed here): (1) a disposable document while
+editing a heading/list and after reload, (2) a disposable message's save-to-library
+confirmation and resulting document, (3) a library bookmark toggled and 收藏 opened,
+(4) search-hit click and close scroll behavior. These operations are not inferred
+from static menu screenshots. All tracking/unverified issues remain open.
+
+Initial local validation: 478 Python tests; 339 Node tests across all 26 CI-listed suites;
+95 clean-fixture browser screenshots with zero hard/soft failures (including
+heading-toolbar editing, source round-trip, saved-message API readback and bookmark
+reload). Follow-up targeted chat/artifact tests cover final error-state/access
+refinements. Compileall, JavaScript syntax, CLI help, whitespace and quick
+secrets/assets/dependency/license review passed. Synthetic local evidence does not
+verify real providers, production deployment or Teamily operation equivalence.
+
+## Connected app tool execution (2026-11-19)
+
+The per-user Composio settings flow now has a task-scoped tool broker and an
+explicit one-shot approval area on the connectors page. Python FlyBot/zipapp and
+container management task loops can feed discovered schemas to an OpenAI-style
+model, submit immutable proposals, wait for owner approval and feed results back.
+No Composio key is given to the runtime. This is functional in **synthetic/mock
+tests only**, not real provider or Teamily parity acceptance. Group/automation/
+gateway work and standalone DSH sessions do not receive personal-tool access.
+The skill-library install control is now disabled by functional pass 6, not a real installed skill.
+Full boundaries, user steps and remaining blockers: [CONNECTED_TOOLS.md](CONNECTED_TOOLS.md).
+
+Ordinary main synchronization: `077cf231` (connected-tools #267) landed during
+the first read-only gate and made the earlier head conflict. Both append-only
+documentation sections were retained; product code merged without conflict.
+Final integrated local validation: **490 Python tests, 344 Node tests in 26
+suites, 95 browser screenshots with no hard/soft failures**. No CI job was rerun.
