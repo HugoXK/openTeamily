@@ -162,6 +162,11 @@ export function renderTeamCard(document, item) {
   return card;
 }
 
+export function reuseKey(seed = Date.now()) {
+  return 'discover-reuse-' + seed.toString(36) + '-' +
+    Math.random().toString(36).slice(2, 10).padEnd(8, '0');
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -357,8 +362,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     status.textContent = text;
   }
 
-  async function request(method, path, body) {
-    const headers = { Accept: 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie) };
+  async function request(method, path, body, extraHeaders = {}) {
+    const headers = Object.assign(
+      { Accept: 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie) }, extraHeaders);
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const response = await fetcher(path, {
       method, headers, credentials: 'same-origin',
@@ -394,7 +400,53 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       chat.title = '未接通：公共目录没有发起聊天的接口';
       chat.setAttribute('aria-label', (item.name || item.slug) + '：聊天未接通');
       copy.append(name, summary);
-      card.append(avatar, copy, chat);
+      // Public catalog entries carry only a name and a summary (no prompts, no
+      // instructions), so 用这个智能体 really calls the existing workspace-agent
+      // create endpoint with those two fields and lands on /agents. It does not
+      // copy a prompt nobody published, and it does not fake a local receipt.
+      const use = document.createElement('button');
+      use.type = 'button';
+      use.className = 'catalog-use';
+      use.textContent = '用这个智能体';
+      use.title = '按公共目录里的名称和简介，在你的工作区里新建一个同名智能体；说明需要你之后自己补。';
+      use.setAttribute('aria-label', '用这个智能体：「' + (item.name || item.slug) + '」');
+      use.addEventListener('click', async () => {
+        const label = item.name || item.slug;
+        if (!currentUser) {
+          show('error', '请先登录，再把这个智能体放进你的工作区。');
+          return;
+        }
+        const space = workspaceSelect.value;
+        if (!space) {
+          show('error', '先创建一个工作区，才能放进这个智能体。');
+          return;
+        }
+        if (use.disabled) return;
+        use.disabled = true;
+        let result;
+        try {
+          result = await request('POST', `/v1/workspaces/${space}/agents`, {
+            name: label,
+            summary: item.summary || '',
+            instructions: '',
+          }, {'Idempotency-Key': reuseKey()});
+        } catch {
+          result = {status: 0, body: {}};
+        }
+        use.disabled = false;
+        if (result.status === 201 || result.status === 200) {
+          show('ok', '已创建「' + label + '」，正在打开智能体页。');
+          if (typeof location.assign === 'function') location.assign('/agents');
+          else location.href = '/agents';
+          return;
+        }
+        if (result.status === 409) {
+          show('error', '你的工作区里已有同名智能体；改名后再从目录创建。');
+          return;
+        }
+        show('error', messageFor(result.body && result.body.error, '无法创建智能体。'));
+      });
+      card.append(avatar, copy, chat, use);
       // Slugs identify records, but no public detail route exists, so the card
       // carries no hover text: a "/d/<slug>" tooltip would promise a 404.
       li.append(card);

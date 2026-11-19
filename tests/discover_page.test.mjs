@@ -522,3 +522,88 @@ test('work covers use real same-origin published media, not invented screenshots
   assert.equal(fallback.textContent, '网页');
   assert.equal(fallback.src, undefined);
 });
+
+
+
+test('用这个智能体 creates a real workspace agent through the existing endpoint and opens /agents', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const calls = [];
+  const fetcher = async (path, options) => {
+    calls.push([path, options.method, options]);
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: [{id: 'space-1', name: '我的工作区'}], cursor: null})};
+    if (path.startsWith('/v1/workspaces/space-1/agents?limit=')) return {status: 200, json: async () => ({items: [], cursor: null})};
+    if (path === '/v1/workspaces/space-1/agents') return {status: 201, json: async () => ({agent: {id: 'agent-1', name: '竞品周报助手'}})};
+    return {status: 200, json: async () => ({items: [
+      {name: '竞品周报助手', slug: 'weekly-digest', summary: '每周竞品摘要'},
+    ], cursor: null})};
+  };
+  let arrived = '';
+  await mount(doc, {fetcher, location: {search: '?tab=agents', assign: (url) => { arrived = url; }}});
+  const el = id => doc.getElementById(id);
+  el('workspace').value = 'space-1';
+  const card = el('discover-list').children[0].children[0];
+  const use = card.children.find(node => node.className === 'catalog-use');
+  assert.ok(use, 'every public catalog card must offer a 用这个智能体 action');
+  assert.equal(use.textContent, '用这个智能体');
+  const before = calls.length;
+  await use.handlers.click();
+  const posted = calls.slice(before);
+  assert.equal(posted.length, 1, 'the action must send exactly one request');
+  const [path, method, options] = posted[0];
+  assert.equal(path, '/v1/workspaces/space-1/agents');
+  assert.equal(method, 'POST');
+  assert.deepEqual(JSON.parse(options.body), {
+    name: '竞品周报助手', summary: '每周竞品摘要', instructions: '',
+  });
+  assert.match(options.headers['Idempotency-Key'], /^[A-Za-z0-9_-]{16,64}$/);
+  assert.equal(el('status').textContent, '已创建「竞品周报助手」，正在打开智能体页。');
+  assert.equal(arrived, '/agents');
+});
+
+test('用这个智能体 reports a same-name conflict instead of pretending the copy landed', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const fetcher = async (path, options) => {
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: [{id: 'space-1', name: '我的工作区'}], cursor: null})};
+    if (path.startsWith('/v1/workspaces/space-1/agents?limit=')) return {status: 200, json: async () => ({items: [], cursor: null})};
+    if (options.method === 'POST') return {status: 409, json: async () => ({error: {message: 'An agent with that name already exists'}})};
+    return {status: 200, json: async () => ({items: [{name: '竞品周报助手', slug: 'weekly-digest', summary: '每周竞品摘要'}], cursor: null})};
+  };
+  let arrived = '';
+  await mount(doc, {fetcher, location: {search: '?tab=agents', assign: (url) => { arrived = url; }}});
+  const el = id => doc.getElementById(id);
+  el('workspace').value = 'space-1';
+  const use = el('discover-list').children[0].children[0].children.find(node => node.className === 'catalog-use');
+  await use.handlers.click();
+  assert.equal(el('status').dataset.kind, 'error');
+  assert.match(el('status').textContent, /已有同名智能体/);
+  assert.equal(arrived, '', 'a refused create must not navigate away as if it worked');
+});
+
+test('用这个智能体 asks a signed-out visitor to sign in and sends nothing', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const calls = [];
+  const fetcher = async (path, options) => {
+    calls.push([path, options.method]);
+    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    return {status: 200, json: async () => ({items: [{name: '竞品周报助手', slug: 'weekly-digest', summary: '每周竞品摘要'}], cursor: null})};
+  };
+  await mount(doc, {fetcher, location: {search: '?tab=agents', assign: () => {}}});
+  const el = id => doc.getElementById(id);
+  const use = el('discover-list').children[0].children[0].children.find(node => node.className === 'catalog-use');
+  const before = calls.length;
+  await use.handlers.click();
+  assert.match(el('status').textContent, /请先登录/);
+  assert.equal(calls.length, before, 'a signed-out click must not POST');
+  assert.equal(calls.some(([, method]) => method === 'POST'), false);
+});
+
+test('the status line is a polite live region for the create receipt', () => {
+  const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
+  assert.match(html, /<p id="status" role="status" aria-live="polite">/);
+  assert.equal(html.includes('catalog-reuse-note'), false);
+});
