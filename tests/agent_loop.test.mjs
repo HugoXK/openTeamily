@@ -117,11 +117,27 @@ test('container refuses inference when verified skill loading is not acknowledge
   const requester=async(_origin,_token,_method,path,body)=>{
     if(path==='/v1/agent/tasks')return {items:[task]};
     if(path.endsWith('/claim'))return {task};
-    if(path.endsWith('/model-access')){assert.equal(body.skill_format,'openteamily.prompt-skill.v1');return {model_api:{api_key:'synthetic-only'},skills:[item]}};
+    if(path.endsWith('/model-access')){assert.equal(body.skill_format,'openteamily.prompt-skill.v2');return {model_api:{api_key:'synthetic-only'},skills:[item]}};
     if(path.endsWith('/skills/ack'))return {acknowledged:false};
     if(path.endsWith('/result'))result=body;
     return {};
   };
   await runCycle({origin:'https://manager.invalid',token:'synthetic',hostname:'synthetic'},{requester,inferer:async()=>{inferred=true}});
   assert.equal(inferred,false);assert.equal(result.status,'failed');assert.match(result.result.error,/skill verification\/loading failed/);
+});
+
+
+test('container cancel races skip only task-local404/409 and never retry inference', async () => {
+  const tasks=[0,1,2].map(i=>({id:String(i),kind:'echo',prompt:'task'}));const saved=[];
+  const requester=async(origin,token,method,path,body)=>{
+    if(path.endsWith('/connect')){assert.deepEqual(body.skill_formats,['openteamily.prompt-skill.v1','openteamily.prompt-skill.v2']);return {}}
+    if(path.endsWith('/tasks'))return {items:tasks};
+    if(path.includes('/0/claim')||path.includes('/1/result'))throw Object.assign(new Error('task cancelled'),{status:409});
+    if(path.endsWith('/claim'))return {task:tasks.find(t=>path.includes('/'+t.id+'/'))};
+    if(path.endsWith('/result'))saved.push(path);
+    return {};
+  };
+  const done=await runCycle({origin:'http://127.0.0.1',token:'synthetic',hostname:'test'},{requester});
+  assert.deepEqual(done,['2']);assert.equal(saved.length,1);
+  await assert.rejects(()=>runCycle({origin:'http://127.0.0.1',token:'synthetic',hostname:'test'},{requester:async()=>{throw Object.assign(new Error('forbidden'),{status:403})}}),/forbidden/);
 });
