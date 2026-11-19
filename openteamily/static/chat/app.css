@@ -912,3 +912,21 @@
 .notification-item strong { font-size: .85rem; font-weight: 600; }
 .notification-excerpt { color: var(--ot-muted); font-size: .8rem; overflow-wrap: anywhere; }
 .notification-item time { color: var(--ot-muted); font-size: .72rem; }
+
+/* Message reactions: fixed self-chosen emoji set; counts come from the server. */
+.message-reactions { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin-top: .2rem; }
+.reaction-chip, .reaction-add, .reaction-picker button {
+  min-height: 1.6rem;
+  padding: 0 .45rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 999px;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  font-size: .8rem;
+}
+.reaction-chip.is-mine { border-color: var(--ot-accent); background: var(--ot-accent-soft); }
+.reaction-add { color: var(--ot-muted); }
+.reaction-chip:hover, .reaction-add:hover, .reaction-picker button:hover,
+.reaction-chip:focus-visible, .reaction-add:focus-visible, .reaction-picker button:focus-visible { border-color: var(--ot-accent); }
+.reaction-picker { display: inline-flex; gap: .2rem; }
+.reaction-picker[hidden] { display: none; }

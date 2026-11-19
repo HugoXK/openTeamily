@@ -1013,3 +1013,41 @@ test('mention notifications show a badge, open the conversation and mark read', 
     assert.equal(el('notification-count').hidden, true);
   } finally { restore(); }
 });
+
+import {MESSAGE_REACTIONS, reactionToggle} from '../openteamily/static/chat/app.mjs';
+
+test('reaction toggle turns my reaction off and others on', () => {
+  assert.equal(MESSAGE_REACTIONS.length, 6);
+  assert.deepEqual(reactionToggle([{emoji: '👍', count: 2, mine: true}], '👍'), {emoji: '👍', active: false});
+  assert.deepEqual(reactionToggle([{emoji: '👍', count: 1, mine: false}], '👍'), {emoji: '👍', active: true});
+  assert.deepEqual(reactionToggle([], '🎉'), {emoji: '🎉', active: true});
+});
+
+test('reaction chips post the toggle and re-render server counts', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const posts = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.endsWith('/messages/m-1/reactions')) {
+        const payload = JSON.parse(options.body); posts.push(payload);
+        return json(200, {message_id: 'm-1', reactions: payload.active ? [{emoji: payload.emoji, count: 2, mine: true}] : []});
+      }
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations/conv-1')) body.items[0].reactions = [{emoji: '👍', count: 1, mine: false}];
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    const li = el('message-list').children[0];
+    const bar = li.children[li.children.length - 1];
+    assert.equal(bar.className, 'message-reactions');
+    assert.equal(bar.children[0].textContent, '👍 1');
+    await fire(bar.children[0], 'click');
+    await settle();
+    assert.deepEqual(posts, [{emoji: '👍', active: true}]);
+    const next = li.children[li.children.length - 1];
+    assert.equal(next.children[0].textContent, '👍 2');
+    assert.equal(next.children[0].getAttribute('aria-pressed'), 'true');
+  } finally { restore(); }
+});

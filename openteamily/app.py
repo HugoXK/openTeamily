@@ -847,7 +847,7 @@ class App:
                 return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}/(?:edit|retract))?|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}/(?:edit|retract|reactions))?|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -3298,6 +3298,8 @@ class App:
             db.execute('INSERT INTO social_preferences VALUES(?,?,?) ON CONFLICT(conversation_id,user_id) '
                        'DO UPDATE SET pinned=excluded.pinned', (row['id'], session['user_id'], int(pinned)))
             return 200, social.preference(db, row['id'], session['user_id']), []
+        if action and action.endswith('/reactions') and method == 'POST' and not query:
+            return self.react_social_message(db, session, row, action.split('/')[1], now, env)
         if action and action.startswith('messages/') and method == 'POST' and not query:
             message_id, operation = action.split('/')[1:]
             message = db.execute('SELECT * FROM social_messages WHERE conversation_id=? AND id=?',
@@ -3341,18 +3343,40 @@ class App:
             conversation['unread_count'] = social.unread_count(db, row['id'], session['user_id'])
             return 200, {'conversation': conversation,
                          'agent_replies': [social.reply_view(item) for item in social.reply_requests(db, row['id'])],
-                         'items': [social.message_view(item) for item in items[:100]],
+                         'items': social.with_reactions(db, [social.message_view(item) for item in items[:100]],
+                                                        session['user_id']),
                          'cursor': items[99]['id'] if len(items) > 100 else None}, []
         if action == 'messages' and method == 'GET':
             limit, cursor, _ = self.pagination(query)
             rows = social.messages(db, row['id'], cursor, limit + 1)
             if rows is None:
                 refuse(400, 'invalid', 'Invalid pagination parameters')
-            return 200, {'items': [social.message_view(item) for item in rows[:limit]],
+            return 200, {'items': social.with_reactions(db, [social.message_view(item) for item in rows[:limit]],
+                                                        session['user_id']),
                          'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
         if action == 'messages' and method == 'POST' and not query:
             return self.send_social_message(db, workspace, session, row, now, env)
         refuse(400, 'invalid', 'Invalid messenger request')
+
+    def react_social_message(self, db, session, row, message_id, now, env):
+        body = self.body(env, ['emoji', 'active'])
+        emoji, active = body.get('emoji'), body.get('active')
+        if emoji not in social.REACTIONS or type(active) is not bool:
+            refuse(400, 'invalid', 'Choose a supported reaction and active true/false')
+        message = db.execute(f'SELECT * FROM ({social.MESSAGE_ROWS}) WHERE conversation_id=? AND id=?',
+                             (row['id'], message_id)).fetchone()
+        if message is None or message['agent_id']:
+            refuse(404, 'not_found', 'Message not found')
+        if message['retracted']:
+            refuse(409, 'conflict', 'Retracted messages cannot be reacted to')
+        if active:
+            db.execute('INSERT OR IGNORE INTO social_reactions VALUES(?,?,?,?)',
+                       (message_id, session['user_id'], emoji, now))
+        else:
+            db.execute('DELETE FROM social_reactions WHERE message_id=? AND user_id=? AND emoji=?',
+                       (message_id, session['user_id'], emoji))
+        return 200, {'message_id': message_id,
+                     'reactions': social.reactions_for(db, [message_id], session['user_id'])[message_id]}, []
 
     def edit_group_agents(self, db, workspace, session, row, action, now, env):
         # Workspace administration alone never grants access to a private group:

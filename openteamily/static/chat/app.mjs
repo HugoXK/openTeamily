@@ -329,6 +329,14 @@ function matchesQuery(item, query) {
   return hay.includes(query.toLowerCase());
 }
 
+// Must match social.REACTIONS on the server.
+export const MESSAGE_REACTIONS = ['👍', '❤️', '😄', '🎉', '👀', '✅'];
+
+export function reactionToggle(reactions, emoji) {
+  const current = (reactions || []).find(item => item.emoji === emoji);
+  return {emoji, active: !(current && current.mine)};
+}
+
 export function notificationBadgeText(count) {
   const value = Number(count) || 0;
   if (value <= 0) return '';
@@ -578,6 +586,59 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return pending;
   }
 
+  function reactionBar(item) {
+    const bar = document.createElement('div');
+    bar.className = 'message-reactions';
+    fillReactionBar(bar, item);
+    return bar;
+  }
+
+  function fillReactionBar(bar, item) {
+    bar.replaceChildren();
+    const react = async (emoji) => {
+      const wid = workspaceId(), cid = currentConversation && currentConversation.id;
+      if (!cid) return;
+      const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/reactions`,
+        reactionToggle(item.reactions, emoji));
+      if (workspaceId() !== wid || !currentConversation || currentConversation.id !== cid) return;
+      if (result.status !== 200) { show('error', messageFor(result.body.error, '表情回应未保存。')); return; }
+      item.reactions = result.body.reactions;
+      fillReactionBar(bar, item);
+    };
+    for (const reaction of item.reactions || []) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'reaction-chip' + (reaction.mine ? ' is-mine' : '');
+      chip.setAttribute('aria-pressed', reaction.mine ? 'true' : 'false');
+      chip.setAttribute('aria-label', `${reaction.emoji} ${reaction.count} 人回应${reaction.mine ? '，含我' : ''}`);
+      chip.textContent = `${reaction.emoji} ${reaction.count}`;
+      chip.addEventListener('click', () => react(reaction.emoji));
+      bar.append(chip);
+    }
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'reaction-add';
+    add.textContent = '+😊';
+    add.setAttribute('aria-label', '添加表情回应');
+    add.setAttribute('aria-expanded', 'false');
+    const picker = document.createElement('span');
+    picker.className = 'reaction-picker';
+    picker.hidden = true;
+    for (const emoji of MESSAGE_REACTIONS) {
+      const choice = document.createElement('button');
+      choice.type = 'button';
+      choice.textContent = emoji;
+      choice.setAttribute('aria-label', '回应 ' + emoji);
+      choice.addEventListener('click', () => react(emoji));
+      picker.append(choice);
+    }
+    add.addEventListener('click', () => {
+      picker.hidden = !picker.hidden;
+      add.setAttribute('aria-expanded', picker.hidden ? 'false' : 'true');
+    });
+    bar.append(add, picker);
+  }
+
   function renderSocialMessages(items) {
     const list = document.getElementById('message-list');
     list.replaceChildren();
@@ -639,6 +700,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         });
         li.append(edit, retract, controls);
       }
+      if (item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
       list.append(li);
     }
     const scroller = document.getElementById('message-scroller');

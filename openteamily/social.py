@@ -92,7 +92,16 @@ CREATE TABLE IF NOT EXISTS social_preferences (
 CREATE TABLE IF NOT EXISTS social_attachments (
  message_id TEXT PRIMARY KEY REFERENCES social_messages(id) ON DELETE CASCADE,
  artifact_id TEXT REFERENCES artifacts(id) ON DELETE SET NULL);
+CREATE TABLE IF NOT EXISTS social_reactions (
+ message_id TEXT NOT NULL REFERENCES social_messages(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ emoji TEXT NOT NULL,
+ created INTEGER NOT NULL,
+ PRIMARY KEY(message_id, user_id, emoji));
 '''
+
+# Fixed, self-chosen reaction set (OpenTeamily default, not a Teamily copy).
+REACTIONS = ('👍', '❤️', '😄', '🎉', '👀', '✅')
 
 KINDS = ('dm', 'group')
 TITLE_MAX = 80
@@ -345,3 +354,29 @@ def preference(db, conversation_id, user_id):
     row = db.execute('SELECT pinned FROM social_preferences WHERE conversation_id=? AND user_id=?',
                      (conversation_id, user_id)).fetchone()
     return {'pinned': bool(row and row['pinned'])}
+
+
+def reactions_for(db, message_ids, user_id):
+    """Aggregate reactions per message: [{emoji, count, mine}] in REACTIONS order."""
+    ids = [mid for mid in message_ids if mid]
+    result = {mid: [] for mid in ids}
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        rows = db.execute(
+            'SELECT message_id, emoji, COUNT(*) AS count, SUM(user_id=?) AS mine FROM social_reactions '
+            f'WHERE message_id IN ({",".join("?" * len(chunk))}) GROUP BY message_id, emoji',
+            (user_id, *chunk)).fetchall()
+        for row in rows:
+            if row['emoji'] in REACTIONS:
+                result[row['message_id']].append(
+                    {'emoji': row['emoji'], 'count': row['count'], 'mine': bool(row['mine'])})
+    for items in result.values():
+        items.sort(key=lambda item: REACTIONS.index(item['emoji']))
+    return result
+
+
+def with_reactions(db, views, user_id):
+    found = reactions_for(db, [view['id'] for view in views if view.get('role') != 'agent'], user_id)
+    for view in views:
+        view['reactions'] = [] if view.get('retracted') else found.get(view['id'], [])
+    return views
