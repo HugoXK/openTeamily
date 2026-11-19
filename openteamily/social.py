@@ -172,8 +172,14 @@ def message_view(row):
                 edited=row['edited'] if 'edited' in row.keys() else None,
                 retracted=bool(row['retracted']) if 'retracted' in row.keys() else False)
     if not data['retracted'] and 'attachment_id' in row.keys() and row['attachment_id']:
-        data['attachment'] = {'id': row['attachment_id'], 'title': row['attachment_title'],
-                              'path': '/v1/workspaces/' + row['workspace_id'] + '/artifacts/' + row['attachment_id'] + '/file'}
+        attachment = {'id': row['attachment_id'], 'title': row['attachment_title'],
+                      'path': '/v1/workspaces/' + row['workspace_id'] + '/artifacts/' + row['attachment_id'] + '/file'}
+        # The stored media type is what lets the client show a picture as a
+        # picture; a client guessing from the filename would render a renamed
+        # or extensionless upload as a document.
+        if 'attachment_mime' in row.keys() and row['attachment_mime']:
+            attachment['mime'] = row['attachment_mime']
+        data['attachment'] = attachment
     if 'agent_id' in row.keys() and row['agent_id']:
         data.update(role='agent', agent_id=row['agent_id'], agent_name=row['agent_name'],
                     source='runtime_infer')
@@ -184,13 +190,16 @@ def message_view(row):
 MESSAGE_ROWS = """
  SELECT m.id, m.conversation_id, m.workspace_id, m.user_id, m.body, m.seq, m.created,
         NULL AS agent_id, NULL AS agent_name, COALESCE(st.revision,1) AS revision,
-        st.edited, COALESCE(st.retracted,0) AS retracted, at.artifact_id AS attachment_id, af.title AS attachment_title FROM social_messages m
+        st.edited, COALESCE(st.retracted,0) AS retracted, at.artifact_id AS attachment_id, af.title AS attachment_title,
+        am.mime AS attachment_mime FROM social_messages m
  LEFT JOIN social_message_state st ON st.message_id=m.id
  LEFT JOIN social_attachments at ON at.message_id=m.id
  LEFT JOIN artifacts af ON af.id=at.artifact_id
+ LEFT JOIN artifact_media am ON am.artifact_id=at.artifact_id
  UNION ALL
  SELECT id, conversation_id, workspace_id, NULL, body, seq, updated,
-        agent_id, agent_name, 1 AS revision, NULL AS edited, 0 AS retracted, NULL AS attachment_id, NULL AS attachment_title
+        agent_id, agent_name, 1 AS revision, NULL AS edited, 0 AS retracted, NULL AS attachment_id, NULL AS attachment_title,
+        NULL AS attachment_mime
  FROM social_agent_replies WHERE status='succeeded'
 """
 
