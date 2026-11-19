@@ -201,11 +201,19 @@
       <div class="editor-topbar">
         <p id="editor-saved" class="editor-saved" hidden></p>
         <div class="editor-top-actions">
-          <button type="button" disabled title="未接通：还没有整理记忆的接口。">做梦</button>
+          <button type="button" id="dream-page" title="找出这一页可以合并的重复段落；不接受不会改动原文">做梦</button>
           <button type="button" disabled title="未接通：还没有分享记忆页的接口。">分享</button>
           <button type="button" disabled title="未接通：还没有页内历史记录接口。">历史</button>
         </div>
       </div>
+      <section id="dream-panel" class="memory-dream" aria-label="整理建议" hidden>
+        <p id="dream-summary" class="note"></p>
+        <div class="memory-dream-actions">
+          <button type="button" id="dream-accept">接受</button>
+          <button type="button" id="dream-ignore">忽略</button>
+        </div>
+        <p id="dream-status" role="status"></p>
+      </section>
       <label class="editor-title-field"><span class="visually-hidden">标题</span> <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="标题"></label>
       <label class="editor-topics-field">话题 <input type="text" name="topics" maxlength="400" autocomplete="off" placeholder="添加标签"></label>
       <div class="editor-toolbar" role="toolbar" aria-label="正文格式">

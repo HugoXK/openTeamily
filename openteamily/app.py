@@ -849,6 +849,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|favorite|preview|file|export|restore|versions(?:/(\d{1,8})(?:/(export))?)?|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
             if artifact_path:
                 return self.artifact_dispatch(db, session, method, query, now, env, *artifact_path.groups())
+            memory_dream_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/memory/([0-9a-f]{32})/dream(?:/([0-9a-f]{32}))?', path)
+            if memory_dream_path:
+                return self.memory_dream_dispatch(db, session, method, query, now, env, *memory_dream_path.groups())
             memory_action_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/memory/actions(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if memory_action_path:
@@ -2214,6 +2218,39 @@ class App:
         if method != 'POST' or query or removing:
             refuse(400, 'invalid', 'Invalid memory request')
         return self.update_memory_page(db, workspace, session, actor, row, now, self.body(env, ['revision', 'changes']))
+
+    def memory_dream_dispatch(self, db, session, method, query, now, env, workspace_id, page_id, suggestion_id):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        row = memory.load(db, workspace['id'], page_id)
+        if row is None:
+            refuse(404, 'not_found', 'Memory page not found')
+        if not memory.can_edit(actor, session['user_id'], row):
+            refuse(403, 'forbidden', 'Not allowed to consolidate this memory page')
+        if method != 'POST' or query:
+            refuse(400, 'invalid', 'Invalid memory request')
+        if suggestion_id is None:
+            self.body(env, [])
+            proposed = memory.propose(db, workspace['id'], row, now, uuid4().hex)
+            if proposed is None:
+                return 200, {'suggestion': None,
+                             'message': '这一页现在没有可以合并的重复段落，原文未改动。'}, []
+            return 200, {'suggestion': memory.suggestion_view(proposed)}, []
+        body = self.body(env, ['action'])
+        action = body.get('action')
+        if action not in ('accept', 'ignore'):
+            refuse(400, 'invalid', 'Provide accept or ignore')
+        suggestion = memory.load_suggestion(db, workspace['id'], page_id, suggestion_id)
+        if suggestion is None:
+            refuse(404, 'not_found', 'Memory suggestion not found')
+        applied = None
+        if suggestion['status'] == 'open':
+            applied = memory.decide(db, workspace, row, suggestion, action, session['user_id'], now)
+        suggestion = memory.load_suggestion(db, workspace['id'], page_id, suggestion_id)
+        page = memory.decorate(db, memory.load(db, workspace['id'], page_id))
+        return 200, {'suggestion': memory.suggestion_view(suggestion), 'page': page, 'applied': applied}, []
 
     def create_memory_page(self, db, workspace, session, now, env):
         body = self.body(env, ['title', 'body', 'topics'])
