@@ -1,0 +1,82 @@
+{
+  "rows": [
+    {
+      "state": {
+        "exists": true,
+        "disabled": true,
+        "checked": "false",
+        "text": "Agent 主动性未接通：群内自动回复尚未实现，只能明确请求一次回复。"
+      },
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "auto-before-1440x900.png",
+      "bytes": 154018,
+      "width": 1440,
+      "height": 900,
+      "sha256": "97428df4bf5bf543f5f2bca98b99d4bc14cd15303c9e1dff33e8d2e27951ce84",
+      "scrollWidth": 1440
+    },
+    {
+      "state": {
+        "disabled": false,
+        "checked": "true",
+        "note": "已开启：由 周报助手 自动回复未 @ 的消息；本小时已用 1/3 条。"
+      },
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "auto-after-1440x900.png",
+      "bytes": 158795,
+      "width": 1440,
+      "height": 900,
+      "sha256": "c53136fad530f7044d6deb10d8b0863f9d0188a1638f0626301db8b62ca8b2d6",
+      "scrollWidth": 1440
+    },
+    {
+      "state": {
+        "checked": "true"
+      },
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "auto-after-390x844.png",
+      "bytes": 66572,
+      "width": 390,
+      "height": 844,
+      "sha256": "7e71ff9fc9417578cb43d1d438ec78de056a41f777453ef7849edf43084e25b3",
+      "scrollWidth": 390
+    },
+    {
+      "state": "affected-reply",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "auto-affected-1440x900.png",
+      "bytes": 122488,
+      "width": 1440,
+      "height": 900,
+      "sha256": "b2cc21a99572ea43910376f66ddd977c7af97371dac926c4bf03d1f60d920350",
+      "scrollWidth": 1440,
+      "seen": [
+        "这周的发布计划我整理好了，大家看一下。",
+        "周五的复盘需要准备什么？",
+        "我看了一下：把本周进展和风险各列三条，周五前发群里。"
+      ]
+    }
+  ],
+  "facts": {
+    "before": {
+      "exists": true,
+      "disabled": true,
+      "checked": "false",
+      "text": "Agent 主动性未接通：群内自动回复尚未实现，只能明确请求一次回复。"
+    },
+    "after": {
+      "disabled": false,
+      "checked": "true",
+      "note": "已开启：由 周报助手 自动回复未 @ 的消息；本小时已用 1/3 条。"
+    },
+    "seen": [
+      "这周的发布计划我整理好了，大家看一下。",
+      "周五的复盘需要准备什么？",
+      "我看了一下：把本周进展和风险各列三条，周五前发群里。"
+    ]
+  }
+}
