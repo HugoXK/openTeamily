@@ -73,7 +73,7 @@
       </label>
       <p id="graph-counts" class="memory-counts"></p>
     </header>
-    <details class="note memory-disclaimer"><summary>对照说明</summary><p>对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。空图谱说明、新建入口和窄屏图谱优先布局是 OpenTeamily 补充，未经目标站对照。画像、分享和导出尚未实现。我的会议进入已有的作品库会议空态，仍没有会议作品接口。还不能写成已经功能对等，也还没有浏览器端到端验收。</p></details>
+    <details class="note memory-disclaimer"><summary>对照说明</summary><p>对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。空图谱说明、新建入口和窄屏图谱优先布局是 OpenTeamily 补充，未经目标站对照。画像和导出尚未实现；记忆页现在可以生成可撤销的只读分享链接。我的会议进入已有的作品库会议空态，仍没有会议作品接口。还不能写成已经功能对等，也还没有浏览器端到端验收。</p></details>
     <section id="list-panel" class="memory-workspace" data-view="overview">
       <aside class="memory-dir" id="memory-dir">
         <div class="dir-header">
@@ -201,10 +201,19 @@
         <p id="editor-saved" class="editor-saved" hidden></p>
         <div class="editor-top-actions">
           <button type="button" disabled title="未接通：还没有整理记忆的接口。">做梦</button>
-          <button type="button" disabled title="未接通：还没有分享记忆页的接口。">分享</button>
+          <button type="button" id="share-memory" title="生成这条记忆页的只读分享链接；只有能编辑这一页的人可以生成或撤销。">分享</button>
           <button type="button" disabled title="未接通：还没有页内历史记录接口。">历史</button>
         </div>
       </div>
+      <section id="share-row" class="share-row" aria-label="分享链接" hidden>
+        <p id="share-note" class="note"></p>
+        <div class="share-actions">
+          <input id="share-link" type="text" readonly autocomplete="off" aria-label="只读分享链接" hidden>
+          <button type="button" id="copy-share-link" hidden>复制链接</button>
+          <button type="button" id="revoke-share-link" hidden>撤销链接</button>
+        </div>
+        <p id="share-status" role="status"></p>
+      </section>
       <label class="editor-title-field"><span class="visually-hidden">标题</span> <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="标题"></label>
       <label class="editor-topics-field">话题 <input type="text" name="topics" maxlength="400" autocomplete="off" placeholder="添加标签"></label>
       <div class="editor-toolbar" role="toolbar" aria-label="正文格式">

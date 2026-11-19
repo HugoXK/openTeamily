@@ -13,6 +13,10 @@ This slice stores workspace-scoped **memory pages**, **next actions**, optional 
 | GET | `/v1/workspaces/{id}/memory/{id}` | One page, including body and topics |
 | POST | `/v1/workspaces/{id}/memory/{id}` | Revisioned `{revision, changes: {title?, body?, topics?}}` |
 | POST | `/v1/workspaces/{id}/memory/{id}/remove` | Delete the page |
+| GET | `/v1/workspaces/{id}/memory/{id}/share` | Current read-only share state for one page (`active`, `prefix`, timestamps; never the token). Members may read |
+| POST | `/v1/workspaces/{id}/memory/{id}/share` | Mint a read-only share link. Editor, owner or admin only. Revokes the previous active link and returns `{token, path}` once |
+| DELETE | `/v1/workspaces/{id}/memory/{id}/share` | Revoke the active link for that page, effective on the next request |
+| GET | `/s/{token}` | Without a session: one page, read-only (title, topics, updated date, Markdown body as text) |
 | GET | `/v1/workspaces/{id}/memory/graph` | Nodes (pages), edges, topics and counts for this workspace |
 | POST | `/v1/workspaces/{id}/memory/links` | Create an undirected manual link `{source, target}` between two pages. Requires an Idempotency-Key |
 | POST | `/v1/workspaces/{id}/memory/links/{id}/remove` | Delete a manual link |
@@ -30,13 +34,17 @@ The `/memory` left directory now follows the recorded chrome: the heading is「�
 
 `due_at` is an optional Unix timestamp in seconds. `memory_page_id` must refer to a page in the same workspace; deleting that page clears the link and keeps the action.
 
+## Share links
+
+A share link belongs to exactly one page of one workspace. Only the author, an owner or an admin of that workspace can mint or revoke it; members can read the current state, and people outside the workspace get `404`. The 43-character token is returned once, on `POST`, and only `sha256('share:' + token)` is stored, so the state response and the database carry no usable token. Minting again revokes the previous link first; `DELETE` revokes immediately and a revoked or replaced link answers `404` on `/s/{token}`. The public page renders the title, the topics, the UTC updated date and the stored Markdown body as escaped text — no session, no editor, no other page, no action list, no profile, no links into the workspace. It is served with `default-src 'none'` CSP, `X-Robots-Tag: noindex, nofollow`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store`. Deleting the page cascades its share rows. This is a share link, not a public index or a website export, and it is not Teamily share parity.
+
 ## Permissions
 
 Workspace members may list, read and create pages and actions, read the graph, and create manual links. The author, an owner or an admin may edit or remove a page, action or manual link. A member cannot change someone else's item (`403`). Callers who cannot see the workspace receive `404`.
 
 ## Not in this slice
 
-The profile page now uses the revisioned save API below. 「做梦」 was not opened in the recapture and is not implemented. Versions beyond the revision number and share or export links remain later slices on issue 8 and issue 9. "我的作品" already links to `/space`. "我的会议" now follows the same pattern and opens the existing `/space?view=meetings` empty chrome; there is still no meeting-artifact API, and this is not a Teamily/Impeccable comparison. Timeline and Project are not used as a memory implementation.
+The profile page now uses the revisioned save API below. 「做梦」 was not opened in the recapture and is not implemented. Versions beyond the revision number and export links remain later slices on issue 8 and issue 9; one-page read-only share links are in this slice. "我的作品" already links to `/space`. "我的会议" now follows the same pattern and opens the existing `/space?view=meetings` empty chrome; there is still no meeting-artifact API, and this is not a Teamily/Impeccable comparison. Timeline and Project are not used as a memory implementation.
 
 No Teamily comparison and no browser E2E are claimed. Issue 8 stays open.
 

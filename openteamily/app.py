@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, composio, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, composio, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, memory_shares, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -455,11 +455,20 @@ class App:
         method, path, query = env.get('REQUEST_METHOD'), env.get('PATH_INFO', ''), env.get('QUERY_STRING', '')
         if len(path) > 256 or len(query) > 512:
             refuse(400, 'invalid', 'Request target is too long')
-        if method not in ('GET', 'POST'):
+        share_revoking = re.fullmatch(
+            r'/v1/workspaces/[0-9a-f]{32}/memory/[0-9a-f]{32}/share', path)
+        if method not in ('GET', 'POST') and not (method == 'DELETE' and share_revoking):
             refuse(405, 'method', 'Only GET and POST are supported')
         if method == 'POST' and query:
             refuse(400, 'invalid', 'Query parameters are not accepted for writes')
         now = int(self.clock())
+        if path == '/s' or path.startswith('/s/'):
+            public_share = re.fullmatch(r'/s/([A-Za-z0-9_-]{43})', path)
+            if public_share is None:
+                refuse(404, 'not_found', 'Share not found')
+            if method != 'GET' or query:
+                refuse(400, 'invalid', 'Invalid memory share request')
+            return self.render_memory_share(public_share[1], now)
         share_path = re.fullmatch(r'/share/([A-Za-z0-9_-]{43})', path)
         if share_path:
             if method != 'GET' or query:
@@ -846,6 +855,13 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|favorite|preview|file|export|restore|versions(?:/(\d{1,8})(?:/(export))?)?|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
             if artifact_path:
                 return self.artifact_dispatch(db, session, method, query, now, env, *artifact_path.groups())
+            memory_share_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/memory/([0-9a-f]{32})/share', path)
+            if memory_share_path:
+                if method == 'DELETE':
+                    self.csrf_check(env, session)
+                return self.memory_share_dispatch(db, session, method, query, now, env,
+                                                  *memory_share_path.groups())
             memory_action_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/memory/actions(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if memory_action_path:
@@ -2131,6 +2147,35 @@ class App:
         return self.artifact_saved(db, workspace['id'], aid, 201)
 
 
+    def memory_share_dispatch(self, db, session, method, query, now, env, workspace_id, page_id):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        row = memory.load(db, workspace['id'], page_id)
+        if row is None:
+            refuse(404, 'not_found', 'Memory page not found')
+        if query:
+            refuse(400, 'invalid', 'Invalid memory share request')
+        if method == 'GET':
+            return 200, {'share': memory_shares.view(memory_shares.latest(db, row['id']), now)}, []
+        if not memory.can_edit(actor, session['user_id'], row):
+            refuse(403, 'forbidden', 'Not allowed to share this memory page')
+        self.body(env, [])
+        if method == 'POST':
+            share, token = memory_shares.create(db, row, session['user_id'], now)
+            return 201, {'share': memory_shares.view(share, now, token=token)}, []
+        share = memory_shares.latest(db, row['id'])
+        if not memory_shares.active(share, now):
+            refuse(404, 'not_found', 'Share not found')
+        return 200, {'share': memory_shares.view(memory_shares.revoke(db, share, now), now)}, []
+
+    def render_memory_share(self, token, now):
+        with self.store.connect() as db:
+            page = memory_shares.load_page(db, token, now)
+        if page is None:
+            refuse(404, 'not_found', 'Share not found')
+        return 200, memory_shares.render_page(page).encode('utf-8'), memory_shares.headers()
 
     def memory_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
         workspace = members.load(db, workspace_id, session['user_id'])

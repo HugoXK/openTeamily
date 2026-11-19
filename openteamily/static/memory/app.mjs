@@ -349,6 +349,43 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
+export function memorySharePath(workspaceId, pageId) {
+  return `/v1/workspaces/${workspaceId}/memory/${pageId}/share`;
+}
+
+export function shareUrl(path, origin) {
+  if (!path) return '';
+  try {
+    return new URL(path, origin).href;
+  } catch {
+    return '';
+  }
+}
+
+// One row mirrors the persisted share state; the token itself is only in the
+// POST answer, so after a reload the row says the link was shown once.
+export function shareRowState(share) {
+  if (!share) return {visible: false, link: '', canRevoke: false, note: ''};
+  if (!share.active) {
+    const why = share.revoked ? '链接已撤销' : '链接已失效';
+    return {visible: true, link: '', canRevoke: false, note: `${why}；重新分享会生成一条新链接。`};
+  }
+  if (share.path) {
+    return {
+      visible: true,
+      link: share.path,
+      canRevoke: true,
+      note: '任何拿到这条链接的人都能只读查看这一页；撤销后立即失效。',
+    };
+  }
+  return {
+    visible: true,
+    link: '',
+    canRevoke: true,
+    note: '这一页已分享；链接只显示一次，需要新链接请重新分享（旧链接会失效）。',
+  };
+}
+
 function applyTheme(settings) {
   const appearance = settings && settings.appearance;
   document.body.dataset.theme = appearance === 'dark' || appearance === 'light' ? appearance : '';
@@ -364,6 +401,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const editor = document.getElementById('editor-form');
   const actionEditor = document.getElementById('action-editor-form');
   const listPanel = document.getElementById('list-panel');
+  const shareRowEl = document.getElementById('share-row');
+  const shareLinkEl = document.getElementById('share-link');
+  const shareNoteEl = document.getElementById('share-note');
+  const shareStatusEl = document.getElementById('share-status');
+  const shareButton = document.getElementById('share-memory');
+  const copyShareButton = document.getElementById('copy-share-link');
+  const revokeShareButton = document.getElementById('revoke-share-link');
   let currentUser = null;
   let workspaces = [];
   let currentPage = null;
@@ -396,6 +440,80 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function workspaceId() {
     return workspaceSelect.value;
+  }
+
+  function renderShare(share) {
+    const state = shareRowState(share);
+    if (!shareRowEl) return;
+    shareRowEl.hidden = !state.visible;
+    if (shareNoteEl) shareNoteEl.textContent = state.note;
+    if (shareLinkEl) {
+      shareLinkEl.hidden = !state.link;
+      shareLinkEl.value = state.link ? shareUrl(state.link, globalThis.location.origin) : '';
+    }
+    if (copyShareButton) copyShareButton.hidden = !state.link;
+    if (revokeShareButton) revokeShareButton.hidden = !state.canRevoke;
+    if (shareStatusEl && !state.visible) shareStatusEl.textContent = '';
+  }
+
+  function resetShareRow() {
+    renderShare(null);
+  }
+
+  async function loadShare(pageId) {
+    const id = workspaceId();
+    if (!id || !pageId) {
+      renderShare(null);
+      return;
+    }
+    const seen = await request('GET', memorySharePath(id, pageId));
+    renderShare(seen.status === 200 ? seen.body.share : null);
+  }
+
+  if (shareButton) {
+    shareButton.addEventListener('click', async () => {
+      const id = workspaceId();
+      if (!id || !currentPage) return;
+      shareButton.disabled = true;
+      const seen = await request('POST', memorySharePath(id, currentPage.id));
+      shareButton.disabled = false;
+      if (seen.status !== 201) {
+        if (shareStatusEl) shareStatusEl.textContent = messageFor(seen.body.error, '无法生成分享链接。');
+        return;
+      }
+      renderShare(seen.body.share);
+      if (shareStatusEl) shareStatusEl.textContent = '只读链接已生成；拿到链接的人不用登录也能查看这一页。';
+    });
+  }
+
+  if (copyShareButton) {
+    copyShareButton.addEventListener('click', async () => {
+      const text = shareLinkEl ? shareLinkEl.value : '';
+      if (!text) return;
+      try {
+        await globalThis.navigator.clipboard.writeText(text);
+        if (shareStatusEl) shareStatusEl.textContent = '链接已复制。';
+      } catch {
+        if (shareLinkEl) shareLinkEl.select();
+        if (shareStatusEl) shareStatusEl.textContent = '无法自动复制，请手动复制选中的链接。';
+      }
+    });
+  }
+
+  if (revokeShareButton) {
+    revokeShareButton.addEventListener('click', async () => {
+      const id = workspaceId();
+      if (!id || !currentPage) return;
+      revokeShareButton.disabled = true;
+      const seen = await request('DELETE', memorySharePath(id, currentPage.id));
+      revokeShareButton.disabled = false;
+      if (seen.status !== 200) {
+        if (shareStatusEl) shareStatusEl.textContent = messageFor(seen.body.error, '无法撤销链接。');
+        return;
+      }
+      renderShare(seen.body.share);
+      if (shareStatusEl) shareStatusEl.textContent = '已撤销；这条链接现在打开是 404。';
+    });
   }
 
   function randomKey() {
@@ -568,7 +686,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   function showView(name, {sync = true} = {}) {
     currentView = name || 'overview';
-    if (editor) editor.hidden = true;
+    if (editor) { editor.hidden = true; resetShareRow(); }
     if (actionEditor) actionEditor.hidden = true;
     const workspace = document.getElementById('list-panel');
     if (workspace) workspace.dataset.view = currentView;
@@ -859,6 +977,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       editor.hidden = true;
+      resetShareRow();
       if (actionEditor) actionEditor.hidden = true;
       await renderProviders();
       return;
@@ -912,6 +1031,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentPage = null;
     currentAction = null;
     editor.hidden = true;
+    resetShareRow();
     if (actionEditor) actionEditor.hidden = true;
     listPanel.hidden = false;
     if (!id) {
@@ -1065,6 +1185,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
 
     renderPageLinks();
+    await loadShare(pageId);
   }
 
   async function openAction(actionId) {
@@ -1080,6 +1201,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentPage = null;
     showPageMode();
     editor.hidden = true;
+    resetShareRow();
     actionEditor.hidden = false;
     actionEditor.elements.title.value = currentAction.title;
     actionEditor.elements.notes.value = currentAction.notes || '';

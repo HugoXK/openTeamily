@@ -206,3 +206,137 @@ class MemoryProfileWorkspaceSwitchTests(unittest.TestCase):
         self.assertIn('profileRevision = null', helper)
         self.assertIn('profileRequest += 1', helper)
         self.assertIn('save.disabled = true', helper)
+
+
+class MemoryShareTests(unittest.TestCase):
+    """Revocable read-only share links for one memory page (issue 288)."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.now = 1800000000
+        self.path = Path(self.temp.name) / 'state'
+        self.api = App(Store(self.path), Config(ORIGIN, allow_registration=True), clock=lambda: self.now)
+        self.app = SettingsPage(self.api)
+        self.raw = RawClient(self.app)
+        self.client = Client(self.app)
+        self.client.register('alice')
+        self.wid = self.client.workspace('Desk', 'memory-share-space-0001')['body']['workspace']['id']
+        self.page = self.make_page(self.client, 'Brief', 'Hello from the brief body.', 'memory-share-page-0001')
+
+    def make_page(self, client, title, body, key):
+        created = client.call('POST', f'/v1/workspaces/{self.wid}/memory',
+                              {'title': title, 'body': body}, {'HTTP_IDEMPOTENCY_KEY': key})
+        self.assertEqual(created['status'], 201, created)
+        return created['body']['page']
+
+    def share_path(self, page_id=None):
+        return f'/v1/workspaces/{self.wid}/memory/{page_id or self.page["id"]}/share'
+
+    def test_shared_link_opens_signed_out_and_revocation_is_immediate(self):
+        created = self.client.call('POST', self.share_path())
+        self.assertEqual(created['status'], 201, created)
+        share = created['body']['share']
+        token = share['token']
+        self.assertRegex(token, r'^[A-Za-z0-9_-]{43}$')
+        self.assertEqual(share['path'], '/s/' + token)
+        self.assertEqual(share['scope'], 'read')
+        self.assertTrue(share['active'])
+        opened = self.raw.call('GET', '/s/' + token)
+        self.assertEqual(opened['status'], 200, opened)
+        html = opened['body'].decode()
+        self.assertIn('Brief', html)
+        self.assertIn('Hello from the brief body.', html)
+        self.assertIn('只读', html)
+        self.assertNotIn('id="editor-form"', html)
+        self.assertNotIn('保存', html)
+        headers = dict(opened['headers'])
+        self.assertEqual(headers.get('X-Robots-Tag'), 'noindex, nofollow')
+        self.assertIn("default-src 'none'", headers.get('Content-Security-Policy', ''))
+        state = self.client.call('GET', self.share_path())
+        self.assertEqual(state['status'], 200, state)
+        self.assertTrue(state['body']['share']['active'])
+        self.assertNotIn('token', state['body']['share'])
+        self.assertNotIn('path', state['body']['share'])
+        revoked = self.client.call('DELETE', self.share_path())
+        self.assertEqual(revoked['status'], 200, revoked)
+        self.assertFalse(revoked['body']['share']['active'])
+        self.assertTrue(revoked['body']['share']['revoked'])
+        self.assertEqual(self.raw.call('GET', '/s/' + token)['status'], 404)
+        after = self.client.call('GET', self.share_path())
+        self.assertEqual(after['status'], 200)
+        self.assertFalse(after['body']['share']['active'])
+        self.assertEqual(self.client.call('DELETE', self.share_path())['status'], 404)
+
+    def test_new_link_revokes_the_previous_one(self):
+        first = self.client.call('POST', self.share_path())['body']['share']
+        second = self.client.call('POST', self.share_path())['body']['share']
+        self.assertNotEqual(first['token'], second['token'])
+        self.assertEqual(self.raw.call('GET', '/s/' + first['token'])['status'], 404)
+        self.assertEqual(self.raw.call('GET', '/s/' + second['token'])['status'], 200)
+        state = self.client.call('GET', self.share_path())
+        self.assertEqual(state['body']['share']['prefix'], second['prefix'])
+
+    def test_link_carries_only_the_shared_page(self):
+        self.make_page(self.client, 'Ledger', 'Secret ledger entry.', 'memory-share-page-0002')
+        bob = Client(self.app, peer='127.0.0.2')
+        bob.register('bob')
+        bob_wid = bob.workspace('Bob desk', 'memory-share-space-0002')['body']['workspace']['id']
+        bob_page = bob.call('POST', f'/v1/workspaces/{bob_wid}/memory',
+                            {'title': 'Bob notes', 'body': 'Bob private line'},
+                            {'HTTP_IDEMPOTENCY_KEY': 'memory-share-page-0003'})['body']['page']
+        token = self.client.call('POST', self.share_path())['body']['share']['token']
+        html = self.raw.call('GET', '/s/' + token)['body'].decode()
+        self.assertIn('Brief', html)
+        self.assertNotIn('Ledger', html)
+        self.assertNotIn('Secret ledger entry.', html)
+        self.assertNotIn('Bob private line', html)
+        bob_view = bob.call('GET', '/s/' + token, parse='raw')
+        self.assertEqual(bob_view['status'], 200)
+        self.assertIn(b'Hello from the brief body.', bob_view['body'])
+        self.assertEqual(bob.call('POST', self.share_path())['status'], 404)
+        self.assertEqual(bob.call('GET', self.share_path())['status'], 404)
+        self.assertEqual(bob.call('DELETE', self.share_path())['status'], 404)
+        alice_on_bob = f'/v1/workspaces/{bob_wid}/memory/{bob_page["id"]}/share'
+        self.assertEqual(self.client.call('POST', alice_on_bob)['status'], 404)
+
+    def test_only_editors_share_and_writes_need_csrf(self):
+        self.assertEqual(self.raw.call('POST', self.share_path())['status'], 401)
+        self.assertEqual(self.raw.call('DELETE', self.share_path())['status'], 401)
+        self.assertEqual(self.client.call('POST', self.share_path(), csrf=False)['status'], 403)
+        self.assertEqual(self.client.call('DELETE', self.share_path(), csrf=False)['status'], 403)
+        self.client.call('POST', self.share_path())
+        self.assertEqual(self.client.call('DELETE', self.share_path(), csrf=False)['status'], 403)
+        self.assertEqual(self.raw.call('GET', self.share_path())['status'], 401)
+
+    def test_invalid_share_requests_are_rejected(self):
+        self.assertEqual(self.raw.call('GET', '/s/short')['status'], 404)
+        self.assertEqual(self.raw.call('GET', '/s/' + 'a' * 43)['status'], 404)
+        self.assertEqual(self.raw.call('GET', '/s/' + 'a' * 43, query='x=1')['status'], 400)
+        self.assertEqual(self.raw.call('POST', '/s/' + 'a' * 43)['status'], 400)
+        self.assertEqual(self.client.call('GET', self.share_path() + '?x=1')['status'], 400)
+        missing = '/v1/workspaces/{}/memory/{}/share'.format(self.wid, '0' * 32)
+        self.assertEqual(self.client.call('GET', missing)['status'], 404)
+        self.assertEqual(self.client.call('POST', missing)['status'], 404)
+        self.assertEqual(self.client.call('DELETE', missing)['status'], 404)
+        unknown_ws = '/v1/workspaces/{}/memory/{}/share'.format('0' * 32, self.page['id'])
+        self.assertEqual(self.client.call('GET', unknown_ws)['status'], 404)
+        self.assertEqual(self.client.call('POST', self.share_path(), {'viewer': 'x'})['status'], 400)
+        deleted = self.client.call('POST', f'/v1/workspaces/{self.wid}/memory/{self.page["id"]}/remove', {})
+        self.assertEqual(deleted['status'], 200, deleted)
+        self.assertEqual(self.client.call('POST', self.share_path())['status'], 404)
+
+    def test_memory_page_wires_the_share_controls(self):
+        html = self.raw.call('GET', '/memory')['body'].decode()
+        self.assertIn('id="share-memory"', html)
+        self.assertIn('id="share-row"', html)
+        self.assertIn('id="share-link"', html)
+        self.assertIn('id="copy-share-link"', html)
+        self.assertIn('id="revoke-share-link"', html)
+        self.assertIn('id="share-status"', html)
+        self.assertNotIn('未接通：还没有分享记忆页的接口', html)
+        self.assertNotRegex(html, r'<button[^>]*id="share-memory"[^>]*disabled')
+        script = self.raw.call('GET', '/memory/app.mjs')['body'].decode()
+        self.assertIn('export function memorySharePath', script)
+        self.assertIn('export function shareRowState', script)
+        self.assertIn('/share', script)
