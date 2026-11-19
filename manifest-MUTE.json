@@ -1,0 +1,101 @@
+{
+  "rows": [
+    {
+      "state": {
+        "exists": true,
+        "disabled": true,
+        "checked": "false",
+        "text": "消息免打扰未接通。"
+      },
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "mute-before-1440x900.png",
+      "bytes": 140624,
+      "width": 1440,
+      "height": 900,
+      "sha256": "265b68a67666b7010b0350f64358c681498641a1178bbee3eefe81745324f9c4",
+      "scrollWidth": 1440
+    },
+    {
+      "state": {
+        "disabled": false,
+        "checked": "true",
+        "note": "已开启：该会话不计入未读角标和通知列表；会话内消息照常可见。"
+      },
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "mute-after-1440x900.png",
+      "bytes": 159221,
+      "width": 1440,
+      "height": 900,
+      "sha256": "7c97f05cb1aa51e0db4b4c5cfab9a420fed5ccdbfa1178654a3ed00a380efe7d",
+      "scrollWidth": 1440
+    },
+    {
+      "state": {
+        "disabled": false,
+        "checked": "true"
+      },
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "mute-after-390x844.png",
+      "bytes": 70765,
+      "width": 390,
+      "height": 844,
+      "sha256": "f8e0c96fded8d3313d2c58b5d9b019da1789e0ea886b63c8b2eec4585a63a52a",
+      "scrollWidth": 390
+    },
+    {
+      "state": "affected-dm",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "mute-affected-1440x900.png",
+      "bytes": 93637,
+      "width": 1440,
+      "height": 900,
+      "sha256": "8af7b7c0eabf3b866af4df78ddb27e4b1778fb65b10e4ea22fc8e489c513561e",
+      "scrollWidth": 1440,
+      "before": {
+        "text": "免打扰",
+        "hidden": false
+      },
+      "after": {
+        "text": "取消免打扰",
+        "hidden": false,
+        "rows": [
+          "Aalice's Personal Agent你们已经是好友了，可以开始聊天啦！22:591",
+          "Bbob@alice 附件我放到作品库了，周三前给你。22:53",
+          "发发布小组这周的发布计划我整理好了，大家看一下。22:53"
+        ]
+      }
+    }
+  ],
+  "facts": {
+    "before": {
+      "exists": true,
+      "disabled": true,
+      "checked": "false",
+      "text": "消息免打扰未接通。"
+    },
+    "after": {
+      "disabled": false,
+      "checked": "true",
+      "note": "已开启：该会话不计入未读角标和通知列表；会话内消息照常可见。"
+    },
+    "dm": {
+      "before": {
+        "text": "免打扰",
+        "hidden": false
+      },
+      "after": {
+        "text": "取消免打扰",
+        "hidden": false,
+        "rows": [
+          "Aalice's Personal Agent你们已经是好友了，可以开始聊天啦！22:591",
+          "Bbob@alice 附件我放到作品库了，周三前给你。22:53",
+          "发发布小组这周的发布计划我整理好了，大家看一下。22:53"
+        ]
+      }
+    }
+  }
+}
