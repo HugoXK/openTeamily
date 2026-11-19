@@ -2,6 +2,7 @@
 // The component runs in a VM Promise realm, so even a host microtask barrier
 // cannot order its awaited send. Observe the ACTUAL dismiss/error callback.
 import { createHash } from 'node:crypto';
+import {target as cleanupTarget,transformRestartFixture} from './upstream-test-cleanup-overlay.mjs';
 export const target = new URL('../runtime/ds-bot-upstream/ds-bot/test/text-annotation.test.js', import.meta.url).href;
 export const oldHelper = 'const settle = () => new Promise(resolve => setTimeout(resolve, 5))';
 export const newHelper = 'const settle = app => app.settled';
@@ -25,6 +26,7 @@ export function transformAnnotationFixture(source) {
 }
 export async function load(url, context, nextLoad) {
   const result = await nextLoad(url, context);
+  if(url===cleanupTarget)return {...result,source:transformRestartFixture(Buffer.from(result.source).toString('utf8'))};
   if (url !== target) return result;
   return { ...result, source: transformAnnotationFixture(Buffer.from(result.source).toString('utf8')) };
 }
