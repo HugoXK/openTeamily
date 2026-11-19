@@ -128,6 +128,29 @@ class AgentDirectoryTests(unittest.TestCase):
         # Archived names still occupy the unique name.
         self.assertEqual(self.create(self.alice, key='agent-reuse-name-0001')['status'], 409)
 
+    def test_restore_puts_an_archived_agent_back_in_the_default_list(self):
+        item = self.create(self.alice)['body']['agent']
+        self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/agents/{item["id"]}/archive', {'revision': 1})
+        self.alice.call('POST', f'/v1/workspaces/{self.wid}/members',
+                        {'username': 'bob', 'role': 'member'})
+        self.assertEqual(self.bob.call(
+            'POST', f'/v1/workspaces/{self.wid}/agents/{item["id"]}/restore', {'revision': 2})['status'], 403)
+        restored = self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/agents/{item["id"]}/restore', {'revision': 2})
+        self.assertEqual(restored['status'], 200, restored)
+        self.assertEqual(restored['body']['agent']['archived'], 0)
+        self.assertEqual(restored['body']['agent']['revision'], 3)
+        listed = self.alice.call('GET', f'/v1/workspaces/{self.wid}/agents')
+        self.assertEqual([row['id'] for row in listed['body']['items']], [item['id']])
+        again = self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/agents/{item["id"]}/restore', {'revision': 3})
+        self.assertEqual(again['status'], 200)
+        self.assertEqual(again['body']['agent']['revision'], 3)
+        stale = self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/agents/{item["id"]}/archive', {'revision': 2})
+        self.assertEqual(stale['status'], 409)
+
     def test_stale_revision_and_validation(self):
         item = self.create(self.alice)['body']['agent']
         stale = self.alice.call(
