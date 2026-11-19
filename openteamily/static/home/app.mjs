@@ -262,12 +262,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       loginPanel.hidden = true;
       mainPanel.hidden = false;
       greeting.textContent = `欢迎回来，${currentUser.username}`;
-      const [personalResult, listed, onboarding] = await Promise.all([
-        request('POST', '/v1/personal-agent'),
+      // Personal initialization creates the first workspace: do not race its listing.
+      const personalResult=await request('POST', '/v1/personal-agent');
+      const [listed, onboarding] = await Promise.all([
         request('GET', '/v1/workspaces?limit=100'),
         request('GET', '/v1/onboarding'),
       ]);
-      personal = personalResult.status === 200 ? personalResult.body.personal_agent : null;
+      personal = [200,201].includes(personalResult.status) ? personalResult.body.personal_agent : null;
       profile = onboarding.status === 200 ? onboarding.body.onboarding : null;
       workspaces = listed.status === 200 ? (listed.body.items || []) : [];
       const banner = document.getElementById('home-onboarding');

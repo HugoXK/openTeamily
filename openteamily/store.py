@@ -1,3 +1,4 @@
+from . import message_utilities, skill_packages
 """Private SQLite v1 store. One transaction per bounded operation; no runtime secrets."""
 from contextlib import contextmanager
 import os
@@ -52,7 +53,7 @@ class Store:
             if version == 0 and db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone():
                 raise ValueError('Unrecognized non-empty database; refusing initialization')
             db.execute('PRAGMA journal_mode=WAL')
-            db.executescript('BEGIN IMMEDIATE;\n' + SCHEMA + settings.SCHEMA + members.SCHEMA + automations.SCHEMA + invites.SCHEMA + model_api.SCHEMA + oidc.SCHEMA + skill_secrets.SCHEMA + teams.SCHEMA + runtime_keys.SCHEMA + runtime_connect.SCHEMA + bot_social.SCHEMA + artifacts.SCHEMA + memory.SCHEMA + agents.SCHEMA + conversations.SCHEMA + agent_runtime.SCHEMA + social.SCHEMA + notifications.SCHEMA + discover.SCHEMA + profiles.SCHEMA + onboarding.SCHEMA + personal.SCHEMA + meetings.SCHEMA + gateway.SCHEMA + team_directory.SCHEMA + composio.SCHEMA + connected_tools.SCHEMA + '\nPRAGMA user_version=1;\nCOMMIT;')
+            db.executescript('BEGIN IMMEDIATE;\n' + SCHEMA + settings.SCHEMA + members.SCHEMA + automations.SCHEMA + invites.SCHEMA + model_api.SCHEMA + oidc.SCHEMA + skill_secrets.SCHEMA + teams.SCHEMA + runtime_keys.SCHEMA + runtime_connect.SCHEMA + bot_social.SCHEMA + artifacts.SCHEMA + memory.SCHEMA + agents.SCHEMA + conversations.SCHEMA + agent_runtime.SCHEMA + social.SCHEMA + notifications.SCHEMA + discover.SCHEMA + profiles.SCHEMA + onboarding.SCHEMA + personal.SCHEMA + meetings.SCHEMA + gateway.SCHEMA + team_directory.SCHEMA + composio.SCHEMA + connected_tools.SCHEMA + message_utilities.SCHEMA + skill_packages.SCHEMA + '\nPRAGMA user_version=1;\nCOMMIT;')
 
     @contextmanager
     def connect(self):
