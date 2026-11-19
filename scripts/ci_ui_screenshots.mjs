@@ -1049,34 +1049,34 @@ async function main() {
       await page.locator('#empty-meetings').waitFor({ state: 'visible', timeout: 8000 });
       const meetings = await visibleText(page.locator('#empty-meetings'));
       record(
-        'artifacts_meetings_unimplemented',
-        meetings.includes('未实现') && meetings.includes('还没有录过音的会议'),
+        'artifacts_meetings_empty',
+        meetings.includes('还没有会议纪要') && !meetings.includes('未实现'),
         meetings || 'meetings empty missing',
       );
       screenshots.push(path.basename(await shot(page, outDir, '31-artifacts-meetings-empty.png')));
       const joined = await visibleText(page.locator('#meetings-chrome'));
       record(
-        'artifacts_meetings_joined',
-        joined.includes('我参加的') && joined.includes('你参加或组织过的录音会议，最新的在前。') && !(await page.locator('#filter-button').isVisible()) && !(await page.locator('#layout-toggle').isVisible()),
+        'artifacts_meetings_chrome',
+        joined.includes('我的会议') && joined.includes('这个工作区的会议纪要，最新的在前。') && !(await page.locator('#filter-button').isVisible()) && !(await page.locator('#layout-toggle').isVisible()),
         joined || 'meetings chrome missing',
       );
-      await page.locator('.meeting-scopes [data-meeting-scope="all"]').click();
-      await waitForLocatorText(page, '#meetings-caption', '你所在群里的录音会议');
-      const meetingsAll = await visibleText(page.locator('#meetings-chrome'));
+      await page.locator('.artifact-kinds [data-kind="all"]').click();
+      await page.waitForTimeout(300);
+      const chromeRetired = await page.locator('#meetings-chrome').evaluate((node) => node.hidden);
       record(
-        'artifacts_meetings_all',
-        meetingsAll.includes('全部') && meetingsAll.includes('你所在群里的录音会议'),
-        meetingsAll || 'meetings all caption missing',
+        'artifacts_meetings_leaves',
+        chromeRetired && await page.locator('#filter-button').isVisible(),
+        chromeRetired ? 'meetings chrome retired, filters back' : 'meetings chrome still shown',
       );
-      screenshots.push(path.basename(await shot(page, outDir, '37-space-meetings-all.png')));
-      await page.locator('.meeting-scopes [data-meeting-scope="joined"]').click();
-      await waitForLocatorText(page, '#meetings-caption', '你参加或组织过的录音会议，最新的在前。');
+      screenshots.push(path.basename(await shot(page, outDir, '37-artifacts-back-from-meetings.png')));
+      await page.locator('.artifact-kinds [data-kind="meetings"]').click();
+      await page.locator('#empty-meetings').waitFor({ state: 'visible', timeout: 8000 });
       const meetingsChromeView = await visibleText(page.locator('#main-panel'));
       record(
         'space_meetings_chrome',
         meetingsChromeView.includes('我的会议')
-          && meetingsChromeView.includes('还没有录过音的会议')
-          && meetingsChromeView.includes('在会议中开启录音后，回放和纪要会出现在这里。')
+          && meetingsChromeView.includes('还没有会议纪要')
+          && meetingsChromeView.includes('在「会议」页记下纪要后，这里会按时间倒序列出。')
           && await page.locator('#empty-meetings .empty-hero svg').count() === 1
           && await page.locator('#meetings-title').isVisible()
           && await page.locator('#artifact-notify').getAttribute('aria-label') === '通知'

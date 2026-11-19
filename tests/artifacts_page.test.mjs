@@ -4,6 +4,7 @@ import {
   csrfCookie, listQuery, visibleArtifacts, artifactMatchesType,
   artifactMatchesModified, viewFromSearch, queryForView, FILE_TYPE_LABELS,
   sessionFilterChoices, applyDirectoryCollapsed, artifactDeletePrompt, mount,
+  meetingRows, meetingActionLabel, meetingTimeLabel,
 } from '../openteamily/static/artifacts/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
@@ -231,7 +232,10 @@ function fakeDocument() {
       created.push(node);
       return node;
     },
-    querySelectorAll() { return []; },
+    querySelectorAll(selector) {
+      if (doc.kindButtons && String(selector).includes('data-kind')) return doc.kindButtons;
+      return [];
+    },
     querySelector() { return null; },
     addEventListener(type, handler) { (doc.handlers[type] ||= []).push(handler); },
     removeEventListener(type, handler) {
@@ -252,8 +256,17 @@ function reply({status = 200, body = {}} = {}) {
   return {status, json: async () => body};
 }
 
-async function openArtifactsPage({items = [], artifact, workspaces = [{id: 'w1', name: 'Desk'}]} = {}) {
+async function openArtifactsPage({items = [], artifact, meetings = [], meetingsStatus = 200, meetingsError = null,
+                                  withKinds = false, workspaces = [{id: 'w1', name: 'Desk'}]} = {}) {
   const {doc, elements, created, form} = fakeDocument();
+  if (withKinds) {
+    doc.kindButtons = ['all', 'website', 'document', 'media', 'messages', 'meetings'].map((kind) => {
+      const node = new FakeNode('button');
+      node.setAttribute('data-kind', kind);
+      node.ownerDocument = doc;
+      return node;
+    });
+  }
   const calls = [];
   let listed = items.slice();
   const target = artifact || {id: 'a1', title: 'Doc', kind: 'document', revision: 1, body: 'hello', created_by: 'alice'};
@@ -265,6 +278,10 @@ async function openArtifactsPage({items = [], artifact, workspaces = [{id: 'w1',
     if (path === '/v1/workspaces?limit=100') return reply({body: {items: workspaces}});
     if (path === '/v1/workspaces/w2/artifacts') return reply({body: {items: []}});
     if (path === '/v1/workspaces/w1/artifacts') return reply({body: {items: listed}});
+    if (path === '/v1/workspaces/w1/meetings?limit=50') {
+      if (meetingsStatus !== 200) return reply({status: meetingsStatus, body: meetingsError || {}});
+      return reply({body: {items: meetings, cursor: null}});
+    }
     const detail = /^\/v1\/workspaces\/w1\/artifacts\/([^/]+)(\/(shares|versions|discover))?$/.exec(path);
     if (detail && method === 'GET') {
       if (detail[3] === 'shares') return reply({body: {items: []}});
@@ -293,6 +310,12 @@ async function openArtifactsPage({items = [], artifact, workspaces = [{id: 'w1',
   }
   return {
     doc, elements, created, form, calls,
+    async openKind(kind) {
+      const button = (doc.kindButtons || []).find((node) => node.getAttribute('data-kind') === kind);
+      assert.ok(button, `kind button ${kind} must exist`);
+      await button.dispatch('click');
+    },
+    meetingCalls() { return calls.filter(call => call.path === '/v1/workspaces/w1/meetings?limit=50'); },
     removeCalls() { return calls.filter(call => call.path === '/v1/workspaces/w1/artifacts/a1/remove'); },
     alertdialog() { return created.filter(node => node.getAttribute('role') === 'alertdialog' && node.parentNode); },
     close() {
@@ -588,4 +611,74 @@ test('?new= only opens known 新建 editors', () => {
   assert.equal(newKindFromSearch('?new=constructor'), '');
   assert.equal(newKindFromSearch(''), '');
   assert.equal(newKindButtonId('image'), '');
+});
+
+test('meetingRows sorts newest first and labels action items honestly', () => {
+  const rows = meetingRows([
+    {id: 'm1', title: '周会', started_at: 1700000000, action_count: 2, done_count: 1},
+    {id: 'm2', title: '评审', started_at: 1700003600, action_count: 0, done_count: 0},
+    {id: 'm3', title: '复盘', started_at: 1699996400, action_count: 3, done_count: 3},
+  ]);
+  assert.deepEqual(rows.map((row) => row.title), ['评审', '周会', '复盘']);
+  assert.equal(rows[0].actionLabel, '尚无行动项');
+  assert.equal(rows[1].actionLabel, '2 项行动项，1 项已完成');
+  assert.equal(rows[2].actionLabel, '3 项行动项，全部完成');
+  assert.equal(meetingActionLabel(1, 0), '1 项行动项');
+  assert.equal(meetingActionLabel(undefined, undefined), '尚无行动项');
+  assert.match(meetingTimeLabel(1700000000), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  assert.equal(meetingTimeLabel(0), '');
+  assert.equal(meetingTimeLabel('nope'), '');
+});
+
+test('the meetings kind renders the workspace meetings from the existing endpoint', async () => {
+  const page = await openArtifactsPage({withKinds: true, meetings: [
+    {id: 'm1', title: '设计周会', started_at: 1700000000, action_count: 2, done_count: 0},
+    {id: 'm2', title: '发布复盘', started_at: 1700007200, action_count: 1, done_count: 1},
+  ]});
+  try {
+    await page.openKind('meetings');
+    assert.equal(page.meetingCalls().length, 1, 'the meetings tab reads the endpoint once');
+    assert.equal(page.meetingCalls()[0].method, 'GET');
+    const list = page.elements.get('artifact-list');
+    const rows = list.children.filter((child) => String(child.className || '').includes('artifact-item'));
+    assert.equal(rows.length, 2, 'two meetings must be listed');
+    assert.match(rows[0].textContent, /发布复盘/);
+    assert.match(rows[1].textContent, /设计周会/);
+    assert.match(rows[0].textContent, /1 项行动项，全部完成/);
+    assert.match(rows[1].textContent, /2 项行动项/);
+    assert.equal(page.elements.get('empty-meetings').hidden, true);
+    assert.equal(page.elements.get('meetings-error').hidden, true);
+  } finally {
+    page.close();
+  }
+});
+
+test('an empty meetings workspace shows the honest empty state, not an error', async () => {
+  const page = await openArtifactsPage({withKinds: true, meetings: []});
+  try {
+    await page.openKind('meetings');
+    assert.equal(page.elements.get('empty-meetings').hidden, false);
+    assert.equal(page.elements.get('meetings-error').hidden, true);
+    assert.equal(page.elements.get('meetings-error').textContent, '');
+  } finally {
+    page.close();
+  }
+});
+
+test('a failing meetings request shows the server reason instead of an empty list', async () => {
+  const page = await openArtifactsPage({
+    withKinds: true, meetingsStatus: 500,
+    meetingsError: {error: {code: 'internal', message: 'listing failed in the store'}},
+  });
+  try {
+    await page.openKind('meetings');
+    const errorBox = page.elements.get('meetings-error');
+    assert.equal(errorBox.hidden, false);
+    assert.match(errorBox.textContent, /listing failed in the store/);
+    assert.equal(page.elements.get('empty-meetings').hidden, true, 'a failure must not read as "no meetings"');
+    const list = page.elements.get('artifact-list');
+    assert.equal(list.children.filter((child) => String(child.className || '').includes('artifact-item')).length, 0);
+  } finally {
+    page.close();
+  }
 });
