@@ -1,0 +1,440 @@
+{
+  "slug": "account-delete",
+  "issue": 350,
+  "capturedAt": "2026-11-19T16:04:57.889Z",
+  "locale": "zh-CN",
+  "arms": [
+    {
+      "name": "before",
+      "sha": "a04f955e8156152f946e6cbd9395978834895122"
+    },
+    {
+      "name": "after",
+      "sha": "6fe8920ae0eea430f1b3945c378545b1594d518e"
+    }
+  ],
+  "notes": [
+    "before: profile page delete button is disabled and titled 未接通：还没有删除账户接口.",
+    "after: the button opens a dialog that asks for your own username; the client refuses a mismatch, the server answers 400 for a mismatch and 409 while the account still owns workspaces.",
+    "blocked state is the real 409 from the fixture account (it owns the seeded workspaces); nothing was deleted.",
+    "The fixture is synthetic CI data on loopback; the provider is a local fake, not a vendor."
+  ],
+  "rows": [
+    {
+      "arm": "before",
+      "armSha": "a04f955e8156152f946e6cbd9395978834895122",
+      "state": "light__1440x900__profile__delete-account.png",
+      "viewport": "1440x900",
+      "file": "before/zh-CN__light__1440x900__profile__delete-account.png",
+      "bytes": 56840,
+      "sha256": "7f0f23bf969dc7fe2bee20b224f98b7c3d5852fcc15e465d96a5d872d4f61934",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "buttonText": "删除账户 ›",
+      "buttonDisabled": true,
+      "buttonTitle": "未接通：还没有删除账户接口",
+      "dialogHidden": null,
+      "noteText": null,
+      "statusText": "",
+      "expectedName": null,
+      "buttonRect": {
+        "x": 702.9375,
+        "y": 817.8125,
+        "width": 90.125,
+        "height": 33.875,
+        "top": 817.8125,
+        "right": 793.0625,
+        "bottom": 851.6875,
+        "left": 702.9375
+      },
+      "dialogRect": null,
+      "privateVisible": {
+        "top": 677,
+        "height": 175,
+        "onScreen": true
+      },
+      "dialogText": null,
+      "confirmValue": "",
+      "themeResolved": "light",
+      "scrollWidth": 1440,
+      "consoleErrors": []
+    },
+    {
+      "arm": "before",
+      "armSha": "a04f955e8156152f946e6cbd9395978834895122",
+      "state": "light__390x844__profile__delete-account.png",
+      "viewport": "390x844",
+      "file": "before/zh-CN__light__390x844__profile__delete-account.png",
+      "bytes": 46437,
+      "sha256": "8615057cbd10977e52cda14b6713ef77a183074bf6601563986d9f9169f4df52",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "buttonText": "删除账户 ›",
+      "buttonDisabled": true,
+      "buttonTitle": "未接通：还没有删除账户接口",
+      "dialogHidden": null,
+      "noteText": null,
+      "statusText": "",
+      "expectedName": null,
+      "buttonRect": {
+        "x": 177.9375,
+        "y": 762.078125,
+        "width": 90.125,
+        "height": 33.875,
+        "top": 762.078125,
+        "right": 268.0625,
+        "bottom": 795.953125,
+        "left": 177.9375
+      },
+      "dialogRect": null,
+      "privateVisible": {
+        "top": 621,
+        "height": 175,
+        "onScreen": true
+      },
+      "dialogText": null,
+      "confirmValue": "",
+      "themeResolved": "light",
+      "scrollWidth": 390,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "state": "light__1440x900__profile__delete-account.png",
+      "viewport": "1440x900",
+      "file": "after/zh-CN__light__1440x900__profile__delete-account.png",
+      "bytes": 52544,
+      "sha256": "644e9ac39da993f2239f47c9df5dea7d2d48a742a47cc87667e6ee8318cc50f8",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "buttonText": "删除账户 ›",
+      "buttonDisabled": false,
+      "buttonTitle": "删除前要输入你自己的用户名确认；仍拥有工作区的账户会被拒绝并说明原因",
+      "dialogHidden": true,
+      "noteText": "",
+      "statusText": "",
+      "expectedName": null,
+      "buttonRect": {
+        "x": 702.9375,
+        "y": 837.8125,
+        "width": 90.125,
+        "height": 33.875,
+        "top": 837.8125,
+        "right": 793.0625,
+        "bottom": 871.6875,
+        "left": 702.9375
+      },
+      "dialogRect": null,
+      "privateVisible": {
+        "top": 697,
+        "height": 175,
+        "onScreen": true
+      },
+      "dialogText": null,
+      "confirmValue": "",
+      "themeResolved": "light",
+      "scrollWidth": 1440,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "state": "light__1440x900__profile__delete-account-dialog.png",
+      "viewport": "1440x900",
+      "file": "after/zh-CN__light__1440x900__profile__delete-account-dialog.png",
+      "bytes": 90952,
+      "sha256": "eec76104054e89aff8d098e3e4ef8148c762fc8a4943f0ba2dfe61aeff073d73",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "buttonText": "删除账户 ›",
+      "buttonDisabled": false,
+      "buttonTitle": "删除前要输入你自己的用户名确认；仍拥有工作区的账户会被拒绝并说明原因",
+      "dialogHidden": false,
+      "noteText": "",
+      "statusText": "",
+      "expectedName": "cifixture",
+      "buttonRect": {
+        "x": 702.9375,
+        "y": 837.8125,
+        "width": 90.125,
+        "height": 33.875,
+        "top": 837.8125,
+        "right": 793.0625,
+        "bottom": 871.6875,
+        "left": 702.9375
+      },
+      "dialogRect": {
+        "x": 494.40625,
+        "y": 272.5625,
+        "width": 451.1875,
+        "height": 354.875,
+        "top": 272.5625,
+        "right": 945.59375,
+        "bottom": 627.4375,
+        "left": 494.40625
+      },
+      "privateVisible": {
+        "top": 697,
+        "height": 175,
+        "onScreen": true
+      },
+      "dialogText": "删除账户 × 删除后：这个账户的会话立即失效，用户名释放、可以重新注册；资料、设置、通知、密钥和成员关系一并清除，没有回收站。 仍拥有工作区、或在工作区里创建过别人还在用的内容的账户，当前版本会拒绝删除并说明原因——那些内容属于工作区，不是单个账户能一起删掉的。 输入你的用户名 cifixture 以确认 取消 确认删除",
+      "confirmValue": "",
+      "themeResolved": "light",
+      "scrollWidth": 1440,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "state": "light__1440x900__profile__delete-account-mismatch.png",
+      "viewport": "1440x900",
+      "file": "after/zh-CN__light__1440x900__profile__delete-account-mismatch.png",
+      "bytes": 97027,
+      "sha256": "7733bfac6956062e8b282092d139f34474123095b3dcefb3808549dabca611cb",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "buttonText": "删除账户 ›",
+      "buttonDisabled": false,
+      "buttonTitle": "删除前要输入你自己的用户名确认；仍拥有工作区的账户会被拒绝并说明原因",
+      "dialogHidden": false,
+      "noteText": "输入的账户名与你登录的账户不一致，没有删除任何内容。",
+      "statusText": "",
+      "expectedName": "cifixture",
+      "buttonRect": {
+        "x": 702.9375,
+        "y": 837.8125,
+        "width": 90.125,
+        "height": 33.875,
+        "top": 837.8125,
+        "right": 793.0625,
+        "bottom": 871.6875,
+        "left": 702.9375
+      },
+      "dialogRect": {
+        "x": 494.40625,
+        "y": 262.8125,
+        "width": 451.1875,
+        "height": 374.375,
+        "top": 262.8125,
+        "right": 945.59375,
+        "bottom": 637.1875,
+        "left": 494.40625
+      },
+      "privateVisible": {
+        "top": 697,
+        "height": 175,
+        "onScreen": true
+      },
+      "dialogText": "删除账户 × 删除后：这个账户的会话立即失效，用户名释放、可以重新注册；资料、设置、通知、密钥和成员关系一并清除，没有回收站。 仍拥有工作区、或在工作区里创建过别人还在用的内容的账户，当前版本会拒绝删除并说明原因——那些内容属于工作区，不是单个账户能一起删掉的。 输入你的用户名 cifixture 以确认 输入的账户名与你登录的账户不一致，没有删除任何内容。 取消 确认删除",
+      "confirmValue": "someone-else",
+      "themeResolved": "light",
+      "scrollWidth": 1440,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "state": "light__1440x900__profile__delete-account-blocked.png",
+      "viewport": "1440x900",
+      "file": "after/zh-CN__light__1440x900__profile__delete-account-blocked.png",
+      "bytes": 108496,
+      "sha256": "845cce20c8ef8d88e66da3b7aaf79d803ab43381b47cd859f0fa49c67a5e3426",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "buttonText": "删除账户 ›",
+      "buttonDisabled": false,
+      "buttonTitle": "删除前要输入你自己的用户名确认；仍拥有工作区的账户会被拒绝并说明原因",
+      "dialogHidden": false,
+      "noteText": "先删除你创建的工作区，或联系实例运行者处理这些内容。",
+      "statusText": "这个账户还有共享内容（工作区或其中别人也在用的记录），当前版本不能自助删除。",
+      "expectedName": "cifixture",
+      "buttonRect": {
+        "x": 702.9375,
+        "y": 886.40625,
+        "width": 90.125,
+        "height": 33.875,
+        "top": 886.40625,
+        "right": 793.0625,
+        "bottom": 920.28125,
+        "left": 702.9375
+      },
+      "dialogRect": {
+        "x": 494.40625,
+        "y": 262.8125,
+        "width": 451.1875,
+        "height": 374.375,
+        "top": 262.8125,
+        "right": 945.59375,
+        "bottom": 637.1875,
+        "left": 494.40625
+      },
+      "privateVisible": {
+        "top": 745,
+        "height": 175,
+        "onScreen": true
+      },
+      "dialogText": "删除账户 × 删除后：这个账户的会话立即失效，用户名释放、可以重新注册；资料、设置、通知、密钥和成员关系一并清除，没有回收站。 仍拥有工作区、或在工作区里创建过别人还在用的内容的账户，当前版本会拒绝删除并说明原因——那些内容属于工作区，不是单个账户能一起删掉的。 输入你的用户名 cifixture 以确认 先删除你创建的工作区，或联系实例运行者处理这些内容。 取消 确认删除",
+      "confirmValue": "cifixture",
+      "themeResolved": "light",
+      "scrollWidth": 1440,
+      "consoleErrors": [
+        "Failed to load resource: the server responded with a status of 409 (Conflict)"
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "state": "light__390x844__profile__delete-account.png",
+      "viewport": "390x844",
+      "file": "after/zh-CN__light__390x844__profile__delete-account.png",
+      "bytes": 46606,
+      "sha256": "b742d06e563a4b86cd82982f8afe74f140bc0a644d4a3153bdb3db864cc33c80",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "buttonText": "删除账户 ›",
+      "buttonDisabled": false,
+      "buttonTitle": "删除前要输入你自己的用户名确认；仍拥有工作区的账户会被拒绝并说明原因",
+      "dialogHidden": true,
+      "noteText": "",
+      "statusText": "",
+      "expectedName": null,
+      "buttonRect": {
+        "x": 177.9375,
+        "y": 762.078125,
+        "width": 90.125,
+        "height": 33.875,
+        "top": 762.078125,
+        "right": 268.0625,
+        "bottom": 795.953125,
+        "left": 177.9375
+      },
+      "dialogRect": null,
+      "privateVisible": {
+        "top": 621,
+        "height": 175,
+        "onScreen": true
+      },
+      "dialogText": null,
+      "confirmValue": "",
+      "themeResolved": "light",
+      "scrollWidth": 390,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "state": "light__390x844__profile__delete-account-dialog.png",
+      "viewport": "390x844",
+      "file": "after/zh-CN__light__390x844__profile__delete-account-dialog.png",
+      "bytes": 70004,
+      "sha256": "fd10084d434cf284cb57342ede75d851fba855ea5f7aa0c39f0e56ee2b024ef3",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "buttonText": "删除账户 ›",
+      "buttonDisabled": false,
+      "buttonTitle": "删除前要输入你自己的用户名确认；仍拥有工作区的账户会被拒绝并说明原因",
+      "dialogHidden": false,
+      "noteText": "",
+      "statusText": "",
+      "expectedName": "cifixture",
+      "buttonRect": {
+        "x": 177.9375,
+        "y": 762.078125,
+        "width": 90.125,
+        "height": 33.875,
+        "top": 762.078125,
+        "right": 268.0625,
+        "bottom": 795.953125,
+        "left": 177.9375
+      },
+      "dialogRect": {
+        "x": 24,
+        "y": 236.40625,
+        "width": 342,
+        "height": 371.1875,
+        "top": 236.40625,
+        "right": 366,
+        "bottom": 607.59375,
+        "left": 24
+      },
+      "privateVisible": {
+        "top": 621,
+        "height": 175,
+        "onScreen": true
+      },
+      "dialogText": "删除账户 × 删除后：这个账户的会话立即失效，用户名释放、可以重新注册；资料、设置、通知、密钥和成员关系一并清除，没有回收站。 仍拥有工作区、或在工作区里创建过别人还在用的内容的账户，当前版本会拒绝删除并说明原因——那些内容属于工作区，不是单个账户能一起删掉的。 输入你的用户名 cifixture 以确认 取消 确认删除",
+      "confirmValue": "",
+      "themeResolved": "light",
+      "scrollWidth": 390,
+      "consoleErrors": []
+    },
+    {
+      "arm": "after",
+      "armSha": "6fe8920ae0eea430f1b3945c378545b1594d518e",
+      "state": "dark__1440x900__profile__delete-account-dialog.png",
+      "viewport": "1440x900",
+      "file": "after/zh-CN__dark__1440x900__profile__delete-account-dialog.png",
+      "bytes": 107377,
+      "sha256": "6d4f41d43e8d87e1609464f56340010d91e423e00196e5f1372aaf5e3ff074f2",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "buttonText": "删除账户 ›",
+      "buttonDisabled": false,
+      "buttonTitle": "删除前要输入你自己的用户名确认；仍拥有工作区的账户会被拒绝并说明原因",
+      "dialogHidden": false,
+      "noteText": "",
+      "statusText": "",
+      "expectedName": "cifixture",
+      "buttonRect": {
+        "x": 701.9375,
+        "y": 814.40625,
+        "width": 92.125,
+        "height": 37.171875,
+        "top": 814.40625,
+        "right": 794.0625,
+        "bottom": 851.578125,
+        "left": 701.9375
+      },
+      "dialogRect": {
+        "x": 494.40625,
+        "y": 266.078125,
+        "width": 451.1875,
+        "height": 367.84375,
+        "top": 266.078125,
+        "right": 945.59375,
+        "bottom": 633.921875,
+        "left": 494.40625
+      },
+      "privateVisible": {
+        "top": 668,
+        "height": 184,
+        "onScreen": true
+      },
+      "dialogText": "删除账户 × 删除后：这个账户的会话立即失效，用户名释放、可以重新注册；资料、设置、通知、密钥和成员关系一并清除，没有回收站。 仍拥有工作区、或在工作区里创建过别人还在用的内容的账户，当前版本会拒绝删除并说明原因——那些内容属于工作区，不是单个账户能一起删掉的。 输入你的用户名 cifixture 以确认 取消 确认删除",
+      "confirmValue": "",
+      "themeResolved": "dark",
+      "scrollWidth": 1440,
+      "consoleErrors": []
+    }
+  ]
+}
