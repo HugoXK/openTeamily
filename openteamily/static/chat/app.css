@@ -873,6 +873,120 @@
 #message-list li.mine .role, #message-list li.user .role { color: var(--ot-ink); }
 #message-list li.mine .time, #message-list li.user .time { color: var(--ot-muted); }
 .composer-tools button[title*="模式"] { margin-left: auto; }
+
+/* @mention notification center: compact list inside the session pane. */
+#notifications-toggle { position: relative; }
+#notification-count {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.45rem;
+  min-width: 1.1rem;
+  padding: 0 .25rem;
+  font-size: .68rem;
+  line-height: 1.1rem;
+}
+.notifications-panel {
+  margin: .5rem 0;
+  padding: .6rem;
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg, 12px);
+  background: var(--ot-surface);
+}
+.notifications-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.notifications-head h2 { margin: 0; font-size: .95rem; }
+#notification-list { list-style: none; margin: .4rem 0 0; padding: 0; display: grid; gap: .25rem; }
+.notification-item {
+  display: grid;
+  gap: .15rem;
+  width: 100%;
+  padding: .45rem .55rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ot-ink);
+  text-align: left;
+  font: inherit;
+}
+.notification-item:hover, .notification-item:focus-visible { background: var(--ot-accent-soft); }
+.notification-item.is-unread strong::before { content: '● '; color: var(--ot-accent); }
+.notification-item strong { font-size: .85rem; font-weight: 600; }
+.notification-excerpt { color: var(--ot-muted); font-size: .8rem; overflow-wrap: anywhere; }
+.notification-item time { color: var(--ot-muted); font-size: .72rem; }
+
+/* Message reactions: fixed self-chosen emoji set; counts come from the server. */
+.message-reactions { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; margin-top: .2rem; }
+.reaction-chip, .reaction-add, .reaction-picker button {
+  min-height: 1.6rem;
+  padding: 0 .45rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 999px;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  font-size: .8rem;
+}
+.reaction-chip.is-mine { border-color: var(--ot-accent); background: var(--ot-accent-soft); }
+.reaction-add { color: var(--ot-muted); }
+.reaction-chip:hover, .reaction-add:hover, .reaction-picker button:hover,
+.reaction-chip:focus-visible, .reaction-add:focus-visible, .reaction-picker button:focus-visible { border-color: var(--ot-accent); }
+.reaction-picker { display: inline-flex; gap: .2rem; }
+.reaction-picker[hidden] { display: none; }
+
+/* Message tools: pinned strip, invite panel and multi-select forward bar. */
+.chat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .4rem .6rem;
+  margin: .35rem .75rem;
+  padding: .45rem .65rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 10px;
+  background: var(--ot-surface);
+  font-size: .85rem;
+}
+.chat-strip[hidden] { display: none; }
+.chat-strip h2 { margin: 0; font-size: .85rem; font-weight: 600; }
+.chat-strip form { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+#pinned-message-list { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+#pinned-message-list li {
+  max-width: 18rem;
+  padding: .15rem .5rem;
+  border-radius: 999px;
+  background: var(--ot-accent-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#chat-invite-result { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+.message-tools { display: inline-flex; gap: .3rem; margin-top: .15rem; font-size: .78rem; }
+.message-tools button {
+  padding: .05rem .45rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ot-muted);
+}
+.message-tools button:hover, .message-tools button:focus-visible { border-color: var(--ot-line); color: var(--ot-ink); }
+#message-list .body[data-forwarded] { border-left: 3px solid var(--ot-line-strong, var(--ot-line)); padding-left: .5rem; }
+
+/* #232 surface polish: notification states, reaction counts, template cards. */
+.notifications-panel { box-shadow: var(--ot-shadow-sm); }
+.notification-item { border-left: 3px solid transparent; transition: background-color .12s ease; }
+.notification-item.is-unread { background: color-mix(in srgb, var(--ot-accent-soft) 55%, transparent); border-left-color: var(--ot-accent); }
+.notification-item time { justify-self: end; }
+.reaction-chip { font-variant-numeric: tabular-nums; transition: border-color .12s ease, background-color .12s ease; }
+.reaction-chip.is-mine { color: var(--ot-accent-hover); font-weight: 600; }
+#team-template-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); gap: .5rem; }
+#team-template-choices label {
+  align-items: flex-start;
+  padding: .55rem .7rem;
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-sm);
+  background: var(--ot-surface);
+  cursor: pointer;
+}
+#team-template-choices label:has(input:checked) { border-color: var(--ot-accent); background: var(--ot-accent-soft); }
+.message-tools input[type="checkbox"] { accent-color: var(--ot-accent); }
 /* Aurora Glass: messenger surfaces */
 body.app-workspace.chat-open { grid-template-columns: 4.9rem 22rem minmax(0, 1fr); }
 .session-pane {

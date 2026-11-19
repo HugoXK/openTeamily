@@ -147,6 +147,17 @@
           <button type="button" id="revoke-homepage">撤回链接</button>
         </div>
       </section>
+      <section id="api-key-panel" hidden>
+        <h2>外部 API 访问</h2>
+        <p class="note">为这个智能体生成仅限调用的 API 密钥。外部程序用 <code>Authorization: Bearer</code> 调用 <code>/v1/gateway/agents/&lt;智能体 ID&gt;/invocations</code>，回复由你已连接的运行时完成。密钥只显示一次。</p>
+        <form id="api-key-form">
+          <label>名称 <input id="api-key-name" maxlength="60" required autocomplete="off"></label>
+          <label>每分钟上限 <input id="api-key-rate" type="number" min="1" max="60" value="10"></label>
+          <button type="submit">生成密钥</button>
+        </form>
+        <p id="api-key-token" class="note" hidden></p>
+        <ul id="api-key-list"></ul>
+      </section>
       <section id="runtime-panel" hidden>
         <h2>运行时绑定</h2>
         <p id="runtime-note" class="note">可以把这个智能体绑定到工作区里的 FlyBot 容器。对话会优先发到该容器；没有可用容器时，才会用你自己已连接的机器。</p>
