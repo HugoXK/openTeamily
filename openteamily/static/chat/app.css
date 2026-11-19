@@ -1266,3 +1266,5 @@ html[data-theme-resolved="dark"] { --ot-bubble-mine: var(--ot-accent-soft); }
 }
 #compose-dialog .member-choices .choice-label { flex: 1 1 auto; min-width: 0; }
 #compose-dialog input[type="checkbox"], #compose-dialog input[type="radio"] { width: auto; min-width: 0; flex: 0 0 auto; margin: 0; accent-color: var(--ot-accent); }
+#conversation-list .session-row[aria-current="true"], #conversation-list .session-row[aria-current="true"]:hover { box-shadow: none; }
+.chat-header .chat-title, #chat-title { font-size: .875rem; font-weight: 650; }

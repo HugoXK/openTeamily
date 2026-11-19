@@ -1292,9 +1292,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     drawBoard();
   });
 
-  const discoverForm = document.getElementById('discover-form');
-  if (discoverForm) {
-    discoverForm.addEventListener('submit', async event => {
+  // The publish controls live inside #editor-form; a nested <form> would be
+  // dropped by the HTML parser and close the editor form early, so this is a
+  // plain group with a button handler (Enter in the slug field publishes too).
+  const publishDiscover = document.getElementById('publish-discover');
+  const discoverSlug = document.getElementById('discover-slug');
+  if (publishDiscover) {
+    if (discoverSlug) discoverSlug.addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); publishDiscover.click(); }
+    });
+    publishDiscover.addEventListener('click', async event => {
       event.preventDefault();
       if (!current || !current.id || !workspaceId()) {
         show('error', '请先保存作品，再发布到发现页。');
