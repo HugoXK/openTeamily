@@ -209,7 +209,7 @@ export function applyArtifactLayout(list, layout) {
 }
 
 export function canSendArtifactToChat(item) {
-  return Boolean(item && item.id && item.kind === 'media');
+  return Boolean(item && item.id && ['media','document','website','whiteboard','slides','dashboard'].includes(item.kind));
 }
 
 export function conversationLabel(item) {
@@ -749,6 +749,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const sendError = document.getElementById('send-to-chat-error');
   const sendLead = document.getElementById('send-to-chat-lead');
   let sendingArtifact = null;
+  let sendPending = false, sendKeys = new Map();
 
   function closeSendDialog() {
     if (!sendDialog) return;
@@ -759,8 +760,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function openSendDialog(item) {
     if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
     sendingArtifact = item;
+    sendKeys = new Map();
     sendDialog.hidden = false;
-    if (sendLead) sendLead.textContent = '将「' + item.title + '」发送到：';
+    if (sendLead) sendLead.textContent = '将「' + item.title + '」的已保存版本发送到聊天。接收成员可下载该版本，不会自动发布。选择会话即发送：';
     if (sendError) { sendError.hidden = true; sendError.textContent = ''; }
     if (sendList) sendList.textContent = '';
     if (sendEmpty) {
@@ -795,12 +797,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function sendArtifactToConversation(item, conversation) {
     if (!workspaceId() || !item || !conversation || !conversation.id) return;
+    if (sendPending) return;
+    sendPending = true;
+    const wid = workspaceId();
+    const key = sendKeys.get(conversation.id) || idempotencyKey();
+    sendKeys.set(conversation.id, key);
+    try {
     const result = await request(
       'POST',
-      `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages`,
-      {body: '', artifact_id: item.id},
-      {'Idempotency-Key': idempotencyKey()},
+      `/v1/workspaces/${wid}/social/conversations/${conversation.id}/messages`,
+      {body: '', artifact_id: item.id, artifact_revision: item.revision},
+      {'Idempotency-Key': key},
     );
+    if (workspaceId() !== wid || sendingArtifact !== item) return;
     if (result.status !== 200 && result.status !== 201) {
       if (sendError) {
         sendError.hidden = false;
@@ -811,6 +820,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     closeSendDialog();
     show('ok', '已发送到「' + conversationLabel(conversation) + '」。');
+    } catch { if (sendError) { sendError.hidden = false; sendError.textContent = '网络错误，发送结果未知。重试同一会话不会重复发送。'; } }
+    finally { sendPending = false; }
   }
 
   if (document.getElementById('send-to-chat-cancel')) {

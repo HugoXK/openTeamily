@@ -12,6 +12,10 @@ from .security import digest
 from . import search
 
 SCHEMA = '''
+CREATE TABLE IF NOT EXISTS social_artifact_versions (
+ message_id TEXT PRIMARY KEY REFERENCES social_messages(id) ON DELETE CASCADE,
+ revision INTEGER NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
+ artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS social_conversations (
  id TEXT PRIMARY KEY,
  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -173,7 +177,8 @@ def message_view(row):
                 retracted=bool(row['retracted']) if 'retracted' in row.keys() else False)
     if not data['retracted'] and 'attachment_id' in row.keys() and row['attachment_id']:
         data['attachment'] = {'id': row['attachment_id'], 'title': row['attachment_title'],
-                              'path': '/v1/workspaces/' + row['workspace_id'] + '/artifacts/' + row['attachment_id'] + '/file'}
+                              'kind': row['attachment_kind'], 'revision': row['attachment_revision'],
+                              'path': '/v1/workspaces/' + row['workspace_id'] + '/artifacts/' + row['attachment_id'] + (('/versions/' + str(row['attachment_revision']) + '/export') if row['attachment_revision'] else '/file')}
     if 'agent_id' in row.keys() and row['agent_id']:
         data.update(role='agent', agent_id=row['agent_id'], agent_name=row['agent_name'],
                     source='runtime_infer')
@@ -184,13 +189,14 @@ def message_view(row):
 MESSAGE_ROWS = """
  SELECT m.id, m.conversation_id, m.workspace_id, m.user_id, m.body, m.seq, m.created,
         NULL AS agent_id, NULL AS agent_name, COALESCE(st.revision,1) AS revision,
-        st.edited, COALESCE(st.retracted,0) AS retracted, at.artifact_id AS attachment_id, af.title AS attachment_title FROM social_messages m
+        st.edited, COALESCE(st.retracted,0) AS retracted, at.artifact_id AS attachment_id, COALESCE(av.title,af.title) AS attachment_title, av.revision AS attachment_revision, COALESCE(av.kind,'media') AS attachment_kind FROM social_messages m
  LEFT JOIN social_message_state st ON st.message_id=m.id
  LEFT JOIN social_attachments at ON at.message_id=m.id
  LEFT JOIN artifacts af ON af.id=at.artifact_id
+ LEFT JOIN social_artifact_versions av ON av.message_id=m.id
  UNION ALL
  SELECT id, conversation_id, workspace_id, NULL, body, seq, updated,
-        agent_id, agent_name, 1 AS revision, NULL AS edited, 0 AS retracted, NULL AS attachment_id, NULL AS attachment_title
+        agent_id, agent_name, 1 AS revision, NULL AS edited, 0 AS retracted, NULL AS attachment_id, NULL AS attachment_title, NULL AS attachment_revision, NULL AS attachment_kind
  FROM social_agent_replies WHERE status='succeeded'
 """
 
