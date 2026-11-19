@@ -190,3 +190,64 @@ test('a category deep link selects its chip and narrows the list', async () => {
     globalThis.fetch = previous.fetch;
   }
 });
+
+async function mountGuide(search) {
+  const {doc, el} = fakeGuideDocument();
+  const replaced = [];
+  const previous = {
+    document: globalThis.document,
+    location: globalThis.location,
+    history: globalThis.history,
+    fetch: globalThis.fetch,
+  };
+  globalThis.document = doc;
+  globalThis.location = {pathname: '/guide', search};
+  globalThis.history = {replaceState: (...args) => replaced.push(args)};
+  globalThis.fetch = async (path) => (path === '/v1/auth/session'
+    ? {status: 200, json: async () => ({user: {id: 'user-1', username: 'alice'}})}
+    : {status: 404, json: async () => ({error: {message: 'missing'}})});
+  await import(`../openteamily/static/guide/app.mjs?mount=${encodeURIComponent(search)}`);
+  for (let i = 0; i < 8; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  const chip = (id) => el('guide-categories').children.find((item) => item.dataset.category === id);
+  return {
+    el,
+    replaced,
+    chip,
+    currentCategory: () => el('guide-categories').children
+      .filter((item) => item.attributes['aria-current'] === 'true')
+      .map((item) => item.dataset.category),
+    restore() {
+      globalThis.document = previous.document;
+      globalThis.location = previous.location;
+      globalThis.history = previous.history;
+      globalThis.fetch = previous.fetch;
+    },
+  };
+}
+
+test('clicking a category chip writes the category into the URL', async () => {
+  const page = await mountGuide('');
+  try {
+    page.chip('calls').handlers.click();
+    assert.equal(page.replaced.length, 1, 'clicking a category chip never updated the URL');
+    assert.equal(page.replaced[0][2], '/guide?category=calls',
+      'the category chip did not put ?category= into the URL');
+    assert.deepEqual(page.currentCategory(), ['calls']);
+  } finally {
+    page.restore();
+  }
+});
+
+test('clicking a category chip keeps the keyword in the URL too', async () => {
+  const page = await mountGuide('?q=%E5%A4%96%E8%A7%82');
+  try {
+    assert.equal(page.el('guide-search').value, '外观');
+    page.chip('settings').handlers.click();
+    assert.equal(page.replaced.length, 1, 'clicking a category chip never updated the URL');
+    assert.equal(page.replaced[0][2], '/guide?category=settings&q=%E5%A4%96%E8%A7%82',
+      'the chip click dropped the keyword or the category from the URL');
+    assert.deepEqual(page.currentCategory(), ['settings']);
+  } finally {
+    page.restore();
+  }
+});
