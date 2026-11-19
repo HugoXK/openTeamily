@@ -443,3 +443,9 @@ test('supported work categories are enabled, unsupported classifications stay di
   assert.match(html, /disabled[^>]*>小游戏</);
   assert.equal(feedQuery('中文', '1.site-one', 'website'), 'limit=12&q=%E4%B8%AD%E6%96%87&cursor=1.site-one&kind=website');
 });
+
+
+test('every supported selected type uses the selected category styling', () => {
+  const css = readFileSync(new URL('../openteamily/static/discover/app.css', import.meta.url), 'utf8');
+  assert.match(css, /\.feed-filters button\[aria-current="true"\]/);
+});
