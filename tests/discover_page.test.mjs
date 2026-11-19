@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { validSlug, catalogInitial, catalogItems, agentDiscoverPairs, isAgentsCatalog, isTeamsCatalog, renderTeamCard, FEED_CATEGORIES, CATALOG_CATEGORIES, TEAM_CATEGORIES, FEED_ACTIVITY_NOTE, FEED_FOLLOWING_EMPTY_TITLE, FEED_FOLLOWING_EMPTY_BODY, FEED_FOLLOWING_NOTE, FEED_SEARCH_NOTE, TEAMS_NOTE, TEAMS_SEARCH_NOTE, TEAMS_SEARCH_PLACEHOLDER } from '../openteamily/static/discover/app.mjs';
+import { validSlug, catalogInitial, catalogItems, agentDiscoverPairs, isAgentsCatalog, isTeamsCatalog, renderTeamCard, FEED_CATEGORIES, CATALOG_CATEGORIES, TEAM_CATEGORIES, FEED_ACTIVITY_EMPTY_NOTE, FEED_ACTIVITY_LISTED_NOTE, FEED_FOLLOWING_EMPTY_TITLE, FEED_FOLLOWING_EMPTY_BODY, FEED_FOLLOWING_NOTE, FEED_SEARCH_EMPTY_NOTE, feedQuery, formatFeedTime, renderFeedCard, TEAMS_NOTE, TEAMS_SEARCH_NOTE, TEAMS_SEARCH_PLACEHOLDER } from '../openteamily/static/discover/app.mjs';
 
 
 test('catalogInitial skips leading punctuation like the public homepage initial', () => {
@@ -301,6 +301,7 @@ test('default discover view is the unconnected feed and does not load the catalo
   const fetcher = async (path, options) => {
     requests.push([path, options.method]);
     if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    if (path.startsWith('/v1/discover/works?')) return {status: 200, json: async () => ({items: [], cursor: null})};
     throw new Error('unexpected ' + path);
   };
   await mount(doc, {fetcher, location: {search: ''}});
@@ -308,11 +309,12 @@ test('default discover view is the unconnected feed and does not load the catalo
   assert.equal(el('main-panel').hidden, false);
   assert.equal(el('feed-panel').hidden, false);
   assert.equal(el('catalog-view').hidden, true);
-  assert.equal(el('feed-note').textContent, FEED_ACTIVITY_NOTE);
+  assert.equal(el('feed-note').textContent, FEED_ACTIVITY_EMPTY_NOTE);
   assert.equal(el('feed-following-empty').hidden, true);
   assert.equal(el('feed-activity-empty').hidden, false);
   assert.equal(el('feed-tab-activity').attributes['aria-selected'], 'true');
   assert.equal(requests.some(([path]) => path.startsWith('/v1/discover/agents')), false);
+  assert.equal(requests.some(([path]) => path.startsWith('/v1/discover/works?')), true);
   el('feed-tab-following').handlers.click();
   assert.equal(el('feed-note').textContent, FEED_FOLLOWING_NOTE);
   assert.equal(el('feed-following-empty').hidden, false);
@@ -322,13 +324,10 @@ test('default discover view is the unconnected feed and does not load the catalo
   assert.equal(FEED_FOLLOWING_EMPTY_BODY, '你关注的人发布动态后会显示在这里。');
   assert.equal(FEED_FOLLOWING_NOTE.includes('没有对照截图'), false);
   assert.match(FEED_FOLLOWING_NOTE, /关注关系还没有接口/);
-  el('feed-search').handlers.submit({preventDefault() {}});
-  assert.equal(el('feed-search-note').hidden, false);
-  assert.equal(el('feed-search-note').textContent, FEED_SEARCH_NOTE);
   el('feed-tab-activity').handlers.click();
   assert.equal(el('feed-following-empty').hidden, true);
   assert.equal(el('feed-activity-empty').hidden, false);
-  assert.equal(el('feed-note').textContent, FEED_ACTIVITY_NOTE);
+  assert.equal(el('feed-note').textContent, FEED_ACTIVITY_EMPTY_NOTE);
 });
 
 test('teams catalog shows recorded chrome and does not load the agent catalog API', async () => {
@@ -367,3 +366,44 @@ test('teams catalog shows recorded chrome and does not load the agent catalog AP
   assert.equal(requests.every(([, method]) => method === 'GET'), true);
 });
 
+test('feedQuery encodes a keyword and a recency cursor', () => {
+  assert.equal(feedQuery('', ''), 'limit=12');
+  assert.equal(feedQuery('外观', '100.ci-doc'), 'limit=12&q=%E5%A4%96%E8%A7%82&cursor=100.ci-doc');
+});
+
+test('the activity feed renders opted-in work cards from the public API', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const fetcher = async (path) => {
+    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    if (path === '/v1/discover/works?limit=12') {
+      return {status: 200, json: async () => ({items: [{
+        slug: 'ci-fixture-doc',
+        title: '[CI FIXTURE] Document',
+        kind: 'document',
+        kind_label: '文档',
+        author: 'alice',
+        updated: 1800000000,
+        path: '/w/ci-fixture-doc',
+      }], cursor: null})};
+    }
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location: {search: ''}});
+  const el = id => doc.getElementById(id);
+  assert.equal(el('feed-grid').dataset.empty, 'false');
+  assert.equal(el('feed-grid').children.length, 1);
+  const card = el('feed-grid').children[0];
+  assert.equal(String(card.tagName).toLowerCase(), 'a');
+  assert.equal(card.href, '/w/ci-fixture-doc');
+  assert.equal(card.children[0].textContent, '文档');
+  assert.equal(card.children[1].textContent, '[CI FIXTURE] Document');
+  assert.equal(card.children[2].textContent.includes('alice'), true);
+  assert.equal(el('feed-note').textContent, FEED_ACTIVITY_LISTED_NOTE);
+  assert.equal(el('feed-count').textContent, '已显示 1 件公开作品');
+  assert.equal(el('feed-more').hidden, true);
+});
+
+test('formatFeedTime renders the listing timestamp in Asia/Shanghai', () => {
+  assert.equal(formatFeedTime(1800000000), '2027/1/15');
+});

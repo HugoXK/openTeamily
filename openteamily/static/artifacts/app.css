@@ -306,6 +306,18 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   background: var(--ot-surface);
 }
 
+#discover-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: end;
+  margin: 0 0 1rem;
+}
+
+#discover-slug {
+  min-width: 12rem;
+}
+
 #share-list,
 #version-list {
   list-style: none;

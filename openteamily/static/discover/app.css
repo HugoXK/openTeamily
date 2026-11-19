@@ -159,6 +159,41 @@ button.catalog-create[hidden], a.catalog-create[hidden] { display: none; }
   border-radius: 1rem;
   background: color-mix(in srgb, var(--ot-surface) 92%, var(--ot-line) 8%);
 }
+.feed-card {
+  display: flex;
+  flex-direction: column;
+  gap: .45rem;
+  min-height: 9.5rem;
+  padding: .85rem .9rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  background: var(--ot-surface);
+  color: inherit;
+  text-decoration: none;
+}
+.feed-card .kind {
+  margin: 0;
+  font-size: .7rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--ot-muted);
+  font-weight: 650;
+}
+.feed-card h3 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.feed-card .meta {
+  margin: auto 0 0;
+  color: var(--ot-muted);
+  font-size: .85rem;
+}
+#feed-more {
+  margin: 0 0 1rem;
+}
+#feed-count { margin: 0 0 .5rem; color: var(--ot-muted); font-size: .9rem; }
 @media (max-width: 65rem) {
   .feed-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   body.app-workspace:not(.chat-open) > main > #main-panel { max-width: none; }

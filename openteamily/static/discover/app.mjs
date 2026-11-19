@@ -50,11 +50,46 @@ export const TEAMS_NOTE = '公开 AI 团队目录还没有接口，所以这里�
 export const TEAMS_SEARCH_NOTE = '搜索 AI 团队尚未接通：没有对应的公开接口。';
 export const TEAMS_SEARCH_PLACEHOLDER = '搜索 AI 团队......';
 
-export const FEED_ACTIVITY_NOTE = '动态信息流还没有接口，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。';
+export const FEED_ACTIVITY_EMPTY_NOTE = '还没有公开作品，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。点赞、关注和分类筛选仍未接通。';
+export const FEED_ACTIVITY_LISTED_NOTE = '以下是工作区自愿公开的作品，不是推荐或奖励内容。点赞、关注和分类筛选仍未接通。';
+export const FEED_ACTIVITY_NOTE = FEED_ACTIVITY_EMPTY_NOTE;
 export const FEED_FOLLOWING_EMPTY_TITLE = '关注列表暂无动态';
 export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显示在这里。';
 export const FEED_FOLLOWING_NOTE = '关注关系还没有接口，所以这里保持对照里的空态，不会列出动态，也不会展示奖励活动。';
-export const FEED_SEARCH_NOTE = '搜索动态和创作者尚未接通：没有对应的公开接口。';
+export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。点赞、关注和分类筛选仍未接通。';
+
+export function feedQuery(query, cursor = '') {
+  const params = new URLSearchParams({limit: '12'});
+  if (query) params.set('q', query);
+  if (cursor) params.set('cursor', cursor);
+  return params.toString();
+}
+
+export function formatFeedTime(value) {
+  if (!value) return '';
+  const date = new Date(Number(value) * 1000);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: 'numeric', day: 'numeric',
+  }).format(date);
+}
+
+export function renderFeedCard(document, item) {
+  const card = document.createElement('a');
+  card.className = 'feed-card';
+  card.href = item.path || ('/w/' + (item.slug || ''));
+  const kind = document.createElement('p');
+  kind.className = 'kind';
+  kind.textContent = item.kind_label || item.kind || '';
+  const title = document.createElement('h3');
+  title.textContent = item.title || '';
+  const meta = document.createElement('p');
+  meta.className = 'meta';
+  const when = formatFeedTime(item.updated);
+  meta.textContent = [item.author || '', when].filter(Boolean).join(' · ');
+  card.append(kind, title, meta);
+  return card;
+}
 
 export function isAgentsCatalog(location) {
   const search = location && typeof location.search === 'string' ? location.search : '';
@@ -195,18 +230,97 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     applyCatalogChrome();
   }
 
+  const feedState = {items: [], cursor: '', query: '', loading: false};
+
   function setFeedTab(tab) {
     const following = tab === 'following';
     const followingBtn = document.getElementById('feed-tab-following');
     const activityBtn = document.getElementById('feed-tab-activity');
     if (followingBtn) followingBtn.setAttribute('aria-selected', following ? 'true' : 'false');
     if (activityBtn) activityBtn.setAttribute('aria-selected', following ? 'false' : 'true');
-    const note = document.getElementById('feed-note');
-    if (note) note.textContent = following ? FEED_FOLLOWING_NOTE : FEED_ACTIVITY_NOTE;
     const empty = document.getElementById('feed-following-empty');
     if (empty) empty.hidden = !following;
     const activityEmpty = document.getElementById('feed-activity-empty');
     if (activityEmpty) activityEmpty.hidden = following;
+    const searchNote = document.getElementById('feed-search-note');
+    if (following && searchNote) searchNote.hidden = true;
+    const more = document.getElementById('feed-more');
+    if (more) more.hidden = following || !feedState.cursor || feedState.loading;
+    const count = document.getElementById('feed-count');
+    const error = document.getElementById('feed-error');
+    if (following) {
+      if (count) count.textContent = '';
+      if (error) error.hidden = true;
+      const note = document.getElementById('feed-note');
+      if (note) note.textContent = FEED_FOLLOWING_NOTE;
+    } else {
+      applyFeedNote();
+    }
+  }
+
+  function applyFeedNote() {
+    const note = document.getElementById('feed-note');
+    const searchNote = document.getElementById('feed-search-note');
+    if (!note) return;
+    if (feedState.query && !feedState.items.length && !feedState.loading) {
+      note.textContent = FEED_SEARCH_EMPTY_NOTE;
+      if (searchNote) {
+        searchNote.hidden = false;
+        searchNote.textContent = FEED_SEARCH_EMPTY_NOTE;
+      }
+    } else {
+      if (searchNote) searchNote.hidden = true;
+      note.textContent = feedState.items.length ? FEED_ACTIVITY_LISTED_NOTE : FEED_ACTIVITY_EMPTY_NOTE;
+    }
+  }
+
+  function renderFeed() {
+    const grid = document.getElementById('feed-grid');
+    if (!grid) return;
+    grid.replaceChildren();
+    for (const item of feedState.items) grid.append(renderFeedCard(document, item));
+    grid.dataset.empty = feedState.items.length ? 'false' : 'true';
+    const count = document.getElementById('feed-count');
+    if (count) {
+      count.textContent = feedState.items.length
+        ? '已显示 ' + feedState.items.length + ' 件公开作品'
+        : '';
+    }
+    const more = document.getElementById('feed-more');
+    if (more) more.hidden = !feedState.cursor || feedState.loading;
+    applyFeedNote();
+  }
+
+  async function loadFeed({append = false} = {}) {
+    if (feedState.loading) return;
+    const input = document.getElementById('feed-query');
+    const query = input ? (input.value || '').trim() : '';
+    if (!append) {
+      feedState.items = [];
+      feedState.cursor = '';
+      feedState.query = query;
+    }
+    feedState.loading = true;
+    const error = document.getElementById('feed-error');
+    if (error) {
+      error.hidden = true;
+      error.textContent = '';
+    }
+    const result = await request('GET', `/v1/discover/works?${feedQuery(feedState.query, append ? feedState.cursor : '')}`);
+    feedState.loading = false;
+    if (result.status !== 200) {
+      if (error) {
+        error.hidden = false;
+        error.textContent = (result.body && result.body.error && result.body.error.message)
+          || '无法加载公开作品。';
+      }
+      renderFeed();
+      return;
+    }
+    const incoming = result.body.items || [];
+    feedState.items = append ? feedState.items.concat(incoming) : incoming;
+    feedState.cursor = result.body.cursor || '';
+    renderFeed();
   }
 
   function show(kind, text) {
@@ -449,18 +563,27 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   if (feedSearch) {
     feedSearch.addEventListener('submit', event => {
       event.preventDefault();
-      const note = document.getElementById('feed-search-note');
-      if (note) {
-        note.hidden = false;
-        note.textContent = FEED_SEARCH_NOTE;
-      }
+      loadFeed();
+    });
+  }
+  const feedMore = document.getElementById('feed-more');
+  if (feedMore) {
+    feedMore.addEventListener('click', () => {
+      if (feedState.cursor && !feedState.loading) loadFeed({append: true});
     });
   }
   for (const tab of ['following', 'activity']) {
     const button = document.getElementById(tab === 'following' ? 'feed-tab-following' : 'feed-tab-activity');
-    if (button) button.addEventListener('click', () => setFeedTab(tab));
+    if (button) button.addEventListener('click', () => {
+      setFeedTab(tab);
+      if (tab === 'activity' && !feedState.items.length && !feedState.loading) loadFeed();
+    });
   }
-  if (!agentsView) setFeedTab('activity');
+  const starting = [load()];
+  if (!catalogView) {
+    setFeedTab('activity');
+    starting.push(loadFeed());
+  }
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
     event.preventDefault();
@@ -468,7 +591,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     await load();
   });
 
-  return load();
+  return Promise.all(starting);
 }
 
 if (globalThis.document && globalThis.document.getElementById('manage-list')) {
