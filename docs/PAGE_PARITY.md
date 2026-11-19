@@ -114,3 +114,16 @@ Wired in this pass: media attach shortcuts, `/space?new=` and `/automations?temp
 Remaining visual gaps: per-message hover actions still sit in flow under the bubble (Teamily floats them); the new-document editor in space is plain; thumbnails are drawn from text, not rendered screenshots; connector marks remain original geometrics.
 
 `impeccable detect` (v4.9.2) on this pass’s changed pages and styles (chat, memory, discover, artifacts, settings, about, profile, automations, shell, thumb.mjs, rich.mjs): 2 findings, down from 11 in the previous pass. Both are nested-card reports for popovers that open inside a card (the session-pane compose menu and the composer’s +/attachment sheets) and were left as detector false positives. The onboarding page (not changed here) still has its pre-existing cramped-padding advisories.
+
+
+## Connected app tool execution (2026-11-19)
+
+The per-user Composio settings flow now has a task-scoped tool broker and an
+explicit one-shot approval area on the connectors page. Python FlyBot/zipapp and
+container management task loops can feed discovered schemas to an OpenAI-style
+model, submit immutable proposals, wait for owner approval and feed results back.
+No Composio key is given to the runtime. This is functional in **synthetic/mock
+tests only**, not real provider or Teamily parity acceptance. Group/automation/
+gateway work and standalone DSH sessions do not receive personal-tool access.
+The skill-library install indicator remains a demo, not a real installed skill.
+Full boundaries, user steps and remaining blockers: [CONNECTED_TOOLS.md](CONNECTED_TOOLS.md).
