@@ -604,6 +604,15 @@ async function main() {
         `avatar=${identity || 'empty'} hidden=${identityHidden} expected=${expectedInitial} order=${[filterBox && Math.round(filterBox.x), searchBox && Math.round(searchBox.x), addBox && Math.round(addBox.x)].join(',')}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '16-agents-conversation.png')));
+      const chrome = await page.evaluate(() => ({
+        rail: document.querySelector('.app-rail').getBoundingClientRect().width,
+        sessions: document.getElementById('session-pane').getBoundingClientRect().width,
+        icons: document.querySelectorAll('.chat-actions svg').length,
+        shellOverflow: document.documentElement.scrollWidth > innerWidth,
+      }));
+      record('ui_chat_compact_chrome', chrome.rail <= 64 && chrome.sessions <= 320 && chrome.icons >= 3 && !chrome.shellOverflow,
+        JSON.stringify(chrome));
+
       screenshots.push(path.basename(await shot(page, outDir, '22-chat-desktop.png')));
       screenshots.push(path.basename(await shot(page, outDir, '62-chat-list-previews.png')));
       screenshots.push(path.basename(await shot(page, outDir, '68-chat-header-identity.png')));
@@ -964,6 +973,15 @@ async function main() {
         await waitForLocatorText(page, '#artifact-list', title);
       }
       artifacts = await visibleText(page.locator('#artifact-list'));
+      const libraryLayout = () => page.locator('#artifact-list').evaluate(node => ({layout: node.dataset.layout, display: getComputedStyle(node).display}));
+      const initialLayout = await libraryLayout();
+      await page.locator('#layout-toggle [data-layout="list"]').click();
+      const listLayout = await libraryLayout();
+      await page.locator('#layout-toggle [data-layout="grid"]').click();
+      const restoredLayout = await libraryLayout();
+      record('ui_library_real_layout_toggle', initialLayout.layout === 'grid' && initialLayout.display === 'grid'
+        && listLayout.layout === 'list' && restoredLayout.layout === 'grid', JSON.stringify({initialLayout,listLayout,restoredLayout}));
+
     } catch (error) {
       artifacts = String(error);
     }

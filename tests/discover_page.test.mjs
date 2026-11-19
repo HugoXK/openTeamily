@@ -506,3 +506,19 @@ test('switching private feed tabs cannot be overwritten by an older in-flight re
   assert.match(JSON.stringify(grid.children[0]), /Saved fixture/);
   assert.doesNotMatch(JSON.stringify(grid.children[0]), /Stale fixture/);
 });
+
+
+test('work covers use real same-origin published media, not invented screenshots', () => {
+  const doc = fakeDocument();
+  const image = renderFeedCard(doc, {slug: 'real-photo', title: '<safe>', kind: 'image'});
+  const cover = image.children.find(node => node.className === 'work-cover');
+  assert.equal(cover.tagName, 'img');
+  assert.equal(cover.src, '/w/real-photo/file');
+  assert.equal(cover.loading, 'lazy');
+  assert.equal(cover.alt, '');
+  const website = renderFeedCard(doc, {slug: 'real-site', title: 'Site', kind: 'website'});
+  const fallback = website.children.find(node => node.className === 'work-cover');
+  assert.equal(fallback.tagName, 'div');
+  assert.equal(fallback.textContent, '网页');
+  assert.equal(fallback.src, undefined);
+});

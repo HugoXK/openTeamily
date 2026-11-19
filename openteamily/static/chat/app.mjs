@@ -278,6 +278,27 @@ function formatTime(value) {
   }).format(date);
 }
 
+export function sessionDisplayGroup(item) {
+  return item.pinned ? '置顶' : (item.kind === 'group' ? '群聊' : '直聊');
+}
+
+export function groupSessionsForDisplay(items) {
+  return ['置顶', '直聊', '群聊'].flatMap(group => items.filter(item => sessionDisplayGroup(item) === group));
+}
+
+export function formatSessionTime(value, now = Date.now()) {
+  const timestamp = Number(value) * 1000;
+  if (!value || !Number.isFinite(timestamp)) return '';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
+  const day = ms => Math.floor((ms + 8 * 3600000) / 86400000);
+  const days = day(now) - day(timestamp);
+  if (days === 0) return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'}).format(date);
+  if (days === 1) return '昨天';
+  if (days > 1 && days < 7) return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', weekday: 'short'}).format(date);
+  return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', year: 'numeric', month: 'numeric', day: 'numeric'}).format(date);
+}
+
 export function initial(name) {
   const text = (name || '').trim();
   const match = text.match(/\p{L}|\p{N}/u);
@@ -467,7 +488,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       || (filter === 'read' && item.source === 'social' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
     document.getElementById('conversations-empty').hidden = visible.length > 0;
-    for (const session of visible) {
+    let lastGroup = '';
+    for (const session of groupSessionsForDisplay(visible)) {
       const li = document.createElement('li');
       const button = document.createElement('button');
       button.type = 'button';
@@ -492,7 +514,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       copy.append(title, preview);
       const time = document.createElement('span');
       time.className = 'time';
-      time.textContent = formatTime(session.updated);
+      time.textContent = formatSessionTime(session.updated);
+      time.title = formatTime(session.updated);
       button.append(avatar, copy, time);
       if (session.unread_count > 0) {
         const unread = document.createElement('span');
@@ -502,6 +525,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         time.append(unread);
       }
 
+      const group = sessionDisplayGroup(session);
+      if (group !== lastGroup) {
+        li.className = 'session-divider'; li.dataset.section = group; lastGroup = group;
+      }
+      button.setAttribute('aria-label', group + '：' + session.title);
       li.append(button);
       list.append(li);
     }

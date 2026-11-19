@@ -137,3 +137,16 @@ test('applyDirectoryCollapsed hides the directory in session only', () => {
   assert.equal(nodes['list-panel'].className.includes('dir-collapsed'), false);
   assert.equal(nodes['dir-collapse'].getAttribute('aria-expanded'), 'true');
 });
+
+
+test('library layout applies actual grid/list presentation state without changing data', async () => {
+  const {applyArtifactLayout} = await import('../openteamily/static/artifacts/app.mjs');
+  const row = {id: 'persisted-work'};
+  const list = {dataset: {}, children: [row]};
+  assert.equal(applyArtifactLayout(list, 'grid'), 'grid');
+  assert.equal(list.dataset.layout, 'grid');
+  assert.equal(applyArtifactLayout(list, 'list'), 'list');
+  assert.equal(list.dataset.layout, 'list');
+  assert.equal(applyArtifactLayout(list, 'unknown'), 'grid');
+  assert.equal(list.children[0], row);
+});
