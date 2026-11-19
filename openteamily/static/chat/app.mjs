@@ -2266,6 +2266,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeComposeDialog();
   });
 
+  const uploadTrigger = document.getElementById('composer-upload-trigger');
+  if (uploadTrigger) {
+    uploadTrigger.addEventListener('click', () => {
+      const input = document.getElementById('chat-attachment');
+      if (input) input.click();
+      const plus = document.querySelector('details.composer-plus');
+      if (plus) plus.open = false;
+    });
+  }
+
   globalThis.addEventListener('hashchange', () => load());
   return load();
 }
