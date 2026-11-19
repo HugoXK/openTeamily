@@ -702,3 +702,57 @@ body.app-workspace > main > #settings-panel { max-width: 32rem; padding: .875rem
 #settings-panel .settings-card.settings-empty { margin: 0 0 .5rem; padding: 1rem .875rem; border-radius: .75rem; background: var(--ot-surface-2); box-shadow: 0 0 0 1px var(--ot-line); font-size: .75rem; color: var(--ot-muted); }
 #privacy #save:enabled:hover { background: var(--ot-accent-hover); color: var(--ot-on-accent); }
 #settings-panel .page-top h1 { font-size: 1.125rem; }
+
+/* Skill configuration subpage (recorded /settings/skill-configuration). */
+#settings-panel [data-settings-page="skill-configuration"] { max-width: 36rem; margin: 0 auto; }
+#settings-panel .skill-banner {
+  display: flex; gap: .7rem; align-items: flex-start;
+  margin: 0 0 .75rem; padding: .85rem 1rem; border-radius: .9rem;
+  background: var(--ot-accent-soft); color: var(--ot-ink);
+}
+#settings-panel .skill-banner-icon {
+  display: grid; place-items: center; flex: none; width: 1.25rem; height: 1.25rem;
+  color: var(--ot-accent); margin-top: .1rem;
+}
+#settings-panel .skill-banner-title { margin: 0 0 .2rem; font-size: .8125rem; font-weight: 650; }
+#settings-panel .skill-banner-body { margin: 0; font-size: .75rem; line-height: 1.55; color: var(--ot-muted); }
+#settings-panel .skill-help {
+  margin: 0 0 1.1rem; padding: .7rem .9rem; border-radius: .9rem;
+  background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line);
+}
+#settings-panel .skill-help > summary {
+  display: flex; align-items: center; gap: .5rem; cursor: pointer; list-style: none;
+  font-size: .875rem; font-weight: 500;
+}
+#settings-panel .skill-help > summary::-webkit-details-marker { display: none; }
+#settings-panel .skill-help-icon { display: inline-flex; color: var(--ot-muted); }
+#settings-panel .skill-help-chevron { margin-left: auto; color: var(--ot-muted); font-size: .75rem; }
+#settings-panel .skill-help[open] .skill-help-chevron { transform: rotate(180deg); }
+#settings-panel .skill-help .note { margin: .65rem 0 0; }
+#settings-panel .skill-head {
+  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  margin: 0 0 .75rem;
+}
+#settings-panel .skill-head-title { margin: 0; font-size: .95rem; font-weight: 650; }
+#settings-panel .skill-add {
+  display: inline-flex; align-items: center; height: 2rem; padding: 0 .85rem;
+  border: 0; border-radius: 999px; background: var(--ot-accent); color: #fff;
+  font: inherit; font-size: .8125rem; font-weight: 650; cursor: pointer;
+}
+#settings-panel .skill-add:hover { background: var(--ot-accent-hover, #07663a); }
+#settings-panel .skill-empty {
+  display: grid; justify-items: center; text-align: center; gap: .3rem;
+  padding: 2.25rem 1rem; border-radius: 1rem; background: var(--ot-surface-2, #f4f7f5);
+}
+#settings-panel .skill-empty-icon { color: var(--ot-muted); margin-bottom: .35rem; }
+#settings-panel .skill-empty-title { margin: 0; font-size: .875rem; font-weight: 650; }
+#settings-panel .skill-empty-body { margin: 0; font-size: .75rem; color: var(--ot-muted); }
+#settings-panel .skill-form-card { margin-top: .75rem; padding: .9rem 1rem !important; }
+#settings-panel #skill-secret-list { list-style: none; margin: 0 0 .75rem; padding: 0; display: grid; gap: .4rem; }
+#settings-panel #skill-secret-list li {
+  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  padding: .55rem 0; border-bottom: 1px solid var(--ot-line); font-size: .85rem;
+}
+#settings-panel #skill-secret-list button { width: auto; }
+#settings-panel .skill-form-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .6rem; }
+#settings-panel .skill-empty { border: 0; box-shadow: none; background: var(--ot-surface-2, #f4f7f5); }

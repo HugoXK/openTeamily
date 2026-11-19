@@ -63,25 +63,38 @@
   </section>
   <section id="main-panel" hidden>
     <header class="page-top">
-      <h1>自动化</h1>
-      <p class="note">工作、生活页签展示 2026-11-16 对照记下的模板目录（标题和说明）。目录卡片的具体排版未经截图核实，不能写成界面已对等。意图、时间选项和生活模板文案已按第二轮对照补齐；每月的日期输入仍未完整记下。服务进程会在后台按点运行已启用的自动化，并把结果写在运行记录里；也可以手动触发一次。循环测试里的假提供方不能当成真实模型厂商已经验证。</p>
+      <div class="page-heading">
+        <h1>自动化</h1>
+        <button type="button" id="new-automation">新建自动化</button>
+      </div>
+      <details class="gap-note">
+        <summary>对照说明</summary>
+        <p class="note">工作、生活页签展示 2026-11-16 对照记下的模板目录（标题和说明）。目录卡片的具体排版未经截图核实，不能写成界面已对等。意图、时间选项和生活模板文案已按第二轮对照补齐；每月的日期输入仍未完整记下。服务进程会在后台按点运行已启用的自动化，并把结果写在运行记录里；也可以手动触发一次。循环测试里的假提供方不能当成真实模型厂商已经验证。</p>
+      </details>
     </header>
-    <p id="whoami"></p>
-    <label>工作区
-      <select id="workspace"></select>
-    </label>
+    <p id="whoami" class="visually-hidden"></p>
+    <div class="page-toolbar">
+      <label class="workspace-field">工作区
+        <select id="workspace"></select>
+      </label>
+    </div>
     <section id="list-panel">
       <div class="tabs" role="tablist">
         <button type="button" role="tab" data-category="mine" aria-selected="true">我的自动化</button>
         <button type="button" role="tab" data-category="work" aria-selected="false">工作</button>
         <button type="button" role="tab" data-category="life" aria-selected="false">生活</button>
       </div>
-      <label>搜索 <input id="search" type="text" maxlength="80" autocomplete="off"></label>
+      <label class="pill-search"><span class="visually-hidden">搜索</span>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="search" type="search" maxlength="80" autocomplete="off" placeholder="搜索">
+      </label>
       <ul id="automation-list"></ul>
-      <p id="list-empty" class="note" hidden>这个分类下还没有自动化。</p>
-      <button type="button" id="new-automation">新建自动化</button>
+      <p id="list-empty" class="empty-state" hidden>这个分类下还没有自动化。</p>
     </section>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
+      <div class="editor-head">
+        <button type="button" id="cancel-editor">‹ 自动化</button>
+      </div>
       <fieldset>
         <legend>模板</legend>
         <label>模板
@@ -142,16 +155,17 @@
         <label><input type="checkbox" name="enabled"> 启用</label>
       </fieldset>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
-      <button type="submit" id="save-automation">保存</button>
-      <button type="button" id="tick-automation">立即触发一次</button>
-      <button type="button" id="cancel-editor">返回列表</button>
-      <button type="button" id="remove-automation">删除</button>
+      <div class="editor-actions">
+        <button type="submit" id="save-automation">保存</button>
+        <button type="button" id="tick-automation">立即触发一次</button>
+        <button type="button" id="remove-automation">删除</button>
+      </div>
     </form>
     <section id="run-panel" hidden>
       <h2>运行记录</h2>
       <p class="note">结果来自已连接的 FlyBot 代理。假提供方给出的文本不能当成真实模型已经验证。</p>
       <ul id="run-list"></ul>
-      <p id="run-empty" class="note" hidden>还没有运行记录。</p>
+      <p id="run-empty" class="empty-state" hidden>还没有运行记录。</p>
     </section>
   </section>
   </main>

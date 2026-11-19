@@ -63,18 +63,25 @@
   </section>
   <section id="main-panel" hidden>
     <header class="page-top">
-      <h1>成员</h1>
-      <p class="note">按已注册用户名添加成员，或生成邀请链接让已登录账号加入。角色和邀请还没有和 Teamily 对照过，不能写成已经功能对等。没有对照过的默认值：邀请默认单次使用、7 天过期，不会发邮件。</p>
+      <div class="page-heading">
+        <h1>成员</h1>
+      </div>
+      <details class="gap-note">
+        <summary>对照说明</summary>
+        <p class="note">按已注册用户名添加成员，或生成邀请链接让已登录账号加入。角色和邀请还没有和 Teamily 对照过，不能写成已经功能对等。没有对照过的默认值：邀请默认单次使用、7 天过期，不会发邮件。</p>
+      </details>
     </header>
-    <p id="whoami"></p>
-    <label>工作区
-      <select id="workspace"></select>
-    </label>
-    <p id="role-note" class="note"></p>
+    <p id="whoami" class="visually-hidden"></p>
+    <div class="page-toolbar">
+      <label class="workspace-field">工作区
+        <select id="workspace"></select>
+      </label>
+      <p id="role-note" class="note"></p>
+    </div>
     <section id="members-panel">
       <h2>成员列表</h2>
       <ul id="member-list"></ul>
-      <p id="members-empty" class="note" hidden>这个工作区还没有可显示的成员。</p>
+      <p id="members-empty" class="empty-state" hidden>这个工作区还没有可显示的成员。</p>
     </section>
     <form id="add-form" method="post" action="/v1/workspaces" hidden>
       <fieldset>
@@ -108,12 +115,12 @@
     <section id="invites-panel" hidden>
       <h2>已发出的邀请</h2>
       <ul id="invite-list"></ul>
-      <p id="invites-empty" class="note" hidden>还没有有效或已记录的邀请。</p>
+      <p id="invites-empty" class="empty-state" hidden>还没有有效或已记录的邀请。</p>
     </section>
     <section id="join-requests-panel" hidden>
       <h2>待审批的加入申请</h2>
       <ul id="join-request-list"></ul>
-      <p id="join-requests-empty" class="note" hidden>没有待审批的申请。</p>
+      <p id="join-requests-empty" class="empty-state" hidden>没有待审批的申请。</p>
     </section>
     <form id="directory-listing-form" hidden>
       <fieldset>
@@ -126,12 +133,14 @@
     </form>
     <section id="team-directory-panel">
       <h2>发现团队</h2>
-      <form id="directory-search-form" role="search">
-        <label>搜索团队 <input type="search" id="directory-query" maxlength="60" autocomplete="off" placeholder="名称或简介"></label>
+      <form id="directory-search-form" role="search" class="directory-toolbar">
+        <label class="pill-search"><span class="visually-hidden">搜索团队</span>
+          <input type="search" id="directory-query" maxlength="60" autocomplete="off" placeholder="名称或简介">
+        </label>
         <button type="submit">搜索</button>
       </form>
       <ul id="directory-results"></ul>
-      <p id="directory-empty" class="note" hidden>没有找到公开的团队。</p>
+      <p id="directory-empty" class="empty-state" hidden>没有找到公开的团队。</p>
     </section>
     <form id="accept-form" method="post" action="/v1/invites/accept">
       <fieldset>

@@ -63,11 +63,11 @@
   </section>
   <section id="main-panel" hidden>
     <header class="page-top runtime-head">
-      <a href="/settings" class="runtime-back" aria-label="返回设置" id="runtime-back">‹</a>
-      <h1>运行时</h1>
+      <a href="/settings" class="runtime-back" aria-label="返回设置" id="runtime-back">‹ 运行时</a>
+      <h1 class="visually-hidden">运行时</h1>
     </header>
-    <p id="whoami"></p>
-    <div class="tabs" role="tablist">
+    <p id="whoami" hidden></p>
+    <div class="tabs runtime-tabs" role="tablist">
       <button type="button" role="tab" data-tab="runtimes" aria-selected="true">运行时</button>
       <button type="button" role="tab" data-tab="connect" aria-selected="false">连接</button>
     </div>
@@ -75,54 +75,97 @@
       <section class="runtime-section" id="hosted-agent-section">
         <h2>托管云端 Agent</h2>
         <p class="note">对照里这里是由平台托管、无需自备设备的云端 Agent。OpenTeamily 不提供这项服务，智能体跑在你自己的 FlyBot 容器或已连接的机器上。</p>
-        <article class="runtime-card is-unavailable" id="hosted-agent-card">
-          <p class="runtime-card-title">托管云端 Agent <span class="runtime-badge is-unavailable">未提供</span></p>
-          <p class="runtime-card-state" id="hosted-agent-state">未提供</p>
+        <article class="runtime-card is-unavailable runtime-row" id="hosted-agent-card">
+          <span class="runtime-glyph runtime-glyph-cloud" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18h11a4 4 0 0 0 0-8 6 6 0 0 0-11.3-1.6A4.5 4.5 0 0 0 7 18Z"/></svg>
+          </span>
+          <div class="runtime-card-copy">
+            <p class="runtime-card-title">托管云端 Agent <span class="runtime-badge is-unavailable">未提供</span></p>
+            <p class="runtime-card-state" id="hosted-agent-state">未提供</p>
+          </div>
           <button type="button" disabled title="未实现：OpenTeamily 不提供由平台托管的云端 Agent">不可用</button>
         </article>
       </section>
       <section class="runtime-section" id="hosted-computer-section">
         <h2>托管电脑</h2>
         <p class="note">对照里这一项写的是尚未配置、即将推出的托管云端计算机。OpenTeamily 不提供这项服务，也没有可保存的配置表单。</p>
-        <article class="runtime-card is-unavailable" id="hosted-computer-card">
-          <p class="runtime-card-title">托管云端计算机 <span class="runtime-badge is-pending">尚未配置</span></p>
-          <p class="runtime-card-state" id="hosted-computer-state">尚未配置</p>
+        <article class="runtime-card is-unavailable runtime-row" id="hosted-computer-card">
+          <span class="runtime-glyph runtime-glyph-computer" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v9H4z M8 19h8 M12 15v4"/></svg>
+          </span>
+          <div class="runtime-card-copy">
+            <p class="runtime-card-title">托管云端计算机 <span class="runtime-badge is-pending">尚未配置</span></p>
+            <p class="runtime-card-state" id="hosted-computer-state">尚未配置</p>
+          </div>
           <button type="button" disabled title="未实现：OpenTeamily 不提供托管云端计算机">即将推出</button>
         </article>
       </section>
-      <section class="runtime-section" id="local-runtime-section">
+      <section class="runtime-section runtime-local-card" id="local-runtime-section">
         <h2>自托管 FlyBot</h2>
-        <article class="runtime-card" id="local-status-card" data-state="empty">
-          <p class="runtime-card-title">本地运行时 <span class="runtime-badge is-offline" id="local-status-badge">离线</span></p>
-          <p class="runtime-card-state" id="local-status-label">尚未连接本机或远程设备</p>
-          <p class="note" id="local-status-detail">请在「连接」里生成密钥，下载 flybot.pyz，在自己的机器上启动守护进程并用同一账号登记。OpenTeamily 没有官方桌面应用。</p>
+        <article class="runtime-status" id="local-status-card" data-state="empty">
+          <span class="runtime-glyph runtime-glyph-local" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v10H4z M8 19h8 M12 15v4"/></svg>
+          </span>
+          <div class="runtime-card-copy">
+            <p class="runtime-card-title">本地运行时 <span class="runtime-badge is-offline" id="local-status-badge">离线</span></p>
+            <p class="runtime-card-state" id="local-status-label">尚未连接本机或远程设备</p>
+            <p class="note" id="local-status-detail">请在「连接」里生成密钥，下载 flybot.pyz，在自己的机器上启动守护进程并用同一账号登记。OpenTeamily 没有官方桌面应用。</p>
+          </div>
         </article>
         <div class="setup-steps" id="local-setup">
-          <h3>完成连接</h3>
+          <div class="setup-steps-head"><h3>三步完成连接</h3><p class="note">不到一分钟</p></div>
           <ol>
             <li>
-              <h4>1. 下载 CLI</h4>
-              <p>从本服务显式下载 zipapp，不要把安装脚本管道给 shell。</p>
-              <p><a href="/install/flybot.pyz">下载 flybot.pyz</a> · <a href="/download">打开下载页</a></p>
+              <span class="setup-index" aria-hidden="true">1</span>
+              <div>
+                <h4>下载 CLI。</h4>
+                <p>从本服务显式下载 zipapp，不要把安装脚本管道给 shell。<a href="/install/flybot.pyz">下载 flybot.pyz</a> · <a href="/download">打开下载页</a></p>
+              </div>
             </li>
             <li>
-              <h4>2. 启动守护进程</h4>
-              <p>把密钥放在 --key-file 里，不要写进 shell 历史。</p>
-              <pre id="local-daemon-command">python3 flybot.pyz daemon start --origin __ORIGIN__ --key-file ./runtime-key</pre>
+              <span class="setup-index" aria-hidden="true">2</span>
+              <div>
+                <h4>启动守护进程。</h4>
+                <p>把密钥放在 --key-file 里，不要写进 shell 历史。</p>
+                <pre id="local-daemon-command">python3 flybot.pyz daemon start --origin __ORIGIN__ --key-file ./runtime-key</pre>
+              </div>
             </li>
             <li>
-              <h4>3. 完成连接</h4>
-              <p>守护进程登记并心跳后，会出现在下方列表。也可以打开「连接」生成密钥或发送测试任务。</p>
+              <span class="setup-index" aria-hidden="true">3</span>
+              <div>
+                <h4>完成连接。</h4>
+                <p>守护进程登记并心跳后，会出现在下方列表。也可以打开「连接」生成密钥或发送测试任务。</p>
+              </div>
             </li>
           </ol>
         </div>
+        <div class="runtime-downloads">
+          <div class="runtime-downloads-head"><h3>获取 FlyBot</h3><p class="note">本实例提供的 zipapp</p></div>
+          <div class="runtime-download-grid">
+            <a class="runtime-download-tile" href="/install/flybot.pyz">
+              <span class="runtime-download-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12.1 3c-2.3 4.1-2 6.3.4 8.2C10 13.6 8 16 8.7 20 6 18.4 4.5 15.3 4.5 12.2 4.5 7 8 3.3 12.1 3zm2.2.6C18.5 5 21 8.4 21 12.2c0 3.4-1.9 6.3-4.7 7.8.2-2.2-.6-3.9-2.2-5.6 2.3-2.1 2.8-4.5 1.2-7.8.4-.2.8-.3 1-.3z"/></svg></span>
+              <span class="runtime-download-copy"><strong>下载 macOS / Linux</strong><span>flybot.pyz · Python 3</span></span>
+              <span class="runtime-download-arrow" aria-hidden="true">↓</span>
+            </a>
+            <a class="runtime-download-tile" href="/download">
+              <span class="runtime-download-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M3 5h8.5v6.5H3V5zm9.5 0H21v6.5h-8.5V5zM3 12.5h8.5V21H3v-8.5zm9.5 0H21V21h-8.5v-8.5z"/></svg></span>
+              <span class="runtime-download-copy"><strong>Windows 与其他安装</strong><span>打开下载页</span></span>
+              <span class="runtime-download-arrow" aria-hidden="true">↓</span>
+            </a>
+          </div>
+        </div>
+        <div class="detected-panel">
         <div class="detected-bar">
-          <h3>已检测到的运行时</h3>
-          <button type="button" id="detect-runtimes">检测</button>
-          <button type="button" id="open-connect">连接远程机器</button>
+          <div>
+            <h3>已检测到的运行时</h3>
+            <p class="note">只会刷新已向本管理面登记的连接</p>
+          </div>
+          <button type="button" id="detect-runtimes" class="secondary">检测</button>
+          <button type="button" id="open-connect">+ 连接远程机器</button>
         </div>
         <ul id="detected-list"></ul>
         <p id="detected-empty" class="note" hidden>还没有向本管理面登记过的 FlyBot 运行时。检测只会刷新已有连接，不会扫描本机进程或局域网。</p>
+        </div>
       </section>
     </section>
     <section id="connect-panel" hidden>

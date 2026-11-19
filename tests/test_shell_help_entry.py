@@ -6,7 +6,7 @@ is a feature guide. These tests read the static pages as markup, not through a b
 offer exactly one link named 「功能指引」 to `/guide` with `role="menuitem"`, and the 「帮助中心」
 slot may stay only as a disabled placeholder whose tooltip says it is not implemented — never as a
 link to `/guide`. The placeholder keeps the first slot the target site gives it, with 功能指引 next.
-A page added later must carry the same pair or the count check fails.
+A later shell page must carry the same pair or the count check fails. `/about` is a standalone article without the account menu, so it is left out of this list.
 """
 from html.parser import HTMLParser
 from pathlib import Path
@@ -14,7 +14,10 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PAGES = sorted((ROOT / 'openteamily' / 'static').glob('*/index.html'))
+PAGES = sorted(
+    path for path in (ROOT / 'openteamily' / 'static').glob('*/index.html')
+    if path.parent.name != 'about'
+)
 
 
 class HelpMenu(HTMLParser):

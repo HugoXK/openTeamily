@@ -177,6 +177,7 @@
   <section id="main-panel" hidden>
     <header class="chat-top">
       <div class="chat-identity">
+        <span id="chat-avatar-stack" class="chat-avatar-stack" hidden></span>
         <span id="chat-avatar" class="avatar" hidden></span>
         <span class="chat-identity-text"><h1 id="chat-title">聊天</h1><span id="chat-subtitle" class="chat-subtitle" hidden></span></span>
       </div>
@@ -242,7 +243,7 @@
       <p class="conversation-search-scope">消息 <span class="conversation-search-scope-note">· 资料、照片和文件搜索尚未接通</span></p>
       <p id="conversation-search-status" role="status"></p><ul id="conversation-search-results"></ul><button type="button" id="conversation-search-more" hidden>加载更多</button>
     </section>
-    <p id="social-agent-members" class="gap-note" hidden></p>
+    <p id="social-agent-members" class="gap-note group-agent-note" hidden></p>
     <section id="pinned-messages" class="chat-strip" hidden aria-labelledby="pinned-messages-heading">
       <h2 id="pinned-messages-heading">置顶消息</h2>
       <ul id="pinned-message-list"></ul>
@@ -264,7 +265,7 @@
       <button type="button" id="forward-cancel">取消</button>
     </section>
     <p id="onboarding-banner" class="note" hidden>完善<strong>工作背景</strong>，让自动化推荐更贴合你。<a href="/onboarding">去设置</a></p>
-    <section id="group-agent-action" class="gap-note" hidden>
+    <section id="group-agent-action" class="gap-note group-agent-panel" hidden>
       <h2>群内智能体</h2>
       <p class="note">原创补充，未经对照。名册编辑只影响本群；请求只发送本次输入，不附带群历史，不会自动回复或互相委派。</p>
       <div id="group-agent-roster">
