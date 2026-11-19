@@ -13,6 +13,17 @@ from .search import snippet
 from .security import digest
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS memory_page_versions (
+ page_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ revision INTEGER NOT NULL CHECK(revision >= 1),
+ title TEXT NOT NULL,
+ body TEXT NOT NULL,
+ created INTEGER NOT NULL,
+ created_by TEXT NOT NULL REFERENCES users(id),
+ PRIMARY KEY(page_id, revision));
+CREATE INDEX IF NOT EXISTS memory_page_version_owner
+ ON memory_page_versions(workspace_id, page_id, revision);
 CREATE TABLE IF NOT EXISTS memory_pages (
  id TEXT PRIMARY KEY,
  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -354,3 +365,58 @@ def graph(db, workspace_id):
         'topics': topics,
         'counts': {'nodes': len(nodes), 'edges': len(edges), 'topics': len(topics)},
     }
+
+
+VERSION_KEEP = 50
+VERSION_ROW_SELECT = (
+    'SELECT v.*, u.username AS created_by_username FROM memory_page_versions v '
+    'JOIN users u ON u.id=v.created_by '
+)
+
+
+def version_view(row):
+    return {
+        'revision': row['revision'],
+        'title': row['title'],
+        'summary': snippet(row['body']) if row['body'].strip() else '（空白正文）',
+        'created': row['created'],
+        'created_by': row['created_by_username'],
+    }
+
+
+def version_body_view(row):
+    return {
+        'revision': row['revision'],
+        'title': row['title'],
+        'body': row['body'],
+        'created': row['created'],
+        'created_by': row['created_by_username'],
+    }
+
+
+def version_rows(db, workspace_id, page_id, before_revision, limit):
+    return db.execute(
+        VERSION_ROW_SELECT + 'WHERE v.workspace_id=? AND v.page_id=? AND v.revision<? '
+        'ORDER BY v.revision DESC LIMIT ?',
+        (workspace_id, page_id, before_revision, limit),
+    ).fetchall()
+
+
+def load_version(db, workspace_id, page_id, revision):
+    return db.execute(
+        VERSION_ROW_SELECT + 'WHERE v.workspace_id=? AND v.page_id=? AND v.revision=?',
+        (workspace_id, page_id, revision),
+    ).fetchone()
+
+
+def record_version(db, workspace_id, page_id, revision, title, body, now, user_id):
+    db.execute(
+        'INSERT OR IGNORE INTO memory_page_versions VALUES(?,?,?,?,?,?,?)',
+        (page_id, workspace_id, revision, title, body, now, user_id),
+    )
+    # A bounded history keeps the newest VERSION_KEEP revisions; pruning older
+    # snapshots never touches the current revision or the live page row.
+    db.execute(
+        'DELETE FROM memory_page_versions WHERE page_id=? AND revision<=?',
+        (page_id, revision - VERSION_KEEP),
+    )
