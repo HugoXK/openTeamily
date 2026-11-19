@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS artifacts (
  UNIQUE(workspace_id, key_hash),
  UNIQUE(workspace_id, title_hash));
 CREATE INDEX IF NOT EXISTS artifact_workspace ON artifacts(workspace_id, id);
+CREATE TABLE IF NOT EXISTS artifact_favorites (
+ artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ created INTEGER NOT NULL,
+ PRIMARY KEY (artifact_id, user_id));
 CREATE TABLE IF NOT EXISTS artifact_meta (
  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
  render TEXT NOT NULL CHECK(render IN ('website')));
@@ -380,7 +385,26 @@ def preview(row):
     first = (body or '').lstrip().split('\n', 1)[0]
     if first.startswith('#') and lines:
         heading, lines = lines[0], lines[1:]
-    return {'type': 'document', 'heading': heading, 'lines': lines[:PREVIEW_LINES]}
+    # Preserve the first visible block shapes instead of flattening headings,
+    # lists and code into indistinguishable prose. Bounded, text-only, never HTML.
+    blocks = []
+    in_code = False
+    for raw in (body or '').splitlines():
+        value = raw.strip()
+        if value.startswith('```'):
+            in_code = not in_code
+            continue
+        if not value:
+            continue
+        block_type = ('code' if in_code else 'heading' if re.match(r'^#{1,3}\s', value)
+                      else 'list' if re.match(r'^(?:[-*+] |[0-9]+[.)] )', value)
+                      else 'quote' if value.startswith('>') else 'text')
+        text = _text_lines(value)
+        if text:
+            blocks.append({'type': block_type, 'text': text[0]})
+        if len(blocks) >= 6:
+            break
+    return {'type': 'document', 'heading': heading, 'lines': lines[:PREVIEW_LINES], 'blocks': blocks}
 
 
 def can_edit(role, user_id, row):

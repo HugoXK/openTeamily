@@ -843,7 +843,7 @@ class App:
             if artifact_discover_path:
                 return self.artifact_discover_dispatch(db, session, method, query, now, env, *artifact_discover_path.groups())
             artifact_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|preview|file|export|restore|versions(?:/(\d{1,8})(?:/(export))?)?|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|favorite|preview|file|export|restore|versions(?:/(\d{1,8})(?:/(export))?)?|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
             if artifact_path:
                 return self.artifact_dispatch(db, session, method, query, now, env, *artifact_path.groups())
             memory_action_path = re.fullmatch(
@@ -915,7 +915,7 @@ class App:
                 return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}/(?:edit|retract|reactions|pin))?|forward|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}/(?:edit|retract|reactions|pin|save))?|forward|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -1539,7 +1539,10 @@ class App:
             if len(needle) > 80:
                 refuse(400, 'invalid', 'Invalid artifact request')
             rows = artifacts.listing(db, workspace['id'], cursor, limit + 1, needle)
-            items = [artifacts.view(row, include_body=False) for row in rows[:limit]]
+            favorites = {entry['artifact_id'] for entry in db.execute(
+                'SELECT f.artifact_id FROM artifact_favorites f JOIN artifacts a ON a.id=f.artifact_id '
+                'WHERE a.workspace_id=? AND f.user_id=?', (workspace['id'], session['user_id']))}
+            items = [dict(artifacts.view(row, include_body=False), favorited=row['id'] in favorites) for row in rows[:limit]]
             return 200, {'items': items,
                          'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
         if target_id is None and method == 'POST' and not query:
@@ -1553,6 +1556,19 @@ class App:
             return self.artifact_history_dispatch(
                 db, session, method, query, now, env, actor, row, action, version, version_export
             )
+        if action == 'favorite':
+            if method != 'POST' or query:
+                refuse(400, 'invalid', 'Invalid favorite request')
+            enabled = self.body(env, ['enabled']).get('enabled')
+            if type(enabled) is not bool:
+                refuse(400, 'invalid', 'Provide enabled as a boolean')
+            if enabled:
+                db.execute('INSERT OR IGNORE INTO artifact_favorites VALUES(?,?,?)',
+                           (row['id'], session['user_id'], now))
+            else:
+                db.execute('DELETE FROM artifact_favorites WHERE artifact_id=? AND user_id=?',
+                           (row['id'], session['user_id']))
+            return 200, {'favorited': enabled}, []
         if action == 'remove':
             if method != 'POST' or query:
                 refuse(400, 'invalid', 'Invalid artifact request')
@@ -3675,6 +3691,8 @@ class App:
             return self.forward_social_messages(db, workspace, session, row, now, env)
         if action and action.endswith('/reactions') and method == 'POST' and not query:
             return self.react_social_message(db, session, row, action.split('/')[1], now, env)
+        if action and action.endswith('/save') and method == 'POST' and not query:
+            return self.save_social_message(db, workspace, session, row, action.split('/')[1], now, env)
         if action and action.startswith('messages/') and method == 'POST' and not query:
             message_id, operation = action.split('/')[1:]
             message = db.execute('SELECT * FROM social_messages WHERE conversation_id=? AND id=?',
@@ -3733,6 +3751,37 @@ class App:
         if action == 'messages' and method == 'POST' and not query:
             return self.send_social_message(db, workspace, session, row, now, env)
         refuse(400, 'invalid', 'Invalid messenger request')
+
+    def save_social_message(self, db, workspace, session, conversation, message_id, now, env):
+        # The caller already passed workspace AND conversation membership checks.
+        # Saving is explicit: the UI warns that the copy becomes workspace-visible.
+        body = self.body(env, ['title', 'revision'])
+        message = db.execute(f'SELECT * FROM ({social.MESSAGE_ROWS}) WHERE conversation_id=? AND id=?',
+                             (conversation['id'], message_id)).fetchone()
+        if message is None:
+            refuse(404, 'not_found', 'Message not found')
+        if message['retracted'] or not social.valid_body(message['body']):
+            refuse(409, 'conflict', 'Only available text messages can be saved')
+        revision = body.get('revision')
+        if type(revision) is not int or revision != (message['revision'] or 1):
+            refuse(409, 'conflict', 'Message changed; reload before saving')
+        title = body.get('title')
+        if not artifacts.valid_title(title):
+            refuse(400, 'invalid', 'Provide a document title')
+        existing = artifacts.load_chat_artifact(db, workspace['id'], message_id)
+        if existing is not None:
+            return 200, {'artifact': artifacts.view(existing)}, []
+        if db.execute('SELECT COUNT(*) FROM artifacts WHERE workspace_id=?',
+                      (workspace['id'],)).fetchone()[0] >= self.config.max_artifacts_per_workspace:
+            refuse(429, 'quota', 'Artifact capacity reached')
+        title = artifacts.unique_title(db, workspace['id'], title.strip(), message_id)
+        artifact_id = uuid4().hex
+        db.execute('INSERT INTO artifacts VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?)',
+                   (artifact_id, workspace['id'], title, artifacts.title_hash(title), 'document',
+                    message['body'][:artifacts.BODY_MAX], now, now, session['user_id'], session['user_id'],
+                    digest('artifact-source:social_message:' + message_id), digest('social-message:' + message_id)))
+        artifacts.attach_chat_source(db, artifact_id, workspace['id'], now, conversation['id'], message_id)
+        return self.artifact_saved(db, workspace['id'], artifact_id, 201)
 
     def pin_social_message(self, db, session, row, message_id, now, env):
         pinned = self.body(env, ['pinned']).get('pinned')
