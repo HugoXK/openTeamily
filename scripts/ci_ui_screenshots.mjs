@@ -1760,7 +1760,7 @@ async function main() {
           && discoverText.includes('搜索动态、创作者')
           && discoverText.includes('[CI FIXTURE] Document')
           && discoverText.includes('文档')
-          && discoverText.includes('点赞、关注和分类筛选仍未接通')
+          && discoverText.includes('点赞、关注和其他分类仍未接通')
           && !discoverText.includes('动态信息流还没有接口')
           && discoverText.includes('热门')
           && discoverText.includes('/discover?tab=agents')
@@ -1770,6 +1770,15 @@ async function main() {
         `whoami=${discoverWho || '(empty)'}; current=${discoverCurrent}; ${discoverText || 'discover empty'}`,
       );
       screenshots.push(path.basename(await shot(page, outDir, '52-discover.png')));
+      await page.locator('#feed-kind-website').click();
+      await waitForLocatorText(page, '#feed-count', '已显示 1 件公开作品');
+      record('discover_work_type_filter',
+        await page.locator('#feed-grid a[href="/w/ci-fixture-site"]').count() === 1
+          && await page.locator('#feed-grid a[href="/w/ci-fixture-doc"]').count() === 0
+          && await page.locator('#feed-kind-website').getAttribute('aria-current') === 'true',
+        'website type filter uses the opted-in website fixture');
+      await page.locator('#feed-kind-all').click();
+      await waitForLocatorText(page, '#feed-count', '已显示 2 件公开作品');
       await page.locator('#feed-tab-following').click();
       await waitForLocatorText(page, '#feed-following-empty', '关注列表暂无动态');
       const followingText = `${await visibleText(page.locator('#feed-panel'))}`;
