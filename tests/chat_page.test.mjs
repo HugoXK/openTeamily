@@ -833,11 +833,11 @@ for (const mode of ['visible', 'hidden', 'failed']) {
     const restore = installChatGlobals({narrow: true});
     try {
       await mount(doc, {fetcher});
-      assert.equal(sessionRows(el)[0].children[3].textContent, '2');
+      assert.equal(sessionRows(el)[0].children[2].children[0].textContent, '2');
       await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
       if (mode === 'hidden') assert.equal(posts.length, 0);
       else assert.deepEqual(posts, [{message_id: 'm-2'}]);
-      assert.equal(sessionRows(el)[0].children[3].textContent, mode === 'visible' ? '1' : '2');
+      assert.equal(sessionRows(el)[0].children[2].children[0].textContent, mode === 'visible' ? '1' : '2');
     } finally { restore(); }
   });
 }

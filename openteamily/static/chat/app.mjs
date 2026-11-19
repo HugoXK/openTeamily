@@ -488,7 +488,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         unread.className = 'unread-badge';
         unread.textContent = String(session.unread_count);
         unread.setAttribute('aria-label', session.unread_count + ' 条未读消息');
-        button.append(unread);
+        time.append(unread);
       }
 
       li.append(button);

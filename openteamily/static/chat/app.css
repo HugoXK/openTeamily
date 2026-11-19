@@ -800,3 +800,10 @@
   font-weight: 600;
   text-align: center;
 }
+
+#conversation-list .time {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: .25rem;
+}
