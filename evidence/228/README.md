@@ -1,6 +1,6 @@
 # Screenshots — PR #228, narrow-screen chat search panel
 
-- after `fb629bcf492254015e7d0e71bec073559371065f` (this PR's tip)
+- after `4d93f03b` (this PR's tip after live main was merged into the branch)
 - before `0abd7e3b66887afd421d32342222afaa09687c67` (the base it merges into)
 
 32 PNGs: each phase has the zh-CN set (light/dark x 1440x900 / 390x844, states
@@ -22,8 +22,14 @@ Measured `documentElement.scrollWidth` at 390×844, same fixture, same click pat
 
 | state | before | after |
 |---|---|---|
-| conversation open, search closed | 459 | 459 |
+| conversation open, search closed | 459 | 390 |
 | after tapping 搜索 | 459 | 390 |
+
+On `fb629bcf` (before live main was merged in) the after column was 459 / 390:
+the closed state still inherited the old composer overflow, and opening the panel
+removed it. Live main has since replaced the composer, so on `4d93f03b` both
+states measure 390 and the only remaining difference from the base is what the
+panel paints.
 
 The 459 is real horizontal overflow, not a viewport parameter: with a
 conversation open the composer overflows the 390 viewport — `textarea#chat-body`
