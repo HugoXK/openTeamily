@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { validSlug, catalogInitial, catalogItems, agentDiscoverPairs, isAgentsCatalog, isTeamsCatalog, renderTeamCard, FEED_CATEGORIES, CATALOG_CATEGORIES, TEAM_CATEGORIES, FEED_ACTIVITY_EMPTY_NOTE, FEED_ACTIVITY_LISTED_NOTE, FEED_FOLLOWING_EMPTY_TITLE, FEED_FOLLOWING_EMPTY_BODY, FEED_FOLLOWING_NOTE, FEED_SEARCH_EMPTY_NOTE, feedQuery, formatFeedTime, renderFeedCard, TEAMS_NOTE, TEAMS_SEARCH_NOTE, TEAMS_SEARCH_PLACEHOLDER } from '../openteamily/static/discover/app.mjs';
+import { validSlug, catalogInitial, catalogItems, agentDiscoverPairs, isAgentsCatalog, isTeamsCatalog, renderTeamCard, FEED_CATEGORIES, CATALOG_CATEGORIES, TEAM_CATEGORIES, FEED_ACTIVITY_EMPTY_NOTE, FEED_ACTIVITY_LISTED_NOTE, FEED_FOLLOWING_EMPTY_TITLE, FEED_FOLLOWING_EMPTY_BODY, FEED_FOLLOWING_NOTE, FEED_SEARCH_EMPTY_NOTE, feedQuery, formatFeedTime, renderFeedCard, coverPattern, TEAMS_NOTE, TEAMS_SEARCH_NOTE, TEAMS_SEARCH_PLACEHOLDER } from '../openteamily/static/discover/app.mjs';
 
 
 test('catalogInitial skips leading punctuation like the public homepage initial', () => {
@@ -397,9 +397,11 @@ test('the activity feed renders opted-in work cards from the public API', async 
   const card = el('feed-grid').children[0];
   assert.equal(String(card.tagName).toLowerCase(), 'a');
   assert.equal(card.href, '/w/ci-fixture-doc');
-  assert.equal(card.children[0].textContent, '文档');
-  assert.equal(card.children[1].textContent, '[CI FIXTURE] Document');
-  assert.equal(card.children[2].textContent.includes('alice'), true);
+  assert.equal(card.children[0].className, 'work-cover');
+  assert.equal(card.children[0].dataset.kind, 'document');
+  assert.equal(card.children[1].textContent, '文档');
+  assert.equal(card.children[2].textContent, '[CI FIXTURE] Document');
+  assert.equal(card.children[3].children[1].textContent.includes('alice'), true);
   assert.equal(el('feed-note').textContent, FEED_ACTIVITY_LISTED_NOTE);
   assert.equal(el('feed-count').textContent, '已显示 1 件公开作品');
   assert.equal(el('feed-more').hidden, true);
@@ -519,6 +521,16 @@ test('work covers use real same-origin published media, not invented screenshots
   const website = renderFeedCard(doc, {slug: 'real-site', title: 'Site', kind: 'website'});
   const fallback = website.children.find(node => node.className === 'work-cover');
   assert.equal(fallback.tagName, 'div');
-  assert.equal(fallback.textContent, '网页');
+  assert.equal(fallback.dataset.kind, 'website');
+  assert.equal(fallback.dataset.pattern, coverPattern('Site'));
+  assert.equal(fallback.textContent, '');
   assert.equal(fallback.src, undefined);
+  const badge = website.children.find(node => node.className === 'kind');
+  assert.equal(badge.textContent, '网页');
+});
+
+test('feed cover patterns are stable for a title and stay in 0-7', () => {
+  assert.equal(coverPattern('Site'), coverPattern('Site'));
+  assert.match(coverPattern('Site'), /^[0-7]$/);
+  assert.notEqual(coverPattern('Site'), coverPattern('Other title completely different'));
 });

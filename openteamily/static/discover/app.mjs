@@ -94,31 +94,50 @@ export function formatFeedTime(value) {
   }).format(date);
 }
 
+export function coverPattern(title) {
+  let hash = 0;
+  for (const ch of String(title || '')) hash = (hash * 33 + ch.charCodeAt(0)) >>> 0;
+  return String(hash % 8);
+}
+
+const KIND_LABELS = {document:'文档',website:'网页',slides:'幻灯片',audio:'音频',video:'视频',whiteboard:'白板',dashboard:'看板',media:'媒体'};
+
 export function renderFeedCard(document, item) {
   const card = document.createElement('a');
   card.className = 'feed-card';
   card.href = item.path || ('/w/' + (item.slug || ''));
-  const kind = document.createElement('p');
-  kind.className = 'kind';
-  kind.textContent = item.kind_label || item.kind || '';
-  const title = document.createElement('h3');
-  title.textContent = item.title || '';
-  const meta = document.createElement('p');
-  meta.className = 'meta';
-  const when = formatFeedTime(item.updated);
-  meta.textContent = [item.author || '', when].filter(Boolean).join(' · ');
-  card.append(kind, title, meta);
   const cover = document.createElement(item.kind === 'image' ? 'img' : 'div');
   cover.className = 'work-cover';
   cover.dataset.kind = item.kind || 'work';
+  cover.dataset.pattern = coverPattern(item.title || item.slug || '');
   if (item.kind === 'image') {
     cover.src = '/w/' + encodeURIComponent(item.slug) + '/file';
     cover.alt = ''; cover.loading = 'lazy';
   } else {
     cover.setAttribute('aria-hidden', 'true');
-    cover.textContent = ({document:'文档',website:'网页',slides:'幻灯片',audio:'音频',video:'视频',whiteboard:'白板',dashboard:'看板',media:'媒体'}[item.kind] || '作品');
   }
-  card.append(cover);
+  const kind = document.createElement('p');
+  kind.className = 'kind';
+  kind.textContent = item.kind_label || KIND_LABELS[item.kind] || item.kind || '';
+  const title = document.createElement('h3');
+  title.textContent = item.title || '';
+  const meta = document.createElement('p');
+  meta.className = 'meta';
+  const mark = document.createElement('span');
+  mark.className = 'feed-author-mark avatar';
+  mark.dataset.tone = String(catalogTone(item.author || item.title || ''));
+  mark.textContent = catalogMonogram(item.author || item.title || '');
+  const who = document.createElement('span');
+  const when = formatFeedTime(item.updated);
+  who.textContent = [item.author || '', when].filter(Boolean).join(' · ');
+  meta.append(mark, who);
+  if (item.likes != null) {
+    const likes = document.createElement('span');
+    likes.className = 'feed-likes';
+    likes.textContent = '♡ ' + (item.likes || 0);
+    meta.append(likes);
+  }
+  card.append(cover, kind, title, meta);
   return card;
 }
 

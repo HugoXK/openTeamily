@@ -894,3 +894,30 @@ body.app-workspace #overview-panel .graph-stage,
   background-image: radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--ot-line-strong) 28%, transparent) 1px, transparent 0) !important;
   background-size: 22px 22px !important;
 }
+
+.memory-editor { position: relative; padding-top: 0.5rem; }
+.editor-topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.75rem; margin-bottom: 0.25rem;
+}
+.editor-saved { margin: 0; font-size: 0.75rem; color: var(--ot-muted); }
+.editor-top-actions { display: flex; gap: 0.35rem; margin-left: auto; }
+.editor-top-actions button {
+  height: 1.85rem; padding: 0 0.65rem; border-radius: 999px;
+  border: 1px solid var(--ot-line); background: var(--ot-surface);
+  color: var(--ot-muted); font-size: 0.75rem;
+}
+.editor-top-actions button:disabled { opacity: 0.7; cursor: not-allowed; }
+.editor-toolbar {
+  display: flex; flex-wrap: wrap; gap: 0.2rem;
+  padding: 0.25rem 0; border-top: 1px solid var(--ot-line);
+  border-bottom: 1px solid var(--ot-line);
+}
+.editor-toolbar button {
+  min-width: 1.85rem; height: 1.85rem; padding: 0 0.4rem;
+  border: 0; border-radius: 0.35rem; background: transparent;
+  color: var(--ot-ink); font-size: 0.75rem; font-weight: 650;
+}
+.editor-toolbar button:hover { background: var(--ot-bg-accent); }
+.memory-editor .editor-title-field input { font-size: 2rem; font-weight: 700; letter-spacing: -0.03em; }
+#editor-form.memory-editor .editor-title-field input { font-size: 2rem !important; font-weight: 700; }
