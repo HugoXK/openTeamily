@@ -1,3 +1,4 @@
+import { mountSkillExecution, readinessLabels } from '../openteamily/static/skills/execution.mjs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
@@ -92,4 +93,42 @@ test('server refusal never invents installed or runtime-loaded state', async () 
   const svc=service({failWrite:true}),{doc,el}=fakeDocument();doc.cookie='';el('skills-scope').value='account';el('skills-permission').checked=true;
   await mountSkills(doc,{fetcher:svc.fetcher}).ready;await el('skills-list').children[0].children[2].handlers.click();
   assert.equal(el('skills-list').children[0].children[2].textContent,'安装');assert.equal(el('skills-error').textContent,'permission denied');
+});
+
+
+test('execution readiness is authoritative, missing/stale versions cannot appear runnable', async () => {
+  const {doc,el}=fakeDocument();el('skills-scope').value='account';let code='runtime_upgrade_required';
+  const request=async(method,path)=>path.includes('/readiness')?{code,ready:code==='ready'}:{items:[]};
+  const app=mountSkillExecution(doc,{request,scope:el('skills-scope')});
+  const binding={scope:'account',skill_id:SKILLS[0].id,version:SKILLS[0].version,digest:SKILLS[0].digest};
+  app.setSkills(SKILLS,[binding]);await app.refresh();
+  assert.equal(el('skill-run-submit').disabled,true);assert.equal(el('skills-readiness').textContent,readinessLabels.runtime_upgrade_required);
+  code='ready';await app.refresh();assert.equal(el('skill-run-submit').disabled,false);assert.equal(el('skill-run-skill').value,SKILLS[0].id);
+  app.setSkills(SKILLS,[{...binding,digest:'stale'}]);assert.equal(el('skill-run-submit').disabled,true);
+});
+
+test('ambiguous skill-run retry keeps its idempotency key; only server history is shown', async () => {
+  const {doc,el}=fakeDocument();el('skills-scope').value='account';let attempt=0;const keys=[];
+  const request=async(method,path,body,key)=>{
+    if(method==='POST'){keys.push(key);if(++attempt===1)throw new Error('response lost');return {task:{id:'actual'}}}
+    if(path.includes('/readiness'))return {ready:true,code:'ready'};
+    return {items:[]};
+  };
+  const app=mountSkillExecution(doc,{request,scope:el('skills-scope'),keyFactory:()=>String(keys.length).padStart(20,'k')});
+  app.setSkills(SKILLS,[{scope:'account',skill_id:SKILLS[0].id,version:SKILLS[0].version,digest:SKILLS[0].digest}]);await app.refresh();
+  el('skill-run-prompt').value='real supplied task';
+  await el('skill-run-form').handlers.submit({preventDefault(){}});
+  assert.equal(el('skill-run-error').textContent,'response lost');
+  assert.match(el('skill-run-history').children[0].textContent,/暂无运行记录/);
+  await el('skill-run-form').handlers.submit({preventDefault(){}});
+  assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);
+});
+
+test('a load receipt without task success does not create a save or verified-success control', async () => {
+  const {doc,el}=fakeDocument();el('skills-scope').value='account';
+  const record={scope:'account',skill_id:SKILLS[0].id,loaded:true,verified:false,task:{id:'actual',status:'claimed',prompt:'task',result:null}};
+  const request=async(method,path)=>path.includes('/readiness')?{ready:true,code:'ready'}:{items:path.endsWith('/runs')?[record]:[]};
+  const app=mountSkillExecution(doc,{request,scope:el('skills-scope')});await app.refresh();
+  const row=el('skill-run-history').children[0];assert.match(row.children[1].textContent,/尚未成功/);
+  assert.equal(row.children.filter(e=>e.tagName==='BUTTON').length,1);assert.equal(row.children[4].textContent,'取消此任务');
 });

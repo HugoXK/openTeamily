@@ -14,7 +14,7 @@ import threading
 import time
 from uuid import uuid4
 
-from . import automations, members, model_api, runtime_connect
+from . import automations, members, model_api, runtime_connect, skill_packages
 
 
 class NullAutomationBackend:
@@ -138,9 +138,20 @@ class AgentAutomationBackend:
         if db is None or not isinstance(payload, dict):
             return {'status': 'failed', 'error_code': 'runtime_failure', 'instance_ids': []}
         now = int(payload.get('now') or 0)
-        connection = pick_connection(
-            db, payload['workspace_id'], now, self.stale, payload.get('preferred_agents'),
-        )
+        scope = 'automation:'+payload['workspace_id']+':'+payload['automation_id']
+        owners = db.execute('SELECT DISTINCT user_id FROM skill_bindings WHERE scope=?',(scope,)).fetchall()
+        skill_owner = None
+        if owners:
+            if len(owners) != 1 or skill_packages.scope_context(db,owners[0]['user_id'],scope) is None:
+                return {'status':'failed','error_code':'skill_scope_revoked','instance_ids':[]}
+            skill_owner = owners[0]['user_id']
+            connection = runtime_connect.online_connection(db,skill_owner,now,self.stale,personal=True)
+            if connection and not skill_packages.supports(db,connection['id']):
+                return {'status':'failed','error_code':'runtime_upgrade_required','instance_ids':[]}
+        else:
+            connection = pick_connection(
+                db, payload['workspace_id'], now, self.stale, payload.get('preferred_agents'),
+            )
         if connection is None:
             return {'status': 'queued', 'error_code': 'no_agent', 'instance_ids': []}
         prompt = payload.get('prompt')
@@ -153,6 +164,15 @@ class AgentAutomationBackend:
             )
         except ValueError:
             return {'status': 'failed', 'error_code': 'quota', 'instance_ids': []}
+        if skill_owner:
+            db.execute('INSERT INTO skill_task_owners VALUES(?,?,?)',(task['id'],skill_owner,scope))
+            material = skill_packages.material(db,task['id'])
+            count = db.execute('SELECT COUNT(*) FROM skill_bindings WHERE user_id=? AND scope=?',(skill_owner,scope)).fetchone()[0]
+            if not material or len(material) != count:
+                runtime_connect.cancel_task(db,task,now)
+                return {'status':'failed','error_code':'skill_version_changed','instance_ids':[]}
+            db.execute('INSERT INTO skill_task_selection VALUES(?,?)',(task['id'],json.dumps(material,sort_keys=True)))
+            db.execute('INSERT INTO skill_runs VALUES(?,?,?,?,?,?,?)',(task['id'],skill_owner,scope,'*','automation:'+task['id'],'',now))
         return {
             'status': 'queued',
             'task_id': task['id'],
