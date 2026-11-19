@@ -36,12 +36,12 @@
         <div class="account-sub">
           <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
           <div id="help-menu" hidden>
-            <button type="button" disabled title="未实现：还没有 OpenTeamily 帮助中心页">帮助中心</button>
+            <a href="/help" role="menuitem">帮助中心</a>
             <a href="/guide" role="menuitem">功能指引</a>
             <a href="/download" role="menuitem" aria-label="下载">下载</a>
             <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
-            <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
-            <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
+            <a href="/terms" role="menuitem">服务条款</a>
+            <a href="/privacy" role="menuitem">隐私政策</a>
             <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
           </div>
         </div>
@@ -57,7 +57,7 @@
   <section id="login-panel" hidden>
     <h2>登录</h2>
     <form id="login-form" method="post" action="/v1/auth/login">
-      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>用户名 <input type="text" id="username" name="username" required autocomplete="username" maxlength="64"></label>
       <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
       <button type="submit">登录</button>
     </form>
@@ -74,7 +74,7 @@
       </label>
       <p id="graph-counts" class="memory-counts"></p>
     </header>
-    <details class="note memory-disclaimer"><summary>对照说明</summary><p>对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。空图谱说明、新建入口和窄屏图谱优先布局是 OpenTeamily 补充，未经目标站对照。画像、分享和导出尚未实现。我的会议进入已有的作品库会议空态，仍没有会议作品接口。还不能写成已经功能对等，也还没有浏览器端到端验收。</p></details>
+    <details class="note memory-disclaimer"><summary>对照说明</summary><p>对照里的记忆总览是左侧目录、中间图谱和右侧话题。新建会立即落盘。空图谱说明、新建入口和窄屏图谱优先布局是 OpenTeamily 补充，未经目标站对照。画像和分享尚未实现；导出只把当前这一页已保存的标题、话题和正文下载成 Markdown 文件，没有整库导出。我的会议进入已有的作品库会议空态，仍没有会议作品接口。还不能写成已经功能对等，也还没有浏览器端到端验收。</p></details>
     <section id="list-panel" class="memory-workspace" data-view="overview">
       <aside class="memory-dir" id="memory-dir">
         <div class="dir-header">
@@ -203,9 +203,26 @@
         <div class="editor-top-actions">
           <button type="button" disabled title="未接通：还没有整理记忆的接口。">做梦</button>
           <button type="button" disabled title="未接通：还没有分享记忆页的接口。">分享</button>
-          <button type="button" disabled title="未接通：还没有页内历史记录接口。">历史</button>
+          <button type="button" id="page-history-open" title="查看此页的历史版本">历史</button>
+          <button type="button" id="page-export" disabled title="打开一页记忆后才能导出为 Markdown。">导出</button>
+          <p id="page-export-status" class="note editor-export-status" hidden></p>
         </div>
       </div>
+      <section id="page-history" class="page-history" aria-labelledby="page-history-title" hidden>
+        <header class="page-history-head">
+          <h2 id="page-history-title">历史</h2>
+          <button type="button" id="page-history-close">关闭</button>
+        </header>
+        <p class="note">回滚会把那一版的内容写成新版本，旧版本不会被删除。</p>
+        <ul id="page-history-list"></ul>
+        <p id="page-history-empty" class="note" hidden>还没有历史版本。保存一次后，之前的版本会出现在这里。</p>
+        <section id="page-history-preview" class="page-history-preview" aria-live="polite" hidden>
+          <h3 id="page-history-preview-title"></h3>
+          <pre id="page-history-preview-body"></pre>
+          <button type="button" id="page-history-restore">回滚到此版本</button>
+        </section>
+        <p id="page-history-status" role="status"></p>
+      </section>
       <label class="editor-title-field"><span class="visually-hidden">标题</span> <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="标题"></label>
       <label class="editor-topics-field">话题 <input type="text" name="topics" maxlength="400" autocomplete="off" placeholder="添加标签"></label>
       <div class="editor-toolbar" role="toolbar" aria-label="正文格式">

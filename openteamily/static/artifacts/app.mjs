@@ -1,3 +1,13 @@
+import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
+// Authorized saved-result links select a real workspace and fetch the actual editor record.
+export function artifactTargetFromSearch(search) {
+  const params=new URLSearchParams(search||'');
+  if(!params.has('workspace')&&!params.has('artifact'))return null;
+  const workspace=params.get('workspace'),artifact=params.get('artifact');
+  if([...params.keys()].some(key=>!['workspace','artifact'].includes(key))||params.getAll('workspace').length!==1||params.getAll('artifact').length!==1||!(/^[0-9a-f]{32}$/).test(workspace||'')||!(/^[0-9a-f]{32}$/).test(artifact||''))return {invalid:true};
+  return {workspace,artifact};
+}
+
 import { bindDocumentEditor } from '../shell/rich-editor.mjs';
 import { renderThumb } from '../shell/thumb.mjs';
 
@@ -209,7 +219,7 @@ export function applyArtifactLayout(list, layout) {
 }
 
 export function canSendArtifactToChat(item) {
-  return Boolean(item && item.id && item.kind === 'media');
+  return Boolean(item && item.id && ['media','document','website','whiteboard','slides','dashboard'].includes(item.kind));
 }
 
 export function conversationLabel(item) {
@@ -749,6 +759,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const sendError = document.getElementById('send-to-chat-error');
   const sendLead = document.getElementById('send-to-chat-lead');
   let sendingArtifact = null;
+  let sendPending = false, sendKeys = new Map();
 
   function closeSendDialog() {
     if (!sendDialog) return;
@@ -759,8 +770,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function openSendDialog(item) {
     if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
     sendingArtifact = item;
+    sendKeys = new Map();
     sendDialog.hidden = false;
-    if (sendLead) sendLead.textContent = '将「' + item.title + '」发送到：';
+    if (sendLead) sendLead.textContent = '将「' + item.title + '」的已保存版本发送到聊天。接收成员可下载该版本，不会自动发布。选择会话即发送：';
     if (sendError) { sendError.hidden = true; sendError.textContent = ''; }
     if (sendList) sendList.textContent = '';
     if (sendEmpty) {
@@ -795,12 +807,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function sendArtifactToConversation(item, conversation) {
     if (!workspaceId() || !item || !conversation || !conversation.id) return;
+    if (sendPending) return;
+    sendPending = true;
+    const wid = workspaceId();
+    const key = sendKeys.get(conversation.id) || idempotencyKey();
+    sendKeys.set(conversation.id, key);
+    try {
     const result = await request(
       'POST',
-      `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages`,
-      {body: '', artifact_id: item.id},
-      {'Idempotency-Key': idempotencyKey()},
+      `/v1/workspaces/${wid}/social/conversations/${conversation.id}/messages`,
+      {body: '', artifact_id: item.id, artifact_revision: item.revision},
+      {'Idempotency-Key': key},
     );
+    if (workspaceId() !== wid || sendingArtifact !== item) return;
     if (result.status !== 200 && result.status !== 201) {
       if (sendError) {
         sendError.hidden = false;
@@ -811,6 +830,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     closeSendDialog();
     show('ok', '已发送到「' + conversationLabel(conversation) + '」。');
+    } catch { if (sendError) { sendError.hidden = false; sendError.textContent = '网络错误，发送结果未知。重试同一会话不会重复发送。'; } }
+    finally { sendPending = false; }
   }
 
   if (document.getElementById('send-to-chat-cancel')) {
@@ -1005,6 +1026,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (item && item.id && workspaceId()) {
       const seen = await request('GET', `/v1/workspaces/${workspaceId()}/artifacts/${item.id}`);
       if (seen.status !== 200) {
+        current=null;form.hidden=true;listPanel.hidden=false;
         show('error', messageFor(seen.body.error, '无法打开文档。'));
         return;
       }
@@ -1099,7 +1121,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function exportHref(revision) {
     const base = `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`;
-    return revision ? `${base}/versions/${revision}/export` : `${base}/export`;
+    if(revision)return `${base}/versions/${revision}/export`;
+    const format=document.getElementById('export-format')?.value;
+    return `${base}/export`+(format && format!=='original'?'?format='+encodeURIComponent(format):'');
   }
 
   async function loadVersions() {
@@ -1149,7 +1173,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   let listGeneration = 0;
+  const workspaceEvents=mountWorkspaceEvents(document,{onInvalidate:async(event)=>{
+    if(event.workspace!==workspaceId()||!event.changed.includes('artifacts'))return;
+    await loadList();
+    if(event.workspace!==workspaceId()||!current?.id)return;
+    const id=current.id,wid=workspaceId();
+    const result=await request('GET',`/v1/workspaces/${wid}/artifacts/${id}`);
+    if(workspaceId()!==wid||current?.id!==id)return;
+    const banner=document.getElementById('artifact-live-update');
+    if(banner)banner.hidden=result.status===200&&result.body.artifact.revision===current.revision;
+  }});
+  document.getElementById('artifact-live-load')?.addEventListener('click',async()=>{
+    if(!current?.id||!globalThis.confirm?.('读取服务器版本将覆盖编辑器内未保存的草稿。请先复制草稿。继续？'))return;
+    const wid=workspaceId(),id=current.id;
+    const result=await request('GET',`/v1/workspaces/${wid}/artifacts/${id}`);
+    if(workspaceId()!==wid||current?.id!==id)return;
+    if(result.status!==200){show('error','服务器作品不可读取，可能已删除或访问已撤销；保留本地草稿。');return;}
+    await openEditor(result.body.artifact);
+    const banner=document.getElementById('artifact-live-update');if(banner)banner.hidden=true;
+  });
   async function loadList() {
+    workspaceEvents.start(workspaceId());
     const generation = ++listGeneration;
     const id = workspaceId();
     if (!id) return;
@@ -1190,6 +1234,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     workspaces = space.body.items || [];
+    const requested=artifactTargetFromSearch(document.defaultView?.location?.search);
     const previous = workspaceSelect.value;
     workspaceSelect.textContent = '';
     for (const item of workspaces) {
@@ -1213,7 +1258,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (emptyMessage) emptyMessage.textContent = '这个工作区还没有作品。';
     form.hidden = true;
     listPanel.hidden = false;
+    if(requested){
+      if(requested.invalid||!workspaces.some(w=>w.id===requested.workspace)){
+        await loadList();show('error','文档链接无效，或你没有访问该工作区的权限。');return;
+      }
+      workspaceSelect.value=requested.workspace;
+    }
     await loadList();
+    if(requested)await openEditor({id:requested.artifact});
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -1828,6 +1880,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!current || !current.id || !workspaceId()) {
       show('error', '请先保存作品，再导出。');
       return;
+    }
+    const format=document.getElementById('export-format')?.value||'original';
+    if((format==='docx'&&current.kind!=='document')||(format==='xlsx'&&current.kind!=='dashboard')||(format==='pdf'&&!['document','slides','dashboard'].includes(current.kind))){
+      show('error','此格式不支持当前作品类型；请按格式说明选择，或使用原格式。');return;
     }
     globalThis.location.assign(exportHref());
   });

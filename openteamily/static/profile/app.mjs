@@ -36,6 +36,16 @@ export function avatarTone(name) {
   return String((hash % 6) + 1);
 }
 
+export const FOLLOW_WORK_EMPTY = '还没有关注任何人。先在发现页关注作者，再回来打开作品通知。';
+
+export function followWorkNotice(enabled) {
+  return enabled ? '已打开作品通知。' : '已关闭作品通知。';
+}
+
+export function followWorkSwitchLabel(name) {
+  return name ? name + ' 的作品通知' : '这个账号的作品通知';
+}
+
 export function monogram(name) {
   const letters = String(name || '').match(/\p{L}|\p{N}/gu) || [];
   if (!letters.length) return '?';
@@ -212,6 +222,83 @@ function mount() {
       if (title) title.textContent = username || '';
       updateCounters();
       markClean();
+    }
+  }
+
+  function closeFollowWork() {
+    const dialog = document.querySelector('#follow-work-dialog');
+    if (dialog) dialog.hidden = true;
+  }
+
+  function followWorkRow(item) {
+    const li = document.createElement('li');
+    li.className = 'follow-work-row';
+    const label = document.createElement('label');
+    label.className = 'follow-work-label';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = item.enabled;
+    input.setAttribute('aria-label', followWorkSwitchLabel(item.name));
+    input.dataset.creator = item.creator_id;
+    const copy = document.createElement('span');
+    copy.className = 'follow-work-copy';
+    const name = document.createElement('strong');
+    name.textContent = item.name || item.username;
+    const handle = document.createElement('span');
+    handle.className = 'follow-work-handle';
+    handle.textContent = '@' + (item.handle || item.username);
+    copy.append(name, handle);
+    label.append(input, copy);
+    input.addEventListener('change', async () => {
+      input.disabled = true;
+      try {
+        const result = await request('POST', '/v1/profile/follow-work',
+          {creator_id: item.creator_id, enabled: input.checked});
+        const status = document.querySelector('#follow-work-status');
+        if (result.status !== 200) {
+          input.checked = !input.checked;
+          if (status) {
+            status.hidden = false;
+            status.textContent = messageFor(result.body.error, '无法保存作品通知设置。');
+          }
+          return;
+        }
+        if (status) {
+          status.hidden = false;
+          status.textContent = followWorkNotice(input.checked);
+        }
+      } finally {
+        input.disabled = false;
+      }
+    });
+    li.append(label);
+    return li;
+  }
+
+  async function loadFollowWork() {
+    const list = document.querySelector('#follow-work-list');
+    const empty = document.querySelector('#follow-work-empty');
+    const status = document.querySelector('#follow-work-status');
+    if (!list) return;
+    if (status) {
+      status.hidden = true;
+      status.textContent = '';
+    }
+    const result = await request('GET', '/v1/profile/follow-work');
+    if (result.status !== 200) {
+      list.hidden = true;
+      if (empty) {
+        empty.hidden = false;
+        empty.textContent = messageFor(result.body.error, '无法读取作品通知设置。');
+      }
+      return;
+    }
+    const items = result.body.items || [];
+    list.replaceChildren(...items.map(followWorkRow));
+    list.hidden = items.length === 0;
+    if (empty) {
+      empty.hidden = items.length > 0;
+      empty.textContent = FOLLOW_WORK_EMPTY;
     }
   }
 
@@ -500,8 +587,26 @@ function mount() {
     const tabR = document.querySelector('#dialog-tab-followers');
     if (tabF) tabF.addEventListener('click', () => openFollowers('following'));
     if (tabR) tabR.addEventListener('click', () => openFollowers('followers'));
+    const notifyOpen = document.querySelector('#profile-notify-open');
+    if (notifyOpen) notifyOpen.addEventListener('click', () => {
+      const dialog = document.querySelector('#follow-work-dialog');
+      if (!dialog) return;
+      dialog.hidden = false;
+      loadFollowWork();
+    });
+    const notifyClose = document.querySelector('#follow-work-dialog-close');
+    if (notifyClose) notifyClose.addEventListener('click', closeFollowWork);
+    const notifyDialog = document.querySelector('#follow-work-dialog');
+    if (notifyDialog) {
+      notifyDialog.addEventListener('click', event => {
+        if (event.target === notifyDialog) closeFollowWork();
+      });
+    }
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape') closeFollowers();
+      if (event.key === 'Escape') {
+        closeFollowers();
+        closeFollowWork();
+      }
     });
   }
 

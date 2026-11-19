@@ -554,3 +554,106 @@ html[data-theme-resolved="dark"] .profile-feed{ place-items: start center; paddi
   -webkit-backdrop-filter: var(--ot-blur);
   backdrop-filter: var(--ot-blur);
 }
+
+#follow-work-dialog-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+
+#follow-work-dialog-close {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: var(--ot-muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.2rem 0.35rem;
+}
+
+.profile-dialog-note {
+  margin: 0.15rem 0 0.9rem;
+  color: var(--ot-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+#follow-work-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.follow-work-row { list-style: none; }
+
+.follow-work-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.8rem;
+  cursor: pointer;
+}
+
+.follow-work-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.follow-work-copy strong {
+  font-size: 0.875rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.follow-work-handle {
+  color: var(--ot-muted);
+  font-size: 0.75rem;
+}
+
+.follow-work-label input {
+  appearance: none;
+  width: 2.1rem;
+  height: 1.2rem;
+  flex: none;
+  border-radius: 999px;
+  background: var(--ot-bg-accent);
+  border: 1px solid var(--ot-line);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.follow-work-label input::after {
+  content: '';
+  position: absolute;
+  top: 0.1rem;
+  left: 0.12rem;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(20 28 24 / 25%);
+  transition: transform 0.15s ease;
+}
+
+.follow-work-label input:checked {
+  background: var(--ot-accent);
+  border-color: var(--ot-accent);
+}
+
+.follow-work-label input:checked::after { transform: translateX(0.85rem); }
+
+.follow-work-label input:disabled { opacity: 0.55; cursor: default; }
