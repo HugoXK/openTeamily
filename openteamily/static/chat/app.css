@@ -1706,3 +1706,32 @@ html[data-theme-resolved="dark"] position: absolute; right: .5rem; bottom: -.625
   #message-list li:focus-within .message-reactions .reaction-add,
   #message-list li .message-reactions:has(.reaction-picker:not([hidden])) .reaction-add { opacity: 1; }
 }
+
+#message-assist-dialog, #announcement-dialog {width:min(44rem,calc(100vw - 2rem));max-height:85vh;overflow:auto;border:1px solid var(--ot-line);border-radius:14px;padding:24px;color:var(--ot-ink);background:var(--ot-surface);}
+#message-assist-dialog::backdrop, #announcement-dialog::backdrop {background:#14281d55;}
+#message-assist-dialog input, #announcement-dialog textarea {display:block;width:100%;box-sizing:border-box;margin:8px 0 12px;font:inherit;}
+#message-assist-history {list-style:none;padding:0;}
+#message-assist-history li {padding:16px 0;border-bottom:1px solid var(--ot-line);}
+
+#resource-picker {width:min(40rem,calc(100vw - 2rem));max-height:85vh;overflow:auto;border:1px solid var(--ot-line);border-radius:14px;padding:24px;color:var(--ot-ink);background:var(--ot-surface);}
+#resource-picker::backdrop {background:#14281d55;}
+#resource-picker-list {list-style:none;padding:0;}
+#resource-picker-list button {width:100%;text-align:left;margin:4px 0;}
+
+.chat-document-card {display:block;padding:16px;border:1px solid var(--ot-line);border-radius:10px;text-decoration:none;color:var(--ot-ink);background:var(--ot-surface);}
+
+#message-list li > .body { margin: 0; line-height: 1.6; }
+.chat-link-card { display: block; margin-top: .5rem; padding: .5rem .65rem; border: 1px solid var(--ot-line); border-radius: .65rem; overflow-wrap: anywhere; color: var(--ot-accent-hover); font-size: .8125rem; }
+
+.composer-tools .composer-tool-link { width: 2rem; min-width: 2rem; min-height: 2rem; display: inline-flex; align-items: center; justify-content: center; color: var(--ot-muted); border-radius: .5rem; }
+.composer-tool-link:hover { background: var(--ot-bg-accent); color: var(--ot-ink); }
+.composer-emoji-grid { display: grid; grid-template-columns: repeat(6, minmax(2.5rem, 1fr)); gap: .5rem; margin: 1rem 0; }
+.composer-emoji-grid button { min-height: 2.75rem; font-size: 1.4rem; }
+#composer-emoji-dialog { width: min(90vw, 28rem); max-width: 100%; box-sizing: border-box; border: 1px solid var(--ot-line); border-radius: 1rem; background: var(--ot-surface); color: var(--ot-ink); padding: 1.25rem; }
+@media (pointer: coarse) { .composer-tools .composer-tool-link { min-width: 44px; min-height: 44px; } }
+/* Opaque, AA-safe primary actions in the existing dark palette. The shared
+   gradient/foreground combination is not safe for these new modal actions. */
+html[data-theme-resolved="dark"] #message-assist-submit,
+html[data-theme-resolved="dark"] #announcement-save { background: #6953c7; color: #ffffff; border-color: transparent; }
+html[data-theme-resolved="dark"] #message-assist-submit:hover,
+html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3; color: #ffffff; }

@@ -204,3 +204,33 @@ the first read-only gate and made the earlier head conflict. Both append-only
 documentation sections were retained; product code merged without conflict.
 Final integrated local validation: **490 Python tests, 344 Node tests in 26
 suites, 95 browser screenshots with no hard/soft failures**. No CI job was rerun.
+
+## Visible-functions aggregate, skills first (2026-11-19)
+
+This corrects a real usability defect: the skills library previously had no execution lifecycle. It now has original actual content, persisted scoped bindings, supported-runtime handshake, digest-verified model-context loading and acknowledgement, plus real revocation. See [SKILLS](SKILLS.md) and the [complete visible-function execution inventory](VISIBLE_FUNCTIONS_INVENTORY.md). This is **instruction-skill functionality**, not a Teamily marketplace, executable package manager, or standalone DSH integration.
+
+Other real flows added: private configured-model translate/ask-AI, revisioned group announcements, all-work-kind version-pinned chat send/forward, explicit saved-document/memory insertion, emoji insertion, real skills/tools navigation and persisted rendering preferences. These are not cosmetic enabled buttons or hardcoded model output. Existing #268 rich editor, message hover/search behavior, stale work-list response guard and daemon fixture readiness remain intact.
+
+### Scene evidence boundary
+
+Existing private reference notes and images remain `/workspace/openteamily-review/2026-11-19-parity-capture/notes.md`: 01b/01b2 message hover/menu, 01c1/01c2 search, 10c/10d group information, 11a–11d works/list/menu/detail. Reference comparison is limited to those scenes. Skills lifecycle, translation/ask-AI dialog, announcement editor and their permission/error interactions have **no reference operation capture** and remain unverified for parity; no fresh browser dispatch was attempted. The new original dialogs preserve the shell rather than invent Teamily claims. True page-render thumbnails, full editor fidelity and unsupplied scenes remain gaps.
+
+Private synthetic after evidence: `/workspace/openteamily-review/2026-11-19-visible-functions-after/`. No screenshots, account data, Teamily icons/fonts/logos/prose or secrets are added to this PR. Impeccable 4.9.2 findings and local validation are recorded with the private evidence; CI screenshots are local app evidence only, not parity or real-vendor acceptance.
+
+The prior main `af18ab1a` failure diagnosis and #268 corrections above are retained: artifacts were a real stale-response product race; runtime key-prefix/daemon scenes were fixture readiness/timing defects; cancelled management(3.11) was not proof of a product failure. No CI reruns or empty retrigger commits are used.
+
+### Merge-gate keyword gap (recommendation only)
+
+The gate's PR-body Related-only policy does not stop older commit messages from containing automatic issue-closing keywords. Recommend a separately coordinated gate change that inspects all proposed merge commit messages (with explicit allowlist/review policy for historical inherited text) and tests that issue auto-closure cannot bypass the intended tracking policy. This PR does not rewrite history, edit others' commits, close tracking issues, or change shared gate code. New commits and PR body use Related-only references.
+
+### Local validation for this aggregate (not vendor/parity acceptance)
+
+- 503 Python tests passed; all 27 management Node CI commands passed (372 tests). Additional runtime-image 23, web-slots 16, social-host 26, social-plugin 165 and upstream-pin 4 tests passed. Syntax/compile/CLI entry and diff checks passed. Shared merge-gate regressions: 13 passed; this is not an exact-head merge authorization.
+- Final fresh synthetic browser run: **104 screenshots, zero hard or soft failures**, including skill install/reload → real daemon/model context receipt → uninstall, private assistance, announcement reload, resource/emoji draft insertion and dark-action contrast. Screenshots remain private in the `release/` subdirectory of the evidence path above.
+- Impeccable **4.9.2** retained 13 static warnings: six contrast, three palette, two nested-card, one dark-glow and one stripe-gradient. They are not declared “all cleared.” Existing dark-theme/nested-shell heuristics require scene judgement. Follow-up actual computed normal/hover light/dark testing found and corrected unsafe new dark modal primary actions; final tested pairs were at least **5.55:1**. Expanded skill cards now align at the top and wrap content/digests at 390px. Full-scene pixel parity is still unverified.
+- Local upstream/service suites were attempted without installs: upstream reported 605 passes / 173 failures, with missing esbuild/DSH/undici/transport modules and consequent gateway assertions (not assumed flaky); the TypeScript social service could not load `tsx` (388 failures). Those local runs are **not green**. No package installation, environment/proxy workaround, assertion weakening or vendor changes were made. CI's normal dependency setup and exact push/PR checks are still required; Docker/vendor builds were not claimed locally.
+- Private evidence also records two local acceptance-test defects corrected before delivery: async browser predicates could treat a pending Promise as truthy before persisted runtime completion, and resource checks ran before the detail fetch completed. Semantic API polling and modal-close waits now assert actual outcomes. A genuine product race allowing late resource insertion after modal cancellation was fixed and covered by a negative test. These were local reproductions, not CI reruns.
+
+Ordinary main sync incorporated contributor #307 at main `2e3e7de` (help/terms/privacy pages and real menu links); no competing implementation was added. The census now includes these landed surfaces. Earlier local counts above refer to the pre-sync baseline; exact-head validation and CI must include the newly landed docs suites.
+
+Final scene review found a genuine new dark-dialog defect despite the primary-button contrast check: undefined generic surface variables fell back to white while text inherited the dark theme. Assistance/announcement/resource dialogs and document cards now use actual shared theme tokens. Browser regression additionally checks heading/label/helper-text contrast across all four new dialog surfaces; this is not a blanket dark-theme or Teamily parity certification.
