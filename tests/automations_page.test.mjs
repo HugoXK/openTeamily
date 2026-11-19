@@ -206,11 +206,16 @@ test('list rows describe the schedule instead of printing the internal kind', as
     {id: 'a5', title: '每月复盘', enabled: false, schedule: {kind: 'monthly', time: '18:00', day: 16, time_zone: 'UTC'}},
   ]);
   const rows = list.children.map(row => row.textContent);
-  assert.equal(rows[0], '每日简报每天 09:00（Asia/Shanghai）· 已启用');
-  assert.equal(rows[1], '周报每周四 09:00（Asia/Shanghai）· 已启用');
-  assert.equal(rows[2], '一次性提醒单次 2026-11-20 09:00（Asia/Shanghai）· 已启用');
-  assert.equal(rows[3], '立即运行的任务立即运行 · 已启用');
-  assert.equal(rows[4], '每月复盘每月 16 日 18:00（UTC）· 未启用');
+  assert.match(rows[0], /每日简报/);
+  assert.match(rows[0], /每天 09:00（Asia\/Shanghai）· 已启用/);
+  assert.match(rows[1], /周报/);
+  assert.match(rows[1], /每周四 09:00（Asia\/Shanghai）· 已启用/);
+  assert.match(rows[2], /一次性提醒/);
+  assert.match(rows[2], /单次 2026-11-20 09:00（Asia\/Shanghai）· 已启用/);
+  assert.match(rows[3], /立即运行的任务/);
+  assert.match(rows[3], /立即运行 · 已启用/);
+  assert.match(rows[4], /每月复盘/);
+  assert.match(rows[4], /每月 16 日 18:00（UTC）· 未启用/);
   const joined = list.textContent;
   assert.doesNotMatch(joined, /(?:^|\s)(?:now|later|once|daily|weekly|monthly|weekdays)(?=\s|$)/u,
     `the list must not print an internal schedule kind: ${joined}`);
@@ -279,10 +284,19 @@ async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 
   };
 }
 
+// A list row is `li > [avatar, copy > [open, schedule], state]`; the open
+// button is the only control in a row that carries a click handler.
+function openButtonIn(row) {
+  const button = row.children.flatMap(node => [node, ...(node.children || [])])
+    .find(node => node.handlers && node.handlers.click);
+  assert.ok(button, 'the list row must offer a button that opens the automation');
+  return button;
+}
+
 async function openFirst(elements) {
   const list = elements.get('automation-list');
   assert.ok(list.children.length, 'the list must render the automation before it can be opened');
-  list.children[0].children[0].handlers.click[0]();
+  openButtonIn(list.children[0]).handlers.click[0]();
   await flush();
 }
 
@@ -442,7 +456,7 @@ test('返回列表再打开第二条时旧问句不跟随，确认也不删第�
 
     const list = elements.get('automation-list');
     assert.equal(list.children.length, 2, 'the list must still offer both automations');
-    list.children[1].children[0].handlers.click[0]();
+    openButtonIn(list.children[1]).handlers.click[0]();
     await flush();
     assert.equal(alertdialogIn(form), undefined,
       'opening the second automation must not bring the first automation question back');
@@ -514,4 +528,12 @@ test('保存成功后旧问句关闭，不会在已保存的编辑器里重问',
     if (savedFormData === undefined) delete globalThis.FormData; else globalThis.FormData = savedFormData;
     restore();
   }
+});
+
+import { templateFromSearch } from '../openteamily/static/automations/app.mjs';
+
+test('?template= accepts only a plain template id', () => {
+  assert.equal(templateFromSearch('?template=daily_brief'), 'daily_brief');
+  assert.equal(templateFromSearch('?template=../x'), '');
+  assert.equal(templateFromSearch(''), '');
 });

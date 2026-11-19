@@ -2,7 +2,7 @@
 
 Related: [#87](https://github.com/openTeamily/openTeamily/issues/87), [#89](https://github.com/openTeamily/openTeamily/issues/89), [#1](https://github.com/openTeamily/openTeamily/issues/1), [#12](https://github.com/openTeamily/openTeamily/issues/12), [#6](https://github.com/openTeamily/openTeamily/issues/6).
 
-This documents the **opt-in** public agent catalog and the **opt-in** public works feed, written for OpenTeamily. It is **not** Teamily Discover parity: there is no recommendation, ranking, follow, like, comment, or federation. Agent listings expose only name, summary and a public slug. Work listings expose only title, kind, author, updated time and a `/w/{slug}` path. Instructions, document bodies in the listing API, workspace ids, artifact ids and homepage tokens are not included in the public JSON.
+This documents the **opt-in** public agent catalog and the **opt-in** public works feed, written for OpenTeamily. It is **not** Teamily Discover parity: there is no recommendation, ranking, comment, or federation. Real per-user likes, collections and author follows are documented below. Agent listings expose only name, summary and a public slug. Work listings expose title, kind, author, updated time, a `/w/{slug}` path and real engagement counts; authenticated projections also include the caller’s flags. Instructions, document bodies in the listing API, workspace ids, artifact ids and homepage tokens are not included in the public JSON.
 
 ## Routes
 
@@ -33,7 +33,7 @@ Additive `agent_discover` and `artifact_discover` tables (`CREATE TABLE IF NOT E
 
 ## Page
 
-`/discover` is a same-origin management page. With no query it renders the recorded 关注 / 动态 feed chrome: a search field, those two tabs, and the captured category chips. The default `/discover` activity tab loads `GET /v1/discover/works` and shows cards for opted-in works. Each card links to `/w/{slug}`. Search uses the title/author `q` parameter; category chips other than 全部 stay disabled. The 关注 tab is still unconnected and keeps the recorded empty copy「关注列表暂无动态」/「你关注的人发布动态后会显示在这里。」and an honest note that follow is not wired. The page does not invent likes, follows, recommendations, or reward/credits banners. Works appear only after an owner or admin publishes them from the artifacts editor. Other HTML queries remain rejected except the recorded catalog views at `/discover?tab=agents` and `/discover?tab=agents&section=groups`.
+`/discover` is a same-origin management page. With no query it renders the recorded 关注 / 动态 feed chrome: a search field, those two tabs, and the captured category chips. The default `/discover` activity tab loads `GET /v1/discover/works` and shows cards for opted-in works. Each card links to `/w/{slug}`. Search uses the title/author `q` parameter; supported type chips use the kind parameter; other category chips stay disabled. The 关注 tab lists opted-in works from authors the current user actually follows; 已收录 lists the caller’s saved, still-public works. Both require login. Like, collect and follow buttons persist actual user choices; no recommendations or reward/credits banners are invented. Works appear only after an owner or admin publishes them from the artifacts editor. Other HTML queries remain rejected except the recorded catalog views at `/discover?tab=agents` and `/discover?tab=agents&section=groups`.
 
 `/discover?tab=agents` still renders the public agent catalog and, for a selected workspace, lets an owner/admin publish or revoke a slug. The public API can be consumed without a session. The public cards stay visible without a session; authenticated listing management is collapsed below the directory. Search submits the existing name/summary `q` API, 12 results per cursor page, with clear, loading, empty and error states. The count says how many have been displayed, not a fabricated total. Card initials are generated locally from the first letter or digit in the name, skipping leading punctuation, not third-party avatars. That matches the public agent homepage initial and avoids showing "[" for fixture names such as "[CI FIXTURE] Directory assistant".
 
@@ -45,7 +45,37 @@ CI captures the default feed with the opted-in fixture document card, the record
 
 ## Explicitly not in this slice
 
-- Recommendation/ranking, follow/like/comment, category-filtered feeds, or reward campaigns.
+- Recommendation/ranking, comments, unsupported category chips or reward campaigns.
 - Public conversation or agent execution from a listing.
 - Cross-instance federation, Bot Social transport, or any Teamily comparison.
 - Browser acceptance. Tests are in-process WSGI + temporary SQLite and pure Node helpers.
+
+
+## Work type filters
+
+The activity feed now accepts `kind=document|website|image|audio|video|slides|whiteboard|dashboard|media`.
+An omitted or empty kind lists all opted-in works. Invalid or repeated kind parameters return 400.
+Filtering is performed in SQLite before search, limit and recency cursor pagination; image/audio/video
+come from sniffed media MIME. The recorded 网页、图片、音乐、幻灯片、视频 chips call this API,
+reset the cursor on selection, and combine with title/author search. 全部 clears the kind.
+Other categories and popularity ranking remain unconnected. No new categories are invented.
+This is functional implementation, not Teamily + Impeccable acceptance.
+
+## Real engagement and public media
+
+`GET /v1/discover/me/works?tab=all|following|collected&q=&kind=&limit=&cursor=`
+requires login and combines private tab scope with existing search/type/keyset paging.
+`POST /v1/discover/works/{slug}/engagement` accepts `{action:"like"|"collect"|"follow",enabled:boolean}`.
+These are idempotent absolute states, protected by session, exact Origin and CSRF. Only still-listed
+works are addressable; self-follow is rejected. Public counts are real; caller flags are false on the
+anonymous projection. No liker, collector or follower identities are exposed by listing APIs.
+Collections and following lists are private to the caller. Unlisting removes a work from all feeds.
+
+For explicitly published image/audio/video works, `/w/{slug}` now renders a native player and
+`/w/{slug}/file` serves the existing MIME-sniffed bytes. Every byte request rechecks the listing;
+revocation immediately returns 404. Publishing makes media publicly viewable/downloadable, as the
+editor warns. File paths/workspace ids are not exposed. CSP blocks scripts, forms, objects, frames
+and external media; no autoplay. Nothing is automatically published. Existing authenticated
+workspace media remains private unless its owner/admin explicitly lists the work.
+
+See [FUNCTIONAL_COMPLETION.md](FUNCTIONAL_COMPLETION.md) for the complete delivery/pending matrix.

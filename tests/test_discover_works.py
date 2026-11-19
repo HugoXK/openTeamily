@@ -55,7 +55,7 @@ class DiscoverWorksTests(unittest.TestCase):
         self.assertEqual(listed['status'], 200)
         self.assertEqual(len(listed['body']['items']), 1)
         item = listed['body']['items'][0]
-        self.assertEqual(item, {
+        self.assertEqual({k:v for k,v in item.items() if k not in ('likes','collections','liked','collected','following','own_work')}, {
             'slug': 'public-note',
             'title': '公开笔记',
             'kind': 'document',
@@ -84,6 +84,23 @@ class DiscoverWorksTests(unittest.TestCase):
         self.assertEqual(read['body']['discover']['slug'], 'public-note')
         again = self.publish(self.alice, artifact, 'public-note')
         self.assertEqual(again['status'], 200)
+
+    def test_public_preview_serves_the_cover_model_for_listed_works_only(self):
+        artifact = self.create(body='# 封面标题\n\n第一行正文')
+        self.assertEqual(self.anon.call('GET', '/w/cover-note/preview')['status'], 404)
+        self.assertEqual(self.publish(self.alice, artifact, 'cover-note')['status'], 201)
+        preview = self.anon.call('GET', '/w/cover-note/preview')
+        self.assertEqual(preview['status'], 200, preview)
+        self.assertEqual(preview['body']['preview']['type'], 'document')
+        self.assertIn('第一行正文', str(preview['body']['preview']))
+        self.assertNotIn(self.wid, str(preview['body']))
+        self.assertNotIn(artifact['id'], str(preview['body']))
+        self.assertEqual(self.anon.call('GET', '/w/cover-note/preview?x=1')['status'], 400)
+        self.assertEqual(self.anon.call('POST', '/w/cover-note/preview', {})['status'], 400)
+        listed = self.anon.call('GET', '/v1/discover/works')
+        self.assertNotIn('第一行正文', str(listed['body']))
+        self.alice.call('POST', f'/v1/workspaces/{self.wid}/artifacts/{artifact["id"]}/discover/revoke', {})
+        self.assertEqual(self.anon.call('GET', '/w/cover-note/preview')['status'], 404)
 
     def test_permissions_conflict_validation_and_paging(self):
         first = self.create()
@@ -125,3 +142,32 @@ class DiscoverWorksTests(unittest.TestCase):
         self.assertEqual(self.alice.call(
             'POST', f'/v1/workspaces/{self.wid}/artifacts/{artifact["id"]}/discover',
             {'slug': 'public-note'}, csrf=False)['status'], 403)
+
+    def test_type_filters_apply_before_search_and_cursor_paging(self):
+        from tests.test_artifact_media import multipart, PNG
+        for index, kind in enumerate(('document', 'website', 'website')):
+            item = self.create(title='Type fixture ' + str(index), body='safe body',
+                               key='work-type-create-%04d' % index, kind=kind)
+            self.assertEqual(self.publish(self.alice, item, 'type-work-%d' % index)['status'], 201)
+        raw, content_type = multipart([('title', 'Type image'), ('kind', 'media')],
+                                      [('file', 'fixture.png', 'image/png', PNG)])
+        media = self.alice.call('POST', f'/v1/workspaces/{self.wid}/artifacts', raw=raw,
+                                headers={'CONTENT_TYPE': content_type,
+                                         'HTTP_IDEMPOTENCY_KEY': 'work-type-image-0001'})
+        self.assertEqual(media['status'], 201, media)
+        self.assertEqual(self.publish(self.alice, media['body']['artifact'], 'type-photo')['status'], 201)
+        first = self.anon.call('GET', '/v1/discover/works?kind=website&limit=1')
+        self.assertEqual([x['slug'] for x in first['body']['items']], ['type-work-2'])
+        cursor = first['body']['cursor']
+        second = self.anon.call('GET', '/v1/discover/works?kind=website&limit=1&cursor=' + cursor)
+        self.assertEqual([x['slug'] for x in second['body']['items']], ['type-work-1'])
+        self.assertIsNone(second['body']['cursor'])
+        self.assertEqual(len(self.anon.call('GET', '/v1/discover/works?kind=website&q=alice')['body']['items']), 2)
+        self.assertEqual(self.anon.call('GET', '/v1/discover/works?kind=website&q=missing')['body']['items'], [])
+        self.assertEqual([x['slug'] for x in self.anon.call('GET', '/v1/discover/works?kind=image')['body']['items']], ['type-photo'])
+        for kind in ('video', 'audio', 'slides'):
+            self.assertEqual(self.anon.call('GET', '/v1/discover/works?kind=' + kind)['body']['items'], [])
+        for query in ('kind=bogus', 'kind=website&kind=image', 'kind=Website'):
+            self.assertEqual(self.anon.call('GET', '/v1/discover/works?' + query)['status'], 400)
+        self.assertEqual(self.alice.call('POST', f'/v1/workspaces/{self.wid}/artifacts/{media["body"]["artifact"]["id"]}/discover/revoke', {})['status'], 200)
+        self.assertEqual(self.anon.call('GET', '/v1/discover/works?kind=image')['body']['items'], [])
