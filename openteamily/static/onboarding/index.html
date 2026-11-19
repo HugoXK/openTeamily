@@ -63,7 +63,7 @@
   <section id="main-panel" hidden>
     <header class="page-top">
       <h1>工作背景</h1>
-      <p class="note">目前仅保存工作背景，尚未用于自动化推荐。连接应用、自动化选择和 Agent 形象步骤尚未接通。</p>
+      <p class="note">共四步：工作背景、连接应用、想分担的事、你的 Agent。第 2–4 步是功能流程，尚未与 Teamily 对照；应用连接尚未实现，选中的事项只会保存，不会自动创建例行任务。</p>
       <p id="whoami"></p>
     </header>
     <form id="onboarding-form" class="onboarding-card">
@@ -89,6 +89,25 @@
       </div>
       <p id="onboarding-meta" class="note"></p>
     </form>
+    <section id="onboarding-steps" class="onboarding-card" hidden>
+      <h2>第 2 步 · 连接你在用的应用</h2>
+      <p class="note">应用连接尚未实现（没有第三方授权），以下应用均显示为未连接，可以直接继续。</p>
+      <ul id="onboarding-apps" class="role-choices"></ul>
+      <form id="onboarding-picks-form">
+        <h2>第 3 步 · 我们能帮你分担些什么？</h2>
+        <p class="note">根据你的行业给出的建议（自拟文案）。选择会被保存，但不会自动创建任务或例行任务。</p>
+        <div id="onboarding-picks" class="role-choices"></div>
+        <button type="submit">保存选择</button>
+      </form>
+      <form id="onboarding-look-form">
+        <h2>第 4 步 · 你的 Agent</h2>
+        <p class="note">为个人 Agent 选一个形象，只保存选择，不生成图片。</p>
+        <div id="onboarding-look"></div>
+        <p id="onboarding-look-preview" class="note"></p>
+        <button type="submit">保存形象</button>
+      </form>
+      <p id="onboarding-steps-meta" class="note"></p>
+    </section>
   </section>
   </main>
 </body>

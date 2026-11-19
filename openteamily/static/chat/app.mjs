@@ -30,6 +30,7 @@ export function mergeSessions(agentRows, socialRows, currentUserId) {
       kind: 'agent',
       title: (row.agent && row.agent.name) || row.title || '对话',
       preview: sessionPreview(row, row.title || ''),
+      unread_count: Number(row.unread_count) || 0,
       updated: row.updated || 0,
     });
   }
@@ -338,6 +339,15 @@ export function reactionToggle(reactions, emoji) {
   return {emoji, active: !(current && current.mine)};
 }
 
+export function forwardTargets(conversations, currentId) {
+  return (conversations || []).filter(item => item.id !== currentId)
+    .map(item => ({id: item.id, label: (item.kind === 'dm' ? '单聊 · ' : '群聊 · ') + (item.title || '会话')}));
+}
+
+export function forwardCountLabel(count) {
+  return `已选 ${Number(count) || 0} 条`;
+}
+
 export function notificationBadgeText(count) {
   const value = Number(count) || 0;
   if (value <= 0) return '';
@@ -346,6 +356,10 @@ export function notificationBadgeText(count) {
 
 export function notificationSummary(item) {
   const where = item.conversation_kind === 'dm' ? '单聊' : (item.conversation_title || '群聊');
+  if (item.kind === 'agent_reply') {
+    const outcome = {succeeded: '已完成', failed: '未能完成', cancelled: '已取消'}[item.status] || '已结束';
+    return `${item.actor_username || '智能体'} 在「${where}」${outcome}你的请求`;
+  }
   return `${item.actor_username || '成员'} 在「${where}」提及了你`;
 }
 
@@ -504,8 +518,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const filter = (filterNode && filterNode.value) || 'all';
     const visible = sessions.filter(item => filter === 'all'
       || (filter === 'pinned' && item.pinned)
-      || (filter === 'unread' && item.source === 'social' && item.unread_count > 0)
-      || (filter === 'read' && item.source === 'social' && !item.unread_count)
+      || (filter === 'unread' && item.unread_count > 0)
+      || (filter === 'read' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
     document.getElementById('conversations-empty').hidden = visible.length > 0;
     let lastGroup = '';
@@ -587,6 +601,86 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return pending;
   }
 
+  let selecting = false;
+  const selectedMessages = new Set();
+  let pinnedIds = new Set();
+
+  function syncForwardBar() {
+    const bar = document.getElementById('forward-bar');
+    if (!bar) return;
+    bar.hidden = !selecting;
+    document.getElementById('forward-count').textContent = forwardCountLabel(selectedMessages.size);
+    const target = document.getElementById('forward-target');
+    document.getElementById('forward-submit').disabled = !(selectedMessages.size && target.value);
+    const toggle = document.getElementById('multi-select-toggle');
+    if (toggle) { toggle.setAttribute('aria-pressed', selecting ? 'true' : 'false'); toggle.textContent = selecting ? '退出多选' : '多选'; }
+  }
+
+  function fillForwardTargets() {
+    const target = document.getElementById('forward-target');
+    if (!target) return;
+    const options = forwardTargets(socialConversations, currentConversation && currentConversation.id);
+    target.replaceChildren(...options.map(item => {
+      const option = document.createElement('option'); option.value = item.id; option.textContent = item.label; return option;
+    }));
+  }
+
+  function setSelecting(on) {
+    selecting = on;
+    selectedMessages.clear();
+    if (on) fillForwardTargets();
+    syncForwardBar();
+    if (currentConversation && currentSource === 'social') renderSocialMessages(lastSocialItems);
+  }
+
+  function renderPinned(list) {
+    pinnedIds = new Set((list || []).map(item => item.message_id));
+    const section = document.getElementById('pinned-messages');
+    const holder = document.getElementById('pinned-message-list');
+    if (!section || !holder) return;
+    section.hidden = !(list && list.length);
+    holder.replaceChildren(...(list || []).map(item => {
+      const li = document.createElement('li');
+      li.textContent = item.excerpt;
+      li.title = '由 ' + item.pinned_by_username + ' 置顶';
+      return li;
+    }));
+  }
+
+  function messageTools(item) {
+    const tools = document.createElement('span');
+    tools.className = 'message-tools';
+    if (selecting) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = selectedMessages.has(item.id);
+      box.setAttribute('aria-label', '选择这条消息');
+      box.addEventListener('change', () => {
+        if (box.checked) selectedMessages.add(item.id); else selectedMessages.delete(item.id);
+        syncForwardBar();
+      });
+      label.append(box, document.createTextNode('选择'));
+      tools.append(label);
+      return tools;
+    }
+    const pin = document.createElement('button');
+    pin.type = 'button';
+    const isPinned = pinnedIds.has(item.id);
+    pin.textContent = isPinned ? '取消置顶' : '置顶';
+    pin.setAttribute('aria-label', isPinned ? '取消置顶这条消息' : '置顶这条消息');
+    pin.addEventListener('click', async () => {
+      const wid = workspaceId(), cid = currentConversation && currentConversation.id;
+      const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/pin`, {pinned: !isPinned});
+      if (workspaceId() !== wid || !currentConversation || currentConversation.id !== cid) return;
+      if (result.status !== 200) { show('error', messageFor(result.body.error, '无法置顶消息。')); return; }
+      renderPinned(result.body.pinned_messages);
+      renderSocialMessages(lastSocialItems);
+    });
+    tools.append(pin);
+    return tools;
+  }
+
   function reactionBar(item) {
     const bar = document.createElement('div');
     bar.className = 'message-reactions';
@@ -640,7 +734,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     bar.append(add, picker);
   }
 
+  let lastSocialItems = [];
   function renderSocialMessages(items) {
+    lastSocialItems = items || [];
     const list = document.getElementById('message-list');
     list.replaceChildren();
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
@@ -657,6 +753,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const body = document.createElement('p');
       body.className = 'body';
       body.textContent = item.retracted ? '此消息已撤回' : (item.body || '');
+      if (item.forwarded_from && !item.retracted) {
+        body.dataset.forwarded = '1';
+        body.title = '转发自 ' + item.forwarded_from.author;
+        role.textContent += ' · 转发自 ' + item.forwarded_from.author;
+      }
       const time = document.createElement('p');
       time.className = 'time';
       time.textContent = formatTime(item.created);
@@ -701,6 +802,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         });
         li.append(edit, retract, controls);
       }
+      if (item.role !== 'agent' && !item.retracted) li.append(messageTools(item));
       if (item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
       list.append(li);
     }
@@ -770,6 +872,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderNotifications(result.body);
   }
 
+  // Live-ish delivery: poll the inbox while the tab is visible. No server push.
+  const NOTIFICATION_POLL_MS = 30000;
+  if (typeof globalThis.setInterval === 'function') {
+    const handle = globalThis.setInterval(() => {
+      if (document.visibilityState === 'hidden' || !currentUser) return;
+      loadNotifications();
+    }, NOTIFICATION_POLL_MS);
+    if (handle && typeof handle.unref === 'function') handle.unref();
+  }
+
   function setNotificationsOpen(open) {
     const panel = document.getElementById('notifications-panel');
     const toggle = document.getElementById('notifications-toggle');
@@ -814,7 +926,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderSessions();
   }
 
+  function setSocialHeaderTools(social) {
+    const invite = document.getElementById('chat-invite');
+    const unavailable = document.getElementById('chat-invite-unavailable');
+    const multi = document.getElementById('multi-select-toggle');
+    if (invite) invite.hidden = !social;
+    if (unavailable) unavailable.hidden = social;
+    if (multi) multi.hidden = !social;
+    if (!social) {
+      selecting = false; selectedMessages.clear(); syncForwardBar();
+      renderPinned([]);
+      const panel = document.getElementById('chat-invite-panel'); if (panel) panel.hidden = true;
+    }
+  }
+
   async function openAgentConversation(agentId, conversationId) {
+    setSocialHeaderTools(false);
     const pin = document.getElementById('pin-conversation');
     if (pin) pin.hidden = true;
     const agent = agents.find(item => item.id === agentId);
@@ -840,6 +967,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     writeHash({workspace: workspaceId(), agent: agentId, conversation: conversationId});
     setSessionsOpen(false);
     const pending = renderAgentMessages(result.body.items);
+    const finished = (result.body.items || []).filter(item => item.role === 'assistant' && item.status === 'succeeded');
+    if (currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
+      const wid = workspaceId(), cid = conversationId;
+      const acknowledged = await request('POST', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${cid}/read`,
+        {message_id: finished[finished.length - 1].id});
+      if (acknowledged.status === 200 && workspaceId() === wid) {
+        const session = sessions.find(item => item.source === 'agent' && item.id === cid);
+        if (session) session.unread_count = acknowledged.body.unread_count;
+      }
+    }
     renderSessions();
     if (pending) schedulePoll();
     else stopPolling();
@@ -869,6 +1006,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       currentConversation, currentUser && currentUser.id));
     setDirectoryLink({source: 'social'});
     writeHash({workspace: workspaceId(), social: conversationId});
+    if (selecting && (!lastSocialItems.length || lastSocialItems[0].conversation_id !== conversationId)) {
+      selecting = false; selectedMessages.clear(); syncForwardBar();
+    }
+    renderPinned(result.body.pinned_messages || []);
+    setSocialHeaderTools(true);
     renderSocialMessages(result.body.items);
     renderGroupReplyAction(result.body.agent_replies || []);
     // Acknowledge only the last message actually rendered, not messages that
@@ -1380,6 +1522,56 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
+  const multiToggle = document.getElementById('multi-select-toggle');
+  if (multiToggle) multiToggle.addEventListener('click', () => setSelecting(!selecting));
+  const forwardCancel = document.getElementById('forward-cancel');
+  if (forwardCancel) forwardCancel.addEventListener('click', () => setSelecting(false));
+  const forwardTarget = document.getElementById('forward-target');
+  if (forwardTarget) forwardTarget.addEventListener('change', syncForwardBar);
+  const forwardSubmit = document.getElementById('forward-submit');
+  if (forwardSubmit) forwardSubmit.addEventListener('click', async () => {
+    const cid = currentConversation && currentConversation.id, target = forwardTarget.value;
+    const ids = lastSocialItems.filter(item => selectedMessages.has(item.id)).map(item => item.id);
+    if (!cid || !target || !ids.length) return;
+    forwardSubmit.disabled = true;
+    const result = await request('POST', `${socialBase()}/${cid}/forward`,
+      {message_ids: ids, target_conversation_id: target}, {'Idempotency-Key': idempotencyKey('forward-')});
+    if (result.status !== 201 && result.status !== 200) {
+      show('error', messageFor(result.body.error, '转发失败。'));
+      syncForwardBar();
+      return;
+    }
+    setSelecting(false);
+    show('ok', `已转发 ${ids.length} 条消息。`);
+    await loadSessions();
+  });
+  const chatInvite = document.getElementById('chat-invite');
+  if (chatInvite) chatInvite.addEventListener('click', () => {
+    const panel = document.getElementById('chat-invite-panel');
+    panel.hidden = !panel.hidden;
+    chatInvite.setAttribute('aria-expanded', panel.hidden ? 'false' : 'true');
+    document.getElementById('chat-invite-result').textContent = '';
+  });
+  const inviteClose = document.getElementById('chat-invite-close');
+  if (inviteClose) inviteClose.addEventListener('click', () => {
+    document.getElementById('chat-invite-panel').hidden = true;
+    if (chatInvite) chatInvite.setAttribute('aria-expanded', 'false');
+  });
+  const chatInviteForm = document.getElementById('chat-invite-form');
+  if (chatInviteForm) chatInviteForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const out = document.getElementById('chat-invite-result');
+    const result = await request('POST', `/v1/workspaces/${workspaceId()}/invites`, {
+      role: 'member', expires_in: 7 * 86400, max_uses: 1,
+      requires_approval: document.getElementById('chat-invite-approval').checked,
+    });
+    if (result.status !== 201) {
+      out.textContent = result.status === 404 || result.status === 403
+        ? '只有工作区所有者或管理员可以生成邀请。' : messageFor(result.body.error, '无法生成邀请。');
+      return;
+    }
+    out.textContent = `邀请令牌只显示一次：${result.body.token}`;
+  });
   const notificationsToggle = document.getElementById('notifications-toggle');
   if (notificationsToggle) notificationsToggle.addEventListener('click', async () => {
     const panel = document.getElementById('notifications-panel');
