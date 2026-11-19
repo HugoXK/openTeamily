@@ -1,0 +1,66 @@
+{
+  "typed-light-1440x900": {
+    "listVisible": true,
+    "items": [
+      "bob · 成员"
+    ]
+  },
+  "inserted-light-1440x900": {
+    "value": "bob, ",
+    "listVisible": false,
+    "focused": "meeting-attendees"
+  },
+  "nomatch-light-1440x900": {
+    "text": "无匹配成员",
+    "visible": true
+  },
+  "pageErrors-light-1440x900": [],
+  "typed-dark-1440x900": {
+    "listVisible": true,
+    "items": [
+      "bob · 成员"
+    ]
+  },
+  "inserted-dark-1440x900": {
+    "value": "bob, ",
+    "listVisible": false,
+    "focused": "meeting-attendees"
+  },
+  "nomatch-dark-1440x900": {
+    "text": "无匹配成员",
+    "visible": true
+  },
+  "pageErrors-dark-1440x900": [],
+  "typed-light-390x844": {
+    "listVisible": true,
+    "items": [
+      "bob · 成员"
+    ]
+  },
+  "inserted-light-390x844": {
+    "value": "bob, ",
+    "listVisible": false,
+    "focused": "meeting-attendees"
+  },
+  "nomatch-light-390x844": {
+    "text": "无匹配成员",
+    "visible": true
+  },
+  "pageErrors-light-390x844": [],
+  "typed-dark-390x844": {
+    "listVisible": true,
+    "items": [
+      "bob · 成员"
+    ]
+  },
+  "inserted-dark-390x844": {
+    "value": "bob, ",
+    "listVisible": false,
+    "focused": "meeting-attendees"
+  },
+  "nomatch-dark-390x844": {
+    "text": "无匹配成员",
+    "visible": true
+  },
+  "pageErrors-dark-390x844": []
+}
