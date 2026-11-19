@@ -78,11 +78,40 @@ export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。支持点�
 
 export const FEED_KINDS = ['', 'website', 'image', 'audio', 'slides', 'video'];
 
-export function feedQuery(query, cursor = '', kind = '') {
+export const FEED_CREATOR_ALL = '全部作者';
+// A refused creator list is not an empty one, so the control says which it is.
+export const FEED_CREATOR_UNREADABLE = '读不到作者列表';
+export const FEED_CREATOR_EMPTY_NOTE = '该作者还没有公开作品。';
+export const FEED_CREATOR_HINT = '只看某位作者的公开作品。';
+
+// Same rule as App.credentials: usernames are lowercase, 3-64 characters.
+const CREATOR_HANDLE = /^[a-z0-9][a-z0-9_.-]{2,63}$/;
+
+export function creatorFromSearch(search) {
+  const params = new URLSearchParams(typeof search === 'string' ? search : '');
+  const handle = (params.get('creator') || '').trim().toLowerCase();
+  return CREATOR_HANDLE.test(handle) ? handle : '';
+}
+
+export function creatorSearch(handle) {
+  const value = String(handle || '').trim().toLowerCase();
+  return CREATOR_HANDLE.test(value) ? '?creator=' + encodeURIComponent(value) : '';
+}
+
+export function creatorLink(handle) {
+  return '/discover' + creatorSearch(handle);
+}
+
+export function creatorsQuery(limit = 50) {
+  return '/v1/discover/creators?limit=' + limit;
+}
+
+export function feedQuery(query, cursor = '', kind = '', creator = '') {
   const params = new URLSearchParams({limit: '12'});
   if (query) params.set('q', query);
   if (cursor) params.set('cursor', cursor);
   if (kind) params.set('kind', kind);
+  if (creator) params.set('creator', creator);
   return params.toString();
 }
 
@@ -120,9 +149,14 @@ export function feedPreviewPath(item) {
 }
 
 export function renderFeedCard(document, item) {
-  const card = document.createElement('a');
+  // The card carries two destinations, so it is a container rather than one big
+  // link: the cover and title open the work, the author opens that author's
+  // filtered feed. Links cannot nest, so this keeps both of them real <a>.
+  const card = document.createElement('article');
   card.className = 'feed-card';
-  card.href = item.path || ('/w/' + (item.slug || ''));
+  const link = document.createElement('a');
+  link.className = 'feed-card-link';
+  link.href = item.path || ('/w/' + (item.slug || ''));
   const cover = document.createElement(item.kind === 'image' ? 'img' : 'div');
   cover.className = 'work-cover';
   cover.dataset.kind = item.kind || 'work';
@@ -145,17 +179,30 @@ export function renderFeedCard(document, item) {
   mark.className = 'feed-author-mark avatar';
   mark.dataset.tone = String(catalogTone(item.author || item.title || ''));
   mark.textContent = catalogMonogram(item.author || item.title || '');
-  const who = document.createElement('span');
+  const author = String(item.author || '').trim().toLowerCase();
+  const who = document.createElement(author ? 'a' : 'span');
+  if (author) {
+    who.className = 'feed-author';
+    who.href = creatorLink(author);
+    who.title = '只看 ' + item.author + ' 的公开作品';
+  }
+  who.textContent = item.author || '';
   const when = formatFeedTime(item.updated);
-  who.textContent = [item.author || '', when].filter(Boolean).join(' · ');
   meta.append(mark, who);
+  if (when) {
+    const stamp = document.createElement('span');
+    stamp.className = 'feed-when';
+    stamp.textContent = when;
+    meta.append(stamp);
+  }
   if (item.likes != null) {
     const likes = document.createElement('span');
     likes.className = 'feed-likes';
     likes.textContent = '♡ ' + (item.likes || 0);
     meta.append(likes);
   }
-  card.append(cover, kind, title, meta);
+  link.append(cover, kind, title);
+  card.append(link, meta);
   return card;
 }
 
@@ -227,7 +274,7 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
-export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), location = globalThis.location } = {}) {
+export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), location = globalThis.location, history = globalThis.history } = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
@@ -306,7 +353,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     applyCatalogChrome();
   }
 
-  const feedState = {items: [], cursor: '', query: '', kind: '', tab: 'activity', loading: false};
+  const feedState = {items: [], cursor: '', query: '', kind: '', tab: 'activity', loading: false, creator: ''};
+  if (!catalogView) feedState.creator = creatorFromSearch(location && location.search);
   let feedRequest = 0;
 
   function setFeedTab(tab) {
@@ -330,6 +378,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
     else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
     else if (feedState.tab === 'collected') note.textContent = '这里只展示你收录且仍公开的作品。';
+    else if (feedState.creator && !feedState.items.length && !feedState.loading) note.textContent = FEED_CREATOR_EMPTY_NOTE;
     else note.textContent = (feedState.query || feedState.kind) && !feedState.items.length && !feedState.loading
       ? FEED_SEARCH_EMPTY_NOTE : (feedState.items.length ? FEED_ACTIVITY_LISTED_NOTE : FEED_ACTIVITY_EMPTY_NOTE);
   }
@@ -410,7 +459,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       error.textContent = '';
     }
     const privateFeed = currentUser || feedState.tab !== 'activity';
-    const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind);
+    const params = feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind, feedState.creator);
     const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
     let result;
@@ -734,6 +783,61 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return loadFeed();
     });
   }
+  function setCreator(handle) {
+    const next = String(handle || '').trim().toLowerCase();
+    feedState.creator = CREATOR_HANDLE.test(next) ? next : '';
+    const select = document.getElementById('feed-creator');
+    if (select) select.value = feedState.creator;
+    // The filter is a shareable URL, so it survives a reload and a copy/paste.
+    if (history && typeof history.replaceState === 'function') {
+      const pathname = location && typeof location.pathname === 'string' ? location.pathname : '/discover';
+      history.replaceState(null, '', pathname + creatorSearch(feedState.creator));
+    }
+    return loadFeed();
+  }
+
+  async function loadCreators() {
+    const select = document.getElementById('feed-creator');
+    if (!select) return;
+    let result;
+    try { result = await request('GET', creatorsQuery()); }
+    catch { result = {status: 0, body: {}}; }
+    const items = result.status === 200 && result.body && Array.isArray(result.body.items)
+      ? result.body.items : null;
+    const option = (value, label) => {
+      const node = document.createElement('option');
+      node.value = value;
+      node.textContent = label;
+      return node;
+    };
+    const hint = document.getElementById('feed-creator-hint');
+    if (!items) {
+      // Never dress a failed read up as "no authors": that is a different fact.
+      select.disabled = true;
+      select.replaceChildren(option('', FEED_CREATOR_UNREADABLE));
+      select.value = '';
+      if (hint) hint.textContent = FEED_CREATOR_UNREADABLE + '；链接里的作者筛选仍然生效。';
+      return;
+    }
+    if (hint) hint.textContent = FEED_CREATOR_HINT;
+    const handles = [''];
+    for (const entry of items) {
+      const handle = String((entry && entry.handle) || '').trim().toLowerCase();
+      if (CREATOR_HANDLE.test(handle) && !handles.includes(handle)) handles.push(handle);
+    }
+    // A deep link can name an author the list no longer shows (their last work
+    // was unlisted); the URL still wins, so keep that option selectable.
+    if (feedState.creator && !handles.includes(feedState.creator)) handles.splice(1, 0, feedState.creator);
+    select.disabled = false;
+    select.replaceChildren(...handles.map(handle => option(handle, handle || FEED_CREATOR_ALL)));
+    select.value = feedState.creator;
+    select.title = '只看某位作者的公开作品；选「' + FEED_CREATOR_ALL + '」回到全部。';
+  }
+
+  const feedCreator = document.getElementById('feed-creator');
+  if (feedCreator) {
+    feedCreator.addEventListener('change', () => setCreator(feedCreator.value));
+  }
   const feedSearch = document.getElementById('feed-search');
   if (feedSearch) {
     feedSearch.addEventListener('submit', event => {
@@ -761,7 +865,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     await load();
   });
 
-  return load().then(() => { if (!catalogView) { setFeedTab('activity'); return loadFeed(); } });
+  return load().then(() => { if (!catalogView) { setFeedTab('activity'); loadCreators(); return loadFeed(); } });
 }
 
 if (globalThis.document && globalThis.document.getElementById('manage-list')) {

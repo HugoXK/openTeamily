@@ -171,3 +171,52 @@ class DiscoverWorksTests(unittest.TestCase):
             self.assertEqual(self.anon.call('GET', '/v1/discover/works?' + query)['status'], 400)
         self.assertEqual(self.alice.call('POST', f'/v1/workspaces/{self.wid}/artifacts/{media["body"]["artifact"]["id"]}/discover/revoke', {})['status'], 200)
         self.assertEqual(self.anon.call('GET', '/v1/discover/works?kind=image')['body']['items'], [])
+
+    def test_creator_filter_lists_only_that_author_and_the_creator_list_names_them(self):
+        alice_note = self.create(title='Alice 笔记', key='creator-work-0001')
+        self.assertEqual(self.publish(self.alice, alice_note, 'alice-note')['status'], 201)
+        bob_wid = self.bob.workspace()['body']['workspace']['id']
+        bob_work = self.bob.call(
+            'POST', f'/v1/workspaces/{bob_wid}/artifacts',
+            {'title': 'Bob 网页', 'body': 'bob body', 'kind': 'website'},
+            {'HTTP_IDEMPOTENCY_KEY': 'creator-work-0002'})
+        self.assertEqual(bob_work['status'], 201, bob_work)
+        self.assertEqual(
+            self.publish(self.bob, bob_work['body']['artifact'], 'bob-site', bob_wid)['status'], 201)
+        unlisted = self.create(title='未收录的笔记', key='creator-work-0003')
+
+        alice_only = self.anon.call('GET', '/v1/discover/works?creator=alice')
+        self.assertEqual(alice_only['status'], 200, alice_only)
+        self.assertEqual([item['slug'] for item in alice_only['body']['items']], ['alice-note'])
+        bob_only = self.anon.call('GET', '/v1/discover/works?creator=bob')
+        self.assertEqual([item['slug'] for item in bob_only['body']['items']], ['bob-site'])
+        self.assertEqual(self.anon.call('GET', '/v1/discover/works?creator=nobody')['body']['items'], [])
+        self.assertEqual(
+            [item['slug'] for item in self.anon.call('GET', '/v1/discover/works?creator=alice&kind=website')['body']['items']],
+            [])
+        self.assertEqual(
+            [item['slug'] for item in self.anon.call('GET', '/v1/discover/works?creator=bob&kind=website')['body']['items']],
+            ['bob-site'])
+
+        creators = self.anon.call('GET', '/v1/discover/creators')
+        self.assertEqual(creators['status'], 200, creators)
+        handles = [item['handle'] for item in creators['body']['items']]
+        self.assertEqual(sorted(handles), ['alice', 'bob'])
+        self.assertEqual(set(creators['body']['items'][0]), {'handle', 'works'})
+        payload = str(creators['body'])
+        self.assertNotIn(self.wid, payload)
+        self.assertNotIn(alice_note['id'], payload)
+        self.assertNotIn(unlisted['title'], payload)
+
+        for query in ('creator=', 'creator=a', 'creator=Al ice', 'creator=alice&creator=bob',
+                      'creator=alice&x=1', 'creator=Alice'):
+            self.assertEqual(self.anon.call('GET', '/v1/discover/works?' + query)['status'], 400, query)
+
+        from openteamily.settings_page import SettingsPage
+        from tests.test_settings_page import RawClient
+        pages = RawClient(SettingsPage(self.app))
+        self.assertEqual(pages.call('GET', '/discover', query='creator=alice')['status'], 200)
+        self.assertEqual(pages.call('GET', '/discover', query='creator=alice&kind=document')['status'], 200)
+        for query in ('creator=', 'creator=a', 'creator=alice&x=1', 'creator=alice&creator=bob',
+                      'creator=Al%20ice', 'creator=alice&kind=bogus'):
+            self.assertEqual(pages.call('GET', '/discover', query=query)['status'], 400, query)

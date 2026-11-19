@@ -10,6 +10,8 @@ voluntarily published artifacts without inventing engagement counts.
 import re
 
 SLUG = re.compile(r'[a-z0-9][a-z0-9-]{1,28}[a-z0-9]')
+# Mirrors the username rule in App.credentials: 3-64 characters, lowercase.
+CREATOR = re.compile(r'[a-z0-9][a-z0-9_.-]{2,63}')
 RESERVED = {
     'settings', 'team', 'members', 'v1', 'discover', 'agents', 'chat',
     'messenger', 'space', 'artifacts', 'memory', 'automations', 'runtimes',
@@ -73,6 +75,10 @@ CREATE TABLE IF NOT EXISTS discover_follows (
 def valid_slug(value):
     return (isinstance(value, str) and bool(SLUG.fullmatch(value))
             and value not in RESERVED)
+
+
+def valid_creator(value):
+    return isinstance(value, str) and bool(CREATOR.fullmatch(value))
 
 
 def load(db, agent_id):
@@ -152,7 +158,7 @@ WORK_FILTER_KINDS = frozenset(('document', 'website', 'image', 'audio', 'video',
                                 'slides', 'whiteboard', 'dashboard', 'media'))
 
 
-def work_listing(db, query, cursor, limit, kind='', viewer_id='', tab='all'):
+def work_listing(db, query, cursor, limit, kind='', viewer_id='', tab='all', creator=''):
     sql = (
         'SELECT d.slug, d.updated AS listed_updated, a.title, a.id AS artifact_id, a.created_by, '
         'cu.username AS created_by_username, m.render AS render, '
@@ -183,6 +189,14 @@ def work_listing(db, query, cursor, limit, kind='', viewer_id='', tab='all'):
             raise ValueError('invalid cursor')
         sql += ' AND (d.updated<? OR (d.updated=? AND d.slug<?))'
         params.extend([parsed[0], parsed[0], parsed[1]])
+    creator = (creator or '').strip()
+    if creator:
+        # The card already names its author, so an exact match on that handle is
+        # the same exposure; the substring search below stays a separate filter.
+        if not valid_creator(creator):
+            raise ValueError('invalid creator')
+        sql += ' AND cu.username=?'
+        params.append(creator)
     text = (query or '').strip()
     if text:
         sql += ' AND (instr(lower(a.title), lower(?))>0 OR instr(lower(cu.username), lower(?))>0)'
@@ -206,6 +220,25 @@ def work_listing(db, query, cursor, limit, kind='', viewer_id='', tab='all'):
     sql += ' ORDER BY d.updated DESC, d.slug DESC LIMIT ?'
     params.append(limit)
     return db.execute(sql, tuple(params)).fetchall()
+
+
+def creator_listing(db, limit):
+    """Handles that already have a public work, so a creator filter has values.
+
+    This is the same author the public card and /w/<slug> page already show; it
+    never exposes a user id, a workspace or a private artifact."""
+    return db.execute(
+        'SELECT cu.username AS handle, COUNT(*) AS works '
+        'FROM artifact_discover d '
+        'JOIN artifacts a ON a.id=d.artifact_id '
+        'JOIN users cu ON cu.id=a.created_by '
+        'WHERE d.listed=1 GROUP BY a.created_by '
+        'ORDER BY works DESC, cu.username ASC LIMIT ?',
+        (limit,)).fetchall()
+
+
+def creator_view(row):
+    return {'handle': row['handle'], 'works': row['works']}
 
 
 def work_public_view(row):

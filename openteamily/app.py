@@ -499,6 +499,10 @@ class App:
             if method != 'GET':
                 refuse(405, 'method', 'Only GET is supported')
             return self.discover_works(query)
+        if path == '/v1/discover/creators':
+            if method != 'GET':
+                refuse(405, 'method', 'Only GET is supported')
+            return self.discover_creators(query)
         work_path = re.fullmatch(r'/w/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])(/file|/preview)?', path)
         if work_path:
             if method != 'GET' or query:
@@ -3519,10 +3523,24 @@ class App:
             return 200, {'items': [discover.public_view(row) for row in rows[:int(limit)]],
                          'cursor': rows[int(limit) - 1]['slug'] if len(rows) > int(limit) else None}, []
 
+    def discover_creators(self, query):
+        try:
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=2) if query else {}
+            if set(args) - {'limit'} or any(len(v) != 1 for v in args.values()):
+                raise ValueError()
+            limit = args.get('limit', ['20'])[0]
+            if not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 50:
+                raise ValueError()
+        except ValueError:
+            refuse(400, 'invalid', 'Invalid discover parameters')
+        with self.store.connect() as db:
+            rows = discover.creator_listing(db, int(limit))
+            return 200, {'items': [discover.creator_view(row) for row in rows]}, []
+
     def discover_works(self, query, db=None, viewer_id=''):
         try:
-            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=5) if query else {}
-            if set(args) - ({'q', 'limit', 'cursor', 'kind', 'tab'} if viewer_id else {'q', 'limit', 'cursor', 'kind'}) or any(len(v) != 1 for v in args.values()):
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=6) if query else {}
+            if set(args) - ({'q', 'limit', 'cursor', 'kind', 'creator', 'tab'} if viewer_id else {'q', 'limit', 'cursor', 'kind', 'creator'}) or any(len(v) != 1 for v in args.values()):
                 raise ValueError()
             text = args.get('q', [''])[0]
             if len(text) > 80 or any(ord(ch) < 32 for ch in text):
@@ -3536,13 +3554,17 @@ class App:
             kind = args.get('kind', [''])[0]
             if kind and kind not in discover.WORK_FILTER_KINDS:
                 raise ValueError()
+            creator = args.get('creator', [''])[0]
+            if 'creator' in args and not discover.valid_creator(creator):
+                raise ValueError()
             cursor = args.get('cursor', [''])[0]
             if cursor and not discover.valid_work_cursor(cursor):
                 raise ValueError()
         except ValueError:
             refuse(400, 'invalid', 'Invalid discover parameters')
         def listed(connection):
-            rows = discover.work_listing(connection, text, cursor, int(limit) + 1, kind, viewer_id, tab)
+            rows = discover.work_listing(connection, text, cursor, int(limit) + 1, kind, viewer_id, tab,
+                                         creator)
             return 200, {'items': [discover.engaged_work_view(connection, row, viewer_id) for row in rows[:int(limit)]],
                          'cursor': discover.work_cursor(rows[int(limit) - 1]) if len(rows) > int(limit) else None}, []
         if db is not None:

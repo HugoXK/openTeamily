@@ -11,6 +11,39 @@ from urllib.parse import parse_qsl, urlsplit
 from . import discover
 
 
+def discover_creator_query(query):
+    """`/discover?creator=<handle>` plus at most one kind/feed/q refinement.
+
+    A creator link is how a reader narrows the works feed to one author, so the
+    handle has to survive a full page load. The people in it are the same author
+    names a public card already shows; every other /discover query still answers
+    400 through the recorded allowlist below.
+    """
+    pairs = parse_qsl(query, keep_blank_values=True)
+    creator = ''
+    seen = set()
+    for key, value in pairs:
+        if key in seen or not value:
+            return False
+        seen.add(key)
+        if key == 'creator':
+            if not discover.valid_creator(value):
+                return False
+            creator = value
+        elif key == 'kind':
+            if value not in discover.WORK_FILTER_KINDS:
+                return False
+        elif key == 'feed':
+            if value not in ('following', 'collected'):
+                return False
+        elif key == 'q':
+            if len(value) > 80 or any(ord(ch) < 32 for ch in value):
+                return False
+        else:
+            return False
+    return bool(creator)
+
+
 class SettingsPage:
     ASSETS = {
         '/settings': ('settings', 'index.html', 'text/html; charset=utf-8'),
@@ -168,6 +201,8 @@ class SettingsPage:
         # Only recorded HTML query allowlists may pass. CSS/JS and every
         # other management page still reject QUERY_STRING.
         if not query:
+            return True
+        if path == '/discover' and discover_creator_query(query):
             return True
         if path in ('/space', '/artifacts'):
             # new=<kind> opens that 新建 editor (chat composer 创建 grid).
