@@ -355,6 +355,10 @@ export function notificationBadgeText(count) {
 
 export function notificationSummary(item) {
   const where = item.conversation_kind === 'dm' ? '单聊' : (item.conversation_title || '群聊');
+  if (item.kind === 'agent_reply') {
+    const outcome = {succeeded: '已完成', failed: '未能完成', cancelled: '已取消'}[item.status] || '已结束';
+    return `${item.actor_username || '智能体'} 在「${where}」${outcome}你的请求`;
+  }
   return `${item.actor_username || '成员'} 在「${where}」提及了你`;
 }
 
@@ -865,6 +869,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     try { result = await request('GET', `/v1/workspaces/${wid}/notifications`); } catch { return; }
     if (token !== notificationSeq || workspaceId() !== wid || result.status !== 200) return;
     renderNotifications(result.body);
+  }
+
+  // Live-ish delivery: poll the inbox while the tab is visible. No server push.
+  const NOTIFICATION_POLL_MS = 30000;
+  if (typeof globalThis.setInterval === 'function') {
+    const handle = globalThis.setInterval(() => {
+      if (document.visibilityState === 'hidden' || !currentUser) return;
+      loadNotifications();
+    }, NOTIFICATION_POLL_MS);
+    if (handle && typeof handle.unref === 'function') handle.unref();
   }
 
   function setNotificationsOpen(open) {

@@ -1110,3 +1110,10 @@ test('pin a message and multi-select forward call the real endpoints', async () 
     assert.equal(el('forward-bar').hidden, true);
   } finally { restore(); }
 });
+
+test('agent task completion notifications have their own summary', () => {
+  assert.equal(notificationSummary({kind: 'agent_reply', status: 'succeeded', actor_username: '助理',
+    conversation_kind: 'group', conversation_title: '项目群'}), '助理 在「项目群」已完成你的请求');
+  assert.equal(notificationSummary({kind: 'agent_reply', status: 'failed', actor_username: '助理',
+    conversation_kind: 'group', conversation_title: '项目群'}), '助理 在「项目群」未能完成你的请求');
+});

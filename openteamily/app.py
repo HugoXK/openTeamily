@@ -603,7 +603,7 @@ class App:
                 return self.apply_team_template(db, session, now, env, *template_path.groups())
             notification_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/notifications(/read)?', path)
             if notification_path:
-                return self.notification_dispatch(db, session, method, query, env, *notification_path.groups())
+                return self.notification_dispatch(db, session, method, query, env, *notification_path.groups(), now=now)
             memory_profile = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/memory/profile', path)
             if memory_profile:
                 return self.memory_profile_dispatch(db, session, method, query, now, env, memory_profile[1])
@@ -3769,12 +3769,19 @@ class App:
         row = social.load(db, workspace['id'], conversation_id)
         return 201, {'conversation': social.conversation_item(db, row), 'created_agents': created}, []
 
-    def notification_dispatch(self, db, session, method, query, env, workspace_id, reading):
+    def notification_dispatch(self, db, session, method, query, env, workspace_id, reading, now=0):
         workspace = members.load(db, workspace_id, session['user_id'])
         if workspace is None:
             refuse(404, 'not_found', 'Workspace not found')
         uid = session['user_id']
         if not reading and method == 'GET' and query in ('', 'filter=unread', 'filter=all'):
+            # Bring the requester's in-flight group agent requests up to date so a
+            # finished task shows up on the next poll without opening the group.
+            for conv in db.execute(
+                    "SELECT DISTINCT c.* FROM social_agent_replies r JOIN social_conversations c ON c.id=r.conversation_id "
+                    "WHERE r.workspace_id=? AND r.requested_by=? AND r.status IN ('queued','running') LIMIT 20",
+                    (workspace['id'], uid)).fetchall():
+                self.reconcile_group_replies(db, conv, now)
             return 200, {'items': notifications.listing(db, workspace['id'], uid, query == 'filter=unread'),
                          'unread_count': notifications.unread_count(db, workspace['id'], uid),
                          'limit': notifications.LIMIT}, []

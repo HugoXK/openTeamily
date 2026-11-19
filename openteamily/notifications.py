@@ -4,8 +4,8 @@ Self-written for OpenTeamily; no upstream or Teamily source. A notification is
 created only when a human message names another human member of the same
 conversation as ``@username``. Visibility is re-checked on every read: a
 recipient who left the conversation or a retracted message stops showing.
-Task-completion, user-agent unread aggregation and push/live delivery are not
-implemented here; do not describe this as Teamily notification parity.
+Group agent request completion is also listed for the requester. User-agent
+conversation unread aggregation and server push are not implemented here; do not describe this as Teamily notification parity.
 """
 import re
 from uuid import uuid4
@@ -25,7 +25,14 @@ CREATE TABLE IF NOT EXISTS social_notifications (
  UNIQUE(message_id, user_id, kind));
 CREATE INDEX IF NOT EXISTS social_notification_inbox
  ON social_notifications(workspace_id, user_id, seq);
+CREATE TABLE IF NOT EXISTS social_reply_notification_reads (
+ reply_id TEXT NOT NULL REFERENCES social_agent_replies(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ PRIMARY KEY(reply_id, user_id));
 '''
+
+# Task-completion notifications are derived from the requester's own group agent
+# requests that reached a terminal state; only the read marker is stored.
 
 LIMIT = 100
 EXCERPT = 140
@@ -86,26 +93,65 @@ def view(row):
             'created': row['created'], 'read': bool(row['read'])}
 
 
+REPLIES = '''
+ FROM social_agent_replies r
+ JOIN social_members sm ON sm.conversation_id=r.conversation_id AND sm.user_id=r.requested_by
+ JOIN social_conversations c ON c.id=r.conversation_id
+ LEFT JOIN social_reply_notification_reads rr ON rr.reply_id=r.id AND rr.user_id=r.requested_by
+ WHERE r.workspace_id=? AND r.requested_by=? AND r.status IN ('succeeded','failed','cancelled')
+'''
+REPLY_STATUS = {'succeeded': '已回复', 'failed': '未能完成', 'cancelled': '已取消'}
+
+
+def reply_view(row):
+    return {'id': row['id'], 'kind': 'agent_reply', 'conversation_id': row['conversation_id'],
+            'conversation_kind': row['conversation_kind'], 'conversation_title': row['conversation_title'],
+            'message_id': row['id'] if row['status'] == 'succeeded' else None, 'actor_id': row['agent_id'],
+            'actor_username': row['agent_name'], 'status': row['status'],
+            'excerpt': REPLY_STATUS[row['status']] + '：' + (row['prompt'] if len(row['prompt']) <= EXCERPT
+                                                            else row['prompt'][:EXCERPT - 1] + '…'),
+            'created': row['updated'], 'read': row['is_read'] == 1}
+
+
 def listing(db, workspace_id, user_id, unread_only=False):
     rows = db.execute(
         'SELECT n.*, msg.body AS body, c.kind AS conversation_kind, c.title AS conversation_title, '
         'a.username AS actor_username' + VISIBLE + (' AND n.read=0' if unread_only else '')
         + ' ORDER BY n.seq DESC LIMIT ?', (workspace_id, user_id, LIMIT)).fetchall()
-    return [view(row) for row in rows]
+    replies = db.execute(
+        'SELECT r.*, c.kind AS conversation_kind, c.title AS conversation_title, '
+        '(rr.reply_id IS NOT NULL) AS is_read' + REPLIES + (' AND rr.reply_id IS NULL' if unread_only else '')
+        + ' ORDER BY r.updated DESC, r.id DESC LIMIT ?', (workspace_id, user_id, LIMIT)).fetchall()
+    items = [view(row) for row in rows] + [reply_view(row) for row in replies]
+    items.sort(key=lambda item: item['created'], reverse=True)
+    return items[:LIMIT]
 
 
 def unread_count(db, workspace_id, user_id):
-    return db.execute('SELECT COUNT(*)' + VISIBLE + ' AND n.read=0', (workspace_id, user_id)).fetchone()[0]
+    mentions = db.execute('SELECT COUNT(*)' + VISIBLE + ' AND n.read=0', (workspace_id, user_id)).fetchone()[0]
+    replies = db.execute('SELECT COUNT(*)' + REPLIES + ' AND rr.reply_id IS NULL', (workspace_id, user_id)).fetchone()[0]
+    return mentions + replies
+
+
+def _mark_replies(db, workspace_id, user_id, extra='', args=()):
+    db.execute('INSERT OR IGNORE INTO social_reply_notification_reads(reply_id,user_id) SELECT r.id, r.requested_by'
+               + REPLIES + extra, (workspace_id, user_id, *args))
 
 
 def mark_read(db, workspace_id, user_id, notification_id=None):
     if notification_id is None:
         db.execute('UPDATE social_notifications SET read=1 WHERE workspace_id=? AND user_id=? AND read=0',
                    (workspace_id, user_id))
+        _mark_replies(db, workspace_id, user_id)
         return True
     cursor = db.execute('UPDATE social_notifications SET read=1 WHERE id=? AND workspace_id=? AND user_id=?',
                         (notification_id, workspace_id, user_id))
-    return cursor.rowcount == 1
+    if cursor.rowcount == 1:
+        return True
+    if db.execute('SELECT 1' + REPLIES + ' AND r.id=?', (workspace_id, user_id, notification_id)).fetchone():
+        _mark_replies(db, workspace_id, user_id, ' AND r.id=?', (notification_id,))
+        return True
+    return False
 
 
 def mark_conversation_read(db, workspace_id, user_id, conversation_id, up_to_seq):
@@ -113,3 +159,5 @@ def mark_conversation_read(db, workspace_id, user_id, conversation_id, up_to_seq
     db.execute('UPDATE social_notifications SET read=1 WHERE workspace_id=? AND user_id=? AND conversation_id=? '
                'AND read=0 AND message_id IN (SELECT id FROM social_messages WHERE conversation_id=? AND seq<=?)',
                (workspace_id, user_id, conversation_id, conversation_id, up_to_seq))
+    _mark_replies(db, workspace_id, user_id, ' AND r.conversation_id=? AND (r.seq IS NULL OR r.seq<=?)',
+                  (conversation_id, up_to_seq))
