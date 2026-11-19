@@ -633,6 +633,32 @@ test('the 900px stylesheet restores the session pane for the sessions-open state
   );
 });
 
+test('the 900px stylesheet puts the chat panel back in the second column', () => {
+  const css = readFileSync(new URL('../openteamily/static/chat/app.css', import.meta.url), 'utf8');
+  const start = css.indexOf('@media (max-width: 900px)');
+  assert.ok(start > -1, 'the chat stylesheet has a 900px block');
+  const block = css.slice(start, css.indexOf('\n}', start));
+  for (const selector of ['#main', '#status']) {
+    const rule = block.match(
+      new RegExp(`body\\.app-workspace\\.chat-open\\s*>\\s*${selector}[^{]*\\{([^}]*)\\}`),
+    );
+    assert.ok(rule, `the two-column override at 900px must also move ${selector} out of column 3`);
+    assert.match(
+      rule[1],
+      /grid-column:\s*2\b/,
+      `${selector} is pinned to grid-column 3 by the shell stylesheet; without this the implicit third column collapses the session pane to its minimum`,
+    );
+  }
+  // With the list shown, #main must leave the flow: otherwise it is auto-placed
+  // in an implicit row below the pane and the 1fr row shrinks (pane 624px tall
+  // instead of the full viewport).
+  assert.match(
+    block,
+    /\.sessions-open\s*>\s*#main\s*\{\s*display:\s*none/,
+    'the list state must hide the chat panel so the pane fills the viewport',
+  );
+});
+
 test('a wide chat still opens the first conversation instead of stopping on the list', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher} = sessionFetcher();
