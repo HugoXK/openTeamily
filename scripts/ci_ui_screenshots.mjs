@@ -1293,11 +1293,16 @@ async function main() {
       await page.locator('#wizard-form input[name="name"]').fill('CI Fixture Preview Team');
       await page.locator('#wizard-form input[name="slug"]').fill('ci-preview-team');
       await page.locator('#next').click();
-      await page.locator('#step-later').waitFor({ state: 'visible', timeout: 10000 });
+      await page.locator('#step-2').waitFor({ state: 'visible', timeout: 10000 });
+      const step2Text = await visibleText(page.locator('#step-2'));
       record(
         'team_wizard_continuation',
-        await page.locator('#step-later').isVisible() && await page.locator('#submit').isVisible(),
-        'name and slug accepted; unverified continuation visible, not submitted',
+        await page.locator('#step-2').isVisible()
+          && await page.locator('#invite-role').isVisible()
+          && await page.locator('#invite-skip').isVisible()
+          && await page.locator('#submit').isVisible()
+          && step2Text.includes('邀请成员'),
+        'name and slug accepted; invite step visible, not submitted',
         { soft: true },
       );
       screenshots.push(path.basename(await shot(page, outDir, '13b-team-wizard-continuation.png')));
