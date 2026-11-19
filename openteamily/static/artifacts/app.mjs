@@ -133,6 +133,21 @@ function idempotencyKey() {
   return globalThis.btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
+export function suggestedDiscoverSlug(title) {
+  const slug = String(title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 30)
+    .replace(/-+$/g, '');
+  return /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug) ? slug : '';
+}
+
+export function applyArtifactLayout(list, layout) {
+  list.dataset.layout = layout === 'list' ? 'list' : 'grid';
+  return list.dataset.layout;
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -653,6 +668,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const list = document.getElementById('artifact-list');
     const empty = document.getElementById('list-empty');
     list.textContent = '';
+    applyArtifactLayout(list, catalogLayout);
     if (empty) empty.hidden = items.length > 0;
     for (const item of items) {
       const row = document.createElement('li');
@@ -667,6 +683,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       meta.textContent = `${kindLabel(item.kind)} · ${item.created_by || ''}${source}`;
       row.appendChild(open);
       row.appendChild(meta);
+      const cover = document.createElement('span');
+      cover.className = 'artifact-cover';
+      cover.setAttribute('aria-hidden', 'true');
+      cover.textContent = kindLabel(item.kind);
+      row.appendChild(cover);
       list.appendChild(row);
     }
   }
@@ -692,12 +713,43 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('share-once').textContent = '';
     const versionPanel = document.getElementById('version-panel');
     versionPanel.hidden = !current || !current.id;
+    const discoverPanel = document.getElementById('discover-panel');
+    if (discoverPanel) discoverPanel.hidden = !current || !current.id;
     if (current && current.id) {
       await loadShares();
       await loadVersions();
+      await loadDiscover();
     } else {
       document.getElementById('share-list').textContent = '';
       document.getElementById('version-list').textContent = '';
+    }
+  }
+
+  async function loadDiscover() {
+    const panel = document.getElementById('discover-panel');
+    const status = document.getElementById('discover-status');
+    const slugInput = document.getElementById('discover-slug');
+    const revoke = document.getElementById('revoke-discover');
+    if (!panel) return;
+    if (!current || !current.id || !workspaceId()) {
+      panel.hidden = true;
+      return;
+    }
+    panel.hidden = false;
+    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/discover`);
+    if (listed.status !== 200) {
+      if (status) {
+        status.hidden = false;
+        status.textContent = '无法读取公开状态。';
+      }
+      return;
+    }
+    const row = listed.body.discover || {};
+    if (slugInput) slugInput.value = row.slug || suggestedDiscoverSlug(current.title);
+    if (revoke) revoke.hidden = !row.listed;
+    if (status) {
+      status.hidden = false;
+      status.textContent = row.listed ? ('已公开：/w/' + row.slug) : '尚未公开到发现页。';
     }
   }
 
@@ -1165,8 +1217,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     fillEditor(current);
     document.getElementById('remove-artifact').hidden = false;
     document.getElementById('share-panel').hidden = false;
+    const discoverPanel = document.getElementById('discover-panel');
+    if (discoverPanel) discoverPanel.hidden = false;
     show('ok', '已保存。');
     await loadShares();
+    await loadDiscover();
   });
 
   document.getElementById('remove-artifact').addEventListener('click', async () => {
@@ -1236,6 +1291,43 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     boardState.strokes = [];
     drawBoard();
   });
+
+  const discoverForm = document.getElementById('discover-form');
+  if (discoverForm) {
+    discoverForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!current || !current.id || !workspaceId()) {
+        show('error', '请先保存作品，再发布到发现页。');
+        return;
+      }
+      const slug = (document.getElementById('discover-slug').value || '').trim();
+      const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/discover`, {slug});
+      if (result.status !== 200 && result.status !== 201) {
+        const messages = {
+          forbidden: '只有所有者或管理员可以把作品公开到发现页。',
+          conflict: '这个短地址已经在用。',
+          invalid: '请输入可用的公开短地址。',
+        };
+        show('error', messages[result.body.error] || messageFor(result.body.error, '无法发布到发现页。'));
+        return;
+      }
+      show('ok', '已公开到发现页。');
+      await loadDiscover();
+    });
+  }
+  const revokeDiscover = document.getElementById('revoke-discover');
+  if (revokeDiscover) {
+    revokeDiscover.addEventListener('click', async () => {
+      if (!current || !current.id || !workspaceId()) return;
+      const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/discover/revoke`, {});
+      if (result.status !== 200) {
+        show('error', messageFor(result.body.error, '无法从发现页撤回。'));
+        return;
+      }
+      show('ok', '已从发现页撤回。');
+      await loadDiscover();
+    });
+  }
 
   document.getElementById('create-share').addEventListener('click', async () => {
     if (!current || !current.id || !workspaceId()) {
