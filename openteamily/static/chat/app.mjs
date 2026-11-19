@@ -2072,7 +2072,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
     });
     const attachment = item.attachment || {};
-    const photo = attachment.kind === 'image';
+    const photo = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
     const avatar = document.createElement('span');
     avatar.className = 'search-hit-avatar';
     avatar.setAttribute('aria-hidden', 'true');
@@ -2116,9 +2116,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (conversationScope !== scope) return;
     const photos = scope === 'photos';
     const hits = found.items.filter(item => {
-      const kind = item.attachment && item.attachment.kind;
-      if (!kind) return false;
-      return photos ? kind === 'image' : kind !== 'image';
+      const attachment = item.attachment;
+      if (!attachment) return false;
+      const image = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
+      return photos ? image : !image;
     });
     for (const item of hits) list.append(attachmentHitRow(item));
     if (hits.length) {

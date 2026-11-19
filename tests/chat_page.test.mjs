@@ -1426,11 +1426,12 @@ test('conversation search lists this conversation photos and files from real att
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   const restore = installChatGlobals({narrow: true});
-  const attachment = (id, title, kind) => ({id: id.repeat(32), title, kind, revision: 1,
+  const attachment = (id, title, kind, mime) => ({id: id.repeat(32), title, kind, mime, revision: 1,
     path: '/v1/workspaces/ws-1/artifacts/' + id.repeat(32) + '/file'});
   const rows = [
-    {id: 'm-1', user_id: bob, body: '', created: '2026-01-01T00:00:00Z', attachment: attachment('a', 'pixel.png', 'image')},
-    {id: 'm-2', user_id: bob, body: '', created: '2026-01-01T00:01:00Z', attachment: attachment('b', 'plan.pdf', 'document')},
+    // Real uploads all land as kind 'media'; the mime is what separates photos.
+    {id: 'm-1', user_id: bob, body: '', created: '2026-01-01T00:00:00Z', attachment: attachment('a', 'pixel.png', 'media', 'image/png')},
+    {id: 'm-2', user_id: bob, body: '', created: '2026-01-01T00:01:00Z', attachment: attachment('b', 'plan.pdf', 'media', 'application/pdf')},
   ];
   try {
     await mount(doc, {fetcher: async path => {
