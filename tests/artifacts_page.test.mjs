@@ -615,7 +615,7 @@ test('saving a completed task artifact posts the task id and lists the document'
     ],
   });
   try {
-    await page.elements.get('empty-save-agent').dispatch('click');
+    await page.doc.getElementById('empty-save-agent').dispatch('click');
     assert.equal(page.calls.some(call => call.path === '/v1/runtime/tasks' && call.method === 'GET'), true,
                  'the agent save panel must read the real task list');
     const dialog = page.created.find(node => node.id === 'agent-task-dialog');
@@ -646,7 +646,7 @@ test('a refused save shows the server reason and keeps the task on screen', asyn
     saveReply: {status: 409, body: {error: {code: 'conflict', message: 'Only a succeeded task with a text result can be saved'}}},
   });
   try {
-    await page.elements.get('empty-save-agent').dispatch('click');
+    await page.doc.getElementById('empty-save-agent').dispatch('click');
     const dialog = page.created.find(node => node.id === 'agent-task-dialog');
     const row = cardOf(dialog).children.find(child => child.id === 'agent-task-list').children[0];
     const save = row.children.filter(child => child.tagName === 'BUTTON')[0];
@@ -669,7 +669,7 @@ test('an unauthorised save asks the user to sign in instead of failing silently'
     saveReply: {status: 401, body: {error: {code: 'unauthorized', message: 'Sign in first'}}},
   });
   try {
-    await page.elements.get('empty-save-agent').dispatch('click');
+    await page.doc.getElementById('empty-save-agent').dispatch('click');
     const dialog = page.created.find(node => node.id === 'agent-task-dialog');
     const row = cardOf(dialog).children.find(child => child.id === 'agent-task-list').children[0];
     await row.children.filter(child => child.tagName === 'BUTTON')[0].dispatch('click');
