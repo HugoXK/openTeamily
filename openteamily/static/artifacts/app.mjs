@@ -797,6 +797,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       badge.setAttribute('aria-hidden', 'true');
       badge.textContent = kindBadge(item.kind);
       row.appendChild(badge);
+      const bookmark = document.createElement('button');
+      bookmark.type = 'button';
+      bookmark.className = 'artifact-bookmark';
+      bookmark.disabled = true;
+      bookmark.title = '未接通：还没有收藏作品接口';
+      bookmark.setAttribute('aria-label', '收藏（未接通）');
+      bookmark.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10v16l-5-3-5 3V4Z"/></svg>';
+      row.appendChild(bookmark);
       const created = document.createElement('span');
       created.className = 'artifact-created';
       created.textContent = artifactTime(item.created);

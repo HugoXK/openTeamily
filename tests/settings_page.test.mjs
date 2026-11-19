@@ -93,6 +93,8 @@ test('settingsViewFromLocation maps recorded paths and leftover hashes', () => {
   assert.equal(settingsViewFromLocation('/settings/channels', ''), 'channels');
   assert.equal(settingsViewFromLocation('/settings/agent-access', ''), 'agent-access');
   assert.equal(settingsViewFromLocation('/settings/connectors', ''), 'connectors');
+  assert.equal(settingsViewFromLocation('/settings/skill-configuration', ''), 'skill-configuration');
+  assert.equal(settingsViewFromLocation('/settings', '#skill-secrets'), 'skill-configuration');
   assert.equal(settingsViewFromLocation('/settings', '#appearance'), 'appearance');
   assert.equal(settingsViewFromLocation('/settings', '#language-section'), 'language');
   assert.equal(settingsViewFromLocation('/settings', '#send-shortcut'), 'shortcuts');

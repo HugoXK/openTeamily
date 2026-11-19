@@ -98,6 +98,7 @@ const PATH_VIEWS = {
   '/settings/channels': 'channels',
   '/settings/agent-access': 'agent-access',
   '/settings/connectors': 'connectors',
+  '/settings/skill-configuration': 'skill-configuration',
 };
 
 const HASH_VIEWS = {
@@ -110,7 +111,7 @@ const HASH_VIEWS = {
   'send-shortcut': 'shortcuts',
   shortcuts: 'shortcuts',
   'model-api': 'model-api',
-  'skill-secrets': 'skill-secrets',
+  'skill-secrets': 'skill-configuration',
 };
 
 export function settingsViewFromLocation(pathname, hash) {
@@ -535,13 +536,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function renderSkillSecrets() {
     const list = document.getElementById('skill-secret-list');
     const skillForm = document.getElementById('skill-secrets-form');
+    const empty = document.getElementById('skill-empty');
     if (!list || !skillForm) return;
     list.textContent = '';
     const listed = await request('GET', '/v1/skill-secrets');
     if (listed.status !== 200) return;
-    for (const item of listed.body.items) {
+    const items = listed.body.items || [];
+    for (const item of items) {
       const row = document.createElement('li');
-      row.textContent = item.name + ' ';
+      const name = document.createElement('span');
+      name.textContent = item.name;
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.textContent = '删除';
@@ -553,12 +557,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
         await renderSkillSecrets();
       });
-      row.appendChild(remove);
+      row.append(name, remove);
       list.appendChild(row);
     }
+    if (empty) empty.hidden = items.length > 0;
+    list.hidden = items.length === 0;
   }
 
   const skillForm = document.getElementById('skill-secrets-form');
+  const skillAddOpen = document.getElementById('skill-add-open');
+  const skillAddCancel = document.getElementById('skill-add-cancel');
+  if (skillAddOpen && skillForm) {
+    skillAddOpen.addEventListener('click', () => {
+      skillForm.hidden = false;
+      const name = skillForm.elements.name;
+      if (name) name.focus();
+    });
+  }
+  if (skillAddCancel && skillForm) {
+    skillAddCancel.addEventListener('click', () => {
+      skillForm.hidden = true;
+      skillForm.elements.value.value = '';
+    });
+  }
   if (skillForm) {
     skillForm.addEventListener('submit', async event => {
       event.preventDefault();
@@ -571,6 +592,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         return;
       }
       show('ok', '技能密钥已保存。');
+      skillForm.hidden = true;
       await renderSkillSecrets();
     });
   }

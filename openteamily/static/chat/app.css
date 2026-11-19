@@ -1405,3 +1405,66 @@ html[data-theme-resolved="dark"] { --ot-bubble-mine: var(--ot-accent-soft); }
 #message-list .reply-state { display: flex; align-items: center; gap: .5rem; margin: .125rem 0 .125rem; font-size: .875rem; font-weight: 650; color: var(--ot-ink); }
 #message-list li[data-state="failed"] > p.failed { padding: .5rem .75rem; border-radius: .625rem; background: #fdf0ef; color: #9b1c13; font-size: .8125rem; }
 html[data-theme-resolved="dark"] #message-list li[data-state="failed"] > p.failed { background: rgba(180, 35, 24, .18); color: #f3b7b1; }
+
+/* Page parity follow-up: header avatar stack, in-stream artifact card, group-agent panel. */
+.chat-avatar-stack {
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding-left: 0.55rem;
+}
+.chat-avatar-stack[hidden] { display: none; }
+.chat-avatar-stack .stack-face {
+  display: grid;
+  place-items: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  margin-left: -0.55rem;
+  border-radius: 50%;
+  font-size: 0.7rem;
+  font-weight: 650;
+  box-shadow: 0 0 0 2px var(--ot-surface);
+}
+.stream-artifact {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: center;
+  margin: 0.35rem 0 0;
+  max-width: 20rem;
+  padding: 0.4rem;
+  border-radius: 0.75rem;
+  background: var(--ot-surface);
+  box-shadow: 0 0 0 1px var(--ot-line);
+}
+.stream-artifact-cover {
+  display: grid;
+  place-items: center;
+  min-height: 3.2rem;
+  border-radius: 0.5rem;
+  background: linear-gradient(150deg, #f7f5ef, #ece6d6);
+  color: #6a5634;
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+.stream-artifact-copy { display: grid; gap: 0.2rem; min-width: 0; }
+.stream-artifact-copy strong { font-size: 0.8125rem; font-weight: 650; }
+.stream-artifact-copy a { font-size: 0.75rem; }
+#social-agent-members.group-agent-note,
+#group-agent-action.group-agent-panel {
+  margin: 0.65rem 1rem 0;
+  padding: 0.8rem 0.95rem;
+  border: 0;
+  border-bottom: 0;
+  border-radius: 0.85rem;
+  background: var(--ot-surface);
+  box-shadow: 0 0 0 1px var(--ot-line);
+}
+#social-agent-members.group-agent-note { font-size: 0.8125rem; color: var(--ot-muted); line-height: 1.5; }
+#group-agent-action.group-agent-panel h2 { font-size: 0.875rem; font-weight: 650; }
+
+#group-agent-form fieldset,
+#social-agent-members fieldset {
+  padding: 0.15rem 0.65rem;
+  box-sizing: border-box;
+}
