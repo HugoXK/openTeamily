@@ -1,6 +1,6 @@
 # Owned functional completion aggregate
 
-Base: ef71b3d1, after merged342; ordinary-synced main13641eb9 including contributor332. Local branch: feat/functional-completion-big. Not a claim of Teamily parity or all controls complete.
+Base: ef71b3d1, after merged342; ordinary-synced main9a7aa53c including contributors332 and348. Local branch: feat/functional-completion-big. Not a claim of Teamily parity or all controls complete.
 
 | Gap/control | Implementation and state | Automated proof | Acceptance still required |
 |---|---|---|---|
@@ -10,8 +10,8 @@ Base: ef71b3d1, after merged342; ordinary-synced main13641eb9 including contribu
 | Document version awareness / explicit latest read | real persisted revision invalidation; draft preserved; confirmed load; existing CAS writes unchanged | WSGI/JS plus added real CI revision-change/draft-retention scene | No CRDT/merge/presence or collaborative editor claim |
 | Word / PDF / spreadsheet downloads | actual DOCX OPC/XML, Unicode text-PDF, dashboard data XLSX; current and historical auth/version checks; no renderer execution, network fetch, macro or formula | test_office_exports validates ZIP/XML/relationships/formula safety/history/xref; local independent Poppler extraction; CI actual downloads added | Text PDF only BMP Unicode/CJK viewer-font substitution; DOCX retains text/headings, not full Markdown/Office; XLSX all strings; full Office/PPTX/media/thumbnail editing still engineering |
 
-## Contributor ownership refreshed before coding and again before publication (48 open)
-Do not edit other branches or count these as landed:352/271 old search hit loading;349 reminders;348 run details;345 mute/notification;346 agent proactivity;320 chat-language prompt;284 preference/notification consumers;309/340 notification writers;335 Discover author;299 memory share;315 composer;277/326 image;322 edit;330/310 automation;273 meeting works;289 action save;313/290 team/template;281 invite;293 email auth;282 runtime key;316 archive restore;298 profile;302 guide;317 docs;325 avatar;280 follow URL;197 preference honesty;294 onboarding;237 checklist. 283 boolean-only remains superseded. No124 reply-protocol changes.
+## Contributor ownership refreshed before coding and again before publication (49 open before this aggregate)
+Do not edit other branches or count these as landed:352/271 old search hit loading;349 reminders;345 mute/notification;346 agent proactivity;320 chat-language prompt;284 preference/notification consumers;309/340 notification writers;335 Discover author;299 memory share;315 composer;277/326 image;322 edit;330/310 automation;273 meeting works;289 action save;313/290 team/template;281 invite;293 email auth;282 runtime key;316 archive restore;298 profile;302 guide;317 docs;325 avatar;280 follow URL;197 preference honesty;294 onboarding;237 checklist. 283 boolean-only remains superseded. No124 reply-protocol changes.
 
 ## Remaining complete scope
 See FUNCTIONAL_COMPLETION_PLAN.md and VISIBLE_FUNCTIONS_INVENTORY.md for all six categories and source census. None is silently hidden or called credential-blocked wholesale. No operator/model/Composio credentials discovered or reused; Composio remains each user's own key; model platform default+user override retained. No production, user computer, :3320 or :3786 changes. No npm installation, external invitations/sends/payments, cloud sessions, proprietary assets, or upstream vendor byte edits. All current tests/captures are synthetic, not real-vendor or Teamily acceptance.
@@ -40,3 +40,9 @@ Contributor332 personal message hiding is now landed in the synced base. The
 SSE fingerprint respects the current user's deletion rows; another member's
 snapshot is unchanged. Overlapping session loads now commit one current
 workspace/user/request snapshot only, including the per-agent fanout phase.
+
+Publication ownership refresh: 49 open contributor PRs, including364 download
+platform guidance112243da70 and365 attendee-name completion2925622bf9. Updated
+358 unread-divider2b36a42e41 and354 attachment-searchee761c6233 remain separate.
+Contributor348 run-detail UI is now in the synced main base, not implemented
+again or counted from its formerly open PR state.
