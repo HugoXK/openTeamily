@@ -53,6 +53,17 @@ export function canRemove(actor, target, selfId) {
   return false;
 }
 
+export function removalPrompt(item, selfId) {
+  if (!item) return {question: '', confirmLabel: '确认'};
+  if (item.user_id === selfId) return {question: '退出工作区？', confirmLabel: '确认退出'};
+  const name = item.username || '';
+  return {question: name ? `移除 ${name}？` : '移除此成员？', confirmLabel: '确认'};
+}
+
+export function revokePrompt() {
+  return {question: '撤销这条邀请？', confirmLabel: '确认撤销'};
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -88,6 +99,97 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return workspaceSelect.value;
   }
 
+  let pendingConfirm = null;
+  let confirmSerial = 0;
+  let memberItems = [];
+  let inviteItems = [];
+
+  function currentId() {
+    return currentUser && currentUser.id;
+  }
+
+  function closeConfirm({restoreFocus = true} = {}) {
+    if (!pendingConfirm) return;
+    const {box, trigger} = pendingConfirm;
+    pendingConfirm = null;
+    if (box && box.parentElement) box.remove();
+    if (trigger) {
+      trigger.hidden = false;
+      if (restoreFocus && typeof trigger.focus === 'function') trigger.focus();
+    }
+  }
+
+  function openConfirm({row, trigger, prompt, action}) {
+    closeConfirm();
+    const questionId = `member-confirm-question-${++confirmSerial}`;
+    const box = document.createElement('span');
+    box.className = 'row-confirm';
+    box.setAttribute('role', 'alertdialog');
+    box.setAttribute('aria-labelledby', questionId);
+    const question = document.createElement('span');
+    question.id = questionId;
+    question.textContent = prompt.question;
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = '取消';
+    cancel.dataset.confirmAction = 'cancel';
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.textContent = prompt.confirmLabel;
+    confirm.dataset.confirmAction = 'ok';
+    box.appendChild(question);
+    box.appendChild(cancel);
+    box.appendChild(confirm);
+    trigger.hidden = true;
+    row.appendChild(box);
+    pendingConfirm = {row, box, trigger, action};
+    if (typeof cancel.focus === 'function') cancel.focus();
+  }
+
+  // One delegated listener for both lists: row buttons only carry data attributes.
+  document.addEventListener('click', event => {
+    const target = event.target;
+    if (!target || !target.dataset) return;
+    if (target.dataset.confirmAction === 'cancel') {
+      closeConfirm();
+      return;
+    }
+    if (target.dataset.confirmAction === 'ok') {
+      if (!pendingConfirm) return;
+      const run = pendingConfirm.action;
+      closeConfirm();
+      run();
+      return;
+    }
+    if (target.dataset.rowAction === 'remove') {
+      const item = memberItems.find(entry => entry.user_id === target.dataset.userId);
+      if (!item) return;
+      openConfirm({
+        row: target.parentElement,
+        trigger: target,
+        prompt: removalPrompt(item, currentId()),
+        action: () => removeMember(item),
+      });
+      return;
+    }
+    if (target.dataset.rowAction === 'revoke') {
+      const item = inviteItems.find(entry => entry.id === target.dataset.inviteId);
+      if (!item) return;
+      openConfirm({
+        row: target.parentElement,
+        trigger: target,
+        prompt: revokePrompt(item),
+        action: () => revokeInvite(item),
+      });
+    }
+  });
+
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !pendingConfirm) return;
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    closeConfirm();
+  });
+
   function setRoleOptions(form, actorRole) {
     const select = form.elements.role;
     const allowed = addableRoles(actorRole);
@@ -122,6 +224,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function renderMembers(items) {
     const list = document.getElementById('member-list');
     const empty = document.getElementById('members-empty');
+    memberItems = items;
+    pendingConfirm = null;
     list.textContent = '';
     empty.hidden = items.length > 0;
     const selfId = currentUser && currentUser.id;
@@ -141,7 +245,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.textContent = item.user_id === selfId ? '退出' : '移除';
-        remove.addEventListener('click', () => removeMember(item));
+        remove.dataset.rowAction = 'remove';
+        remove.dataset.userId = item.user_id;
         row.appendChild(remove);
       }
       list.appendChild(row);
@@ -151,6 +256,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function renderInvites(items) {
     const list = document.getElementById('invite-list');
     const empty = document.getElementById('invites-empty');
+    inviteItems = items;
+    pendingConfirm = null;
     list.textContent = '';
     empty.hidden = items.length > 0;
     for (const item of items) {
@@ -163,7 +270,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const revoke = document.createElement('button');
         revoke.type = 'button';
         revoke.textContent = '撤销';
-        revoke.addEventListener('click', () => revokeInvite(item));
+        revoke.dataset.rowAction = 'revoke';
+        revoke.dataset.inviteId = item.id;
         row.appendChild(revoke);
       }
       list.appendChild(row);
