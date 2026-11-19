@@ -475,7 +475,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const id = workspaceId();
       if (!id || !currentPage) return;
       shareButton.disabled = true;
-      const seen = await request('POST', memorySharePath(id, currentPage.id));
+      const seen = await request('POST', memorySharePath(id, currentPage.id), {});
       shareButton.disabled = false;
       if (seen.status !== 201) {
         if (shareStatusEl) shareStatusEl.textContent = messageFor(seen.body.error, '无法生成分享链接。');
@@ -505,7 +505,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const id = workspaceId();
       if (!id || !currentPage) return;
       revokeShareButton.disabled = true;
-      const seen = await request('DELETE', memorySharePath(id, currentPage.id));
+      const seen = await request('DELETE', memorySharePath(id, currentPage.id), {});
       revokeShareButton.disabled = false;
       if (seen.status !== 200) {
         if (shareStatusEl) shareStatusEl.textContent = messageFor(seen.body.error, '无法撤销链接。');

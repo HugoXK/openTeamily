@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import {memorySharePath, shareRowState, shareUrl} from '../openteamily/static/memory/app.mjs';
 
@@ -46,4 +47,10 @@ test('shareRowState explains a revoked or expired link and offers sharing again'
   const expired = shareRowState({active: false, revoked: false, prefix: 'abcdefgh', expired: true});
   assert.equal(expired.canRevoke, false);
   assert.match(expired.note, /已失效|已撤销/);
+});
+
+test('share writes carry a JSON body so the server never answers 415', () => {
+  const source = readFileSync(new URL('../openteamily/static/memory/app.mjs', import.meta.url), 'utf8');
+  assert.match(source, /request\('POST', memorySharePath\([^)]*\), \{\}\)/);
+  assert.match(source, /request\('DELETE', memorySharePath\([^)]*\), \{\}\)/);
 });
