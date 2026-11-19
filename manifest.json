@@ -1,0 +1,89 @@
+{
+  "rows": [
+    {
+      "state": "bubble",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "315-before-1440x900.png",
+      "bytes": 94852,
+      "width": 1440,
+      "height": 900,
+      "sha256": "972c8fbdbccf1c77f10e298a8975acd81334a331eadc803c4ea1a5945b005ebb",
+      "scrollWidth": 1440,
+      "bubble": {
+        "text": "你好，**世界**和**团队**都在这里",
+        "strongs": 0
+      },
+      "hasButton": false
+    },
+    {
+      "state": "bubble",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "315-after-1440x900.png",
+      "bytes": 88460,
+      "width": 1440,
+      "height": 900,
+      "sha256": "6d9061130089c7de6169808332d15d3b26f8a2a1de5da19b6a0da3c4ebd7d3c8",
+      "scrollWidth": 1440,
+      "bubble": {
+        "text": "你好，世界和团队都在这里",
+        "strongs": 2
+      },
+      "hasButton": true
+    },
+    {
+      "state": "click",
+      "viewport": "1440x900",
+      "theme": "light",
+      "file": "315-after-click-1440x900.png",
+      "bytes": 88653,
+      "width": 1440,
+      "height": 900,
+      "sha256": "c51237517cec4c1bf1984e969577c482e738fefda922811502e37c7a950b9635",
+      "scrollWidth": 1440,
+      "wrap": {
+        "value": "你好**世界**",
+        "start": 4,
+        "end": 6
+      }
+    },
+    {
+      "state": "bubble-mobile",
+      "viewport": "390x844",
+      "theme": "light",
+      "file": "315-after-390x844.png",
+      "bytes": 60394,
+      "width": 390,
+      "height": 844,
+      "sha256": "4ae314134f2ba0a4e1290f3711ee090b427bd934e1d172c897c19758ce25fad5",
+      "scrollWidth": 390
+    }
+  ],
+  "facts": {
+    "chat": {
+      "bubble": {
+        "text": "你好，世界和团队都在这里",
+        "strongs": 2
+      },
+      "hasButton": true,
+      "wrap": {
+        "value": "你好**世界**",
+        "start": 4,
+        "end": 6
+      }
+    },
+    "agents": {
+      "baseList": {
+        "cards": 1,
+        "toggle": true,
+        "archivedTags": 0
+      },
+      "archived": {
+        "cards": 2,
+        "tags": 1,
+        "restore": 1
+      }
+    }
+  }
+}
