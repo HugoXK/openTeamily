@@ -152,7 +152,10 @@ export function renderFeedCard(document, item) {
   // The card carries two destinations, so it is a container rather than one big
   // link: the cover and title open the work, the author opens that author's
   // filtered feed. Links cannot nest, so this keeps both of them real <a>.
-  const card = document.createElement('article');
+  // It stays a div, not an article: the signed-in grid already wraps each work
+  // in <article class="feed-entry">, and scripts/ci_ui_screenshots.mjs counts
+  // #feed-grid article per work (a nested article would double that census).
+  const card = document.createElement('div');
   card.className = 'feed-card';
   const link = document.createElement('a');
   link.className = 'feed-card-link';

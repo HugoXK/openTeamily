@@ -395,7 +395,7 @@ test('the activity feed renders opted-in work cards from the public API', async 
   assert.equal(el('feed-grid').dataset.empty, 'false');
   assert.equal(el('feed-grid').children.length, 1);
   const card = el('feed-grid').children[0];
-  assert.equal(String(card.tagName).toLowerCase(), 'article');
+  assert.equal(String(card.tagName).toLowerCase(), 'div');
   // The card carries two destinations, so the work link is the cover+title and
   // the author link lives in the meta row instead of nesting inside it.
   const link = card.children[0];
@@ -825,4 +825,35 @@ test('a public work card links its author to the creator filter', async () => {
   const anonymousAuthor = anonymous.children[1].children[1];
   assert.equal(typeof anonymousAuthor.href, 'undefined');
   assert.equal(anonymousAuthor.textContent, '');
+});
+
+
+test('a signed-in feed keeps exactly one article per work so the shipped grid census still counts works', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const item = {slug: 'shared-doc', title: 'Public work', author: 'bob', path: '/w/shared-doc', kind: 'document'};
+  const fetcher = async path => {
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path.startsWith('/v1/discover/me/works?')) {
+      const saved = path.includes('tab=following') || path.includes('tab=collected');
+      const items = saved ? [item] : [item, {...item, slug: 'second-doc', path: '/w/second-doc'}];
+      return {status: 200, json: async () => ({items, cursor: null})};
+    }
+    if (path.startsWith('/v1/discover/works?')) {
+      return {status: 200, json: async () => ({items: [item, {...item, slug: 'second-doc', path: '/w/second-doc'}], cursor: null})};
+    }
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location: {search: ''}});
+  const grid = doc.getElementById('feed-grid');
+  // scripts/ci_ui_screenshots.mjs:1969 counts #feed-grid article on the private
+  // collected feed and expects exactly one per saved work, so the card must not
+  // become a second <article> inside the per-work row.
+  const articles = node => node.children.reduce(
+    (count, child) => count + (String(child.tagName).toLowerCase() === 'article' ? 1 : 0) + articles(child), 0);
+  assert.equal(grid.children.length, 2);
+  assert.equal(articles(grid), 2);
+  assert.equal(String(grid.children[0].tagName).toLowerCase(), 'article');
+  assert.equal(String(grid.children[0].children[0].tagName).toLowerCase(), 'div');
+  assert.equal(grid.children[0].children[0].className, 'feed-card');
 });
