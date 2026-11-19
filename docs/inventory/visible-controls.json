@@ -1734,7 +1734,8 @@
     {"source": "openteamily/static/settings/connected-tools.mjs", "line": 46, "construction": "const button = document.createElement('button')", "execution_profile": "settings", "verification": "unverified dynamic construction site; conditional instances require execution"},
     {"source": "openteamily/static/shell/app.mjs", "line": 191, "construction": "link = doc.createElement('a');", "execution_profile": "shell", "verification": "unverified dynamic construction site; conditional instances require execution"},
     {"source": "openteamily/static/shell/app.mjs", "line": 346, "construction": "const skip = document.createElement('a');", "execution_profile": "shell", "verification": "unverified dynamic construction site; conditional instances require execution"},
-    {"source": "openteamily/static/skills/app.mjs", "line": 44, "construction": "const button=document.createElement('button');button.type='button';button.className='skill-install';button.dataset.skill=skill.id;", "execution_profile": "skills", "verification": "unverified dynamic construction site; conditional instances require execution"},
+    {"source": "openteamily/static/skills/app.mjs", "line": 106, "construction": "const button=document.createElement('button');button.type='button';button.className='skill-install';button.dataset.skill=skill.id;", "execution_profile": "skills", "verification": "unverified dynamic construction site; conditional instances require execution"},
+    {"source": "openteamily/static/skills/app.mjs", "line": 119, "construction": "const library = document.createElement('button');", "execution_profile": "skills", "verification": "unverified dynamic construction site; conditional instances require execution"},
     {"source": "openteamily/static/team/app.mjs", "line": 164, "construction": "const button = document.createElement('button');", "execution_profile": "team", "verification": "unverified dynamic construction site; conditional instances require execution"}
   ],
   "server_template_controls": [
@@ -2045,6 +2046,7 @@
       "candidate_apis": [
         "/v1/skills/bindings",
         "/v1/skills/catalog",
+        "/v1/skills/installed",
         "/v1/workspaces",
         "/v1/workspaces/${workspace.id}/agents?limit=100"
       ]
