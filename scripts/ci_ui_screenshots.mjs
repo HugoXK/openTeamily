@@ -426,8 +426,11 @@ async function main() {
       const allConnectDisabled = connectCount === 39
         && await connectButtons.evaluateAll((nodes) => nodes.every((node) => node.disabled));
       const statuses = await page.locator('#connectors-catalog .connector-status').allTextContents();
+      // The screenshot account has not saved its own Composio key, so every
+      // row stays disabled: 31 say 未配置 Composio and 8 (no toolkit) say 未接通.
       const allDisconnected = statuses.length === 39
-        && statuses.every((text) => text.includes('未连接') && !text.includes('已连接'));
+        && statuses.filter((text) => text.trim() === '未配置 Composio').length === 31
+        && statuses.filter((text) => text.trim() === '未接通').length === 8;
       const connectorsText = `${await visibleText(connectors)}`;
       const addMcp = page.locator('#add-mcp-server');
       const addMcpDisabled = await addMcp.isDisabled();
@@ -441,8 +444,8 @@ async function main() {
           && connectorsText.includes('添加 MCP 服务器')
           && connectorsText.includes('GitHub')
           && connectorsText.includes('Mailbox')
-          && connectorsText.includes('未连接')
-          && connectorsText.includes('还没有连接器后端或账号授权接口')
+          && connectorsText.includes('Composio API key')
+          && connectorsText.includes('未配置 Composio')
           && !connectorsText.includes('还没有可连接的应用目录。')
           && !connectorsText.includes('已连接')
           && !/积分|套餐|升级/.test(connectorsText),
