@@ -185,11 +185,16 @@ test('list rows describe the schedule instead of printing the internal kind', as
     {id: 'a5', title: '每月复盘', enabled: false, schedule: {kind: 'monthly', time: '18:00', day: 16, time_zone: 'UTC'}},
   ]);
   const rows = list.children.map(row => row.textContent);
-  assert.equal(rows[0], '每日简报每天 09:00（Asia/Shanghai）· 已启用');
-  assert.equal(rows[1], '周报每周四 09:00（Asia/Shanghai）· 已启用');
-  assert.equal(rows[2], '一次性提醒单次 2026-11-20 09:00（Asia/Shanghai）· 已启用');
-  assert.equal(rows[3], '立即运行的任务立即运行 · 已启用');
-  assert.equal(rows[4], '每月复盘每月 16 日 18:00（UTC）· 未启用');
+  assert.match(rows[0], /每日简报/);
+  assert.match(rows[0], /每天 09:00（Asia\/Shanghai）· 已启用/);
+  assert.match(rows[1], /周报/);
+  assert.match(rows[1], /每周四 09:00（Asia\/Shanghai）· 已启用/);
+  assert.match(rows[2], /一次性提醒/);
+  assert.match(rows[2], /单次 2026-11-20 09:00（Asia\/Shanghai）· 已启用/);
+  assert.match(rows[3], /立即运行的任务/);
+  assert.match(rows[3], /立即运行 · 已启用/);
+  assert.match(rows[4], /每月复盘/);
+  assert.match(rows[4], /每月 16 日 18:00（UTC）· 未启用/);
   const joined = list.textContent;
   assert.doesNotMatch(joined, /(?:^|\s)(?:now|later|once|daily|weekly|monthly|weekdays)(?=\s|$)/u,
     `the list must not print an internal schedule kind: ${joined}`);

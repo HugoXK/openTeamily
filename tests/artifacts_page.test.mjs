@@ -565,3 +565,16 @@ test('library item badges and times are derived from real artifact fields', asyn
   assert.equal(artifactTime(new Date(2026, 10, 19, 9, 5).getTime() / 1000, now), '今天 09:05');
   assert.equal(artifactTime(new Date(2026, 10, 2, 18, 30).getTime() / 1000, now), '11月2日 18:30');
 });
+
+
+test('canSendArtifactToChat is only true for media with an id', async () => {
+  const {canSendArtifactToChat, conversationLabel} = await import('../openteamily/static/artifacts/app.mjs');
+  assert.equal(canSendArtifactToChat({id: 'a', kind: 'media'}), true);
+  assert.equal(canSendArtifactToChat({id: 'a', kind: 'document'}), false);
+  assert.equal(canSendArtifactToChat({id: 'a', kind: 'website'}), false);
+  assert.equal(canSendArtifactToChat({kind: 'media'}), false);
+  assert.equal(conversationLabel({title: 'Project room'}), 'Project room');
+  assert.equal(conversationLabel({kind: 'dm', members: [{username: 'alice'}, {username: 'bob'}]}), 'alice、bob');
+  assert.equal(conversationLabel({kind: 'group'}), '群聊');
+  assert.equal(conversationLabel({kind: 'dm'}), '单聊');
+});
