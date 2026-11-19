@@ -9,14 +9,32 @@
 
 The en set was taken after switching the interface language to `en` through
 `POST /v1/settings`; the rendered strings are identical to zh-CN on this tip
-(no i18n layer for `/chat`), so it documents the language axis rather than
-different text.
+(no i18n layer for `/chat`, `documentElement.lang` stays `zh-CN`), so it
+documents the language axis rather than different text — the en and zh-CN files
+of the same state are byte-identical.
 
 The defect is the 390x844 pair. On `before`, tapping 搜索 with a conversation
-open leaves the screen unchanged: `s227-closed` and `s227-panel` are the same
-picture (the panel is inside the `display:none` session pane). On `after`, the
-same click paints the search panel over the session list, and the page's
-scroll width drops from the overflowing 459px to 390px.
+open leaves the screen unchanged: the panel is inside the `display:none` session
+pane, and the two pictures differ only in a 60×40 caret region. On `after`, the
+same click paints the search panel over the session list.
+
+Measured `documentElement.scrollWidth` at 390×844, same fixture, same click path:
+
+| state | before | after |
+|---|---|---|
+| conversation open, search closed | 459 | 459 |
+| after tapping 搜索 | 459 | 390 |
+
+The 459 is real horizontal overflow, not a viewport parameter: with a
+conversation open the composer overflows the 390 viewport — `textarea#chat-body`
+has its right edge at 402 and the send `button` at 459. It is there on the base
+too, so it is not introduced here; this PR only removes it from the search-open
+state by painting the panel over the list instead of inside the hidden pane.
+
+The six 390×844 images that used to be 459 px wide were `fullPage: true`
+captures, which Chromium sizes to the real `scrollWidth`; they are re-shot as
+viewport captures (390×844) so every narrow image has the same frame. The
+overflow number above is the measurement, not a cropped image.
 
 Captured with plain Playwright/Chromium (headless) against a loopback
 `scripts/ci_ui_screenshots.py --serve` fixture, 2026-11-19.
