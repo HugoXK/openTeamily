@@ -327,6 +327,13 @@ export function queryForMemoryPage(view) {
   return '';
 }
 
+export function exportDownloadName(title) {
+  const flat = String(title == null ? '' : title).replace(/[\s\u0000-\u001f]+/g, ' ').trim();
+  const safe = flat.replace(/[\\/:*?"<>|]+/g, '-').replace(/^[.\s-]+|[.\s-]+$/g, '');
+  const limited = safe.slice(0, 60).replace(/[.\s-]+$/, '');
+  return (limited || '记忆页') + '.md';
+}
+
 export function graphLayout(nodes, width = 640, height = 400, padding = 56) {
   const list = [...(nodes || [])].sort((a, b) => String(a.id).localeCompare(String(b.id)));
   const cx = width / 2;
@@ -911,6 +918,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const id = workspaceId();
     currentPage = null;
     currentAction = null;
+    syncExportButton();
     editor.hidden = true;
     if (actionEditor) actionEditor.hidden = true;
     listPanel.hidden = false;
@@ -1036,8 +1044,73 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncBodyFromRich();
   }
 
+  const exportButton = document.getElementById('page-export');
+  const exportStatus = document.getElementById('page-export-status');
+
+  // Export reads the saved page from the server, so it never ships an unsaved
+  // draft and it stays identical to what a later reader would find.
+  function syncExportButton() {
+    if (!exportButton) return;
+    const ready = Boolean(currentPage && workspaceId());
+    exportButton.disabled = !ready;
+    exportButton.title = ready
+      ? '把这页已保存的标题、话题和正文导出为 Markdown 文件。'
+      : '打开一页记忆后才能导出为 Markdown。';
+    if (!ready && exportStatus) {
+      exportStatus.hidden = true;
+      exportStatus.textContent = '';
+    }
+  }
+
+  async function exportCurrentPage() {
+    if (!currentPage) return;
+    const id = workspaceId();
+    if (!id) return;
+    const url = `/v1/workspaces/${id}/memory/${currentPage.id}/export`;
+    const name = exportDownloadName(currentPage.title);
+    exportButton.disabled = true;
+    try {
+      const response = await fetcher(url, {
+        method: 'GET', headers: {'Accept': 'text/markdown'}, credentials: 'same-origin',
+      });
+      if (response.status !== 200) {
+        let parsed = {};
+        try { parsed = await response.json(); } catch { parsed = {}; }
+        show('error', messageFor(parsed.error, '无法导出这页记忆。'));
+        return;
+      }
+      const markdown = await response.text();
+      if (exportStatus) {
+        exportStatus.hidden = false;
+        exportStatus.textContent = '已导出 ' + name + ' · 修订 ' + currentPage.revision;
+      }
+      const objectUrl = globalThis.URL && globalThis.URL.createObjectURL
+        ? globalThis.URL.createObjectURL(new Blob([markdown], {type: 'text/markdown;charset=utf-8'}))
+        : '';
+      if (!objectUrl) {
+        globalThis.location.assign(url);
+        show('ok', '已开始下载 ' + name + '。');
+        return;
+      }
+      const download = document.createElement('a');
+      download.href = objectUrl;
+      download.download = name;
+      download.rel = 'noopener';
+      document.body.appendChild(download);
+      download.click();
+      download.remove();
+      globalThis.URL.revokeObjectURL(objectUrl);
+      show('ok', '已导出 ' + name + '。');
+    } finally {
+      syncExportButton();
+    }
+  }
+
+  if (exportButton) exportButton.addEventListener('click', exportCurrentPage);
+
   async function openPage(pageId) {
     closeDeleteConfirm({restoreFocus: false});
+    closePageHistory({restoreFocus: false});
     hideGraphHoverCard(document.getElementById('graph-hover-card'));
     const id = workspaceId();
     if (!id) return;
@@ -1065,7 +1138,129 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
 
     renderPageLinks();
+    syncExportButton();
   }
+
+  const historyPanel = document.getElementById('page-history');
+  const historyOpen = document.getElementById('page-history-open');
+  let historySelection = 0;
+  let historyTokens = 0;
+
+  function closePageHistory({restoreFocus = true} = {}) {
+    if (!historyPanel || historyPanel.hidden) return;
+    historyPanel.hidden = true;
+    historySelection = 0;
+    if (restoreFocus && historyOpen) historyOpen.focus();
+  }
+
+  function applyPageToEditor(page) {
+    currentPage = page;
+    editor.elements.title.value = page.title;
+    editor.elements.body.value = page.body || '';
+    loadRichBody(page.body || '');
+    editor.elements.topics.value = formatTopics(page.topics);
+    document.getElementById('editor-meta').textContent =
+      `修订 ${page.revision} · 作者 ${page.created_by} · 最近更新 ${page.updated_by}`;
+    const savedHint = document.getElementById('editor-saved');
+    if (savedHint) {
+      const when = memoryUpdatedLabel(page.updated);
+      savedHint.hidden = false;
+      savedHint.textContent = when ? ('已保存 · ' + when) : ('已保存 · 修订 ' + page.revision);
+    }
+    renderPageLinks();
+  }
+
+  async function loadPageHistory() {
+    const wid = workspaceId();
+    if (!wid || !currentPage) return;
+    const token = ++historyTokens;
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/${currentPage.id}/versions`);
+    if (token !== historyTokens || workspaceId() !== wid) return;
+    const list = document.getElementById('page-history-list');
+    const empty = document.getElementById('page-history-empty');
+    const status = document.getElementById('page-history-status');
+    if (!list) return;
+    list.replaceChildren();
+    if (result.status !== 200) {
+      if (status) status.textContent = '历史没有读取成功。';
+      return;
+    }
+    const items = result.body.items || [];
+    if (empty) empty.hidden = items.length > 0;
+    if (status) status.textContent = '';
+    for (const item of items) {
+      const row = document.createElement('li');
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.className = 'page-history-item';
+      open.dataset.revision = String(item.revision);
+      const when = memoryUpdatedLabel(item.created);
+      open.textContent = `修订 ${item.revision} · ${when || '时间未知'} · ${item.summary}`;
+      open.addEventListener('click', () => previewPageVersion(item.revision));
+      row.appendChild(open);
+      list.appendChild(row);
+    }
+  }
+
+  async function openPageHistory() {
+    if (!currentPage || !historyPanel) return;
+    historyPanel.hidden = false;
+    historySelection = 0;
+    const preview = document.getElementById('page-history-preview');
+    if (preview) preview.hidden = true;
+    if (historyOpen) historyOpen.focus();
+    await loadPageHistory();
+  }
+
+  async function previewPageVersion(revision) {
+    const wid = workspaceId();
+    if (!wid || !currentPage) return;
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/${currentPage.id}/versions/${revision}`);
+    if (workspaceId() !== wid) return;
+    const status = document.getElementById('page-history-status');
+    if (result.status !== 200 || !result.body.version) {
+      if (status) status.textContent = '这一版没有读取成功。';
+      return;
+    }
+    const version = result.body.version;
+    historySelection = version.revision;
+    document.getElementById('page-history-preview-title').textContent =
+      `修订 ${version.revision} · ${version.created_by}`;
+    document.getElementById('page-history-preview-body').textContent = version.body || '（空白正文）';
+    const preview = document.getElementById('page-history-preview');
+    if (preview) preview.hidden = false;
+    if (status) status.textContent = '';
+  }
+
+  async function restorePageVersion() {
+    const wid = workspaceId();
+    if (!wid || !currentPage || !historySelection) return;
+    const revision = historySelection;
+    const status = document.getElementById('page-history-status');
+    const result = await request(
+      'POST', `/v1/workspaces/${wid}/memory/${currentPage.id}/versions/${revision}/restore`,
+      {revision: currentPage.revision});
+    if (workspaceId() !== wid) return;
+    if (result.status !== 200 || !result.body.page) {
+      if (status) status.textContent = result.status === 409
+        ? '这一页已在别处更新，重新打开后再回滚。'
+        : '没有回滚成功。';
+      return;
+    }
+    applyPageToEditor(result.body.page);
+    historySelection = 0;
+    const preview = document.getElementById('page-history-preview');
+    if (preview) preview.hidden = true;
+    await loadPageHistory();
+    await loadGraph();
+    show('ok', `已回滚到修订 ${revision}，保存为新的修订 ${currentPage.revision}。`);
+  }
+
+  if (historyOpen) historyOpen.addEventListener('click', openPageHistory);
+  const historyClose = document.getElementById('page-history-close');
+  if (historyClose) historyClose.addEventListener('click', () => closePageHistory());
+  const historyRestore = document.getElementById('page-history-restore');
+  if (historyRestore) historyRestore.addEventListener('click', restorePageVersion);
 
   async function openAction(actionId) {
     closeDeleteConfirm({restoreFocus: false});
@@ -1078,6 +1273,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentAction = seen.body.action;
     currentPage = null;
+    syncExportButton();
     showPageMode();
     editor.hidden = true;
     actionEditor.hidden = false;
@@ -1114,6 +1310,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = null;
     currentPage = null;
     currentAction = null;
+    syncExportButton();
     show('ok', '已退出登录。');
     await loadSession();
   });
@@ -1196,6 +1393,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   workspaceSelect.addEventListener('change', async () => {
     invalidateMemoryProfile();
+    const historyFocus = {restoreFocus: false};
+    closePageHistory(historyFocus);
     await loadWorkspace();
     if (currentView === 'profile') await loadMemoryProfile();
   });
@@ -1360,6 +1559,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     closeDeleteConfirm({restoreFocus: false});
     currentPage = saved.body.page;
+    syncExportButton();
     editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =
       `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
@@ -1372,6 +1572,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
     await loadGraph();
     renderPageLinks();
+    if (historyPanel && !historyPanel.hidden) await loadPageHistory();
     show('ok', '已保存。');
   });
 
