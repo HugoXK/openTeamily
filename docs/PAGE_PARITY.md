@@ -234,3 +234,25 @@ The gate's PR-body Related-only policy does not stop older commit messages from 
 Ordinary main sync incorporated contributor #307 at main `2e3e7de` (help/terms/privacy pages and real menu links); no competing implementation was added. The census now includes these landed surfaces. Earlier local counts above refer to the pre-sync baseline; exact-head validation and CI must include the newly landed docs suites.
 
 Final scene review found a genuine new dark-dialog defect despite the primary-button contrast check: undefined generic surface variables fell back to white while text inherited the dark theme. Assistance/announcement/resource dialogs and document cards now use actual shared theme tokens. Browser regression additionally checks heading/label/helper-text contrast across all four new dialog surfaces; this is not a blanket dark-theme or Teamily parity certification.
+
+
+## Skills/runtime usability follow-up (not Teamily parity)
+
+Library structure/branding retained; a run-and-proof section below the catalogue adds actual readiness, isolated skill execution, reload-persistent result history, cancellation and explicit document saving. Automation scopes are an original functional extension. No skill-operation reference capture exists, so these scenes are **unverified against Teamily**, even when synthetic CI screenshots pass. CI screenshot acceptance now includes actual UI-run → digest receipt/result → reload → save → real rich editor; no manual account/browser operation or real-vendor claim. Runtime/member/cancellation defects are functional fixes, not cosmetic parity completion. Remaining static design warnings are retained in private Impeccable4.9.2 findings, not waived by CI.
+
+
+### PR342 substantive repair checkpoint (not parity acceptance)
+
+The first exact-head screenshot runs exposed a genuine HTTP400: the saved-result editor target existed in JavaScript but not the strict HTML query allowlist. The repair permits only a complete lowercase32hex workspace/artifact pair on `/space` and `/artifacts`; duplicate/extra/encoded/traversal/asset queries still fail. Raw HTTP plus restarted-session document reads cover successful navigation, unauthenticated/foreign-workspace/missing-record denial. UI screenshots must still prove actual editor text and uninstall after that step; a saved-document id is not whole-flow acceptance.
+
+The enabled run primary now uses opaque white-on-green normal/hover states in both themes, rather than dark ink inherited from the shared dark gradient. CI measures actual computed contrast/background/opacity for all four states and captures the dark hover scene; no existing assertion or scan finding is suppressed. The result-document link stays together instead of wrapping in half.
+
+Node22 annotation dismissal was a test-ordering defect reproduced with a controlled clock: the old5ms barrier can become due **before** the close timer scheduled after an awaited mock send. An owned, test-only loader overlays only that helper with a causal microtask-then-zero-timer barrier, never a longer sleep. All vendor test bodies/assertions remain identical and the vendor bytes/pin remain unchanged; unexpected upstream source hashes fail closed. Independent tests retain normal/delayed send/dismiss/clear and failed-send cases. This is not an inference/privacy-isolation claim or permission to rerun an old CI job.
+
+Management cancellation was independently diagnosed from its check annotation: `The job has exceeded the maximum execution time of 5m0s`. The full500+ Python cases and28 Node command lists remain required; the job has a bounded10m execution budget. No test is skipped, retried, or loosened. Actual Docker/build and exact-head CI results remain separate acceptance evidence.
+
+The owner's expanded six-category scope is tracked in [FUNCTIONAL_COMPLETION_PLAN.md](FUNCTIONAL_COMPLETION_PLAN.md); none is silently dropped or treated as solely a credentials problem.
+
+
+#### Cross-realm completion correction
+The intermediate314a582 head passed all screenshot/management/build checks, including actual rich-editor opening, reload-persistent uninstall and all four enabled button contrasts (5.55:1 normal,6.69:1 hover), but its host-microtask clock overlay was insufficient for the component's **separate VM Promise realm**. Both Node22/24 still observed dismissal0. This is not treated as flakiness or rerun permission. The corrected owned fixture observes the actual `dismiss` or `reportError` callback and awaits that completion; unresolved sends cannot become completed, and no number of microtasks or milliseconds is assumed. Tests execute the real pinned async-send code in a VM, reproduce BOTH old helper failures and cover delayed/normal/error/pending sends. All original assertion bytes and vendor source remain intact; only test-bench completion/wait wiring changes. Exact-head first-run CI remains mandatory; no old job/head is rerun.
