@@ -49,6 +49,7 @@ repair PR follows functional review; controls here use existing components/nativ
 | Real-time voice/video/camera #12 #157 | Unconnected controls remain honestly marked | Runtime/media contracts, capture consent, WebRTC lifecycle, TURN/STUN/security, voice input and tests; actual external transport/recording needs permission, not excluded |
 | Real vendor inference #91 #2 #11 | Fake provider/runtime protocol tests only | Safe owner-provided sandbox/provider configuration plus explicit permission, then actual recorded container/browser E2E; no discovery/use of credentials or production deployment |
 | Settings/help/legal #4 #12 #128 | Existing settings persistence and Guide | Behavioral validation of saved toggles, help/legal pages with owner-supplied original text; never copy proprietary legal copy |
+| Signed-in home #1 #14 | New `/` welcome page: Personal Agent look and conversation entry, real workspace totals, quick actions, recent conversations/works/meetings, onboarding and unread banners, workspace picker; read-only `overview` endpoint with no new table | No Teamily home comparison, generated recommendations, live push or home composer; not Impeccable acceptance |
 | Full UI acceptance #14 | Existing read-only evidence available; no redesign in this PR | One comprehensive separate UI repair PR, followed by Teamily + Impeccable evaluation; no entire page currently accepted |
 
 ## Tests, privacy and migration
@@ -100,3 +101,17 @@ semantic document thumbnails; removal of fake skill-install success.
 The overall tracking issues stay open. Credits/points/plans/rewards and copying
 proprietary assets remain excluded by the owner; integrations, social capability,
 real inference and live media are tracked gaps, not silently excluded scope.
+
+## Visible-functions aggregate: skills-first correction (2026-11-19)
+
+The earlier skill “catalogue only / disabled” descriptions above are historical and superseded **only for the instruction-skill lifecycle now implemented**. The complete current route/control execution checklist and every unmet category are in [VISIBLE_FUNCTIONS_INVENTORY](VISIBLE_FUNCTIONS_INVENTORY.md) and the generated [source census](inventory/visible-controls.json). Neither is a blanket acceptance claim.
+
+Actual additions:
+- Ten original content/version/digest packages; account and per-agent SQLite bindings; explicit model-context permission; real Python/zipapp and container loading into actual model requests; compatibility handshake; verified loading acknowledgement; reload/restart persistence; scoped isolation; uninstall/revocation/cancellation. See [SKILLS](SKILLS.md) for the exact boundary. No archive extraction, installation scripts, arbitrary paths or fake installed booleans.
+- On-demand private translation and ask-AI dispatch actual tasks through the requesting user's configured model or platform fallback and their own online runtime. Source revision, membership, CSRF, replay and errors are enforced; history persists; no automatic group message or connected-tools grant.
+- Revisioned group announcement read/edit/unpublish with owner/admin membership and conflict handling.
+- All six saved work kinds can be sent as actual authorized, revision-pinned chat exports; forwarding retains the same version. Stable replay does not duplicate a send after an intervening document edit. No public share is created by chat sending.
+- Composer document/memory picker reads real workspace content and inserts it for review; emoji insertion does not send; skills/connectors navigate to their real management flows.
+- Saved folding/document-card/link-preview preferences now affect rendering without changing original text. Link-address cards do not fetch external metadata. New active #320 owns chat-language prompt behavior; this aggregate does not duplicate it.
+
+These do **not** complete all visible functionality. Automatic translation, complete locale/privacy/reminder consumers, delete/mute/voice/video/meeting/proactive/mode controls, agent binary attachments, advanced exports/collaboration/generation, push/delivery, executable/third-party/standalone-DSH/scheduled skills, group/schedule tools and the explicitly listed contributor dependencies remain open. Real vendor/account validation still needs user-supplied configuration and is not replaced by synthetic tests. Credits remain excluded by owner instruction. #1/#14 and unverified tracking issues remain open.

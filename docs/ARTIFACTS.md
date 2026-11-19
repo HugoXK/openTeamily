@@ -62,3 +62,7 @@ The `/space?view=meetings` page now also exposes the recorded heading「我的�
 ## Not claimed
 
 No public homepage, no scripted web apps, no meeting-notes ingest, no Teamily comparison, no browser E2E. This issue stays open until those are done and compared.
+
+### Version-pinned work sharing into chat
+
+All saved work kinds (document, website, whiteboard, slides, dashboard, media) can be sent to an authorized workspace social conversation. An optional `artifact_revision` must match the saved current revision for a new send. Metadata and export link are pinned in `social_artifact_versions`; forwarding copies this metadata, and later work edits do not silently change the sent version. Replaying the same idempotency key returns the original message even after a later edit. Sending does not publish a public share. Source deletion can make the reference unavailable; it does not erase the historical chat text. Exports keep their existing supported formats, not native Office/PDF promises.
