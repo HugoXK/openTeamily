@@ -3,14 +3,13 @@ import unittest
 
 from tests import test_agent_chat_infer as infer_tests
 
-Base = infer_tests.AgentChatInferTests
 
 
 class AgentUnreadTests(unittest.TestCase):
-    setUp = Base.setUp
-    conversations = Base.conversations
-    online_agent = Base.online_agent
-    finish_infer = Base.finish_infer
+    setUp = infer_tests.AgentChatInferTests.setUp
+    conversations = infer_tests.AgentChatInferTests.conversations
+    online_agent = infer_tests.AgentChatInferTests.online_agent
+    finish_infer = infer_tests.AgentChatInferTests.finish_infer
 
     def test_finished_reply_is_unread_until_acknowledged(self):
         conv_id = self.alice.call('POST', self.conversations(), {'title': '问答'},

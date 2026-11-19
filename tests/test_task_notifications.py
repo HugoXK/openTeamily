@@ -3,18 +3,17 @@ import unittest
 
 from tests import test_group_agent_reply as group_tests
 
-GroupAgentReplyTests = group_tests.GroupAgentReplyTests
 
 
 class TaskCompletionNotificationTests(unittest.TestCase):
-    setUp = GroupAgentReplyTests.setUp
-    _user_id = GroupAgentReplyTests._user_id
-    base = GroupAgentReplyTests.base
-    create = GroupAgentReplyTests.create
-    make_agent = GroupAgentReplyTests.make_agent
-    group = GroupAgentReplyTests.group
-    trigger = GroupAgentReplyTests.trigger
-    connect = GroupAgentReplyTests.connect
+    setUp = group_tests.GroupAgentReplyTests.setUp
+    _user_id = group_tests.GroupAgentReplyTests._user_id
+    base = group_tests.GroupAgentReplyTests.base
+    create = group_tests.GroupAgentReplyTests.create
+    make_agent = group_tests.GroupAgentReplyTests.make_agent
+    group = group_tests.GroupAgentReplyTests.group
+    trigger = group_tests.GroupAgentReplyTests.trigger
+    connect = group_tests.GroupAgentReplyTests.connect
 
     def inbox(self, client=None, query=''):
         return (client or self.alice).call('GET', f'/v1/workspaces/{self.wid}/notifications' + query)['body']

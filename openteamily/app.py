@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_templates, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, gateway, invites, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_templates, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -559,6 +559,8 @@ class App:
             refuse(404, 'not_found', 'Route not found')
         if path.startswith('/v1/agent/'):
             return self.agent_dispatch(env, method, path, query, now)
+        if path.startswith('/v1/gateway/'):
+            return self.gateway_dispatch(env, method, path, query, now)
         runtime_path = re.fullmatch(r'/v1/workspaces/[0-9a-f]{32}/instances|/v1/instances/[0-9a-f]{32}(?:/[a-z]+)?|/v1/jobs/[0-9a-f]{32}', path)
         if self.lifecycle is not None and (runtime_path or path.startswith('/v1/internal/')):
             if path.startswith('/v1/internal/'):
@@ -853,6 +855,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/runtime(?:/(unbind))?', path)
             if agent_runtime_path:
                 return self.agent_runtime_dispatch(db, session, method, query, now, env, *agent_runtime_path.groups())
+            api_key_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/api-keys(?:/([0-9a-f]{32})/revoke)?', path)
+            if api_key_path:
+                return self.api_key_dispatch(db, session, method, query, now, env, *api_key_path.groups())
             conversation_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/agents/([0-9a-f]{32})/conversations'
                 r'(?:/([0-9a-f]{32})(?:/(messages(?:/([0-9a-f]{32})(?:/(artifact))?)?|read))?)?', path)
@@ -911,6 +917,113 @@ class App:
         if key is None:
             refuse(401, 'unauthorized', runtime_connect.KEY_AUTH)
         return key
+
+    def gateway_dispatch(self, env, method, path, query, now):
+        # Bearer-only machine API: browser credentials are refused so a page can never ride a session.
+        if env.get('HTTP_COOKIE') or env.get('HTTP_ORIGIN'):
+            refuse(401, 'unauthorized', 'Use an agent API key without cookies')
+        match = re.fullmatch(r'Bearer ([A-Za-z0-9_-]{32,128})', env.get('HTTP_AUTHORIZATION', ''))
+        with self.store.transaction() as db:
+            key = db.execute('SELECT * FROM agent_api_keys WHERE token_hash=? AND revoked=0',
+                             (digest(match[1]) if match else '',)).fetchone()
+            workspace = members.load(db, key['workspace_id'], key['created_by']) if key else None
+            agent = agents.load(db, key['workspace_id'], key['agent_id']) if key else None
+            if (key is None or workspace is None or agent is None or agent['archived']
+                    or not agents.can_manage(members.role_of(db, workspace, key['created_by']))):
+                refuse(401, 'unauthorized', 'Invalid or inactive agent API key')
+            db.execute('UPDATE agent_api_keys SET last_used=? WHERE id=?', (now, key['id']))
+            invoke = re.fullmatch(r'/v1/gateway/agents/([0-9a-f]{32})/invocations', path)
+            if invoke and method == 'POST' and not query:
+                if invoke[1] != key['agent_id']:
+                    refuse(403, 'forbidden', 'This key is scoped to a different agent')
+                text = self.body(env, ['prompt']).get('prompt')
+                if not conversations.valid_message(text):
+                    refuse(400, 'invalid', 'Provide a prompt of 1–4000 characters')
+                idem = env.get('HTTP_IDEMPOTENCY_KEY', '')
+                if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', idem):
+                    refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+                key_hash, request_hash = digest('gateway:' + idem), digest(text)
+                prior = db.execute('SELECT * FROM agent_api_invocations WHERE key_id=? AND key_hash=?',
+                                   (key['id'], key_hash)).fetchone()
+                if prior is not None:
+                    if prior['request_hash'] != request_hash:
+                        refuse(409, 'conflict', 'Idempotency key was used for a different request')
+                    return 200, {'invocation': gateway.invocation_view(prior)}, []
+                if not gateway.consume_rate(db, key, now):
+                    refuse(429, 'rate_limited', 'Agent API key rate limit reached; retry next minute')
+                prompt = conversations.compose_prompt(agent, [], text)
+                task_id, error, _ = self.queue_infer_task(db, key['created_by'], now, prompt, workspace['id'], agent['id'])
+                iid = uuid4().hex
+                db.execute('INSERT INTO agent_api_invocations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                           (iid, key['id'], workspace['id'], agent['id'], text, 'queued' if task_id else 'failed',
+                            task_id, error, '', now, now, key_hash, request_hash))
+                row = db.execute('SELECT * FROM agent_api_invocations WHERE id=?', (iid,)).fetchone()
+                return 202, {'invocation': gateway.invocation_view(row)}, []
+            status_path = re.fullmatch(r'/v1/gateway/invocations/([0-9a-f]{32})', path)
+            if status_path and method == 'GET' and not query:
+                row = db.execute('SELECT * FROM agent_api_invocations WHERE id=? AND key_id=?',
+                                 (status_path[1], key['id'])).fetchone()
+                if row is None:
+                    refuse(404, 'not_found', 'Invocation not found')
+                if row['status'] in ('queued', 'running'):
+                    task = runtime_connect.load_task(db, row['task_id']) if row['task_id'] else None
+                    if task is None:
+                        status, error, text = 'failed', 'task_missing', ''
+                    else:
+                        task = runtime_connect.expire_task(db, task, now)
+                        status, error, text = conversations.map_task_status(task)
+                        if status == 'succeeded' and not text.strip():
+                            status, error, text = 'failed', 'empty_reply', ''
+                        if status in ('failed', 'cancelled'):
+                            error = error if error in gateway.ERRORS else 'runtime_failed'
+                            text = ''
+                    db.execute('UPDATE agent_api_invocations SET status=?, error_code=?, body=?, updated=? WHERE id=?',
+                               (status, error, text, now, row['id']))
+                    row = db.execute('SELECT * FROM agent_api_invocations WHERE id=?', (row['id'],)).fetchone()
+                return 200, {'invocation': gateway.invocation_view(row)}, []
+            refuse(404, 'not_found', 'Route not found')
+
+    def api_key_dispatch(self, db, session, method, query, now, env, workspace_id, agent_id, key_id):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        if not agents.can_manage(members.role_of(db, workspace, session['user_id'])):
+            refuse(403, 'forbidden', 'Only workspace owners and admins manage agent API keys')
+        agent = agents.load(db, workspace['id'], agent_id)
+        if agent is None:
+            refuse(404, 'not_found', 'Agent not found')
+        if key_id is None and method == 'GET' and not query:
+            rows = db.execute('SELECT * FROM agent_api_keys WHERE workspace_id=? AND agent_id=? ORDER BY created, id',
+                              (workspace['id'], agent['id'])).fetchall()
+            return 200, {'items': [gateway.key_view(row) for row in rows]}, []
+        if key_id is None and method == 'POST' and not query:
+            body = self.body(env, ['name', 'rate_per_minute'])
+            name, rate = body.get('name'), body.get('rate_per_minute', gateway.DEFAULT_RATE)
+            if not isinstance(name, str) or not gateway.NAME.fullmatch(name.strip() or ''):
+                refuse(400, 'invalid', 'Provide a key name of 1–60 characters')
+            if type(rate) is not int or not 1 <= rate <= 60:
+                refuse(400, 'invalid', 'rate_per_minute must be between 1 and 60')
+            if agent['archived']:
+                refuse(409, 'conflict', 'Archived agents cannot get API keys')
+            active = db.execute('SELECT COUNT(*) FROM agent_api_keys WHERE agent_id=? AND revoked=0',
+                                (agent['id'],)).fetchone()[0]
+            if active >= gateway.MAX_KEYS_PER_AGENT:
+                refuse(429, 'quota', 'Agent API key capacity reached')
+            token, kid = opaque(), uuid4().hex
+            db.execute('INSERT INTO agent_api_keys VALUES(?,?,?,?,?,?,?,?,?,NULL,0)',
+                       (kid, workspace['id'], agent['id'], name.strip(), digest(token), 'invoke', rate, now,
+                        session['user_id']))
+            row = db.execute('SELECT * FROM agent_api_keys WHERE id=?', (kid,)).fetchone()
+            return 201, {'key': gateway.key_view(row), 'token': token}, []
+        if key_id is not None and method == 'POST' and not query:
+            self.body(env, [])
+            row = db.execute('SELECT * FROM agent_api_keys WHERE id=? AND agent_id=?', (key_id, agent['id'])).fetchone()
+            if row is None:
+                refuse(404, 'not_found', 'API key not found')
+            db.execute('UPDATE agent_api_keys SET revoked=1 WHERE id=?', (row['id'],))
+            row = db.execute('SELECT * FROM agent_api_keys WHERE id=?', (row['id'],)).fetchone()
+            return 200, {'key': gateway.key_view(row)}, []
+        refuse(400, 'invalid', 'Invalid API key request')
 
     def agent_dispatch(self, env, method, path, query, now):
         stale = self.config.runtime_heartbeat_seconds
