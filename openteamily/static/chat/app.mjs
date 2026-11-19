@@ -63,6 +63,10 @@ export function shouldSendOnShortcut(event, sendShortcut = 'enter') {
   return !modifier && !event.shiftKey && !event.altKey;
 }
 
+// A hit the user jumps to is flashed for a few seconds so the eye can land on
+// it, then the class comes off by itself; nothing is persisted.
+export const SEARCH_JUMP_HIGHLIGHT_MS = 2600;
+
 export function messageSearchQuery(query, conversationId = '', cursor = '') {
   const params = new URLSearchParams({q: query, limit: '20'});
   if (conversationId) params.set('conversation_id', conversationId);
@@ -670,6 +674,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const item of items || []) {
       const li = document.createElement('li');
       li.className = item.role === 'user' ? 'user' : 'assistant';
+      if (item.id) li.dataset.messageId = item.id;
       const role = document.createElement('p');
       role.className = 'role';
       role.textContent = item.role === 'user' ? '你' : ((currentAgent && currentAgent.name) || '智能体');
@@ -923,6 +928,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const li = document.createElement('li');
       const mine = item.user_id === (currentUser && currentUser.id);
       li.className = mine ? 'mine' : 'other';
+      if (item.id) li.dataset.messageId = item.id;
       const role = document.createElement('p');
       role.className = 'role';
       const member = people.find(entry => entry.user_id === item.user_id);
@@ -1223,7 +1229,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
-      const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
+      closeConversationSearch({restoreScroll: false});
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
     currentConversation = result.body.conversation;
@@ -1255,7 +1261,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
-      const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
+      closeConversationSearch({restoreScroll: false});
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
     currentConversation = result.body.conversation;
@@ -1868,7 +1874,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopPolling();
     closeSearchPanel();
     closeComposeDialog();
-    const inChatPanel = document.getElementById('conversation-search-panel'); if (inChatPanel) inChatPanel.hidden = true;
+    closeConversationSearch({restoreScroll: false});
     writeHash({workspace: workspaceId()});
     applyChatIdentity(document, '聊天');
     document.getElementById('message-list').replaceChildren();
@@ -1900,12 +1906,68 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const hit of state.hits) {
       list.append(searchHitRow(hit, (document.getElementById('conversation-search-query').value || '').trim()));
     }
-    document.getElementById('conversation-search-status').textContent = state.error || ('已显示 ' + state.hits.length + ' 条消息');
+    document.getElementById('conversation-search-status').textContent = state.error
+      || (state.hits.length ? '已显示 ' + state.hits.length + ' 条消息' : '没有找到匹配的消息。');
     document.getElementById('conversation-search-more').hidden = !state.cursor;
+  }
+  let searchScrollTop = null;
+  function openConversationSearch() {
+    const panel = document.getElementById('conversation-search-panel');
+    if (!panel) return;
+    if (searchScrollTop === null) {
+      const scroller = document.getElementById('message-scroller');
+      searchScrollTop = scroller ? scroller.scrollTop : 0;
+    }
+    panel.hidden = false;
+    const field = document.getElementById('conversation-search-query');
+    if (field) field.focus();
+  }
+  function closeConversationSearch({restoreScroll = true} = {}) {
+    const panel = document.getElementById('conversation-search-panel');
+    if (!panel) { searchScrollTop = null; return; }
+    const wasOpen = !panel.hidden;
+    panel.hidden = true;
+    if (wasOpen && restoreScroll && searchScrollTop !== null) {
+      const scroller = document.getElementById('message-scroller');
+      if (scroller) scroller.scrollTop = searchScrollTop;
+    }
+    searchScrollTop = null;
+  }
+  function flashMessage(row) {
+    if (!row || !row.classList) return;
+    row.classList.add('search-jump');
+    globalThis.setTimeout(() => row.classList.remove('search-jump'), SEARCH_JUMP_HIGHLIGHT_MS);
+  }
+  function jumpToMessage(hit) {
+    const list = document.getElementById('message-list');
+    // A live #message-list hands back an HTMLCollection, which has no find().
+    const rows = list ? Array.from(list.children || []) : [];
+    const row = hit.messageId
+      ? rows.find(item => item.dataset && item.dataset.messageId === hit.messageId)
+      : null;
+    if (!row) {
+      document.getElementById('conversation-search-status').textContent = '这条消息较早，当前会话还没有加载到它。';
+      return;
+    }
+    closeConversationSearch({restoreScroll: false});
+    if (typeof row.scrollIntoView === 'function') row.scrollIntoView({block: 'center'});
+    flashMessage(row);
   }
   function searchHitRow(hit, query) {
     const li = document.createElement('li');
     li.className = 'search-hit';
+    if (hit.messageId) {
+      li.dataset.messageId = hit.messageId;
+      li.tabIndex = 0;
+      li.setAttribute('role', 'button');
+      li.setAttribute('aria-label', '跳到这条消息：' + (hit.preview || ''));
+      li.addEventListener('click', () => jumpToMessage(hit));
+      li.addEventListener('keydown', event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        jumpToMessage(hit);
+      });
+    }
     const avatar = document.createElement('span');
     avatar.className = 'search-hit-avatar';
     avatar.setAttribute('aria-hidden', 'true');
@@ -1931,7 +1993,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   if (groupInfoToggle) {
     groupInfoToggle.addEventListener('click', () => {
       const open = groupInfoToggle.getAttribute('aria-expanded') !== 'true';
-      if (open) document.getElementById('conversation-search-panel').hidden = true;
+      if (open) closeConversationSearch();
       setGroupInfoOpen(open);
     });
     document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
@@ -1961,11 +2023,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   if (inChatOpen) inChatOpen.addEventListener('click', () => {
     if (!currentConversation) { show('error', '请先打开一个会话。'); return; }
     setGroupInfoOpen(false);
-    document.getElementById('conversation-search-panel').hidden = false;
-    const field = document.getElementById('conversation-search-query'); if (field) field.focus();
+    openConversationSearch();
   });
   const inChatClose = document.getElementById('conversation-search-close');
-  if (inChatClose) inChatClose.addEventListener('click', () => { document.getElementById('conversation-search-panel').hidden = true; });
+  if (inChatClose) inChatClose.addEventListener('click', () => { closeConversationSearch(); });
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    const panel = document.getElementById('conversation-search-panel');
+    if (panel && !panel.hidden) closeConversationSearch();
+  });
   const inChatForm = document.getElementById('conversation-search-form');
   if (inChatForm) inChatForm.addEventListener('submit', async event => { event.preventDefault(); await searchCurrentConversation(); });
   const inChatMore = document.getElementById('conversation-search-more');

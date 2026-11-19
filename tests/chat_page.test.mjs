@@ -903,6 +903,101 @@ test('independent conversation search uses current id and pages without opening 
   } finally { restore(); }
 });
 
+test('clicking a conversation-search hit jumps to that message and flashes it briefly', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path) => {
+      if (path.includes('/search/messages?')) {
+        return json(200, {items: [{kind: 'social', conversation_id: 'conv-1', message_id: 'm-1', snippet: '你好'}], cursor: null});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await settle();
+    const target = el('message-list').children.find((row) => row.dataset.messageId === 'm-1');
+    assert.ok(target, 'the rendered message carries its id so a hit can point at it');
+    await fire(el('conversation-search-open'), 'click');
+    el('conversation-search-query').value = '你好';
+    await fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
+    const hit = el('conversation-search-results').children[0];
+    assert.equal(hit.dataset.messageId, 'm-1', 'the hit row knows which message it points at');
+    const timers = [];
+    const realTimer = globalThis.setTimeout;
+    globalThis.setTimeout = (fn, ms) => { timers.push({fn, ms}); return 1; };
+    try {
+      await fire(hit, 'click');
+      assert.equal(el('conversation-search-panel').hidden, true, 'jumping to a hit closes the panel first');
+      assert.ok(target.classList.contains('search-jump'), 'the message a hit points at is flashed');
+      const flash = timers.find((timer) => typeof timer.fn === 'function');
+      assert.ok(flash, 'the flash clears itself on a timer instead of staying forever');
+      assert.ok(flash.ms >= 1000 && flash.ms <= 5000, 'the flash lasts a few seconds, not ' + flash.ms + 'ms');
+      flash.fn();
+      assert.equal(target.classList.contains('search-jump'), false, 'the flash is gone once the timer fires');
+    } finally { globalThis.setTimeout = realTimer; }
+
+    // A live #message-list hands back an HTMLCollection (array-like, no find());
+    // jumping must not depend on the fake document's plain array.
+    await fire(el('conversation-search-open'), 'click');
+    await fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
+    el('message-list').children = {0: target, length: 1};
+    const again = el('conversation-search-results').children[0];
+    await fire(again, 'click');
+    assert.equal(el('conversation-search-panel').hidden, true, 'an HTMLCollection target still closes the panel');
+    assert.ok(target.classList.contains('search-jump'), 'an HTMLCollection target is still flashed');
+  } finally { restore(); }
+});
+
+test('a conversation search with no hits gives one empty sentence and keeps the conversation', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path) => {
+      if (path.includes('/search/messages?')) return json(200, {items: [], cursor: null});
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await settle();
+    await fire(el('conversation-search-open'), 'click');
+    el('conversation-search-query').value = '不存在的词';
+    await fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
+    assert.equal(el('conversation-search-results').children.length, 0, 'no hit rows are drawn');
+    assert.match(
+      el('conversation-search-status').textContent,
+      /没有找到/,
+      'the empty result is one sentence, not a blank panel or a bare count',
+    );
+    assert.ok(el('message-list').children.length > 0, 'searching without hits never empties the conversation');
+  } finally { restore(); }
+});
+
+test('closing the in-chat search returns to the scroll position the conversation had', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await settle();
+    const scroller = el('message-scroller');
+    scroller.scrollTop = 420;
+    await fire(el('conversation-search-open'), 'click');
+    scroller.scrollTop = 0;
+    await fire(el('conversation-search-close'), 'click');
+    assert.equal(el('conversation-search-panel').hidden, true, 'the close control hides the panel');
+    assert.equal(scroller.scrollTop, 420, 'closing returns the reader to where the conversation was');
+
+    scroller.scrollTop = 260;
+    await fire(el('conversation-search-open'), 'click');
+    scroller.scrollTop = 10;
+    await fire(doc, 'keydown', {key: 'Escape'});
+    assert.equal(el('conversation-search-panel').hidden, true, 'Escape also closes the panel');
+    assert.equal(scroller.scrollTop, 260, 'Escape restores the scroll position too');
+  } finally { restore(); }
+});
+
 test('own message editing and confirmed retraction call versioned endpoints', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
