@@ -85,10 +85,15 @@ class ComposioError(Exception):
         self.code, self.message, self.status = code, message, status
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def urllib_transport(method, url, headers, body):
     request = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+        with urllib.request.build_opener(NoRedirect).open(request, timeout=TIMEOUT) as response:
             return response.status, response.read(MAX_RESPONSE + 1)
     except urllib.error.HTTPError as error:
         try:
@@ -170,6 +175,23 @@ class Client:
 
     def list_accounts(self, user_id, limit=MAX_CONNECTIONS):
         return self._call('GET', '/connected_accounts', {'user_ids': [user_id], 'limit': str(limit)})
+
+    def tools(self, toolkit, search=None, cursor=None):
+        query = {'toolkit_slug': toolkit, 'limit': '20', 'toolkit_versions': 'latest'}
+        if search:
+            query['query'] = search
+        else:
+            query['important'] = 'true'
+        if cursor:
+            query['cursor'] = cursor
+        return self._call('GET', '/tools', query)
+
+    def execute(self, tool, account, user, version, arguments):
+        # Fixed route and explicit account: never custom_auth_params / proxy URLs,
+        # instant accounts, model-supplied user_id or automatic fallback credentials.
+        return self._call('POST', '/tools/execute/' + urllib.parse.quote(tool, safe=''),
+                          body={'connected_account_id': account, 'user_id': user,
+                                'version': version, 'arguments': arguments})
 
     def delete_account(self, account_id):
         return self._call('DELETE', '/connected_accounts/' + urllib.parse.quote(account_id, safe=''))

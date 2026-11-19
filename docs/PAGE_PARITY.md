@@ -179,10 +179,28 @@ confirmation and resulting document, (3) a library bookmark toggled and 收藏 o
 (4) search-hit click and close scroll behavior. These operations are not inferred
 from static menu screenshots. All tracking/unverified issues remain open.
 
-Local validation: 478 Python tests; 339 Node tests across all 26 CI-listed suites;
+Initial local validation: 478 Python tests; 339 Node tests across all 26 CI-listed suites;
 95 clean-fixture browser screenshots with zero hard/soft failures (including
 heading-toolbar editing, source round-trip, saved-message API readback and bookmark
 reload). Follow-up targeted chat/artifact tests cover final error-state/access
 refinements. Compileall, JavaScript syntax, CLI help, whitespace and quick
 secrets/assets/dependency/license review passed. Synthetic local evidence does not
 verify real providers, production deployment or Teamily operation equivalence.
+
+## Connected app tool execution (2026-11-19)
+
+The per-user Composio settings flow now has a task-scoped tool broker and an
+explicit one-shot approval area on the connectors page. Python FlyBot/zipapp and
+container management task loops can feed discovered schemas to an OpenAI-style
+model, submit immutable proposals, wait for owner approval and feed results back.
+No Composio key is given to the runtime. This is functional in **synthetic/mock
+tests only**, not real provider or Teamily parity acceptance. Group/automation/
+gateway work and standalone DSH sessions do not receive personal-tool access.
+The skill-library install control is now disabled by functional pass 6, not a real installed skill.
+Full boundaries, user steps and remaining blockers: [CONNECTED_TOOLS.md](CONNECTED_TOOLS.md).
+
+Ordinary main synchronization: `077cf231` (connected-tools #267) landed during
+the first read-only gate and made the earlier head conflict. Both append-only
+documentation sections were retained; product code merged without conflict.
+Final integrated local validation: **490 Python tests, 344 Node tests in 26
+suites, 95 browser screenshots with no hard/soft failures**. No CI job was rerun.

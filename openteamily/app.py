@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, composio, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, composio, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -580,6 +580,8 @@ class App:
                     return self.save_bot_social(db, now, None, self.body(env, ['revision', 'changes']), scope='platform')
             refuse(404, 'not_found', 'Route not found')
         if path.startswith('/v1/agent/'):
+            if re.fullmatch(r'/v1/agent/tasks/[0-9a-f]{32}/tools(?:/.*)?', path):
+                return self.connected_tools_dispatch(env, method, path, query, now)
             return self.agent_dispatch(env, method, path, query, now)
         if path.startswith('/v1/gateway/'):
             return self.gateway_dispatch(env, method, path, query, now)
@@ -1162,6 +1164,8 @@ class App:
                 self.config.runtime_task_timeout_seconds, workspace_id)
         except ValueError:
             refuse(429, 'quota', 'Runtime task capacity reached')
+        if kind == 'infer' and workspace_id is None:
+            connected_tools.grant(db, row['id'], user_id)
         return 201, {'task': runtime_connect.view_with_meta(db, row)}, []
 
     def issue_model_access(self, db, connection, task_id, now):
@@ -1190,7 +1194,7 @@ class App:
             refuse(409, 'conflict', 'This agent only supports OpenAI-compatible model APIs')
         runtime_connect.mark_access_issued(db, task['id'])
         runtime_connect.heartbeat(db, connection, now)
-        return 200, {'model_api': {
+        return 200, {'connected_tools': connected_tools.available(db, task['id']), 'model_api': {
             'provider': public['provider'],
             'base_url': public['base_url'],
             'model': public['model'],
@@ -2548,7 +2552,7 @@ class App:
              1),
         )
         task_id, error_code, dispatch = self.queue_infer_task(
-            db, session['user_id'], now, prompt, workspace['id'], agent['id'])
+            db, session['user_id'], now, prompt, workspace['id'], agent['id'], personal_tools=True)
         db.execute(
             'INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (assistant_id, row['id'], workspace['id'], agent['id'], session['user_id'], 'assistant',
@@ -3026,7 +3030,7 @@ class App:
              next_seq + 1),
         )
         task_id, error_code, dispatch = self.queue_infer_task(
-            db, session['user_id'], now, prompt, workspace['id'], agent['id'])
+            db, session['user_id'], now, prompt, workspace['id'], agent['id'], personal_tools=True)
         db.execute(
             'INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (assistant_id, row['id'], workspace['id'], agent['id'], session['user_id'], 'assistant',
@@ -3048,7 +3052,8 @@ class App:
             'reply': self.public_message(db, conversations.load_message(db, row['id'], assistant_id)),
         }, []
 
-    def queue_infer_task(self, db, user_id, now, prompt, workspace_id, agent_id=None):
+    def queue_infer_task(self, db, user_id, now, prompt, workspace_id, agent_id=None, personal_tools=False):
+        initiating_user = user_id
         stale = self.config.runtime_heartbeat_seconds
         target = None
         dispatch = {'source': 'connection', 'instance_id': None, 'connection_id': None}
@@ -3073,6 +3078,8 @@ class App:
                 self.config.runtime_task_timeout_seconds, workspace_id)
         except ValueError:
             return None, 'quota', None
+        if personal_tools and target['user_id'] == initiating_user:
+            connected_tools.grant(db, row['id'], initiating_user)
         return row['id'], None, dispatch
 
     def reconcile_conversation(self, db, row, now):
@@ -3142,7 +3149,7 @@ class App:
                 if not runtime_connect.valid_prompt(prompt):
                     continue
                 task_id, error_code, dispatch = self.queue_infer_task(
-                    db, row['user_id'], now, prompt, row['workspace_id'], row['agent_id'])
+                    db, row['user_id'], now, prompt, row['workspace_id'], row['agent_id'], personal_tools=True)
                 if task_id and task_id == message['task_id']:
                     continue
                 db.execute(
@@ -4659,6 +4666,37 @@ class App:
         self.write_editor(db, updated['id'], intent, scope, agents, compiled)
         return 200, {'automation': self.automation_view(db, updated)}, []
 
+    def connected_tools_dispatch(self, env, method, path, query, now):
+        if query:
+            refuse(400, 'invalid', 'Tool queries are not supported')
+        with self.store.transaction() as db:
+            key = self._runtime_key_from_env(db, env, now)
+            connection = runtime_connect.load_connection(db, key['id'])
+            if connection is None:
+                refuse(409, 'conflict', 'Connect the runtime first')
+        match = re.fullmatch(r'/v1/agent/tasks/([0-9a-f]{32})/tools(?:/(calls)(?:/([0-9a-f]{32}))?)?', path)
+        if match is None:
+            refuse(404, 'not_found', 'Tool route not found')
+        broker = connected_tools.Broker(self)
+        try:
+            if not match[2] and method == 'POST':
+                body = self.body(env, ['search'], limit=1024)
+                search = body.get('search')
+                if search is not None and (not isinstance(search, str) or len(search) > 100):
+                    refuse(400, 'invalid', 'Search must be at most 100 characters')
+                return 200, broker.discover(connection, match[1], now, search), []
+            if match[2] and not match[3] and method == 'POST':
+                body = self.body(env, ['call_id', 'name', 'arguments'])
+                return 200, {'call': broker.propose(connection, match[1], body, now)}, []
+            if match[3] and method == 'POST':
+                self.body(env, [], limit=64)
+                return 200, {'call': broker.run(connection, match[1], match[3], now)}, []
+            refuse(405, 'method', 'Only POST is supported')
+        except connected_tools.Fault as error:
+            refuse(error.status, error.code, error.message)
+        except composio.ComposioError as error:
+            refuse(502, error.code, error.message)
+
     def composio_client(self, user_id):
         """A Composio client bound to this user's own key; no fallback key exists."""
         with self.store.connect() as db:
@@ -4679,6 +4717,12 @@ class App:
                 with self.store.connect() as db:
                     view = composio.key_view(composio.load_key_row(db, user_id))
                 return 200, {'composio': view, 'catalog': composio.catalog_view()}, []
+            if path == '/v1/composio/approvals' and method == 'GET' and not query:
+                return 200, connected_tools.Broker(self).listing(user_id, now), []
+            approval = re.fullmatch(r'/v1/composio/approvals/([0-9a-f]{32})', path)
+            if approval and method == 'POST' and not query:
+                body = self.body(env, ['decision'], limit=256)
+                return 200, {'call': connected_tools.Broker(self).decide(user_id, approval[1], body.get('decision'), now)}, []
             if path == '/v1/composio/key':
                 if method != 'POST':
                     refuse(405, 'method', 'Only POST is supported')
@@ -4770,6 +4814,8 @@ class App:
                     row = db.execute('SELECT * FROM composio_connections WHERE id=?', (row['id'],)).fetchone()
                 return 200, {'connection': composio.connection_view(row)}, []
             refuse(404, 'not_found', 'Route not found')
+        except connected_tools.Fault as error:
+            refuse(error.status, error.code, error.message)
         except composio.ComposioError as error:
             refuse(502, error.code, error.message)
 
