@@ -531,6 +531,12 @@ body.app-workspace:has(#profile-edit:not([hidden])) > main > #main-panel {
 .profile-tabs { gap: 1rem; margin-top: 1.25rem; }
 .profile-tabs [role="tab"],
 #profile-home .profile-tabs [role="tab"] { width: auto; height: auto; min-height: 0; padding: .5rem 0 .5rem; border-radius: 0; box-shadow: none; background: transparent; font-size: .8125rem; }
-.profile-feed { place-items: start center; padding-top: 5.5rem; }
-.profile-feed-empty, #profile-home .profile-feed-empty { font-size: .8125rem; }
-#profile-agents-empty { margin: 0; padding: .25rem .2rem; border: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: .8125rem; color: var(--ot-muted); }
+html[data-theme-resolved="dark"] .profile-feed{ place-items: start center; padding-top: 5.5rem; }html[data-theme-resolved="dark"] .profile-feed-empty, html[data-theme-resolved="dark"] #profile-home .profile-feed-empty{ font-size: .8125rem; }html[data-theme-resolved="dark"] #profile-agents-empty{ margin: 0; padding: .25rem .2rem; border: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: .8125rem; color: var(--ot-muted); }html[data-theme-resolved="dark"] /* Aurora Glass: profile */
+.profile-card{
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+}

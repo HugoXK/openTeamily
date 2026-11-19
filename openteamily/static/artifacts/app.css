@@ -1019,11 +1019,28 @@ body #main-panel > #editor-form:not([hidden]) { max-width: 46rem; width: 100%; j
   background: var(--ot-surface-2);
   border-radius: 0.75rem;
 }
-
-#send-to-chat-cancel {
+html[data-theme-resolved="dark"] #send-to-chat-cancel{
   border-radius: 999px;
   padding: 0.4rem 0.95rem;
+/* Aurora Glass: works library */
+#artifact-list li {
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+  transition: transform .18s var(--ot-ease), box-shadow .18s var(--ot-ease);
 }
+#artifact-list li:hover { transform: translateY(-2px); box-shadow: var(--ot-shadow); }
+.artifact-kinds button[aria-current="page"] { background: var(--ot-grad-soft); color: var(--ot-accent); }
+#new-menu { background: var(--ot-surface-solid); border: 1px solid var(--ot-line); border-radius: var(--ot-radius); box-shadow: var(--ot-shadow-lg); }
+#filter-panel, #editor-form, .slide-card, #version-list li, #share-list li {
+  background: var(--ot-surface);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+  border-radius: var(--ot-radius);
+}}
 
 /* Functional parity 6: original document editing surface, same stored markdown. */
 #document-editor { padding: 0; margin: .75rem 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }

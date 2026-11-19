@@ -132,6 +132,26 @@ export function artifactDeletePrompt(artifact) {
   };
 }
 
+export function savableTaskArtifacts(tasks) {
+  return (Array.isArray(tasks) ? tasks : []).filter((task) => {
+    const result = task && task.result;
+    const text = result && (typeof result.text === 'string' ? result.text : result.echo);
+    return Boolean(task) && task.status === 'succeeded' && typeof text === 'string' && text.trim() !== '';
+  });
+}
+
+export function taskArtifactTitle(task) {
+  const prompt = task && typeof task.prompt === 'string' ? task.prompt.trim() : '';
+  return prompt || '任务结果';
+}
+
+export function taskArtifactError(status, body, fallback = '保存失败。') {
+  if (status === 401) return '登录后才能把任务成果保存到作品库。';
+  if (status === 403) return '没有权限把这条任务成果保存到这个工作区。';
+  const message = body && body.error && body.error.message;
+  return typeof message === 'string' && message ? message : fallback;
+}
+
 export function applyDirectoryCollapsed(root, collapsed) {
   const next = Boolean(collapsed);
   const dir = root.getElementById('artifact-dir');
@@ -189,7 +209,7 @@ export function applyArtifactLayout(list, layout) {
 }
 
 export function canSendArtifactToChat(item) {
-  return Boolean(item && item.id && item.kind === 'media');
+  return Boolean(item && item.id && ['media','document','website','whiteboard','slides','dashboard'].includes(item.kind));
 }
 
 export function conversationLabel(item) {
@@ -729,6 +749,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const sendError = document.getElementById('send-to-chat-error');
   const sendLead = document.getElementById('send-to-chat-lead');
   let sendingArtifact = null;
+  let sendPending = false, sendKeys = new Map();
 
   function closeSendDialog() {
     if (!sendDialog) return;
@@ -739,8 +760,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function openSendDialog(item) {
     if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
     sendingArtifact = item;
+    sendKeys = new Map();
     sendDialog.hidden = false;
-    if (sendLead) sendLead.textContent = '将「' + item.title + '」发送到：';
+    if (sendLead) sendLead.textContent = '将「' + item.title + '」的已保存版本发送到聊天。接收成员可下载该版本，不会自动发布。选择会话即发送：';
     if (sendError) { sendError.hidden = true; sendError.textContent = ''; }
     if (sendList) sendList.textContent = '';
     if (sendEmpty) {
@@ -775,12 +797,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function sendArtifactToConversation(item, conversation) {
     if (!workspaceId() || !item || !conversation || !conversation.id) return;
+    if (sendPending) return;
+    sendPending = true;
+    const wid = workspaceId();
+    const key = sendKeys.get(conversation.id) || idempotencyKey();
+    sendKeys.set(conversation.id, key);
+    try {
     const result = await request(
       'POST',
-      `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages`,
-      {body: '', artifact_id: item.id},
-      {'Idempotency-Key': idempotencyKey()},
+      `/v1/workspaces/${wid}/social/conversations/${conversation.id}/messages`,
+      {body: '', artifact_id: item.id, artifact_revision: item.revision},
+      {'Idempotency-Key': key},
     );
+    if (workspaceId() !== wid || sendingArtifact !== item) return;
     if (result.status !== 200 && result.status !== 201) {
       if (sendError) {
         sendError.hidden = false;
@@ -791,6 +820,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     closeSendDialog();
     show('ok', '已发送到「' + conversationLabel(conversation) + '」。');
+    } catch { if (sendError) { sendError.hidden = false; sendError.textContent = '网络错误，发送结果未知。重试同一会话不会重复发送。'; } }
+    finally { sendPending = false; }
   }
 
   if (document.getElementById('send-to-chat-cancel')) {
@@ -1580,6 +1611,97 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.addEventListener('keydown', onKey);
     });
   }
+
+  let agentTaskDialog = null;
+
+  function closeAgentTaskDialog() {
+    if (agentTaskDialog && agentTaskDialog.parentNode) agentTaskDialog.parentNode.removeChild(agentTaskDialog);
+    agentTaskDialog = null;
+    const opener = document.getElementById('empty-save-agent');
+    if (opener) opener.disabled = false;
+    if (opener && typeof opener.focus === 'function') opener.focus();
+  }
+
+  async function openAgentTaskDialog() {
+    const opener = document.getElementById('empty-save-agent');
+    if (agentTaskDialog) return;
+    if (opener) opener.disabled = true;
+    const dialog = document.createElement('div');
+    dialog.id = 'agent-task-dialog';
+    dialog.className = 'send-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'agent-task-title');
+    const card = document.createElement('div');
+    card.className = 'send-dialog-card';
+    const heading = document.createElement('h2');
+    heading.id = 'agent-task-title';
+    heading.textContent = '保存智能体成果';
+    const note = document.createElement('p');
+    note.id = 'agent-task-note';
+    note.className = 'note';
+    note.hidden = true;
+    const taskList = document.createElement('ul');
+    taskList.id = 'agent-task-list';
+    const close = document.createElement('button');
+    close.id = 'agent-task-close';
+    close.type = 'button';
+    close.textContent = '关闭';
+    close.addEventListener('click', () => closeAgentTaskDialog());
+    card.appendChild(heading);
+    card.appendChild(note);
+    card.appendChild(taskList);
+    card.appendChild(close);
+    dialog.appendChild(card);
+    const host = mainPanel || listPanel || form.parentNode;
+    if (host && typeof host.appendChild === 'function') host.appendChild(dialog);
+    else if (form && typeof form.appendChild === 'function') form.appendChild(dialog);
+    agentTaskDialog = dialog;
+    if (typeof close.focus === 'function') close.focus();
+
+    const listed = await request('GET', '/v1/runtime/tasks');
+    if (listed.status !== 200) {
+      note.hidden = false;
+      note.textContent = taskArtifactError(listed.status, listed.body, '读取任务列表失败。');
+      if (opener) opener.disabled = false;
+      return;
+    }
+    const tasks = savableTaskArtifacts(listed.body && listed.body.items);
+    if (!tasks.length) {
+      note.hidden = false;
+      note.textContent = '没有可保存的已完成任务：任务需要有成功的文本结果。';
+    }
+    for (const task of tasks) {
+      const row = document.createElement('li');
+      const label = document.createElement('span');
+      label.textContent = taskArtifactTitle(task);
+      const save = document.createElement('button');
+      save.type = 'button';
+      save.textContent = '保存';
+      save.addEventListener('click', async () => {
+        save.disabled = true;
+        note.hidden = true;
+        const saved = await request('POST', `/v1/runtime/tasks/${task.id}/artifact`, {workspace_id: workspaceId()});
+        if (saved.status === 200 || saved.status === 201) {
+          closeAgentTaskDialog();
+          show('ok', '已保存。');
+          if (catalogScope !== 'all') { catalogScope = 'all'; syncViewUrl(); }
+          await loadList();
+          return;
+        }
+        save.disabled = false;
+        note.hidden = false;
+        note.textContent = taskArtifactError(saved.status, saved.body);
+      });
+      row.appendChild(label);
+      row.appendChild(save);
+      taskList.appendChild(row);
+    }
+  }
+
+  document.getElementById('empty-save-agent').addEventListener('click', async () => {
+    await openAgentTaskDialog();
+  });
 
   document.getElementById('remove-artifact').addEventListener('click', async () => {
     if (!current || !current.id || !workspaceId()) return;
