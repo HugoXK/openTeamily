@@ -1589,3 +1589,62 @@ body.app-workspace > .app-rail > a[aria-current="page"] {
     transition-duration: .001ms !important;
   }
 }
+
+/* ------------------------------------------------------------------
+   Aurora identity is dark-only. The light default keeps the neutral
+   token system: green accent, opaque surfaces, no blur, no glow, no
+   gradient. Anything that decorates (the drifting aurora canvas, the dot
+   grid, gradient headings and gradient bubbles) is disabled in light.
+   Radii are left as they are.
+------------------------------------------------------------------- */
+:root {
+  --ot-bg: #eef2ef;
+  --ot-bg-accent: #e9eeea;
+  --ot-surface: #ffffff;
+  --ot-surface-solid: #ffffff;
+  --ot-surface-2: #fbfcfb;
+  --ot-ink: #1f2a24;
+  --ot-muted: #5a6861;
+  --ot-line: #e3e9e5;
+  --ot-line-strong: #cbd6cf;
+  --ot-accent: #097845;
+  --ot-accent-hover: #076a3d;
+  --ot-accent-soft: #e0f3e7;
+  --ot-accent-2: #097845;
+  --ot-on-accent: #ffffff;
+  --ot-ok: #0f766e;
+  --ot-ok-bg: #ccfbf1;
+  --ot-danger: #be123c;
+  --ot-danger-bg: #ffe4e6;
+  --ot-warn-bg: #fff7ed;
+  --ot-focus: #097845;
+  --ot-rail-bg: #20382d;
+  --ot-rail-ink: #e2e8f0;
+  --ot-grad: #097845;
+  --ot-grad-soft: #e0f3e7;
+  --ot-glow: none;
+  --ot-blur: none;
+  --ot-shadow-sm: 0 1px 2px rgb(15 23 42 / 6%);
+  --ot-shadow: 0 1px 2px rgb(15 23 42 / 6%), 0 12px 32px rgb(15 23 42 / 8%);
+  --ot-shadow-lg: 0 18px 48px rgb(15 23 42 / 14%);
+}
+html[data-theme-resolved="light"] body::before,
+html[data-theme-resolved="light"] body::after { content: none; }
+html[data-theme-resolved="light"] body.app-workspace .page-top h1,
+html[data-theme-resolved="light"] #login-panel h2 {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: var(--ot-ink);
+}
+@media (prefers-color-scheme: light) {
+  html:not([data-theme-resolved]) body::before,
+  html:not([data-theme-resolved]) body::after { content: none; }
+  html:not([data-theme-resolved]) body.app-workspace .page-top h1,
+  html:not([data-theme-resolved]) #login-panel h2 {
+    background: none;
+    -webkit-background-clip: border-box;
+    background-clip: border-box;
+    color: var(--ot-ink);
+  }
+}
