@@ -2271,6 +2271,15 @@ async function main() {
         return s.backgroundImage==='none'?(Math.max(a,b)+.05)/(Math.min(a,b)+.05):0;
       });
       record('new_modal_dark_primary_contrast',contrast>=4.5,'Actual settled dark submit contrast '+contrast.toFixed(2)+':1; opaque background, no mixed-theme inference');
+      const dialogContrasts=await page.evaluate(()=>{
+        const lum=color=>color.match(/[0-9.]+/g).slice(0,3).map(Number).map(n=>{n/=255;return n<=.04045?n/12.92:((n+.055)/1.055)**2.4}).reduce((a,n,i)=>a+n*[.2126,.7152,.0722][i],0);
+        return ['message-assist-dialog','announcement-dialog','resource-picker','composer-emoji-dialog'].map(id=>{
+          const dialog=document.getElementById(id),s=getComputedStyle(dialog),bg=lum(s.backgroundColor);
+          const ratios=[dialog,...dialog.querySelectorAll('h2,label,p')].map(e=>{const fg=lum(getComputedStyle(e).color);return (Math.max(fg,bg)+.05)/(Math.min(fg,bg)+.05)});
+          return {id,background:s.backgroundColor,minimum:Math.min(...ratios)};
+        });
+      });
+      record('new_modal_dark_text_contrast',dialogContrasts.every(x=>x.minimum>=4.5),'Actual heading/label/helper text against all four dark dialog surfaces: '+JSON.stringify(dialogContrasts));
       screenshots.push(path.basename(await shot(page,outDir,'101b-group-announcement-dark.png')));
       await page.evaluate(()=>{document.documentElement.dataset.themeResolved='light'});
       await page.locator('#announcement-close').click();

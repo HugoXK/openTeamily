@@ -1412,3 +1412,11 @@ test('model utility errors remain visible and retries retain identity without fa
   assert.equal(writes[0].body.revision,3);assert.equal(el('message-assist-history').children.length,0);
   el('message-assist-dialog').close();
 });
+
+
+test('new dialog and document-card surfaces use actual theme tokens, not undefined white fallbacks', () => {
+  const css = readFileSync(new URL('../openteamily/static/chat/app.css', import.meta.url), 'utf8');
+  assert.match(css, /#message-assist-dialog, #announcement-dialog \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
+  assert.match(css, /#resource-picker \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
+  assert.match(css, /\.chat-document-card \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
+});
