@@ -677,3 +677,18 @@ html[data-theme-resolved="dark"] .filter-count {
     flex: 0 0 auto;
   }
 }
+
+/* Aurora Glass: memory */
+.memory-dir, .memory-side, .overview-panel, .actions-panel,
+#meetings-panel, .memory-top {
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+}
+.memory-views button[aria-current="page"], .side-tabs button[aria-selected="true"] {
+  background: var(--ot-grad-soft);
+  color: var(--ot-accent);
+}

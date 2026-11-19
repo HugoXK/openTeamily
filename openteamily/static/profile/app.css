@@ -41,3 +41,13 @@
   .profile-layout { grid-template-columns: 1fr; }
   .profile-grid { grid-template-columns: 1fr; }
 }
+
+/* Aurora Glass: profile */
+.profile-card {
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+}

@@ -611,3 +611,13 @@ a.settings-row:focus-visible {
   background: var(--ot-bg-accent);
   color: var(--ot-ink);
 }
+
+/* Aurora Glass: settings */
+#settings-panel > section {
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+}
