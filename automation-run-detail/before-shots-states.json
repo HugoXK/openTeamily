@@ -1,0 +1,211 @@
+{
+  "phase": "before",
+  "errors": [],
+  "states": [
+    {
+      "shot": "remind-menu-before-1440x900",
+      "note": "message menu open on a message",
+      "viewport": "1440x900",
+      "horizontalOverflow": 0,
+      "menu": [
+        {
+          "key": "reply",
+          "text": "回复",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "save",
+          "text": "保存到资料空间",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "translate",
+          "text": "翻译",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "ask",
+          "text": "问 AI",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "copy",
+          "text": "复制",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "forward",
+          "text": "转发",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "pin",
+          "text": "置顶",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "select",
+          "text": "选择消息",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "edit",
+          "text": "编辑",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "retract",
+          "text": "撤回",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "delete",
+          "text": "删除",
+          "disabled": true,
+          "inViewport": true,
+          "painted": true
+        }
+      ]
+    },
+    {
+      "shot": "remind-menu-before-390x844",
+      "note": "message menu open on a message, narrow width",
+      "viewport": "390x844",
+      "horizontalOverflow": 0,
+      "menu": [
+        {
+          "key": "reply",
+          "text": "回复",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "save",
+          "text": "保存到资料空间",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "translate",
+          "text": "翻译",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "ask",
+          "text": "问 AI",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "copy",
+          "text": "复制",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "forward",
+          "text": "转发",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "pin",
+          "text": "置顶",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "select",
+          "text": "选择消息",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "edit",
+          "text": "编辑",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "retract",
+          "text": "撤回",
+          "disabled": false,
+          "inViewport": true,
+          "painted": true
+        },
+        {
+          "key": "delete",
+          "text": "删除",
+          "disabled": true,
+          "inViewport": true,
+          "painted": true
+        }
+      ]
+    },
+    {
+      "shot": "run-collapsed-before-1440x900",
+      "note": "run rows closed; the row is the control",
+      "viewport": "1440x900",
+      "horizontalOverflow": 0,
+      "runs": [
+        {
+          "headText": "已完成succeeded[CI FIXTURE] Fake provider briefing. Not a real vendor response.保存到作品库",
+          "hasToggle": false,
+          "expanded": null,
+          "detailVisible": null,
+          "detailText": null,
+          "inViewport": false,
+          "painted": null
+        },
+        {
+          "headText": "已完成succeeded今天的简报：三件待办、两条需要回复的消息。保存到作品库",
+          "hasToggle": false,
+          "expanded": null,
+          "detailVisible": null,
+          "detailText": null,
+          "inViewport": false,
+          "painted": null
+        },
+        {
+          "headText": "失败failedprovider_error",
+          "hasToggle": false,
+          "expanded": null,
+          "detailVisible": null,
+          "detailText": null,
+          "inViewport": false,
+          "painted": null
+        }
+      ]
+    }
+  ]
+}
