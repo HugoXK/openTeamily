@@ -1354,7 +1354,7 @@ test('the composer exposes a real bold tool instead of the disabled placeholder'
 });
 
 test('wrapBold puts double asterisks around the selected text', () => {
-  assert.deepEqual(wrapBold('你好世界', 2, 4), {text: '你好**世界**', start: 4, end: 10});
+  assert.deepEqual(wrapBold('你好世界', 2, 4), {text: '你好**世界**', start: 4, end: 6});
   assert.deepEqual(wrapBold('abc', 1, 1), {text: 'a****bc', start: 3, end: 3});
   assert.deepEqual(wrapBold('', 0, 0), {text: '****', start: 2, end: 2});
 });
