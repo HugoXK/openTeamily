@@ -301,6 +301,13 @@ export function formatSessionTime(value, now = Date.now()) {
   return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', year: 'numeric', month: 'numeric', day: 'numeric'}).format(date);
 }
 
+// Six original pastel tones so neighbouring avatars are distinguishable; stable per name.
+export function avatarTone(name) {
+  let hash = 0;
+  for (const ch of String(name || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  return String((hash % 6) + 1);
+}
+
 export function initial(name) {
   const text = (name || '').trim();
   const match = text.match(/\p{L}|\p{N}/u);
@@ -321,6 +328,7 @@ export function applyChatIdentity(document, name) {
   if (avatar) {
     avatar.textContent = identity.initial;
     avatar.hidden = !identity.showAvatar;
+    if (avatar.dataset) avatar.dataset.tone = avatarTone(identity.title);
   }
   return identity;
 }
@@ -537,6 +545,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const avatar = document.createElement('span');
       avatar.className = 'avatar';
       avatar.textContent = initial(session.title);
+      avatar.dataset.tone = avatarTone(session.title);
+      avatar.dataset.kind = session.kind || session.source || '';
       const copy = document.createElement('span');
       copy.className = 'copy';
       const title = document.createElement('span');
