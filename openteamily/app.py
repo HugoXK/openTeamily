@@ -1502,16 +1502,25 @@ class App:
             if method != 'GET':
                 refuse(400, 'invalid', 'Invalid automation request')
             try:
-                limit, cursor, _ = self.pagination(query)
+                limit, cursor, args = self.pagination(query, allowed=('status',))
             except APIError:
                 raise
             except Exception:
                 refuse(400, 'invalid', 'Invalid pagination parameters')
+            wanted = (args.get('status', [''])[0] if args else '')
+            if wanted and wanted not in ('queued', 'succeeded', 'failed', 'skipped'):
+                refuse(400, 'invalid', 'Invalid run status')
             scheduler.reconcile_workspace(db, workspace['id'], now)
-            rows = db.execute(
-                'SELECT * FROM automation_runs WHERE automation_id=? AND id>? ORDER BY id LIMIT ?',
-                (row['id'], cursor, limit + 1),
-            ).fetchall()
+            if wanted:
+                rows = db.execute(
+                    'SELECT * FROM automation_runs WHERE automation_id=? AND id>? AND status=? ORDER BY id LIMIT ?',
+                    (row['id'], cursor, wanted, limit + 1),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    'SELECT * FROM automation_runs WHERE automation_id=? AND id>? ORDER BY id LIMIT ?',
+                    (row['id'], cursor, limit + 1),
+                ).fetchall()
             return 200, {'items': [automations.run_view(item) for item in rows[:limit]],
                          'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
         if method == 'GET' and removing is None and not query:
