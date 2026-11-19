@@ -1078,7 +1078,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const wid = workspaceId();
     if (!pageId || !wid) return;
     if (dreamPanel) dreamPanel.hidden = false;
-    const result = await request('POST', `/v1/workspaces/${wid}/memory/${pageId}/dream`);
+    const result = await request('POST', `/v1/workspaces/${wid}/memory/${pageId}/dream`, {});
     if (result.status !== 200) {
       if (dreamStatus) dreamStatus.textContent = messageFor(result.body.error, '这一页暂时不能整理。');
       return;
