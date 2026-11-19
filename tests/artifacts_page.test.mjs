@@ -150,3 +150,14 @@ test('library layout applies actual grid/list presentation state without changin
   assert.equal(applyArtifactLayout(list, 'unknown'), 'grid');
   assert.equal(list.children[0], row);
 });
+
+test('library item badges and times are derived from real artifact fields', async () => {
+  const { kindBadge, artifactTime } = await import('../openteamily/static/artifacts/app.mjs');
+  assert.equal(kindBadge('document'), 'DOC');
+  assert.equal(kindBadge('website'), 'WEB');
+  assert.equal(kindBadge('unknown'), 'FILE');
+  assert.equal(artifactTime(0), '');
+  const now = new Date(2026, 10, 19, 15, 0).getTime();
+  assert.equal(artifactTime(new Date(2026, 10, 19, 9, 5).getTime() / 1000, now), '今天 09:05');
+  assert.equal(artifactTime(new Date(2026, 10, 2, 18, 30).getTime() / 1000, now), '11月2日 18:30');
+});

@@ -11,6 +11,23 @@ export function catalogInitial(name) {
   return match ? match[0].toUpperCase() : '?';
 }
 
+// Two-letter monogram for directory cards ("Content Creator" -> "CC"),
+// skipping a bracketed prefix such as "[CI FIXTURE]".
+export function catalogMonogram(name) {
+  const text = String(name || '').replace(/^\s*\[[^\]]*\]\s*/, '');
+  const words = text.match(/[\p{L}\p{N}]+/gu) || [];
+  if (!words.length) return catalogInitial(name);
+  if (/^\p{Script=Han}/u.test(words[0])) return words[0].slice(0, 1);
+  const letters = words.slice(0, 2).map((word) => word[0].toUpperCase()).join('');
+  return letters || catalogInitial(name);
+}
+
+export function catalogTone(name) {
+  let hash = 0;
+  for (const ch of String(name || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  return String((hash % 6) + 1);
+}
+
 export function catalogItems(body) {
   return Array.isArray(body && body.items) ? body.items : [];
 }
@@ -93,6 +110,7 @@ export function renderFeedCard(document, item) {
   card.append(kind, title, meta);
   const cover = document.createElement(item.kind === 'image' ? 'img' : 'div');
   cover.className = 'work-cover';
+  cover.dataset.kind = item.kind || 'work';
   if (item.kind === 'image') {
     cover.src = '/w/' + encodeURIComponent(item.slug) + '/file';
     cover.alt = ''; cover.loading = 'lazy';
@@ -385,7 +403,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       const avatar = document.createElement('span');
       avatar.className = 'catalog-avatar';
       avatar.setAttribute('aria-hidden', 'true');
-      avatar.textContent = catalogInitial(item.name || item.slug);
+      avatar.textContent = catalogMonogram(item.name || item.slug);
+      avatar.dataset.tone = catalogTone(item.name || item.slug);
       const copy = document.createElement('div');
       copy.className = 'catalog-copy';
       const name = document.createElement('h3');
