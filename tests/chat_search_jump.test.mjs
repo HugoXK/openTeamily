@@ -70,5 +70,9 @@ test('the sidebar message result opens its conversation and then jumps to the hi
   const source = readFileSync(new URL('../openteamily/static/chat/app.mjs', import.meta.url), 'utf8');
   // Every message hit carries the id of the row it came from, so the sidebar
   // result can land on that row instead of the newest screen of the thread.
-  assert.match(source, /item\.messageId\) await focusSearchHit\(item\)/);
+  assert.match(source, /pendingHitJump = \{conversationId: item\.conversationId \|\| item\.id, messageId: item\.messageId\}/);
+  // Opening a conversation rewrites the hash, which repaints the thread, so the
+  // jump is retried by the render that finishes for that conversation.
+  assert.match(source, /currentConversation\.id !== pending\.conversationId\) return;/);
+  assert.match(source, /renderSessions\(\);\n    flushPendingHitJump\(\);/);
 });

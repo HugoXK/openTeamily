@@ -489,6 +489,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let personalAgentId = '';
   let personalLook = null;
   let currentConversation = null;
+  // A sidebar message hit survives the hashchange repaint that opening its
+  // conversation triggers. Each render that finishes for that conversation
+  // retries the jump, and a landed jump clears it.
+  let pendingHitJump = null;
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
   let pollTimer = 0;
@@ -1295,6 +1299,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openAgentConversation(agentId, conversationId) {
+    if (pendingHitJump && pendingHitJump.conversationId !== conversationId) pendingHitJump = null;
     setSocialHeaderTools(false);
     setGroupInfo(null);
     const pin = document.getElementById('pin-conversation');
@@ -1333,11 +1338,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     renderSessions();
+    flushPendingHitJump();
     if (pending) schedulePoll();
     else stopPolling();
   }
 
   async function openSocialConversation(conversationId) {
+    if (pendingHitJump && pendingHitJump.conversationId !== conversationId) pendingHitJump = null;
     currentAgent = null;
     currentSource = 'social';
     stopPolling();
@@ -1384,6 +1391,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     renderSessions();
+    flushPendingHitJump();
     if ((result.body.agent_replies || []).some(item => ['queued', 'running'].includes(item.status))) schedulePoll();
   }
 
@@ -1739,13 +1747,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             writeHash({workspace: workspaceId(), agent: item.id});
           }
         } else if (item.type === 'social' || item.kind === 'social') {
+          // Opening writes the hash, which re-runs load() on hashchange and
+          // repaints the thread. Hold the hit across that repaint; the render
+          // that finishes for this conversation performs the jump.
+          if (item.messageId) pendingHitJump = {conversationId: item.conversationId || item.id, messageId: item.messageId};
           await openSocialConversation(item.conversationId || item.id);
-          if (item.messageId) await focusSearchHit(item);
         } else if (item.type === 'agent-message' || item.kind === 'agent') {
           const session = sessions.find(row => row.source === 'agent' && row.id === item.conversationId);
           if (session) {
+            if (item.messageId) pendingHitJump = {conversationId: session.id, messageId: item.messageId};
             await openAgentConversation(session.agent_id, session.id);
-            if (item.messageId) await focusSearchHit(item);
           }
         } else if (item.type === 'contact') {
           openComposeDialog('contact');
@@ -1886,6 +1897,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       else await openAgentConversation(first.agent_id, first.id);
     }
     show('', '');
+    flushPendingHitJump();
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -2011,10 +2023,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // A sidebar message hit opens its conversation first, then lands on the row
   // it came from. Older hits may sit outside the loaded window; say so instead
   // of leaving the reader on the newest screen with no explanation.
-  function focusSearchHit(hit) {
-    if (jumpToSearchHit(document.getElementById('message-list'), hit.messageId)) return true;
+  function focusSearchHit(messageId) {
+    if (!messageId) return false;
+    if (jumpToSearchHit(document.getElementById('message-list'), messageId)) return true;
     show('error', SEARCH_JUMP_MISSING);
     return false;
+  }
+
+  function flushPendingHitJump() {
+    const pending = pendingHitJump;
+    if (!pending || !currentConversation || currentConversation.id !== pending.conversationId) return;
+    if (focusSearchHit(pending.messageId)) pendingHitJump = null;
   }
 
   function searchHitRow(hit, query) {
