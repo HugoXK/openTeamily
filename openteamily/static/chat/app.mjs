@@ -228,6 +228,7 @@ export function composeCreateEnabled(options) {
   const groupMode = (options && options.groupMode) || 'custom';
   const selectedCount = Number((options && options.selectedCount) || 0);
   if (mode === 'contact') return selectedCount === 1;
+  if (mode === 'group' && groupMode === 'team') return options.templateSelected === true;
   if (mode === 'group') return groupMode === 'custom'
     && selectedCount <= 49 && Number(options.selectedHumanCount ?? selectedCount) >= 1;
   return false;
@@ -914,6 +915,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       groupMode,
       selectedCount: selectedMemberCount(),
       selectedHumanCount: document.querySelectorAll('#member-choices input[name="member"]:checked').length,
+      templateSelected: document.querySelectorAll('#team-template-choices input:checked').length === 1,
     });
   }
 
@@ -951,10 +953,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const team = composeMode === 'group' && groupMode === 'team';
     document.getElementById('compose-team-note').hidden = !team;
+    const templates = document.getElementById('compose-team-templates');
+    if (templates) templates.hidden = !team;
+    if (team) loadTeamTemplates();
     document.getElementById('compose-member-picker').hidden = team;
     if (composeMode === 'group') {
       document.getElementById('compose-title-label').hidden = team;
     }
+    syncComposeCreate();
+  }
+
+  let teamTemplates = null;
+  async function loadTeamTemplates() {
+    const holder = document.getElementById('team-template-choices');
+    if (!holder) return;
+    if (teamTemplates === null) {
+      let result;
+      try { result = await request('GET', '/v1/team-templates'); } catch { result = {status: 0, body: {}}; }
+      if (result.status !== 200) {
+        document.getElementById('team-templates-empty').hidden = false;
+        return;
+      }
+      teamTemplates = result.body.items || [];
+    }
+    if (holder.children.length) return;
+    for (const template of teamTemplates) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'radio'; box.name = 'team-template'; box.value = template.slug;
+      const text = `${template.name} · ${template.agents.map(agent => agent.name).join('、')}`;
+      label.append(box, document.createTextNode(text));
+      holder.append(label);
+    }
+    document.getElementById('team-templates-empty').hidden = teamTemplates.length > 0;
     syncComposeCreate();
   }
 
@@ -1574,11 +1605,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   document.getElementById('compose-member-search').addEventListener('input', applyMemberFilter);
   document.getElementById('member-choices').addEventListener('change', syncSelectedCount);
+  const templateChoices = document.getElementById('team-template-choices');
+  if (templateChoices) templateChoices.addEventListener('change', syncComposeCreate);
 
   document.getElementById('compose-social-form').addEventListener('submit', async event => {
     event.preventDefault();
-    if (composeMode === 'group' && groupMode !== 'custom') {
-      show('error', '未接通：还不能从这里创建 AI 智能体团队。');
+    if (composeMode === 'group' && groupMode === 'team') {
+      const picked = document.querySelectorAll('#team-template-choices input:checked')[0];
+      if (!picked) { show('error', '请选择一个团队模板。'); return; }
+      const wid = workspaceId();
+      const created = await request('POST', `/v1/workspaces/${wid}/team-templates/${picked.value}`, {},
+        {'Idempotency-Key': idempotencyKey('team-')});
+      if (created.status !== 201 && created.status !== 200) {
+        show('error', messageFor(created.body.error, '无法创建智能体团队。'));
+        return;
+      }
+      closeComposeDialog();
+      await loadSessions();
+      await openSocialConversation(created.body.conversation.id);
+      show('ok', '智能体团队已创建。智能体只在你明确请求时回复。');
       return;
     }
     const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')]

@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, teams
+from . import agent_runtime, agents, artifacts, automations, bot_social, conversations, discover, invites, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_templates, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -592,6 +592,15 @@ class App:
                 if method != 'POST' or query:
                     refuse(400, 'invalid', 'Invalid engagement request')
                 return self.discover_engagement(db, session, discover_action[1], env)
+            if path == '/v1/team-templates':
+                if method != 'GET' or query:
+                    refuse(400, 'invalid', 'Invalid template request')
+                return 200, {'items': [team_templates.view(item) for item in team_templates.TEMPLATES]}, []
+            template_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/team-templates/([a-z0-9-]{3,40})', path)
+            if template_path:
+                if method != 'POST' or query:
+                    refuse(400, 'invalid', 'Invalid template request')
+                return self.apply_team_template(db, session, now, env, *template_path.groups())
             notification_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/notifications(/read)?', path)
             if notification_path:
                 return self.notification_dispatch(db, session, method, query, env, *notification_path.groups())
@@ -3596,6 +3605,75 @@ class App:
                        (conversation_id, agent_id, now))
         row = social.load(db, workspace['id'], conversation_id)
         return 201, {'conversation': social.conversation_item(db, row)}, []
+
+    def apply_team_template(self, db, session, now, env, workspace_id, slug):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        template = team_templates.BY_SLUG.get(slug)
+        if template is None:
+            refuse(404, 'not_found', 'Template not found')
+        if not agents.can_manage(members.role_of(db, workspace, session['user_id'])):
+            refuse(403, 'forbidden', 'Only workspace owners and admins can create agent teams')
+        body = self.body(env, ['title', 'member_ids'])
+        title = body.get('title') or template['name']
+        if not social.valid_title(title):
+            refuse(400, 'invalid', 'Provide a valid conversation title')
+        title = title.strip()
+        member_ids = body.get('member_ids', [])
+        if not isinstance(member_ids, list) or (member_ids and not social.valid_member_ids(member_ids)):
+            refuse(400, 'invalid', 'Provide up to 49 member ids')
+        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+        humans = {session['user_id'], *member_ids}
+        if not humans.issubset(social.workspace_member_ids(db, workspace)):
+            refuse(400, 'invalid', 'Every member must belong to the workspace')
+        key_hash = digest('team-template:' + key)
+        request_hash = digest(json.dumps({'slug': slug, 'title': title, 'member_ids': sorted(member_ids)},
+                                         sort_keys=True, separators=(',', ':'), ensure_ascii=False))
+        prior = social.load_by_key(db, workspace['id'], key_hash)
+        if prior:
+            if prior['request_hash'] != request_hash:
+                refuse(409, 'conflict', 'Idempotency key was used for a different request')
+            return 200, {'conversation': social.conversation_item(db, prior), 'created_agents': []}, []
+        if len(humans) + len(template['agents']) > self.config.max_social_members_per_conversation:
+            refuse(429, 'quota', 'Conversation member limit reached')
+        if (db.execute('SELECT COUNT(*) FROM social_conversations WHERE workspace_id=?',
+                       (workspace['id'],)).fetchone()[0] >= self.config.max_social_conversations_per_workspace):
+            refuse(429, 'quota', 'Conversation capacity reached')
+        agent_ids, created = [], []
+        for index, spec in enumerate(template['agents']):
+            existing = db.execute('SELECT * FROM workspace_agents WHERE workspace_id=? AND name_hash=?',
+                                  (workspace['id'], agents.name_hash(spec['name']))).fetchone()
+            if existing is not None:
+                if existing['archived']:
+                    refuse(409, 'conflict', 'An archived agent already uses a template agent name: ' + spec['name'])
+                agent_ids.append(existing['id'])
+                continue
+            if (db.execute('SELECT COUNT(*) FROM workspace_agents WHERE workspace_id=?',
+                           (workspace['id'],)).fetchone()[0] >= self.config.max_agents_per_workspace):
+                refuse(429, 'quota', 'Agent capacity reached')
+            agent_id = uuid4().hex
+            payload = {'name': spec['name'], 'summary': spec['summary'], 'instructions': spec['instructions'],
+                       'category': spec['category']}
+            db.execute('INSERT INTO workspace_agents VALUES(?,?,?,?,?,?,1,?,?,?,0,?,?)',
+                       (agent_id, workspace['id'], spec['name'], agents.name_hash(spec['name']), spec['summary'],
+                        spec['instructions'], now, now, session['user_id'],
+                        digest(f'team-template-agent:{key}:{index}'),
+                        digest(json.dumps(payload, sort_keys=True, ensure_ascii=False))))
+            agents.store_category(db, agent_id, spec['category'], now)
+            agent_ids.append(agent_id)
+            created.append(agent_id)
+        conversation_id = uuid4().hex
+        db.execute('INSERT INTO social_conversations VALUES(?,?,?,?,?,?,?,?,?)',
+                   (conversation_id, workspace['id'], 'group', title, None, now, now, key_hash, request_hash))
+        for user_id in sorted(humans):
+            db.execute('INSERT INTO social_members VALUES(?,?,?,?)', (conversation_id, workspace['id'], user_id, now))
+        for agent_id in agent_ids:
+            db.execute('INSERT INTO social_agent_members VALUES(?,?,?)', (conversation_id, agent_id, now))
+        row = social.load(db, workspace['id'], conversation_id)
+        return 201, {'conversation': social.conversation_item(db, row), 'created_agents': created}, []
 
     def notification_dispatch(self, db, session, method, query, env, workspace_id, reading):
         workspace = members.load(db, workspace_id, session['user_id'])

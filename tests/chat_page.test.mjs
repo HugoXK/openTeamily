@@ -1051,3 +1051,8 @@ test('reaction chips post the toggle and re-render server counts', async () => {
     assert.equal(next.children[0].getAttribute('aria-pressed'), 'true');
   } finally { restore(); }
 });
+
+test('team mode needs a selected template', () => {
+  assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', selectedCount: 3}), false);
+  assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', templateSelected: true}), true);
+});

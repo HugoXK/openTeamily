@@ -134,7 +134,12 @@
             AI 智能体团队
           </button>
         </div>
-        <p id="compose-team-note" class="note" hidden>未接通：还没有智能体团队模板或创建接口，不能在这个模式下创建群组。</p>
+        <p id="compose-team-note" class="note" hidden>选择一个团队模板：会在当前工作区新建（同名则复用）三个智能体，并和你一起组成群组。智能体只在你明确请求时回复；需要所有者或管理员权限。</p>
+        <fieldset id="compose-team-templates" hidden>
+          <legend>团队模板</legend>
+          <div id="team-template-choices" class="member-choices"></div>
+          <p id="team-templates-empty" class="note" hidden>无法读取团队模板。</p>
+        </fieldset>
         <label id="compose-title-label">群组名称 <input id="compose-title" maxlength="80" autocomplete="off" placeholder="输入群组名称（可选）"></label>
         <div id="compose-member-picker">
           <div id="compose-member-tools" class="compose-member-tools">
