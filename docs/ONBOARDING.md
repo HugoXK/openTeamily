@@ -17,12 +17,28 @@ This slice implements **step 1 only** (industry and role) and stores it for late
 |---|---|---|---|
 | GET | `/v1/onboarding` | session | `{onboarding}` (or `null`) plus the captured `industries`/`roles` lists. |
 | POST | `/v1/onboarding` | session + Origin + CSRF | `{industry, role, completed}`. First save `201`, later `200`; revision increments. |
+| GET | `/v1/onboarding/recommendations` | session | Role-based automation recommendations from the existing templates. |
+| POST | `/v1/onboarding/automations` | session + Origin + CSRF | `{template_ids:[1–6]}`; creates paused automations in the first owned workspace or `个人空间`. |
 
 `industry` and `role` are ≤40 characters with no control characters; an empty pair is accepted for「暂时跳过」. `completed` must be a boolean. Unknown extra fields are rejected. The saved row is per user; no other account can read it.
 
 ## Captured lists
 
 16 industries are returned with the role suggestions captured from the real UI: 科技与软件, 广告与营销, 媒体与娱乐, 金融服务, 教育, 电子商务与零售, 咨询与专业服务, 游戏, 旅游与酒店, 医疗健康, 时尚与服装, 房地产与租赁, 农业与种养, 运输与物流, 建筑与家居服务, 其他. Custom industry and role text are accepted; the lists are suggestions, not hard enums.
+
+## Automation recommendations (step 3, first part)
+
+`GET /v1/onboarding/recommendations` maps the captured industry/role to 4–5 templates from the
+existing `automations.TEMPLATES` (products → deck/task breakdown/industry watch; engineering →
+task breakdown/build web; marketing → industry watch/deck/inbox; finance → market research/inbox;
+research/education → expert research; generic → daily brief/task breakdown/meeting prep/inbox).
+
+`POST /v1/onboarding/automations` validates 1–6 known templates, reuses the first workspace the
+caller owns (or creates `个人空间`), and inserts `automations` + `automation_editors` rows with a
+daily 09:00 Asia/Shanghai schedule and the caller as participant. Created automations are
+**paused** (`enabled=0`) so they do not start background work before review; the `/automations`
+page can enable them. Existing titles/keys are skipped, replaying is idempotent, and capacity
+limits still apply.
 
 ## Storage
 
@@ -34,7 +50,7 @@ Additive `user_onboarding` table (`user_id` primary key, industry, role, complet
 
 ## Explicitly not in this slice
 
-- App connectors/OAuth (Birfy/Bot Social territory), automation selection from step 3, and the Personal Agent look from step 4.
+- App connectors/OAuth (Birfy/Bot Social territory) and the Personal Agent look from step 4.
 - A forced first-login redirect or blocking onboarding gate.
 - Teamily comparison acceptance. Tests are in-process WSGI + temporary SQLite.
 

@@ -9,6 +9,8 @@ automation and avatar steps remain pending.
 """
 import re
 
+from . import automations
+
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS user_onboarding (
  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -67,6 +69,41 @@ def view(row):
 
 def industries_view():
     return [{'name': name, 'roles': list(roles)} for name, roles in INDUSTRIES.items()]
+
+
+WORK_TEMPLATES = (
+    'meeting_prep', 'daily_brief', 'industry_watch', 'expert_research', 'deck_report',
+    'build_web', 'task_breakdown', 'reply_in_voice', 'market_research', 'advance_goals',
+    'inbox_followup', 'timezone_handoff',
+)
+
+GROUPS = (
+    (('产品', '项目'), ('deck_report', 'task_breakdown', 'industry_watch', 'daily_brief', 'meeting_prep')),
+    (('工程', '开发', '技术', 'AI', '数据'), ('task_breakdown', 'build_web', 'daily_brief', 'meeting_prep')),
+    (('营销', '内容', '设计', '创作', '媒体'), ('industry_watch', 'deck_report', 'inbox_followup', 'daily_brief')),
+    (('财务', '会计', '投资', '金融'), ('market_research', 'inbox_followup', 'daily_brief', 'meeting_prep')),
+    (('研究', '学生', '科学', '教育'), ('expert_research', 'daily_brief', 'task_breakdown', 'meeting_prep')),
+    (('销售', '客户', '运营', '服务'), ('inbox_followup', 'daily_brief', 'task_breakdown', 'meeting_prep')),
+)
+DEFAULT_TEMPLATES = ('daily_brief', 'task_breakdown', 'meeting_prep', 'inbox_followup')
+
+
+def recommended_template_ids(role):
+    text = role or ''
+    for keys, ids in GROUPS:
+        if any(key in text for key in keys):
+            return list(ids)
+    return list(DEFAULT_TEMPLATES)
+
+
+def recommendations(role):
+    items = []
+    for template_id in recommended_template_ids(role):
+        template = automations.TEMPLATES.get(template_id)
+        if template is None:
+            continue
+        items.append({'template_id': template_id, 'title': template['title'], 'prompt': template['prompt']})
+    return items
 
 
 def load(db, user_id):

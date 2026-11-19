@@ -119,6 +119,35 @@ function mount() {
     }
   }
 
+  async function loadRecommendations() {
+    const result = await request('GET', '/v1/onboarding/recommendations');
+    if (result.status !== 200) return;
+    const items = result.body.items || [];
+    const holder = document.getElementById('recommendation-list');
+    holder.replaceChildren();
+    for (const item of items) {
+      const label = document.createElement('label');
+      label.className = 'recommendation-item';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.name = 'recommendation';
+      box.value = item.template_id;
+      box.checked = true;
+      const copy = document.createElement('span');
+      const title = document.createElement('strong');
+      title.textContent = item.title;
+      const prompt = document.createElement('span');
+      prompt.className = 'note';
+      prompt.textContent = item.prompt || '';
+      copy.append(title, prompt);
+      label.append(box, copy);
+      holder.append(label);
+    }
+    document.getElementById('onboarding-automations').hidden = items.length === 0;
+    document.getElementById('recommendation-meta').textContent = items.length
+      ? '' : '没有可推荐的自动化，可以直接进入聊天。';
+  }
+
   async function load() {
     const session = await request('GET', '/v1/auth/session');
     if (session.status === 401) {
@@ -143,6 +172,9 @@ function mount() {
     industries = result.body.industries || [];
     populateIndustries();
     fill(result.body.onboarding);
+    if (result.body.onboarding && result.body.onboarding.completed) {
+      await loadRecommendations();
+    }
   }
 
   select.addEventListener('change', () => {
@@ -169,6 +201,28 @@ function mount() {
       show('error', messageFor(result.body.error, '保存失败。'));
       return;
     }
+    fill(result.body.onboarding);
+    await loadRecommendations();
+    document.getElementById('onboarding-automations').scrollIntoView({behavior: 'smooth', block: 'start'});
+    show('ok', '工作背景已保存。');
+  });
+
+  document.getElementById('create-automations').addEventListener('click', async () => {
+    const templateIds = [...document.querySelectorAll('#recommendation-list input[name="recommendation"]:checked')]
+      .map(box => box.value);
+    if (!templateIds.length) {
+      globalThis.location.assign('/chat');
+      return;
+    }
+    const result = await request('POST', '/v1/onboarding/automations', {template_ids: templateIds});
+    if (result.status !== 200 && result.status !== 201) {
+      show('error', messageFor(result.body.error, '无法创建自动化。'));
+      return;
+    }
+    globalThis.location.assign('/chat');
+  });
+
+  document.getElementById('skip-automations').addEventListener('click', () => {
     globalThis.location.assign('/chat');
   });
 

@@ -61,3 +61,24 @@ body.app-workspace:not(.chat-open) > main > #main-panel { max-width: 46rem; widt
 .role-choices label { padding: .55rem .8rem; min-height: 2.5rem; box-sizing: border-box; }
 .onboarding-actions { padding-top: 1rem; border-top: 1px solid var(--ot-line); }
 @media (max-width: 600px) { .onboarding-card { padding: 1rem; } .onboarding-actions { flex-wrap: wrap; } }
+
+/* Automation recommendations */
+.recommendation-list {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.8rem 0;
+}
+.recommendation-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius);
+  background: var(--ot-surface-solid);
+  cursor: pointer;
+}
+.recommendation-item:hover { border-color: var(--ot-line-strong); }
+.recommendation-item input { margin-top: 0.2rem; accent-color: var(--ot-accent); }
+.recommendation-item span { display: grid; gap: 0.15rem; }
+.recommendation-item strong { font-weight: 650; }

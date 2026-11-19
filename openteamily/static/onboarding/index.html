@@ -63,7 +63,7 @@
   <section id="main-panel" hidden>
     <header class="page-top">
       <h1>工作背景</h1>
-      <p class="note">目前仅保存工作背景，尚未用于自动化推荐。连接应用、自动化选择和 Agent 形象步骤尚未接通。</p>
+      <p class="note">保存工作背景后可以选择自动化推荐；连接应用与 Agent 形象步骤尚未接通。</p>
       <p id="whoami"></p>
     </header>
     <form id="onboarding-form" class="onboarding-card">
@@ -89,6 +89,16 @@
       </div>
       <p id="onboarding-meta" class="note"></p>
     </form>
+    <section id="onboarding-automations" class="onboarding-card" hidden>
+      <h2>我们能帮你分担些什么？</h2>
+      <p class="note">根据你的行业和角色推荐。创建后默认暂停，可在自动化页开启。</p>
+      <div id="recommendation-list" class="recommendation-list"></div>
+      <div class="onboarding-actions">
+        <button type="button" id="create-automations">创建并继续</button>
+        <button type="button" id="skip-automations" class="secondary">暂时跳过</button>
+      </div>
+      <p id="recommendation-meta" class="note"></p>
+    </section>
   </section>
   </main>
 </body>

@@ -6,3 +6,5 @@ not a Teamily comparison.
 
 - `onboarding-context.png`: `/onboarding` with the captured industry/role step.
 - `onboarding-banner.png`: `/chat` with the non-blocking work-context hint.
+
+- `onboarding-recommendations.png`: `/onboarding` with role-based automation recommendations after saving work context.
