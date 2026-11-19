@@ -83,6 +83,28 @@ export function revokePrompt() {
   return {question: '撤销这条邀请？', confirmLabel: '确认撤销'};
 }
 
+// Freezing pauses an invite without revoking it, so it gets the same inline
+// confirmation as revoking instead of firing on one click.
+export function freezePrompt(item) {
+  return item && item.frozen
+    ? {question: '解冻这条邀请？', confirmLabel: '确认解冻'}
+    : {question: '冻结这条邀请？', confirmLabel: '确认冻结'};
+}
+
+// The server answers these codes with English sentences; the page says the
+// same thing in the language the rest of the row uses.
+export function inviteFailure(error, action) {
+  const code = error && error.code;
+  if (code === 'forbidden') {
+    return action === 'revoke'
+      ? '只有工作区所有者或管理员可以撤销邀请。'
+      : '只有工作区所有者或管理员可以冻结邀请。';
+  }
+  if (code === 'conflict') return '已撤销的邀请不能冻结或解冻。';
+  if (code === 'not_found') return '找不到这条邀请，可能已被撤销或删除。';
+  return (error && error.message) || '无法更新邀请。';
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -199,6 +221,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         trigger: target,
         prompt: revokePrompt(item),
         action: () => revokeInvite(item),
+      });
+      return;
+    }
+    if (target.dataset.rowAction === 'freeze' || target.dataset.rowAction === 'unfreeze') {
+      const item = inviteItems.find(entry => entry.id === target.dataset.inviteId);
+      if (!item) return;
+      const action = target.dataset.rowAction;
+      openConfirm({
+        row: target.parentElement,
+        trigger: target,
+        prompt: freezePrompt(item),
+        action: () => inviteAction(item, action),
       });
     }
   });
@@ -336,9 +370,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         revoke.dataset.inviteId = item.id;
         const freeze = document.createElement('button');
         freeze.type = 'button';
-        freeze.textContent = item.frozen ? '恢复' : '冻结';
-        freeze.title = item.frozen ? '恢复后邀请可再次使用' : '暂停这条邀请，不撤销，可随时恢复';
-        freeze.addEventListener('click', () => inviteAction(item, item.frozen ? 'unfreeze' : 'freeze'));
+        freeze.textContent = item.frozen ? '解冻' : '冻结';
+        freeze.title = item.frozen ? '解冻后邀请可再次使用，不会撤销' : '暂停这条邀请，不撤销，可随时解冻';
+        freeze.dataset.rowAction = item.frozen ? 'unfreeze' : 'freeze';
+        freeze.dataset.inviteId = item.id;
         row.appendChild(freeze);
         row.appendChild(revoke);
       }
@@ -387,10 +422,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!id) return;
     const result = await request('POST', `/v1/workspaces/${id}/invites/${item.id}/${action}`, {});
     if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法更新邀请。'));
+      show('error', inviteFailure(result.body.error, action));
       return;
     }
-    show('ok', action === 'freeze' ? '已冻结邀请。' : '已恢复邀请。');
+    show('ok', action === 'freeze' ? '已冻结。' : '已解冻。');
     await loadWorkspace();
   }
 
