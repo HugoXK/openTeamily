@@ -50,18 +50,21 @@ export const TEAMS_NOTE = '公开 AI 团队目录还没有接口，所以这里�
 export const TEAMS_SEARCH_NOTE = '搜索 AI 团队尚未接通：没有对应的公开接口。';
 export const TEAMS_SEARCH_PLACEHOLDER = '搜索 AI 团队......';
 
-export const FEED_ACTIVITY_EMPTY_NOTE = '还没有公开作品，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。点赞、关注和分类筛选仍未接通。';
-export const FEED_ACTIVITY_LISTED_NOTE = '以下是工作区自愿公开的作品，不是推荐或奖励内容。点赞、关注和分类筛选仍未接通。';
+export const FEED_ACTIVITY_EMPTY_NOTE = '还没有公开作品，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。点赞、关注和其他分类仍未接通。';
+export const FEED_ACTIVITY_LISTED_NOTE = '以下是工作区自愿公开的作品，不是推荐或奖励内容。点赞、关注和其他分类仍未接通。';
 export const FEED_ACTIVITY_NOTE = FEED_ACTIVITY_EMPTY_NOTE;
 export const FEED_FOLLOWING_EMPTY_TITLE = '关注列表暂无动态';
 export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显示在这里。';
 export const FEED_FOLLOWING_NOTE = '关注关系还没有接口，所以这里保持对照里的空态，不会列出动态，也不会展示奖励活动。';
-export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。点赞、关注和分类筛选仍未接通。';
+export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。点赞、关注和其他分类仍未接通。';
 
-export function feedQuery(query, cursor = '') {
+export const FEED_KINDS = ['', 'website', 'image', 'audio', 'slides', 'video'];
+
+export function feedQuery(query, cursor = '', kind = '') {
   const params = new URLSearchParams({limit: '12'});
   if (query) params.set('q', query);
   if (cursor) params.set('cursor', cursor);
+  if (kind) params.set('kind', kind);
   return params.toString();
 }
 
@@ -230,7 +233,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     applyCatalogChrome();
   }
 
-  const feedState = {items: [], cursor: '', query: '', loading: false};
+  const feedState = {items: [], cursor: '', query: '', kind: '', loading: false};
 
   function setFeedTab(tab) {
     const following = tab === 'following';
@@ -262,7 +265,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const note = document.getElementById('feed-note');
     const searchNote = document.getElementById('feed-search-note');
     if (!note) return;
-    if (feedState.query && !feedState.items.length && !feedState.loading) {
+    if ((feedState.query || feedState.kind) && !feedState.items.length && !feedState.loading) {
       note.textContent = FEED_SEARCH_EMPTY_NOTE;
       if (searchNote) {
         searchNote.hidden = false;
@@ -306,7 +309,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       error.hidden = true;
       error.textContent = '';
     }
-    const result = await request('GET', `/v1/discover/works?${feedQuery(feedState.query, append ? feedState.cursor : '')}`);
+    const result = await request('GET', `/v1/discover/works?${feedQuery(feedState.query, append ? feedState.cursor : '', feedState.kind)}`);
     feedState.loading = false;
     if (result.status !== 200) {
       if (error) {
@@ -559,6 +562,20 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   document.getElementById('catalog-more').addEventListener('click', () => {
     if (agentsView) return loadCatalog(true);
   });
+  for (const kind of FEED_KINDS) {
+    const button = document.getElementById('feed-kind-' + (kind || 'all'));
+    if (!button) continue;
+    button.addEventListener('click', () => {
+      if (feedState.loading) return;
+      feedState.kind = kind;
+      for (const candidate of FEED_KINDS) {
+        const node = document.getElementById('feed-kind-' + (candidate || 'all'));
+        if (node) node.setAttribute('aria-current', candidate === kind ? 'true' : 'false');
+      }
+      setFeedTab('activity');
+      return loadFeed();
+    });
+  }
   const feedSearch = document.getElementById('feed-search');
   if (feedSearch) {
     feedSearch.addEventListener('submit', event => {

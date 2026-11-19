@@ -136,7 +136,11 @@ def work_cursor(row):
     return '%s.%s' % (row['listed_updated'], row['slug'])
 
 
-def work_listing(db, query, cursor, limit):
+WORK_FILTER_KINDS = frozenset(('document', 'website', 'image', 'audio', 'video',
+                                'slides', 'whiteboard', 'dashboard', 'media'))
+
+
+def work_listing(db, query, cursor, limit, kind=''):
     sql = (
         'SELECT d.slug, d.updated AS listed_updated, a.title, '
         'cu.username AS created_by_username, m.render AS render, '
@@ -163,6 +167,22 @@ def work_listing(db, query, cursor, limit):
     if text:
         sql += ' AND (instr(lower(a.title), lower(?))>0 OR instr(lower(cu.username), lower(?))>0)'
         params.extend([text, text])
+    if kind:
+        if kind not in WORK_FILTER_KINDS:
+            raise ValueError('invalid work kind')
+        # Match the same precedence as artifacts.public_kind; media subtypes use
+        # server-sniffed MIME, never user-supplied category text.
+        sql += """ AND (CASE
+            WHEN md.mime LIKE 'image/%' THEN 'image'
+            WHEN md.mime LIKE 'audio/%' THEN 'audio'
+            WHEN md.mime LIKE 'video/%' THEN 'video'
+            WHEN md.mime IS NOT NULL THEN 'media'
+            WHEN b.board IS NOT NULL THEN 'whiteboard'
+            WHEN sl.deck IS NOT NULL THEN 'slides'
+            WHEN dbd.dashboard IS NOT NULL THEN 'dashboard'
+            WHEN m.render='website' THEN 'website'
+            ELSE 'document' END)=?"""
+        params.append(kind)
     sql += ' ORDER BY d.updated DESC, d.slug DESC LIMIT ?'
     params.append(limit)
     return db.execute(sql, tuple(params)).fetchall()

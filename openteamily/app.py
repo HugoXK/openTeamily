@@ -3115,8 +3115,8 @@ class App:
 
     def discover_works(self, query):
         try:
-            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=3) if query else {}
-            if set(args) - {'q', 'limit', 'cursor'} or any(len(v) != 1 for v in args.values()):
+            args = parse_qs(query, keep_blank_values=True, strict_parsing=True, max_num_fields=4) if query else {}
+            if set(args) - {'q', 'limit', 'cursor', 'kind'} or any(len(v) != 1 for v in args.values()):
                 raise ValueError()
             text = args.get('q', [''])[0]
             if len(text) > 80 or any(ord(ch) < 32 for ch in text):
@@ -3124,13 +3124,16 @@ class App:
             limit = args.get('limit', ['20'])[0]
             if not re.fullmatch(r'[0-9]{1,3}', limit) or not 1 <= int(limit) <= 50:
                 raise ValueError()
+            kind = args.get('kind', [''])[0]
+            if kind and kind not in discover.WORK_FILTER_KINDS:
+                raise ValueError()
             cursor = args.get('cursor', [''])[0]
             if cursor and not discover.valid_work_cursor(cursor):
                 raise ValueError()
         except ValueError:
             refuse(400, 'invalid', 'Invalid discover parameters')
         with self.store.connect() as db:
-            rows = discover.work_listing(db, text, cursor, int(limit) + 1)
+            rows = discover.work_listing(db, text, cursor, int(limit) + 1, kind)
             return 200, {'items': [discover.work_public_view(row) for row in rows[:int(limit)]],
                          'cursor': discover.work_cursor(rows[int(limit) - 1]) if len(rows) > int(limit) else None}, []
 

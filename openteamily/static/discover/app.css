@@ -135,7 +135,7 @@ button.catalog-create[hidden], a.catalog-create[hidden] { display: none; }
   padding: .2rem 0;
   font: inherit;
 }
-.feed-filter-all[aria-current="true"] {
+.feed-filters button[aria-current="true"] {
   padding: .2rem .75rem;
   border-radius: 999px;
   background: var(--ot-accent-soft);

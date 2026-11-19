@@ -407,3 +407,45 @@ test('the activity feed renders opted-in work cards from the public API', async 
 test('formatFeedTime renders the listing timestamp in Asia/Shanghai', () => {
   assert.equal(formatFeedTime(1800000000), '2027/1/15');
 });
+
+
+test('work type selection uses the real API and resets pagination, all restores full feed', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const calls = [];
+  const fetcher = async (path, options) => {
+    calls.push([path, options.method]);
+    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    return {status: 200, json: async () => ({items: [], cursor: path.includes('kind=website') ? '1.site-one' : null})};
+  };
+  await mount(doc, {fetcher, location: {search: ''}});
+  const el = id => doc.getElementById(id);
+  await el('feed-kind-website').handlers.click();
+  assert.equal(calls.at(-1)[0], '/v1/discover/works?limit=12&kind=website');
+  assert.equal(el('feed-kind-website').attributes['aria-current'], 'true');
+  assert.equal(el('feed-kind-all').attributes['aria-current'], 'false');
+  el('feed-more').handlers.click();
+  await flush();
+  assert.equal(calls.at(-1)[0], '/v1/discover/works?limit=12&cursor=1.site-one&kind=website');
+  await el('feed-kind-image').handlers.click();
+  assert.equal(calls.at(-1)[0], '/v1/discover/works?limit=12&kind=image');
+  await el('feed-kind-all').handlers.click();
+  assert.equal(calls.at(-1)[0], '/v1/discover/works?limit=12');
+  assert.equal(calls.every(([, method]) => method === 'GET'), true);
+});
+
+test('supported work categories are enabled, unsupported classifications stay disabled', () => {
+  const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
+  for (const kind of ['website', 'image', 'audio', 'slides', 'video']) {
+    const tag = html.match(new RegExp('<button[^>]*id="feed-kind-' + kind + '"[^>]*>'))[0];
+    assert.equal(tag.includes('disabled'), false);
+  }
+  assert.match(html, /disabled[^>]*>小游戏</);
+  assert.equal(feedQuery('中文', '1.site-one', 'website'), 'limit=12&q=%E4%B8%AD%E6%96%87&cursor=1.site-one&kind=website');
+});
+
+
+test('every supported selected type uses the selected category styling', () => {
+  const css = readFileSync(new URL('../openteamily/static/discover/app.css', import.meta.url), 'utf8');
+  assert.match(css, /\.feed-filters button\[aria-current="true"\]/);
+});
