@@ -167,8 +167,14 @@
     <section id="run-panel" hidden>
       <h2>运行记录</h2>
       <p class="note">结果来自已连接的 FlyBot 代理。假提供方给出的文本不能当成真实模型已经验证。</p>
+      <nav class="run-filters" aria-label="运行状态">
+        <button type="button" id="run-filter-all" data-run-filter="all" aria-current="true">全部</button>
+        <button type="button" id="run-filter-succeeded" data-run-filter="succeeded" aria-current="false">成功</button>
+        <button type="button" id="run-filter-failed" data-run-filter="failed" aria-current="false">失败</button>
+      </nav>
       <ul id="run-list"></ul>
       <p id="run-empty" class="empty-state" hidden>还没有运行记录。</p>
+      <p id="run-filter-empty" class="empty-state" hidden>没有符合这个筛选的运行记录。</p>
     </section>
   </section>
   </main>

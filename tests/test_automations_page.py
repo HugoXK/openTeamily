@@ -38,6 +38,10 @@ class AutomationsPageTests(unittest.TestCase):
         self.assertIn('value="monthly"', html)
         self.assertIn('value="weekdays"', html)
         self.assertIn('运行记录', html)
+        self.assertIn('id="run-filter-failed"', html)
+        self.assertIn('id="run-filter-succeeded"', html)
+        self.assertIn('id="run-filter-all"', html)
+        self.assertIn('没有符合这个筛选的运行记录。', html)
         self.assertIn('模板目录', html)
         self.assertIn('>模板<', html)
         self.assertNotIn('生活类模板还没有从对照里记下来', html)
@@ -56,6 +60,15 @@ class AutomationsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/automations', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/automations', query='q=1')['status'], 400)
         self.assertEqual(self.raw.call('POST', '/automations')['status'], 405)
+
+    def test_page_accepts_only_recorded_run_filters(self):
+        for value in ('all', 'succeeded', 'failed'):
+            page = self.raw.call('GET', '/automations', query='runs=' + value)
+            self.assertEqual(page['status'], 200, (value, page['status']))
+        self.assertEqual(self.raw.call('GET', '/automations', query='runs=1')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/automations', query='runs=FAILED')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/automations', query='runs=failed&template=daily_brief')['status'], 400,
+                         'the one-shot template prefill and the run filter never share a URL')
 
     def test_wrapper_still_exposes_the_automations_api(self):
         workspace = self.client.call('POST', '/v1/workspaces', {'name': 'Desk'},

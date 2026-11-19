@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, inlineToggleState, listQuery, mount, namesFromList, readEditor, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory, toggleChanges } from '../openteamily/static/automations/app.mjs';
+import {cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, inlineToggleState, listQuery, matchesRunFilter, mount, namesFromList, readEditor, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory, toggleChanges} from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -243,11 +243,18 @@ function holdRunPolling() {
   };
 }
 
-async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 'ws1', name: '团队'}]} = {}) {
+async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 'ws1', name: '团队'}],
+  search = '', pushes = [], windowHandlers = {}} = {}) {
   // The click handlers resolve `document` and the run poll from globals, so both
   // stay installed until the test calls restore().
   const restorePolling = holdRunPolling();
   const {doc, elements} = fakeDocument();
+  const view = {
+    location: {search},
+    history: {pushState(state, title, url) { pushes.push(url); view.location.search = url; }},
+    addEventListener(type, handler) { (windowHandlers[type] ||= []).push(handler); },
+  };
+  doc.defaultView = view;
   const calls = [];
   const fetcher = async (path, options = {}) => {
     const method = options.method || 'GET';
@@ -257,9 +264,11 @@ async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 
     if (path === '/v1/automation-templates') return {status: 200, json: async () => ({items: []})};
     const listed = path.match(/^\/v1\/workspaces\/([^/]+)\/automations\?category=mine$/);
     if (method === 'GET' && listed) return {status: 200, json: async () => ({items})};
-    const listedRuns = path.match(/^\/v1\/workspaces\/([^/]+)\/automations\/([^/]+)\/runs\?limit=20$/);
+    const listedRuns = path.match(/^\/v1\/workspaces\/([^/]+)\/automations\/([^/]+)\/runs\?limit=20(?:&status=([a-z]+))?$/);
     if (method === 'GET' && listedRuns) {
-      return {status: 200, json: async () => ({items: listedRuns[2] === 'a1' ? runs : []})};
+      const wanted = listedRuns[3] || '';
+      const rows = runs.filter(item => !wanted || item.status === wanted);
+      return {status: 200, json: async () => ({items: listedRuns[2] === 'a1' ? rows : []})};
     }
     if (method === 'POST' && /^\/v1\/workspaces\/[^/]+\/automations\/[^/]+\/remove$/.test(path)) {
       return {status: 200, json: async () => ({})};
@@ -276,7 +285,7 @@ async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 
   globalThis.document = doc;
   await mount(doc, {fetcher});
   return {
-    doc, elements, calls,
+    doc, elements, calls, view,
     restore() {
       if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
       restorePolling();
@@ -657,4 +666,112 @@ test('a stale revision asks for a reload instead of pretending the toggle worked
   const reloads = calls.filter(entry => entry.method === 'GET'
     && entry.path === '/v1/workspaces/ws1/automations?category=mine');
   assert.equal(reloads.length, 2, 'a 409 must re-read the list so the row shows the stored state');
+});
+
+test('runFilterFromSearch and runFilterSearchText round-trip the runs query', () => {
+  assert.equal(runFilterFromSearch(''), 'all');
+  assert.equal(runFilterFromSearch('?runs=failed'), 'failed');
+  assert.equal(runFilterFromSearch('?runs=succeeded'), 'succeeded');
+  assert.equal(runFilterFromSearch('?runs=all'), 'all');
+  assert.equal(runFilterFromSearch('?runs=1'), 'all');
+  assert.equal(runFilterFromSearch('?runs=FAILED'), 'all');
+  assert.equal(runFilterFromSearch('?template=daily_brief&runs=failed'), 'failed');
+  assert.equal(runFilterSearchText('all'), '');
+  assert.equal(runFilterSearchText('failed'), '?runs=failed');
+  assert.equal(runFilterSearchText('succeeded'), '?runs=succeeded');
+});
+
+test('matchesRunFilter keeps only the requested stored statuses', () => {
+  assert.equal(matchesRunFilter({status: 'failed'}, 'all'), true);
+  assert.equal(matchesRunFilter({status: 'succeeded'}, 'all'), true);
+  assert.equal(matchesRunFilter({status: 'failed'}, 'failed'), true);
+  assert.equal(matchesRunFilter({status: 'queued'}, 'failed'), false);
+  assert.equal(matchesRunFilter({status: 'succeeded'}, 'failed'), false);
+  assert.equal(matchesRunFilter({status: 'cancelled'}, 'failed'), true,
+    'run_view reports a cancelled run as cancelled; the server stores it as failed');
+  assert.equal(matchesRunFilter({status: 'timeout'}, 'failed'), true);
+  assert.equal(matchesRunFilter({status: 'succeeded'}, 'succeeded'), true);
+  assert.equal(matchesRunFilter({status: 'failed'}, 'succeeded'), false);
+  assert.equal(matchesRunFilter({}, 'succeeded'), false);
+});
+
+const RUNS = [
+  {id: 'r1', status: 'succeeded', error_code: null, due_at: 1795085700, started: 1795085700, finished: 1795085760},
+  {id: 'r2', status: 'failed', error_code: 'runtime_failure', due_at: 1795085800, started: 1795085800, finished: 1795085860},
+  {id: 'r3', status: 'failed', error_code: 'timeout', due_at: 1795085900, started: 1795085900, finished: 1795085960},
+];
+
+test('点「失败」只请求失败运行，并把 ?runs=failed 写进地址栏', async () => {
+  const pushes = [];
+  const {elements, calls, restore} = await mountEditor({runs: RUNS, pushes});
+  try {
+    await openFirst(elements);
+    calls.length = 0;
+    await elements.get('run-filter-failed').handlers.click[0]();
+    await flush();
+    assert.ok(calls.includes('GET /v1/workspaces/ws1/automations/a1/runs?limit=20&status=failed'),
+      `the failed filter must ask the server for failed runs: ${calls.join(' | ')}`);
+    assert.deepEqual(pushes, ['/automations?runs=failed'], 'choosing a run filter must leave a shareable URL');
+    assert.equal(elements.get('run-filter-failed').getAttribute('aria-current'), 'true');
+    assert.equal(elements.get('run-filter-all').getAttribute('aria-current'), 'false');
+    assert.equal(elements.get('run-filter-succeeded').getAttribute('aria-current'), 'false');
+    assert.equal(elements.get('run-list').children.length, 2, 'only the two failed runs stay listed');
+    assert.equal(elements.get('run-filter-empty').hidden, true);
+  } finally {
+    restore();
+  }
+});
+
+test('带 ?runs=failed 直接打开时首屏就请求失败列表，按钮也已经选中', async () => {
+  const handlers = {};
+  const {elements, calls, restore} = await mountEditor({runs: RUNS, search: '?runs=failed', windowHandlers: handlers});
+  try {
+    await openFirst(elements);
+    assert.ok(calls.includes('GET /v1/workspaces/ws1/automations/a1/runs?limit=20&status=failed'),
+      `a shared URL must be honoured on the first run request: ${calls.join(' | ')}`);
+    assert.equal(elements.get('run-filter-failed').getAttribute('aria-current'), 'true');
+    assert.equal(elements.get('run-filter-all').getAttribute('aria-current'), 'false');
+    assert.equal(elements.get('run-list').children.length, 2);
+  } finally {
+    restore();
+  }
+});
+
+test('筛选没有匹配项时给一句空态，而不是空白列表', async () => {
+  const only = [{id: 'r1', status: 'succeeded', error_code: null, due_at: 1795085700}];
+  const {elements, restore} = await mountEditor({runs: only, search: '?runs=failed'});
+  try {
+    await openFirst(elements);
+    assert.equal(elements.get('run-list').children.length, 0);
+    assert.equal(elements.get('run-filter-empty').hidden, false,
+      'a filter with no match must say so instead of leaving the list blank');
+    assert.equal(elements.get('run-empty').hidden, true,
+      'the old empty note belongs to the unfiltered list only');
+  } finally {
+    restore();
+  }
+});
+
+test('浏览器后退回到「全部」时按地址栏重载，不再写一次历史', async () => {
+  const pushes = [];
+  const handlers = {};
+  const {elements, calls, view, restore} = await mountEditor({runs: RUNS, pushes, windowHandlers: handlers});
+  try {
+    await openFirst(elements);
+    await elements.get('run-filter-succeeded').handlers.click[0]();
+    await flush();
+    assert.deepEqual(pushes, ['/automations?runs=succeeded']);
+    assert.ok(handlers.popstate && handlers.popstate.length, 'the page must listen for back/forward');
+    calls.length = 0;
+    view.location.search = '';
+    handlers.popstate[0]({});
+    await flush();
+    assert.deepEqual(pushes, ['/automations?runs=succeeded'], 'back/forward must not push another history entry');
+    assert.ok(calls.includes('GET /v1/workspaces/ws1/automations/a1/runs?limit=20'),
+      `going back to 全部 must reload the unfiltered list: ${calls.join(' | ')}`);
+    assert.equal(elements.get('run-filter-all').getAttribute('aria-current'), 'true');
+    assert.equal(elements.get('run-list').children.length, 3);
+  } finally {
+    restore();
+  }
 });
