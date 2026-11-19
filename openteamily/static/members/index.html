@@ -99,6 +99,7 @@
         </label>
         <label>有效天数 <input type="number" name="expires_days" min="1" max="30" value="7"></label>
         <label>最多使用次数 <input type="number" name="max_uses" min="1" max="50" value="1"></label>
+        <label class="check-row"><input type="checkbox" name="requires_approval"> 加入前需要所有者或管理员审批</label>
         <button type="submit">生成</button>
         <p id="issued-token" class="note" hidden></p>
       </fieldset>
@@ -107,6 +108,29 @@
       <h2>已发出的邀请</h2>
       <ul id="invite-list"></ul>
       <p id="invites-empty" class="note" hidden>还没有有效或已记录的邀请。</p>
+    </section>
+    <section id="join-requests-panel" hidden>
+      <h2>待审批的加入申请</h2>
+      <ul id="join-request-list"></ul>
+      <p id="join-requests-empty" class="note" hidden>没有待审批的申请。</p>
+    </section>
+    <form id="directory-listing-form" hidden>
+      <fieldset>
+        <legend>团队目录</legend>
+        <p class="note">列入目录后，本实例上已登录的用户可以搜索到团队名称、简介和人数，并提交加入申请；申请要由所有者或管理员审批。未登录访客看不到目录。</p>
+        <label><input type="checkbox" id="directory-listed"> 在团队目录中公开</label>
+        <label class="stack">简介 <input type="text" id="directory-summary" maxlength="200" autocomplete="off"></label>
+        <button type="submit">保存目录设置</button>
+      </fieldset>
+    </form>
+    <section id="team-directory-panel">
+      <h2>发现团队</h2>
+      <form id="directory-search-form" role="search">
+        <label>搜索团队 <input type="search" id="directory-query" maxlength="60" autocomplete="off" placeholder="名称或简介"></label>
+        <button type="submit">搜索</button>
+      </form>
+      <ul id="directory-results"></ul>
+      <p id="directory-empty" class="note" hidden>没有找到公开的团队。</p>
     </section>
     <form id="accept-form" method="post" action="/v1/invites/accept">
       <fieldset>

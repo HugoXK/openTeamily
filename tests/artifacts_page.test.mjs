@@ -176,6 +176,9 @@ class FakeNode {
     if (this.tagName === 'SELECT' && !this.value) this.value = child.value || '';
     return child;
   }
+  append(...nodes) {
+    for (const node of nodes) this.appendChild(typeof node === 'string' ? {textContent: node, parentNode: null} : node);
+  }
   insertBefore(child, before) {
     child.parentNode = this;
     const index = before ? this.children.indexOf(before) : -1;
@@ -298,10 +301,14 @@ async function openArtifactsPage({items = [], artifact, workspaces = [{id: 'w1',
   };
 }
 
-async function openEditorOn(page) {
+function artifactRows(list) {
+  return list.children.filter(child => String(child.className || '').split(/\s+/).includes('artifact-item'));
+}
+
+async function openEditorOn(page, index = 0) {
   const list = page.elements.get('artifact-list');
-  const row = list.children[0];
-  assert.ok(row, 'the list must render the artifact row first');
+  const row = artifactRows(list)[index];
+  assert.ok(row, `the list must render artifact row ${index} first`);
   await row.children[0].dispatch('click');
 }
 
@@ -466,13 +473,13 @@ test('opening another artifact never inherits the previous delete question', asy
   });
   try {
     const list = page.elements.get('artifact-list');
-    await list.children[0].children[0].dispatch('click');
+    await artifactRows(list)[0].children[0].dispatch('click');
     void page.elements.get('remove-artifact').dispatch('click');
     assert.equal(page.alertdialog().length, 1, 'clicking remove asks the user first');
 
     await page.elements.get('cancel-editor').dispatch('click');
     await new Promise((resolve) => setImmediate(resolve));
-    await list.children[1].children[0].dispatch('click');
+    await artifactRows(list)[1].children[0].dispatch('click');
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(
@@ -526,11 +533,11 @@ test('opening an artifact straight from a stale list clears the question', async
   });
   try {
     const list = page.elements.get('artifact-list');
-    await list.children[0].children[0].dispatch('click');
+    await artifactRows(list)[0].children[0].dispatch('click');
     void page.elements.get('remove-artifact').dispatch('click');
     assert.equal(page.alertdialog().length, 1, 'clicking remove asks the user first');
 
-    await list.children[1].children[0].dispatch('click');
+    await artifactRows(list)[1].children[0].dispatch('click');
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(
@@ -546,4 +553,15 @@ test('opening an artifact straight from a stale list clears the question', async
   } finally {
     page.close();
   }
+});
+
+test('library item badges and times are derived from real artifact fields', async () => {
+  const { kindBadge, artifactTime } = await import('../openteamily/static/artifacts/app.mjs');
+  assert.equal(kindBadge('document'), 'DOC');
+  assert.equal(kindBadge('website'), 'WEB');
+  assert.equal(kindBadge('unknown'), 'FILE');
+  assert.equal(artifactTime(0), '');
+  const now = new Date(2026, 10, 19, 15, 0).getTime();
+  assert.equal(artifactTime(new Date(2026, 10, 19, 9, 5).getTime() / 1000, now), '今天 09:05');
+  assert.equal(artifactTime(new Date(2026, 10, 2, 18, 30).getTime() / 1000, now), '11月2日 18:30');
 });

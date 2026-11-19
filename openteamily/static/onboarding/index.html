@@ -61,34 +61,87 @@
     </form>
   </section>
   <section id="main-panel" hidden>
-    <header class="page-top">
-      <h1>工作背景</h1>
-      <p class="note">目前仅保存工作背景，尚未用于自动化推荐。连接应用、自动化选择和 Agent 形象步骤尚未接通。</p>
-      <p id="whoami"></p>
+    <header class="page-top onboarding-top">
+      <h1 class="visually-hidden">工作背景</h1>
+      <p id="whoami" class="visually-hidden"></p>
+      <p id="onboarding-step-label" class="onboarding-step-label">第 1 步，共 4 步</p>
+      <ol class="onboarding-progress" aria-hidden="true"><li data-bar="1"></li><li data-bar="2"></li><li data-bar="3"></li><li data-bar="4"></li></ol>
     </header>
-    <form id="onboarding-form" class="onboarding-card">
+    <form id="onboarding-form" class="onboarding-card" data-step="1">
       <h2>聊聊你的工作</h2>
       <p class="note">选择你的行业和角色，让工作区从一开始就有合适的背景。</p>
-      <label>你的行业
-        <select id="industry"></select>
-      </label>
+      <div class="onboarding-row-head">
+        <h3 id="industry-heading">你的行业</h3>
+        <label class="industry-list-pick"><span class="visually-hidden">你的行业</span>
+          <select id="industry" aria-labelledby="industry-heading"></select>
+        </label>
+      </div>
+      <div id="industry-cards" class="choice-cards" role="radiogroup" aria-labelledby="industry-heading"></div>
       <label id="custom-industry-label" hidden>你的行业
         <input id="custom-industry" maxlength="40" placeholder="输入你的行业">
       </label>
       <fieldset id="role-field">
         <legend>你的角色</legend>
-        <div id="role-choices" class="role-choices"></div>
+        <div id="role-choices" class="role-choices choice-cards"></div>
         <label id="custom-role-label" hidden>你的角色
           <input id="custom-role" maxlength="40" placeholder="输入你的角色">
         </label>
         <p id="role-locked" class="note" hidden>请先选择行业</p>
       </fieldset>
-      <div class="onboarding-actions">
-        <button type="submit" id="onboarding-save">保存并继续</button>
-        <button type="button" id="onboarding-skip" class="secondary">暂时跳过</button>
-      </div>
       <p id="onboarding-meta" class="note"></p>
+      <div class="onboarding-actions">
+        <button type="button" id="onboarding-skip" class="secondary">暂时跳过</button>
+        <button type="submit" id="onboarding-save">继续 <span aria-hidden="true">→</span></button>
+      </div>
     </form>
+    <section id="onboarding-steps" class="onboarding-card" hidden>
+      <div class="onboarding-step" data-step="2">
+        <h2>连接你在用的应用</h2>
+        <p class="note">连接后，你的 Personal Agent 能更好地帮你。应用连接在 OpenTeamily 里尚未实现（没有第三方授权），这里的应用都显示为未连接，可以直接继续。</p>
+        <h3 class="onboarding-group">常用应用</h3>
+        <ul id="onboarding-apps" class="app-rows"></ul>
+        <p class="onboarding-hint"><span aria-hidden="true">ⓘ</span> 不会代你连接任何账号；以后可在设置 → 应用连接器查看。</p>
+        <div class="onboarding-actions">
+          <button type="button" class="secondary" data-go="1">← 上一步</button>
+          <button type="button" class="secondary onboarding-later" data-go="3">暂时跳过</button>
+          <button type="button" data-go="3">继续 <span aria-hidden="true">→</span></button>
+        </div>
+      </div>
+      <form id="onboarding-picks-form" class="onboarding-step" data-step="3">
+        <h2>我们能帮你分担些什么？</h2>
+        <p class="note">选几件想交给 Agent 的事。建议按你的行业给出（OpenTeamily 自拟文案）；选择会被保存，但不会自动创建任务或例行任务。</p>
+        <div id="onboarding-picks" class="pick-groups"></div>
+        <div class="onboarding-actions">
+          <button type="button" class="secondary" data-go="2">← 上一步</button>
+          <button type="submit">保存并继续 <span aria-hidden="true">→</span></button>
+        </div>
+      </form>
+      <form id="onboarding-look-form" class="onboarding-step" data-step="4">
+        <h2><span id="onboarding-ready-name"></span>你的工作区已准备就绪</h2>
+        <p class="note">自定义你的 Personal Agent 形象。只保存选择，不生成图片。</p>
+        <div class="look-layout">
+          <figure class="look-preview" aria-hidden="true">
+            <svg id="look-avatar" viewBox="0 0 120 120" width="132" height="132">
+              <rect class="look-bg" x="6" y="6" width="108" height="108" rx="28"/>
+              <rect class="look-head" x="30" y="34" width="60" height="50" rx="14"/>
+              <rect class="look-hat" x="34" y="22" width="52" height="14" rx="7"/>
+              <g class="look-face"><circle cx="48" cy="57" r="4.5"/><circle cx="72" cy="57" r="4.5"/><path d="M50 70q10 7 20 0" fill="none" stroke-width="3.5" stroke-linecap="round"/></g>
+              <g class="look-glasses" fill="none" stroke-width="3"><circle cx="48" cy="57" r="8"/><circle cx="72" cy="57" r="8"/><path d="M56 57h8"/></g>
+              <rect class="look-hand" x="86" y="74" width="16" height="20" rx="4"/>
+            </svg>
+            <figcaption id="look-caption">Personal Agent</figcaption>
+          </figure>
+          <div id="onboarding-look" class="look-options"></div>
+        </div>
+        <p id="onboarding-look-preview" class="note"></p>
+        <div class="onboarding-actions">
+          <button type="button" class="secondary" data-go="3">← 上一步</button>
+          <button type="submit" class="secondary">保存形象</button>
+          <a class="onboarding-enter" href="/chat" id="onboarding-enter">进入 OpenTeamily <span aria-hidden="true">→</span></a>
+        </div>
+      </form>
+      <p id="onboarding-steps-meta" class="note"></p>
+    </section>
   </section>
   </main>
 </body>

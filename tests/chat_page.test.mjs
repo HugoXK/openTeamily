@@ -892,7 +892,9 @@ test('independent conversation search uses current id and pages without opening 
     assert.equal(el('conversation-search-panel').hidden, false);
     el('conversation-search-query').value = 'needle';
     await fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
-    assert.equal(el('conversation-search-results').children[0].textContent, 'Scoped result');
+    const firstHit = el('conversation-search-results').children[0];
+    assert.equal(firstHit.className, 'search-hit');
+    assert.ok(descendants(firstHit).some(node => node.textContent === 'Scoped result'), 'snippet is rendered in the hit row');
     assert.equal(el('conversation-search-more').hidden, false);
     await fire(el('conversation-search-more'), 'click');
     assert.equal(calls.length, 2);
@@ -963,4 +965,176 @@ test('icon chat controls preserve accessible names, disabled truth and attachmen
   assert.match(html, /class="attachment-menu"[\s\S]*?id="chat-attachment"/);
   assert.match(html, /工作区成员可在作品库查看/);
   assert.match(html, /disabled title="未实现：语音消息"[\s\S]*?sr-only">语音/);
+});
+
+import {notificationBadgeText, notificationSummary} from '../openteamily/static/chat/app.mjs';
+
+test('notification badge and summary text', () => {
+  assert.equal(notificationBadgeText(0), '');
+  assert.equal(notificationBadgeText(3), '3');
+  assert.equal(notificationBadgeText(120), '99+');
+  assert.equal(notificationSummary({actor_username: 'bob', conversation_kind: 'group', conversation_title: '项目群'}),
+    'bob 在「项目群」提及了你');
+  assert.equal(notificationSummary({actor_username: 'bob', conversation_kind: 'dm', conversation_title: 'bob'}),
+    'bob 在「单聊」提及了你');
+});
+
+test('mention notifications show a badge, open the conversation and mark read', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals();
+  const posts = [];
+  let unread = 1;
+  const inbox = () => ({unread_count: unread, limit: 100, items: [{
+    id: 'n'.repeat(32), kind: 'mention', conversation_id: 'conv-1', conversation_kind: 'group',
+    conversation_title: '项目群', message_id: 'm-1', actor_username: 'bob', excerpt: '@alice 看一下',
+    created: 30, read: unread === 0}]});
+  try {
+    await mount(doc, {fetcher: async (path, init = {}) => {
+      if (path === '/v1/workspaces/ws-1/notifications') return json(200, inbox());
+      if (path === '/v1/workspaces/ws-1/notifications/read') {
+        posts.push(JSON.parse(init.body)); unread = 0; return json(200, {unread_count: 0});
+      }
+      if (path.endsWith('/conv-1/read')) return json(200, {unread_count: 0});
+      return original(path);
+    }});
+    await settle();
+    assert.equal(el('notification-count').hidden, false);
+    assert.equal(el('notification-count').textContent, '1');
+    await fire(el('notifications-toggle'), 'click');
+    await settle();
+    assert.equal(el('notifications-panel').hidden, false);
+    const item = el('notification-list').children[0] && el('notification-list').children[0].children[0];
+    assert.ok(item, 'the mention is listed');
+    assert.equal(item.children[0].textContent, 'bob 在「项目群」提及了你');
+    assert.equal(el('notifications-read-all').disabled, false);
+    await fire(item, 'click');
+    await settle();
+    assert.deepEqual(posts, [{notification_id: 'n'.repeat(32)}]);
+    assert.equal(el('notifications-panel').hidden, true);
+    assert.equal(el('notification-count').hidden, true);
+  } finally { restore(); }
+});
+
+import {MESSAGE_REACTIONS, reactionToggle} from '../openteamily/static/chat/app.mjs';
+
+test('reaction toggle turns my reaction off and others on', () => {
+  assert.equal(MESSAGE_REACTIONS.length, 6);
+  assert.deepEqual(reactionToggle([{emoji: '👍', count: 2, mine: true}], '👍'), {emoji: '👍', active: false});
+  assert.deepEqual(reactionToggle([{emoji: '👍', count: 1, mine: false}], '👍'), {emoji: '👍', active: true});
+  assert.deepEqual(reactionToggle([], '🎉'), {emoji: '🎉', active: true});
+});
+
+test('reaction chips post the toggle and re-render server counts', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const posts = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.endsWith('/messages/m-1/reactions')) {
+        const payload = JSON.parse(options.body); posts.push(payload);
+        return json(200, {message_id: 'm-1', reactions: payload.active ? [{emoji: payload.emoji, count: 2, mine: true}] : []});
+      }
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations/conv-1')) body.items[0].reactions = [{emoji: '👍', count: 1, mine: false}];
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    const li = el('message-list').children[0];
+    const bar = li.children[li.children.length - 1];
+    assert.equal(bar.className, 'message-reactions');
+    assert.equal(bar.children[0].textContent, '👍 1');
+    await fire(bar.children[0], 'click');
+    await settle();
+    assert.deepEqual(posts, [{emoji: '👍', active: true}]);
+    const next = li.children[li.children.length - 1];
+    assert.equal(next.children[0].textContent, '👍 2');
+    assert.equal(next.children[0].getAttribute('aria-pressed'), 'true');
+  } finally { restore(); }
+});
+
+test('team mode needs a selected template', () => {
+  assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', selectedCount: 3}), false);
+  assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', templateSelected: true}), true);
+});
+
+import {forwardTargets, forwardCountLabel} from '../openteamily/static/chat/app.mjs';
+
+test('forward target list excludes the current conversation', () => {
+  assert.deepEqual(forwardTargets([{id: 'a', kind: 'dm', title: 'bob'}, {id: 'b', kind: 'group', title: '群'}], 'a'),
+    [{id: 'b', label: '群聊 · 群'}]);
+  assert.equal(forwardCountLabel(3), '已选 3 条');
+});
+
+test('pin a message and multi-select forward call the real endpoints', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const posts = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.endsWith('/messages/m-1/pin')) {
+        posts.push([path, JSON.parse(options.body)]);
+        return json(200, {pinned_messages: [{message_id: 'm-1', excerpt: '你好', pinned_by_username: 'alice'}]});
+      }
+      if (path.endsWith('/conv-1/forward')) {
+        posts.push([path, JSON.parse(options.body)]);
+        return json(201, {items: [{id: 'f-1'}]});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    assert.equal(el('chat-invite').hidden, false);
+    assert.equal(el('multi-select-toggle').hidden, false);
+    let li = el('message-list').children[0];
+    const tools = li.children[li.children.length - 2];
+    assert.equal(tools.className, 'message-tools');
+    await fire(tools.children[0], 'click');
+    await settle();
+    assert.deepEqual(posts[0][1], {pinned: true});
+    assert.equal(el('pinned-messages').hidden, false);
+    li = el('message-list').children[0];
+    assert.equal(li.children[li.children.length - 2].children[0].textContent, '取消置顶');
+    await fire(el('multi-select-toggle'), 'click');
+    assert.equal(el('forward-bar').hidden, false);
+    li = el('message-list').children[0];
+    const box = li.children[li.children.length - 2].children[0].children[0];
+    box.checked = true;
+    await fire(box, 'change');
+    assert.equal(el('forward-count').textContent, '已选 1 条');
+    el('forward-target').value = 'conv-2';
+    await fire(el('forward-target'), 'change');
+    assert.equal(el('forward-submit').disabled, false);
+    await fire(el('forward-submit'), 'click');
+    await settle();
+    assert.deepEqual(posts[1][1], {message_ids: ['m-1'], target_conversation_id: 'conv-2'});
+    assert.equal(el('forward-bar').hidden, true);
+  } finally { restore(); }
+});
+
+test('agent task completion notifications have their own summary', () => {
+  assert.equal(notificationSummary({kind: 'agent_reply', status: 'succeeded', actor_username: '助理',
+    conversation_kind: 'group', conversation_title: '项目群'}), '助理 在「项目群」已完成你的请求');
+  assert.equal(notificationSummary({kind: 'agent_reply', status: 'failed', actor_username: '助理',
+    conversation_kind: 'group', conversation_title: '项目群'}), '助理 在「项目群」未能完成你的请求');
+});
+
+test('group info panel counts members and agents honestly and picks a readable glyph', async () => {
+  const { groupInfoCounts, leadGlyph } = await import('../openteamily/static/chat/app.mjs');
+  assert.equal(groupInfoCounts({ members: [{}, {}], agent_members: [{}] }).text, '3 位成员 · 2 位真人 · 1 位智能体');
+  assert.equal(groupInfoCounts({}).text, '0 位成员 · 0 位真人 · 0 位智能体');
+  assert.equal(leadGlyph('[CI FIXTURE] Group chat'), 'G');
+  assert.equal(leadGlyph('产品群'), '产');
+  assert.equal(leadGlyph('---', '群'), '群');
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  for (const label of ['视频通话', '语音通话', 'Agent 主动性', '自动翻译', '消息免打扰']) assert.ok(html.includes(label));
+  assert.match(html, /aria-label="自动翻译（未接通）"/);
+});
+
+test('in-chat search highlights every case-insensitive match without HTML', async () => {
+  const { highlightParts } = await import('../openteamily/static/chat/app.mjs');
+  assert.deepEqual(highlightParts('Test a test', 'test'), [
+    { text: 'Test', match: true }, { text: ' a ', match: false }, { text: 'test', match: true }]);
+  assert.deepEqual(highlightParts('<b>x</b>', ''), [{ text: '<b>x</b>', match: false }]);
 });

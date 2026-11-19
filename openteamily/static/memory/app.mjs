@@ -1,3 +1,8 @@
+export function recentlyUpdatedCount(pages, now = Date.now(), days = 7) {
+  const since = now / 1000 - days * 86400;
+  return (pages || []).filter((page) => Number(page.updated || 0) >= since).length;
+}
+
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -454,6 +459,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : (String(needle || '').trim() ? MEMORY_EMPTY_NO_MATCH : MEMORY_EMPTY_WORKSPACE);
     const count = document.getElementById('filter-all-count');
     if (count) count.textContent = String((pageChoices || []).length);
+    const recent = document.getElementById('filter-updated-count');
+    if (recent) recent.textContent = String(recentlyUpdatedCount(pageChoices));
   }
 
   function renderDirectory() {
