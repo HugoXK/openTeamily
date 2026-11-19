@@ -443,6 +443,78 @@ export function notificationSummary(item) {
   return `${item.actor_username || '成员'} 在「${where}」提及了你`;
 }
 
+function zoneClock(ts, zone) {
+  try {
+    const format = new Intl.DateTimeFormat('en-US', {
+      timeZone: zone, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+    const parts = {};
+    for (const part of format.formatToParts(new Date(ts))) {
+      if (part.type !== 'literal') parts[part.type] = Number(part.value);
+    }
+    if (!Number.isFinite(parts.year)) return null;
+    return {...parts, hour: parts.hour % 24};
+  } catch {
+    return null;
+  }
+}
+
+export function zonedInstant(dateText, timeText, zone) {
+  const [year, month, day] = String(dateText || '').split('-').map(Number);
+  const [hour, minute] = String(timeText || '').split(':').map(Number);
+  if (![year, month, day, hour, minute].every(Number.isFinite)) return null;
+  const guess = Date.UTC(year, month - 1, day, hour, minute);
+  const first = zoneClock(guess, zone);
+  if (!first) return null;
+  const offset = Date.UTC(first.year, first.month - 1, first.day, first.hour, first.minute, first.second) - guess;
+  const settled = zoneClock(guess - offset, zone);
+  const finalOffset = settled
+    ? Date.UTC(settled.year, settled.month - 1, settled.day, settled.hour, settled.minute, settled.second) - (guess - offset)
+    : offset;
+  return guess - finalOffset;
+}
+
+export function zoneDayKey(ts, zone) {
+  const clock = zoneClock(ts, zone);
+  if (!clock) return '';
+  return `${clock.year}-${String(clock.month).padStart(2, '0')}-${String(clock.day).padStart(2, '0')}`;
+}
+
+// The automations listing is the only place a reminder exists today: a one-off
+// schedule that already came due. Anything else (repeating schedules, other
+// people's reminders, disabled rows, future slots) is not a reminder that is
+// waiting to be seen.
+export function dueReminders(items, userId, now = Date.now()) {
+  const today = [];
+  const older = [];
+  for (const item of items || []) {
+    if (!item || item.enabled === false) continue;
+    const schedule = item.schedule || {};
+    if (schedule.kind !== 'once' || !schedule.date || !schedule.time || !schedule.time_zone) continue;
+    const mine = (item.participants || []).some(person => person && userId
+      && (person.user_id === userId || (!person.user_id && person.username === userId)));
+    if (!mine) continue;
+    const due = zonedInstant(schedule.date, schedule.time, schedule.time_zone);
+    if (due === null || due > now) continue;
+    const row = {id: item.id, title: item.title || '', due, schedule};
+    if (zoneDayKey(due, schedule.time_zone) === zoneDayKey(now, schedule.time_zone)) today.push(row);
+    else older.push(row);
+  }
+  today.sort((left, right) => right.due - left.due);
+  older.sort((left, right) => right.due - left.due);
+  return {today, older};
+}
+
+export function reminderDueLabel(item, now = Date.now()) {
+  const zone = (item.schedule && item.schedule.time_zone) || 'UTC';
+  const clock = zoneClock(item.due, zone);
+  const time = clock ? `${String(clock.hour).padStart(2, '0')}:${String(clock.minute).padStart(2, '0')}` : (item.schedule && item.schedule.time) || '';
+  if (zoneDayKey(item.due, zone) === zoneDayKey(now, zone)) return `今天 ${time} 到点`;
+  return `${String((item.schedule && item.schedule.date) || '').slice(5)} ${time} 到点`;
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -1149,6 +1221,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const handle = globalThis.setInterval(() => {
       if (document.visibilityState === 'hidden' || !currentUser) return;
       loadNotifications();
+      loadDueReminders();
     }, NOTIFICATION_POLL_MS);
     if (handle && typeof handle.unref === 'function') handle.unref();
   }
@@ -1160,8 +1233,52 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
 
+  let dueSeq = 0;
+
+  function renderDueReminders(state) {
+    const panel = document.getElementById('due-reminders');
+    const heading = document.getElementById('due-reminders-heading');
+    const note = document.getElementById('due-reminders-note');
+    const list = document.getElementById('due-reminders-list');
+    if (!panel || !heading || !note || !list) return;
+    const model = state || {};
+    const today = model.today || [];
+    const older = model.older || [];
+    const failed = Boolean(model.failed);
+    panel.hidden = !failed && today.length + older.length === 0;
+    heading.textContent = failed ? '今天到点的提醒' : `今天到点的提醒 ${today.length} 条`;
+    note.hidden = !failed && older.length === 0;
+    note.textContent = failed ? '读不到到点的提醒。'
+      : (older.length ? `另有 ${older.length} 条更早到点的提醒。` : '');
+    if (failed) { list.replaceChildren(); return; }
+    list.replaceChildren(...[...today, ...older].map(item => {
+      const row = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = '/automations';
+      link.textContent = item.title || '提醒';
+      const when = document.createElement('span');
+      when.className = 'note';
+      when.textContent = reminderDueLabel(item, Date.now());
+      link.append(when);
+      row.append(link);
+      return row;
+    }));
+  }
+
+  async function loadDueReminders() {
+    const wid = workspaceId();
+    if (!wid || !currentUser) return;
+    const token = ++dueSeq;
+    let result;
+    try { result = await request('GET', `/v1/workspaces/${wid}/automations`); } catch { result = {status: 0, body: {}}; }
+    if (token !== dueSeq || workspaceId() !== wid) return;
+    if (result.status !== 200) { renderDueReminders({failed: true}); return; }
+    renderDueReminders(dueReminders(result.body.items || [], currentUser.id, Date.now()));
+  }
+
   async function loadSessions() {
     loadNotifications();
+    loadDueReminders();
     const id = workspaceId();
     sessions = [];
     agents = [];
