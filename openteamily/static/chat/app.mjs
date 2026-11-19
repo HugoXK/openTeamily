@@ -1234,6 +1234,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你' : '工作区成员', 'person')));
     const pinned = sessions.some(item => item.source === 'social' && item.id === conversation.id && item.pinned);
     document.getElementById('group-info-pin').setAttribute('aria-checked', String(pinned));
+    const notice = conversation.announcement || null;
+    document.getElementById('group-announce-text').textContent = notice ? notice.body : '暂无群公告。';
+    const meta = document.getElementById('group-announce-meta');
+    meta.textContent = notice ? `${notice.author} · ${formatTime(notice.updated)}` : '';
+    meta.hidden = !notice;
+    const publish = document.getElementById('group-announce-publish');
+    if (publish) publish.hidden = !conversation.can_announce;
+    const clear = document.getElementById('group-announce-clear');
+    if (clear) clear.hidden = !(notice && conversation.can_announce);
+    const form = document.getElementById('group-announce-form');
+    if (form) form.hidden = true;
+  }
+
+  async function saveAnnouncement(text) {
+    const cid = currentConversation && currentConversation.id;
+    const status = document.getElementById('group-announce-status');
+    if (!cid) return;
+    const result = await request('POST', `${socialBase()}/${cid}/announcement`, {body: text});
+    if (result.status !== 200) {
+      if (status) status.textContent = messageFor(result.body.error, '群公告未保存，请重试。');
+      return;
+    }
+    if (!currentConversation || currentConversation.id !== cid) return;
+    currentConversation.announcement = result.body.announcement || null;
+    if (status) status.textContent = '';
+    setGroupInfo(currentConversation);
   }
 
   function setGroupInfoOpen(open) {
@@ -2024,6 +2050,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
     document.getElementById('group-info-tab-agents').addEventListener('click', () => setGroupInfoTab('agents'));
     document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
+    const announcePublish = document.getElementById('group-announce-publish');
+    const announceForm = document.getElementById('group-announce-form');
+    if (announcePublish && announceForm) {
+      announcePublish.addEventListener('click', () => {
+        if (!currentConversation || !currentConversation.can_announce) return;
+        announceForm.hidden = false;
+        const field = document.getElementById('group-announce-body');
+        field.value = (currentConversation.announcement || {}).body || '';
+        field.focus();
+      });
+      document.getElementById('group-announce-cancel').addEventListener('click', () => {
+        announceForm.hidden = true;
+        document.getElementById('group-announce-status').textContent = '';
+      });
+      document.getElementById('group-announce-clear').addEventListener('click', () => saveAnnouncement(''));
+      announceForm.addEventListener('submit', event => {
+        event.preventDefault();
+        saveAnnouncement(document.getElementById('group-announce-body').value);
+      });
+    }
     document.getElementById('group-info-pin').addEventListener('click', async () => {
       const pin = document.getElementById('pin-conversation');
       if (!pin || pin.hidden) return;

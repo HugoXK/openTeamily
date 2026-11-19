@@ -918,7 +918,7 @@ class App:
                 return self.search_messages(db, session, method, query, search_path.group(1))
             social_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/social/conversations'
-                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}/(?:edit|retract|reactions|pin|save))?|forward|preferences|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
+                r'(?:/([0-9a-f]{32})(?:/(messages(?:/[0-9a-f]{32}/(?:edit|retract|reactions|pin|save))?|forward|preferences|announcement|read|agent-replies|agents(?:/[0-9a-f]{32}/remove)?))?)?', path)
             if social_path:
                 return self.social_dispatch(db, session, method, query, now, env, *social_path.groups())
             discover_path = re.fullmatch(
@@ -3690,6 +3690,18 @@ class App:
                 refuse(400, 'invalid', 'Invalid group agent membership request')
             return self.edit_group_agents(db, workspace, session, row, action, now, env)
         self.reconcile_group_replies(db, row, now)
+        if action == 'announcement':
+            if method == 'GET' and not query:
+                return 200, {'announcement': social.announcement(db, row['id'])}, []
+            if method == 'POST' and not query:
+                if members.role_of(db, workspace, session['user_id']) not in ('owner', 'admin'):
+                    refuse(403, 'forbidden', 'Only owners and admins can publish an announcement')
+                body = self.body(env, ['body']).get('body')
+                if not social.valid_announcement(body) or (body != '' and not body.strip()):
+                    refuse(400, 'invalid', 'Provide a 1–500 character announcement, or an empty string to clear it')
+                return 200, {'announcement': social.save_announcement(
+                    db, row['id'], session['user_id'], body, now)}, []
+            refuse(400, 'invalid', 'Invalid announcement request')
         if action == 'preferences' and method == 'POST' and not query:
             pinned = self.body(env, ['pinned']).get('pinned')
             if type(pinned) is not bool:
@@ -3745,6 +3757,9 @@ class App:
         if action is None and method == 'GET' and not query:
             items = social.messages(db, row['id'], '', 101) or []
             conversation = social.conversation_item(db, row)
+            conversation['announcement'] = social.announcement(db, row['id'])
+            conversation['can_announce'] = members.role_of(
+                db, workspace, session['user_id']) in ('owner', 'admin')
             conversation['unread_count'] = social.unread_count(db, row['id'], session['user_id'])
             return 200, {'conversation': conversation,
                          'agent_replies': [social.reply_view(item) for item in social.reply_requests(db, row['id'])],

@@ -84,6 +84,11 @@ CREATE TABLE IF NOT EXISTS social_reads (
 CREATE TABLE IF NOT EXISTS social_message_state (
  message_id TEXT PRIMARY KEY REFERENCES social_messages(id) ON DELETE CASCADE,
  revision INTEGER NOT NULL DEFAULT 1, edited INTEGER, retracted INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS social_announcements (
+ conversation_id TEXT PRIMARY KEY REFERENCES social_conversations(id) ON DELETE CASCADE,
+ body TEXT NOT NULL,
+ author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ updated INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS social_preferences (
  conversation_id TEXT NOT NULL REFERENCES social_conversations(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -116,6 +121,7 @@ REACTIONS = ('👍', '❤️', '😄', '🎉', '👀', '✅')
 KINDS = ('dm', 'group')
 TITLE_MAX = 80
 BODY_MAX = 4000
+ANNOUNCE_MAX = 500
 CONTROL = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
 HEX32 = re.compile(r'[0-9a-f]{32}')
 
@@ -127,6 +133,11 @@ def valid_title(value):
 def valid_body(value):
     return (isinstance(value, str) and 1 <= len(value) <= BODY_MAX and '\x00' not in value
             and not any(ord(ch) < 32 and ch not in '\t\n\r' for ch in value))
+
+
+def valid_announcement(value):
+    return (isinstance(value, str) and len(value) <= ANNOUNCE_MAX
+            and '\x00' not in value and not CONTROL.search(value))
 
 
 def valid_member_ids(value):
@@ -396,6 +407,25 @@ def with_reactions(db, views, user_id):
 
 PIN_LIMIT = 20
 FORWARD_LIMIT = 20
+
+
+def announcement(db, conversation_id):
+    row = db.execute(
+        'SELECT a.body, a.updated, u.username AS author FROM social_announcements a '
+        'JOIN users u ON u.id=a.author_id WHERE a.conversation_id=?', (conversation_id,)).fetchone()
+    if row is None:
+        return None
+    return {'body': row['body'], 'author': row['author'], 'updated': row['updated']}
+
+
+def save_announcement(db, conversation_id, user_id, body, now):
+    if body == '':
+        db.execute('DELETE FROM social_announcements WHERE conversation_id=?', (conversation_id,))
+        return None
+    db.execute('INSERT INTO social_announcements VALUES(?,?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET '
+               'body=excluded.body, author_id=excluded.author_id, updated=excluded.updated',
+               (conversation_id, body, user_id, now))
+    return announcement(db, conversation_id)
 
 
 def pinned_messages(db, conversation_id):

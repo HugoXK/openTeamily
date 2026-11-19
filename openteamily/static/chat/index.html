@@ -206,8 +206,17 @@
       </div>
       <button type="button" id="group-info-search" class="group-info-row group-info-search">搜索聊天记录</button>
       <section class="group-info-card" aria-labelledby="group-info-notice-heading">
-        <div class="group-info-card-head"><h3 id="group-info-notice-heading">群公告</h3><button type="button" class="group-info-link" disabled title="未接通：还没有群公告接口">发布</button></div>
-        <p class="group-info-sub">暂无群公告。</p>
+        <div class="group-info-card-head"><h3 id="group-info-notice-heading">群公告</h3><button type="button" class="group-info-link" id="group-announce-publish" hidden>发布</button></div>
+        <p class="group-info-sub" id="group-announce-text">暂无群公告。</p>
+        <p class="group-info-sub" id="group-announce-meta" hidden></p>
+        <form id="group-announce-form" hidden>
+          <label class="sr-only" for="group-announce-body">群公告内容</label>
+          <textarea id="group-announce-body" rows="3" maxlength="500" placeholder="写一条 500 字以内的群公告"></textarea>
+          <button type="submit" id="group-announce-save">发布</button>
+          <button type="button" id="group-announce-clear" hidden>清空</button>
+          <button type="button" id="group-announce-cancel">取消</button>
+          <p id="group-announce-status" role="status"></p>
+        </form>
       </section>
       <section class="group-info-card group-info-list" aria-label="通话">
         <button type="button" class="group-info-row" disabled title="未接通：还没有视频通话">视频通话<span class="group-info-tag">未接通</span></button>
