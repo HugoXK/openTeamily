@@ -582,11 +582,11 @@ test('library item badges and times are derived from real artifact fields', asyn
 });
 
 
-test('canSendArtifactToChat is only true for media with an id', async () => {
+test('canSendArtifactToChat enables every persisted work type, not missing IDs', async () => {
   const {canSendArtifactToChat, conversationLabel} = await import('../openteamily/static/artifacts/app.mjs');
   assert.equal(canSendArtifactToChat({id: 'a', kind: 'media'}), true);
-  assert.equal(canSendArtifactToChat({id: 'a', kind: 'document'}), false);
-  assert.equal(canSendArtifactToChat({id: 'a', kind: 'website'}), false);
+  assert.equal(canSendArtifactToChat({id: 'a', kind: 'document'}), true);
+  assert.equal(canSendArtifactToChat({id: 'a', kind: 'website'}), true);
   assert.equal(canSendArtifactToChat({kind: 'media'}), false);
   assert.equal(conversationLabel({title: 'Project room'}), 'Project room');
   assert.equal(conversationLabel({kind: 'dm', members: [{username: 'alice'}, {username: 'bob'}]}), 'alice、bob');
@@ -713,4 +713,13 @@ test('an older workspace list cannot overwrite the current selected workspace', 
     assert.equal(artifactRows(elements.get('artifact-list')).length, 1);
     assert.equal(artifactRows(elements.get('artifact-list'))[0].children[0].textContent, 'New workspace document');
   } finally { if (saved === undefined) delete globalThis.document; else globalThis.document=saved; }
+});
+
+
+test('saved result deep links require an exact authorized workspace and artifact id pair', async () => {
+  const {artifactTargetFromSearch}=await import('../openteamily/static/artifacts/app.mjs');
+  const wid='a'.repeat(32),aid='b'.repeat(32);
+  assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&artifact='+aid),{workspace:wid,artifact:aid});
+  assert.equal(artifactTargetFromSearch('?new=document'),null);
+  for(const query of ['?artifact='+aid,'?workspace='+wid,'?workspace=../private&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&new=document','?workspace='+wid+'&artifact='+aid+'&x=1'])assert.deepEqual(artifactTargetFromSearch(query),{invalid:true});
 });
