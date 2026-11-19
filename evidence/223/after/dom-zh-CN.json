@@ -1,0 +1,482 @@
+[
+  {
+    "shot": "light__1440x900/01-library.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": true,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "light__1440x900/02-editor.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "light__1440x900/03-confirm-open.png",
+    "dom": {
+      "url": "/space",
+      "dialog": "删除「[CI FIXTURE] Website」？删除后不能恢复。取消确认",
+      "dialogLabel": "remove-artifact-question",
+      "focused": "BUTTON",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "light__1440x900/04-cancelled.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "remove-artifact",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "light__1440x900/05-back-to-list.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "remove-artifact",
+      "editorHidden": true,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "light__1440x900/06-second-artifact.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "light__390x844/01-library.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": true,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "light__390x844/02-editor.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "light__390x844/03-confirm-open.png",
+    "dom": {
+      "url": "/space",
+      "dialog": "删除「[CI FIXTURE] Website」？删除后不能恢复。取消确认",
+      "dialogLabel": "remove-artifact-question",
+      "focused": "BUTTON",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "light__390x844/04-cancelled.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "remove-artifact",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "light__390x844/05-back-to-list.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "remove-artifact",
+      "editorHidden": true,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "light__390x844/06-second-artifact.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "dark__1440x900/01-library.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": true,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "dark__1440x900/02-editor.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "dark__1440x900/03-confirm-open.png",
+    "dom": {
+      "url": "/space",
+      "dialog": "删除「[CI FIXTURE] Website」？删除后不能恢复。取消确认",
+      "dialogLabel": "remove-artifact-question",
+      "focused": "BUTTON",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "dark__1440x900/04-cancelled.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "remove-artifact",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "dark__1440x900/05-back-to-list.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "remove-artifact",
+      "editorHidden": true,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "dark__1440x900/06-second-artifact.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "dark__390x844/01-library.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": true,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "dark__390x844/02-editor.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "dark__390x844/03-confirm-open.png",
+    "dom": {
+      "url": "/space",
+      "dialog": "删除「[CI FIXTURE] Website」？删除后不能恢复。取消确认",
+      "dialogLabel": "remove-artifact-question",
+      "focused": "BUTTON",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "dark__390x844/04-cancelled.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "remove-artifact",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "dark__390x844/05-back-to-list.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "remove-artifact",
+      "editorHidden": true,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  },
+  {
+    "shot": "dark__390x844/06-second-artifact.png",
+    "dom": {
+      "url": "/space",
+      "dialog": null,
+      "dialogLabel": null,
+      "focused": "BODY",
+      "editorHidden": false,
+      "listRows": [
+        "[CI FIXTURE] Whiteboard",
+        "[CI FIXTURE] Media",
+        "[CI FIXTURE] 周报",
+        "[CI FIXTURE] Website",
+        "[CI FIXTURE] Saved chat message",
+        "[CI FIXTURE] Document"
+      ],
+      "secretRows": [],
+      "title": "作品库 · OpenTeamily"
+    }
+  }
+]
