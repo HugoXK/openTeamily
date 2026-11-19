@@ -140,6 +140,7 @@ FOLLOW_WORK = '''
  FROM social_follow_work_notifications n
  JOIN artifact_discover d ON d.artifact_id=n.artifact_id AND d.listed=1
  JOIN users a ON a.id=n.actor_id
+ JOIN discover_follows f ON f.follower_id=n.user_id AND f.creator_id=n.actor_id
  WHERE n.user_id=?
 '''
 
@@ -197,8 +198,9 @@ def set_follow_work(db, follower_id, creator_id, enabled, now):
 
 def deliver_follow_work(db, artifact_id, slug, title, creator_id, now):
     """One unread item per subscribed follower when a work becomes publicly listed."""
-    subs = db.execute('SELECT follower_id FROM social_follow_work_subs '
-                      'WHERE creator_id=? AND enabled=1 AND follower_id<>?',
+    subs = db.execute('SELECT s.follower_id FROM social_follow_work_subs s '
+                      'JOIN discover_follows f ON f.follower_id=s.follower_id AND f.creator_id=s.creator_id '
+                      'WHERE s.creator_id=? AND s.enabled=1 AND s.follower_id<>?',
                       (creator_id, creator_id)).fetchall()
     if not subs:
         return 0

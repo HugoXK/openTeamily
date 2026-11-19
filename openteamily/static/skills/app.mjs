@@ -1,3 +1,4 @@
+import { mountSkillExecution } from './execution.mjs';
 import { csrfCookie } from '../agents/app.mjs';
 // Original content packages are loaded from the authenticated catalogue; no fake page-local installation.
 
@@ -18,14 +19,16 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
   const scope = document.getElementById('skills-scope');
   const permission = document.getElementById('skills-permission');
   let catalogue = [], bindings = [], busy = false;
-  async function request(method,path,body) {
+  async function request(method,path,body,key) {
     const csrf = csrfCookie(document.cookie);
-    const result = await fetcher(path,{method, credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:body ? JSON.stringify(body) : undefined});
+    const result = await fetcher(path,{method, credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf,...(key ? {'Idempotency-Key':key} : {})},body:body ? JSON.stringify(body) : undefined});
     const data = await result.json();
     if (!result.ok && result.status !== 200) throw new Error(data.error?.message || '请求失败。');
     return data;
   }
+  const execution=mountSkillExecution(document,{request,scope});
   function render() {
+    execution.setSkills(catalogue,bindings);
     const matches = filterSkills(catalogue,input.value);
     list.replaceChildren();
     for (const skill of matches) {
@@ -54,7 +57,9 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
         } catch(e) {error.textContent=e.message || '网络错误，结果未知，请刷新检查。';}
         finally {busy=false;render();}
       });
-      item.append(mark,copy,button);list.append(item);
+      item.append(mark,copy,button);
+      if(binding){const use=document.createElement('button');use.type='button';use.textContent='使用技能';use.className='skill-use';use.addEventListener('click',()=>execution.selectSkill(skill.id));item.append(use);}
+      list.append(item);
     }
     const empty=document.getElementById('skills-empty');if(empty)empty.hidden=matches.length>0;
     const count=document.getElementById('skills-count');if(count)count.textContent=skillCountLabel(matches.length,catalogue.length);
@@ -68,19 +73,18 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
         if(binding.scope==='account'||options.has(binding.scope))continue;
         const option=document.createElement('option');option.value=binding.scope;option.textContent='已绑定智能体（可撤销） · '+binding.scope.slice(-8);scope.append(option);options.set(binding.scope,option);
       }
-      const workspaces=(await request('GET','/v1/workspaces')).items || [];
-      for (const workspace of workspaces) {
-        const agents=(await request('GET',`/v1/workspaces/${workspace.id}/agents?limit=100`)).items || [];
-        for (const agent of agents) {
-          if(agent.archived)continue;
-          const value=workspace.id+':'+agent.id;
-          const option=options.get(value)||document.createElement('option');option.value=value;option.textContent=workspace.name+' / '+agent.name;if(!options.has(value)){scope.append(option);options.set(value,option);}
-        }
+      const scopes=(await request('GET','/v1/skills/scopes')).items || [];
+      for (const entry of scopes) {
+        if(entry.scope==='account')continue;
+        const option=options.get(entry.scope)||document.createElement('option');option.value=entry.scope;
+        option.textContent=(entry.kind==='automation'?'自动化 · ':'智能体 · ')+entry.label;
+        if(!options.has(entry.scope)){scope.append(option);options.set(entry.scope,option);}
       }
+      await execution.refresh();
     } catch(e) {error.textContent=e.message || '技能读取失败，请刷新重试。';}
   }
   input.addEventListener('input',render);
-  scope.addEventListener('change',() => {permission.checked=false;render();});
+  scope.addEventListener('change',() => {permission.checked=false;render();execution.refresh();});
   const ready=load();return {render,ready};
 }
 

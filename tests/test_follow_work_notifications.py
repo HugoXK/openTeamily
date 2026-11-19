@@ -115,3 +115,31 @@ class FollowWorkNotificationTests(unittest.TestCase):
         anon = Client(self.app, peer='127.0.0.9')
         self.assertEqual(anon.call('GET', self.switches)['status'], 401)
         self.assertEqual(anon.call('POST', self.switches, {'creator_id': self.alice_id, 'enabled': True})['status'], 401)
+
+    def test_switch_csrf_rejection_leaves_follow_work_disabled(self):
+        self.publish('csrf-follow-note')
+        self.follow('csrf-follow-note')
+        denied = self.bob.call('POST', self.switches,
+                               {'creator_id': self.alice_id, 'enabled': True}, csrf=False)
+        self.assertEqual(denied['status'], 403, denied)
+        self.assertFalse(self.bob.call('GET', self.switches)['body']['items'][0]['enabled'])
+        self.assertEqual(self.alice.call('GET', self.inbox)['status'], 404)
+
+    def test_unfollowing_stops_delivery_even_if_subscription_was_enabled(self):
+        self.publish('before-unfollow')
+        self.follow('before-unfollow')
+        self.assertEqual(self.switch(self.alice_id, True)['status'], 200)
+        self.follow('before-unfollow', enabled=False)
+        self.publish('after-unfollow', title='Post-unfollow work', key='after-unfollow-0001')
+        self.assertEqual(self.bob.call('GET', self.inbox)['body']['items'], [])
+
+    def test_unfollowing_hides_previously_delivered_work_and_unread_count(self):
+        self.publish('follow-visibility-first')
+        self.follow('follow-visibility-first')
+        self.assertEqual(self.switch(self.alice_id, True)['status'], 200)
+        self.publish('follow-visibility-second', title='Previously delivered', key='follow-visibility-0002')
+        self.assertEqual(self.bob.call('GET', self.inbox)['body']['unread_count'], 1)
+        self.follow('follow-visibility-first', enabled=False)
+        inbox = self.bob.call('GET', self.inbox)['body']
+        self.assertEqual(inbox['items'], [])
+        self.assertEqual(inbox['unread_count'], 0)
