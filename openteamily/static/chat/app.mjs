@@ -435,6 +435,10 @@ export function notificationBadgeText(count) {
 }
 
 export function notificationSummary(item) {
+  if (item.kind === 'follow_work') {
+    const author = item.actor_username || '你关注的作者';
+    return item.title ? `${author} 发布了新作品「${item.title}」` : '你关注的作者发布了新作品';
+  }
   const where = item.conversation_kind === 'dm' ? '单聊' : (item.conversation_title || '群聊');
   if (item.kind === 'agent_reply') {
     const outcome = {succeeded: '已完成', failed: '未能完成', cancelled: '已取消'}[item.status] || '已结束';
@@ -1109,8 +1113,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const items = body.items || [];
     list.replaceChildren(...items.map(item => {
       const li = document.createElement('li');
-      const button = document.createElement('button');
-      button.type = 'button';
+      const link = item.kind === 'follow_work' && item.path;
+      const button = document.createElement(link ? 'a' : 'button');
+      if (link) button.href = item.path;
+      else button.type = 'button';
       button.className = 'notification-item' + (item.read ? '' : ' is-unread');
       button.dataset.notification = item.id;
       const summary = document.createElement('strong'); summary.textContent = notificationSummary(item);
@@ -1119,6 +1125,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       button.append(summary, excerpt, time);
       button.addEventListener('click', async () => {
         const wid = workspaceId();
+        if (link) {
+          if (!item.read) request('POST', `/v1/workspaces/${wid}/notifications/read`, {notification_id: item.id});
+          setNotificationsOpen(false);
+          return;
+        }
         if (!item.read) await request('POST', `/v1/workspaces/${wid}/notifications/read`, {notification_id: item.id});
         if (workspaceId() !== wid) return;
         setNotificationsOpen(false);
