@@ -157,88 +157,134 @@ function mount() {
     ready.replaceChildren(document.createTextNode('可以开始了：'), link);
   }
 
+  async function judgeAgents(step, spaces) {
+    let total = 0;
+    let firstName = '';
+    let failed = false;
+    for (const space of spaces) {
+      const agents = await request('GET', '/v1/workspaces/' + space.id + '/agents?limit=100');
+      if (agents.status !== 200) {
+        failed = true;
+        continue;
+      }
+      const items = agents.body.items || [];
+      total += items.length;
+      if (!firstName && items.length && items[0].name) firstName = items[0].name;
+    }
+    if (total) {
+      step.state = 'done';
+      step.detail = '已有 ' + total + ' 个智能体' + (firstName ? '，其中「' + firstName + '」' : '') + '。';
+    } else if (failed) {
+      step.state = 'unknown';
+      step.detail = '读取智能体失败，暂时无法判断。';
+    } else {
+      step.state = 'pending';
+      step.detail = '还没有智能体：到智能体页创建一个。';
+    }
+  }
+
+  async function judgeAutomations(step, spaces) {
+    let automations = 0;
+    let runsKnown = false;
+    let ran = false;
+    let listFailed = false;
+    let runFailed = false;
+    for (const space of spaces) {
+      const listed = await request('GET', '/v1/workspaces/' + space.id + '/automations');
+      if (listed.status !== 200) {
+        listFailed = true;
+        continue;
+      }
+      const items = listed.body.items || [];
+      automations += items.length;
+      for (const item of items) {
+        const runs = await request('GET', '/v1/workspaces/' + space.id + '/automations/' + item.id + '/runs?limit=20');
+        if (runs.status !== 200) {
+          runFailed = true;
+          continue;
+        }
+        runsKnown = true;
+        if ((runs.body.items || []).some(run => run.status === 'succeeded' || run.status === 'failed')) {
+          ran = true;
+        }
+      }
+      if (ran) break;
+    }
+    if (ran) {
+      step.state = 'done';
+      step.detail = '已经有自动化执行记录。';
+    } else if (!automations) {
+      if (listFailed) {
+        step.state = 'unknown';
+        step.detail = '读取自动化失败，暂时无法判断。';
+      } else {
+        step.state = 'pending';
+        step.detail = '还没有自动化：到自动化页创建一条。';
+      }
+    } else if (!runsKnown && runFailed) {
+      step.state = 'unknown';
+      step.detail = '读取运行记录失败，暂时无法判断。';
+    } else {
+      step.state = 'pending';
+      step.detail = '自动化还没有执行过：到自动化页跑一次。';
+    }
+  }
+
+  async function judgeRuntime(step) {
+    const runtimes = await request('GET', '/v1/runtime/connections');
+    if (runtimes.status !== 200) {
+      step.detail = '读取运行时失败，暂时无法判断。';
+      return;
+    }
+    const items = runtimes.body.items || [];
+    const online = items.filter(item => item.status === 'online').length;
+    if (online) {
+      step.state = 'done';
+      step.detail = '已有 ' + online + ' 个运行时在线。';
+    } else if (items.length) {
+      step.state = 'pending';
+      step.detail = '运行时当前离线：重新启动它就能继续。';
+    } else {
+      step.state = 'pending';
+      step.detail = '还没有连接运行时：到运行时页按提示连接。';
+    }
+  }
+
+  async function judgeChecklist(steps) {
+    const listed = await request('GET', '/v1/workspaces?limit=100');
+    const spaces = listed.status === 200 ? (listed.body.items || []) : [];
+    if (listed.status !== 200) {
+      steps[0].detail = '读取工作区失败，需要登录一个有权限的账号才能判断。';
+      steps[2].detail = '读取工作区失败，需要登录一个有权限的账号才能判断。';
+    } else if (!spaces.length) {
+      steps[0].detail = '需要你先创建工作区才能判断。';
+      steps[2].detail = '需要你先创建工作区才能判断。';
+    } else {
+      // Every workspace counts: a second workspace may hold the agent and the
+      // finished run, so judging only the first one would report "还没有" for a
+      // user who already has them.
+      await judgeAgents(steps[0], spaces);
+      await judgeAutomations(steps[2], spaces);
+    }
+    await judgeRuntime(steps[1]);
+  }
+
   async function loadChecklist() {
     const steps = [
       {title: '建智能体', state: 'unknown', detail: ''},
       {title: '连运行时', state: 'unknown', detail: ''},
       {title: '跑一次自动化', state: 'unknown', detail: ''},
     ];
-    let space = null;
-    const listed = await request('GET', '/v1/workspaces?limit=100');
-    if (listed.status !== 200) {
-      steps[0].detail = '读取工作区失败，需要登录一个有权限的账号才能判断。';
-      steps[2].detail = '读取工作区失败，需要登录一个有权限的账号才能判断。';
-    } else {
-      space = (listed.body.items || [])[0] || null;
-      if (!space) {
-        steps[0].detail = '需要你先创建工作区才能判断。';
-        steps[2].detail = '需要你先创建工作区才能判断。';
-      }
-    }
-    if (space) {
-      const agents = await request('GET', '/v1/workspaces/' + space.id + '/agents?limit=100');
-      if (agents.status !== 200) {
-        steps[0].detail = '读取智能体失败，暂时无法判断。';
-      } else {
-        const items = agents.body.items || [];
-        if (items.length) {
-          steps[0].state = 'done';
-          const name = items[0].name ? '「' + items[0].name + '」' : '';
-          steps[0].detail = '已有 ' + items.length + ' 个智能体' + (name ? '，其中' + name : '') + '。';
-        } else {
-          steps[0].state = 'pending';
-          steps[0].detail = '还没有智能体：到智能体页创建一个。';
-        }
-      }
-    }
-    const runtimes = await request('GET', '/v1/runtime/connections');
-    if (runtimes.status !== 200) {
-      steps[1].detail = '读取运行时失败，暂时无法判断。';
-    } else {
-      const items = runtimes.body.items || [];
-      const online = items.filter(item => item.status === 'online').length;
-      if (online) {
-        steps[1].state = 'done';
-        steps[1].detail = '已有 ' + online + ' 个运行时在线。';
-      } else if (items.length) {
-        steps[1].state = 'pending';
-        steps[1].detail = '运行时当前离线：重新启动它就能继续。';
-      } else {
-        steps[1].state = 'pending';
-        steps[1].detail = '还没有连接运行时：到运行时页按提示连接。';
-      }
-    }
-    if (space) {
-      const listed = await request('GET', '/v1/workspaces/' + space.id + '/automations');
-      if (listed.status !== 200) {
-        steps[2].detail = '读取自动化失败，暂时无法判断。';
-      } else {
-        const items = listed.body.items || [];
-        if (!items.length) {
-          steps[2].state = 'pending';
-          steps[2].detail = '还没有自动化：到自动化页创建一条。';
-        } else {
-          let known = false;
-          let ran = false;
-          for (const item of items) {
-            const runs = await request('GET', '/v1/workspaces/' + space.id + '/automations/' + item.id + '/runs?limit=20');
-            if (runs.status !== 200) continue;
-            known = true;
-            if ((runs.body.items || []).some(run => run.status === 'succeeded' || run.status === 'failed')) {
-              ran = true;
-              break;
-            }
-          }
-          if (!known) {
-            steps[2].detail = '读取运行记录失败，暂时无法判断。';
-          } else if (ran) {
-            steps[2].state = 'done';
-            steps[2].detail = '已经有自动化执行记录。';
-          } else {
-            steps[2].state = 'pending';
-            steps[2].detail = '自动化还没有执行过：到自动化页跑一次。';
-          }
-        }
+    try {
+      await judgeChecklist(steps);
+    } catch {
+      // A thrown request must not leave the block blank: keep the three rows,
+      // say why they are unknown, and never tick them. A transport failure also
+      // means later requests cannot be trusted, so nothing else is judged here.
+      for (const step of steps) {
+        if (step.state === 'done') continue;
+        step.state = 'unknown';
+        if (!step.detail) step.detail = '读取时出错，暂时无法判断。';
       }
     }
     renderChecklist(steps);
@@ -260,7 +306,7 @@ function mount() {
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = session.body.user.username;
     document.getElementById('whoami').dataset.username = session.body.user.username;
-    loadChecklist();
+    await loadChecklist();
     const result = await request('GET', '/v1/onboarding');
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法读取工作背景。'));
