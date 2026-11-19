@@ -57,7 +57,7 @@
   <section id="login-panel" hidden>
     <h2>登录</h2>
     <form id="login-form" method="post" action="/v1/auth/login">
-      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>用户名 <input type="text" id="username" name="username" required autocomplete="username" maxlength="64"></label>
       <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
       <button type="submit">登录</button>
     </form>
@@ -98,6 +98,7 @@
           <div class="meeting-actions">
             <button type="submit" id="save-meeting">保存</button>
             <button type="button" id="cancel-meeting" class="secondary">取消</button>
+            <a id="export-meeting" class="secondary" download hidden>导出 Markdown</a>
             <button type="button" id="remove-meeting" class="secondary" hidden>删除</button>
           </div>
         </form>

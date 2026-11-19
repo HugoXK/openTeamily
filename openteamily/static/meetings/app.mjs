@@ -256,6 +256,11 @@ function mount() {
     actions = meeting ? (meeting.action_items || []).map(item => ({...item})) : [];
     renderActions();
     document.getElementById('remove-meeting').hidden = !meeting || !meeting.id;
+    const exportLink = document.getElementById('export-meeting');
+    if (exportLink) {
+      exportLink.hidden = !meeting || !meeting.id;
+      exportLink.href = meeting && meeting.id ? `${base()}/${meeting.id}/export` : '#';
+    }
     document.getElementById('meeting-meta').textContent = meeting && meeting.id
       ? '修订 ' + meeting.revision + ' · 创建者 ' + meeting.created_by : '新会议';
     renderList();
