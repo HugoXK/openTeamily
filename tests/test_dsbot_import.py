@@ -15,14 +15,19 @@ class FakeRunner:
         self.calls = []
         self.running = True
         self.files = set()
+        self.unreadable = set()
 
     def run(self, args, heartbeat=lambda: None, timeout=10):
         self.calls.append(args)
         if args[:3] == ['inspect', '-f', '{{.State.Running}}']:
             return ('true\n' if self.running else 'false\n'), ''
-        if args[0] == 'exec' and 'test' in args and '-f' in args:
-            marker = args[-1]
-            if marker in self.files:
+        if 'check-delivery' in args:
+            marker, bundle = args[-2:]
+            if marker in self.files and bundle not in self.unreadable:
+                return '', ''
+            raise ManagerError('exec_failed')
+        if args[0] == 'exec' and args[-3:-1] == ['test', '-r']:
+            if args[-1] in self.files and args[-1] not in self.unreadable:
                 return '', ''
             raise ManagerError('exec_failed')
         if args[0] == 'exec' and args[-2:] == ['-p', '/data/openteamily/import']:
@@ -30,6 +35,7 @@ class FakeRunner:
         if args[0] == 'cp':
             dest = args[-1].split(':', 1)[-1]
             self.files.add(dest)
+            self.unreadable.discard(dest)
             return '', ''
         if args[0] == 'exec' and 'chown' in args:
             return '', ''
@@ -79,7 +85,8 @@ class ImportJobTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
 
-    def test_writes_bundles_once_and_reuses_the_seal_key(self):
+    @mock.patch('openteamily.manager.dsbot_import.os.fchown')
+    def test_writes_bundles_once_and_reuses_the_seal_key(self, _chown):
         engine, client = FakeEngine(self.tmp.name), FakeClient()
         iid = '1' * 32
         first = dsbot_import.deliver(engine, client, iid)
@@ -93,6 +100,20 @@ class ImportJobTests(unittest.TestCase):
         again = dsbot_import.deliver(engine, client, iid)
         self.assertEqual(again['status'], 'already-imported')
         self.assertFalse(any(c[0] == 'cp' for c in engine.runner.calls))
+
+    @mock.patch('openteamily.manager.dsbot_import.os.fchown')
+    def test_redelivers_unreadable_bundles_with_legacy_markers(self, _chown):
+        engine, client = FakeEngine(self.tmp.name), FakeClient()
+        iid = '1' * 32
+        dsbot_import.deliver(engine, client, iid)
+        bundle = '/data/openteamily/import/agents-v1.bundle'
+        engine.runner.unreadable.add(bundle)
+        engine.runner.files.remove('/data/openteamily/import/automations-v1.bundle')
+        engine.runner.calls.clear()
+        retry = dsbot_import.deliver(engine, client, iid)
+        self.assertEqual(retry['features'], ['agents-v1.bundle'])
+        self.assertNotIn(bundle, engine.runner.unreadable)
+        self.assertEqual(dsbot_import.deliver(engine, client, iid)['status'], 'already-imported')
 
     def test_refuses_when_the_runtime_is_down(self):
         engine, client = FakeEngine(self.tmp.name), FakeClient()

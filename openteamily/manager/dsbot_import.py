@@ -38,9 +38,16 @@ def deliver(engine, client, iid, heartbeat=lambda: None):
     inspect, _ = engine.runner.run(['inspect', '-f', '{{.State.Running}}', container], heartbeat=heartbeat, timeout=10)
     require(inspect.strip() == 'true', 'instance_not_running')
     def delivered(name):
+        bundle = f'/data/openteamily/import/{name}-v{VERSION}.bundle'
         marker = f'/data/openteamily/import/.delivered-{name}-v{VERSION}'
         try:
-            engine.runner.run(['exec', '-u', '1000:1000', container, 'test', '-f', marker], heartbeat=heartbeat, timeout=10)
+            # Older managers could mark a root-owned bundle as delivered.
+            # An absent bundle was already consumed, but an unreadable one must be recopied.
+            engine.runner.run(
+                ['exec', '-u', '1000:1000', container, 'sh', '-c',
+                 'test -f "$1" && { test ! -e "$2" || test -r "$2"; }',
+                 'check-delivery', marker, bundle],
+                heartbeat=heartbeat, timeout=10)
             return True
         except ManagerError:
             return False
