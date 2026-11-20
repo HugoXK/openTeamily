@@ -84,3 +84,19 @@ test('skills are native DS-Bot capabilities attached to the Main Bot', async () 
     assert.equal(bot.capabilities.includes('ot-user-skill-weekly-review'), false)
   } finally { detachRuntime() }
 })
+
+test('legacy history import is idempotent and keeps ids', async () => {
+  const table = await load()
+  const c = 'a'.repeat(32)
+  const payload = { conversations: [{ id: c, title: 'Old chat', created: 1700000000, updated: 1700000100,
+    messages: [{ id: 'b'.repeat(32), role: 'user', body: 'hi', created: 1700000000 }, { id: 'c'.repeat(32), role: 'assistant', body: 'hello', created: 1700000001 },
+      { id: 'bad', role: 'user', body: 'x' }] }] }
+  assert.deepEqual(await table['chat/import'](payload), { conversations: 1, messages: 2, done: false })
+  assert.deepEqual(await table['chat/import'](payload), { conversations: 0, messages: 0, done: false })
+  assert.equal((await table['chat/importStatus']()).done, false)
+  await table['chat/import']({ conversations: [], finish: true })
+  assert.equal((await table['chat/importStatus']()).done, true)
+  const history = await table['chat/messages']({ conversation_id: c })
+  assert.deepEqual(history.items.map((m) => [m.role, m.text, m.created]), [['user', 'hi', 1700000000000], ['assistant', 'hello', 1700000001000]])
+  await assert.rejects(table['chat/import']({ conversations: [{ id: 'nope' }] }), { code: 'chat/invalid' })
+})

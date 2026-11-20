@@ -9,7 +9,10 @@ CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, title TEXT NOT NU
 CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK(role IN ('user','assistant')), text TEXT NOT NULL, created INTEGER NOT NULL, meta TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id, created, id);
+CREATE TABLE IF NOT EXISTS chat_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `
+const ms = (value) => { const n = Number(value) || 0; return n > 0 && n < 1e12 ? Math.round(n * 1000) : Math.round(n) }
+const clip = (value, max) => String(value ?? '').slice(0, max)
 const ID = /^[0-9a-f]{32}$/
 const now = () => Date.now()
 
@@ -72,6 +75,43 @@ export default function chat(host) {
         await conversation(payload?.conversation_id)
         const rows = (await database()).prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY created, id').all(payload.conversation_id)
         return { items: rows.map((r) => ({ ...r, meta: JSON.parse(r.meta) })) }
+      },
+      // One-time copy of this user's own platform chat history (the browser reads it
+      // with the user's session and hands it to their own DS-Bot). Idempotent: legacy
+      // ids are kept, so re-sending the same rows changes nothing.
+      async importStatus() {
+        const row = (await database()).prepare("SELECT value FROM chat_state WHERE key='legacy_import'").get()
+        return row ? JSON.parse(row.value) : { done: false }
+      },
+      async import(payload) {
+        const d = await database()
+        const list = Array.isArray(payload?.conversations) ? payload.conversations : []
+        if (list.length > 100) fail('chat/invalid', 'at most 100 conversations per call')
+        let conversations = 0
+        let messages = 0
+        d.exec('BEGIN')
+        try {
+          for (const c of list) {
+            if (typeof c?.id !== 'string' || !ID.test(c.id)) fail('chat/invalid', 'conversation id must be 32 hex')
+            const items = Array.isArray(c.messages) ? c.messages.slice(0, 2000) : []
+            const created = ms(c.created) || now()
+            const updated = Math.max(ms(c.updated) || created, ...items.map((m) => ms(m?.created)))
+            conversations += Number(d.prepare('INSERT OR IGNORE INTO conversations VALUES(?,?,?,?)')
+              .run(c.id, clip(c.title, 120).trim() || 'Imported chat', created, updated).changes)
+            for (const m of items) {
+              if (typeof m?.id !== 'string' || !ID.test(m.id) || !['user', 'assistant'].includes(m.role)) continue
+              const text = clip(m.body, 20000)
+              if (!text.trim()) continue
+              messages += Number(d.prepare("INSERT OR IGNORE INTO messages VALUES(?,?,?,?,?,?)")
+                .run(m.id, c.id, m.role, text, ms(m.created) || created, JSON.stringify({ imported: 'platform' })).changes)
+            }
+          }
+          if (payload?.finish === true) {
+            d.prepare("INSERT OR REPLACE INTO chat_state VALUES('legacy_import', ?)").run(JSON.stringify({ done: true, at: now() }))
+          }
+          d.exec('COMMIT')
+        } catch (error) { d.exec('ROLLBACK'); throw error }
+        return { conversations, messages, done: payload?.finish === true }
       },
       async send(payload) {
         const convo = await conversation(payload?.conversation_id)
