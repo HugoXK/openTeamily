@@ -347,7 +347,7 @@ class GatewayTest(unittest.TestCase):
     def test_manager_import_bundles_are_scoped_to_the_granted_owner(self):
         import io
         token = secrets.token_urlsafe(32)
-        self.app.manager_auth = ManagerAuth([ManagerIdentity('manager-a', digest(token), frozenset({'1' * 32}), 'compose')])
+        self.app.manager_auth = ManagerAuth([ManagerIdentity('manager-a', digest(token), frozenset({'1' * 32, '3' * 32}), 'compose')])
         seal = 'ab' * 32
         raw = json.dumps({'seal_key': seal}).encode()
 
@@ -370,6 +370,16 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(post('2' * 32)[0], 403)
         self.assertEqual(post('1' * 32, tok='x' * 43)[0], 401)
         self.assertEqual(post('1' * 32, body=json.dumps({'seal_key': '00'}).encode())[0], 400)
+        with self.store.transaction() as db:
+            db.execute("INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,"
+                       "desired,revision,operation_id,operation_type,observed,observed_revision,health,create_key,created) "
+                       "VALUES(?,?,?,'p','compose','img','legacy-volume','running',1,'op','create','running',1,'healthy','legacy',0)",
+                       ('3' * 32, '0' * 32, 'a' * 32))
+            db.execute('INSERT INTO runtime_auto_provisions VALUES(?,?,?,?,?,?)',
+                       ('a' * 32, '0' * 32, 'a' * 32, '1' * 32, 'manager-a', 1))
+        status, rejected = post('3' * 32)
+        self.assertEqual((status, rejected['error']['code']), (409, 'import_destination'))
+        self.assertEqual(post('1' * 32)[0], 200)
 
 if __name__ == '__main__':
     unittest.main()

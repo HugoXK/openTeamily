@@ -429,6 +429,12 @@ class GatewayApp:
             row = db.execute('SELECT owner_id FROM instances WHERE id=?', (iid,)).fetchone()
             if row is None or not Lifecycle.grants(db, manager, iid):
                 raise GatewayError(403, 'not_granted')
+            try:
+                destination = owned_instance(db, row[0])
+            except RuntimeFault as error:
+                raise GatewayError(409, 'import_destination') from error
+            if destination != iid:
+                raise GatewayError(409, 'import_destination')
             features = []
             for feature in dsbot_bundle.FEATURE_TABLES:
                 bundle = dsbot_bundle.build_with_secrets(db, self.store, row[0], feature, seal, int(self.clock()))

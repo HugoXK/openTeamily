@@ -280,7 +280,7 @@ class Runner:
             self.home.mkdir(mode=0o700)
         trusted_path(str(self.home), directory=True, private=True)
 
-    def run(self, args, *, heartbeat=lambda: None, timeout=10):
+    def run(self, args, *, heartbeat=lambda: None, timeout=10, stdin=subprocess.DEVNULL):
         require(self.enabled is True and self.registry.config['execution_enabled'] is True, 'execution_disabled')
         require(type(timeout) in (int, float) and 0 < timeout <= 60, 'command_timeout')
         cfg = self.registry.config
@@ -296,7 +296,7 @@ class Runner:
         heartbeat()  # do not spawn anything after lost lease
         deadline = time.monotonic() + timeout
         out, err = bytearray(), bytearray()
-        proc = subprocess.Popen(argv, cwd=self.registry.root, env=env, shell=False, stdin=subprocess.DEVNULL,
+        proc = subprocess.Popen(argv, cwd=self.registry.root, env=env, shell=False, stdin=stdin,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, close_fds=True)
         try:
             with selectors.DefaultSelector() as selector:
