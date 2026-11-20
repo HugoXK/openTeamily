@@ -250,7 +250,19 @@ for (const tab of tabs) tab.addEventListener('click', () => {
 });
 search.addEventListener('input', render);
 retry.addEventListener('click', () => void load());
+byId('logout-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  try {
+    await request('/v1/auth/logout', {});
+    location.assign('/login');
+  } catch (error) {
+    notify(error.message, true);
+  }
+});
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') void load();
 });
 void load();
+void request('/v1/auth/session').then(data => {
+  byId('whoami').textContent = data.user?.username || '';
+}).catch(() => {});
