@@ -671,7 +671,7 @@ def social_location(upstream):
     if not SOCIAL_UPSTREAM.fullmatch(upstream):
         raise ValueError('Invalid Bot Social upstream')
     return (
-        '  location = /social { return 308 /social/; }\n'
+        '  location = /social { absolute_redirect off; return 308 /social/; }\n'
         '  location ^~ /social/ {\n'
         f'    proxy_pass http://{upstream}/;\n'
         '    proxy_http_version 1.1;\n'

@@ -190,7 +190,7 @@ class GatewayTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             gw.nginx_config(routes, '127.0.0.1:8080', 8081, key='k' * 40, bot_social='http://bad')
         social = gw.nginx_config(routes, '127.0.0.1:8080', 8081, key='k' * 40, bot_social='bot-social:8787')
-        self.assertIn('location = /social { return 308 /social/; }', social)
+        self.assertIn('location = /social { absolute_redirect off; return 308 /social/; }', social)
         self.assertIn('location ^~ /social/', social)
         self.assertIn('proxy_pass http://bot-social:8787/;', social)
         self.assertIn('X-Forwarded-Prefix /social;', social)
