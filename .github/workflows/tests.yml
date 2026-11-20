@@ -28,6 +28,7 @@ jobs:
       - run: node --test tests/artifacts_page.test.mjs
       - run: node --test tests/automations_page.test.mjs
       - run: node --test tests/chat_auto_reply_ui.test.mjs
+      - run: node --test tests/chat_language.test.mjs
       - run: node --test tests/chat_page.test.mjs
       - run: node --test tests/chat_reminder.test.mjs
       - run: node --test tests/ci_test_list.test.mjs
@@ -53,6 +54,7 @@ jobs:
       - run: node --test tests/meetings_page.test.mjs
       - run: node --test tests/meetings_action_toggle.test.mjs
       - run: node --test tests/meetings_attendee_complete.test.mjs
+      - run: node --test tests/onboarding_page.test.mjs
       - run: node --test tests/agents_creator_filter.test.mjs
       - run: node --test tests/registration_page.test.mjs
       - run: node --test tests/workspace_events.test.mjs
