@@ -1,0 +1,1104 @@
+{
+  "slug": "ev463",
+  "reuse": {
+    "theme": "dsh-client-ui-theme — token names only: the page maps --dsw-alias-* (shellTokens in themes.js) and resolves our dark arm to documentElement.dataset.themeResolved=dark; body[data-ds-dark-theme] is set by the dsh host, absent in these standalone pages (fact darkAttr), so no parallel palette is invented",
+    "viewports": "none — dsh ships no px breakpoint constant (only prefers-reduced-motion/transparency); 1440x900 + 390x844 are the owner rule, kept as-is",
+    "hmr": "none — not needed for static before/after shots"
+  },
+  "generated_at": "2026-11-20T06:16:27.898Z",
+  "sides": [
+    {
+      "name": "before",
+      "ref": "f7fa182955a498344117d4f23b712b215a9c0a5f",
+      "url": "http://127.0.0.1:8101"
+    },
+    {
+      "name": "after",
+      "ref": "a1c5cc8b0e8afe59f676b877cc64d5115097c06b",
+      "url": "http://127.0.0.1:8102"
+    }
+  ],
+  "images": [
+    {
+      "arm": "before",
+      "file": "before/ev463__before__zh-CN__light__1440x900__chat.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "light",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 100634
+      },
+      "viewport_size_ok": true,
+      "sha256": "ed85b3c53319ed9a5c57e1d7904b08e15a7fbcbc2aed3b40b1766d8ad8d0c078",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 644,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev463__after__zh-CN__light__1440x900__chat.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "light",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 101391
+      },
+      "viewport_size_ok": true,
+      "sha256": "44faaf66c12efc42067a95465b7166620376604ad05cdda6c49d64c540d9096c",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 662,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 1,
+            "visible": true,
+            "text": "Auto\nInstant\nAgentic",
+            "disabled": false,
+            "rect": {
+              "x": 764,
+              "y": 801,
+              "w": 128,
+              "h": 23
+            }
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 3,
+            "visible": false,
+            "text": "Auto",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev463__before__zh-CN__dark__1440x900__chat.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 132481
+      },
+      "viewport_size_ok": true,
+      "sha256": "cd962c4ae3e70942e09d814bf26f1f26efcdad7f54be1e98a82e30fae2ab9657",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 644,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev463__after__zh-CN__dark__1440x900__chat.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 132991
+      },
+      "viewport_size_ok": true,
+      "sha256": "1a3b7d5b1731a25ae1cf6e823b7c3c3c7a38ec6de2c5274dd66adab9746601d3",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 662,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 1,
+            "visible": true,
+            "text": "Auto\nInstant\nAgentic",
+            "disabled": false,
+            "rect": {
+              "x": 764,
+              "y": 791,
+              "w": 128,
+              "h": 38
+            }
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 3,
+            "visible": false,
+            "text": "Auto",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev463__before__en__light__1440x900__chat.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "en",
+      "theme": "light",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 100635
+      },
+      "viewport_size_ok": true,
+      "sha256": "5624817817b2d890fa84b022791e588c9939616baf6df3bb231639259b2c5505",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 644,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev463__after__en__light__1440x900__chat.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "en",
+      "theme": "light",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 101396
+      },
+      "viewport_size_ok": true,
+      "sha256": "bca867a84c7777535e76a82a39c37a5443648094cc3c348f07f8c1f120675905",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 662,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 1,
+            "visible": true,
+            "text": "Auto\nInstant\nAgentic",
+            "disabled": false,
+            "rect": {
+              "x": 764,
+              "y": 801,
+              "w": 128,
+              "h": 23
+            }
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 3,
+            "visible": false,
+            "text": "Auto",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev463__before__en__dark__1440x900__chat.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "en",
+      "theme": "dark",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 132481
+      },
+      "viewport_size_ok": true,
+      "sha256": "cd962c4ae3e70942e09d814bf26f1f26efcdad7f54be1e98a82e30fae2ab9657",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 644,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev463__after__en__dark__1440x900__chat.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "en",
+      "theme": "dark",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 132991
+      },
+      "viewport_size_ok": true,
+      "sha256": "1a3b7d5b1731a25ae1cf6e823b7c3c3c7a38ec6de2c5274dd66adab9746601d3",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 662,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 1,
+            "visible": true,
+            "text": "Auto\nInstant\nAgentic",
+            "disabled": false,
+            "rect": {
+              "x": 764,
+              "y": 791,
+              "w": 128,
+              "h": 38
+            }
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 3,
+            "visible": false,
+            "text": "Auto",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev463__before__zh-CN__light__390x844__chat.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "zh-CN",
+      "theme": "light",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 46110
+      },
+      "viewport_size_ok": true,
+      "sha256": "da3f278a5f5c55d3162ba9d102d84d336afe09e8ab18d5ab8fb2c2545364b4c5",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 351,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev463__after__zh-CN__light__390x844__chat.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "zh-CN",
+      "theme": "light",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 46110
+      },
+      "viewport_size_ok": true,
+      "sha256": "da3f278a5f5c55d3162ba9d102d84d336afe09e8ab18d5ab8fb2c2545364b4c5",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 351,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 1,
+            "visible": false,
+            "text": "AutoInstantAgentic",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 3,
+            "visible": false,
+            "text": "Auto",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev463__before__zh-CN__dark__390x844__chat.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 55277
+      },
+      "viewport_size_ok": true,
+      "sha256": "fc8d847156f7767a94bc1ece840f42ab10125899a8e00f2e7c5a7c8fa9dfefca",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 351,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev463__after__zh-CN__dark__390x844__chat.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 55278
+      },
+      "viewport_size_ok": true,
+      "sha256": "48cd3dc5b53d507fff4609fcacc89f3fc61251f8d6dcb20d55befba021ab9621",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 351,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 1,
+            "visible": false,
+            "text": "AutoInstantAgentic",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 3,
+            "visible": false,
+            "text": "Auto",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev463__before__en__light__390x844__chat.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "en",
+      "theme": "light",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 46110
+      },
+      "viewport_size_ok": true,
+      "sha256": "da3f278a5f5c55d3162ba9d102d84d336afe09e8ab18d5ab8fb2c2545364b4c5",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 351,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev463__after__en__light__390x844__chat.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "en",
+      "theme": "light",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 46110
+      },
+      "viewport_size_ok": true,
+      "sha256": "da3f278a5f5c55d3162ba9d102d84d336afe09e8ab18d5ab8fb2c2545364b4c5",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 351,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 1,
+            "visible": false,
+            "text": "AutoInstantAgentic",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 3,
+            "visible": false,
+            "text": "Auto",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev463__before__en__dark__390x844__chat.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "en",
+      "theme": "dark",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 55277
+      },
+      "viewport_size_ok": true,
+      "sha256": "fc8d847156f7767a94bc1ece840f42ab10125899a8e00f2e7c5a7c8fa9dfefca",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 351,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev463__after__en__dark__390x844__chat.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "en",
+      "theme": "dark",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 55277
+      },
+      "viewport_size_ok": true,
+      "sha256": "fc8d847156f7767a94bc1ece840f42ab10125899a8e00f2e7c5a7c8fa9dfefca",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI 搜索 + 工作区 CI Fixture Team [CI FIXTURE] Empty library 个人空间 实时更新已连接（非模型逐字推送）。 重连更新 cifixture 对话 · 3 C [CI FIXTURE] Directory assistant [",
+        "textLength": 351,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "#composer-mode",
+            "count": 1,
+            "visible": false,
+            "text": "AutoInstantAgentic",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#composer-mode option",
+            "count": 3,
+            "visible": false,
+            "text": "Auto",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#chat-invite",
+            "count": 1,
+            "visible": false,
+            "text": "邀请",
+            "disabled": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n"
+      ]
+    }
+  ],
+  "failures": [],
+  "arms": {
+    "before": {
+      "ref": "f7fa182955a498344117d4f23b712b215a9c0a5f",
+      "count": 8
+    },
+    "after": {
+      "ref": "a1c5cc8b0e8afe59f676b877cc64d5115097c06b",
+      "count": 8
+    }
+  },
+  "grid": {
+    "viewports": [
+      "1440x900",
+      "390x844"
+    ],
+    "locales": [
+      "zh-CN",
+      "en"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ]
+  }
+}
