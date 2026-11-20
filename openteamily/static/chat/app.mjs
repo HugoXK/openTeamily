@@ -340,7 +340,7 @@ export function sendNotice(reply) {
   if (code === 'runtime_starting') return {kind: 'ok', text: '消息已保存。' + RUNTIME_WAIT_ERRORS[code] + '。'};
   if (RUNTIME_WAIT_ERRORS[code]) return {kind: 'error', text: '消息已保存。' + RUNTIME_WAIT_ERRORS[code] + '。'};
   if (reply?.status === 'failed') return {kind: 'error', text: '消息已保存，智能体回复失败。'};
-  return {kind: 'ok', text: '已发送。'};
+  return {kind: 'ok', text: '已发送。', announceOnly: true};
 }
 
 export function groupReplyStatus(reply) {
@@ -754,7 +754,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       if (voiceContext()?.scope === scope) {
         await openSocialConversation(cid);
-        show('ok', '语音已发送。');
+        show('ok', '语音已发送。', {announceOnly: true});
       }
     },
   });
@@ -823,8 +823,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
 
-  function show(kind, text) {
+  function show(kind, text, {announceOnly = false} = {}) {
     status.dataset.kind = kind;
+    status.dataset.announceOnly = String(announceOnly);
     status.textContent = text;
   }
 
@@ -3625,7 +3626,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         } else {
           void openSocialConversation(conversationId);
         }
-        show('ok', '已发送。');
+        show('ok', '已发送。', {announceOnly: true});
       } else {
         const reply = result.body.reply;
         if (result.body.message?.id && reply?.id) {
@@ -3634,7 +3635,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           void openAgentConversation(agentId, conversationId);
         }
         const notice = sendNotice(reply);
-        show(notice.kind, notice.text);
+        show(notice.kind, notice.text, notice);
       }
       void loadSessions();
     } catch {

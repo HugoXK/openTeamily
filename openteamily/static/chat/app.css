@@ -2,7 +2,8 @@
    visit (rail + ~350px session column + main canvas + bottom composer).
    Colors stay FlyBot tokens. Non-empty message bubbles are an original
    supplement and were not compared this round. */
-.visually-hidden {
+.visually-hidden,
+body.app-workspace > #status[data-announce-only="true"] {
   position: absolute;
   width: 1px;
   height: 1px;
