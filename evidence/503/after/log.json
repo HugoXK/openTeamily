@@ -1,0 +1,27 @@
+{
+ "origin": "http://127.0.0.1:18908",
+ "modules": {
+  "/chat/dsbot.mjs": 200,
+  "/shell/dsbot-skills.mjs": 200
+ },
+ "frames": [
+  {
+   "name": "zh-CN__light__1440x900__chat.png",
+   "workspaceOptions": 3,
+   "conversations": 1,
+   "listVisible": true
+  },
+  {
+   "name": "zh-CN__light__390x844__chat.png",
+   "workspaceOptions": 3,
+   "conversations": 1,
+   "listVisible": true
+  },
+  {
+   "name": "zh-CN__dark__1440x900__chat.png",
+   "workspaceOptions": 3,
+   "conversations": 1,
+   "listVisible": true
+  }
+ ]
+}
