@@ -1341,7 +1341,8 @@ class App:
         db.execute('INSERT OR REPLACE INTO skill_task_material VALUES(?,?,0)', (task['id'], json.dumps(skill_material, sort_keys=True)))
         runtime_connect.mark_access_issued(db, task['id'])
         runtime_connect.heartbeat(db, connection, now)
-        return 200, {'skills': skill_material, 'connected_tools': connected_tools.available(db, task['id']), 'model_api': {
+        chat = db.execute('SELECT conversation_id FROM agent_messages WHERE task_id=? LIMIT 1', (task['id'],)).fetchone()
+        return 200, {'conversation_id': chat['conversation_id'] if chat else None, 'skills': skill_material, 'connected_tools': connected_tools.available(db, task['id']), 'model_api': {
             **({'http_endpoint_grant': grant} if grant else {}),
             'provider': public['provider'],
             'base_url': public['base_url'],

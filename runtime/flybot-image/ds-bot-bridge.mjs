@@ -18,6 +18,8 @@
 //   on the server; every call still needs the owner's one-shot approval there.
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer, request as httpRequest } from 'node:http'
+import { readFileSync, writeFileSync, renameSync } from 'node:fs'
+import { join } from 'node:path'
 import { request as httpsRequest } from 'node:https'
 import { call, loadSkillMaterial, main as agentMain, toolBridge } from './agent-loop.mjs'
 import { streamHttpTask, validateModelEndpoint } from './model-http-policy.mjs'
@@ -229,6 +231,23 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
   let botId = null
   let skillNames = new Set()
   let toolsAttached = false
+  const chatsPath = join(env.DSH_HOME || '/data', 'openteamily-chats.json')
+  let chats
+  const loadChats = () => {
+    if (chats) return chats
+    try { chats = JSON.parse(readFileSync(chatsPath, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw error; chats = {} }
+    return chats
+  }
+  async function selectConversation(id) {
+    if (!id) return
+    const map = loadChats()
+    if (map[id]) { await rt.switchPart(botId, map[id]); return }
+    // Each OpenTeamily conversation gets a separate native DS-Bot chat/session.
+    await rt.newPart(rt.chatOf(botId))
+    map[id] = rt.chatOf(botId)
+    writeFileSync(chatsPath + '.tmp', JSON.stringify(map), { mode: 0o600 })
+    renameSync(chatsPath + '.tmp', chatsPath)
+  }
 
   async function setup() {
     try {
@@ -284,6 +303,7 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     state.active = active
     try {
       await ensureSetup()
+      await selectConversation(access.conversation_id)
       stage = 'skill verification/loading'
       const material = access.skills || []
       loadSkillMaterial(material, '')
@@ -307,9 +327,19 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
       try { turn = await runTurn(rt, ctx, botId, payload.prompt, requestId, Math.max(5000, Math.min(deadlineMs, 600000))) }
       finally { clearInterval(beat) }
       if (!active.modelCalls) throw new Error('DS-Bot turn did not use the OpenTeamily model')
+      // Read through DSH's native history API, not grep over its binary store.
+      let historyVerified = false
+      if (rt.eventsBackwards && rt.resolveAgent && ctx.sessions?.flush) {
+        const agent = await rt.resolveAgent(turn.sessionId)
+        await ctx.sessions.flush(agent.session)
+        for await (const event of rt.eventsBackwards(turn.sessionId, AbortSignal.timeout(5000), 3)) {
+          if (event.type === 'user/message' && event.data?.source?.rpcId === requestId) { historyVerified = true; break }
+        }
+        if (!historyVerified) throw new Error('DS-Bot persisted turn verification failed')
+      }
       return { text: turn.text.slice(0, RESULT_TEXT_LIMIT), model: active.modelApi?.model, source: active.modelApi?.source, engine: 'ds-bot',
         ds_bot: { bot_id: botId, session_id: turn.sessionId, request_id: requestId, turn_id: turn.turnId, model_calls: active.modelCalls,
-          tool_calls: active.toolCalls, skills, tools: active.tools.length } }
+          tool_calls: active.toolCalls, history_verified: historyVerified, skills, tools: active.tools.length } }
     } catch (error) {
       log('ds-bot-bridge: ' + stage + ' failed: ' + redact(error?.message || 'error'))
       throw Object.assign(new Error(stage), { stage })

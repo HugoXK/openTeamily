@@ -381,18 +381,15 @@ def main(argv):
         require(ds_bot.get('request_id') == 'ot:' + reply['task_id'] and ds_bot.get('session_id') and ds_bot.get('bot_id'),
                 'missing DS-Bot session evidence: %r' % result, secrets)
         require(ds_bot.get('model_calls', 0) >= 1, 'DS-Bot turn made no model call: %r' % result, secrets)
-        # DS-Bot evidence 2: DS-Bot's own session store holds the user turn.
-        stored = docker(['exec', name, 'grep', '-rl', '--include=*', ds_bot['request_id'], '/data'],
-                        allow_failure=True, secrets=secrets)
-        require(stored.returncode == 0 and stored.stdout.strip(), 'DS-Bot session store has no record of the turn', secrets)
+        require(ds_bot.get('history_verified') is True, 'DS-Bot native persisted history did not verify the request', secrets)
         # DS-Bot evidence 3: the model saw a DS-Bot-built request (system prompt + DS-Bot tools),
         # streamed through the loopback proxy, which rewrote the model name.
         dsbot_requests = [r for r in RECEIVED if r['stream'] and r['tools'] > 0 and r['system_chars'] > 200]
         require(dsbot_requests, 'model never received a DS-Bot request: %r' % RECEIVED, secrets)
         require(all(r['model'] == 'fake-model' for r in RECEIVED), 'proxy did not enforce the model: %r' % RECEIVED, secrets)
-        print('DS-Bot evidence: bot=%s session=%s request=%s model_calls=%s tools_in_request=%s stored_in=%s' % (
+        print('DS-Bot evidence: bot=%s session=%s request=%s model_calls=%s tools_in_request=%s history_verified=%s' % (
             ds_bot.get('bot_id'), ds_bot.get('session_id'), ds_bot.get('request_id'), ds_bot.get('model_calls'),
-            dsbot_requests[0]['tools'], stored.stdout.strip().splitlines()[0]))
+            dsbot_requests[0]['tools'], ds_bot.get('history_verified')))
         logs = docker(['logs', name], allow_failure=True, secrets=secrets)
         combined = (logs.stdout or '') + '\n' + (logs.stderr or '')
         require(runtime_key['token'] not in combined, 'runtime token appeared in container logs')
