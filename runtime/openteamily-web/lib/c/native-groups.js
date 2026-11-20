@@ -62,6 +62,13 @@ export function nativeGroupClient(host, raw) {
     rt.updateRoom = async (id, patch, ...rest) => {
       const cid = roomFor(id)
       if (!cid) return originalUpdate(id, patch, ...rest)
+      patch = Object.fromEntries(Object.entries(patch).filter(([,v]) => v !== undefined))
+      if (patch.members) {
+        const previous = rt.roomOf(id).members || []
+        patch.add = patch.members.filter(bid => !previous.includes(bid))
+        patch.remove = previous.filter(bid => !patch.members.includes(bid))
+        delete patch.members
+      }
       const allowed = new Set(['name','add','remove','notice'])
       if (Object.keys(patch).some(k => !allowed.has(k))) throw new Error('Change shared group settings in OpenTeamily; unsupported native changes are not applied locally')
       const base = '/v1/ot/conversations/' + encodeURIComponent(cid)
@@ -80,7 +87,7 @@ export function nativeGroupClient(host, raw) {
         await raw.post(base + '/announcement', { body: patch.notice, revision: current.announcement.revision })
       }
       const result = await sync(await raw.get(base))
-      return rt.roomOf(result.native_room_id)
+      return { room: rt.roomOf(result.native_room_id), changes: [] }
     }
     const originalDelete = rt.deleteRoom.bind(rt)
     rt.deleteRoom = async id => {
