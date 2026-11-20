@@ -10,6 +10,7 @@
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/settings/app.mjs"></script>
   <script type="module" src="/settings/connected-tools.mjs"></script>
+  <script type="module" src="/settings/custom-mcp.mjs"></script>
 </head>
 <body class="app-workspace">
   <a class="skip-link" href="#main">跳到主要内容</a>
@@ -931,15 +932,23 @@
           </li>
         </ul>
         <p id="connectors-empty" class="settings-card settings-empty" hidden>没有匹配的应用。</p>
-        <p class="note">下列 39 项来自仓内 DS-Bot 开源基线目录，不是对照里约 60 项的第三方清单。名称保留官方英文，简述沿用基线原文一句。这里用首字母占位，不复制第三方标志，也不假装已连上任何账号。每项都是未连接；「连接」保持禁用，因为还没有连接器后端或账号授权接口，不会真连。搜索框按名称、简介或 id 过滤本页目录；没有匹配时显示空态。分类筛选、接通后的排序和真实账号状态未经对照核实，本页没有做。「添加 MCP 服务器」只打开对照里的说明弹层；「知道了」关闭说明，不会添加或连接服务器。OpenTeamily 还没有 MCP 接入接口。</p>
+        <section class="composio-key-card" id="custom-mcp-card">
+          <h2>自定义 MCP 服务器 · 仅当前账号</h2>
+          <p>公开 HTTPS:443 Streamable HTTP；不支持本地命令、私网、重定向或 URL 查询参数。凭据仅加密保存在管理服务，不会交给 DS-Bot。每次工具调用（包括读取）都需要在上方逐次确认。</p>
+          <div id="custom-mcp-list" aria-live="polite"></div>
+          <form id="custom-mcp-form" autocomplete="off">
+            <label>名称 <input name="name" required maxlength="60"></label>
+            <label>MCP HTTPS 地址 <input name="url" type="url" required maxlength="512" placeholder="https://mcp.example.com/mcp"></label>
+            <label>Bearer token（可空） <input name="bearer_token" type="password" maxlength="4096" autocomplete="new-password"></label>
+            <button type="submit">保存到我的 DS-Bot</button>
+          </form>
+          <p id="custom-mcp-status" role="status"></p>
+        </section>
+        <p class="note">自定义 MCP 工具会在下一条私人聊天中由你的 DS-Bot 原生 MCP 工具桥加载；断开连接会使尚未执行的授权失效。</p>
         <div id="mcp-dialog" class="mcp-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-dialog-title">
           <div class="mcp-dialog-card">
             <h2 id="mcp-dialog-title">在智能体里添加自定义 MCP 服务器</h2>
-            <ol class="mcp-dialog-steps">
-              <li>打开你创建的智能体、Personal AI 或内置智能体的聊天。</li>
-              <li>点输入框里的「连接器」。</li>
-              <li>点搜索框旁的「+」。</li>
-            </ol>
+            <p>在本页「自定义 MCP 服务器」填写公开 HTTPS 地址和可选 Bearer token，保存后开始私人聊天。工具由你的 DS-Bot 加载，调用须在本页逐次批准。</p>
             <div class="mcp-dialog-actions">
               <button type="button" id="mcp-dialog-ack">知道了</button>
             </div>

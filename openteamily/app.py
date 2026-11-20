@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
+from . import custom_mcp, skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -97,7 +97,7 @@ def object_only(pairs):
 
 
 class App:
-    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None, model_http_policy=None, auto_provision=None):
+    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None, model_http_policy=None, auto_provision=None, mcp_transport=None):
         from .model_http_policy import ModelHttpPolicy
         if model_http_policy is not None and not isinstance(model_http_policy, ModelHttpPolicy):
             raise ValueError("Invalid operator model HTTP policy")
@@ -105,6 +105,7 @@ class App:
         self.store, self.config, self.clock = store, config, clock
         # Tests inject a fake Composio HTTP transport; production uses urllib.
         self.composio_transport = composio_transport
+        self.mcp_transport = mcp_transport
         self.lifecycle, self.manager_auth = lifecycle, manager_auth
         from . import runtime_autoprovision
         if auto_provision is not None and not isinstance(auto_provision, runtime_autoprovision.AutoProvisionPolicy):
@@ -583,6 +584,12 @@ class App:
                 ('Content-Type', 'text/html; charset=utf-8'),
                 ('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"),
             ]
+        if path == '/v1/mcp/servers' or path.startswith('/v1/mcp/servers/'):
+            with self.store.connect() as db:
+                session = self.authenticated(db, env, now)
+            if method != 'GET':
+                self.csrf_check(env, session)
+            return self.custom_mcp_dispatch(env, session['user_id'], method, path, query, now)
         if path == '/v1/composio' or path.startswith('/v1/composio/'):
             with self.store.connect() as db:
                 session = self.authenticated(db, env, now)
@@ -5394,6 +5401,28 @@ class App:
         updated = db.execute('SELECT * FROM automations WHERE id=?', (row['id'],)).fetchone()
         self.write_editor(db, updated['id'], intent, scope, agents, compiled)
         return 200, {'automation': self.automation_view(db, updated)}, []
+
+    def custom_mcp_dispatch(self, env, user_id, method, path, query, now):
+        if query:
+            refuse(400, 'invalid', 'MCP queries are not supported')
+        try:
+            with self.store.transaction() as db:
+                if path == '/v1/mcp/servers':
+                    if method == 'GET':
+                        rows = db.execute('SELECT * FROM custom_mcp_servers WHERE user_id=? ORDER BY created,id', (user_id,)).fetchall()
+                        return 200, {'items': [custom_mcp.view(row) for row in rows]}, []
+                    if method == 'POST':
+                        body = self.body(env, ['id', 'name', 'url', 'bearer_token'], limit=8192)
+                        return 200, {'server': custom_mcp.save(self.store, db, user_id, body, now)}, []
+                match = re.fullmatch(r'/v1/mcp/servers/([0-9a-f]{32})', path)
+                if match and method == 'DELETE':
+                    found = db.execute('DELETE FROM custom_mcp_servers WHERE id=? AND user_id=?', (match[1], user_id)).rowcount
+                    if not found:
+                        refuse(404, 'not_found', 'MCP server not found')
+                    return 200, {'removed': True}, []
+                refuse(405, 'method', 'Unsupported MCP request')
+        except connected_tools.Fault as error:
+            refuse(error.status, error.code, error.message)
 
     def connected_tools_dispatch(self, env, method, path, query, now):
         if query:
