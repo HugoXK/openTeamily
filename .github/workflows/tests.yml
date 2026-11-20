@@ -44,6 +44,8 @@ jobs:
       - run: node --test tests/runtimes_copy_feedback.test.mjs
       - run: node --test tests/shell_page.test.mjs
       - run: node --test tests/agent_loop.test.mjs
+      - run: node --test tests/agent_loop_retry.test.mjs
+      - run: node --test tests/ds_bot_bridge.test.mjs
       - run: node --test tests/model_http_policy.test.mjs
       - run: node --test tests/memory_page.test.mjs
       - run: node --test tests/memory_search.test.mjs
