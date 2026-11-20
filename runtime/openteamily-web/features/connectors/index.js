@@ -7,12 +7,15 @@
 import { join } from 'node:path'
 import { compatHandler } from '../../lib/b4/compat.js'
 import { loadSealKey } from '../../lib/b4/seal.js'
-import { createConnectors } from './connectors.js'
+import { importJsonBundles } from '../../lib/b4/importer.js'
+import { createConnectors, importApplier, IMPORT_TABLES } from './connectors.js'
 import { startToolServer, syncCapability } from './tool-server.js'
 
 export default function connectors(host) {
   const dir = host.featureDir()
-  const api = createConnectors({ dir, sealKey: loadSealKey({ fallbackFile: join(dir, 'seal.key') }), identity: host.identity })
+  const sealKey = loadSealKey({ fallbackFile: join(dir, 'seal.key') })
+  const api = createConnectors({ dir, sealKey, identity: host.identity })
+  const imported = importJsonBundles({ dataDir: host.dataDir, feature: { name: 'connectors', importTables: IMPORT_TABLES }, store: api.store, sealKey, apply: importApplier(sealKey), log: host.log })
   let version = 0
   let sync = async () => {}
   if (process.env.OPENTEAMILY_APPS_MCP !== '0') {
@@ -35,6 +38,7 @@ export default function connectors(host) {
     schedule(5000)
   }
   return {
+    imported,
     pages: ['settings'],
     endpoints: {
       overview: async () => api.overview(),
