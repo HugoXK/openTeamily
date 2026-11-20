@@ -536,6 +536,10 @@ export function notificationSummary(item) {
     const author = item.by?.display_name || item.by?.handle || '成员';
     return `${author} 提及了你`;
   }
+  if (item.kind === 'messenger.added') {
+    const author = item.by?.display_name || item.by?.handle || '成员';
+    return `${author} 将你加入「${item.title || '群聊'}」`;
+  }
   const where = item.conversation_kind === 'dm' ? '单聊' : (item.conversation_title || '群聊');
   if (item.kind === 'automation_reminder') {
     return `提醒到点：${item.title || '回看一条消息'}`;

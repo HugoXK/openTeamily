@@ -256,7 +256,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         if (ot.get("SELECT 1 FROM ot_conversation_members WHERE conversation_id = ? AND owner_id = ?", conv.id, owner)) continue;
         assertReachable(ot, me.ownerId, owner, teamId);
         ot.run("INSERT INTO ot_conversation_members(conversation_id, owner_id, read_seq, created_at) VALUES (?,?,?,?)", conv.id, owner, conv.last_seq, ot.now());
-        ot.notify(owner, "messenger.added", { conversation_id: conv.id, title: conv.title, by: invitedBy });
+        ot.notify(owner, "messenger.added", { conversation_id: conv.id, title: conv.title, by: invitedBy,
+          ...(teamId ? { team_id: teamId } : {}) });
       }
     });
     return conversationView(ot, conv, me.ownerId);

@@ -1276,6 +1276,8 @@ test('notification badge and summary text', () => {
     'bob 在「项目群」提及了你');
   assert.equal(notificationSummary({actor_username: 'bob', conversation_kind: 'dm', conversation_title: 'bob'}),
     'bob 在「单聊」提及了你');
+  assert.equal(notificationSummary({kind: 'messenger.added', by: {display_name: '小林'}, title: '项目群'}),
+    '小林 将你加入「项目群」');
 });
 
 test('mention notifications show a badge, open the conversation and mark read', async () => {
