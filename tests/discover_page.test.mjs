@@ -394,7 +394,11 @@ test('the activity feed renders opted-in work cards from the public API', async 
   const el = id => doc.getElementById(id);
   assert.equal(el('feed-grid').dataset.empty, 'false');
   assert.equal(el('feed-grid').children.length, 1);
-  const card = el('feed-grid').children[0];
+  const cell = el('feed-grid').children[0];
+  // The grid cell wraps the work link so the detail can sit beside it.
+  assert.equal(String(cell.tagName).toLowerCase(), 'article');
+  assert.equal(cell.className, 'feed-entry');
+  const card = cell.children[0];
   assert.equal(String(card.tagName).toLowerCase(), 'a');
   assert.equal(card.href, '/w/ci-fixture-doc');
   assert.equal(card.children[0].className, 'work-cover');
@@ -507,6 +511,152 @@ test('switching private feed tabs cannot be overwritten by an older in-flight re
   assert.equal(grid.children.length, 1);
   assert.match(JSON.stringify(grid.children[0]), /Saved fixture/);
   assert.doesNotMatch(JSON.stringify(grid.children[0]), /Stale fixture/);
+});
+
+
+test('feed selection round-trips through the URL search', async () => {
+  const {feedStateFromSearch, feedSearchText} = await import('../openteamily/static/discover/app.mjs');
+  assert.deepEqual(feedStateFromSearch('?feed=following&kind=video&q=cat'),
+    {tab: 'following', kind: 'video', query: 'cat'});
+  assert.deepEqual(feedStateFromSearch('?feed=collected&q=%E4%B8%AD%E6%96%87'),
+    {tab: 'collected', kind: '', query: '中文'});
+  assert.deepEqual(feedStateFromSearch('?tab=agents'),
+    {tab: 'activity', kind: '', query: ''});
+  assert.deepEqual(feedStateFromSearch('?feed=following&kind=bogus'),
+    {tab: 'following', kind: '', query: ''});
+  assert.deepEqual(feedStateFromSearch('?feed=activity'), {tab: 'activity', kind: '', query: ''});
+  assert.deepEqual(feedStateFromSearch(''), {tab: 'activity', kind: '', query: ''});
+  assert.deepEqual(feedStateFromSearch(undefined), {tab: 'activity', kind: '', query: ''});
+  assert.equal(feedSearchText({tab: 'following', kind: 'video', query: 'cat'}),
+    '?feed=following&kind=video&q=cat');
+  assert.equal(feedSearchText({tab: 'collected', kind: '', query: ''}), '?feed=collected');
+  assert.equal(feedSearchText({tab: 'activity', kind: '', query: ''}), '');
+  assert.equal(feedSearchText({tab: 'following', kind: 'bogus', query: ''}), '?feed=following');
+});
+
+
+test('a shared feed URL opens the tab, kind and search it names', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const calls = [], visit = [];
+  const fetcher = async (path) => {
+    calls.push(path);
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path.startsWith('/v1/discover/me/works?')) {
+      return {status: 200, json: async () => ({items: [{slug: 'followed-work', title: 'Followed', author: 'bob'}], cursor: null})};
+    }
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {
+    fetcher, location: {search: '?feed=following&kind=video&q=cat', pathname: '/discover'},
+    history: {pushState(_state, _title, url) { visit.push(url); }},
+    window: {addEventListener() {}},
+  });
+  assert.equal(doc.getElementById('feed-query').value, 'cat');
+  assert.equal(doc.getElementById('feed-tab-following').attributes['aria-selected'], 'true');
+  assert.equal(doc.getElementById('feed-tab-activity').attributes['aria-selected'], 'false');
+  assert.equal(doc.getElementById('feed-kind-video').attributes['aria-current'], 'true');
+  assert.equal(doc.getElementById('feed-kind-all').attributes['aria-current'], 'false');
+  const loaded = calls.findLast(path => path.startsWith('/v1/discover/me/works?'));
+  assert.match(loaded, /tab=following/);
+  assert.match(loaded, /kind=video/);
+  assert.match(loaded, /q=cat/);
+  assert.equal(visit.length, 0, 'opening a link must not add a history entry');
+});
+
+
+test('choosing a category keeps the feed tab instead of resetting to 动态', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const calls = [];
+  const fetcher = async (path) => {
+    calls.push(path);
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path.startsWith('/v1/discover/me/works?')) {
+      return {status: 200, json: async () => ({items: [{slug: 'followed-work', title: 'Followed', author: 'bob'}], cursor: null})};
+    }
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location: {search: '', pathname: '/discover'},
+    history: {pushState() {}}, window: {addEventListener() {}}});
+  const el = id => doc.getElementById(id);
+  await el('feed-tab-following').handlers.click();
+  assert.match(calls.at(-1), /tab=following/);
+  await el('feed-kind-image').handlers.click();
+  assert.match(calls.at(-1), /tab=following/);
+  assert.match(calls.at(-1), /kind=image/);
+  assert.equal(el('feed-tab-following').attributes['aria-selected'], 'true');
+  assert.equal(el('feed-tab-activity').attributes['aria-selected'], 'false');
+  assert.equal(el('feed-kind-image').attributes['aria-current'], 'true');
+  el('feed-query').value = 'cat';
+  await el('feed-search').handlers.submit({preventDefault() {}});
+  assert.match(calls.at(-1), /tab=following/);
+  assert.match(calls.at(-1), /kind=image/);
+  assert.match(calls.at(-1), /q=cat/);
+});
+
+
+test('feed tab and category changes push a shareable URL and back/forward restores them', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const visit = [];
+  const handlers = {};
+  const location = {search: '', pathname: '/discover'};
+  const calls = [];
+  const fetcher = async (path) => {
+    calls.push(path);
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path.startsWith('/v1/discover/me/works?')) return {status: 200, json: async () => ({items: [], cursor: null})};
+    throw new Error('unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location,
+    history: {pushState(_state, _title, url) { visit.push(url); location.search = url.split('?')[1] ? '?' + url.split('?')[1] : ''; }},
+    window: {addEventListener(type, handler) { handlers[type] = handler; }}});
+  const el = id => doc.getElementById(id);
+  assert.equal(visit.length, 0);
+  await el('feed-tab-following').handlers.click();
+  assert.equal(visit.at(-1), '/discover?feed=following');
+  await el('feed-kind-image').handlers.click();
+  assert.equal(visit.at(-1), '/discover?feed=following&kind=image');
+  el('feed-query').value = 'cat';
+  await el('feed-search').handlers.submit({preventDefault() {}});
+  assert.equal(visit.at(-1), '/discover?feed=following&kind=image&q=cat');
+  assert.equal(typeof handlers.popstate, 'function');
+
+  location.search = '';
+  await handlers.popstate();
+  assert.equal(el('feed-tab-activity').attributes['aria-selected'], 'true');
+  assert.equal(el('feed-kind-all').attributes['aria-current'], 'true');
+  assert.equal(el('feed-query').value, '');
+  assert.doesNotMatch(calls.at(-1), /tab=following/);
+  assert.equal(visit.at(-1), '/discover?feed=following&kind=image&q=cat', 'back must not push a new entry');
+
+  location.search = '?feed=following&kind=image&q=cat';
+  await handlers.popstate();
+  assert.equal(el('feed-tab-following').attributes['aria-selected'], 'true');
+  assert.equal(el('feed-kind-image').attributes['aria-current'], 'true');
+  assert.equal(el('feed-query').value, 'cat');
+  assert.match(calls.at(-1), /tab=following/);
+  assert.match(calls.at(-1), /kind=image/);
+});
+
+
+test('following nobody from a shared URL shows the following empty note, not a blank feed', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const calls = [];
+  const fetcher = async (path) => {
+    calls.push(path);
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    return {status: 200, json: async () => ({items: [], cursor: null})};
+  };
+  await mount(doc, {fetcher, location: {search: '?feed=following', pathname: '/discover'},
+    history: {pushState() {}}, window: {addEventListener() {}}});
+  const empty = doc.getElementById('feed-following-empty');
+  assert.equal(empty.hidden, false);
+  assert.equal(doc.getElementById('feed-tab-following').attributes['aria-selected'], 'true');
+  assert.match(doc.getElementById('feed-note').textContent, /只展示你关注的作者/);
+  assert.match(calls.at(-1), /tab=following/);
 });
 
 
@@ -686,4 +836,138 @@ test('document thumbnails preserve only bounded semantic text blocks', () => {
   ]});
   assert.deepEqual(model.blocks.map(block=>block.type), ['heading','list','code','quote']);
   assert.equal(model.blocks[1].text,'item');
+});
+
+// A work card's detail is read in place: the feed keeps its tab, filter and
+// scroll position, and the work page stays one click away.
+function classHits(node, wanted, hits = []) {
+  if (String(node.className || '').split(/\s+/).includes(wanted)) hits.push(node);
+  for (const child of node.children || []) classHits(child, wanted, hits);
+  return hits;
+}
+
+function feedDocument() {
+  return fakeDocument();
+}
+
+function detailFixture(extra = {}) {
+  return Object.assign({
+    slug: 'ci-fixture-doc',
+    title: '[CI FIXTURE] Document',
+    kind: 'document',
+    kind_label: '文档',
+    author: 'alice',
+    updated: 1800000000,
+    path: '/w/ci-fixture-doc',
+  }, extra);
+}
+
+function detailFetcher(item, previewResult) {
+  const requests = [];
+  const fetcher = async path => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return {status: 401, json: async () => ({})};
+    if (path.startsWith('/v1/discover/works')) {
+      return {status: 200, json: async () => ({items: [item], cursor: null})};
+    }
+    if (path === '/w/' + item.slug + '/preview') return previewResult(path);
+    throw new Error('unexpected ' + path);
+  };
+  return {fetcher, requests};
+}
+
+test('a work card opens a read-only detail in place without leaving the feed', async () => {
+  const app = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const {fetcher, requests} = detailFetcher(detailFixture(), () => ({status: 200, json: async () => ({preview: {
+    type: 'document', heading: '季报摘要', lines: ['第一行正文', '第二行正文', '第三行正文', '第四行不该出现'],
+  }})}));
+  const visited = [];
+  const location = {search: '', pathname: '/discover', assign: url => visited.push(url)};
+  await app.mount(doc, {fetcher, location});
+
+  const cell = doc.getElementById('feed-grid').children[0];
+  const toggles = classHits(cell, 'feed-detail-toggle');
+  assert.equal(toggles.length, 1, 'a feed card offers exactly one detail toggle');
+  const toggle = toggles[0];
+  assert.equal(toggle.tagName, 'button');
+  assert.equal(toggle.textContent, app.FEED_DETAIL_MORE);
+  assert.equal(toggle.attributes['aria-expanded'], 'false');
+  const panel = classHits(cell, 'feed-detail')[0];
+  assert.ok(panel, 'the detail region exists before it is opened');
+  assert.equal(panel.hidden, true);
+  assert.equal(toggle.attributes['aria-controls'], panel.id);
+  const listCallsBefore = requests.filter(path => path.startsWith('/v1/discover/works')).length;
+
+  await toggle.handlers.click();
+  await flush();
+
+  assert.equal(toggle.attributes['aria-expanded'], 'true');
+  assert.equal(toggle.textContent, app.FEED_DETAIL_LESS);
+  assert.equal(panel.hidden, false);
+  const text = JSON.stringify(panel);
+  assert.match(text, /文档/);
+  assert.match(text, /alice/);
+  assert.match(text, /2027/);
+  assert.match(text, /季报摘要/);
+  assert.match(text, /第三行正文/);
+  assert.equal(text.includes('第四行不该出现'), false, 'the excerpt stays bounded');
+  const open = classHits(panel, 'feed-detail-open')[0];
+  assert.equal(open.href, '/w/ci-fixture-doc');
+  assert.equal(open.textContent, app.FEED_DETAIL_OPEN);
+  assert.deepEqual(visited, [], 'reading the detail never navigates');
+  assert.equal(requests.filter(path => path.startsWith('/v1/discover/works')).length, listCallsBefore,
+    'reading the detail never reloads the listing');
+
+  await toggle.handlers.click();
+  assert.equal(toggle.attributes['aria-expanded'], 'false');
+  assert.equal(toggle.textContent, app.FEED_DETAIL_MORE);
+  assert.equal(panel.hidden, true);
+});
+
+test('a detail whose preview cannot be read says so instead of faking an empty summary', async () => {
+  const app = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const {fetcher} = detailFetcher(detailFixture(), () => ({status: 500, json: async () => ({})}));
+  await app.mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
+  const cell = doc.getElementById('feed-grid').children[0];
+  const toggle = classHits(cell, 'feed-detail-toggle')[0];
+  await toggle.handlers.click();
+  await flush();
+  const panel = classHits(cell, 'feed-detail')[0];
+  assert.match(JSON.stringify(panel), new RegExp(app.FEED_DETAIL_UNREADABLE));
+  assert.equal(JSON.stringify(panel).includes(app.FEED_DETAIL_EMPTY), false);
+  assert.equal(classHits(panel, 'feed-detail-open')[0].href, '/w/ci-fixture-doc');
+});
+
+test('an image work says it has no text summary instead of reading a preview it does not have', async () => {
+  const app = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const {fetcher, requests} = detailFetcher(detailFixture({kind: 'image', kind_label: '图片'}), () => {
+    throw new Error('an image work must not request a text preview');
+  });
+  await app.mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
+  const cell = doc.getElementById('feed-grid').children[0];
+  const toggle = classHits(cell, 'feed-detail-toggle')[0];
+  await toggle.handlers.click();
+  await flush();
+  const panel = classHits(cell, 'feed-detail')[0];
+  assert.match(JSON.stringify(panel), new RegExp(app.FEED_DETAIL_NO_TEXT));
+  assert.equal(requests.some(path => path.endsWith('/preview')), false);
+  assert.equal(classHits(panel, 'feed-detail-open')[0].href, '/w/ci-fixture-doc');
+});
+
+test('a work with an empty preview says it has no content yet', async () => {
+  const app = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const {fetcher} = detailFetcher(detailFixture(), () => ({status: 200, json: async () => ({preview: {
+    type: 'document', heading: '', lines: [],
+  }})}));
+  await app.mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
+  const cell = doc.getElementById('feed-grid').children[0];
+  await classHits(cell, 'feed-detail-toggle')[0].handlers.click();
+  await flush();
+  const panel = classHits(cell, 'feed-detail')[0];
+  assert.match(JSON.stringify(panel), new RegExp(app.FEED_DETAIL_EMPTY));
+  assert.equal(JSON.stringify(panel).includes(app.FEED_DETAIL_UNREADABLE), false);
 });

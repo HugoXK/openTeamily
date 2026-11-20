@@ -66,6 +66,17 @@ export function shouldSendOnShortcut(event, sendShortcut = 'enter') {
   return !modifier && !event.shiftKey && !event.altKey;
 }
 
+// The chat language is stored per account by /settings; it only reaches the
+// model if the message request carries it. 'auto' means "no opinion", so the
+// field has to be absent rather than a value the server has to interpret.
+export function messagePayload(text, chatLanguage = 'auto') {
+  const payload = {body: text};
+  if (typeof chatLanguage === 'string' && chatLanguage && chatLanguage !== 'auto') {
+    payload.chat_language = chatLanguage;
+  }
+  return payload;
+}
+
 export function messageSearchQuery(query, conversationId = '', cursor = '') {
   const params = new URLSearchParams({q: query, limit: '20'});
   if (conversationId) params.set('conversation_id', conversationId);
@@ -219,6 +230,62 @@ export function leadGlyph(text, fallback = '?') {
   const cleaned = String(text || '').replace(/^\s*\[[^\]]*\]\s*/, '');
   const match = cleaned.match(/[\p{L}\p{N}]/u) || String(text || '').match(/[\p{L}\p{N}]/u);
   return match ? match[0].toUpperCase() : fallback;
+}
+
+export function inlineBold(text) {
+  const value = typeof text === 'string' ? text : '';
+  const parts = [];
+  const pattern = /\*\*([^*]+)\*\*/g;
+  let last = 0;
+  let match;
+  while ((match = pattern.exec(value))) {
+    if (match.index > last) parts.push({text: value.slice(last, match.index), bold: false});
+    parts.push({text: match[1], bold: true});
+    last = match.index + match[0].length;
+  }
+  if (last < value.length) parts.push({text: value.slice(last), bold: false});
+  return parts;
+}
+
+export function wrapBold(text, start, end) {
+  const value = typeof text === 'string' ? text : '';
+  const from = Number.isFinite(start) ? Math.max(0, Math.min(value.length, start)) : value.length;
+  const to = Number.isFinite(end) ? Math.max(from, Math.min(value.length, end)) : from;
+  return {
+    text: value.slice(0, from) + '**' + value.slice(from, to) + '**' + value.slice(to),
+    start: from + 2,
+    end: to + 2,
+  };
+}
+
+function fillBold(doc, node, text) {
+  const parts = inlineBold(text);
+  node.textContent = '';
+  if (!parts.some(part => part.bold)) {
+    node.textContent = parts.map(part => part.text).join('');
+    return;
+  }
+  for (const part of parts) {
+    if (part.bold && typeof doc.createElement === 'function') {
+      const strong = doc.createElement('strong');
+      strong.textContent = part.text;
+      node.append(strong);
+    } else if (typeof doc.createTextNode === 'function') {
+      node.append(doc.createTextNode(part.text));
+    } else {
+      node.textContent += part.text;
+    }
+  }
+}
+
+function renderMessageBody(doc, node, text, prefs) {
+  const source = String(text || '');
+  // Bold markers are ours; everything else keeps the shared folding and link preview path.
+  if (inlineBold(source).some(part => part.bold)) {
+    fillBold(doc, node, source);
+    return;
+  }
+  renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews);
 }
 
 export function highlightParts(text, query) {
@@ -554,6 +621,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let resourceCursor = '';
   let resourceItems = [];
   let sendShortcut = 'enter';
+  let chatLanguage = 'auto';
   let chatPreferences = {message_folding:'standard', document_cards:false, link_previews:true};
 
   function show(kind, text) {
@@ -714,7 +782,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       title.textContent = (session.pinned ? '置顶 · ' : '') + session.title;
       const preview = document.createElement('span');
       preview.className = 'preview';
-      preview.textContent = session.preview || '';
+      fillBold(document, preview, session.preview || '');
       copy.append(title, preview);
       const time = document.createElement('span');
       time.className = 'time';
@@ -763,7 +831,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const waiting = item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
       const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
       body.className = 'body ' + (waiting ? 'pending' : (failed ? 'failed' : ''));
-      renderMessageText(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences.message_folding, chatPreferences.link_previews);
+      renderMessageBody(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences);
       if (waiting || failed) li.dataset.state = waiting ? item.status : 'failed';
       if (waiting) {
         const heading = document.createElement('p');
@@ -1092,7 +1160,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         : (mine ? '我' : ((member && member.username) || '成员'));
       const body = document.createElement('div');
       body.className = 'body';
-      renderMessageText(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences.message_folding, chatPreferences.link_previews);
+      renderMessageBody(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences);
       if (item.forwarded_from && !item.retracted) {
         body.dataset.forwarded = '1';
         body.title = '转发自 ' + item.forwarded_from.author;
@@ -1972,6 +2040,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const stored = settings.status === 200 && settings.body && settings.body.settings
       && settings.body.settings.values && settings.body.settings.values.send_shortcut;
     sendShortcut = stored === 'mod_enter' ? 'mod_enter' : 'enter';
+    const storedLanguage = settings.status === 200 && settings.body && settings.body.settings
+      && settings.body.settings.values && settings.body.settings.values.chat_language;
+    chatLanguage = typeof storedLanguage === 'string' ? storedLanguage : 'auto';
     document.getElementById('chat-body').dataset.sendShortcut = sendShortcut;
     workspaces = listed.status === 200 ? (listed.body.items || []) : [];
     const wanted = hashParams().workspace || personalWorkspace || workspaceSelect.value;
@@ -2146,25 +2217,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-search-status').textContent = state.error || (state.hits.length ? '已显示 ' + state.hits.length + ' 条消息' : '没有找到匹配的消息。试试其他关键词。');
     document.getElementById('conversation-search-more').hidden = !state.cursor;
   }
+  // One jump-and-highlight action for both message hits and attachment hits: a
+  // search result never opens a second view, it scrolls the real message back in.
+  function jumpToMessage(messageId) {
+    const list = document.getElementById('message-list');
+    const target = Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
+    if (!target) {
+      document.getElementById('conversation-search-status').textContent = '这条消息不在当前已加载的消息窗口里，请加载更多消息后重试。';
+      return;
+    }
+    target.scrollIntoView?.({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+    target.tabIndex = -1; target.focus?.({preventScroll: true});
+    for (const node of Array.from(list.children || [])) delete node.dataset.searchJump;
+    target.dataset.searchJump = 'true';
+    setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
+  }
   function searchHitRow(hit, query) {
     const li = document.createElement('li');
     li.className = 'search-hit';
     li.tabIndex = 0;
     li.setAttribute('role', 'button');
     li.setAttribute('aria-label', '跳到这条消息');
-    const jump = () => {
-      const list = document.getElementById('message-list');
-      const target = Array.from(list.children || []).find(node => node.dataset.messageId === hit.messageId);
-      if (!target) {
-        document.getElementById('conversation-search-status').textContent = '这条消息不在当前已加载的消息窗口里，请加载更多消息后重试。';
-        return;
-      }
-      target.scrollIntoView({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
-      target.tabIndex = -1; target.focus({preventScroll: true});
-      for (const node of Array.from(list.children || [])) delete node.dataset.searchJump;
-      target.dataset.searchJump = 'true';
-      setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
-    };
+    const jump = () => jumpToMessage(hit.messageId);
     li.addEventListener('click', jump);
     li.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
@@ -2189,6 +2263,129 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }));
     li.append(avatar, head, text);
     return li;
+  }
+  // The conversation search covers three scopes of the SAME conversation. The
+  // photo and file scopes read the attachment fields the message rows already
+  // carry (social.py MESSAGE_ROWS -> attachment{id,title,kind,revision,path}),
+  // paged through the existing messages endpoint; no second list is invented.
+  const CONVERSATION_SCOPE_NOTES = {
+    messages: '· 搜索当前会话里你有权查看的消息。',
+    photos: '· 只读取当前会话消息里已有的图片附件。',
+    files: '· 只读取当前会话消息里已有的文件附件。',
+  };
+  const ATTACHMENT_PAGE_LIMIT = 100; // the messages endpoint caps limit at 100
+  const ATTACHMENT_MAX_PAGES = 50;
+  let conversationScope = 'messages';
+  function setConversationScope(tab) {
+    conversationScope = tab;
+    for (const name of ['messages', 'photos', 'files']) {
+      const button = document.getElementById('conversation-search-tab-' + name);
+      if (button) button.setAttribute('aria-selected', String(name === tab));
+    }
+    const note = document.getElementById('conversation-search-scope-note');
+    if (note) note.textContent = CONVERSATION_SCOPE_NOTES[tab] || CONVERSATION_SCOPE_NOTES.messages;
+    const more = document.getElementById('conversation-search-more');
+    if (more) more.hidden = true;
+  }
+  async function conversationAttachments(conversation) {
+    const items = [];
+    let cursor = '';
+    let truncated = false;
+    for (let page = 0; page < ATTACHMENT_MAX_PAGES; page += 1) {
+      const params = new URLSearchParams({limit: String(ATTACHMENT_PAGE_LIMIT)});
+      if (cursor) params.set('cursor', cursor);
+      const result = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages?${params}`);
+      if (result.status !== 200) throw new Error('读不到当前会话的附件。');
+      items.push(...(result.body.items || []));
+      cursor = result.body.cursor || '';
+      if (!cursor) return {items, truncated: false};
+      truncated = true;
+    }
+    return {items, truncated};
+  }
+  function attachmentHitRow(item) {
+    const li = document.createElement('li');
+    li.className = 'search-hit';
+    li.tabIndex = 0;
+    li.setAttribute('role', 'button');
+    li.setAttribute('aria-label', '跳到这条消息');
+    const jump = () => jumpToMessage(item.id);
+    li.addEventListener('click', jump);
+    li.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
+    });
+    const attachment = item.attachment || {};
+    const photo = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
+    const avatar = document.createElement('span');
+    avatar.className = 'search-hit-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    avatar.textContent = photo ? '照' : '件';
+    const head = document.createElement('span');
+    head.className = 'search-hit-head';
+    const name = document.createElement('strong');
+    name.textContent = attachment.title || (photo ? '未命名照片' : '未命名文件');
+    const when = document.createElement('time');
+    when.textContent = item.created ? formatSessionTime(item.created) : '';
+    head.append(name, when);
+    const text = document.createElement('span');
+    text.className = 'search-hit-text';
+    text.textContent = (photo ? '照片' : '文件') + ' · 点开回到这条消息';
+    li.append(avatar, head, text);
+    return li;
+  }
+  async function searchCurrentAttachments(scope) {
+    const conversation = currentConversation;
+    const list = document.getElementById('conversation-search-results');
+    const status = document.getElementById('conversation-search-status');
+    if (!list || !status) return;
+    list.replaceChildren();
+    if (!conversation) { status.textContent = '请先打开一个会话。'; return; }
+    if (currentSource !== 'social') {
+      status.textContent = '智能体会话的消息数据里没有附件字段，读不到照片和文件。';
+      return;
+    }
+    status.textContent = '正在读取当前会话的附件…';
+    const wid = workspaceId();
+    let found;
+    try {
+      found = await conversationAttachments(conversation);
+    } catch (failure) {
+      if (currentConversation && currentConversation.id === conversation.id) {
+        status.textContent = failure.message || '读不到当前会话的附件。';
+      }
+      return;
+    }
+    if (workspaceId() !== wid || !currentConversation || currentConversation.id !== conversation.id) return;
+    if (conversationScope !== scope) return;
+    const photos = scope === 'photos';
+    const hits = found.items.filter(item => {
+      const attachment = item.attachment;
+      if (!attachment) return false;
+      const image = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
+      return photos ? image : !image;
+    });
+    for (const item of hits) list.append(attachmentHitRow(item));
+    if (hits.length) {
+      status.textContent = (photos ? '已显示 ' + hits.length + ' 张照片' : '已显示 ' + hits.length + ' 个文件')
+        + (found.truncated ? ' · 只读取了最近 ' + (ATTACHMENT_PAGE_LIMIT * ATTACHMENT_MAX_PAGES) + ' 条消息' : '');
+    } else {
+      status.textContent = photos ? '这个会话里还没有照片。' : '这个会话里还没有文件。';
+    }
+  }
+  for (const scope of ['messages', 'photos', 'files']) {
+    const button = document.getElementById('conversation-search-tab-' + scope);
+    if (!button) continue;
+    button.addEventListener('click', async () => {
+      setConversationScope(scope);
+      const list = document.getElementById('conversation-search-results');
+      if (scope === 'messages') {
+        const query = (document.getElementById('conversation-search-query').value || '').trim();
+        if (query) await searchCurrentConversation();
+        else { if (list) list.replaceChildren(); document.getElementById('conversation-search-status').textContent = ''; }
+        return;
+      }
+      await searchCurrentAttachments(scope);
+    });
   }
   const groupInfoToggle = document.getElementById('group-info-toggle');
   if (groupInfoToggle) {
@@ -2511,7 +2708,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const result = await request(
       'POST',
       `${agentBase()}/conversations/${currentConversation.id}/messages`,
-      {body: text},
+      messagePayload(text, chatLanguage),
       {'Idempotency-Key': idempotencyKey('msg-')},
     );
     if (result.status !== 201 && result.status !== 200) {
@@ -2525,6 +2722,38 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
            : '已发送。');
     await loadSessions();
     await openAgentConversation(currentAgent.id, currentConversation.id);
+  }
+
+  const formatButton = document.getElementById('chat-format');
+  const formatMenu = document.getElementById('chat-format-menu');
+  const formatBold = document.getElementById('chat-format-bold');
+  if (formatButton && formatMenu && formatBold) {
+    const closeFormat = () => {
+      formatMenu.hidden = true;
+      formatButton.setAttribute('aria-expanded', 'false');
+    };
+    formatButton.addEventListener('click', () => {
+      const open = formatMenu.hidden;
+      formatMenu.hidden = !open;
+      formatButton.setAttribute('aria-expanded', String(open));
+    });
+    if (typeof document.addEventListener === 'function') {
+      document.addEventListener('click', event => {
+        if (formatMenu.hidden) return;
+        if (event.target && event.target.closest && event.target.closest('.format-wrap')) return;
+        closeFormat();
+      });
+    }
+    formatBold.addEventListener('click', () => {
+      const field = document.getElementById('chat-body');
+      const selection = wrapBold(field.value || '', field.selectionStart, field.selectionEnd);
+      field.value = selection.text;
+      field.focus();
+      if (typeof field.setSelectionRange === 'function') {
+        field.setSelectionRange(selection.start, selection.end);
+      }
+      closeFormat();
+    });
   }
 
   document.getElementById('chat-body').addEventListener('keydown', event => {

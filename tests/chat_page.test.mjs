@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery } from '../openteamily/static/chat/app.mjs';
+import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery, wrapBold, inlineBold } from '../openteamily/static/chat/app.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
@@ -1480,6 +1480,30 @@ test('removing a group agent sends nothing until the explicit confirmation', asy
   } finally {restore();}
 });
 
+test('the composer exposes a real bold tool instead of the disabled placeholder', () => {
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  const start = html.indexOf('id="chat-format"');
+  assert.ok(start > -1, 'the composer has a format control');
+  const open = html.lastIndexOf('<button', start);
+  const block = html.slice(open, html.indexOf('>', start) + 1);
+  assert.doesNotMatch(block, /disabled/, 'the format control must not be disabled');
+  assert.match(html, /id="chat-format-bold"/, 'the format menu offers bold');
+});
+
+test('wrapBold puts double asterisks around the selected text', () => {
+  assert.deepEqual(wrapBold('你好世界', 2, 4), {text: '你好**世界**', start: 4, end: 6});
+  assert.deepEqual(wrapBold('abc', 1, 1), {text: 'a****bc', start: 3, end: 3});
+  assert.deepEqual(wrapBold('', 0, 0), {text: '****', start: 2, end: 2});
+});
+
+test('inlineBold splits text into plain and bold runs', () => {
+  assert.deepEqual(inlineBold('发 **重要** 通知'), [
+    {text: '发 ', bold: false}, {text: '重要', bold: true}, {text: ' 通知', bold: false},
+  ]);
+  assert.deepEqual(inlineBold('**未闭合'), [{text: '**未闭合', bold: false}]);
+  assert.deepEqual(inlineBold(''), []);
+});
+
 test('the message menu offers delete that hides the message only for this account', () => {
   const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
   const app = readFileSync(new URL('../openteamily/static/chat/app.mjs', import.meta.url), 'utf8');
@@ -1567,6 +1591,64 @@ test('new dialog and document-card surfaces use actual theme tokens, not undefin
   assert.match(css, /\.chat-document-card \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
 });
 
+
+test('conversation search lists this conversation photos and files from real attachment fields', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  const attachment = (id, title, kind, mime) => ({id: id.repeat(32), title, kind, mime, revision: 1,
+    path: '/v1/workspaces/ws-1/artifacts/' + id.repeat(32) + '/file'});
+  const rows = [
+    // Real uploads all land as kind 'media'; the mime is what separates photos.
+    {id: 'm-1', user_id: bob, body: '', created: '2026-01-01T00:00:00Z', attachment: attachment('a', 'pixel.png', 'media', 'image/png')},
+    {id: 'm-2', user_id: bob, body: '', created: '2026-01-01T00:01:00Z', attachment: attachment('b', 'plan.pdf', 'media', 'application/pdf')},
+  ];
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.startsWith('/v1/workspaces/ws-1/social/conversations/conv-1/messages?')) {
+        return json(200, {items: rows, cursor: null});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('conversation-search-open'), 'click');
+    await fire(el('conversation-search-tab-photos'), 'click');
+    assert.equal(el('conversation-search-tab-photos').getAttribute('aria-selected'), 'true');
+    const photos = el('conversation-search-results').children;
+    assert.equal(photos.length, 1, 'only the image attachment is a photo');
+    assert.ok(descendants(photos[0]).some(node => node.textContent === 'pixel.png'));
+    assert.match(el('conversation-search-status').textContent, /已显示 1 张照片/);
+    await fire(photos[0], 'click');
+    const jumped = el('message-list').children.find(node => node.dataset.messageId === 'm-1');
+    assert.equal(jumped.dataset.searchJump, 'true', 'a photo hit jumps back to its message and highlights it');
+    await fire(el('conversation-search-tab-files'), 'click');
+    const files = el('conversation-search-results').children;
+    assert.equal(files.length, 1, 'the document attachment is a file, not a photo');
+    assert.ok(descendants(files[0]).some(node => node.textContent === 'plan.pdf'));
+    assert.match(el('conversation-search-status').textContent, /已显示 1 个文件/);
+    await fire(files[0], 'click');
+    assert.match(el('conversation-search-status').textContent, /不在当前已加载/, 'a hit outside the loaded window says so instead of pretending');
+  } finally { restore(); }
+});
+
+test('the photos and files tabs say what is missing instead of inventing an empty conversation', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.startsWith('/v1/workspaces/ws-1/social/conversations/conv-1/messages?')) {
+        return json(500, {error: {code: 'internal', message: 'nope'}});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('conversation-search-open'), 'click');
+    await fire(el('conversation-search-tab-photos'), 'click');
+    assert.match(el('conversation-search-status').textContent, /读不到当前会话的附件/);
+    assert.equal(el('conversation-search-results').children.length, 0);
+  } finally { restore(); }
+});
 
 for (const phase of ['directory', 'fanout']) for (const target of ['ws-1','ws-2']) {
   test(`deferred ${phase} from an older load cannot overwrite the latest ${target} session list`, async () => {
