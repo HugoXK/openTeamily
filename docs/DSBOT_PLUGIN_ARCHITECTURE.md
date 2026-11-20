@@ -74,7 +74,7 @@ All of these already exist in the pinned tree and are used by today's runtime im
 * The browser keeps calling legacy `/v1/...` until the page is flipped in `dsbot_routes.json`
   (`moved_pages`); a moved page calls `/b/api/openteamily` instead. Flip a page only once its moved
   calls are covered: a row in `static/shell/dsbot-api.mjs` `MOVED` (generic `<feature>/v1` shim) or a
-  page adapter (chat: `static/chat/dsbot.mjs`). Moved so far: `chat`, `meetings`, `skills`, `memory`, `settings`, `onboarding`. B4 account settings, notification prefs, onboarding/look, model-api and connectors are routed by `dsbot-api.mjs`. Auth, skill-secrets, Composio callback, `/v1/onboarding/automations` and workspace lists stay on the platform. `/automations/` and `/agents/` wait on B2's call routing.
+  page adapter (chat: `static/chat/dsbot.mjs`). Moved so far: `chat`, `meetings`, `skills`, `memory`, `settings`, `onboarding`, `automations`, `agents`, `artifacts`. Auth, skill-secrets, Composio callback, `/v1/onboarding/automations`, workspace lists, runtime keys and public `/share/<token>` pages stay on the platform. `/members/`, `/team/`, `/messenger/` and `/discover/` wait for a dedicated (not old FlyBot) Bot Social URL. Office format exports of works still follow.
   platform registry (P); the effective set (account bindings + library) is materialized in DS-Bot via
   `skills/sync` (digest-checked) from `static/shell/dsbot-skills.mjs`, on chat send and on skills changes.
 
@@ -289,7 +289,7 @@ and a container test proving the capability executes inside the user's DS-Bot.
   `dsbot_bundle.build_with_secrets` so imported secrets can be re-sealed. Without it, bundles carrying
   secrets are rejected and kept for retry. The manager job `dsbot_import.deliver` (hooked from
   `poll_once`) creates that key, requests the sealed bundles over loopback, and copies them into
-  `/data/openteamily/import/<feature>-v1.bundle` once per instance. Phase D: the server scheduler skips a workspace once `/automations/` is in `moved_pages` and that owner has a healthy published DS-Bot, so both clocks cannot fire. Flask also stops queueing `runtime_connect` infer tasks for agent/chat conversations and the leftover External Agent API handler once those pages have moved and the owner has a live DS-Bot; group replies stay on the platform path until C pages move. Workspaces whose owner has no runtime keep the server clock until one is published. Automations and agents are included in the import job (per-feature delivery markers). Moved `/v1` routes listed in this
+  `/data/openteamily/import/<feature>-v1.bundle` once per instance. Phase D: the server scheduler skips a workspace once `/automations/` is in `moved_pages` and that owner has a healthy published DS-Bot, so both clocks cannot fire. Flask also stops queueing `runtime_connect` infer tasks for agent/chat conversations and the leftover External Agent API handler once those pages have moved and the owner has a live DS-Bot; group replies stay on the platform path until C pages move. Workspaces whose owner has no runtime keep the server clock until one is published. Automations, agents and artifacts are included in the import job (per-feature delivery markers). Moved `/v1` routes listed in this
   section (except `/v1/onboarding/automations`) are forwarded by the platform gateway to
   `/api/openteamily/legacy` on the owner's DS-Bot.
 * Stays platform: account security, runtime keys UI (#282), delete account (#362), public profile.

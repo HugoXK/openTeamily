@@ -125,11 +125,23 @@ class GatewayTest(unittest.TestCase):
         self.assertIsNone(gw.target_for('/privacy/', routes))
 
     def test_shipped_routes_move_private_chat(self):
-        self.assertTrue({'chat', 'meetings', 'skills', 'memory', 'settings', 'onboarding', 'automations', 'agents'} <= gw.load_routes()['moved_pages'])
+        self.assertTrue({'chat', 'meetings', 'skills', 'memory', 'settings', 'onboarding', 'automations', 'agents', 'artifacts'} <= gw.load_routes()['moved_pages'])
+        self.assertTrue({'members', 'team', 'messenger', 'discover'}.isdisjoint(gw.load_routes()['moved_pages']))
         self.assertEqual(gw.target_for('/chat/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fchat%2Fapp.mjs')
         self.assertEqual(gw.target_for('/settings', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings')
         self.assertEqual(gw.target_for('/settings/connectors', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings%2Fconnectors')
         self.assertEqual(gw.target_for('/onboarding', gw.load_routes()), '/api/openteamily/page?path=%2Fonboarding')
+        self.assertEqual(gw.target_for('/artifacts/', gw.load_routes()), '/api/openteamily/page?path=%2Fartifacts%2F')
+        self.assertEqual(gw.target_for('/artifacts/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fartifacts%2Fapp.mjs')
+        self.assertIsNone(gw.target_for('/share/' + 'A' * 43, gw.load_routes()))
+        self.assertIsNone(gw.target_for('/members/', gw.load_routes()))
+        self.assertIsNone(gw.target_for('/messenger/', gw.load_routes()))
+        self.assertIsNone(gw.target_for('/discover/', gw.load_routes()))
+        self.assertIsNone(gw.target_for('/team/', gw.load_routes()))
+        ws, aid = 'a' * 32, 'b' * 32
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/export'), 'artifacts')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/revoke'), 'artifacts')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'))
 
     def test_record_upstream_validation(self):
         with self.store.transaction() as db:
@@ -165,6 +177,11 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('location = /settings { return 418; }', conf)
         self.assertIn('location ^~ /settings/ { return 418; }', conf)
         self.assertIn('location = /onboarding { return 418; }', conf)
+        self.assertIn('location = /artifacts { return 418; }', conf)
+        self.assertIn('location ^~ /artifacts/ { return 418; }', conf)
+        self.assertIn('location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }', conf)
+        self.assertNotIn('location = /members { return 418; }', conf)
+        self.assertNotIn('location = /discover { return 418; }', conf)
 
     def report(self, iid, body, manager_token):
         import io
