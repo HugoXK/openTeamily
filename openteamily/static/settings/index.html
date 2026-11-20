@@ -37,13 +37,13 @@
         <div class="account-sub">
           <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
           <div id="help-menu" hidden>
-            <button type="button" disabled title="未实现：还没有 OpenTeamily 帮助中心页">帮助中心</button>
+            <a href="/help" role="menuitem">帮助中心</a>
             <a href="/guide" role="menuitem">功能指引</a>
             <a href="/about" role="menuitem">关于</a>
             <a href="/download" role="menuitem" aria-label="下载">下载</a>
             <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
-            <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
-            <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
+            <a href="/terms" role="menuitem">服务条款</a>
+            <a href="/privacy" role="menuitem">隐私政策</a>
             <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
           </div>
         </div>
@@ -59,10 +59,11 @@
   <section id="login-panel" hidden>
     <h2>登录</h2>
     <form id="login-form" method="post" action="/v1/auth/login">
-      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>用户名 <input type="text" id="username" name="username" required autocomplete="username" maxlength="64"></label>
       <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
       <button type="submit">登录</button>
     </form>
+    <p><a class="login-register-button" href="/register">注册新账户</a> · 需要管理员开放本实例注册；普通账号不会成为平台管理员。</p>
     <div id="oidc-providers"></div>
   </section>
   <section id="settings-panel" hidden>

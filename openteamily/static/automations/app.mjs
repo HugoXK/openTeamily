@@ -72,6 +72,52 @@ export function runResultText(run) {
   return '';
 }
 
+// A run row opens in place. The server already returns the status, the error
+// code and a whitelisted result (automations.py run_view), so this page only
+// has to name them; a run that left nothing says so instead of showing a blank.
+export const RUN_DETAIL_EMPTY = '这次运行没有留下输出';
+
+const RUN_ERROR_REASONS = Object.freeze({
+  cancelled: '这次运行被取消了。',
+  timeout: '这次运行超时，没有在时限内完成。',
+  no_agent: '当前没有已连接的代理，运行还在排队。',
+  provider_error: '模型提供方这次没有返回结果。',
+  rate_limited: '被服务方限流，这次运行没有跑完。',
+  forbidden: '当前工作区没有权限完成这次运行。',
+  invalid: '这次运行的请求没有被接受，没有执行。',
+});
+
+export function runErrorReason(run) {
+  if (!run) return '';
+  const explicit = run.result && typeof run.result.error === 'string' ? run.result.error.trim() : '';
+  if (explicit) return explicit;
+  const code = typeof run.error_code === 'string' ? run.error_code : '';
+  if (code && RUN_ERROR_REASONS[code]) return RUN_ERROR_REASONS[code];
+  if (code) return `服务端只留下错误代码：${code}`;
+  if (run.status === 'failed' || run.status === 'timeout' || run.status === 'cancelled') {
+    return '这次运行没有成功，服务端也没有留下原因。';
+  }
+  return '';
+}
+
+export function runDetailFields(run) {
+  const fields = [];
+  if (!run) return fields;
+  const text = runResultText(run);
+  if (text) fields.push({label: '摘要', value: text});
+  const code = typeof run.error_code === 'string' ? run.error_code : '';
+  const reason = runErrorReason(run);
+  if (code) fields.push({label: '状态码', value: code});
+  if (reason) fields.push({label: '失败原因', value: reason});
+  const result = run.result || {};
+  if (typeof result.model === 'string' && result.model) fields.push({label: '模型', value: result.model});
+  if (typeof result.source === 'string' && result.source) fields.push({label: '来源', value: result.source});
+  const dispatch = run.dispatch || {};
+  if (typeof dispatch.backend === 'string' && dispatch.backend) fields.push({label: '执行位置', value: dispatch.backend});
+  if (typeof dispatch.task_id === 'string' && dispatch.task_id) fields.push({label: '任务', value: dispatch.task_id});
+  return fields;
+}
+
 // The two destructive controls on this page ask before they act. The wording is
 // a pure function so it can be asserted without a DOM; it stays generic on
 // purpose and never echoes a user-supplied title, which could make the question
@@ -321,6 +367,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const view = document.defaultView;
   const readSearch = () => (view && view.location && view.location.search) || '';
   let runFilter = runFilterFromSearch(readSearch());
+  // Which rows the reader opened. Kept outside the render so the 3s poll and
+  // the filter switches do not close a row under the reader.
+  const expandedRuns = new Set();
 
   function pushRunFilter(filter) {
     const text = runFilterSearchText(filter);
@@ -436,8 +485,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (filterEmpty) filterEmpty.hidden = !(filtering && visible.length === 0);
     for (const item of visible) {
       const row = document.createElement('li');
+      row.className = 'run-row';
       const head = document.createElement('div');
       head.className = 'run-head';
+      // The whole head is the toggle, so one click opens exactly one run.
+      // Opening never fetches: the payload already carries what the detail shows.
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'run-toggle';
+      const open = expandedRuns.has(item.id);
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
       const status = document.createElement('strong');
       status.textContent = runStatusLabel(item);
       const pill = document.createElement('span');
@@ -446,9 +503,52 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const meta = document.createElement('span');
       meta.className = 'note';
       meta.textContent = item.error_code ? item.error_code : '';
-      head.appendChild(status);
-      head.appendChild(pill);
-      head.appendChild(meta);
+      toggle.appendChild(status);
+      toggle.appendChild(pill);
+      toggle.appendChild(meta);
+      const detail = document.createElement('div');
+      detail.className = 'run-detail';
+      detail.hidden = !open;
+      const fields = runDetailFields(item);
+      if (fields.length) {
+        const terms = document.createElement('dl');
+        for (const field of fields) {
+          const term = document.createElement('dt');
+          term.textContent = field.label;
+          const value = document.createElement('dd');
+          value.textContent = field.value;
+          terms.appendChild(term);
+          terms.appendChild(value);
+        }
+        detail.appendChild(terms);
+      } else {
+        const note = document.createElement('p');
+        note.className = 'note';
+        note.textContent = RUN_DETAIL_EMPTY;
+        detail.appendChild(note);
+      }
+      if (item.status === 'succeeded' && current && current.id) {
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.textContent = '保存到作品库';
+        save.addEventListener('click', async () => {
+          const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs/${item.id}/artifact`, {});
+          if (result.status !== 200 && result.status !== 201) {
+            show('error', messageFor(result.body.error, '保存到作品库失败。'));
+            return;
+          }
+          show('ok', '已保存到作品库。');
+        });
+        detail.appendChild(save);
+      }
+      toggle.addEventListener('click', () => {
+        const next = !expandedRuns.has(item.id);
+        if (next) expandedRuns.add(item.id);
+        else expandedRuns.delete(item.id);
+        detail.hidden = !next;
+        toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+      });
+      head.appendChild(toggle);
       if (item.status === 'queued' && current && current.id) {
         const cancel = document.createElement('button');
         cancel.type = 'button';
@@ -478,26 +578,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         head.appendChild(retry);
       }
       row.appendChild(head);
-      const text = runResultText(item);
-      if (text) {
-        const pre = document.createElement('pre');
-        pre.textContent = text;
-        row.appendChild(pre);
-        if (item.status === 'succeeded' && current && current.id) {
-          const save = document.createElement('button');
-          save.type = 'button';
-          save.textContent = '保存到作品库';
-          save.addEventListener('click', async () => {
-            const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs/${item.id}/artifact`, {});
-            if (result.status !== 200 && result.status !== 201) {
-              show('error', messageFor(result.body.error, '保存到作品库失败。'));
-              return;
-            }
-            show('ok', '已保存到作品库。');
-          });
-          row.appendChild(save);
-        }
-      }
+      row.appendChild(detail);
       list.appendChild(row);
     }
   }

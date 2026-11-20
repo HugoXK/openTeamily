@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, mount, namesFromList, readEditor, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
+import { cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -784,4 +784,36 @@ test('服务端说不能重跑时贴出原因，不假装成功', async () => {
   } finally {
     restore();
   }
+});
+
+// A run row expands in place: the summary, the status code and the failure
+// reason come from fields the server already returns (automations.py run_view).
+test('a failed run names a readable reason and keeps the raw code visible', () => {
+  const failed = {id: 'r1', status: 'failed', error_code: 'provider_error', result: {}};
+  assert.equal(runErrorReason(failed), '模型提供方这次没有返回结果。');
+  assert.deepEqual(runDetailFields(failed).map(field => field.label), ['状态码', '失败原因']);
+  assert.equal(runDetailFields(failed)[0].value, 'provider_error');
+});
+
+test('an explicit result.error wins over the mapped code', () => {
+  const failed = {status: 'failed', error_code: 'provider_error', result: {error: '上游 502：bad gateway'}};
+  assert.equal(runErrorReason(failed), '上游 502：bad gateway');
+});
+
+test('an unknown code falls back to the raw code, never to an empty box', () => {
+  const failed = {status: 'failed', error_code: 'mystery', result: {}};
+  assert.equal(runErrorReason(failed), '服务端只留下错误代码：mystery');
+});
+
+test('a run that left nothing says so instead of showing an empty box', () => {
+  assert.equal(RUN_DETAIL_EMPTY, '这次运行没有留下输出');
+  assert.deepEqual(runDetailFields({status: 'succeeded', result: {}}), []);
+});
+
+test('a succeeded run expands to its summary and the model that wrote it', () => {
+  const succeeded = {status: 'succeeded', error_code: null, result: {text: '今天的简报', model: 'deepseek-v4'}};
+  assert.deepEqual(runDetailFields(succeeded), [
+    {label: '摘要', value: '今天的简报'},
+    {label: '模型', value: 'deepseek-v4'},
+  ]);
 });
