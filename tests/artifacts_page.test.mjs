@@ -665,6 +665,9 @@ test('meetingsForScope keeps the workspace list unless the joined scope is selec
   );
   assert.deepEqual(meetingsForScope(items, {scope: 'joined', username: 'ALICE'}).map((row) => row.id), ['m1']);
   assert.deepEqual(meetingsForScope(items, {scope: 'joined'}).map((row) => row.id), []);
+  const local = [{id: 'm4', title: '独立容器的会议', attendees: [], created_by: 'owner'}];
+  assert.deepEqual(meetingsForScope(local, {scope: 'joined', userId: 'u1'}).map(row => row.id), ['m4']);
+  assert.deepEqual(meetingsForScope(local, {scope: 'joined'}), []);
 });
 
 test('the meetings kind renders the workspace meetings from the existing endpoint', async () => {

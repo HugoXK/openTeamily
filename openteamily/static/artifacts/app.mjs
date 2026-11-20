@@ -141,7 +141,8 @@ export function meetingsForScope(items, {scope = 'all', username = '', userId = 
   if (scope !== 'joined') return rows;
   const name = (username || '').trim().toLowerCase();
   return rows.filter((row) => {
-    if (userId && row.created_by === userId) return true;
+    // The single-owner DS-Bot uses this marker when its platform user ID is unavailable.
+    if (userId && (row.created_by === userId || row.created_by === 'owner')) return true;
     const attendees = Array.isArray(row.attendees) ? row.attendees : [];
     return Boolean(name) && attendees.some((item) => String(item).trim().toLowerCase() === name);
   });
