@@ -938,6 +938,7 @@ body.app-workspace #overview-panel .graph-stage,
   border: 0; background: var(--ot-accent); color: var(--ot-on-accent);
   font-size: 0.78rem; font-weight: 650;
 }
+.editor-export-status { margin: 0; align-self: center; font-size: 0.7rem; color: var(--ot-muted); }
 .editor-toolbar {
   display: flex; flex-wrap: wrap; gap: 0.2rem;
   padding: 0.25rem 0; border-top: 1px solid var(--ot-line);

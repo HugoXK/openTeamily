@@ -299,7 +299,7 @@ class ComposeEngine:
     def runtime_key_path(self, iid):
         return self.registry.root / runtime_key_relpath(iid)
 
-    def install_secret(self, iid, payload):
+    def install_secret(self, iid, payload, heartbeat=lambda: None):
         """Write the resolved model-API file (or empty). Never logs the key."""
         self.registry.entry(iid)
         path = self.secret_path(iid)
@@ -307,6 +307,19 @@ class ComposeEngine:
             raw = b''
         else:
             require(isinstance(payload, dict) and payload.get('api_key'), 'secret_payload')
+            from ..model_http_policy import valid_grant
+            from .. import model_api
+            if 'http_endpoint_grant' in payload:
+                require(valid_grant(payload.get('base_url'), payload['http_endpoint_grant']), 'model_endpoint')
+                # New manager + old pinned image must fail before writing a key
+                # file that an older launcher could export to an unsafe SDK.
+                from ..model_http_policy import FORMAT
+                image = self.registry.config['instances'][iid]['image']
+                raw_labels, _ = self.runner.run(['image', 'inspect', image, '--format', '{{json .Config.Labels}}'], heartbeat=heartbeat)
+                labels = json_loads(raw_labels)
+                require(isinstance(labels, dict) and labels.get('io.openteamily.model-http') == FORMAT, 'runtime_upgrade_required')
+            elif isinstance(payload.get('base_url'), str) and payload['base_url'].startswith('http:'):
+                require(model_api.valid_base_url(payload['base_url']), 'model_endpoint')
             raw = (json.dumps(payload, separators=(',', ':')) + '\n').encode()
         replace_private(path, raw)
         publish_container_secret(path)

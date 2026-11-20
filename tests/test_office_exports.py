@@ -10,6 +10,7 @@ from zipfile import ZipFile
 from openteamily import office_exports
 from tests import test_artifact_versions as helpers
 from tests import test_artifact_dashboards as dashboard_helpers
+from tests import test_artifact_slides as slide_helpers
 from tests.test_management import Client
 
 class OfficeExportTests(unittest.TestCase):
@@ -77,3 +78,30 @@ class OfficeExportTests(unittest.TestCase):
             self.assertEqual(self.alice.call('GET',base+path)['status'],400,path)
         self.assertEqual(self.export(aid,'xlsx')['status'],400)
         self.assertEqual(self.export(aid,'pdf',revision=999)['status'],404)
+
+    def test_actual_slides_pptx_unicode_no_macros_or_external_links_and_history(self):
+        made=self.alice.call('POST',f'/v1/workspaces/{self.wid}/artifacts',
+            {'title':'路线 & 报告','kind':'slides','slides':slide_helpers.deck(('目标',['统一入口 < B & C']),('下一步',['接入运行时','Literal =CMD()']))},
+            {'HTTP_IDEMPOTENCY_KEY':'office-slides-create001'})
+        self.assertEqual(made['status'],201,made);aid=made['body']['artifact']['id']
+        result=self.export(aid,'pptx');self.assertEqual(result['status'],200,result)
+        parts=self.parts(result['body']);slide=''.join(parts['ppt/slides/slide1.xml'].itertext())
+        self.assertIn('目标',slide);self.assertIn('统一入口 < B & C',slide)
+        self.assertIn('Literal =CMD()',''.join(parts['ppt/slides/slide2.xml'].itertext()))
+        types={n.attrib.get('PartName'):n.attrib.get('ContentType') for n in parts['[Content_Types].xml']}
+        self.assertEqual(types['/ppt/presentation.xml'],'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml')
+        self.assertEqual(types['/ppt/slides/slide1.xml'],'application/vnd.openxmlformats-officedocument.presentationml.slide+xml')
+        self.assertNotIn('vbaProject',types)
+        saved=self.alice.call('POST',f'/v1/workspaces/{self.wid}/artifacts/{aid}',
+            {'revision':1,'changes':{'slides':slide_helpers.deck(('CHANGED VERSION ONLY',['only in revision 2']))}})
+        self.assertEqual(saved['status'],200,saved)
+        old=self.export(aid,'pptx',revision=1);self.assertEqual(old['status'],200,old)
+        historical=''.join(self.parts(old['body'])['ppt/slides/slide1.xml'].itertext())
+        self.assertIn('目标',historical);self.assertNotIn('CHANGED VERSION ONLY',historical)
+        current=''.join(self.parts(self.export(aid,'pptx')['body'])['ppt/slides/slide1.xml'].itertext())
+        self.assertIn('CHANGED VERSION ONLY',current)
+        headers=dict(old['headers']);self.assertIn('attachment',headers['Content-Disposition']);self.assertIn('.pptx',headers['Content-Disposition'])
+        self.assertIn('sandbox',headers['Content-Security-Policy']);self.assertEqual(headers['X-Content-Type-Options'],'nosniff')
+        self.assertEqual(self.export(aid,'docx')['status'],400)
+        self.assertEqual(self.export(aid,'xlsx')['status'],400)
+        self.assertEqual(self.export(self.create()['body']['artifact']['id'],'pptx')['status'],400)

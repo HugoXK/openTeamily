@@ -58,7 +58,8 @@ class ManagerClient:
             timer.start()  # total response/header deadline, not only per-read timeout
             conn.request(method, path, body=body, headers={
                 'Host': self.host_header, 'Authorization': f'Bearer {self.manager_id}.{self._token}',
-                'Content-Type': 'application/json', 'Accept': 'application/json', 'Connection': 'close'})
+                'Content-Type': 'application/json', 'Accept': 'application/json', 'Connection': 'close',
+                'X-Openteamily-Model-HTTP': 'openteamily.exact-http-task.v1'})
             response = conn.getresponse()
             raw = response.read(131073)
             require(len(raw) <= 131072, 'response_limit')
@@ -142,10 +143,15 @@ class ManagerClient:
             require(data['model_api'] is None, 'secret_shape')
             return None
         doc = data['model_api']
-        require(isinstance(doc, dict) and set(doc) == {'provider', 'base_url', 'model', 'api_key', 'source'}, 'secret_shape')
+        require(isinstance(doc, dict) and set(doc) in ({'provider', 'base_url', 'model', 'api_key', 'source'},
+                {'provider', 'base_url', 'model', 'api_key', 'source', 'http_endpoint_grant'}), 'secret_shape')
         for key in ('provider', 'base_url', 'model', 'api_key', 'source'):
             require(isinstance(doc[key], str) and doc[key], 'secret_shape')
         require(doc['source'] in ('platform', 'user'), 'secret_shape')
+        from .. import model_api
+        from ..model_http_policy import valid_grant
+        grant = doc.get('http_endpoint_grant')
+        require(valid_grant(doc['base_url'], grant) if 'http_endpoint_grant' in doc else model_api.valid_base_url(doc['base_url']), 'model_endpoint')
         return doc
 
     def runtime_bot_social(self, iid, claim):
