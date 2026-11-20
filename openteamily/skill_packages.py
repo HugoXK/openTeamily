@@ -1,6 +1,7 @@
 """Original, immutable prompt-only packages. No archives, scripts or path inputs."""
 import hashlib
 import re
+from . import imported_skills
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS skill_bindings (
@@ -14,6 +15,7 @@ CREATE TABLE IF NOT EXISTS skill_task_material (
  task_id TEXT PRIMARY KEY REFERENCES runtime_tasks(id) ON DELETE CASCADE,
  manifest TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
 """
+SCHEMA += imported_skills.SCHEMA
 # Capability is advertised, not proof of successful inference; per-task acknowledgement remains mandatory.
 FORMAT = 'openteamily.prompt-skill.v1'
 SCHEMA += """
@@ -54,10 +56,10 @@ def scope_context(db, uid, scope, allow_member=False):
             'label':workspace['name']+' / '+(row['title'] if kind else row['name']), 'administration':role in ('owner','admin')}
 
 
-def supports(db, connection_id):
+def supports(db, connection_id, formats=None):
     import json
     row = db.execute('SELECT formats FROM runtime_skill_capabilities WHERE connection_id=?',(connection_id,)).fetchone()
-    return bool(row and FORMAT in json.loads(row['formats']))
+    return bool(row and set(formats or [FORMAT]) <= set(json.loads(row['formats'])))
 
 
 def selection(db, task_id):
@@ -234,18 +236,18 @@ DEFINITIONS = [('meeting-notes',
   'actions without tool results.')]
 
 
-def catalogue():
+def catalogue(db=None, uid=None):
     items = []
     for ident, title, content in DEFINITIONS:
         markdown = f"---\nname: {ident}\ndescription: {title}\nversion: {VERSION}\n---\n\n{content}\n"
         items.append({'id':ident, 'name':title, 'version':VERSION, 'content':markdown,
                       'digest':hashlib.sha256(markdown.encode()).hexdigest(), 'permissions':PERMISSIONS,
                       'format':'openteamily.prompt-skill.v1', 'source':'bundled-original'})
-    return items
+    return items + (imported_skills.catalogue(db,uid) if db is not None and uid else [])
 
 
-def resolve(ident):
-    return next((i for i in catalogue() if i['id']==ident),None)
+def resolve(ident, db=None, uid=None):
+    return next((i for i in catalogue(db,uid) if i['id']==ident),None)
 
 
 def material(db, task_id):
@@ -262,7 +264,7 @@ def material(db, task_id):
     for row in rows:
         if context['kind']=='agent' and not context['administration'] and row['scope']!='account':
             continue
-        item = resolve(row['skill_id'])
+        item = resolve(row['skill_id'],db,owner['user_id'])
         if item and item['version']==row['version'] and item['digest']==row['digest']:
             result[item['id']] = item
     expected = selection(db,task_id)
@@ -271,3 +273,14 @@ def material(db, task_id):
             return []
         result = {i['id']:i for i in expected}
     return sorted(result.values(),key=lambda i:i['id'])
+
+
+def required_formats(db,uid,scope):
+    inherited = scope if scope.startswith('automation:') else 'account'
+    rows = db.execute('SELECT * FROM skill_bindings WHERE user_id=? AND scope IN (?,?)',(uid,inherited,scope)).fetchall()
+    formats = {FORMAT}
+    for row in rows:
+        item = resolve(row['skill_id'],db,uid)
+        if item and item['version']==row['version'] and item['digest']==row['digest']:
+            formats.add(item['format'])
+    return formats

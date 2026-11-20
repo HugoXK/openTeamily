@@ -14,6 +14,9 @@ from . import discover
 
 class SettingsPage:
     ASSETS = {
+        '/register': ('register', 'index.html', 'text/html; charset=utf-8'),
+        '/register/app.mjs': ('register', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/register/app.css': ('register', 'app.css', 'text/css; charset=utf-8'),
         '/settings': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/appearance': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/language': ('settings', 'index.html', 'text/html; charset=utf-8'),
@@ -87,6 +90,8 @@ class SettingsPage:
         '/look/app.mjs': ('look', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/look/app.css': ('look', 'app.css', 'text/css; charset=utf-8'),
         '/skills': ('skills', 'index.html', 'text/html; charset=utf-8'),
+        '/skills/imports.mjs': ('skills', 'imports.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/workspace-events.mjs': ('shell', 'workspace-events.mjs', 'text/javascript; charset=utf-8'),
         '/skills/execution.mjs': ('skills', 'execution.mjs', 'text/javascript; charset=utf-8'),
         '/skills/app.mjs': ('skills', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/skills/app.css': ('skills', 'app.css', 'text/css; charset=utf-8'),
@@ -99,7 +104,7 @@ class SettingsPage:
         '/home/app.mjs': ('home', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/home/app.css': ('home', 'app.css', 'text/css; charset=utf-8'),
     }
-    PREFIXES = ('/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
+    PREFIXES = ('/register', '/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")

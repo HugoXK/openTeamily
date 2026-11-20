@@ -137,7 +137,7 @@ class SkillExecutionTests(unittest.TestCase):
         tasks=[{'id':str(i),'kind':'echo','prompt':'task'}for i in range(3)];seen=[]
         def request(origin,method,path,token,body=None):
             if path.endswith('/connect'):
-                self.assertEqual(body['skill_formats'],['openteamily.prompt-skill.v1']);return 200,{'connection':{'id':'own'}}
+                self.assertEqual(body['skill_formats'],['openteamily.prompt-skill.v1','openteamily.prompt-skill.v2']);return 200,{'connection':{'id':'own'}}
             if path.endswith('/tasks'):return 200,{'items':tasks}
             if '/0/claim' in path:raise AgentError(409,{})
             if '/1/result' in path:raise AgentError(409,{})
