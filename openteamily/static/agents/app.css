@@ -243,3 +243,33 @@ body.app-workspace:not(.chat-open) > main > #main-panel:has(> .directory-top) { 
   .directory-top .directory-search input { width: 100%; }
 }
 .filter-row > label select#creator-filter { flex: 0 0 auto; width: auto; min-width: 6rem; max-width: 14rem; }
+
+#team-template-list .team-template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.9rem;
+  background: var(--ot-surface);
+}
+
+#team-template-list h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+#team-template-list .summary {
+  margin: 0;
+  color: var(--ot-muted);
+  font-size: 0.85rem;
+}
+
+#team-template-list .note {
+  margin: 0;
+}
+
+#team-template-list .primary {
+  margin-top: 0.35rem;
+  align-self: flex-start;
+}
