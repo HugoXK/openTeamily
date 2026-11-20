@@ -7,6 +7,12 @@ export default function members(host) {
   return {
     pages: ['members'],
     endpoints: {
+      // Wizard step 3 (#281): static OpenTeamily role copy, not a Teamily claim.
+      roles: async () => ({ roles: [
+        { role: 'owner', title: 'Owner', summary: 'Creates and can delete the team, assigns admin/member roles, and can never be removed or suspended.' },
+        { role: 'admin', title: 'Admin', summary: 'Manages members (except the owner), invites and join requests; cannot change roles.' },
+        { role: 'member', title: 'Member', summary: 'Works in the team and can leave; cannot manage invites or other members.' },
+      ] }),
       list: async (p) => bs().get(base(p)),
       setRole: async (p) => bs().patch(`${base(p)}/${seg(p?.handle, 'handle')}`, { role: p?.role }),
       suspend: async (p) => bs().patch(`${base(p)}/${seg(p?.handle, 'handle')}`, { suspended: p?.suspended !== false }),

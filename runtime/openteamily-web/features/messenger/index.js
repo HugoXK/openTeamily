@@ -14,14 +14,21 @@ export default function messenger(host) {
   return {
     pages: ['messenger'],
     endpoints: {
-      list: async () => bs().get('/v1/ot/conversations'),
+      list: async () => {
+        const data = await bs().get('/v1/ot/conversations')
+        return { ...data, conversations: (data.conversations ?? []).map((c) => ({ ...c, first_unread_seq: c.unread > 0 ? c.read_seq + 1 : null })) }
+      },
       openDm: async (p) => bs().post('/v1/ot/conversations', { kind: 'dm', peer: p?.handle }),
       createGroup: async (p) => bs().post('/v1/ot/conversations', { kind: 'group', title: p?.title, team_id: p?.team_id || undefined, members: p?.members ?? [] }),
       get: async (p) => bs().get(conv(p)),
       update: async (p) => bs().patch(conv(p), { title: p?.title, pinned: p?.pinned, muted: p?.muted }),
       addMember: async (p) => bs().post(`${conv(p)}/members`, { handle: p?.handle }),
       removeMember: async (p) => bs().del(`${conv(p)}/members/${seg(p?.handle, 'handle')}`),
-      messages: async (p) => bs().get(`${conv(p)}/messages` + qs({ before: p?.before, after: p?.after, limit: p?.limit })),
+      messages: async (p) => {
+        const page = await bs().get(`${conv(p)}/messages` + qs({ before: p?.before, after: p?.after, limit: p?.limit }))
+        // #358: the first message after the viewer's read cursor is the "new messages" divider.
+        return { ...page, first_unread_seq: page.read_seq < page.last_seq ? page.read_seq + 1 : null }
+      },
       send: async (p) => bs().post(`${conv(p)}/messages`, { body: p?.body, mentions: p?.mentions, reply_to: p?.reply_to, client_key: p?.client_key }),
       read: async (p) => bs().post(`${conv(p)}/read`, p?.seq === undefined ? {} : { seq: p.seq }),
       edit: async (p) => bs().patch(msg(p), { body: p?.body }),

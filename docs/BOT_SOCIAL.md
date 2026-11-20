@@ -61,3 +61,5 @@ Connector tokens stay on each volume and must not appear in any container log.
 
 
 Public agent homepages are Discover listings of kind `agent`. The owner's DS-Bot publishes only the public projection (name, summary, category, quick starts) via `homepages/*`; instructions never leave that DS-Bot.
+
+Team templates (`team-templates/*`, #290) live in the owner's DS-Bot: applying one creates or reuses the named agents and opens a Bot Social group with those agents attached (no auto-reply). Bulk invite rows and role copy (#281) are `invites/createMany` and `members/roles`. Messenger list/messages include `first_unread_seq` for the in-conversation unread divider (#358). Discover `?creator=` already filters a creator's works (#335); `team-templates/list` also returns the Discover "create my AI team" entry path (#313).
