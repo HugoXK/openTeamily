@@ -88,6 +88,23 @@ test('the mine tab lists saved automations for the signed-in runtime owner', asy
   assert.deepEqual(result.body.items.map(item => item.id), [automation.id])
 })
 
+test('creating a scheduled automation can save it enabled in the same request', async () => {
+  const { e } = fixture()
+  const request = {
+    method: 'POST', path: `/v1/workspaces/${W}/automations`, idempotency_key: 'e'.repeat(16),
+    body: { title: '每周检查', template_id: 'custom', prompt: 'Check the report', participants: ['alice'],
+      schedule: { kind: 'weekly', weekday: 1, time: '09:00', time_zone: 'UTC' }, enabled: true },
+  }
+  const created = await e['automations/v1'](request)
+  assert.equal(created.status, 201)
+  assert.equal(created.body.automation.enabled, true)
+  assert.equal(created.body.automation.revision, 1)
+  const retried = await e['automations/v1'](request)
+  assert.equal(retried.status, 200)
+  assert.equal(retried.body.automation.id, created.body.automation.id)
+  assert.equal((await e['automations/v1']({...request, body: {...request.body, enabled: false}})).status, 409)
+})
+
 test('a due schedule fires inside DS-Bot once per slot and records the DS-Bot reply', async () => {
   const at = zonedEpoch('UTC', 2027, 1, 4, 9, 1)
   const { e, calls, feature, clock } = fixture(null, at)

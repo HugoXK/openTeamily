@@ -254,10 +254,12 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     const intent = payload.intent ?? ''
     const scope = payload.scope ?? 'once'
     const agents = payload.agents ?? []
+    const enabled = payload.enabled === undefined ? templateId === REMINDER : payload.enabled
     if (!validTitle(title) || !Object.hasOwn(TEMPLATES, templateId) || !validSchedule(schedule) || !validUsernames(names)
       || !validIntent(intent) || !SCOPES.has(scope) || !validAgents(agents)) {
       refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
     }
+    if (typeof enabled !== 'boolean') refuse(400, 'invalid', 'enabled must be a boolean')
     const key = String(payload.idempotency_key ?? '')
     if (!IDEM.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
     const sched = normalizeSchedule(schedule)
@@ -268,7 +270,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     else if (validPrompt(prompt)) compiled = prompt === compiledPrompt
     else refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
     const clean = title.trim()
-    const requestHash = sha(JSON.stringify({ agents, intent, participants: names, prompt, schedule: sched, scope, template_id: templateId, title: clean }))
+    const requestHash = sha(JSON.stringify({ agents, intent, participants: names, prompt, schedule: sched, scope, template_id: templateId, title: clean,
+      ...(payload.enabled === undefined ? {} : { enabled }) }))
     const keyHash = sha(key)
     const existing = one('SELECT * FROM ot_automations WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
     if (existing) {
@@ -284,7 +287,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     const now = clock()
     run('INSERT INTO ot_automations (id, workspace_id, title, title_hash, prompt, template_id, schedule, participants, enabled, revision, created, updated, key_hash, request_hash, intent, scope, agents, compiled) VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)',
       id, workspaceId, clean, sha(clean.toLowerCase()), prompt, templateId, JSON.stringify(sched),
-      JSON.stringify(names.map((username) => ({ username }))), templateId === REMINDER ? 1 : 0, now, now, keyHash, requestHash,
+      JSON.stringify(names.map((username) => ({ username }))), enabled ? 1 : 0, now, now, keyHash, requestHash,
       intent, scope, JSON.stringify(agents.map((n) => n.trim())), compiled ? 1 : 0)
     return { status: 201, automation: view(one('SELECT * FROM ot_automations WHERE id=?', id)) }
   }

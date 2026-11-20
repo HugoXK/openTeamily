@@ -369,12 +369,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const search = document.getElementById('search');
   const runButton = document.getElementById('tick-automation');
   const newButton = document.getElementById('new-automation');
+  const saveButton = document.getElementById('save-automation');
+  const backButton = document.getElementById('cancel-editor');
+  const tabs = document.querySelectorAll('.tabs [data-category]');
   const workspaceStatus = document.getElementById('workspace-status');
   let currentUser = null;
   let loadRequest = 0;
   let templates = [];
   let templateState = 'loading';
   let current = null;
+  let draftSave = null;
   let category = 'mine';
   let runTimer = 0;
   let runRequest = 0;
@@ -725,6 +729,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     // drops the question instead of showing it again above a different item.
     closeConfirm({restoreFocus: false});
     current = item;
+    draftSave = null;
     recentRuns = [];
     stopRunPoll();
     listPanel.hidden = true;
@@ -739,6 +744,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     runButton.disabled = Boolean(item?.id && manualPending.has(item.id));
     runButton.textContent = '运行一次';
     loadRuns();
+  }
+
+  function selectCategory(value) {
+    category = value;
+    for (const tab of tabs) {
+      tab.setAttribute('aria-selected', tab.dataset.category === category ? 'true' : 'false');
+    }
   }
 
   async function loadList() {
@@ -879,12 +891,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       loadRuns();
     });
   }
-  for (const tab of document.querySelectorAll('.tabs [data-category]')) {
+  for (const tab of tabs) {
     tab.addEventListener('click', async () => {
-      category = tabCategory(tab.dataset.category);
-      for (const button of document.querySelectorAll('.tabs [data-category]')) {
-        button.setAttribute('aria-selected', button === tab ? 'true' : 'false');
-      }
+      selectCategory(tabCategory(tab.dataset.category));
       form.hidden = true;
       listPanel.hidden = false;
       closeConfirm({restoreFocus: false});
@@ -901,7 +910,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   form.elements.kind.addEventListener('change', () => syncScheduleFields(form));
 
-  document.getElementById('cancel-editor').addEventListener('click', async () => {
+  backButton.addEventListener('click', async () => {
     closeConfirm({restoreFocus: false});
     current = null;
     form.hidden = true;
@@ -915,8 +924,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (saveButton.disabled) return;
     const values = readEditor(form);
-    if (!workspaceId()) {
+    const workspace = workspaceId();
+    if (!workspace) {
       show('error', '先选择一个工作区。');
       return;
     }
@@ -924,26 +935,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', '请填写标题和至少一名参与成员。');
       return;
     }
+    const item = current?.id ? current : null;
+    const path = `/v1/workspaces/${workspace}/automations`;
+    const {template_id, ...changes} = values;
+    saveButton.disabled = true;
+    backButton.disabled = true;
+    saveButton.textContent = '保存中…';
     let result;
-    if (current && current.id) {
-      const changes = {
-        title: values.title, prompt: values.prompt, schedule: values.schedule,
-        participants: values.participants, enabled: values.enabled,
-        intent: values.intent, scope: values.scope, agents: values.agents,
-      };
-      result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}`,
-                             {revision: current.revision, changes});
-    } else {
-      result = await request('POST', `/v1/workspaces/${workspaceId()}/automations`, {
-        title: values.title, prompt: values.prompt, template_id: values.template_id,
-        schedule: values.schedule, participants: values.participants,
-        intent: values.intent, scope: values.scope, agents: values.agents,
-      }, {'Idempotency-Key': idempotencyKey()});
-      if (result.status === 201 && values.enabled && result.body.automation) {
-        const created = result.body.automation;
-        result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${created.id}`,
-                               {revision: created.revision, changes: {enabled: true}});
+    try {
+      if (item) {
+        result = await request('POST', `${path}/${item.id}`, {revision: item.revision, changes});
+      } else {
+        const content = JSON.stringify([workspace, values]);
+        if (draftSave?.content !== content) draftSave = {content, key: idempotencyKey()};
+        result = await request('POST', path, {...changes, template_id}, {'Idempotency-Key': draftSave.key});
       }
+    } catch {
+      show('error', '暂时无法确认是否保存成功，请重试。');
+      return;
+    } finally {
+      saveButton.disabled = false;
+      backButton.disabled = false;
+      saveButton.textContent = '保存';
     }
     if (result.status === 409) {
       show('error', '自动化已在别处更新，请重新打开后再保存。');
@@ -955,6 +968,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     current = result.body.automation;
+    if (!item) {
+      selectCategory('mine');
+      search.value = '';
+    }
     closeConfirm({restoreFocus: false});
     fillEditor(form, current, currentUser && currentUser.username);
     form.elements.template_id.disabled = true;
