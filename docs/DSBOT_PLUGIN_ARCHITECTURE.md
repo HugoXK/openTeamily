@@ -48,6 +48,25 @@ All of these already exist in the pinned tree and are used by today's runtime im
 | Runtime services: `sessions`, `sessionController`, `llm`, `tools`, `systemPrompt`, `workspaceRegistry`, `schedule`, `skills.registerProvider`, `jobs`, `shellEnv`, DS-Bot memory/goals/schedules/office | ds-bot `src/host/*` | Execution of every moved feature (chat via native sessions as in #379, skills via `skills.registerProvider`, automations via DSH `schedule`, exports via ds-bot `office`, memory via ds-bot memory scopes). |
 | MCP tool mounts | #379 (`ds-bot-bridge.mjs`, Composio→MCP bridge, custom MCP) | Composio and user-configured MCP as native DS-Bot tools, per user. |
 
+### 2.1 Feature extension point (stable; parallel streams add features without editing core)
+
+* A feature is a directory `runtime/openteamily-web/features/<name>/index.js` whose default export is a
+  factory `feature(host) → { endpoints: { <op>: async (payload, { request, host }) => value }, migrate? }`.
+  `<name>` matches `[a-z][a-z0-9-]{0,39}`; endpoints are reachable as
+  `POST /api/openteamily {"endpoint": "<name>/<op>", "payload": …}` and answer `{ok, value | error}`.
+  Throw an `Error` with a string `code` (e.g. `automations/not-found`) for a typed failure.
+* `host` gives: `identity` (instance id), `dataDir`, `featureDir()` (private per-feature directory on the
+  user's volume, e.g. for a `node:sqlite` file), `runtime()` → `Promise<{ rt, ctx }>` of the user's
+  DS-Bot (the upstream `createRuntime` result and the DSH context with `sessions`, `llm`, `tools`,
+  `schedule`, `skills`, …), `currentRuntime()`, `log()`.
+* Features are discovered at start; a feature that throws while loading is skipped and logged, never
+  breaking the core or other features. Core files (`index.js`, `src/*`) are owned by the skeleton stream;
+  interface changes are noted here.
+* Each feature ships its own tests in `runtime/openteamily-web/test/<name>*.test.js` (run by
+  `npm test` in the image recipe job) and, where it needs a running DS-Bot, a container check.
+* The browser keeps calling legacy `/v1/...` until the page is flipped in `dsbot_routes.json`
+  (`moved_pages`); a moved page calls `/b/api/openteamily` instead.
+
 Plugin storage lives on the user's volume under `/data/openteamily/` (SQLite via `node:sqlite` on Node 24,
 plus files), owned by uid 1000 like the rest of `/data`. Nothing about one user is stored in another user's
 volume.
