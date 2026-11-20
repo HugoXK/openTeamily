@@ -8,6 +8,7 @@ import { applyOnRuntime } from '../../flybot-social-host/index.js'
 import { registerFlybotRoute } from '../../flybot-web-slots/index.js'
 import { loadBotSocialConfig } from '../bot-social-config.js'
 import { startBridge, runTurn } from '../ds-bot-bridge.mjs'
+import { normalizeImportedSession } from '../../openteamily-web/features/agents/history.js'
 import { attachRuntime } from '../../openteamily-web/src/host.js'
 
 // Same inject list as runtime/ds-bot-upstream/ds-bot/index.js — this plugin
@@ -17,6 +18,12 @@ export const inject = ['llm', 'tools', 'systemPrompt', 'sessionController', 'ses
 
 export function apply(ctx, config = {}) {
   const rt = createRuntime(ctx, config)
+  const resolveAgent = rt.resolveAgent.bind(rt)
+  rt.resolveAgent = async (...args) => {
+    const agent = await resolveAgent(...args)
+    normalizeImportedSession(agent?.session)
+    return agent
+  }
   // OpenTeamily features (@openteamily/web) execute on this same DS-Bot runtime.
   attachRuntime({ rt, ctx })
   const collaboration = loadBotSocialConfig()
