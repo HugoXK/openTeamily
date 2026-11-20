@@ -23,21 +23,20 @@ BOT_SOCIAL_TARGET = '/run/secrets/openteamily-bot-social.json'
 BOT_SOCIAL_BIND_SUFFIX = ':' + BOT_SOCIAL_TARGET + ':ro'
 RUNTIME_KEY_TARGET = '/run/secrets/openteamily-runtime-key.json'
 RUNTIME_KEY_BIND_SUFFIX = ':' + RUNTIME_KEY_TARGET + ':ro'
-ALLOWED_BIND_SUFFIXES = (SECRET_BIND_SUFFIX, BOT_SOCIAL_BIND_SUFFIX, RUNTIME_KEY_BIND_SUFFIX)
-ALLOWED_BIND_TARGETS = (SECRET_TARGET, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET)
+SEAL_KEY_TARGET = '/run/secrets/openteamily-seal.key'
+SEAL_KEY_BIND_SUFFIX = ':' + SEAL_KEY_TARGET + ':ro'
+ALLOWED_BIND_SUFFIXES = (SECRET_BIND_SUFFIX, BOT_SOCIAL_BIND_SUFFIX, RUNTIME_KEY_BIND_SUFFIX, SEAL_KEY_BIND_SUFFIX)
+ALLOWED_BIND_TARGETS = (SECRET_TARGET, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET, SEAL_KEY_TARGET)
+RUNTIME_MEMORY_MIB = 1536
+RUNTIME_MEMORY_LIMIT = f'{RUNTIME_MEMORY_MIB}m'
+LEGACY_MEMORY_LIMIT = '1g'
 
 def compose_bytes(document):
     return (json.dumps(document, sort_keys=True, separators=(',', ':')) + '\n').encode()
 
 
-def volume_key(item):
-    if not isinstance(item, dict):
-        return None
-    return (item.get('type'), item.get('source'), item.get('target'), bool(item.get('read_only')))
-
-
-def added_secret_binds(stored, expected):
-    """If stored is expected plus only missing allowlisted secret binds, return those binds.
+def compatible_manifest_upgrade(stored, expected):
+    """Describe a manifest upgrade limited to known secret binds and the new memory cap.
 
     Anything else (removed mounts, changed image, unexpected keys) returns None so the
     exact-content check still fails closed. Named volume identity must stay the same.
@@ -46,7 +45,10 @@ def added_secret_binds(stored, expected):
         return None
     if stored.get('volumes') != expected.get('volumes'):
         return None
-    stored_svc, expected_svc = (stored.get('services') or {}).get('flybot'), (expected.get('services') or {}).get('flybot')
+    stored_services, expected_services = stored.get('services'), expected.get('services')
+    if not isinstance(stored_services, dict) or not isinstance(expected_services, dict) or set(stored_services) != {'flybot'}:
+        return None
+    stored_svc, expected_svc = stored_services['flybot'], expected_services.get('flybot')
     if not isinstance(stored_svc, dict) or not isinstance(expected_svc, dict):
         return None
     stored_vols = stored_svc.get('volumes')
@@ -55,27 +57,29 @@ def added_secret_binds(stored, expected):
         return None
     stored_rest = {k: v for k, v in stored_svc.items() if k != 'volumes'}
     expected_rest = {k: v for k, v in expected_svc.items() if k != 'volumes'}
+    change = {'added': []}
+    if stored_rest.get('mem_limit') == LEGACY_MEMORY_LIMIT and expected_rest.get('mem_limit') == RUNTIME_MEMORY_LIMIT:
+        stored_rest['mem_limit'] = RUNTIME_MEMORY_LIMIT
+        change['memory_limit'] = {'from': LEGACY_MEMORY_LIMIT, 'to': RUNTIME_MEMORY_LIMIT}
+    # Only this additive, manager-derived routing identity is permitted. Keep
+    # the stable per-volume UI/API identity (and existing issued API keys).
+    env = expected_rest.get('environment')
+    if 'environment' not in stored_rest and isinstance(env, dict) and set(env) == {'OPENTEAMILY_ROUTING_INSTANCE_ID'} and re.fullmatch(r'[0-9a-f]{32}', env['OPENTEAMILY_ROUTING_INSTANCE_ID']):
+        stored_rest['environment'] = env
     if stored_rest != expected_rest:
         return None
     if {k: v for k, v in stored.items() if k != 'services'} != {k: v for k, v in expected.items() if k != 'services'}:
         return None
-    stored_keys = [volume_key(item) for item in stored_vols]
-    expected_keys = [volume_key(item) for item in expected_vols]
-    if None in stored_keys or None in expected_keys:
+    if any(item not in expected_vols or stored_vols.count(item) != 1 for item in stored_vols):
         return None
-    if any(key not in expected_keys for key in stored_keys):
-        return None
-    added = [item for item, key in zip(expected_vols, expected_keys) if key not in stored_keys]
-    if not added:
-        return []
-    allowed = []
+    added = [item for item in expected_vols if item not in stored_vols]
     for item in added:
-        if item.get('type') != 'bind' or item.get('read_only') is not True:
+        if not isinstance(item, dict) or item.get('type') != 'bind' or item.get('read_only') is not True:
             return None
         if item.get('target') not in ALLOWED_BIND_TARGETS or '..' in str(item.get('source') or ''):
             return None
-        allowed.append(item)
-    return allowed
+        change['added'].append(item['target'])
+    return change
 
 
 def secret_relpath(iid):
@@ -93,6 +97,11 @@ def runtime_key_relpath(iid):
     return 'secrets/runtime-key-' + iid + '.json'
 
 
+def seal_key_relpath(iid):
+    check_id(iid)
+    return 'secrets/seal-' + iid + '.key'
+
+
 def manifest(iid, entry):
     check_id(iid)
     require(isinstance(entry, dict) and set(entry) == {'image', 'healthcheck', 'publish_port'}, 'registry_fields')
@@ -105,12 +114,14 @@ def manifest(iid, entry):
             re.fullmatch(r'[A-Za-z0-9/_.-]+', health[1]) and '..' not in health[1].split('/')), 'healthcheck')
     service = {'image': image, 'init': True, 'user': '1000:1000', 'read_only': True,
                'security_opt': ['no-new-privileges:true'], 'cap_drop': ['ALL'], 'pids_limit': 256,
-               'mem_limit': '1g', 'cpus': 1, 'restart': 'no',
+               'mem_limit': RUNTIME_MEMORY_LIMIT, 'cpus': 1, 'restart': 'no',
+               'environment': {'OPENTEAMILY_ROUTING_INSTANCE_ID': iid},
                'volumes': [
                    {'type': 'volume', 'source': 'data', 'target': '/data'},
                    {'type': 'bind', 'source': secret_relpath(iid), 'target': SECRET_TARGET, 'read_only': True},
                    {'type': 'bind', 'source': bot_social_relpath(iid), 'target': BOT_SOCIAL_TARGET, 'read_only': True},
                    {'type': 'bind', 'source': runtime_key_relpath(iid), 'target': RUNTIME_KEY_TARGET, 'read_only': True},
+                   {'type': 'bind', 'source': seal_key_relpath(iid), 'target': SEAL_KEY_TARGET, 'read_only': True},
                ],
                'tmpfs': ['/tmp:rw,noexec,nosuid,size=67108864'],
                'logging': {'driver': 'local', 'options': {'max-size': '10m', 'max-file': '3'}}}
@@ -163,7 +174,7 @@ class Registry:
         self.adopted = {}
         cfg = self.config
         base = {'version', 'execution_enabled', 'base_url', 'server_host', 'manager_id', 'token', 'docker', 'socket', 'instances'}
-        require(isinstance(cfg, dict) and set(cfg) in (base, base | {'auto_instances'}), 'config_fields')
+        require(isinstance(cfg, dict) and set(cfg) - {'auto_instances', 'dsbot_gateway'} == base, 'config_fields')
         require(type(cfg['version']) is int and cfg['version'] == 1 and type(cfg['execution_enabled']) is bool, 'config_version')
         auto = cfg.get('auto_instances')
         if auto is not None:
@@ -215,12 +226,12 @@ class Registry:
             write_new(path, expected)
         stored = read_private(path)
         if stored != expected:
-            added = added_secret_binds(stored, expected)
-            require(added is not None, 'manifest_changed')
+            change = compatible_manifest_upgrade(stored, expected)
+            require(change is not None, 'manifest_changed')
             # Rewrite only the frozen compose file. The named volume ot-<id> and
             # existing secret files are not removed or replaced here.
             replace_private(path, compose_bytes(expected))
-            self.upgrades[iid] = [item['target'] for item in added]
+            self.upgrades[iid] = change
         require(read_private(path) == expected, 'manifest_changed')
         if snapshot is not None:
             require(snapshot.get('id') == iid and snapshot.get('backend_mode') == 'compose' and
@@ -234,18 +245,18 @@ class Registry:
         expected = manifest(iid, self.config['instances'][iid])
         path = self.root / ('compose-' + iid + '.json')
         volume = 'ot-' + iid
-        note = 'The named volume and existing secret files are left in place. A container created from the old file still needs a no-delete recreate so new binds attach.'
+        note = 'The named volume and existing secret files stay in place. A container created from the old file needs a recreate to apply the manifest changes.'
         if not path.exists() and not path.is_symlink():
             return {'status': 'missing', 'volume': volume, 'compose_file': str(path), 'note': note}
         stored = read_private(path)
         if stored == expected:
             return {'status': 'current', 'volume': volume, 'compose_file': str(path)}
-        added = added_secret_binds(stored, expected)
-        if added is None:
+        change = compatible_manifest_upgrade(stored, expected)
+        if change is None:
             return {'status': 'incompatible', 'reason': 'manifest_changed', 'volume': volume, 'compose_file': str(path),
-                    'note': 'The frozen compose file does not match a known secret-bind addition. The volume was not modified. Recreate the instance only after reviewing the file; do not delete the ot-<id> volume.'}
+                    'note': 'The frozen compose file differs beyond the supported upgrades. The volume was not modified. Recreate the instance only after reviewing the file; do not delete the ot-<id> volume.'}
         return {'status': 'upgradeable', 'volume': volume, 'compose_file': str(path),
-                'added': [item['target'] for item in added], 'note': note}
+                'note': note, **change}
 
     def apply_manifest_upgrade(self, iid):
         preview = self.preview_manifest(iid)
@@ -254,7 +265,7 @@ class Registry:
         require(preview['status'] == 'upgradeable', preview.get('reason') or 'manifest_changed')
         self.entry(iid)
         preview['status'] = 'upgraded'
-        preview['added'] = self.upgrades.get(iid, preview.get('added') or [])
+        preview.update(self.upgrades.get(iid, {}))
         return preview
 
 
@@ -266,7 +277,7 @@ class Runner:
             self.home.mkdir(mode=0o700)
         trusted_path(str(self.home), directory=True, private=True)
 
-    def run(self, args, *, heartbeat=lambda: None, timeout=10):
+    def run(self, args, *, heartbeat=lambda: None, timeout=10, stdin=subprocess.DEVNULL):
         require(self.enabled is True and self.registry.config['execution_enabled'] is True, 'execution_disabled')
         require(type(timeout) in (int, float) and 0 < timeout <= 60, 'command_timeout')
         cfg = self.registry.config
@@ -282,7 +293,7 @@ class Runner:
         heartbeat()  # do not spawn anything after lost lease
         deadline = time.monotonic() + timeout
         out, err = bytearray(), bytearray()
-        proc = subprocess.Popen(argv, cwd=self.registry.root, env=env, shell=False, stdin=subprocess.DEVNULL,
+        proc = subprocess.Popen(argv, cwd=self.registry.root, env=env, shell=False, stdin=stdin,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, close_fds=True)
         try:
             with selectors.DefaultSelector() as selector:
@@ -328,6 +339,9 @@ class ComposeEngine:
 
     def runtime_key_path(self, iid):
         return self.registry.root / runtime_key_relpath(iid)
+
+    def seal_key_path(self, iid):
+        return self.registry.root / seal_key_relpath(iid)
 
     def install_secret(self, iid, payload, heartbeat=lambda: None):
         """Write the resolved model-API file (or empty). Never logs the key."""
@@ -386,6 +400,19 @@ class ComposeEngine:
         publish_container_secret(path)
         return path
 
+
+    def install_seal_key(self, iid):
+        """Create or reuse this instance's 32-byte seal key. Never rotated automatically."""
+        self.registry.entry(iid)
+        path = self.seal_key_path(iid)
+        if path.exists() and not path.is_symlink() and path.stat().st_size == 32:
+            publish_container_secret(path)
+            return path, path.read_bytes()
+        key = os.urandom(32)
+        replace_private(path, key)
+        publish_container_secret(path)
+        return path, key
+
     def compose(self, iid, operation, *, heartbeat=lambda: None, tail=100):
         _, path = self.registry.entry(iid)
         require(type(tail) is int and 1 <= tail <= 100, 'log_tail')
@@ -396,6 +423,8 @@ class ComposeEngine:
                 self.install_bot_social(iid, None)
             if not self.runtime_key_path(iid).exists():
                 self.install_runtime_key(iid, None)
+            if not self.seal_key_path(iid).exists():
+                self.install_seal_key(iid)
         # Exact argv grammar only; neither API nor registry can supply a verb/flags.
         commands = {
             'create': ['create', '--no-build', '--no-recreate', '--pull', 'never', 'flybot'],
@@ -449,12 +478,12 @@ class ComposeEngine:
         config, state, mounts = container.get('Config'), container.get('State'), container.get('Mounts')
         host = container.get('HostConfig')
         require(isinstance(config, dict) and isinstance(state, dict) and isinstance(mounts, list), 'inspect_shape')
-        binds = host.get('Binds') or []
         require(isinstance(host, dict) and host.get('Privileged') is False and host.get('ReadonlyRootfs') is True and
                 config.get('User') == '1000:1000' and host.get('CapDrop') == ['ALL'] and not host.get('CapAdd') and
                 not host.get('Devices') and not host.get('PidMode') and
                 host.get('IpcMode') in ('private', 'shareable') and host.get('NetworkMode') == 'ot-' + iid + '_default' and
                 isinstance(host.get('SecurityOpt'), list) and any(x in host['SecurityOpt'] for x in ('no-new-privileges', 'no-new-privileges:true')), 'unsafe_container')
+        binds = host.get('Binds') or []
         def bind_suffix(bind):
             require(isinstance(bind, str) and '..' not in bind, 'unsafe_container')
             matched = [suffix for suffix in ALLOWED_BIND_SUFFIXES if bind.endswith(suffix)]
@@ -489,7 +518,7 @@ class ComposeEngine:
                     and '..' not in str(found[0].get('Source') or ''), 'secret_mount')
             return found[0]
         present_secrets = [target for target in ALLOWED_BIND_TARGETS if secret_bind(target) is not None]
-        if set(present_secrets) != set(ALLOWED_BIND_TARGETS):
+        if set(present_secrets) != set(ALLOWED_BIND_TARGETS) or host.get('Memory') != RUNTIME_MEMORY_MIB * 1024 ** 2:
             needs_recreate = True
         require(all(isinstance(m, dict) and (m.get('Destination') == '/data' or
                     m.get('Destination') in ALLOWED_BIND_TARGETS or
@@ -515,8 +544,11 @@ class ComposeEngine:
         while True:
             bounded_heartbeat()
             state = self.inspect(iid, bounded_heartbeat)
-            if action in ('create', 'create-recreate', 'stop', 'recover'):
-                if state['stopped'] and state.get('needs_recreate') is not True and (action in ('stop', 'recover') or state['present']):
+            if action in ('stop', 'recover'):
+                if state['stopped']:
+                    return {'observed': 'stopped'}
+            elif action in ('create', 'create-recreate'):
+                if state['stopped'] and state['present'] and not state['needs_recreate']:
                     return {'observed': 'stopped'}
             elif state['healthy'] and state.get('needs_recreate') is not True and (
                     action != 'restart' or state['process_ref'] != previous):
