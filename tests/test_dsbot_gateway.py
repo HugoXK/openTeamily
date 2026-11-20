@@ -125,7 +125,7 @@ class GatewayTest(unittest.TestCase):
         self.assertIsNone(gw.target_for('/privacy/', routes))
 
     def test_shipped_routes_move_private_chat(self):
-        self.assertTrue({'chat', 'meetings', 'skills', 'memory', 'settings', 'onboarding'} <= gw.load_routes()['moved_pages'])
+        self.assertTrue({'chat', 'meetings', 'skills', 'memory', 'settings', 'onboarding', 'automations', 'agents'} <= gw.load_routes()['moved_pages'])
         self.assertEqual(gw.target_for('/chat/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fchat%2Fapp.mjs')
         self.assertEqual(gw.target_for('/settings', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings')
         self.assertEqual(gw.target_for('/settings/connectors', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings%2Fconnectors')
@@ -258,6 +258,10 @@ class GatewayTest(unittest.TestCase):
         status, headers = self.call(b, uri='/v1/settings')
         self.assertEqual(headers['X-OT-Instance'], '2' * 32)
         self.assertEqual(self.call(None, uri='/v1/settings')[0], 401)
+        status, headers = self.call(a, uri='/v1/automation-templates')
+        self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
+        # onboarding automations still stay on the platform (B2 page is /automations/, not this path)
+        self.assertEqual(self.call(a, uri='/v1/onboarding/automations')[0], 404)
 
     def test_nginx_forwards_moved_v1_apis_except_platform_exceptions(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)

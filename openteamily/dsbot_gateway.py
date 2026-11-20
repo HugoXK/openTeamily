@@ -52,6 +52,10 @@ PAGE_SEGMENT = re.compile(r'[a-z0-9][a-z0-9-]{0,40}')
 # here stays on the platform (auth, skill-secrets, /v1/onboarding/automations, the
 # Composio callback bounce page, workspace lists, C pages, automations/agents until B2).
 MOVED_APIS = (
+    (re.compile(r'^/v1/automation-templates$'), 'automations'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:tick|[0-9a-f]{32}(?:/(?:remove|runs(?:/[0-9a-f]{32}(?:/(?:cancel|retry|artifact))?)?)?))?)?$'), 'automations'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/api-keys(?:/[0-9a-f]{32}/revoke)?$'), 'agent-api'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents(?:/[0-9a-f]{32}(?:/(?:archive|conversations(?:/[0-9a-f]{32}(?:/messages(?:/[0-9a-f]{32}/artifact)?)?)?))?)?$'), 'agents'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/meetings(?:/[0-9a-f]{32}(?:/(?:remove|export))?)?$'), 'meetings'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory(?:/[0-9a-f]{32}(?:/(?:remove|export|dream(?:/[0-9a-f]{32})?|versions(?:/\d{1,8}(?:/restore)?)?))?)?$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/(?:profile|graph|(?:actions|links|preferences)(?:/[0-9a-f]{32}(?:/remove)?)?)$'), 'memory'),
@@ -81,6 +85,9 @@ MOVED_API_LOCATIONS = (
     'location = /v1/composio { return 418; }',
     'location ^~ /v1/composio/ { return 418; }',
     'location ^~ /v1/mcp/servers { return 418; }',
+    'location = /v1/automation-templates { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/automations(?:/|$) { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/agents(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/[0-9a-f]{32}(?:/(?:remove|export))?)?$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/memory(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$ { return 418; }',
