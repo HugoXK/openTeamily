@@ -4,6 +4,7 @@
 // hands its owner's DS-Bot the messages it should answer (agent inbox); the reply is generated in
 // that DS-Bot and posted back here. Automatic (un-@'d) group replies are capped at 3 per hour per
 // conversation (#346). OpenTeamily semantics; not Teamily parity.
+import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
@@ -21,7 +22,8 @@ CREATE TABLE IF NOT EXISTS ot_group_announcements (
 CREATE TABLE IF NOT EXISTS ot_conversations (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('dm','group')), title TEXT NOT NULL DEFAULT '',
   team_id TEXT, dm_key TEXT UNIQUE, created_by TEXT NOT NULL, last_seq INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, account_group INTEGER NOT NULL DEFAULT 0
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, account_group INTEGER NOT NULL DEFAULT 0,
+  activity_revision INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS ot_group_requests (
   owner_id TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
@@ -206,6 +208,30 @@ const messageView = (ot: OtContext, m: any, viewer?: string) => ({
   reactions: ot.all<any>("SELECT emoji, COUNT(*) AS n, SUM(owner_id = ?) AS me FROM ot_reactions WHERE message_id = ? GROUP BY emoji", viewer ?? "", m.id).map((r) => ({ emoji: r.emoji, count: r.n, mine: !!r.me })),
 });
 
+function contentVersion(c: {last_seq: number; activity_revision: number}, open?: boolean) {
+  return `${c.last_seq}.${c.activity_revision}.${Number(Boolean(open))}`;
+}
+
+function registerActivityTriggers(ot: OtContext) {
+  const message = (row: string) => `(SELECT conversation_id FROM ot_messages WHERE id=${row}.message_id)`;
+  const changes = [
+    {table: "ot_conversations", events: ["UPDATE OF title"], room: (row: string) => row + ".id"},
+    {table: "ot_conversation_members", events: ["INSERT", "DELETE"]},
+    {table: "ot_conversation_agents", events: ["INSERT", "UPDATE", "DELETE"]},
+    {table: "ot_messages", events: ["UPDATE"]},
+    {table: "ot_reactions", events: ["INSERT", "DELETE"], room: message},
+    {table: "ot_agent_reply_jobs", events: ["INSERT", "UPDATE"], room: message},
+    {table: "ot_group_announcements", events: ["INSERT", "UPDATE"]},
+  ];
+  for (const {table, events, room} of changes) for (const event of events) {
+    const row = event === "DELETE" ? "old" : "new";
+    ot.run(`CREATE TRIGGER IF NOT EXISTS ${table}_activity_${event.split(" ")[0].toLowerCase()}
+      AFTER ${event} ON ${table} BEGIN
+        UPDATE ot_conversations SET activity_revision=activity_revision+1 WHERE id=${room?.(row) ?? row + ".conversation_id"};
+      END`);
+  }
+}
+
 function conversationView(ot: OtContext, c: any, viewer: string) {
   const published = publicListing(ot, c);
   const members = ot.all<any>("SELECT owner_id, read_seq, pinned, muted FROM ot_conversation_members WHERE conversation_id = ? ORDER BY created_at", c.id).filter(m => publicParticipant(ot, c, m.owner_id));
@@ -213,6 +239,7 @@ function conversationView(ot: OtContext, c: any, viewer: string) {
   const last = ot.get<any>("SELECT * FROM ot_messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1", c.id);
   const peer = c.kind === "dm" ? members.find((m) => m.owner_id !== viewer) : undefined;
   const open = !!(published?.listed && published.chat_enabled);
+  const directOpen = Boolean(peer && ordinaryDirect(c) && directReachable(ot, viewer, peer.owner_id));
   const pending = open && !!ot.get(`SELECT 1 FROM ot_messages m
     WHERE m.conversation_id=? AND m.rowseq>? AND m.author_id=? AND m.author_kind='member' AND m.retracted=0
       AND m.created_at>? AND NOT EXISTS (
@@ -221,11 +248,12 @@ function conversationView(ot: OtContext, c: any, viewer: string) {
     LIMIT 1`, c.id, published.chat_from, c.created_by, ot.now() - 180_000, published.owner_id, published.ref);
   return {
     ...(fixedPublicThread(c) ? {public_agent: {open, pending, publisher: published ? ot.profileView(published.owner_id).display_name : ""}} : {}),
-    ...(ordinaryDirect(c) ? {direct: {open: Boolean(peer && directReachable(ot, viewer, peer.owner_id))}} : {}),
+    ...(ordinaryDirect(c) ? {direct: {open: directOpen}} : {}),
     ...(c.account_group === 1 ? {account_group: true} : {}),
     id: c.id, kind: c.kind, title: c.kind === "dm" ? (peer ? ot.profileView(peer.owner_id).display_name : c.title) : c.title,
     team_id: c.team_id, members: members.map((m) => ot.profileView(m.owner_id)),
     agents: ot.all<any>("SELECT agent_ref, owner_id, name, auto_reply FROM ot_conversation_agents WHERE conversation_id = ?", c.id).map((a) => ({ agent_ref: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, owner: ot.profileView(a.owner_id), mine: a.owner_id === viewer })),
+    activity_version: contentVersion(c, open || directOpen),
     last_seq: c.last_seq, read_seq: mine?.read_seq ?? 0, unread: Math.max(0, c.last_seq - (mine?.read_seq ?? 0)),
     pinned: !!mine?.pinned, muted: !!mine?.muted, last_message: last ? messageView(ot, last, viewer) : null, updated_at: c.updated_at,
   };
@@ -306,9 +334,10 @@ function replyContext(ot: OtContext, conversationId: string, seq: number) {
 }
 
 export function registerMessenger(app: FastifyInstance, ot: OtContext) {
-  if (!ot.all<{name:string}>("PRAGMA table_info(ot_conversations)").some(col => col.name === "account_group")) {
-    ot.run("ALTER TABLE ot_conversations ADD COLUMN account_group INTEGER NOT NULL DEFAULT 0");
-  }
+  const conversationCols = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_conversations)").map(col => col.name));
+  if (!conversationCols.has("account_group")) ot.run("ALTER TABLE ot_conversations ADD COLUMN account_group INTEGER NOT NULL DEFAULT 0");
+  if (!conversationCols.has("activity_revision")) ot.run("ALTER TABLE ot_conversations ADD COLUMN activity_revision INTEGER NOT NULL DEFAULT 0");
+  registerActivityTriggers(ot);
   const messageCols = new Set(ot.all<any>("PRAGMA table_info(ot_messages)").map(c => c.name));
   if (!messageCols.has("revision")) ot.run("ALTER TABLE ot_messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
   const agentCols = new Set(ot.all<any>("PRAGMA table_info(ot_conversation_agents)").map(c => c.name));
@@ -373,7 +402,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
 
   app.get("/v1/ot/conversations", async (req) => {
     const me = ot.me(req);
-    const {scope, team_id} = query(req);
+    const {scope, team_id, view, since} = query(req);
     assert(scope === undefined || scope === "public" || scope === "member" || scope === "personal", 400, "invalid_request", "Invalid conversation scope");
     let filter = scope === "public" ? " AND c.dm_key LIKE 'agent:%'"
       : scope === "personal" ? " AND (c.dm_key LIKE 'agent:%' OR (c.kind='dm' AND c.team_id IS NULL) OR c.account_group=1)"
@@ -388,9 +417,23 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         WHERE peer.conversation_id=c.id AND peer.owner_id<>?)))`;
       args.push(team_id, team_id, me.ownerId);
     }
-    const rows = ot.all<any>(`SELECT c.* FROM ot_conversations c JOIN ot_conversation_members m ON m.conversation_id=c.id
-      WHERE m.owner_id=?${filter} ORDER BY m.pinned DESC,c.updated_at DESC LIMIT 200`, ...args);
-    const list = rows.filter(c => publicParticipant(ot, c, me.ownerId)).map((c) => conversationView(ot, c, me.ownerId));
+    const rows = ot.all<any>(`SELECT c.*, m.read_seq, m.pinned, m.muted FROM ot_conversations c
+      JOIN ot_conversation_members m ON m.conversation_id=c.id
+      WHERE m.owner_id=?${filter} ORDER BY m.pinned DESC,c.updated_at DESC,c.id LIMIT 200`, ...args)
+      .filter(c => publicParticipant(ot, c, me.ownerId));
+    if (view === "activity") {
+      const items = rows.map(c => {
+        const published = publicListing(ot, c);
+        const peer = ordinaryDirect(c) && ot.get<{owner_id: string}>(
+          "SELECT owner_id FROM ot_conversation_members WHERE conversation_id=? AND owner_id<>?", c.id, me.ownerId);
+        const open = Boolean(published?.listed && published.chat_enabled || peer && directReachable(ot, me.ownerId, peer.owner_id));
+        return {id: c.id, activity_version: contentVersion(c, open), last_seq: c.last_seq,
+          unread_count: Math.max(0, c.last_seq - c.read_seq), pinned: c.pinned === 1, muted: c.muted === 1};
+      });
+      const version = createHash("sha256").update(JSON.stringify(items)).digest("hex");
+      return since === version ? {version} : {version, items};
+    }
+    const list = rows.map(c => conversationView(ot, c, me.ownerId));
     return { conversations: list, unread: list.reduce((n, c) => n + (c.muted ? 0 : c.unread), 0) };
   });
   app.get("/v1/ot/conversations/:id", async (req) => {

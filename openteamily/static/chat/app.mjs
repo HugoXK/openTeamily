@@ -4,6 +4,7 @@ import { AGENT_FILE_ACCEPT, mountChatFiles, renderChatFile, sendPrivateAttachmen
 import { mountGroupTranslation } from './translation.mjs';
 import { mountChatCalls } from './calls.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
+import { mountChatActivity } from './activity.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
@@ -61,10 +62,13 @@ export function mergeSessions(agentRows, socialRows, currentUserId) {
       updated: row.updated || 0,
     });
   }
-  sessions.sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || (right.updated || 0) - (left.updated || 0));
-  return sessions;
+  return sortSessions(sessions);
 }
 
+
+function sortSessions(sessions) {
+  return sessions.sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || (right.updated || 0) - (left.updated || 0));
+}
 
 export function shouldSendOnShortcut(event, sendShortcut = 'enter') {
   if (!event || event.key !== 'Enter') return false;
@@ -1535,7 +1539,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
               const target = [...list.children].find(element => element.dataset.messageId === item.id);
               target?.querySelector('.group-reply-jobs')?.replaceWith(updated);
             }
-            if (!socialHistory?.readingHistory) schedulePoll(1800);
+            if (!socialHistory?.readingHistory) scheduleSocialPoll(currentConversation);
             show('ok', '已重新请求 ' + job.agent_name + ' 回复。', {announceOnly: true});
           } else {
             button.disabled = false;
@@ -1858,22 +1862,64 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
 
-  const workspaceEvents=mountWorkspaceEvents(document,{onInvalidate:async(event)=>{
-    if(event.workspace!==workspaceId()||document.visibilityState==='hidden')return;
-    if (event.changed.includes('notifications')) void chatCalls.refresh();
-    await loadSessions();
-    if(event.workspace!==workspaceId())return;
-    if(!event.initial&&event.changed.includes('social')&&currentSource==='social'&&currentConversation){
-      if (currentConversation.public_agent && !socialHistory?.readingHistory) {
-        await openSocialConversation(currentConversation.id, {refresh: true});
-        return;
+  const liveBanner = document.getElementById('conversation-live-update');
+  const workspaceEvents = servedByDsbot
+    ? mountChatActivity(document, {request, update: applySocialActivity})
+    : mountWorkspaceEvents(document, {onInvalidate: async event => {
+        if (event.workspace !== workspaceId() || document.visibilityState === 'hidden') return;
+        if (event.changed.includes('notifications')) void chatCalls.refresh();
+        await loadSessions();
+        if (event.workspace === workspaceId() && !event.initial && event.changed.includes('social')
+          && currentSource === 'social' && currentConversation && liveBanner) liveBanner.hidden = false;
+      }});
+
+  function viewingSocialMessages() {
+    return !narrowScreen() || !document.body.classList.contains('sessions-open');
+  }
+
+  function readingSocialContext() {
+    const scroller = document.getElementById('message-scroller');
+    return socialHistory?.readingHistory || socialHistory?.loading || selecting
+      || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 48
+      || document.activeElement?.closest?.('.message-edit-controls')
+      || [...(scroller.querySelectorAll?.('audio') || [])].some(audio => !audio.paused);
+  }
+
+  async function applySocialActivity(wid, items) {
+    if (!currentUser || wid !== workspaceId() || wid !== sessionsWorkspace) return;
+    const cid = currentSource === 'social' && currentConversation?.id;
+    const next = items.find(row => row.id === cid);
+    if (next && viewingSocialMessages() && socialHistory?.cid === cid
+      && next.activity_version !== currentConversation.activity_version && !pendingSends.has(sendScope())) {
+      if (readingSocialContext()) {
+        if (liveBanner) liveBanner.hidden = false;
+      } else {
+        await openSocialConversation(cid, {refresh: true});
       }
-      const banner=document.getElementById('conversation-live-update');if(banner)banner.hidden=false;
     }
-  }});
-  document.getElementById('conversation-live-load')?.addEventListener('click',async()=>{
-    if(currentSource==='social'&&currentConversation)await openSocialConversation(currentConversation.id);
-    const banner=document.getElementById('conversation-live-update');if(banner)banner.hidden=true;
+    if (!currentUser || wid !== workspaceId() || wid !== sessionsWorkspace || document.visibilityState === 'hidden') return;
+    const listed = new Map(socialConversations.map(row => [row.id, row]));
+    const directoryChanged = items.length !== listed.size || items.some(row => {
+      const old = listed.get(row.id);
+      return !old || old.activity_version !== row.activity_version || old.unread_count !== row.unread_count
+        || old.pinned !== row.pinned || old.muted !== row.muted;
+    });
+    if (!directoryChanged) return;
+    const sequence = sessionsRequest;
+    const user = currentUser;
+    const result = await request('GET', `${socialBase()}?limit=100`);
+    if (sequence !== sessionsRequest || user !== currentUser || wid !== workspaceId() || result.status !== 200) return;
+    const changed = result.body.items || [];
+    const incoming = changed.some(row => !listed.has(row.id) || row.last_seq > listed.get(row.id).last_seq);
+    socialConversations = changed;
+    sessions = sortSessions([...sessions.filter(row => row.source === 'agent'), ...mergeSessions([], changed, user.id)]);
+    renderSessions();
+    if (incoming || !document.getElementById('notifications-panel')?.hidden) void loadNotifications();
+    if (['all', 'groups'].includes(searchTab)) refreshDirectorySearch();
+  }
+
+  document.getElementById('conversation-live-load')?.addEventListener('click', async () => {
+    if (currentSource === 'social' && currentConversation) await openSocialConversation(currentConversation.id);
   });
   let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
   let membersStatus = '', artifactsStatus = '';
@@ -1883,6 +1929,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     loadNotifications();
     loadDueReminders();
     const id = workspaceId();
+    if (servedByDsbot && id !== sessionsWorkspace) workspaceEvents.start(null);
     if (id !== sessionsWorkspace || user !== sessionsUser || !id) {
       setSessionsStatus('正在加载对话…');
       sessionsWorkspace = id; sessionsUser = user;
@@ -1942,8 +1989,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderSessions();
     if (!document.getElementById('compose-dialog').hidden && composeMode === 'group') renderMemberChoices(false, true);
     if (['all', 'agents', 'groups'].includes(searchTab)) refreshDirectorySearch();
-    // The first SSE snapshot may immediately refresh; do not invalidate the
-    // initial directory before deep-link resolution has a committed snapshot.
+    // Start activity checks after the initial directory commits.
     workspaceEvents.start(id);
   }
 
@@ -2232,6 +2278,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncMuteButton();
     currentSource = 'agent';
     currentAgent = agent;
+    if (liveBanner) liveBanner.hidden = true;
     chatCalls.sync();
     voiceRecorder.refresh();
     document.getElementById('social-agent-members').hidden = true;
@@ -2274,22 +2321,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentAgent = null;
     currentSource = 'social';
     stopPolling();
-    const result = await request('GET', `${socialBase()}/${conversationId}`);
+    const result = await request('GET', `${socialBase()}/${conversationId}`).catch(() => ({status: 0, body: {}}));
     if (open !== socialOpen || workspaceId() !== wid || currentSource !== 'social') return false;
     if (result.status !== 200) {
-      if (refresh && (pollsAccountThread(currentConversation) || hasPendingReplies())) {
-        schedulePoll(hasPendingReplies() ? 2500 : 8000);
+      if (refresh) {
+        scheduleSocialPoll(currentConversation);
         return false;
       }
       show('error', messageFor(result.body.error, '无法打开会话。'));
       return false;
     }
     const updated = result.body.conversation;
+    if (refresh && servedByDsbot && (!viewingSocialMessages() || readingSocialContext() || pendingSends.has(sendScope()))) {
+      if (viewingSocialMessages() && liveBanner && updated.activity_version !== currentConversation?.activity_version) liveBanner.hidden = false;
+      scheduleSocialPoll(currentConversation);
+      return false;
+    }
     if (refresh && currentConversation?.id === updated.id
       && JSON.stringify(currentConversation) === JSON.stringify(updated)
       && JSON.stringify(lastSocialItems) === JSON.stringify(result.body.items)) {
-      if (hasPendingReplies()) schedulePoll(1800);
-      else if (pollsAccountThread(updated)) schedulePoll(updated.public_agent?.pending ? 2000 : 8000);
+      scheduleSocialPoll(updated);
       return true;
     }
     if (!currentConversation || currentConversation.id !== updated.id) {
@@ -2297,6 +2348,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
     currentConversation = updated;
+    if (liveBanner) liveBanner.hidden = true;
     setSocialHistory({wid, cid: conversationId, cursor: result.body.cursor ?? null});
     chatCalls.sync();
     agentMentions.refresh();
@@ -2334,16 +2386,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         Number.isSafeInteger(shown[shown.length - 1].seq)
           ? {seq: shown[shown.length - 1].seq}
           : {message_id: shown[shown.length - 1].id});
+      if (open !== socialOpen || workspaceId() !== wid || currentSource !== 'social') return false;
       if (acknowledged.status === 200) {
+        const unread = acknowledged.body.unread_count;
+        currentConversation.unread_count = unread;
         const session = sessions.find(item => item.source === 'social' && item.id === conversationId);
-        if (session) session.unread_count = acknowledged.body.unread_count;
+        if (session) session.unread_count = unread;
+        const directory = socialConversations.find(item => item.id === conversationId);
+        if (directory) directory.unread_count = unread;
       }
     }
     renderSessions();
-    if (hasPendingReplies()) schedulePoll(1800);
-    else if (pollsAccountThread(currentConversation)) schedulePoll(publicChat?.pending ? 2000 : 8000);
-    else if ((result.body.agent_replies || []).some(item => ['queued', 'running'].includes(item.status))) schedulePoll();
-    return open === socialOpen && workspaceId() === wid && currentSource === 'social';
+    scheduleSocialPoll(currentConversation);
+    if ((result.body.agent_replies || []).some(item => ['queued', 'running'].includes(item.status))) schedulePoll();
+    return true;
+  }
+
+  function scheduleSocialPoll(conversation) {
+    if (hasPendingReplies() || conversation?.public_agent?.pending) {
+      schedulePoll(servedByDsbot ? 8000 : 1800);
+    } else if (!servedByDsbot && pollsAccountThread(conversation)) {
+      schedulePoll(8000);
+    }
   }
 
   function pollsAccountThread(conversation) {
@@ -2357,16 +2421,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentConversation && currentAgent && currentSource === 'agent') {
         openAgentConversation(currentAgent.id, currentConversation.id);
       } else if (currentConversation && currentSource === 'social' && !socialHistory?.readingHistory) {
-        if (document.visibilityState !== 'hidden') {
+        if (document.visibilityState !== 'hidden' && viewingSocialMessages() && (!servedByDsbot || !readingSocialContext())) {
           openSocialConversation(currentConversation.id, {refresh: true});
+        } else if (servedByDsbot && viewingSocialMessages()) {
+          scheduleSocialPoll(currentConversation);
         }
       }
     }, delay);
   }
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && currentSource === 'social' && currentConversation && (pollsAccountThread(currentConversation) || hasPendingReplies())
-      && !pollTimer && !socialHistory?.readingHistory) {
+    if (document.visibilityState !== 'visible' || currentSource !== 'social' || !currentConversation
+      || pollTimer || socialHistory?.readingHistory || !viewingSocialMessages()) return;
+    if (servedByDsbot) scheduleSocialPoll(currentConversation);
+    else if (pollsAccountThread(currentConversation) || hasPendingReplies()) {
       void openSocialConversation(currentConversation.id, {refresh: true});
     }
   });
@@ -2820,6 +2888,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const session = await request('GET', '/v1/auth/session');
     if (session.status !== 200) {
       currentUser = null;
+      if (servedByDsbot) workspaceEvents.start(null);
       autoTranslation.open(null);
       attachmentSender?.reset();
       privateAttempts.clear();
@@ -3046,6 +3115,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   workspaceSelect.addEventListener('change', async () => {
     socialOpen += 1;
     setSocialHistory(null);
+    if (liveBanner) liveBanner.hidden = true;
     notificationSnapshot = null;
     agentMentions.clear();
     renderNotifications({items: [], unread_count: 0});
@@ -3807,9 +3877,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
         if (currentConversation.public_agent?.open) {
           showPublicChatState({open: true, pending: true});
-          schedulePoll();
-        } else if (hasPendingReplies()) {
-          schedulePoll(1800);
+          schedulePoll(servedByDsbot ? 8000 : 2000);
+        } else {
+          scheduleSocialPoll(currentConversation);
         }
         show('ok', '已发送。', {announceOnly: true});
       } else {

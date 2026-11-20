@@ -97,6 +97,8 @@ function conversationItem(row, me, env, workspaceId) {
     title: row.title || '',
     created: unix(row.created_at),
     updated: unix(row.updated_at),
+    activity_version: row.activity_version ?? null,
+    last_seq: row.last_seq ?? 0,
     preview: row.last_message && !row.last_message.retracted ? (row.last_message.body || '') : '',
     unread_count: row.unread ?? 0,
     muted: !!row.muted,
@@ -559,8 +561,14 @@ function messengerRoutes(host, wakeReplies) {
         return wrap(async () => {
           const bs = client(host)
           const {personal, team} = await messengerScope(host, bs, match[1])
+          const scope = {scope: personal ? 'personal' : 'member', team_id: team?.id}
+          const q = parseQuery(query)
+          if (q.get('view') === 'activity') {
+            const data = await bs.get('/v1/ot/conversations' + qs({...scope, view: 'activity', since: q.get('since')}))
+            return [200, data]
+          }
           const me = await meOf(bs, env)
-          const data = await bs.get('/v1/ot/conversations' + qs({scope: personal ? 'personal' : 'member', team_id: team?.id}))
+          const data = await bs.get('/v1/ot/conversations' + qs(scope))
           const items = (data.conversations || []).filter(c => personal ? (c.public_agent || accountConversation(c)) : !c.public_agent)
             .map(c => conversationItem(c, me, env, match[1]))
           return [200, { items, cursor: null }]

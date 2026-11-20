@@ -107,3 +107,38 @@ test("group mentions retry individual replies after the inbox cursor moves", asy
   assert.deepEqual(history.map((row: any) => row.id), [message.id, posted.id, completed.id]);
   assert.deepEqual(history[0].reply_jobs.map((job: any) => job.status), ["replied", "replied"]);
 });
+
+test("activity snapshots are scoped and skip message content until the client needs it", async () => {
+  const [owner, reader, outsider] = await Promise.all([
+    home(S.base, "activity-owner"), home(S.base, "activity-reader"), home(S.base, "activity-other"),
+  ]);
+  const request = await owner.ok("POST", "/v1/ot/contacts", {handle: reader.handle});
+  await reader.ok("POST", "/v1/ot/contacts/" + request.id, {action: "accept"});
+  const root = "/v1/ot/conversations";
+  const activity = root + "?scope=personal&view=activity";
+  const group = await owner.ok("POST", root, {kind: "group", account_group: true, title: "Live chat check", members: [reader.handle]});
+  const get = () => reader.ok("GET", activity);
+  const baseline = await get();
+  const before = baseline.items.find((row: any) => row.id === group.id);
+  assert.equal(before.activity_version, group.activity_version);
+  assert.deepEqual(await reader.ok("GET", activity + "&since=" + baseline.version), {version: baseline.version});
+  assert.deepEqual((await outsider.ok("GET", activity)).items, []);
+  const message = await owner.ok("POST", root + "/" + group.id + "/messages", {body: "Private smoke-test text"});
+  const next = await get();
+  assert.equal(next.items[0].unread_count, 1);
+  assert.equal(next.items[0].last_seq, message.seq);
+  assert.notEqual(next.items[0].activity_version, before.activity_version);
+  assert.equal(JSON.stringify(next).includes(message.body), false);
+  assert.equal((await reader.ok("GET", root + "/" + group.id)).activity_version, next.items[0].activity_version);
+  await owner.ok("PATCH", "/v1/ot/messages/" + message.id, {body: "Revised private text"});
+  const edited = await get();
+  assert.equal(edited.items[0].last_seq, next.items[0].last_seq);
+  assert.notEqual(edited.items[0].activity_version, next.items[0].activity_version);
+  await reader.ok("POST", root + "/" + group.id + "/read", {seq:message.seq});
+  const read = await get();
+  assert.equal(read.items[0].activity_version, edited.items[0].activity_version);
+  assert.equal(read.items[0].unread_count, 0);
+  assert.notEqual(read.version, edited.version);
+  await owner.ok("DELETE", root + "/" + group.id + "/members/" + encodeURIComponent(reader.handle));
+  assert.deepEqual((await get()).items, []);
+});
