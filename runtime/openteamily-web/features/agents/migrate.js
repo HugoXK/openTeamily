@@ -33,6 +33,15 @@ export function verifyOfficial(bundle) {
 
 export async function importOfficialBundle(endpoints, bundle) {
   const tables = verifyOfficial(bundle)
+  const agentsById = new Map((tables.workspace_agents ?? []).map(row => [row.id, row]))
+  const conversations = new Map((tables.agent_conversations ?? []).map(row => [row.id, row]))
+  for (const row of tables.agent_conversations ?? []) {
+    if (agentsById.get(row.agent_id)?.workspace_id !== row.workspace_id) throw new Error('conversation ownership mismatch')
+  }
+  for (const row of tables.agent_messages ?? []) {
+    const conversation = conversations.get(row.conversation_id)
+    if (!conversation || conversation.workspace_id !== row.workspace_id || conversation.agent_id !== row.agent_id) throw new Error('message ownership mismatch')
+  }
   const categories = new Map((tables.workspace_agent_categories ?? []).map((row) => [row.agent_id, row.category]))
   const starts = new Map()
   for (const row of tables.workspace_agent_quick_starts ?? []) {

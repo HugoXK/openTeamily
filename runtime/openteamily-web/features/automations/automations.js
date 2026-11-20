@@ -1,3 +1,4 @@
+import { importPending } from '../../src/pending-import.js'
 // Automations + scheduler inside the user's own DS-Bot (batch B2, replaces the
 // server-side openteamily/automations.py + scheduler.py for moved users).
 //
@@ -446,9 +447,10 @@ export default async function automations(host) {
   const { openDatabase } = await import('../../src/store.js')
   const db = await openDatabase(host, 'automations.sqlite3')
   const feature = createAutomations({ db, turn: dsBotTurn(host), log: host.log })
+  const imported = await importPending({ host, db, migrate: feature.migrate })
   // The clock starts once this user's DS-Bot is attached, so no slot fires into a
   // runtime that is still booting.
-  if (process.env.OPENTEAMILY_AUTOMATIONS_CLOCK !== '0') host.runtime({ timeoutMs: 10 * 60_000 }).then(() => feature.start(), () => feature.start())
+  if (!imported.some(item => item.status === 'rejected') && process.env.OPENTEAMILY_AUTOMATIONS_CLOCK !== '0') host.runtime({ timeoutMs: 10 * 60_000 }).then(() => feature.start(), () => feature.start())
   const ops = {}
   for (const [name, handler] of Object.entries(feature.ops)) ops[name] = async (payload) => handler(payload ?? {})
   ops.v1 = feature.ops.v1

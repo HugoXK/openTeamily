@@ -1,3 +1,4 @@
+import { importPending } from '../../src/pending-import.js'
 // Workspace agents inside the user's own DS-Bot (batch B2; moved from
 // openteamily/agents.py + the agent conversation dispatch in app.py).
 // An agent is a named persona of this user's DS-Bot: its record lives in the
@@ -240,6 +241,7 @@ export function createAgents({ db, host }) {
 export default async function agents(host) {
   const db = await openDatabase(host, 'agents.sqlite3')
   const { endpoints, migrate } = createAgents({ db, host })
+  await importPending({ host, db, migrate })
   const wrapped = {}
   for (const [name, fn] of Object.entries(endpoints)) wrapped[name] = async (payload) => fn(payload ?? {})
   return { pages: ['agents'], endpoints: wrapped, migrate }

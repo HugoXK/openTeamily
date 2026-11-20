@@ -433,6 +433,7 @@ class GatewayApp:
             features = []
             for feature in dsbot_bundle.FEATURE_TABLES:
                 bundle = dsbot_bundle.build_with_secrets(db, self.store, row[0], feature, seal, int(self.clock()))
+                bundle['instance_id'] = iid
                 features.append({'name': feature, 'bundle': bundle})
         return [('Content-Type', 'application/json')], json.dumps({'owner_imported': True, 'features': features}, separators=(',', ':')).encode()
 
