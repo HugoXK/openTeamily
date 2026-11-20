@@ -151,6 +151,8 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.target_for('/settings/connectors', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings%2Fconnectors')
         self.assertEqual(gw.target_for('/onboarding', gw.load_routes()), '/api/openteamily/page?path=%2Fonboarding')
         self.assertEqual(gw.target_for('/artifacts/', gw.load_routes()), '/api/openteamily/page?path=%2Fartifacts%2F')
+        self.assertEqual(gw.target_for('/space?view=meetings', gw.load_routes()), '/api/openteamily/page?path=%2Fartifacts')
+        self.assertIsNone(gw.target_for('/space/app.mjs', gw.load_routes()))
         self.assertEqual(gw.target_for('/artifacts/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fartifacts%2Fapp.mjs')
         self.assertIsNone(gw.target_for('/share/' + 'A' * 43, gw.load_routes()))
         self.assertEqual(gw.target_for('/members/', gw.load_routes()), '/api/openteamily/page?path=%2Fmembers%2F')
@@ -349,6 +351,7 @@ class GatewayTest(unittest.TestCase):
     def test_nginx_forwards_moved_v1_apis_except_platform_exceptions(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
         self.assertIn('location = /v1/settings { return 418; }', conf)
+        self.assertIn('location = /space { return 418; }', conf)
         self.assertEqual(conf.count('location = /v1/onboarding/automations'), 1)
         self.assertIn('location = /v1/onboarding/automations { return 418; }', conf)
         self.assertIn('location = /v1/composio/callback', conf)

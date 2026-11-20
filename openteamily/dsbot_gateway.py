@@ -201,6 +201,8 @@ def target_for(uri, routes):
     if feature is not None:
         # Plugin legacy surface; authorize() keeps the session cookie swap.
         return '/api/openteamily/legacy?feature=' + quote(feature, safe='') + '&path=' + quote(path, safe='') + (('&query=' + quote(query, safe='')) if query else '')
+    if path == '/space' and 'artifacts' in routes['moved_pages']:
+        path = '/artifacts'
     first = path.split('/')[1] if path != '/' else 'home'
     if first in routes['moved_pages']:
         return PAGE_ROUTE + '?path=' + quote(path, safe='')
@@ -735,6 +737,8 @@ def nginx_config(routes, platform, listen, key_include=None, key=None, bot_socia
         locations.append(f'  location ^~ {prefix} {{ return 418; }}')
     for line in MOVED_API_LOCATIONS:
         locations.append('  ' + line.replace('__PLATFORM__', platform))
+    if 'artifacts' in routes['moved_pages']:
+        locations.append('  location = /space { return 418; }')
     for page in sorted(routes['moved_pages']):
         if page == 'home':
             locations.append('  location = / { return 418; }')
