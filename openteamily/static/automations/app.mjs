@@ -60,11 +60,105 @@ export function runStatusLabel(run) {
   return run.status || '';
 }
 
+// A run that ended can be asked for again; a queued run is cancelled instead,
+// and a finished success has nothing to re-run.
+export function retryAllowed(run) {
+  if (!run) return false;
+  return run.status === 'failed' || run.status === 'cancelled' || run.status === 'timeout';
+}
+
 export function runResultText(run) {
   if (run && run.result && typeof run.result.text === 'string') return run.result.text;
   return '';
 }
 
+// A run row opens in place. The server already returns the status, the error
+// code and a whitelisted result (automations.py run_view), so this page only
+// has to name them; a run that left nothing says so instead of showing a blank.
+export const RUN_DETAIL_EMPTY = '这次运行没有留下输出';
+
+const RUN_ERROR_REASONS = Object.freeze({
+  cancelled: '这次运行被取消了。',
+  timeout: '这次运行超时，没有在时限内完成。',
+  no_agent: '当前没有已连接的代理，运行还在排队。',
+  provider_error: '模型提供方这次没有返回结果。',
+  rate_limited: '被服务方限流，这次运行没有跑完。',
+  forbidden: '当前工作区没有权限完成这次运行。',
+  invalid: '这次运行的请求没有被接受，没有执行。',
+});
+
+export function runErrorReason(run) {
+  if (!run) return '';
+  const explicit = run.result && typeof run.result.error === 'string' ? run.result.error.trim() : '';
+  if (explicit) return explicit;
+  const code = typeof run.error_code === 'string' ? run.error_code : '';
+  if (code && RUN_ERROR_REASONS[code]) return RUN_ERROR_REASONS[code];
+  if (code) return `服务端只留下错误代码：${code}`;
+  if (run.status === 'failed' || run.status === 'timeout' || run.status === 'cancelled') {
+    return '这次运行没有成功，服务端也没有留下原因。';
+  }
+  return '';
+}
+
+export function runDetailFields(run) {
+  const fields = [];
+  if (!run) return fields;
+  const text = runResultText(run);
+  if (text) fields.push({label: '摘要', value: text});
+  const code = typeof run.error_code === 'string' ? run.error_code : '';
+  const reason = runErrorReason(run);
+  if (code) fields.push({label: '状态码', value: code});
+  if (reason) fields.push({label: '失败原因', value: reason});
+  const result = run.result || {};
+  if (typeof result.model === 'string' && result.model) fields.push({label: '模型', value: result.model});
+  if (typeof result.source === 'string' && result.source) fields.push({label: '来源', value: result.source});
+  const dispatch = run.dispatch || {};
+  if (typeof dispatch.backend === 'string' && dispatch.backend) fields.push({label: '执行位置', value: dispatch.backend});
+  if (typeof dispatch.task_id === 'string' && dispatch.task_id) fields.push({label: '任务', value: dispatch.task_id});
+  return fields;
+}
+
+// The two destructive controls on this page ask before they act. The wording is
+// a pure function so it can be asserted without a DOM; it stays generic on
+// purpose and never echoes a user-supplied title, which could make the question
+// look like a different action.
+export function deletePrompt(item) {
+  return {question: '删除这条自动化？', confirmLabel: '确认'};
+}
+
+export function cancellationPrompt(run) {
+  return {question: '取消这次运行？', confirmLabel: '确认取消'};
+}
+
+
+// `/automations?template=<id>` opens the editor prefilled from that template
+// (used by the chat composer's 自动化 shortcuts).
+export function templateFromSearch(search) {
+  const value = new URLSearchParams(search || '').get('template') || '';
+  return /^[a-z0-9_-]{1,64}$/.test(value) ? value : '';
+}
+
+// `/automations?runs=failed` keeps the run-history filter across refresh,
+// back/forward and sharing. One recorded value at a time; anything else is 全部.
+export const RUN_FILTERS = Object.freeze(['all', 'succeeded', 'failed']);
+
+export function runFilterFromSearch(search) {
+  const value = new URLSearchParams(search || '').get('runs') || '';
+  return value === 'succeeded' || value === 'failed' ? value : 'all';
+}
+
+export function runFilterSearchText(filter) {
+  return filter === 'succeeded' || filter === 'failed' ? `?runs=${filter}` : '';
+}
+
+// The server filters on the stored status, and run_view reports cancelled and
+// timed-out runs as their own status. 失败 therefore names all three, so the
+// mirror here can never hide a row the server sent back for status=failed.
+export function matchesRunFilter(item, filter) {
+  if (filter === 'succeeded') return item.status === 'succeeded';
+  if (filter === 'failed') return item.status === 'failed' || item.status === 'cancelled' || item.status === 'timeout';
+  return true;
+}
 
 export function catalogItems(templates, category, search) {
   const tab = tabCategory(category);
@@ -179,22 +273,55 @@ function fillEditor(form, item, templates, username) {
   form.elements.title.value = (item && item.title) || (templates.find(row => row.id === form.elements.template_id.value) || {}).title || '';
 }
 
+
+function setBusy(node, busy) {
+  if (!node) return;
+  if (busy) {
+    if (typeof node.setAttribute === 'function') node.setAttribute('aria-busy', 'true');
+    return;
+  }
+  if (typeof node.removeAttribute === 'function') node.removeAttribute('aria-busy');
+}
+
+function monogram(name) {
+  const text = String(name || '').trim();
+  const chars = Array.from(text);
+  const label = (chars.slice(0, chars[0] && /[A-Za-z]/.test(chars[0]) ? 2 : 1).join('') || '?');
+  let tone = 0;
+  for (const ch of chars) tone += ch.codePointAt(0) || 0;
+  return {label, tone: (tone % 6) + 1};
+}
+
 function renderList(items, list, empty, onOpen) {
   list.textContent = '';
   list.classList.remove('template-catalog');
+  setBusy(list, false);
   empty.hidden = items.length > 0;
   for (const item of items) {
     const row = document.createElement('li');
+    const mark = monogram(item.title);
+    const avatar = document.createElement('span');
+    avatar.className = 'avatar';
+    avatar.dataset.tone = String(mark.tone);
+    avatar.textContent = mark.label;
+    const copy = document.createElement('div');
+    copy.className = 'item-meta';
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'link';
     open.textContent = item.title;
     open.addEventListener('click', () => onOpen(item));
     const meta = document.createElement('span');
-    meta.className = 'note';
+    meta.className = 'item-schedule';
     meta.textContent = scheduleSummary(item.schedule, item.enabled);
-    row.appendChild(open);
-    row.appendChild(meta);
+    copy.appendChild(open);
+    copy.appendChild(meta);
+    const state = document.createElement('span');
+    state.className = 'status-pill' + (item.enabled ? ' is-on' : '');
+    state.textContent = item.enabled ? '已启用' : '未启用';
+    row.appendChild(avatar);
+    row.appendChild(copy);
+    row.appendChild(state);
     list.appendChild(row);
   }
 }
@@ -203,6 +330,7 @@ function renderList(items, list, empty, onOpen) {
 function renderCatalog(items, list, empty, onOpen) {
   list.textContent = '';
   list.classList.add('template-catalog');
+  setBusy(list, false);
   empty.hidden = items.length > 0;
   for (const item of items) {
     const row = document.createElement('li');
@@ -236,6 +364,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let current = null;
   let category = 'mine';
   let runTimer = 0;
+  const view = document.defaultView;
+  const readSearch = () => (view && view.location && view.location.search) || '';
+  let runFilter = runFilterFromSearch(readSearch());
+  // Which rows the reader opened. Kept outside the render so the 3s poll and
+  // the filter switches do not close a row under the reader.
+  const expandedRuns = new Set();
+
+  function pushRunFilter(filter) {
+    const text = runFilterSearchText(filter);
+    if (!view || !view.history || !view.location) return;
+    if ((view.location.search || '') === text) return;
+    const base = view.location.pathname || '/automations';
+    view.history.pushState({runs: filter}, '', text ? base + text : base);
+  }
+
+  const RUN_FILTER_BUTTONS = {all: 'run-filter-all', succeeded: 'run-filter-succeeded', failed: 'run-filter-failed'};
+
+  function syncRunFilters() {
+    for (const [name, id] of Object.entries(RUN_FILTER_BUTTONS)) {
+      const button = document.getElementById(id);
+      if (button) button.setAttribute('aria-current', name === runFilter ? 'true' : 'false');
+    }
+  }
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -259,6 +410,60 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return workspaceSelect.value;
   }
 
+  let pendingConfirm = null;
+  let confirmSerial = 0;
+
+  function closeConfirm({restoreFocus = true} = {}) {
+    if (!pendingConfirm) return;
+    const {box, trigger} = pendingConfirm;
+    pendingConfirm = null;
+    if (box && box.parentNode) box.parentNode.removeChild(box);
+    if (trigger) {
+      trigger.hidden = false;
+      if (restoreFocus && typeof trigger.focus === 'function') trigger.focus();
+    }
+  }
+
+  function openConfirm({parent, trigger, prompt, action}) {
+    closeConfirm();
+    const questionId = 'automation-confirm-question-' + (++confirmSerial);
+    const box = document.createElement('span');
+    box.className = 'row-confirm';
+    box.setAttribute('role', 'alertdialog');
+    box.setAttribute('aria-labelledby', questionId);
+    const question = document.createElement('span');
+    question.id = questionId;
+    question.textContent = prompt.question;
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = '取消';
+    cancel.dataset.confirmAction = 'cancel';
+    cancel.addEventListener('click', () => closeConfirm());
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.textContent = prompt.confirmLabel;
+    confirm.dataset.confirmAction = 'ok';
+    confirm.addEventListener('click', () => {
+      const run = action;
+      closeConfirm();
+      run();
+    });
+    box.appendChild(question);
+    box.appendChild(cancel);
+    box.appendChild(confirm);
+    trigger.hidden = true;
+    parent.appendChild(box);
+    pendingConfirm = {box, trigger, action};
+    if (typeof cancel.focus === 'function') cancel.focus();
+  }
+
+  // One question at a time; Esc is the keyboard way out and never acts.
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !pendingConfirm) return;
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    closeConfirm();
+  });
+
   function stopRunPoll() {
     if (runTimer) {
       globalThis.clearInterval(runTimer);
@@ -273,56 +478,146 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!list || !panel) return;
     panel.hidden = false;
     list.textContent = '';
-    empty.hidden = items.length > 0;
-    for (const item of items) {
+    const visible = items.filter(item => matchesRunFilter(item, runFilter));
+    const filtering = runFilter !== 'all';
+    empty.hidden = items.length > 0 || filtering;
+    const filterEmpty = document.getElementById('run-filter-empty');
+    if (filterEmpty) filterEmpty.hidden = !(filtering && visible.length === 0);
+    for (const item of visible) {
       const row = document.createElement('li');
+      row.className = 'run-row';
       const head = document.createElement('div');
       head.className = 'run-head';
+      // The whole head is the toggle, so one click opens exactly one run.
+      // Opening never fetches: the payload already carries what the detail shows.
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'run-toggle';
+      const open = expandedRuns.has(item.id);
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
       const status = document.createElement('strong');
       status.textContent = runStatusLabel(item);
+      const pill = document.createElement('span');
+      pill.className = 'status-pill' + (item.status === 'succeeded' ? ' is-on' : '');
+      pill.textContent = item.status || '';
       const meta = document.createElement('span');
       meta.className = 'note';
       meta.textContent = item.error_code ? item.error_code : '';
-      head.appendChild(status);
-      head.appendChild(meta);
+      toggle.appendChild(status);
+      toggle.appendChild(pill);
+      toggle.appendChild(meta);
+      const detail = document.createElement('div');
+      detail.className = 'run-detail';
+      detail.hidden = !open;
+      const fields = runDetailFields(item);
+      if (fields.length) {
+        const terms = document.createElement('dl');
+        for (const field of fields) {
+          const term = document.createElement('dt');
+          term.textContent = field.label;
+          const value = document.createElement('dd');
+          value.textContent = field.value;
+          terms.appendChild(term);
+          terms.appendChild(value);
+        }
+        detail.appendChild(terms);
+      } else {
+        const note = document.createElement('p');
+        note.className = 'note';
+        note.textContent = RUN_DETAIL_EMPTY;
+        detail.appendChild(note);
+      }
+      if (item.status === 'succeeded' && current && current.id) {
+        const save = document.createElement('button');
+        save.type = 'button';
+        save.textContent = '保存到作品库';
+        save.addEventListener('click', async () => {
+          const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs/${item.id}/artifact`, {});
+          if (result.status !== 200 && result.status !== 201) {
+            show('error', messageFor(result.body.error, '保存到作品库失败。'));
+            return;
+          }
+          show('ok', '已保存到作品库。');
+        });
+        detail.appendChild(save);
+      }
+      toggle.addEventListener('click', () => {
+        const next = !expandedRuns.has(item.id);
+        if (next) expandedRuns.add(item.id);
+        else expandedRuns.delete(item.id);
+        detail.hidden = !next;
+        toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+      });
+      head.appendChild(toggle);
       if (item.status === 'queued' && current && current.id) {
         const cancel = document.createElement('button');
         cancel.type = 'button';
         cancel.textContent = '取消这次运行';
-        cancel.addEventListener('click', async () => {
-          const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs/${item.id}/cancel`, {});
-          if (result.status !== 200) {
-            show('error', messageFor(result.body.error, '取消失败。'));
-            return;
-          }
-          show('ok', '已取消。');
-          await loadRuns();
+        cancel.addEventListener('click', () => {
+          // The question is bound to the run it names: switching workspace or
+          // automation later cannot retarget the request built from this snapshot.
+          const target = {workspace: workspaceId(), automation: current.id, run: item.id};
+          openConfirm({
+            parent: head,
+            trigger: cancel,
+            prompt: cancellationPrompt(item),
+            action: () => cancelRun(target),
+          });
         });
         head.appendChild(cancel);
       }
-      row.appendChild(head);
-      const text = runResultText(item);
-      if (text) {
-        const pre = document.createElement('pre');
-        pre.textContent = text;
-        row.appendChild(pre);
-        if (item.status === 'succeeded' && current && current.id) {
-          const save = document.createElement('button');
-          save.type = 'button';
-          save.textContent = '保存到作品库';
-          save.addEventListener('click', async () => {
-            const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs/${item.id}/artifact`, {});
-            if (result.status !== 200 && result.status !== 201) {
-              show('error', messageFor(result.body.error, '保存到作品库失败。'));
-              return;
-            }
-            show('ok', '已保存到作品库。');
-          });
-          row.appendChild(save);
-        }
+      if (retryAllowed(item) && current && current.id) {
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.textContent = '重新运行';
+        retry.addEventListener('click', () => {
+          // Bound to this run snapshot: retrying after switching automation
+          // cannot retarget someone else's run.
+          retryRun({workspace: workspaceId(), automation: current.id, run: item.id});
+        });
+        head.appendChild(retry);
       }
+      row.appendChild(head);
+      row.appendChild(detail);
       list.appendChild(row);
     }
+  }
+
+  async function cancelRun(target) {
+    if (!target || !target.workspace || !target.automation || !target.run) return;
+    const result = await request('POST', `/v1/workspaces/${target.workspace}/automations/${target.automation}/runs/${target.run}/cancel`, {});
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '取消失败。'));
+      return;
+    }
+    show('ok', '已取消。');
+    await loadRuns();
+  }
+
+  // A double click has to reuse one idempotency key, otherwise the server
+  // queues the automation twice. The key is dropped once a retry lands, so a
+  // deliberate later retry of the same run is a new attempt.
+  const retryKeys = new Map();
+
+  function retryKeyFor(runId) {
+    if (!retryKeys.has(runId)) retryKeys.set(runId, idempotencyKey());
+    return retryKeys.get(runId);
+  }
+
+  async function retryRun(target) {
+    if (!target || !target.workspace || !target.automation || !target.run) return;
+    const result = await request(
+      'POST',
+      `/v1/workspaces/${target.workspace}/automations/${target.automation}/runs/${target.run}/retry`,
+      {}, {'Idempotency-Key': retryKeyFor(target.run)},
+    );
+    if (result.status !== 200 && result.status !== 201) {
+      show('error', messageFor(result.body.error, '重新运行失败。'));
+      return;
+    }
+    retryKeys.delete(target.run);
+    show('ok', '已重新排队。');
+    await loadRuns();
   }
 
   async function loadRuns() {
@@ -333,7 +628,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       stopRunPoll();
       return;
     }
-    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs?limit=20`);
+    const wanted = runFilter === 'all' ? '' : `&status=${runFilter}`;
+    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs?limit=20${wanted}`);
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法读取运行记录。'));
       return;
@@ -381,9 +677,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function openEditor(item) {
+    // A question belongs to the editor that raised it; entering another editor
+    // drops the question instead of showing it again above a different item.
+    closeConfirm({restoreFocus: false});
     current = item;
     listPanel.hidden = true;
     form.hidden = false;
+    mainPanel.classList.add('is-editing');
     fillEditor(form, item, templates, currentUser && currentUser.username);
     document.getElementById('remove-automation').hidden = !item || !item.id;
     document.getElementById('tick-automation').hidden = !item || !item.id;
@@ -405,12 +705,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       );
       return;
     }
-    empty.textContent = '这个分类下还没有自动化。';
+    setBusy(list, true);
+    list.textContent = '';
+    empty.hidden = false;
+    setBusy(empty, true);
+    empty.textContent = '正在加载自动化…';
     const listed = await request('GET', `/v1/workspaces/${id}/automations${listQuery(category, search.value)}`);
+    setBusy(empty, false);
+    setBusy(list, false);
     if (listed.status !== 200) {
+      empty.hidden = false;
+      empty.textContent = messageFor(listed.body.error, '无法读取自动化列表。');
       show('error', messageFor(listed.body.error, '无法读取自动化列表。'));
       return;
     }
+    empty.textContent = '这个分类下还没有自动化。';
     renderList(listed.body.items || [], list, empty, item => openEditor(item));
   }
 
@@ -462,6 +771,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('list-empty').textContent = '这个分类下还没有自动化。';
     form.hidden = true;
     listPanel.hidden = false;
+    mainPanel.classList.remove('is-editing');
     await loadList();
   }
 
@@ -479,8 +789,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  workspaceSelect.addEventListener('change', () => loadList());
+  workspaceSelect.addEventListener('change', () => {
+    closeConfirm({restoreFocus: false});
+    loadList();
+  });
   search.addEventListener('input', () => loadList());
+  syncRunFilters();
+  for (const [filter, id] of Object.entries(RUN_FILTER_BUTTONS)) {
+    const button = document.getElementById(id);
+    if (!button) continue;
+    button.addEventListener('click', async () => {
+      if (filter === runFilter) return;
+      runFilter = filter;
+      syncRunFilters();
+      pushRunFilter(filter);
+      await loadRuns();
+    });
+  }
+  if (view && typeof view.addEventListener === 'function') {
+    view.addEventListener('popstate', () => {
+      const wanted = runFilterFromSearch(readSearch());
+      if (wanted === runFilter) return;
+      runFilter = wanted;
+      syncRunFilters();
+      loadRuns();
+    });
+  }
   for (const tab of document.querySelectorAll('.tabs [data-category]')) {
     tab.addEventListener('click', async () => {
       category = tabCategory(tab.dataset.category);
@@ -489,6 +823,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       form.hidden = true;
       listPanel.hidden = false;
+      closeConfirm({restoreFocus: false});
+      mainPanel.classList.remove('is-editing');
       const runPanel = document.getElementById('run-panel');
       if (runPanel) runPanel.hidden = true;
       stopRunPoll();
@@ -507,9 +843,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
+    closeConfirm({restoreFocus: false});
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
+    mainPanel.classList.remove('is-editing');
     const runPanel = document.getElementById('run-panel');
     if (runPanel) runPanel.hidden = true;
     stopRunPoll();
@@ -558,6 +896,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     current = result.body.automation;
+    closeConfirm({restoreFocus: false});
     fillEditor(form, current, templates, currentUser && currentUser.username);
     document.getElementById('remove-automation').hidden = false;
     document.getElementById('tick-automation').hidden = false;
@@ -576,9 +915,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadRuns();
   });
 
-  document.getElementById('remove-automation').addEventListener('click', async () => {
-    if (!current || !current.id || !workspaceId()) return;
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}/remove`, {});
+  const removeButton = document.getElementById('remove-automation');
+
+  async function removeAutomation(target) {
+    if (!target || !target.workspace || !target.automation) return;
+    const result = await request('POST', `/v1/workspaces/${target.workspace}/automations/${target.automation}/remove`, {});
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '删除失败。'));
       return;
@@ -586,11 +927,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
+    mainPanel.classList.remove('is-editing');
     const runPanel = document.getElementById('run-panel');
     if (runPanel) runPanel.hidden = true;
     stopRunPoll();
     show('ok', '已删除。');
     await loadList();
+  }
+
+  removeButton.addEventListener('click', () => {
+    if (!current || !current.id || !workspaceId()) return;
+    // Bind the question to the automation and workspace it names right now.
+    const target = {workspace: workspaceId(), automation: current.id};
+    openConfirm({
+      parent: removeButton.parentNode || form,
+      trigger: removeButton,
+      prompt: deletePrompt(current),
+      action: () => removeAutomation(target),
+    });
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
@@ -600,12 +954,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '退出失败。'));
       return;
     }
+    closeConfirm({restoreFocus: false});
     current = null;
     stopRunPoll();
     await load();
   });
 
-  return load();
+  return load().then(() => {
+    const view = document.defaultView;
+    const wanted = templateFromSearch(view && view.location && view.location.search);
+    if (!wanted || mainPanel.hidden || !workspaceId()) return;
+    const template = templates.find(item => item.id === wanted);
+    if (!template) return;
+    openEditor(draftFromTemplate(template, currentUser && currentUser.username));
+  });
 }
 
 if (globalThis.document && globalThis.document.getElementById('editor-form')) {

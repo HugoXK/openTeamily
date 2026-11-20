@@ -24,6 +24,67 @@ async function request(method, path, body) {
 
 const LOOK_LABELS = {color: '颜色', expression: '表情', headwear: '头饰', glasses: '眼镜', hand: '手持'};
 
+// Composio toolkit slugs for the step-2 catalog in openteamily/onboarding.py.
+// The catalog uses dashed ids; Composio does not, so the mapping is explicit
+// instead of guessed from the display name.
+const TOOLKITS = {
+  gmail: 'gmail', outlook: 'outlook', 'google-calendar': 'googlecalendar', github: 'github',
+  'google-drive': 'googledrive', notion: 'notion', 'google-sheets': 'googlesheets', 'google-docs': 'googledocs',
+};
+
+// The words for one app row come from the real read, never from a constant.
+// `readable: false` means the connection list could not be read (no Composio
+// key of the user's own, or another refusal): that row says 未接入, because
+// claiming 未连接 would assert something about an app nobody asked.
+export function appConnectionState(app, {connections = [], readable = true, sync = 'ok'} = {}) {
+  if (!readable) {
+    return {state: 'unknown', label: '未接入', connected: false,
+            title: '还没有配置你自己的 Composio key，读不到这个应用的连接状态'};
+  }
+  if (sync === 'failed') {
+    return {state: 'unknown', label: '状态未知', connected: false,
+            title: 'Composio 同步失败，这次读到的连接状态不可信'};
+  }
+  const slug = TOOLKITS[app.key] || String(app.key || '');
+  const rows = (connections || []).filter(row => row && String(row.toolkit || '').toLowerCase() === slug);
+  if (rows.some(row => row.state === 'connected')) {
+    return {state: 'connected', label: '已连接', connected: true, title: '这个应用已经有真实的连接'};
+  }
+  if (rows.some(row => row.state === 'connecting')) {
+    return {state: 'connecting', label: '连接中', connected: false, title: '授权流程还没有完成'};
+  }
+  if (rows.some(row => row.state === 'inactive')) {
+    return {state: 'inactive', label: '已停用', connected: false, title: '连接存在但已停用，需要重新授权'};
+  }
+  if (rows.some(row => row.state === 'failed')) {
+    return {state: 'failed', label: '连接失败', connected: false, title: '上次授权失败，需要重新连接'};
+  }
+  return {state: 'unconnected', label: '未连接', connected: false, title: '还没有这个应用的连接'};
+}
+
+// What the workspace already has, said in one line instead of "everything is
+// unconnected". Empty string when the reads returned nothing to report.
+export function realitySummary({agents = 0, runtimes = 0, online = 0} = {}) {
+  const parts = [];
+  if (agents > 0) parts.push(`${agents} 个智能体`);
+  if (runtimes > 0) parts.push(online > 0 ? `${online} 个运行时连接在线` : `${runtimes} 个运行时连接（都不在线）`);
+  if (!parts.length) return '';
+  return '你的工作区已经有 ' + parts.join('，') + '。';
+}
+
+
+const TILE_TONES = 6;
+
+export function tileTone(text) {
+  let hash = 0;
+  for (const ch of String(text || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  return String((hash % TILE_TONES) + 1);
+}
+
+export function stepLabel(step) {
+  return `第 ${step} 步，共 4 步`;
+}
+
 export function lookSummary(look) {
   if (!look) return '还没有选择形象。';
   return Object.keys(LOOK_LABELS).map(name => `${LOOK_LABELS[name]}：${look[name]}`).join(' · ');
@@ -62,12 +123,67 @@ function mount() {
       option.textContent = row.name;
       select.append(option);
     }
+    renderIndustryCards();
+  }
+
+  function renderIndustryCards() {
+    const holder = document.getElementById('industry-cards');
+    if (!holder) return;
+    holder.replaceChildren();
+    for (const row of industries) {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'choice-card';
+      card.setAttribute('role', 'radio');
+      card.dataset.value = row.name;
+      card.setAttribute('aria-checked', String(select.value === row.name));
+      const tile = document.createElement('span');
+      tile.className = 'choice-tile';
+      tile.dataset.tone = tileTone(row.name);
+      tile.setAttribute('aria-hidden', 'true');
+      tile.textContent = Array.from(row.name)[0] || '?';
+      const name = document.createElement('span');
+      name.className = 'choice-name';
+      name.textContent = row.name;
+      card.append(tile, name);
+      card.addEventListener('click', () => {
+        select.value = row.name;
+        select.dispatchEvent(new Event('change'));
+      });
+      holder.append(card);
+    }
+  }
+
+  function syncIndustryCards() {
+    for (const card of document.querySelectorAll('#industry-cards .choice-card')) {
+      card.setAttribute('aria-checked', String(card.dataset.value === select.value));
+    }
+  }
+
+  let step = 1;
+  function goStep(next) {
+    step = next;
+    form.hidden = next !== 1;
+    const section = document.getElementById('onboarding-steps');
+    if (section) section.hidden = next === 1;
+    for (const part of document.querySelectorAll('#onboarding-steps .onboarding-step')) {
+      part.hidden = Number(part.dataset.step) !== next;
+    }
+    const label = document.getElementById('onboarding-step-label');
+    if (label) label.textContent = stepLabel(next);
+    for (const bar of document.querySelectorAll('.onboarding-progress li')) {
+      bar.dataset.done = String(Number(bar.dataset.bar) <= next);
+    }
+  }
+  for (const button of document.querySelectorAll('#onboarding-steps [data-go]')) {
+    button.addEventListener('click', () => goStep(Number(button.dataset.go)));
   }
 
   function renderRoles() {
     const name = select.value;
     const row = industries.find(item => item.name === name);
     roleChoices.replaceChildren();
+    syncIndustryCards();
     customIndustryLabel.hidden = name !== '其他';
     customRoleLabel.hidden = true;
     roleLocked.hidden = Boolean(name);
@@ -84,7 +200,16 @@ function mount() {
         customRoleLabel.hidden = radio.value !== '其他';
         if (radio.value === '其他') customRole.focus();
       });
-      label.append(radio, document.createTextNode(role));
+      const tile = document.createElement('span');
+      tile.className = 'choice-tile';
+      tile.dataset.tone = tileTone(role);
+      tile.setAttribute('aria-hidden', 'true');
+      tile.textContent = Array.from(role)[0] || '?';
+      const name = document.createElement('span');
+      name.className = 'choice-name';
+      name.textContent = role;
+      label.className = 'choice-card';
+      label.append(radio, tile, name);
       roleChoices.append(label);
     }
     if (!roles.length) {
@@ -315,33 +440,108 @@ function mount() {
     industries = result.body.industries || [];
     populateIndustries();
     fill(result.body.onboarding);
-    renderSteps(result.body.steps, result.body.onboarding);
+    await renderSteps(result.body.steps, result.body.onboarding);
+    const ready = document.getElementById('onboarding-ready-name');
+    if (ready) ready.textContent = session.body.user.username + '，';
+    goStep(step);
   }
 
-  function renderSteps(steps, state) {
+  async function readReality() {
+    const out = {agents: 0, runtimes: 0, online: 0, connections: [], readable: true, sync: 'ok'};
+    const spaces = await request('GET', '/v1/workspaces?limit=100');
+    const workspace = spaces.status === 200 ? (spaces.body.items || [])[0] : null;
+    if (workspace) {
+      const listed = await request('GET', `/v1/workspaces/${workspace.id}/agents?limit=100`);
+      if (listed.status === 200) out.agents = (listed.body.items || []).length;
+    }
+    const runtimes = await request('GET', '/v1/runtime/connections');
+    if (runtimes.status === 200) {
+      const items = runtimes.body.items || [];
+      out.runtimes = items.length;
+      out.online = items.filter(item => item && item.status === 'online').length;
+    }
+    const listed = await request('GET', '/v1/composio/connections');
+    if (listed.status === 200) {
+      out.connections = listed.body.items || [];
+      out.sync = listed.body.sync === 'failed' ? 'failed' : 'ok';
+    } else {
+      out.readable = false;
+    }
+    return out;
+  }
+
+  async function renderSteps(steps, state) {
     const section = document.getElementById('onboarding-steps');
     if (!section) return;
-    section.hidden = !steps || !state || !state.completed;
-    if (section.hidden) return;
+    if (!steps) return;
     const apps = document.getElementById('onboarding-apps');
     apps.textContent = '';
+    const reality = await readReality();
+    const summary = document.getElementById('onboarding-reality');
+    if (summary) summary.textContent = realitySummary(reality);
     for (const app of steps.apps || []) {
       const li = document.createElement('li');
-      li.textContent = `${app.name} · 未连接`;
+      const tile = document.createElement('span');
+      tile.className = 'choice-tile';
+      tile.dataset.tone = tileTone(app.name);
+      tile.setAttribute('aria-hidden', 'true');
+      tile.textContent = Array.from(app.name)[0] || '?';
+      const copy = document.createElement('span');
+      copy.className = 'app-copy';
+      const name = document.createElement('strong');
+      name.textContent = app.name;
+      const state = document.createElement('span');
+      state.className = 'app-state';
+      const info = appConnectionState(app, reality);
+      state.dataset.state = info.state;
+      state.textContent = ' · ' + info.label;
+      state.title = info.title;
+      copy.append(name, state);
+      const connect = document.createElement('button');
+      connect.type = 'button';
+      connect.disabled = true;
+      connect.className = 'app-connect';
+      connect.textContent = info.connected ? '已连接' : '+ 连接';
+      connect.title = info.connected ? info.title : info.title + '；连接在 设置 → 应用连接器 里做';
+      connect.setAttribute('aria-label', app.name + '：' + info.label);
+      li.append(tile, copy, connect);
       apps.appendChild(li);
     }
     const picks = document.getElementById('onboarding-picks');
     picks.textContent = '';
+    const groups = {task: ['一次性任务'], routine: ['例行任务']};
+    const lists = {};
+    for (const [kind, [title]] of Object.entries(groups)) {
+      const group = document.createElement('div');
+      group.className = 'pick-group';
+      const head = document.createElement('h3');
+      head.className = 'onboarding-group';
+      head.textContent = title;
+      const list = document.createElement('div');
+      list.className = 'pick-list';
+      group.append(head, list);
+      picks.append(group);
+      lists[kind] = list;
+    }
     for (const item of steps.recommendations || []) {
       const label = document.createElement('label');
+      label.className = 'pick-card';
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.name = 'pick';
       box.value = item.key;
       box.checked = (steps.picks || []).includes(item.key);
-      label.append(box, ` ${item.title}（${item.kind === 'routine' ? '例行' : '一次性'}）`);
+      const copy = document.createElement('span');
+      copy.className = 'pick-copy';
+      const title = document.createElement('strong');
+      title.textContent = ` ${item.title}（${item.kind === 'routine' ? '例行' : '一次性'}）`;
+      const summary = document.createElement('span');
+      summary.className = 'pick-summary';
+      summary.textContent = item.summary;
+      copy.append(title, summary);
+      label.append(box, copy);
       label.title = item.summary;
-      picks.appendChild(label);
+      (lists[item.kind] || lists.task).appendChild(label);
     }
     const look = document.getElementById('onboarding-look');
     look.textContent = '';
@@ -356,15 +556,28 @@ function mount() {
         choice.appendChild(option);
       }
       if (steps.look && steps.look[name]) choice.value = steps.look[name];
-      label.append(`${LOOK_LABELS[name] || name} `, choice);
+      choice.addEventListener('change', paintLook);
+      label.className = 'look-option';
+      const caption = document.createElement('span');
+      caption.textContent = `${LOOK_LABELS[name] || name} `;
+      label.append(caption, choice);
       look.appendChild(label);
     }
+    paintLook();
     document.getElementById('onboarding-look-preview').textContent = lookSummary(steps.look);
     document.getElementById('onboarding-steps-meta').textContent =
       `已选 ${(steps.picks || []).length} 项 · ` + (steps.look ? '形象已保存' : '形象未保存');
   }
 
-  async function saveStep(path, body, okText) {
+  function paintLook() {
+    const avatar = document.getElementById('look-avatar');
+    if (!avatar) return;
+    for (const choice of document.querySelectorAll('#onboarding-look select')) {
+      avatar.dataset[choice.name] = choice.value;
+    }
+  }
+
+  async function saveStep(path, body, okText, next) {
     const result = await request('POST', path, body);
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '保存失败。'));
@@ -372,6 +585,7 @@ function mount() {
     }
     renderSteps(result.body.steps, current || {completed: true});
     show('ok', okText);
+    if (next) goStep(next);
   }
 
   const picksForm = document.getElementById('onboarding-picks-form');
@@ -379,7 +593,7 @@ function mount() {
     event.preventDefault();
     const chosen = [...document.getElementById('onboarding-picks').querySelectorAll('input[name="pick"]')]
       .filter(box => box.checked).map(box => box.value);
-    saveStep('/v1/onboarding/picks', {picks: chosen}, '已保存选择（不会自动创建例行任务）。');
+    saveStep('/v1/onboarding/picks', {picks: chosen}, '已保存选择（不会自动创建例行任务）。', 4);
   });
 
   const lookForm = document.getElementById('onboarding-look-form');
@@ -414,7 +628,8 @@ function mount() {
       show('error', messageFor(result.body.error, '保存失败。'));
       return;
     }
-    globalThis.location.assign('/chat');
+    step = 2;
+    await load();
   });
 
   document.getElementById('onboarding-skip').addEventListener('click', async () => {

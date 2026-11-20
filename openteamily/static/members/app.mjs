@@ -72,6 +72,39 @@ export function canRemove(actor, target, selfId) {
   return false;
 }
 
+export function removalPrompt(item, selfId) {
+  if (!item) return {question: '', confirmLabel: '确认'};
+  if (item.user_id === selfId) return {question: '退出工作区？', confirmLabel: '确认退出'};
+  const name = item.username || '';
+  return {question: name ? `移除 ${name}？` : '移除此成员？', confirmLabel: '确认'};
+}
+
+export function revokePrompt() {
+  return {question: '撤销这条邀请？', confirmLabel: '确认撤销'};
+}
+
+// Freezing pauses an invite without revoking it, so it gets the same inline
+// confirmation as revoking instead of firing on one click.
+export function freezePrompt(item) {
+  return item && item.frozen
+    ? {question: '解冻这条邀请？', confirmLabel: '确认解冻'}
+    : {question: '冻结这条邀请？', confirmLabel: '确认冻结'};
+}
+
+// The server answers these codes with English sentences; the page says the
+// same thing in the language the rest of the row uses.
+export function inviteFailure(error, action) {
+  const code = error && error.code;
+  if (code === 'forbidden') {
+    return action === 'revoke'
+      ? '只有工作区所有者或管理员可以撤销邀请。'
+      : '只有工作区所有者或管理员可以冻结邀请。';
+  }
+  if (code === 'conflict') return '已撤销的邀请不能冻结或解冻。';
+  if (code === 'not_found') return '找不到这条邀请，可能已被撤销或删除。';
+  return (error && error.message) || '无法更新邀请。';
+}
+
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
@@ -107,6 +140,109 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return workspaceSelect.value;
   }
 
+  let pendingConfirm = null;
+  let confirmSerial = 0;
+  let memberItems = [];
+  let inviteItems = [];
+
+  function currentId() {
+    return currentUser && currentUser.id;
+  }
+
+  function closeConfirm({restoreFocus = true} = {}) {
+    if (!pendingConfirm) return;
+    const {box, trigger} = pendingConfirm;
+    pendingConfirm = null;
+    if (box && box.parentElement) box.remove();
+    if (trigger) {
+      trigger.hidden = false;
+      if (restoreFocus && typeof trigger.focus === 'function') trigger.focus();
+    }
+  }
+
+  function openConfirm({row, trigger, prompt, action}) {
+    closeConfirm();
+    const questionId = `member-confirm-question-${++confirmSerial}`;
+    const box = document.createElement('span');
+    box.className = 'row-confirm';
+    box.setAttribute('role', 'alertdialog');
+    box.setAttribute('aria-labelledby', questionId);
+    const question = document.createElement('span');
+    question.id = questionId;
+    question.textContent = prompt.question;
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = '取消';
+    cancel.dataset.confirmAction = 'cancel';
+    const confirm = document.createElement('button');
+    confirm.type = 'button';
+    confirm.textContent = prompt.confirmLabel;
+    confirm.dataset.confirmAction = 'ok';
+    box.appendChild(question);
+    box.appendChild(cancel);
+    box.appendChild(confirm);
+    trigger.hidden = true;
+    row.appendChild(box);
+    pendingConfirm = {row, box, trigger, action};
+    if (typeof cancel.focus === 'function') cancel.focus();
+  }
+
+  // One delegated listener for both lists: row buttons only carry data attributes.
+  document.addEventListener('click', event => {
+    const target = event.target;
+    if (!target || !target.dataset) return;
+    if (target.dataset.confirmAction === 'cancel') {
+      closeConfirm();
+      return;
+    }
+    if (target.dataset.confirmAction === 'ok') {
+      if (!pendingConfirm) return;
+      const run = pendingConfirm.action;
+      closeConfirm();
+      run();
+      return;
+    }
+    if (target.dataset.rowAction === 'remove') {
+      const item = memberItems.find(entry => entry.user_id === target.dataset.userId);
+      if (!item) return;
+      openConfirm({
+        row: target.parentElement,
+        trigger: target,
+        prompt: removalPrompt(item, currentId()),
+        action: () => removeMember(item),
+      });
+      return;
+    }
+    if (target.dataset.rowAction === 'revoke') {
+      const item = inviteItems.find(entry => entry.id === target.dataset.inviteId);
+      if (!item) return;
+      openConfirm({
+        row: target.parentElement,
+        trigger: target,
+        prompt: revokePrompt(item),
+        action: () => revokeInvite(item),
+      });
+      return;
+    }
+    if (target.dataset.rowAction === 'freeze' || target.dataset.rowAction === 'unfreeze') {
+      const item = inviteItems.find(entry => entry.id === target.dataset.inviteId);
+      if (!item) return;
+      const action = target.dataset.rowAction;
+      openConfirm({
+        row: target.parentElement,
+        trigger: target,
+        prompt: freezePrompt(item),
+        action: () => inviteAction(item, action),
+      });
+    }
+  });
+
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !pendingConfirm) return;
+    if (typeof event.preventDefault === 'function') event.preventDefault();
+    closeConfirm();
+  });
+
   function setRoleOptions(form, actorRole) {
     const select = form.elements.role;
     const allowed = addableRoles(actorRole);
@@ -138,17 +274,51 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+
+  function monogram(name) {
+    const text = String(name || '').trim();
+    const chars = Array.from(text);
+    const label = (chars.slice(0, chars[0] && /[A-Za-z]/.test(chars[0]) ? 2 : 1).join('') || '?');
+    let tone = 0;
+    for (const ch of chars) tone += ch.codePointAt(0) || 0;
+    return {label, tone: (tone % 6) + 1};
+  }
+
+  function identity(name, detail) {
+    const wrap = document.createElement('span');
+    wrap.className = 'member-id';
+    const mark = monogram(name);
+    const avatar = document.createElement('span');
+    avatar.className = 'avatar';
+    avatar.dataset.tone = String(mark.tone);
+    avatar.textContent = mark.label;
+    const label = document.createElement('span');
+    label.className = 'member-name';
+    label.textContent = detail ? `${name} · ${detail}` : (name || '');
+    wrap.appendChild(avatar);
+    wrap.appendChild(label);
+    // Fake-DOM tests read textContent on the wrap itself; keep a copy of the
+    // visible name there when the getter does not walk children.
+    if (Object.prototype.hasOwnProperty.call(wrap, '_text')) wrap._text = label.textContent;
+    return wrap;
+  }
+
   function renderMembers(items) {
     const list = document.getElementById('member-list');
     const empty = document.getElementById('members-empty');
+    memberItems = items;
+    pendingConfirm = null;
     list.textContent = '';
     empty.hidden = items.length > 0;
     const selfId = currentUser && currentUser.id;
     for (const item of items) {
       const row = document.createElement('li');
-      const label = document.createElement('span');
-      label.textContent = `${item.username} · ${ROLE_LABELS[item.role] || item.role}${item.suspended ? ' · 已停用' : ''}`;
-      row.appendChild(label);
+      const roleText = (ROLE_LABELS[item.role] || item.role) + (item.suspended ? ' · 已停用' : '');
+      row.appendChild(identity(item.username, roleText));
+      const role = document.createElement('span');
+      role.className = 'role-pill' + (item.role === 'owner' ? ' is-owner' : '');
+      role.textContent = ROLE_LABELS[item.role] || item.role;
+      row.appendChild(role);
       if (canSuspend(actor, item, selfId)) {
         const suspend = document.createElement('button');
         suspend.type = 'button';
@@ -168,7 +338,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.textContent = item.user_id === selfId ? '退出' : '移除';
-        remove.addEventListener('click', () => removeMember(item));
+        remove.dataset.rowAction = 'remove';
+        remove.dataset.userId = item.user_id;
         row.appendChild(remove);
       }
       list.appendChild(row);
@@ -178,24 +349,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function renderInvites(items) {
     const list = document.getElementById('invite-list');
     const empty = document.getElementById('invites-empty');
+    inviteItems = items;
+    pendingConfirm = null;
     list.textContent = '';
     empty.hidden = items.length > 0;
     for (const item of items) {
       const row = document.createElement('li');
       const state = inviteState(item);
-      const meta = document.createElement('span');
-      meta.textContent = `${ROLE_LABELS[item.role] || item.role} · ${state} · 已用 ${item.use_count}/${item.max_uses}`;
-      row.appendChild(meta);
+      const detail = `${ROLE_LABELS[item.role] || item.role} · ${state} · 已用 ${item.use_count}/${item.max_uses}`;
+      row.appendChild(identity('邀请', detail));
+      const role = document.createElement('span');
+      role.className = 'role-pill';
+      role.textContent = ROLE_LABELS[item.role] || item.role;
+      row.appendChild(role);
       if (!item.revoked) {
         const revoke = document.createElement('button');
         revoke.type = 'button';
         revoke.textContent = '撤销';
-        revoke.addEventListener('click', () => revokeInvite(item));
+        revoke.dataset.rowAction = 'revoke';
+        revoke.dataset.inviteId = item.id;
         const freeze = document.createElement('button');
         freeze.type = 'button';
-        freeze.textContent = item.frozen ? '恢复' : '冻结';
-        freeze.title = item.frozen ? '恢复后邀请可再次使用' : '暂停这条邀请，不撤销，可随时恢复';
-        freeze.addEventListener('click', () => inviteAction(item, item.frozen ? 'unfreeze' : 'freeze'));
+        freeze.textContent = item.frozen ? '解冻' : '冻结';
+        freeze.title = item.frozen ? '解冻后邀请可再次使用，不会撤销' : '暂停这条邀请，不撤销，可随时解冻';
+        freeze.dataset.rowAction = item.frozen ? 'unfreeze' : 'freeze';
+        freeze.dataset.inviteId = item.id;
         row.appendChild(freeze);
         row.appendChild(revoke);
       }
@@ -244,10 +422,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!id) return;
     const result = await request('POST', `/v1/workspaces/${id}/invites/${item.id}/${action}`, {});
     if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法更新邀请。'));
+      show('error', inviteFailure(result.body.error, action));
       return;
     }
-    show('ok', action === 'freeze' ? '已冻结邀请。' : '已恢复邀请。');
+    show('ok', action === 'freeze' ? '已冻结。' : '已解冻。');
     await loadWorkspace();
   }
 
@@ -259,9 +437,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (empty) empty.hidden = items.length > 0;
     for (const item of items) {
       const row = document.createElement('li');
-      const meta = document.createElement('span');
-      meta.textContent = `${item.username} · 申请成为${ROLE_LABELS[item.role] || item.role}`;
-      row.appendChild(meta);
+      row.appendChild(identity(item.username, '申请成为' + (ROLE_LABELS[item.role] || item.role)));
       for (const [decision, label] of [['approve', '批准'], ['reject', '拒绝']]) {
         const button = document.createElement('button');
         button.type = 'button';

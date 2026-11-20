@@ -1,0 +1,176 @@
+#main-panel {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem 3rem;
+}
+
+.skills-top h1 {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.4rem;
+  font-size: 1.15rem;
+  font-weight: 650;
+}
+
+.skills-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.55rem;
+  background: var(--ot-accent);
+  color: var(--ot-surface);
+}
+
+.skills-top .note { margin: 0 0 1rem; max-width: 46rem; }
+
+.skills-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 0.6rem;
+}
+
+.skills-search-label { flex: 1; min-width: 0; }
+
+#skills-search {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--ot-line);
+  border-radius: 999px;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  padding: 0.55rem 0.95rem 0.55rem 2.1rem;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23787574' d='M10 3a7 7 0 1 1 0 14 7 7 0 0 1 0-14zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm11.3 13.3-3.8-3.8 1.4-1.4 3.8 3.8-1.4 1.4z'/></svg>");
+  background-repeat: no-repeat;
+  background-position: 0.7rem 50%;
+  background-size: 1rem;
+  font: inherit;
+}
+
+.skills-count {
+  margin: 0 0 0.75rem;
+  color: var(--ot-muted);
+  font-size: 0.75rem;
+}
+
+.skills-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.skill-card {
+  display: grid;
+  grid-template-columns: 2.25rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.8rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 0.875rem;
+  background: var(--ot-surface);
+}
+
+.skill-card.is-installed {
+  border-color: var(--ot-accent);
+  background: var(--ot-accent-soft);
+}
+
+.skill-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.7rem;
+  background: var(--ot-bg-accent);
+  color: var(--ot-accent-hover);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.skill-copy {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.skill-copy strong {
+  color: var(--ot-ink);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.skill-description {
+  color: var(--ot-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.skill-install {
+  min-width: 4.25rem;
+  border: 1px solid var(--ot-line-strong);
+  border-radius: 999px;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+  padding: 0.3rem 0.65rem;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.skill-install:hover { border-color: var(--ot-accent); color: var(--ot-accent-hover); }
+.skill-install[aria-pressed="true"] {
+  border-color: var(--ot-accent);
+  background: var(--ot-accent);
+  color: var(--ot-surface);
+}
+
+.skills-empty { margin-top: 0.75rem; }
+
+@media (max-width: 520px) {
+  #main-panel { padding: 1rem 0.9rem 2rem; }
+  .skills-grid { grid-template-columns: minmax(0, 1fr); }
+  .skill-card { grid-template-columns: 2.25rem minmax(0, 1fr); }
+  .skill-install { grid-column: 2; justify-self: start; }
+}
+
+#skills-scope { display: block; max-width: 100%; margin: .35rem 0 .75rem; font: inherit; }
+#skills-permission { margin: 0 .4rem 0 0; }
+.skills-runtime-note { margin: .65rem 0 1rem; }
+.skill-copy p { margin: .25rem 0; font-size: .75rem; line-height: 1.5; color: var(--ot-muted); }
+.skill-copy details { font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere; }
+.skill-copy summary { cursor: pointer; color: var(--ot-accent-hover); }
+.skill-copy pre { max-height: 22rem; overflow: auto; font: inherit; overflow-wrap: anywhere; }
+.skill-copy small { overflow-wrap: anywhere; }
+.skill-install { align-self: start; min-height: 2rem; }
+.skill-install:focus-visible, .skill-copy summary:focus-visible { outline: 2px solid var(--ot-accent); outline-offset: 3px; }
+.skills-grid { align-items: start; }
+.skill-card { align-items: start; }
+#skills-error:empty { display: none; }
+
+.skills-execution {margin:1.25rem 0;padding:1.25rem;border:1px solid var(--ot-line);border-radius:1rem;background:var(--ot-surface);color:var(--ot-ink)}
+.skills-execution h2 {font-size:1rem;margin:0 0 .75rem}
+.skills-execution form,.skills-execution label {display:grid;gap:.5rem}
+.skills-execution form {gap:1rem;margin:1rem 0}
+.skills-execution textarea,.skills-execution select {width:100%;max-width:100%;box-sizing:border-box;font:inherit}
+.skills-execution button {min-height:2.5rem}
+#skill-run-history {list-style:none;padding:0}
+#skill-run-history li {padding:1rem 0;border-bottom:1px solid var(--ot-line)}
+#skill-run-history pre {white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:24rem;overflow:auto}
+.skill-card .skill-use {grid-column:2 / -1;justify-self:start;min-height:2.5rem}
+
+/* Opaque scoped primary states: the shared dark gradient carries dark ink. */
+#skill-run-submit {background:#097845;color:#fff;border-color:transparent}
+#skill-run-submit:hover {background:#076a3d;color:#fff}
+html[data-theme-resolved="dark"] #skill-run-submit {background:#097845;color:#fff;border-color:transparent}
+html[data-theme-resolved="dark"] #skill-run-submit:hover {background:#076a3d;color:#fff}
+#skill-run-history button,#skill-run-history a {display:inline-flex;align-items:center;margin:.4rem .5rem .25rem 0;vertical-align:middle}
+#skill-run-history a {white-space:nowrap;max-width:100%}
+
+.skill-import-panel{margin:1.5rem 0;padding:1rem;border:1px solid var(--ot-line);border-radius:12px}.skill-import-panel summary{cursor:pointer;font-weight:600}.skill-import-panel form{display:grid;gap:.8rem}.skill-import-panel textarea{box-sizing:border-box;width:100%;padding:.8rem;font:inherit;color:inherit;background:var(--ot-surface);border:1px solid var(--ot-line);border-radius:8px}.skill-copy>button,.skill-copy>a{display:inline-block;margin:.5rem .75rem .25rem 0}.skill-import-panel button:focus-visible,.skill-copy button:focus-visible{outline:3px solid #32704e;outline-offset:3px}
