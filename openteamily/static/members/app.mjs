@@ -32,8 +32,20 @@ export function directoryMembershipLabel(team) {
   return '';
 }
 
+// self may be a platform user object or just an id. After the page is served by
+// this user's DS-Bot, member.user_id may be a Bot Social owner id or handle.
+export function samePerson(item, self) {
+  if (!item || self == null || self === '') return false;
+  const user = typeof self === 'object' ? self : {id: self};
+  if (item.user_id && user.id && item.user_id === user.id) return true;
+  const strip = (value) => String(value || '').toLowerCase().replace(/^@/, '').replace(/\.home$/, '');
+  const mine = new Set([user.id, user.username, user.handle].filter(Boolean).map(strip).filter(Boolean));
+  if (!mine.size) return false;
+  return [item.user_id, item.username, item.handle].some((value) => value && mine.has(strip(value)));
+}
+
 export function canSuspend(actorRole, item, selfId) {
-  if (!item || item.role === 'owner' || item.user_id === selfId) return false;
+  if (!item || item.role === 'owner' || samePerson(item, selfId)) return false;
   if (actorRole === 'owner') return true;
   return actorRole === 'admin' && item.role === 'member';
 }
@@ -69,7 +81,7 @@ export function canInvite(actor) {
 
 export function canRemove(actor, target, selfId) {
   if (!target || target.role === 'owner') return false;
-  if (target.user_id === selfId) return actor === 'admin' || actor === 'member';
+  if (samePerson(target, selfId)) return actor === 'admin' || actor === 'member';
   if (actor === 'owner') return target.role === 'admin' || target.role === 'member';
   if (actor === 'admin') return target.role === 'member';
   return false;
@@ -77,7 +89,7 @@ export function canRemove(actor, target, selfId) {
 
 export function removalPrompt(item, selfId) {
   if (!item) return {question: '', confirmLabel: '确认'};
-  if (item.user_id === selfId) return {question: '退出工作区？', confirmLabel: '确认退出'};
+  if (samePerson(item, selfId)) return {question: '退出工作区？', confirmLabel: '确认退出'};
   const name = item.username || '';
   return {question: name ? `移除 ${name}？` : '移除此成员？', confirmLabel: '确认'};
 }
@@ -316,7 +328,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
   async function startDirectMessage(item) {
     const id = workspaceId();
     if (!id || !item || !item.user_id) return;
-    if (currentId() && item.user_id === currentId()) {
+    if (currentUser && samePerson(item, currentUser)) {
       show('error', '不能给自己发消息。');
       return;
     }
@@ -342,7 +354,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
     pendingConfirm = null;
     list.textContent = '';
     empty.hidden = items.length > 0;
-    const selfId = currentUser && currentUser.id;
+    const selfId = currentUser;
     for (const item of items) {
       const row = document.createElement('li');
       const roleText = (ROLE_LABELS[item.role] || item.role) + (item.suspended ? ' · 已停用' : '');
@@ -351,7 +363,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       role.className = 'role-pill' + (item.role === 'owner' ? ' is-owner' : '');
       role.textContent = ROLE_LABELS[item.role] || item.role;
       row.appendChild(role);
-      if (item.user_id !== selfId) {
+      if (!samePerson(item, selfId)) {
         const message = document.createElement('button');
         message.type = 'button';
         message.textContent = '发消息';
@@ -377,7 +389,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       if (canRemove(actor, item, selfId)) {
         const remove = document.createElement('button');
         remove.type = 'button';
-        remove.textContent = item.user_id === selfId ? '退出' : '移除';
+        remove.textContent = samePerson(item, selfId) ? '退出' : '移除';
         remove.dataset.rowAction = 'remove';
         remove.dataset.userId = item.user_id;
         row.appendChild(remove);
@@ -453,7 +465,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       show('error', messageFor(result.body.error, '无法移除成员。'));
       return;
     }
-    show('ok', item.user_id === currentUser.id ? '已退出工作区。' : '已移除。');
+    show('ok', samePerson(item, currentUser) ? '已退出工作区。' : '已移除。');
     await load();
   }
 
@@ -533,7 +545,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), as
       return;
     }
     const items = listed.body.items || [];
-    const self = items.find(item => currentUser && item.user_id === currentUser.id);
+    const self = items.find(item => samePerson(item, currentUser));
     actor = self ? self.role : null;
     document.getElementById('role-note').textContent = actor
       ? `当前角色：${ROLE_LABELS[actor] || actor}`
