@@ -28,6 +28,7 @@ export function readInvite(form) {
 export function directoryMembershipLabel(team) {
   if (team.membership === 'member') return '已加入';
   if (team.membership === 'pending') return '等待审批';
+  if (team.membership === 'suspended') return '已暂停';
   return '';
 }
 

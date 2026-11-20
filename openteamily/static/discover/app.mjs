@@ -58,15 +58,10 @@ export const CATALOG_CATEGORIES = [
   'Legal', 'Life', 'Marketing',
 ];
 
-export const TEAM_CATEGORIES = [
-  'Marketing', 'Engineering', 'IT & Security', 'Content Creation',
-  'Operations', 'Product', 'Data Analysis', 'Design', 'Research',
-  'Investment', 'Education', 'Life', 'Sales',
-];
-
-export const TEAMS_NOTE = '公开 AI 团队目录还没有接口，所以这里不会列出模板卡片。也不会复制对照里的团队名称或创建者品牌。';
-export const TEAMS_SEARCH_NOTE = '搜索 AI 团队尚未接通：没有对应的公开接口。';
-export const TEAMS_SEARCH_PLACEHOLDER = '搜索 AI 团队......';
+const TEAM_DIRECTORY_LIMIT = 100;
+const TEAM_DIRECTORY_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const TEAM_MEMBERSHIP = {member: '已加入', pending: '等待审批', suspended: '已暂停'};
+const TEAM_SEARCH_LIMIT = 60;
 
 export const FEED_ACTIVITY_EMPTY_NOTE = '还没有公开作品，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。支持点赞、收录和关注作者；其他分类尚未接通。';
 export const FEED_ACTIVITY_LISTED_NOTE = '以下是工作区自愿公开的作品，不是推荐或奖励内容。支持点赞、收录和关注作者；其他分类尚未接通。';
@@ -239,49 +234,56 @@ export function isTeamsCatalog(location) {
   return params.get('tab') === 'agents' && params.get('section') === 'groups';
 }
 
-export function renderTeamCard(document, item) {
+function teamDirectoryQuery(text) {
+  const params = new URLSearchParams({limit: String(TEAM_DIRECTORY_LIMIT)});
+  if (text) params.set('q', text);
+  return '/v1/team-directory?' + params.toString();
+}
+
+export function renderTeamCard(document, team, {joining = false, onJoin} = {}) {
   const card = document.createElement('article');
-  const category = document.createElement('p');
-  category.className = 'team-category';
-  category.textContent = item.category || '';
+  const heading = document.createElement('div');
+  heading.className = 'team-card-heading';
+  const mark = document.createElement('span');
+  mark.className = 'catalog-avatar';
+  mark.dataset.tone = catalogTone(team.name);
+  mark.setAttribute('aria-hidden', 'true');
+  mark.textContent = catalogMonogram(team.name);
   const name = document.createElement('h3');
-  name.textContent = item.name || item.slug || '';
-  const summary = document.createElement('p');
-  summary.className = 'summary';
-  summary.textContent = item.summary || '';
-  const tags = document.createElement('ul');
-  tags.className = 'team-tags';
-  for (const label of item.tags || []) {
-    const li = document.createElement('li');
-    li.textContent = label;
-    tags.append(li);
+  name.textContent = team.name;
+  heading.append(mark, name);
+  card.append(heading);
+  if (team.summary) {
+    const summary = document.createElement('p');
+    summary.className = 'team-summary';
+    summary.textContent = team.summary;
+    card.append(summary);
   }
   const foot = document.createElement('div');
   foot.className = 'team-foot';
-  const avatars = document.createElement('div');
-  avatars.className = 'team-avatars';
-  avatars.setAttribute('aria-hidden', 'true');
-  for (const member of item.members || []) {
-    const mark = document.createElement('span');
-    mark.textContent = catalogInitial(member);
-    avatars.append(mark);
+  const count = document.createElement('span');
+  count.className = 'team-size';
+  const members = Number(team.member_count);
+  count.textContent = Number.isInteger(members) && members >= 0 ? `${members} 位成员` : '';
+  foot.append(count);
+  const membership = Object.hasOwn(TEAM_MEMBERSHIP, team.membership) ? TEAM_MEMBERSHIP[team.membership] : '';
+  if (membership) {
+    const state = document.createElement('span');
+    state.className = 'team-membership';
+    state.dataset.state = team.membership;
+    state.textContent = membership;
+    foot.append(state);
+  } else if (onJoin && TEAM_DIRECTORY_ID.test(team.workspace_id || '')) {
+    const join = document.createElement('button');
+    join.type = 'button';
+    join.className = 'team-join';
+    join.disabled = joining;
+    join.textContent = joining ? '正在申请…' : '申请加入';
+    join.setAttribute('aria-label', `${join.textContent} ${team.name}`);
+    join.addEventListener('click', () => onJoin(team));
+    foot.append(join);
   }
-  foot.append(avatars);
-  if (item.extra) {
-    const extra = document.createElement('span');
-    extra.className = 'team-extra';
-    extra.textContent = item.extra;
-    foot.append(extra);
-  }
-  const create = document.createElement('button');
-  create.type = 'button';
-  create.className = 'team-create';
-  create.disabled = true;
-  create.textContent = '创建';
-  create.title = '未接通：没有从目录创建 AI 团队的接口。';
-  create.setAttribute('aria-label', (item.name || item.slug || '团队') + '：创建未接通');
-  foot.append(create);
-  card.append(category, name, summary, tags, foot);
+  card.append(foot);
   return card;
 }
 
@@ -308,6 +310,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   let cursor = '';
   let activeQuery = '';
   let catalogRequest = 0;
+  let directoryItems = [];
+  let directoryLoading = false;
+  let activeTeamQuery = '';
+  const joiningTeams = new Set();
   const agentsView = isAgentsCatalog(location);
   const teamsView = isTeamsCatalog(location);
   const catalogView = agentsView || teamsView;
@@ -327,15 +333,18 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     setCurrent('catalog-tab-agents', agentsView);
     setCurrent('catalog-tab-teams', teamsView);
     const agentFilters = document.getElementById('catalog-filters');
-    const teamFilters = document.getElementById('teams-filters');
     if (agentFilters) agentFilters.hidden = !agentsView;
-    if (teamFilters) teamFilters.hidden = !teamsView;
+    const creator = document.getElementById('catalog-creator');
+    if (creator) creator.hidden = teamsView;
     const createAgent = document.getElementById('catalog-create-agent');
     const createTeam = document.getElementById('catalog-create-team');
     if (createAgent) createAgent.hidden = !agentsView;
     if (createTeam) createTeam.hidden = !teamsView;
     const query = document.getElementById('catalog-query');
-    if (query) query.placeholder = teamsView ? TEAMS_SEARCH_PLACEHOLDER : '搜索智能体…';
+    if (query) {
+      query.placeholder = teamsView ? '搜索 AI 团队…' : '搜索智能体…';
+      if (teamsView) query.maxLength = TEAM_SEARCH_LIMIT;
+    }
     if (typeof document.querySelector === 'function') {
       const queryLabel = document.querySelector('label[for="catalog-query"]');
       if (queryLabel) queryLabel.textContent = teamsView ? '搜索 AI 团队' : '搜索智能体';
@@ -349,24 +358,94 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   }
 
-  function showTeamsUnconnected() {
+  function renderTeamDirectory() {
     const list = document.getElementById('discover-list');
-    if (list) list.replaceChildren();
-    const empty = document.getElementById('discover-empty');
-    if (empty) empty.hidden = true;
-    const more = document.getElementById('catalog-more');
-    if (more) more.hidden = true;
-    const count = document.getElementById('catalog-count');
-    if (count) count.textContent = '';
-    const error = document.getElementById('catalog-error');
-    if (error) error.hidden = true;
-    const note = document.getElementById('teams-note');
-    if (note) {
-      note.hidden = false;
-      note.textContent = TEAMS_NOTE;
+    list.replaceChildren();
+    for (const team of directoryItems) {
+      const row = document.createElement('li');
+      row.append(renderTeamCard(document, team, {
+        joining: joiningTeams.has(team.workspace_id),
+        onJoin: applyTeam,
+      }));
+      list.append(row);
     }
+  }
+
+  async function applyTeam(team) {
+    const id = team.workspace_id;
+    const user = currentUser;
+    if (!user || joiningTeams.has(id) || !TEAM_DIRECTORY_ID.test(id)) return;
+    joiningTeams.add(id);
+    renderTeamDirectory();
+    show('', '');
+    try {
+      const response = await request('POST', '/v1/team-directory/' + encodeURIComponent(id) + '/join', {});
+      const next = response.status === 202 ? 'pending' : response.status === 200 ? response.body.status : '';
+      if (currentUser !== user) return;
+      if (!Object.hasOwn(TEAM_MEMBERSHIP, next)) {
+        show('error', messageFor(response.body.error, '无法提交加入申请，请重试。'));
+        return;
+      }
+      directoryItems = directoryItems.map(item => item.workspace_id === id ? {...item, membership: next} : item);
+      show('ok', next === 'pending' ? '已提交申请，等待团队管理员审批。' : TEAM_MEMBERSHIP[next]);
+      // A search started before the write can return pre-application membership.
+      if (directoryLoading) void loadTeams(activeTeamQuery);
+    } catch {
+      if (currentUser === user) show('error', '连接失败，暂时无法确认申请结果。可刷新重试。');
+    } finally {
+      joiningTeams.delete(id);
+      if (currentUser === user) renderTeamDirectory();
+    }
+  }
+
+  async function loadTeams(query = document.getElementById('catalog-query').value.trim().slice(0, TEAM_SEARCH_LIMIT)) {
+    const seq = ++catalogRequest;
     const panel = document.getElementById('catalog-panel');
-    if (panel) panel.setAttribute('aria-busy', 'false');
+    const empty = document.getElementById('discover-empty');
+    const error = document.getElementById('catalog-error');
+    const retry = document.getElementById('teams-retry');
+    const count = document.getElementById('catalog-count');
+    activeTeamQuery = query;
+    directoryItems = [];
+    renderTeamDirectory();
+    document.getElementById('catalog-more').hidden = true;
+    empty.hidden = true;
+    error.hidden = true;
+    retry.hidden = true;
+    if (!currentUser) {
+      directoryLoading = false;
+      panel.setAttribute('aria-busy', 'false');
+      count.textContent = '';
+      empty.textContent = '登录后可查看并申请加入公开团队。';
+      empty.hidden = false;
+      return;
+    }
+    directoryLoading = true;
+    panel.setAttribute('aria-busy', 'true');
+    count.textContent = '正在加载团队…';
+    try {
+      const result = await request('GET', teamDirectoryQuery(query));
+      if (seq !== catalogRequest) return;
+      if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法加载团队目录。'));
+      directoryItems = catalogItems(result.body);
+      renderTeamDirectory();
+      count.textContent = directoryItems.length >= TEAM_DIRECTORY_LIMIT
+        ? `已显示前 ${TEAM_DIRECTORY_LIMIT} 个团队，可用搜索缩小范围。`
+        : directoryItems.length ? `${directoryItems.length} 个团队` : '';
+      empty.textContent = query ? '没有匹配的团队。' : '暂无公开团队。';
+      empty.hidden = directoryItems.length > 0;
+    } catch (failure) {
+      if (seq !== catalogRequest) return;
+      count.textContent = '';
+      error.textContent = failure.message || '无法加载团队目录。';
+      error.hidden = false;
+      retry.hidden = false;
+    } finally {
+      if (seq === catalogRequest) {
+        directoryLoading = false;
+        panel.setAttribute('aria-busy', 'false');
+      }
+    }
   }
 
   function showDiscoverView() {
@@ -835,7 +914,6 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function load() {
     showDiscoverView();
     if (agentsView) await loadCatalog();
-    if (teamsView) showTeamsUnconnected();
     const session = await request('GET', '/v1/auth/session');
     if (session.status !== 200) {
       currentUser = null;
@@ -843,6 +921,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       mainPanel.hidden = false;
       document.getElementById('catalog-manage').hidden = true;
       show('', '');
+      if (teamsView) await loadTeams();
       return;
     }
     currentUser = session.body.user;
@@ -864,6 +943,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       await loadManage();
     }
     show('', '');
+    if (teamsView) await loadTeams();
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -883,20 +963,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   document.getElementById('catalog-search').addEventListener('submit', event => {
     event.preventDefault();
     if (agentsView) return loadCatalog();
-    if (teamsView) {
-      const note = document.getElementById('teams-search-note');
-      if (note) {
-        note.hidden = false;
-        note.textContent = TEAMS_SEARCH_NOTE;
-      }
-    }
+    if (teamsView) return loadTeams();
   });
   document.getElementById('catalog-clear').addEventListener('click', () => {
     document.getElementById('catalog-query').value = '';
-    const note = document.getElementById('teams-search-note');
-    if (note) note.hidden = true;
     if (agentsView) return loadCatalog();
+    if (teamsView) return loadTeams();
   });
+  document.getElementById('teams-retry').addEventListener('click', () => loadTeams(activeTeamQuery));
   document.getElementById('catalog-more').addEventListener('click', () => {
     if (agentsView) return loadCatalog(true);
   });
