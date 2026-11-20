@@ -218,7 +218,8 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('location = /members { return 418; }', conf)
         self.assertIn('location = /discover { return 418; }', conf)
         self.assertIn('absolute_redirect off;', conf)
-        self.assertIn('location @ot_login { return 302 /register/; }', conf)
+        self.assertIn('location @ot_login { return 302 /login; }', conf)
+        self.assertNotIn('location = /login { return 418; }', conf)
         self.assertIn('location ^~ /v1/discover/ { return 418; }', conf)
 
     def test_nginx_config_optional_social_path(self):

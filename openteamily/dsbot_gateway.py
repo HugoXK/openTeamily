@@ -652,7 +652,7 @@ __DSBOT_LOCATIONS__
   recursive_error_pages on;
   error_page 418 = @ot_dsbot;
   error_page 401 = @ot_login;
-  location @ot_login { return 302 /register/; }
+  location @ot_login { return 302 /login; }
   location / {
     proxy_pass http://__PLATFORM__;
     proxy_set_header Host $host;

@@ -59,7 +59,10 @@ function element(tag, className, text) {
 }
 
 function show(document, kind, text) {
-  const status = document.getElementById('home-status');
+  const signedIn = document.getElementById('main-panel')?.hidden === false;
+  const status = document.getElementById(signedIn ? 'home-status' : 'status');
+  const other = document.getElementById(signedIn ? 'status' : 'home-status');
+  if (other) other.textContent = '';
   if (!status) return;
   status.dataset.kind = kind || '';
   status.textContent = text || '';
@@ -264,6 +267,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         show(document, 'error', (session.body.error && session.body.error.message) || '无法读取会话。');
         return;
       }
+      if (globalThis.location?.pathname === '/login') {
+        globalThis.location.replace('/');
+        return;
+      }
       currentUser = session.body.user;
       loginPanel.hidden = true;
       mainPanel.hidden = false;
@@ -313,7 +320,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       password: form.elements.password.value,
     });
     if (result.status !== 200) {
-      show(document, 'error', (result.body.error && result.body.error.message) || '无法登录。');
+      show(document, 'error', result.status === 401 ? '用户名或密码不正确。'
+        : (result.body.error && result.body.error.message) || '无法登录。');
       return;
     }
     form.reset();

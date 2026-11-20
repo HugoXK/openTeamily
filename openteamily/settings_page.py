@@ -14,7 +14,9 @@ from . import discover
 
 class SettingsPage:
     ASSETS = {
+        '/login': ('home', 'index.html', 'text/html; charset=utf-8'),
         '/register': ('register', 'index.html', 'text/html; charset=utf-8'),
+        '/register/': ('register', 'index.html', 'text/html; charset=utf-8'),
         '/register/app.mjs': ('register', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/register/app.css': ('register', 'app.css', 'text/css; charset=utf-8'),
         '/settings': ('settings', 'index.html', 'text/html; charset=utf-8'),
