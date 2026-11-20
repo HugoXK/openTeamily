@@ -21,14 +21,18 @@ export async function adoptThread({ rt, source, target, sessionId }) {
   return part.sessionId
 }
 
-export async function importHistory({ db, rt, ctx, bot, conversationId, sessionId }) {
+export async function importHistory({ db, rt, ctx, bot, conversationId, sessionId, secondarySessionId }) {
   db.exec('CREATE TABLE IF NOT EXISTS native_agent_events(message_id TEXT PRIMARY KEY,session_id TEXT NOT NULL,event_seq INTEGER,source TEXT NOT NULL)')
   const rows = db.prepare('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created,id').all(conversationId)
   if (!rows.length) return { imported:0, matched:0 }
-  const targetThread = threadOfPart(bot, sessionId)
-  const chain = targetThread?.segments || []
+  const scan = new Set()
+  for (const sid of [sessionId, secondarySessionId].filter(Boolean)) {
+    const thread = threadOfPart(bot, sid)
+    for (const part of thread?.segments || []) scan.add(part.sessionId)
+    scan.add(sid)
+  }
   const events = []
-  for (const id of [...chain.map(s=>s.sessionId), sessionId]) {
+  for (const id of scan) {
     const agent = await rt.resolveAgent(id); await ctx.sessions.flush(agent.session)
     for await (const event of rt.eventsBackwards(id, AbortSignal.timeout(15000), Infinity)) {
       if (!['user/message','assistant/message','openteamily/message-status'].includes(event.type)) continue

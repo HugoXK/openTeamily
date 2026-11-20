@@ -18,12 +18,25 @@ legacy ID/title.
 Session. New agent turns run on that mapped Bot and Session, not on the Main Bot
 with a persona prompt. List/create returns native session IDs for inspection.
 
-Outstanding parity work (do not claim complete): historical plugin-only messages
-have not yet been replayed into native Session events; pre-existing Main Bot
-agent-session parts need explicit history-preserving adoption; Bot Social groups
-need native group/remote-human participant mapping; reverse creation from the
-native UI needs explicit workspace assignment. Group membership/history remains
-canonical in Bot Social, and compatibility tables retain all legacy history.
+## Historical sessions increment (acceptance pending)
+
+Main Bot thread chains are adopted by their original bridge key, including the
+pre-plugin plain agent-conversation ID. Chains move to the mapped Bot without
+copying native logs. A newer mapped thread is retained; both chains are scanned
+before missing messages are appended. Durable Bot sessionKeys recover interrupted
+create/map commits; native_agent_events maps source messages after native flush.
+Source IDs recover the flush/ledger crash window. Original timestamps remain in
+source metadata; native append sequence stays append-only. Failed historical
+messages remain diagnostics, not fabricated assistant replies.
+
+c3f226 functional/model/isolation acceptance passed. dd647 consumed all retained
+agent/automation bundles but failed conversation creation with a ReferenceError.
+#523 fixes it; historical native-view/dedup acceptance is still pending.
+
+Outstanding: explicit workspace selection and reverse mapping on native creation,
+complete historical ordering/native-view acceptance, remaining user administration
+and profile/onboarding central paths, real skill-run abort, and Teamily reference
+inspection (unverified, not claimed). These are gaps, not completed capabilities.
 
 ## Shared group increment
 
@@ -37,8 +50,9 @@ to that same shared record. Native delete leaves the shared conversation for the
 current member and archives its local room; it does not delete other people's
 history. Unsupported native-only settings fail visibly instead of diverging.
 
-Remaining: native remote-human participant editor integration; reverse native
+Native remote-human editor is merged for the next deployment; acceptance pending.
+
+Remaining: reverse native
 creation requires explicit workspace selection; initial reconciliation still
-requires a conversation read; plugin-only historical agent messages need native
-Session event import. Do not label full feature parity accepted until test-account
+requires a conversation read; historical event import/adoption still needs native-view evidence. Do not label full feature parity accepted until test-account
 native-view consistency evidence exists after deployment.
