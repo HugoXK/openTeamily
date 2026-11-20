@@ -322,7 +322,12 @@ class Scheduler:
 
         Returns None when the automation already holds the maximum number of
         runs, so the caller can answer 429 instead of silently dropping work.
+        Returns 'moved_to_dsbot' when /automations/ already runs on the owner's
+        DS-Bot, so Flask cannot start a second infer.
         """
+        from .dsbot_gateway import workspace_moved_to_dsbot
+        if workspace_moved_to_dsbot(db, row['workspace_id'], 'automations'):
+            return 'moved_to_dsbot'
         count = db.execute(
             'SELECT COUNT(*) FROM automation_runs WHERE automation_id=?', (row['id'],)
         ).fetchone()[0]
