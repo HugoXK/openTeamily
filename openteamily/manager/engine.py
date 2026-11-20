@@ -23,8 +23,10 @@ BOT_SOCIAL_TARGET = '/run/secrets/openteamily-bot-social.json'
 BOT_SOCIAL_BIND_SUFFIX = ':' + BOT_SOCIAL_TARGET + ':ro'
 RUNTIME_KEY_TARGET = '/run/secrets/openteamily-runtime-key.json'
 RUNTIME_KEY_BIND_SUFFIX = ':' + RUNTIME_KEY_TARGET + ':ro'
-ALLOWED_BIND_SUFFIXES = (SECRET_BIND_SUFFIX, BOT_SOCIAL_BIND_SUFFIX, RUNTIME_KEY_BIND_SUFFIX)
-ALLOWED_BIND_TARGETS = (SECRET_TARGET, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET)
+SEAL_KEY_TARGET = '/run/secrets/openteamily-seal.key'
+SEAL_KEY_BIND_SUFFIX = ':' + SEAL_KEY_TARGET + ':ro'
+ALLOWED_BIND_SUFFIXES = (SECRET_BIND_SUFFIX, BOT_SOCIAL_BIND_SUFFIX, RUNTIME_KEY_BIND_SUFFIX, SEAL_KEY_BIND_SUFFIX)
+ALLOWED_BIND_TARGETS = (SECRET_TARGET, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET, SEAL_KEY_TARGET)
 
 def compose_bytes(document):
     return (json.dumps(document, sort_keys=True, separators=(',', ':')) + '\n').encode()
@@ -93,6 +95,11 @@ def runtime_key_relpath(iid):
     return 'secrets/runtime-key-' + iid + '.json'
 
 
+def seal_key_relpath(iid):
+    check_id(iid)
+    return 'secrets/seal-' + iid + '.key'
+
+
 def manifest(iid, entry):
     check_id(iid)
     require(isinstance(entry, dict) and set(entry) == {'image', 'healthcheck', 'publish_port'}, 'registry_fields')
@@ -111,6 +118,7 @@ def manifest(iid, entry):
                    {'type': 'bind', 'source': secret_relpath(iid), 'target': SECRET_TARGET, 'read_only': True},
                    {'type': 'bind', 'source': bot_social_relpath(iid), 'target': BOT_SOCIAL_TARGET, 'read_only': True},
                    {'type': 'bind', 'source': runtime_key_relpath(iid), 'target': RUNTIME_KEY_TARGET, 'read_only': True},
+                   {'type': 'bind', 'source': seal_key_relpath(iid), 'target': SEAL_KEY_TARGET, 'read_only': True},
                ],
                'tmpfs': ['/tmp:rw,noexec,nosuid,size=67108864'],
                'logging': {'driver': 'local', 'options': {'max-size': '10m', 'max-file': '3'}}}
@@ -158,10 +166,18 @@ class Registry:
         self.root = Path(config_path).parent
         self.config = read_private(config_path)
         self.upgrades = {}
+        # Server-assigned (auto-provisioned) instances adopted for this invocation
+        # only, from the operator's auto_instances template; never written back.
+        self.adopted = {}
         cfg = self.config
-        require(isinstance(cfg, dict) and set(cfg) == {'version', 'execution_enabled', 'base_url', 'server_host', 'manager_id', 'token', 'docker', 'socket', 'instances'}, 'config_fields')
+        base = {'version', 'execution_enabled', 'base_url', 'server_host', 'manager_id', 'token', 'docker', 'socket', 'instances'}
+        require(isinstance(cfg, dict) and set(cfg) - {'auto_instances', 'dsbot_gateway'} == base, 'config_fields')
         require(type(cfg['version']) is int and cfg['version'] == 1 and type(cfg['execution_enabled']) is bool, 'config_version')
-        require(isinstance(cfg['instances'], dict) and 1 <= len(cfg['instances']) <= 100, 'registry_limit')
+        auto = cfg.get('auto_instances')
+        if auto is not None:
+            require(isinstance(auto, dict) and set(auto) == {'image', 'healthcheck'}, 'auto_instances_fields')
+            manifest('0' * 32, {**auto, 'publish_port': None})
+        require(isinstance(cfg['instances'], dict) and (0 if auto is not None else 1) <= len(cfg['instances']) <= 100, 'registry_limit')
         ports = []
         for iid, entry in cfg['instances'].items():
             manifest(iid, entry)
@@ -173,12 +189,34 @@ class Registry:
             secrets.mkdir(mode=0o700)
         trusted_path(str(secrets), directory=True, private=True)
 
+    def adopt(self, iid, snapshot):
+        """Accept a server-assigned auto-provisioned instance from the authenticated listing.
+
+        The server only lists instances this manager is granted. The local template
+        still pins the image (must equal the server image_ref), uses no published
+        port, and the instance's own ot-<id> volume and secret files.
+        """
+        check_id(iid)
+        auto = self.config.get('auto_instances')
+        require(auto is not None, 'instance_not_registered')
+        require(iid not in self.config['instances'], 'instance_already_registered')
+        require(isinstance(snapshot, dict) and snapshot.get('id') == iid and snapshot.get('provisioning') == 'auto' and
+                snapshot.get('backend_mode') == 'compose' and snapshot.get('image_ref') == auto['image'] and
+                snapshot.get('volume_ref') == 'ot-' + iid, 'auto_instance_mismatch')
+        require(len(self.adopted) < 1000, 'registry_limit')
+        self.adopted[iid] = {'image': auto['image'], 'healthcheck': auto['healthcheck'], 'publish_port': None}
+        return self.adopted[iid]
+
+    def lookup(self, iid):
+        entry = self.config['instances'].get(iid) or self.adopted.get(iid)
+        require(entry is not None, 'instance_not_registered')
+        return entry
+
     def entry(self, iid, snapshot=None):
         check_id(iid)
         # Freeze registry for this invocation; detect replacement or a permission change.
         require(read_private(self.config_path) == self.config, 'registry_changed')
-        require(iid in self.config['instances'], 'instance_not_registered')
-        entry = self.config['instances'][iid]
+        entry = self.lookup(iid)
         expected = manifest(iid, entry)
         path = self.root / ('compose-' + iid + '.json')
         if not path.exists() and not path.is_symlink():
@@ -299,6 +337,9 @@ class ComposeEngine:
     def runtime_key_path(self, iid):
         return self.registry.root / runtime_key_relpath(iid)
 
+    def seal_key_path(self, iid):
+        return self.registry.root / seal_key_relpath(iid)
+
     def install_secret(self, iid, payload, heartbeat=lambda: None):
         """Write the resolved model-API file (or empty). Never logs the key."""
         self.registry.entry(iid)
@@ -314,7 +355,8 @@ class ComposeEngine:
                 # New manager + old pinned image must fail before writing a key
                 # file that an older launcher could export to an unsafe SDK.
                 from ..model_http_policy import FORMAT
-                image = self.registry.config['instances'][iid]['image']
+                lookup = getattr(self.registry, 'lookup', None)
+                image = (lookup(iid) if lookup else self.registry.config['instances'][iid])['image']
                 raw_labels, _ = self.runner.run(['image', 'inspect', image, '--format', '{{json .Config.Labels}}'], heartbeat=heartbeat)
                 labels = json_loads(raw_labels)
                 require(isinstance(labels, dict) and labels.get('io.openteamily.model-http') == FORMAT, 'runtime_upgrade_required')
@@ -355,6 +397,19 @@ class ComposeEngine:
         publish_container_secret(path)
         return path
 
+
+    def install_seal_key(self, iid):
+        """Create or reuse this instance's 32-byte seal key. Never rotated automatically."""
+        self.registry.entry(iid)
+        path = self.seal_key_path(iid)
+        if path.exists() and not path.is_symlink() and path.stat().st_size == 32:
+            publish_container_secret(path)
+            return path, path.read_bytes()
+        key = os.urandom(32)
+        replace_private(path, key)
+        publish_container_secret(path)
+        return path, key
+
     def compose(self, iid, operation, *, heartbeat=lambda: None, tail=100):
         _, path = self.registry.entry(iid)
         require(type(tail) is int and 1 <= tail <= 100, 'log_tail')
@@ -365,6 +420,8 @@ class ComposeEngine:
                 self.install_bot_social(iid, None)
             if not self.runtime_key_path(iid).exists():
                 self.install_runtime_key(iid, None)
+            if not self.seal_key_path(iid).exists():
+                self.install_seal_key(iid)
         # Exact argv grammar only; neither API nor registry can supply a verb/flags.
         commands = {
             'create': ['create', '--no-build', '--no-recreate', '--pull', 'never', 'flybot'],

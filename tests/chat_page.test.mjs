@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery, wrapBold, inlineBold } from '../openteamily/static/chat/app.mjs';
+import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery, wrapBold, inlineBold, dueReminders, reminderDueLabel } from '../openteamily/static/chat/app.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
@@ -1705,4 +1705,81 @@ test('initial SSE cannot supersede an uncommitted session directory and lose a c
   sources[0].handlers.invalidate({data:JSON.stringify({version:'f'.repeat(64),domains:{social:'a'.repeat(64),artifacts:'b'.repeat(64),notifications:'c'.repeat(64)}})});
   await settle();assert.match(el('chat-title').textContent,/Deep link agent/);assert.ok(el('message-list').children.length>0,'initial snapshot refresh retains the deep-linked history');
  }finally{if(saved===undefined)delete globalThis.EventSource;else globalThis.EventSource=saved;restore();}
+});
+
+const reminderRow = (id, overrides = {}) => ({
+  id, title: '提醒：看这条消息', template_id: 'custom', scope: 'once', enabled: true,
+  participants: [{user_id: alice, username: 'alice'}],
+  schedule: {kind: 'once', date: '2026-11-19', time: '14:30', time_zone: 'UTC'},
+  ...overrides,
+});
+
+test('due reminders are only my enabled one-off automations that are already due, split by their own zone', () => {
+  const now = Date.parse('2026-11-19T16:05:00Z');
+  const rows = [
+    reminderRow('a'.repeat(32)),
+    reminderRow('b'.repeat(32), {schedule: {kind: 'once', date: '2026-11-19', time: '23:00', time_zone: 'UTC'}}),
+    reminderRow('c'.repeat(32), {schedule: {kind: 'daily', time: '09:00', time_zone: 'UTC'}}),
+    reminderRow('d'.repeat(32), {participants: [{user_id: bob, username: 'bob'}]}),
+    reminderRow('e'.repeat(32), {enabled: false}),
+    reminderRow('f'.repeat(32), {schedule: {kind: 'once', date: '2026-11-18', time: '09:00', time_zone: 'UTC'}}),
+    reminderRow('0'.repeat(32), {schedule: {kind: 'once', date: '2026-11-19', time: '10:30', time_zone: 'Asia/Shanghai'}}),
+    reminderRow('1'.repeat(32), {participants: [{username: 'alice'}], schedule: {kind: 'once', date: '2026-11-19', time: '13:00', time_zone: 'UTC'}}),
+  ];
+  const {today, older} = dueReminders(rows, {id: alice, username: 'alice'}, now);
+  assert.deepEqual(today.map((item) => item.id), ['a'.repeat(32), '1'.repeat(32)]);
+  assert.deepEqual(older.map((item) => item.id), ['0'.repeat(32), 'f'.repeat(32)]);
+  assert.equal(reminderDueLabel(today[0], now), '今天 14:30 到点');
+  assert.equal(reminderDueLabel(older[0], now), '11-19 10:30 到点');
+  assert.equal(reminderDueLabel(older[1], now), '11-18 09:00 到点');
+  assert.deepEqual(dueReminders([], alice, now), {today: [], older: []});
+  assert.deepEqual(dueReminders(null, alice, now), {today: [], older: []});
+});
+
+test('the sidebar lists 今天到点的提醒 from the automations the server returns and says 读不到 instead of 0', async () => {
+  const at = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  const date = `${at.getUTCFullYear()}-${pad(at.getUTCMonth() + 1)}-${pad(at.getUTCDate())}`;
+  const due = {
+    id: 'r'.repeat(32), title: '提醒：看这条消息', template_id: 'custom', scope: 'once', enabled: true,
+    participants: [{user_id: alice, username: 'alice'}],
+    schedule: {kind: 'once', date, time: '00:00', time_zone: 'UTC'},
+  };
+  const future = {
+    ...due, id: 'q'.repeat(32), title: '提醒：明天',
+    schedule: {kind: 'once', date: '2999-01-01', time: '09:00', time_zone: 'UTC'},
+  };
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher: async (path, init = {}) => {
+      if (path === '/v1/workspaces/ws-1/automations') return json(200, {items: [due, future]});
+      return original(path);
+    }});
+    await settle();
+    assert.equal(el('due-reminders').hidden, false, 'the panel appears when something is due today');
+    assert.equal(el('due-reminders-heading').textContent, '今天到点的提醒 1 条');
+    const rows = el('due-reminders-list').children;
+    assert.equal(rows.length, 1, 'only the due one is listed');
+    const link = rows[0].children[0];
+    assert.equal(link.tagName, 'A');
+    assert.match(String(link.getAttribute('href') || link.href), /\/automations$/);
+    assert.match(link.textContent, /提醒：看这条消息/);
+    assert.equal(link.children[0].textContent, '今天 00:00 到点');
+  } finally { restore(); }
+
+  const failing = fakeChatDocument(chatHtml());
+  const restore2 = installChatGlobals();
+  try {
+    await mount(failing.doc, {fetcher: async (path, init = {}) => {
+      if (path === '/v1/workspaces/ws-1/automations') return json(500, {error: {code: 'internal', message: 'boom'}});
+      return original(path);
+    }});
+    await settle();
+    assert.equal(failing.el('due-reminders').hidden, false, 'a failed read is shown, not hidden as 0');
+    assert.equal(failing.el('due-reminders-note').hidden, false);
+    assert.equal(failing.el('due-reminders-note').textContent, '读不到到点的提醒。');
+    assert.equal(failing.el('due-reminders-list').children.length, 0);
+  } finally { restore2(); }
 });
