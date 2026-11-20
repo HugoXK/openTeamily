@@ -57,6 +57,11 @@ def added_secret_binds(stored, expected):
         return None
     stored_rest = {k: v for k, v in stored_svc.items() if k != 'volumes'}
     expected_rest = {k: v for k, v in expected_svc.items() if k != 'volumes'}
+    # Only this additive, manager-derived routing identity is permitted. Keep
+    # the stable per-volume UI/API identity (and existing issued API keys).
+    env = expected_rest.get('environment')
+    if 'environment' not in stored_rest and isinstance(env, dict) and set(env) == {'OPENTEAMILY_ROUTING_INSTANCE_ID'} and re.fullmatch(r'[0-9a-f]{32}', env['OPENTEAMILY_ROUTING_INSTANCE_ID']):
+        stored_rest['environment'] = env
     if stored_rest != expected_rest:
         return None
     if {k: v for k, v in stored.items() if k != 'services'} != {k: v for k, v in expected.items() if k != 'services'}:
@@ -113,6 +118,7 @@ def manifest(iid, entry):
     service = {'image': image, 'init': True, 'user': '1000:1000', 'read_only': True,
                'security_opt': ['no-new-privileges:true'], 'cap_drop': ['ALL'], 'pids_limit': 256,
                'mem_limit': '1g', 'cpus': 1, 'restart': 'no',
+               'environment': {'OPENTEAMILY_ROUTING_INSTANCE_ID': iid},
                'volumes': [
                    {'type': 'volume', 'source': 'data', 'target': '/data'},
                    {'type': 'bind', 'source': secret_relpath(iid), 'target': SECRET_TARGET, 'read_only': True},
