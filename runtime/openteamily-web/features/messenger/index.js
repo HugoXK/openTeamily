@@ -1,0 +1,37 @@
+// Stream C: member messenger — DMs, groups, unread, reactions, pins, edits, @mentions and group
+// agents (legacy social.py), shared through Bot Social. Group agents answer from this user's own
+// DS-Bot (lib/c/agent-replies.js); nothing is executed by the platform or by another user's DS-Bot.
+import { sharedBotSocial, seg, qs } from '../../lib/c/bot-social.js'
+import { createAgentReplier, defaultStateFile } from '../../lib/c/agent-replies.js'
+
+export default function messenger(host) {
+  const bs = () => sharedBotSocial(host)
+  const conv = (p) => `/v1/ot/conversations/${seg(p?.conversation_id, 'conversation_id')}`
+  const msg = (p) => `/v1/ot/messages/${seg(p?.message_id, 'message_id')}`
+  let replier
+  const agentReplier = () => (replier ??= createAgentReplier({ bs: bs(), host, stateFile: defaultStateFile(host), log: host.log ?? (() => {}) }))
+  if (typeof host.runtime === 'function' && process.env.OPENTEAMILY_SOCIAL_AGENTS !== '0') agentReplier().start()
+  return {
+    pages: ['messenger'],
+    endpoints: {
+      list: async () => bs().get('/v1/ot/conversations'),
+      openDm: async (p) => bs().post('/v1/ot/conversations', { kind: 'dm', peer: p?.handle }),
+      createGroup: async (p) => bs().post('/v1/ot/conversations', { kind: 'group', title: p?.title, team_id: p?.team_id || undefined, members: p?.members ?? [] }),
+      get: async (p) => bs().get(conv(p)),
+      update: async (p) => bs().patch(conv(p), { title: p?.title, pinned: p?.pinned, muted: p?.muted }),
+      addMember: async (p) => bs().post(`${conv(p)}/members`, { handle: p?.handle }),
+      removeMember: async (p) => bs().del(`${conv(p)}/members/${seg(p?.handle, 'handle')}`),
+      messages: async (p) => bs().get(`${conv(p)}/messages` + qs({ before: p?.before, after: p?.after, limit: p?.limit })),
+      send: async (p) => bs().post(`${conv(p)}/messages`, { body: p?.body, mentions: p?.mentions, reply_to: p?.reply_to, client_key: p?.client_key }),
+      read: async (p) => bs().post(`${conv(p)}/read`, p?.seq === undefined ? {} : { seq: p.seq }),
+      edit: async (p) => bs().patch(msg(p), { body: p?.body }),
+      retract: async (p) => bs().del(msg(p)),
+      react: async (p) => bs().post(`${msg(p)}/reactions`, { emoji: p?.emoji, on: p?.on !== false }),
+      pin: async (p) => bs().post(`${msg(p)}/pin`, { on: p?.on !== false }),
+      setAgent: async (p) => bs().put(`${conv(p)}/agents/${seg(p?.agent_ref, 'agent_ref')}`, { name: p?.name, auto_reply: p?.auto_reply === true }),
+      removeAgent: async (p) => bs().del(`${conv(p)}/agents/${seg(p?.agent_ref, 'agent_ref')}`),
+      // Runs one agent-inbox pass now (the background loop does the same every 10 s).
+      agentsTick: async () => agentReplier().once(),
+    },
+  }
+}

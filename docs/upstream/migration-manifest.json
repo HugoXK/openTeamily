@@ -1884,16 +1884,40 @@
       "path": "src/openteamily/index.ts",
       "reason": "OpenTeamily-authored addition (MIT): shared social state for users' own DS-Bots (phase C, docs/DSBOT_PLUGIN_ARCHITECTURE.md).",
       "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
-      "new_sha256": "ea0cd93b765f24d1053837efce725c11837a55caf7a45a60eeb5fc9be6253ba0",
-      "bytes": 620
+      "new_sha256": "150b431ea01d3dc6b1483df4fac5f5ab5c548c13dae5e26ac39b55a2da699ee4",
+      "bytes": 738
     },
     "services/bot-social/test/openteamily_teams.test.ts": {
       "destination": "services/bot-social",
       "path": "test/openteamily_teams.test.ts",
       "reason": "OpenTeamily-authored addition (MIT): shared social state for users' own DS-Bots (phase C, docs/DSBOT_PLUGIN_ARCHITECTURE.md).",
       "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
-      "new_sha256": "f269061619af98058d7d25eba1949b875c5cd7ce1489d864556b7d1d13ca1286",
-      "bytes": 7749
+      "new_sha256": "51cff9122b0732e5c2ea6393bd22448206da2025ecc50ba49aa6b10b7da0413c",
+      "bytes": 6742
+    },
+    "services/bot-social/src/openteamily/messenger.ts": {
+      "destination": "services/bot-social",
+      "path": "src/openteamily/messenger.ts",
+      "reason": "OpenTeamily-authored addition (MIT): shared social state for users' own DS-Bots (phase C, docs/DSBOT_PLUGIN_ARCHITECTURE.md).",
+      "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
+      "new_sha256": "633c9f04bf0424e8f52d42d3e355eefbfd7f4eb0b2e60e5f281b757a33725af8",
+      "bytes": 23346
+    },
+    "services/bot-social/test/openteamily_messenger.test.ts": {
+      "destination": "services/bot-social",
+      "path": "test/openteamily_messenger.test.ts",
+      "reason": "OpenTeamily-authored addition (MIT): shared social state for users' own DS-Bots (phase C, docs/DSBOT_PLUGIN_ARCHITECTURE.md).",
+      "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
+      "new_sha256": "fb61febe22f623ecd3d7f2837e2193ead8ced8ed8a156511ef0c92a41048719f",
+      "bytes": 6581
+    },
+    "services/bot-social/test/openteamily_helpers.ts": {
+      "destination": "services/bot-social",
+      "path": "test/openteamily_helpers.ts",
+      "reason": "OpenTeamily-authored addition (MIT): shared social state for users' own DS-Bots (phase C, docs/DSBOT_PLUGIN_ARCHITECTURE.md).",
+      "license_notice": "MIT (Bot Social snapshot) file added or modified by OpenTeamily; see OPENTEAMILY.md.",
+      "new_sha256": "0cf09a90e60a286ed08c9c38ee77c94396faf1cf38c77d4b830c9af57b889120",
+      "bytes": 1213
     }
   },
   "core_fork_removed": {

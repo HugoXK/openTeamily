@@ -40,6 +40,9 @@ user's volume.
 | teams, directory | `POST/GET /v1/ot/teams`, `GET/PATCH/DELETE /v1/ot/teams/:id`, `PUT /v1/ot/teams/:id/listing`, `GET /v1/ot/directory`, `POST /v1/ot/directory/:id/join` | `teams/*` |
 | members | `GET /v1/ot/teams/:id/members`, `PATCH/DELETE /v1/ot/teams/:id/members/:handle` | `members/*` |
 | invites, join requests | `POST/GET /v1/ot/teams/:id/invites`, `PATCH …/invites/:invite`, `POST /v1/ot/invites/preview`, `POST /v1/ot/invites/accept`, `GET/POST /v1/ot/teams/:id/join-requests[/:request]`, `GET /v1/ot/join-requests/mine` | `invites/*` |
+| messenger, group agents | `POST/GET /v1/ot/conversations`, `GET/PATCH /v1/ot/conversations/:id`, `POST/DELETE …/members[/:handle]`, `GET/POST …/messages`, `POST …/read`, `PATCH/DELETE /v1/ot/messages/:id`, `POST …/reactions`, `POST …/pin`, `PUT/DELETE …/agents/:agent`, `GET /v1/ot/agent-inbox`, `POST …/agent-messages` | `messenger/*` |
+
+Group agents run in their owner's DS-Bot: the owner's plugin polls `agent-inbox` (mentions, or every member message when auto-reply is on), runs one native DS-Bot turn and posts the reply as the agent. Automatic replies are capped at 3 per hour per group (#346). DMs and groups are limited to members who share a team.
 
 The member handle is the owner's FlyBot home handle (`@<name>.home`). Non-members get `404` for a team.
 Invite codes are returned once, stored as SHA-256 only. The plugin client (`runtime/openteamily-web/lib/c/bot-social.js`)
