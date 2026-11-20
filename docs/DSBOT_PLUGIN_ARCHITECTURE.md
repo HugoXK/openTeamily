@@ -287,7 +287,11 @@ and a container test proving the capability executes inside the user's DS-Bot.
   read-only `/run/secrets/openteamily-model-http.json` (#375), and a manager-provided
   `/run/secrets/openteamily-seal.key`; the platform passes the same key to
   `dsbot_bundle.build_with_secrets` so imported secrets can be re-sealed. Without it, bundles carrying
-  secrets are rejected and kept for retry.
+  secrets are rejected and kept for retry. The manager job `dsbot_import.deliver` (hooked from
+  `poll_once`) creates that key, requests the sealed bundles over loopback, and copies them into
+  `/data/openteamily/import/<feature>-v1.bundle` once per instance. Moved `/v1` routes listed in this
+  section (except `/v1/onboarding/automations`) are forwarded by the platform gateway to
+  `/api/openteamily/legacy` on the owner's DS-Bot.
 * Stays platform: account security, runtime keys UI (#282), delete account (#362), public profile.
 
 ## 8. Rollback

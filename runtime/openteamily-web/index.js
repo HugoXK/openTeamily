@@ -8,7 +8,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createPageHandler, PAGE_PATH } from './src/pages.js'
-import { createDispatch, API_PATH, createGatewayDispatch, GATEWAY_PATH } from './src/dispatch.js'
+import { createDispatch, API_PATH, createGatewayDispatch, GATEWAY_PATH, createLegacyDispatch, LEGACY_PATH } from './src/dispatch.js'
 import { loadIdentity } from './src/identity.js'
 import { loadFeatures } from './src/features.js'
 
@@ -47,6 +47,12 @@ export function apply(ctx, config = {}) {
     requestBody: 'buffered',
     fetch: createGatewayDispatch({ endpoints: async () => (await features).table }),
   }), 'openteamily-web: external agent api')
+  ctx.effect(() => ctx.connection.fetch.register({
+    path: LEGACY_PATH,
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    requestBody: 'buffered',
+    fetch: createLegacyDispatch({ endpoints: async () => (await features).table }),
+  }), 'openteamily-web: legacy /v1')
   return { identity, features }
 }
 

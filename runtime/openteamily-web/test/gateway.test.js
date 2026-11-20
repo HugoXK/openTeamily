@@ -36,3 +36,22 @@ test('external agent API is shaped like /v1/gateway and verifies the token in th
   const denied = await dispatch(request(`/v1/gateway/agents/${agent}/invocations`, { body: { prompt: 'x' } }))
   assert.equal(denied.status, 401)
 })
+
+import { createLegacyDispatch, LEGACY_PATH } from '../src/dispatch.js'
+
+test('legacy /v1 dispatch returns the Flask-shaped body and status', async () => {
+  const dispatch = createLegacyDispatch({
+    endpoints: {
+      'settings/v1': async (payload) => {
+        if (payload.path !== '/v1/settings' || payload.method !== 'POST') throw new Error('bad')
+        return { status: 200, body: { language: payload.body.language, revision: 3 } }
+      },
+    },
+  })
+  const url = 'http://127.0.0.1' + LEGACY_PATH + '?feature=settings&path=' + encodeURIComponent('/v1/settings')
+  const ok = await dispatch(new Request(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ language: 'zh-CN' }) }))
+  assert.equal(ok.status, 200)
+  assert.deepEqual(await ok.json(), { language: 'zh-CN', revision: 3 })
+  const missing = await dispatch(new Request('http://127.0.0.1' + LEGACY_PATH + '?feature=unknown&path=' + encodeURIComponent('/v1/settings'), { method: 'GET' }))
+  assert.equal(missing.status, 404)
+})

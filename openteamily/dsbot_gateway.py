@@ -23,6 +23,7 @@ from .security import digest
 
 ROUTES_FILE = Path(__file__).with_name('dsbot_routes.json')
 ROUTE_PATH = '/v1/platform/route'
+IMPORT_PATH = re.compile(r'^/v1/internal/instances/([0-9a-f]{32})/dsbot-import$')
 UPSTREAM_PATH = re.compile(r'/v1/internal/instances/([0-9a-f]{32})/dsbot-upstream')
 KEY_HEADER = 'HTTP_X_OT_GATEWAY_KEY'
 PAGE_ROUTE = '/api/openteamily/page'
@@ -44,6 +45,58 @@ TOKEN = re.compile(r'[A-Za-z0-9_-]{43}')
 ADDRESS = re.compile(r'(\d{1,3}(?:\.\d{1,3}){3}):(\d{2,5})')
 COOKIE_NAME = re.compile(r'dsh-auth-[A-Za-z0-9._:%-]{1,200}')
 PAGE_SEGMENT = re.compile(r'[a-z0-9][a-z0-9-]{0,40}')
+
+
+# Browser and non-browser /v1 routes that the signed-in owner's DS-Bot now serves.
+# Kept in sync with openteamily/static/shell/dsbot-api.mjs `MOVED`. A path not listed
+# here stays on the platform (auth, skill-secrets, /v1/onboarding/automations, the
+# Composio callback bounce page, workspace lists, C pages, automations/agents until B2).
+MOVED_APIS = (
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/meetings(?:/[0-9a-f]{32}(?:/(?:remove|export))?)?$'), 'meetings'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory(?:/[0-9a-f]{32}(?:/(?:remove|export|dream(?:/[0-9a-f]{32})?|versions(?:/\d{1,8}(?:/restore)?)?))?)?$'), 'memory'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/(?:profile|graph|(?:actions|links|preferences)(?:/[0-9a-f]{32}(?:/remove)?)?)$'), 'memory'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$'), 'search'),
+    (re.compile(r'^/v1/settings$'), 'settings'),
+    (re.compile(r'^/v1/notification-prefs$'), 'settings'),
+    (re.compile(r'^/v1/onboarding(?:/(?:recommendations|picks|look))?$'), 'settings'),
+    (re.compile(r'^/v1/model-api$'), 'model-api'),
+    (re.compile(r'^/v1/composio$'), 'connectors'),
+    (re.compile(r'^/v1/composio/key$'), 'connectors'),
+    (re.compile(r'^/v1/composio/toolkits$'), 'connectors'),
+    (re.compile(r'^/v1/composio/connections(?:/[0-9a-f]{32}(?:/disconnect)?)?$'), 'connectors'),
+    (re.compile(r'^/v1/composio/approvals(?:/[0-9a-f]{32})?$'), 'connectors'),
+    (re.compile(r'^/v1/mcp/servers(?:/[0-9a-f]{32})?$'), 'connectors'),
+)
+
+# Nginx locations that send a moved /v1 API to the owner's DS-Bot. More-specific
+# platform exceptions (automations, composio callback) are emitted first.
+MOVED_API_LOCATIONS = (
+    'location = /v1/onboarding/automations { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
+    'location = /v1/composio/callback { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
+    'location = /v1/settings { return 418; }',
+    'location = /v1/notification-prefs { return 418; }',
+    'location = /v1/onboarding { return 418; }',
+    'location ^~ /v1/onboarding/ { return 418; }',
+    'location = /v1/model-api { return 418; }',
+    'location = /v1/composio { return 418; }',
+    'location ^~ /v1/composio/ { return 418; }',
+    'location ^~ /v1/mcp/servers { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/[0-9a-f]{32}(?:/(?:remove|export))?)?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/memory(?:/|$) { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$ { return 418; }',
+)
+
+
+def moved_api(path):
+    """Return the plugin feature that serves this /v1 path, or None."""
+    if not isinstance(path, str) or not path.startswith('/v1/') or len(path) > 512:
+        return None
+    for pattern, feature in MOVED_APIS:
+        if pattern.fullmatch(path):
+            return feature
+    return None
+
+
 
 
 class GatewayError(Exception):
@@ -90,6 +143,10 @@ def target_for(uri, routes):
         return uri
     if path.startswith(GATEWAY_PREFIX) and not query:
         return path  # authorize() rewrites this to /api/openteamily after the key is parsed
+    feature = moved_api(path)
+    if feature is not None:
+        # Plugin legacy surface; authorize() keeps the session cookie swap.
+        return '/api/openteamily/legacy?feature=' + quote(feature, safe='') + '&path=' + quote(path, safe='') + (('&query=' + quote(query, safe='')) if query else '')
     first = path.split('/')[1] if path != '/' else 'home'
     if first in routes['moved_pages'] and not query:
         return PAGE_ROUTE + '?path=' + quote(path, safe='')
@@ -283,6 +340,50 @@ class GatewayApp:
         with store.transaction() as db:
             ensure_schema(db)
 
+
+    def import_bundles(self, env, iid):
+        """Manager job: build this owner's per-feature import bundles, secrets sealed to seal_key.
+
+        The 32-byte seal key is the same one the manager binds at
+        /run/secrets/openteamily-seal.key. Plain secrets never leave this process
+        except re-wrapped in the response, which is loopback-only.
+        """
+        from . import dsbot_bundle
+        from .lifecycle import Lifecycle, RuntimeFault
+        if self.manager_auth is None:
+            raise GatewayError(404, 'not_found')
+        if env.get('REQUEST_METHOD') != 'POST' or env.get('QUERY_STRING'):
+            raise GatewayError(405, 'method')
+        try:
+            manager = self.manager_auth.authenticate(env)
+        except RuntimeFault:
+            raise GatewayError(401, 'manager_auth')
+        try:
+            length = int(env.get('CONTENT_LENGTH') or 0)
+        except ValueError:
+            raise GatewayError(400, 'invalid')
+        if not 0 < length <= 256:
+            raise GatewayError(400, 'invalid')
+        try:
+            body = json.loads(env['wsgi.input'].read(length))
+        except (ValueError, KeyError):
+            raise GatewayError(400, 'invalid')
+        if not isinstance(body, dict) or set(body) != {'seal_key'}:
+            raise GatewayError(400, 'invalid')
+        key = body['seal_key']
+        if not isinstance(key, str) or not re.fullmatch(r'[0-9a-f]{64}', key):
+            raise GatewayError(400, 'invalid')
+        seal = bytes.fromhex(key)
+        with self.store.transaction() as db:
+            row = db.execute('SELECT owner_id FROM instances WHERE id=?', (iid,)).fetchone()
+            if row is None or not Lifecycle.grants(db, manager, iid):
+                raise GatewayError(403, 'not_granted')
+            features = []
+            for feature in dsbot_bundle.FEATURE_TABLES:
+                bundle = dsbot_bundle.build_with_secrets(db, self.store, row[0], feature, seal, int(self.clock()))
+                features.append({'name': feature, 'bundle': bundle})
+        return [('Content-Type', 'application/json')], json.dumps({'owner_imported': True, 'features': features}, separators=(',', ':')).encode()
+
     def decide(self, env):
         presented = env.get(KEY_HEADER, '')
         if not presented or not hmac.compare_digest(digest(presented), self.key_hash):
@@ -337,6 +438,18 @@ class GatewayApp:
 
     def __call__(self, env, start_response):
         base = [('Cache-Control', 'no-store'), ('Content-Type', 'text/plain; charset=utf-8')]
+        imported = IMPORT_PATH.fullmatch(env.get('PATH_INFO', ''))
+        if imported:
+            try:
+                headers, body = self.import_bundles(env, imported[1])
+                start_response('200 OK', [('Cache-Control', 'no-store')] + headers)
+                return [body]
+            except GatewayError as error:
+                start_response(f'{error.status} Refused', [('Cache-Control', 'no-store'), ('Content-Type', 'application/json')])
+                return [json.dumps({'error': {'code': error.code}}).encode()]
+            except Exception:
+                start_response('503 Service Unavailable', [('Content-Type', 'application/json')])
+                return [b'{"error":{"code":"unavailable"}}']
         reported = UPSTREAM_PATH.fullmatch(env.get('PATH_INFO', ''))
         if reported:
             try:
@@ -401,7 +514,8 @@ def mount(app, gateway):
     """Compose the management app with the gateway endpoint; nothing else changes."""
     def composed(env, start_response):
         if gateway is not None and (env.get('PATH_INFO') == ROUTE_PATH
-                                    or UPSTREAM_PATH.fullmatch(env.get('PATH_INFO', ''))):
+                                    or UPSTREAM_PATH.fullmatch(env.get('PATH_INFO', ''))
+                                    or IMPORT_PATH.fullmatch(env.get('PATH_INFO', ''))):
             return gateway(env, start_response)
         return app(env, start_response)
     return composed
@@ -517,6 +631,8 @@ def nginx_config(routes, platform, listen, key_include=None, key=None):
                  f'  location ^~ {routes["mount"]}/ {{ return 418; }}']
     for prefix in routes['passthrough']:
         locations.append(f'  location ^~ {prefix} {{ return 418; }}')
+    for line in MOVED_API_LOCATIONS:
+        locations.append('  ' + line.replace('__PLATFORM__', platform))
     for page in sorted(routes['moved_pages']):
         if page == 'home':
             locations.append('  location = / { return 418; }')

@@ -237,5 +237,64 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('proxy_set_header Authorization "";', conf)
 
 
+
+    def test_moved_v1_apis_go_to_the_owners_dsbot(self):
+        a = self.tokens['a' * 32]
+        status, headers = self.call(a, uri='/v1/settings', method='GET')
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Instance'], '1' * 32)
+        self.assertIn('/api/openteamily/legacy?feature=settings&path=%2Fv1%2Fsettings', headers['X-OT-Upstream-Path'])
+        status, headers = self.call(a, uri='/v1/onboarding/look', method='POST', Origin='https://openteamily.example')
+        self.assertEqual(status, 204)
+        self.assertIn('feature=settings', headers['X-OT-Upstream-Path'])
+        status, headers = self.call(a, uri='/v1/model-api')
+        self.assertIn('feature=model-api', headers['X-OT-Upstream-Path'])
+        # Still on the platform: automations onboarding, composio callback, auth.
+        self.assertEqual(self.call(a, uri='/v1/onboarding/automations')[0], 404)
+        self.assertEqual(self.call(a, uri='/v1/composio/callback')[0], 404)
+        self.assertEqual(self.call(a, uri='/v1/auth/session')[0], 404)
+        # User B cannot be steered onto A's settings by a forged instance id.
+        b = self.tokens['b' * 32]
+        status, headers = self.call(b, uri='/v1/settings')
+        self.assertEqual(headers['X-OT-Instance'], '2' * 32)
+        self.assertEqual(self.call(None, uri='/v1/settings')[0], 401)
+
+    def test_nginx_forwards_moved_v1_apis_except_platform_exceptions(self):
+        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
+        self.assertIn('location = /v1/settings { return 418; }', conf)
+        self.assertIn('location = /v1/onboarding/automations', conf)
+        self.assertIn('location = /v1/composio/callback', conf)
+        # Exceptions must appear before the prefix locations that would catch them.
+        self.assertLess(conf.index('location = /v1/onboarding/automations'), conf.index('location ^~ /v1/onboarding/'))
+        self.assertLess(conf.index('location = /v1/composio/callback'), conf.index('location ^~ /v1/composio/'))
+
+
+    def test_manager_import_bundles_are_scoped_to_the_granted_owner(self):
+        import io
+        token = secrets.token_urlsafe(32)
+        self.app.manager_auth = ManagerAuth([ManagerIdentity('manager-a', digest(token), frozenset({'1' * 32}), 'compose')])
+        seal = 'ab' * 32
+        raw = json.dumps({'seal_key': seal}).encode()
+
+        def post(iid, body=raw, tok=token):
+            env = {'REQUEST_METHOD': 'POST', 'PATH_INFO': f'/v1/internal/instances/{iid}/dsbot-import',
+                   'REMOTE_ADDR': '127.0.0.1', 'CONTENT_LENGTH': str(len(body)), 'wsgi.input': io.BytesIO(body),
+                   'HTTP_AUTHORIZATION': f'Bearer manager-a.{tok}'}
+            seen = {}
+            out = b''.join(gw.mount(None, self.app)(env, lambda st, h: seen.setdefault('s', int(st.split()[0]))))
+            return seen['s'], json.loads(out)
+
+        # No user rows is fine: empty tables, no secrets. B's instance is not granted.
+        status, body = post('1' * 32)
+        self.assertEqual(status, 200)
+        self.assertTrue(body['owner_imported'])
+        names = [f['name'] for f in body['features']]
+        self.assertIn('settings', names)
+        self.assertIn('model-api', names)
+        self.assertIn('connectors', names)
+        self.assertEqual(post('2' * 32)[0], 403)
+        self.assertEqual(post('1' * 32, tok='x' * 43)[0], 401)
+        self.assertEqual(post('1' * 32, body=json.dumps({'seal_key': '00'}).encode())[0], 400)
+
 if __name__ == '__main__':
     unittest.main()
