@@ -353,3 +353,69 @@ test("standalone video meetings grant access to the call only, and only its host
   assert.equal((await guest.call("POST", path + "/poll", guestPeer)).status, 404);
   assert.equal((await guest.call("POST", path + "/preview", {code: created.meeting.code})).status, 404);
 });
+
+test("chat files are idempotent and readable only by active members of the correct conversation", async () => {
+  const author = await home(S.base, "file-author");
+  const reader = await home(S.base, "file-reader");
+  const teammate = await home(S.base, "file-teammate");
+  const team = await teamOf(author, reader, teammate);
+  const {workspaces} = await author.ok("GET", "/v1/ot/workspaces");
+  const workspace = workspaces.find((row: any) => row.id === team.id).workspace_id;
+  const sentTo = await author.ok("POST", "/v1/ot/conversations", {
+    kind: "group", title: "Shared files", team_id: team.id, members: [reader.handle],
+  });
+  const forwardedTo = await author.ok("POST", "/v1/ot/conversations", {
+    kind: "group", title: "Forwarded files", team_id: team.id, members: [teammate.handle],
+  });
+  const filePath = (conversation: string, message: string) =>
+    `/v1/ot/workspaces/${workspace}/conversations/${conversation}/messages/${message}/file`;
+  const post = `/v1/ot/conversations/${sentTo.id}/messages`;
+  const raw = Buffer.from("plain file contents", "utf8");
+  const file = {title: "评审.txt", mime: "text/plain", data: raw.toString("base64")};
+  const data = {workspace, client_key: "browser-retry", attachment: file};
+  const created = await author.ok("POST", post, data);
+  assert.deepEqual(created.attachment, {title: file.title, mime: file.mime, bytes: raw.length});
+  assert.equal((await author.ok("POST", post, data)).id, created.id);
+  assert.equal((await reader.ok("GET", post)).messages.length, 1);
+  assert.deepEqual(await reader.ok("GET", filePath(sentTo.id, created.id)), file);
+  assert.equal((await teammate.call("GET", filePath(sentTo.id, created.id))).status, 404);
+  assert.equal((await reader.call("GET", filePath(forwardedTo.id, created.id))).status, 404);
+  const fakeImage = await author.call("POST", post, {workspace, attachment:{...file, title:"bad.png", mime:"image/png"}});
+  assert.equal(fakeImage.status, 400);
+  const forwarded = await author.ok("POST", `/v1/ot/conversations/${forwardedTo.id}/messages`, {
+    workspace, attachment_from: {conversation_id: sentTo.id, message_id: created.id},
+  });
+  assert.deepEqual(await teammate.ok("GET", filePath(forwardedTo.id, forwarded.id)), file);
+  await author.ok("DELETE", `/v1/ot/conversations/${sentTo.id}/members/${reader.handle}`);
+  assert.equal((await reader.call("GET", filePath(sentTo.id, created.id))).status, 404);
+  await author.ok("DELETE", "/v1/ot/messages/" + created.id);
+  assert.equal((await author.call("GET", filePath(sentTo.id, created.id))).status, 404);
+  assert.deepEqual(await teammate.ok("GET", filePath(forwardedTo.id, forwarded.id)), file);
+});
+
+test("group translation sources require membership, exclude own media and check the exact revision", async () => {
+  const reader = await home(S.base, "translation-reader");
+  const author = await home(S.base, "translation-author");
+  const outsider = await home(S.base, "translation-outsider");
+  const team = await teamOf(reader, author, outsider);
+  const {workspaces} = await reader.ok("GET", "/v1/ot/workspaces");
+  const workspace = workspaces.find((row: any) => row.id === team.id).workspace_id;
+  const conv = await reader.ok("POST", "/v1/ot/conversations", {
+    kind: "group", title: "Translations", team_id: team.id, members: [author.handle],
+  });
+  const post = `/v1/ot/conversations/${conv.id}/messages`;
+  const own = await reader.ok("POST", post, {body:"My text"});
+  const first = await author.ok("POST", post, {body:"Visible text"});
+  const file = await author.ok("POST", post, {
+    workspace, attachment:{title:"data.txt",mime:"text/plain",data:Buffer.from("File contents").toString("base64")},
+  });
+  const source = `/v1/ot/workspaces/${workspace}/conversations/${conv.id}/translation-sources`;
+  const refs = {items:[own,first,file].map(row => ({id:row.id,revision:row.revision}))};
+  assert.deepEqual((await reader.ok("POST", source, refs)).sources, [{id:first.id,revision:first.revision,body:"Visible text"}]);
+  assert.equal((await outsider.call("POST", source, refs)).status,404);
+  const edited = await author.ok("PATCH", "/v1/ot/messages/"+first.id, {body:"Edited text"});
+  assert.deepEqual((await reader.ok("POST", source, refs)).sources, []);
+  assert.equal((await reader.ok("POST", source, {items:[{id:first.id,revision:edited.revision}]})).sources[0].body,"Edited text");
+  await author.ok("DELETE", "/v1/ot/messages/"+first.id);
+  assert.deepEqual((await reader.ok("POST", source, {items:[{id:first.id,revision:edited.revision}]})).sources, []);
+});

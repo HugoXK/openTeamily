@@ -1256,12 +1256,12 @@ test('session timestamps use Hong Kong calendar boundaries and never invent unre
   assert.equal(formatSessionTime('invalid', now), '');
 });
 
-test('icon chat controls preserve accessible names and attachment privacy', () => {
+test('icon chat controls have accessible names and a direct file picker', () => {
   const html = chatHtml();
   assert.match(html, /id="conversation-search-open"[^>]*aria-label="搜索当前会话"[\s\S]*?<svg/);
   assert.match(html, /id="chat-call" hidden aria-label="通话" aria-haspopup="dialog"/);
-  assert.match(html, /class="attachment-menu"[\s\S]*?id="chat-attachment"/);
-  assert.match(html, /工作区成员可在作品库查看/);
+  assert.match(html, /id="chat-attachment-open"[^>]*aria-label="发送文件"/);
+  assert.match(html, /id="chat-attachment"[^>]*multiple hidden/);
   assert.match(html, /id="voice-record"[^>]*aria-label="录制语音"/);
   assert.match(html, /id="voice-preview" controls/);
 });
@@ -1441,7 +1441,8 @@ test('group info panel counts members and agents honestly and picks a readable g
   assert.equal(leadGlyph('---', '群'), '群');
   const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
   for (const label of ['视频通话', '语音通话', '自动回复', '自动翻译', '消息免打扰']) assert.ok(html.includes(label));
-  assert.match(html, /aria-label="自动翻译（未接通）"/);
+  assert.match(html, /id="group-translate"[^>]*aria-label="自动翻译"/);
+  assert.match(html, /id="group-translate-language"/);
 });
 
 test('group members can change automatic replies for their own agent only', async () => {

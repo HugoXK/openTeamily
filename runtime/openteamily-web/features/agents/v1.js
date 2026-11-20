@@ -2,6 +2,7 @@
 // moved_pages. Homepage, discover and runtime-binding stay on the platform
 // (cross-user / provision) and are not matched here.
 import { FeatureError } from '../../featurekit/http.js'
+import { PRIVATE_FILE_BYTES, PRIVATE_FILE_COUNT } from './files.js'
 import { createV1Endpoint } from '../../featurekit/v1.js'
 
 const HEX = '([0-9a-f]{32})'
@@ -24,16 +25,27 @@ const publicMessage = (row, workspaceId, agentId) => {
   const status = row.status === 'sent' ? 'succeeded' : row.status
   let meta = row.meta
   if (typeof meta === 'string') try { meta = JSON.parse(meta) } catch { meta = {} }
+  const attachments = (meta?.files || []).map(({title,mime,bytes}, index) => ({
+    title,mime,bytes,path:`/v1/workspaces/${workspaceId}/agents/${agentId}/conversations/${row.conversation_id}/messages/${row.id}/files/${index}`,
+  }))
   return {
+    ...(attachments.length ? {attachments} : {}),
     id: row.id, conversation_id: row.conversation_id, workspace_id: workspaceId, agent_id: agentId, role: row.role,
     body: row.text ?? row.body ?? '', status, created: row.created, updated: row.updated ?? row.created,
     task_id: null, error_code: meta?.error ? String(meta.error).replace(/^agents\//, '') : row.error_code ?? null, agent_revision: null,
   }
 }
 
-export function agentsV1({ endpoints, log }) {
+export function agentsV1({ endpoints, log, personalSend }) {
   const call = (name, payload) => endpoints[name](payload)
   const routes = [
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages/${HEX}/files/([0-3])$`),
+      handle: wrap(async (req, workspaceId, id, conversationId, messageId, index) => {
+        if (req.method !== 'GET') throw new FeatureError(405, 'method', 'Only GET is supported')
+        const file = await call('attachment', {workspace_id:workspaceId,id,conversation_id:conversationId,message_id:messageId,index:Number(index)})
+        const inline = file.mime.startsWith('image/') && req.query.get('download') !== '1'
+        return {status:200, raw:file.data, filename:file.title, headers:{'content-type':file.mime}, inline}
+      }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages/${HEX}/artifact$`), handle: wrap(async (req, workspaceId, id, conversationId, messageId) => {
       if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only POST is supported')
       const body = await req.json()
@@ -43,9 +55,13 @@ export function agentsV1({ endpoints, log }) {
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
       if (req.method !== 'POST') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
-      const body = await req.json()
-      const result = await call('send', { workspace_id: workspaceId, id, conversation_id: conversationId,
-        text: body.body ?? body.text, reply_language: body.reply_language, return_failed: true })
+      const body = await req.json(Math.ceil(PRIVATE_FILE_BYTES / 3) * 4 + PRIVATE_FILE_COUNT * 4 + 192*1024)
+      const payload = {workspace_id:workspaceId,id,agent_id:id,conversation_id:conversationId,
+        text:body.body ?? body.text,reply_language:body.reply_language,attachments:body.attachments,
+        idempotency_key:req.headers.get('idempotency-key'),return_failed:true}
+      const binding = payload.attachments && personalSend ? await call('personal-binding', {}) : null
+      const result = binding?.workspace_id === workspaceId && binding?.agent_id === id
+        ? await personalSend(payload) : await call('send', payload)
       return { status: 201, body: { message: publicMessage(result.message, workspaceId, id), reply: publicMessage(result.reply, workspaceId, id) } }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}$`), handle: wrap(async (req, workspaceId, id, conversationId) => {

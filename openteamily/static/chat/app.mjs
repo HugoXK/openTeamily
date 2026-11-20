@@ -1,5 +1,7 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { mountAgentMentions } from './mentions.mjs';
+import { AGENT_FILE_ACCEPT, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
+import { mountGroupTranslation } from './translation.mjs';
 import { mountChatCalls } from './calls.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
@@ -725,6 +727,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentConversation = null;
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
+  const autoTranslation = mountGroupTranslation(document,{request});
   const chatCalls = mountChatCalls(document, {request, context: () => {
     if (!servedByDsbot || currentSource !== 'social' || !currentConversation) return null;
     return {wid: workspaceId(), cid: currentConversation.id, title: conversationLabel(currentConversation, currentUser?.id)};
@@ -813,7 +816,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let sendShortcut = 'enter';
   let chatLanguage = 'auto';
   let chatPreferences = {message_folding:'standard', document_cards:false, link_previews:true};
+  let attachmentSender;
   const pendingSends = new Map();
+  const privateAttempts = new Map();
   let pendingBubble = null;
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
@@ -835,7 +840,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     bubble.dataset.sendPending = '1';
     const body = document.createElement('div');
     body.className = 'body';
-    renderMessageBody(document, body, pending.text, chatPreferences);
+    renderMessageBody(document, body, pending.text || (pending.files || []).map(file => file.name).join(' · '), chatPreferences);
     const state = document.createElement('p');
     state.className = 'reply-state';
     state.setAttribute('role', 'status');
@@ -1077,6 +1082,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
       body.className = 'body ' + (waiting ? 'pending' : (failed ? 'failed' : ''));
       renderMessageBody(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences);
+      if (item.attachments?.length && !item.body) body.hidden = true;
       if (waiting || failed) li.dataset.state = waiting ? item.status : 'failed';
       if (waiting) {
         const heading = document.createElement('p');
@@ -1086,6 +1092,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       } else {
         li.append(role, body);
       }
+      for (const attachment of item.attachments || []) li.append(renderChatFile(document,attachment));
       if (item.role === 'assistant' && saveableAgentMessage(item)) {
         li.append(saveMessageButton(item, currentAgent.id));
       }
@@ -1094,6 +1101,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     setChatSubtitle(pending ? '正在回复…' : 'AI 智能体 · 经运行时回复', pending);
     renderPendingSend();
+    attachmentSender?.render();
     const scroller = document.getElementById('message-scroller');
     scroller.scrollTop = scroller.scrollHeight;
     return pending;
@@ -1471,6 +1479,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let lastSocialItems = [];
   function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory)} = {}) {
+    const translateRoom = currentConversation?.kind === 'group' || (currentConversation?.kind === 'dm' && chatPreferences.auto_translate === true);
+    autoTranslation.open(servedByDsbot && currentUser && translateRoom
+      ? {user:currentUser.id,wid:workspaceId(),cid:currentConversation.id}
+      : null);
+    autoTranslation.clearRows();
     const scroller = document.getElementById('message-scroller');
     const oldHeight = scroller.scrollHeight;
     const oldTop = scroller.scrollTop;
@@ -1492,6 +1505,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         : (mine ? '我' : ((member && member.username) || '成员'));
       const body = document.createElement('div');
       body.className = 'body';
+      if (item.attachment?.bytes !== undefined && item.body === item.attachment.title) body.hidden = true;
       renderMessageBody(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences);
       if (item.forwarded_from && !item.retracted) {
         body.dataset.forwarded = '1';
@@ -1502,8 +1516,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.className = 'time';
       time.textContent = formatTime(item.created);
       li.append(role, body, time);
+      if (!mine) autoTranslation.add(item,li,body);
       if (item.voice && !item.retracted) li.insertBefore(voicePlayer(item), time);
-      if (item.attachment && !item.retracted) {
+      if (item.attachment?.bytes !== undefined && !item.retracted) {
+        li.insertBefore(renderChatFile(document, item.attachment), time);
+      } else if (item.attachment && !item.retracted) {
         const card = document.createElement('article');
         card.className = 'stream-artifact';
         const copy = document.createElement('span');
@@ -1610,6 +1627,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       list.append(li);
     }
     renderPendingSend();
+    attachmentSender?.render();
     scroller.scrollTop = keepScroll ? Math.max(0, oldTop + scroller.scrollHeight - oldHeight) : scroller.scrollHeight;
     return false;
   }
@@ -2040,6 +2058,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function setGroupInfo(conversation) {
+    if (!conversation) autoTranslation.open(null);
     const toggle = document.getElementById('group-info-toggle');
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
@@ -2120,6 +2139,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     voiceRecorder.refresh();
     document.getElementById('social-agent-members').hidden = true;
     setDirectoryLink({source: 'agent'});
+    syncPlusState();
     applyChatIdentity(document, agent.name);
     if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
       const autoReplyNotice = document.getElementById('group-agent-auto-reply-status');
@@ -2188,6 +2208,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     renderPinned(result.body.pinned_messages || []);
     setSocialHeaderTools(true);
+    syncPlusState();
     setGroupInfo(currentConversation);
     messageUtilities.refreshAnnouncement();
     setChatSubtitle(currentConversation.kind === 'group' ? groupInfoCounts(currentConversation).text
@@ -2650,6 +2671,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const session = await request('GET', '/v1/auth/session');
     if (session.status !== 200) {
       currentUser = null;
+      autoTranslation.open(null);
+      attachmentSender?.reset();
+      privateAttempts.clear();
       currentConversation = null;
       chatCalls.sync();
       socialOpen += 1;
@@ -2663,6 +2687,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       setSessionsOpen(false);
       show('', '');
       return;
+    }
+    if (currentUser && currentUser.id !== session.body.user.id) {
+      attachmentSender?.reset();
+      privateAttempts.clear();
     }
     currentUser = session.body.user;
     loginPanel.hidden = true;
@@ -2866,6 +2894,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('chat-empty').hidden = false;
     renderPendingSend();
     setDirectoryLink({source: 'agent'});
+    syncPlusState();
     await loadSessions();
   });
 
@@ -3159,27 +3188,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   if (inChatForm) inChatForm.addEventListener('submit', async event => { event.preventDefault(); await searchCurrentConversation(); });
   const inChatMore = document.getElementById('conversation-search-more');
   if (inChatMore) inChatMore.addEventListener('click', () => searchCurrentConversation(true));
-  const attachmentInput = document.getElementById('chat-attachment');
-  if (attachmentInput) attachmentInput.addEventListener('change', async () => {
-    const file = attachmentInput.files && attachmentInput.files[0];
-    if (!file || !currentConversation || currentSource !== 'social') { show('error', '请先打开单聊或群聊。'); return; }
-    const wid = workspaceId(), cid = currentConversation.id;
-    attachmentInput.disabled = true;
-    try {
-      const form = new FormData(); form.append('kind', 'media'); form.append('title', file.name); form.append('file', file);
-      const response = await fetcher(`/v1/workspaces/${wid}/artifacts`, {method: 'POST', credentials: 'same-origin',
-        headers: {'X-CSRF-Token': csrfCookie(document.cookie), 'Idempotency-Key': idempotencyKey()}, body: form});
-      const uploaded = await response.json();
-      if (response.status !== 201) throw new Error(messageFor(uploaded.error, '附件未上传。'));
-      const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${cid}/messages`,
-        {body: '', artifact_id: uploaded.artifact.id}, {'Idempotency-Key': idempotencyKey()});
-      if (result.status !== 201 && result.status !== 200) throw new Error('作品已上传，但附件消息未发送；文件仍在工作区作品库。');
-      if (workspaceId() === wid && currentConversation && currentConversation.id === cid) {
-        await loadSessions(); await openSocialConversation(cid);
+  attachmentSender = mountChatFiles(document, {
+    context: () => {
+      if (!servedByDsbot || !currentUser) return null;
+      if (currentSource === 'agent' && currentAgent) return {scope:sendScope(), private:true, owner:currentUser.id};
+      if (currentSource !== 'social' || !currentConversation) return null;
+      const wid = workspaceId(), cid = currentConversation.id;
+      return {scope:sendScope(), owner:currentUser.id, path:`/v1/workspaces/${wid}/social/conversations/${cid}/messages`};
+    },
+    ownerId: () => currentUser?.id,
+    csrfToken: () => csrfCookie(document.cookie),
+    createKey: () => idempotencyKey('chat-file-'),
+    sent(destination, message) {
+      if (destination.scope === sendScope() && !socialHistory?.readingHistory) {
+        const without = lastSocialItems.filter(item => item.id !== message.id);
+        renderSocialMessages([...without, message].sort((a,b) => a.seq - b.seq));
       }
-      show('ok', '附件已上传到工作区作品库并发送。');
-    } catch (failure) { show('error', failure.message || '附件未发送。'); }
-    finally { attachmentInput.disabled = false; attachmentInput.value = ''; }
+      void loadSessions();
+    },
   });
   const filterButton = document.getElementById('session-filter');
   const filterLabel = document.getElementById('session-filter-label');
@@ -3283,7 +3309,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadSessions(); await openSocialConversation(id);
   });
   document.getElementById('search-close').addEventListener('click', closeSearchPanel);
-  document.getElementById('chat-back').addEventListener('click', () => setSessionsOpen(true));
+  document.getElementById('chat-back').addEventListener('click', () => {
+    setSessionsOpen(true);
+    document.getElementById('conversation-list').querySelector('[aria-current="true"]')?.focus();
+  });
+
+  const chatMore = document.getElementById('chat-more');
+  const extraActions = document.getElementById('chat-extra-actions');
+  chatMore?.addEventListener('click', () => {
+    const open = chatMore.getAttribute('aria-expanded') !== 'true';
+    chatMore.setAttribute('aria-expanded', String(open));
+  });
+  document.addEventListener('click', event => {
+    if (chatMore?.getAttribute('aria-expanded') !== 'true' || chatMore.contains(event.target)) return;
+    const inside = extraActions.contains(event.target);
+    if (inside && !event.target.closest('button, a')) return;
+    if (inside && extraActions.contains(document.activeElement)) chatMore.focus();
+    chatMore.setAttribute('aria-expanded', 'false');
+  });
+
   document.getElementById('search-more').addEventListener('click', async () => {
     if (searchTab === 'files' || searchTab === 'links') { if (resourceCursor) await renderSearch({appendResources: true}); return; }
     const query = (document.getElementById('session-search').value || '').trim();
@@ -3311,8 +3355,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('conversation-list').addEventListener('click', async event => {
     const button = event.target.closest('button[data-conversation]');
     if (!button) return;
-    if (button.dataset.source === 'social') await openSocialConversation(button.dataset.conversation);
-    else await openAgentConversation(button.dataset.agent, button.dataset.conversation);
+    const opened = button.dataset.source === 'social'
+      ? await openSocialConversation(button.dataset.conversation)
+      : await openAgentConversation(button.dataset.agent, button.dataset.conversation);
+    if (opened && narrowScreen() && !document.body.classList.contains('sessions-open')
+      && document.activeElement === document.body) document.getElementById('chat-title').focus();
   });
 
   document.getElementById('new-conversation').addEventListener('click', event => {
@@ -3479,11 +3526,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function sendCurrentMessage() {
     const field = document.getElementById('chat-body');
     const text = field.value;
-    if (!text.trim()) {
+    const social = currentSource === 'social';
+    let draftScope = sendScope();
+    const files = social ? [] : attachmentSender?.draftFiles?.(draftScope) || [];
+    if (!text.trim() && !files.length) {
       show('error', '请填写消息。');
       return;
     }
-    const social = currentSource === 'social';
     const message = social ? agentMentions.message(text) : messagePayload(text, chatLanguage);
     if (social && !validMessage(message.body)) {
       show('error', '请输入 1–4000 字符的消息。');
@@ -3497,8 +3546,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (pendingSends.has(key)) return;
     const base = social ? socialBase() : `${agentBase()}/conversations`;
     const agentId = currentAgent?.id;
+    const owner = currentUser?.id;
     let conversationId = currentConversation?.id;
-    const pending = {text: message.body, state: conversationId ? '正在发送…' : '正在创建对话…'};
+    const pending = {text:message.body, files, state:conversationId ? '正在发送…' : '正在创建对话…'};
     pendingSends.set(key, pending);
     show('', '');
     renderPendingSend();
@@ -3520,15 +3570,46 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           pendingSends.delete(key);
           key = sendScope();
           pendingSends.set(key, pending);
+          if (files.length) {
+            attachmentSender.moveDraft(draftScope,key);
+            draftScope = key;
+          }
         }
       }
       pending.state = social ? '正在发送…' : '正在发送，等待智能体回复…';
       if (isCurrent()) renderPendingSend();
-      const result = await request('POST', `${base}/${conversationId}/messages`, message,
-        {'Idempotency-Key': idempotencyKey(social ? 'socialmsg-' : 'msg-')});
+      const path = `${base}/${conversationId}/messages`;
+      let result;
+      if (files.length) {
+        if (owner !== currentUser?.id) return;
+        const existing = privateAttempts.get(draftScope);
+        const same = existing?.text === message.body && existing.language === message.reply_language
+          && existing.files.length === files.length && existing.files.every((file,index) => file === files[index]);
+        const attempt = same ? existing : {
+          key:idempotencyKey('agent-files-'), files, text:message.body, language:message.reply_language,
+        };
+        privateAttempts.set(draftScope,attempt);
+        pending.state = '正在上传附件…';
+        if (isCurrent()) renderPendingSend();
+        result = await sendPrivateAttachmentMessage(document.defaultView,path,message,files,
+          {'Idempotency-Key':attempt.key,'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
+            pending.state = percent < 100 ? `正在上传附件 · ${percent}%` : '附件已上传，正在等待智能体回复…';
+            const progress = isCurrent() && pendingBubble?.querySelector('.reply-state');
+            if (progress) progress.textContent = pending.state;
+          });
+        if (result.status === 201 && result.body.message?.attachments?.length) {
+          privateAttempts.delete(draftScope);
+          attachmentSender.clearDraft(draftScope,files);
+        }
+      } else {
+        result = await request('POST', path, message, {'Idempotency-Key':idempotencyKey(social ? 'socialmsg-' : 'msg-')});
+      }
       if (!isCurrent()) return;
       if (![200, 201].includes(result.status)) {
-        show('error', messageFor(result.body.error, '发送失败，已保留草稿。'));
+        const code = result.body?.error?.code;
+        const attachmentError = result.status === 413 ? '附件合计不能超过 8 MB。'
+          : code === 'attachment_type_blocked' ? '请确认附件的格式与扩展名一致。' : '';
+        show('error', attachmentError || messageFor(result.body.error, '发送失败，已保留草稿。'));
         return;
       }
       pendingSends.delete(key);
@@ -3603,7 +3684,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('chat-body').addEventListener('keydown', event => {
     if (agentMentions.keydown(event) || !shouldSendOnShortcut(event, sendShortcut)) return;
     event.preventDefault();
-    if (!(document.getElementById('chat-body').value || '').trim()) return;
+    if (!(document.getElementById('chat-body').value || '').trim() && !attachmentSender?.draftFiles?.(sendScope())?.length) return;
     sendCurrentMessage();
   }, true);
 
@@ -3629,32 +3710,38 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeComposeMenu();
   });
   document.addEventListener('keydown', event => {
-    if (event.key !== 'Escape') return;
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    if (chatMore?.getAttribute('aria-expanded') === 'true') {
+      chatMore.setAttribute('aria-expanded', 'false');
+      chatMore.focus();
+      return;
+    }
     closeComposeMenu();
     if (isSearchOpen()) closeSearchPanel();
     closeComposeDialog();
   });
 
-  // Composer "+": 上传 / 照片 / 视频 reuse the existing media-attachment upload
-  // (single and group chats only); agent chats show them disabled with a note.
   const plus = document.querySelector('details.composer-plus');
   const attachInput = document.getElementById('chat-attachment');
   const defaultAccept = attachInput ? attachInput.getAttribute('accept') || '' : '';
   function syncPlusState() {
     const social = currentSource === 'social' && Boolean(currentConversation);
+    const agent = currentSource === 'agent' && Boolean(currentAgent);
+    const available = servedByDsbot && (social || agent);
     for (const button of document.querySelectorAll('[data-plus-attach]')) {
-      button.disabled = !social;
-      if (!button.dataset.title) button.dataset.title = button.title;
-      button.title = social ? button.dataset.title : '未接通：智能体私聊还不能发附件';
+      button.disabled = !available;
+      if (button.dataset.plusAttach === 'video') button.hidden = agent;
     }
     const hint = document.getElementById('plus-attach-hint');
-    if (hint) hint.hidden = social;
+    if (hint) hint.hidden = available;
+    attachmentSender?.render();
   }
   if (plus) plus.addEventListener('toggle', () => { if (plus.open) syncPlusState(); });
   for (const button of document.querySelectorAll('[data-plus-attach]')) {
     button.addEventListener('click', () => {
       if (!attachInput || button.disabled) return;
-      attachInput.setAttribute('accept', plusAttachAccept(button.dataset.plusAttach, defaultAccept));
+      const accept = currentSource === 'agent' ? AGENT_FILE_ACCEPT : defaultAccept;
+      attachInput.setAttribute('accept',plusAttachAccept(button.dataset.plusAttach,accept));
       attachInput.click();
       if (plus) plus.open = false;
     });

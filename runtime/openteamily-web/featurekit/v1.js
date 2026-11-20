@@ -78,6 +78,7 @@ export function createV1Endpoint({ feature, routes, context }) {
           download: {
             content_type: result.headers?.['content-type'] ?? 'application/octet-stream',
             filename: result.filename ?? /filename="([^"]+)"/.exec(result.headers?.['content-disposition'] ?? '')?.[1] ?? 'download',
+            ...(result.inline ? {inline:true} : {}),
             encoding: 'base64',
             data: bytes.toString('base64'),
           },

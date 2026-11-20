@@ -36,7 +36,7 @@ export const PROVIDER = 'openteamily'
 export const MODEL_ID = 'openteamily-model'
 export const TOOLS_CAPABILITY = 'ot-tools'
 export const DEFAULT_PORT = 18731
-const BODY_LIMIT = 4 * 1024 * 1024
+const BODY_LIMIT = 24 * 1024 * 1024
 const RESULT_TEXT_LIMIT = 12000
 const SKILL_FORMATS = ['openteamily.prompt-skill.v1', 'openteamily.prompt-skill.v2']
 
@@ -126,9 +126,10 @@ export function createBridgeServer(state, { log = () => {}, forward = forwardMod
       if (path === '/v1/chat/completions' && req.method === 'POST') {
         if (req.headers.authorization !== 'Bearer ' + state.token) return sendJson(res, 401, { error: { message: 'unauthorized' } })
         const raw = await readBody(req)
-        const modelApi = state.active?.modelApi || state.startupModel()
+        const task = req.headers['x-openteamily-private-text'] === '1' ? null : state.active
+        const modelApi = task?.modelApi || state.startupModel()
         if (!modelApi) return sendJson(res, 503, { error: { message: 'No model is configured for this OpenTeamily runtime yet.' } })
-        if (state.active) state.active.modelCalls += 1
+        if (task) task.modelCalls += 1
         state.modelCalls += 1
         try { await forward(modelApi, raw, res) } catch (error) {
           log('ds-bot-bridge: model upstream failed: ' + redact(error?.message || 'error'))
@@ -194,7 +195,7 @@ export async function handleMcp(state, message) {
 }
 
 // Wait for the DS-Bot turn that our requestId started; collect the Bot's text.
-export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000) {
+export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000, files = []) {
   return new Promise((resolve, reject) => {
     let sessionId
     let settled = false
@@ -222,7 +223,7 @@ export function runTurn(rt, ctx, botId, text, requestId, timeoutMs = 170000) {
       }
     })
     off = typeof disposer === 'function' ? disposer : () => disposer?.dispose?.()
-    Promise.resolve(rt.sendUser({ sessionId: rt.chatOf(botId), content: [{ type: 'text', text }], requestId }))
+    Promise.resolve(rt.sendUser({ sessionId: rt.chatOf(botId), content: [{ type: 'text', text }, ...files], requestId }))
       .catch(error => finish(error instanceof Error ? error : new Error('DS-Bot rejected the message')))
   })
 }

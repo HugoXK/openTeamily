@@ -32,8 +32,12 @@ function conversation(row, agentId) {
   return {id: row.id, title: row.title, agent_id: agentId, created: row.created, updated: row.updated, unread_count: 0};
 }
 
-function message(row) {
-  return {id: row.id, role: row.role, body: row.text,
+function message(row, base, cid) {
+  const id = row.conversation_id || cid;
+  const attachments = (row.meta?.files || []).map(({title,mime,bytes},index) => ({
+    title,mime,bytes,path:`${base}/conversations/${id}/messages/${row.id}/files/${index}`,
+  }));
+  return {id: row.id, ...(attachments.length ? {attachments} : {}), role: row.role, body: row.text,
     status: !row.status || row.status === 'sent' ? 'succeeded' : row.status, created: row.created,
     error_code: row.meta?.error?.replace(/^agents\//, '') || null,
     memory_refs: (row.meta && row.meta.memory_refs) || [], engine: 'ds-bot'};
@@ -62,8 +66,8 @@ export async function dsbotRequest(fetcher, route, agentId, headers) {
   if (route.shape === 'list') return {status: 200, body: {items: (value.items || []).map(row => conversation(row, agentId))}};
   if (route.shape === 'created') return {status: 201, body: {conversation: conversation(value, agentId)}};
   if (route.shape === 'sent') return {status: 201, body: {
-    message: value.message && message(value.message), reply: message(value.reply),
+    message: value.message && message(value.message,route.base,route.cid), reply: message(value.reply,route.base,route.cid),
   }};
   return {status: 200, body: {agent: value.agent, conversation: conversation(value.conversation, agentId),
-    items: (value.items || []).map(message)}};
+    items: (value.items || []).map(row => message(row,route.base,value.conversation.id))}};
 }

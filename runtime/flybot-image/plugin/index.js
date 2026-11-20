@@ -46,17 +46,46 @@ export function apply(ctx, config = {}) {
       return runTurn(rt, ctx, bridge.botId, text, requestId)
     })
     const mainBot = async () => { await bridge.setup(); return bridge.botId }
-    const nativeTurn = (botId, sessionId, text, requestId) => bridge.exclusive(async () => {
+    const attachmentStore = () => ctx.get?.('attachments')
+    const nativeTurn = (botId, sessionId, text, requestId, options = {}) => bridge.exclusive(async () => {
       await bridge.setup()
       if (!rt.botOf(botId)) throw new Error('Mapped native Bot no longer exists')
       await rt.switchPart(botId, sessionId)
       await rt.applyModel(rt.botOf(botId), { force: true })
-      return runTurn(rt, ctx, botId, text, requestId)
+      const parts = [], stored = []
+      const uploads = ctx.get?.('fileUploads')
+      for (const file of options.files || []) {
+        if (!uploads) throw Object.assign(new Error('Native attachment service unavailable'), {code:'agents/attachment-unavailable'})
+        const data = (async function* () { yield file.data })()
+        const scope = {sessionId:rt.chatOf(botId), name:file.title, data}
+        const image = file.mime.startsWith('image/')
+        const result = image ? await uploads.uploadImageStream({...scope, mediaType:file.mime}) : await uploads.uploadStream(scope)
+        const ref = image ? result.image : result.file
+        parts.push({type:'file', receiptId:result.receiptId})
+        stored.push({title:file.title, mime:ref.mediaType || file.mime, bytes:ref.bytes, image, ref})
+      }
+      if (stored.length) options.onStaged?.(stored)
+      return runTurn(rt, ctx, botId, text, requestId, undefined, parts)
     })
-    const textOnly = prompt => bridge.exclusive(async () => {
+    const readNativeAttachment = async file => {
+      const store = attachmentStore()
+      if (!store) throw new Error('Native attachment service unavailable')
+      if (file.image) return Buffer.from((await store.readImage(file.ref)).data)
+      const chunks = []
+      let bytes = 0
+      for await (const chunk of store.readFileStream(file.ref)) {
+        bytes += chunk.byteLength
+        if (bytes > file.bytes) throw new Error('Native attachment size mismatch')
+        chunks.push(chunk)
+      }
+      if (bytes !== file.bytes) throw new Error('Native attachment size mismatch')
+      return Buffer.concat(chunks)
+    }
+    const privateText = async (prompt, background = false) => {
       await bridge.setup()
       const response = await fetch(bridge.baseURL + '/chat/completions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token },
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token,
+          ...(background ? {'X-OpenTeamily-Private-Text':'1'} : {}) },
         body: JSON.stringify({ model: 'openteamily-model', messages: [{ role: 'user', content: prompt }], stream: false }),
         signal: AbortSignal.timeout(170000), redirect: 'error',
       })
@@ -64,8 +93,10 @@ export function apply(ctx, config = {}) {
       const data = await response.json(), text = data.choices?.[0]?.message?.content
       if (typeof text !== 'string' || !text.trim()) throw new Error('Text-only model returned no text')
       return text.slice(0, 20000)
-    })
-    attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn, textOnly, exclusive: bridge.exclusive, legacySession: bridge.legacySession })
+    }
+    const textOnly = prompt => bridge.exclusive(() => privateText(prompt))
+    const backgroundTextOnly = prompt => privateText(prompt,true)
+    attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn, readNativeAttachment, textOnly, backgroundTextOnly, exclusive: bridge.exclusive, legacySession: bridge.legacySession })
   } else attachRuntime({ rt, ctx })
   return attached
 }

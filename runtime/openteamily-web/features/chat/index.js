@@ -73,7 +73,7 @@ export default function chat(host) {
       if (name === 'messages') return host.call('agents/messages',payload)
       if (name === 'send') {
         const profile = await host.call('personal/get',{})
-        const {notes,refs} = await recall(p.text,profile)
+        const {notes,refs} = await recall(typeof p.text === 'string' ? p.text : '',profile)
         const context = composePrompt({text:'',profile,notes}).trim()
         const out = await host.call('agents/send',{...payload,context,return_failed:true})
         return {user_message_id:out.message.id,message:out.message,reply:{...out.reply,meta:{...out.reply.meta,memory_refs:refs}}}

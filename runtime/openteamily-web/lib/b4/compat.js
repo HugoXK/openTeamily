@@ -29,8 +29,8 @@ export function compatHandler(routes) {
       pathMatched = true
       if (route.method !== method) continue
       try {
-        const [status, body] = await route.handle({ match, query, body: payload.body, method, idempotency_key: payload.idempotency_key })
-        return { status, body }
+        const [status, body, download] = await route.handle({ match, query, body: payload.body, method, idempotency_key: payload.idempotency_key })
+        return { status, body, ...(download ? {download} : {}) }
       } catch (caught) {
         if (caught instanceof Fault) {
           const body = { error: { code: caught.code, message: caught.message } }
