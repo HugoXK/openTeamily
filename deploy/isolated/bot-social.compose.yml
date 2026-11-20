@@ -35,3 +35,11 @@ services:
       start_period: 15s
     # A KMS key is generated once into /data/kms.key (mode 0600) if unset.
     # Back up the volume; do not put the key in this file or in logs.
+    # Membership migrate is operator-only and is disabled until a key file is mounted.
+    # Do not auto-generate this key, and do not put it in this file or in logs:
+    #   environment:
+    #     OPENTEAMILY_SOCIAL_MIGRATE_KEY_FILE: /run/secrets/openteamily-social-migrate.key
+    #   volumes:
+    #     - /var/lib/openteamily/secrets/openteamily-social-migrate.key:/run/secrets/openteamily-social-migrate.key:ro
+    # Create the host file (mode 0600, 32+ chars) before recreate. Recreate only bot-social
+    # after mounting; do not rotate KMS or wipe /data.

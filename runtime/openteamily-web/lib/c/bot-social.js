@@ -87,6 +87,26 @@ export function createBotSocial({ dataDir, server, credentialsPath, fetch: fetch
         return { connected: false, reason: error.code ?? 'social/error', message: error.message }
       }
     },
+    async identity() {
+      // Non-secret attestation for the platform migrate planner. Never returns a token.
+      try {
+        const { home } = await connection()
+        const me = await request('GET', '/v1/ot/me')
+        const homeId = home?.bot_id || home?.id || null
+        if (!me?.owner_id || !homeId) {
+          return { connected: false, reason: 'identity_unavailable', social_owner_id: me?.owner_id ?? null, home_id: homeId, home_handle: home?.handle ?? null, platform_user_id: me?.platform_user_id ?? null }
+        }
+        return {
+          connected: true,
+          social_owner_id: me.owner_id,
+          home_id: homeId,
+          home_handle: home?.handle ?? me.handle ?? null,
+          platform_user_id: me.platform_user_id ?? null,
+        }
+      } catch (error) {
+        return { connected: false, reason: error.code ?? 'social/error' }
+      }
+    },
   }
 }
 

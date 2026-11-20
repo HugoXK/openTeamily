@@ -6,6 +6,7 @@ export default function social(host) {
   return {
     endpoints: {
       status: async () => bs().status(),
+      identity: async () => bs().identity(),
       profile: async () => bs().get('/v1/ot/me'),
       updateProfile: async (p) => bs().put('/v1/ot/profile', { display_name: p?.display_name, bio: p?.bio }),
       notifications: async (p) => bs().get('/v1/ot/notifications' + qs({ after: p?.after, limit: p?.limit })),
