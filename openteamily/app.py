@@ -3338,14 +3338,23 @@ class App:
                      'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
 
     def send_conversation_message(self, db, workspace, session, agent, row, now, env):
-        body = self.body(env, ['body'])
+        body = self.body(env, ['body', 'chat_language'])
         text = body.get('body')
         if not conversations.valid_message(text):
             refuse(400, 'invalid', 'Provide a message')
+        requested_language = body.get('chat_language')
+        if requested_language is not None and not settings.valid_value('chat_language', requested_language):
+            refuse(400, 'invalid', 'Unsupported chat language')
+        # The composer sends the stored preference; a client that does not send
+        # it still gets the account's choice, so the setting never depends on a
+        # page having been upgraded.
+        chat_language = requested_language or settings.stored_chat_language(db, session['user_id'])
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         payload = {'body': text}
+        if requested_language is not None:
+            payload['chat_language'] = requested_language
         key_hash, request_hash = digest('message:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         )
@@ -3377,7 +3386,8 @@ class App:
                 > self.config.max_messages_per_conversation):
             refuse(429, 'quota', 'Conversation message capacity reached')
         history = conversations.history_for_prompt(db, row['id'])
-        prompt = conversations.compose_prompt(agent, history, text)
+        prompt = conversations.compose_prompt(
+            agent, history, text, settings.chat_language_name(chat_language))
         if not runtime_connect.valid_prompt(prompt):
             refuse(400, 'invalid', 'Provide a message')
         user_id = uuid4().hex
