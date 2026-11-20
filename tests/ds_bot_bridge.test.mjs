@@ -9,6 +9,7 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import {
   createBridge, createBridgeServer, forwardModel, handleMcp, mcpTool, skillCapabilityName, MODEL_ID, TOOLS_CAPABILITY,
+  userModelOverride, MODEL_OVERRIDE,
 } from '../runtime/flybot-image/ds-bot-bridge.mjs'
 
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
@@ -244,4 +245,15 @@ test('separate conversations use separate native DS-Bot threads and reuse persis
     assert.equal(fake.rt.chatOf('bot1'), a)
     assert.equal(created, 2)
   } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+test('B4: the account model override from @openteamily/web wins, failures fall back to none', () => {
+  const scope = {}
+  assert.equal(userModelOverride(scope), null)
+  scope[MODEL_OVERRIDE] = () => ({ provider: 'openai', base_url: 'https://models.example/v1', model: 'm', api_key: 'k'.repeat(12), source: 'user' })
+  assert.equal(userModelOverride(scope).source, 'user')
+  scope[MODEL_OVERRIDE] = () => { throw new Error('sealed value is corrupt') }
+  assert.equal(userModelOverride(scope), null)
+  scope[MODEL_OVERRIDE] = () => null
+  assert.equal(userModelOverride(scope), null)
 })

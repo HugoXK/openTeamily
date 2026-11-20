@@ -26,6 +26,12 @@ import { call, loadSkillMaterial, main as agentMain, toolBridge } from './agent-
 import { STREAM_LIMIT, streamHttpTask, validateModelEndpoint } from './model-http-policy.mjs'
 import { loadModelApi, redact } from './model-api.js'
 
+export const MODEL_OVERRIDE = Symbol.for('openteamily.model-api.override')
+export function userModelOverride(scope = globalThis) {
+  const resolve = scope[MODEL_OVERRIDE]
+  if (typeof resolve !== 'function') return null
+  try { return resolve() || null } catch { return null }
+}
 export const PROVIDER = 'openteamily'
 export const MODEL_ID = 'openteamily-model'
 export const TOOLS_CAPABILITY = 'ot-tools'
@@ -227,7 +233,9 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     active: null,
     tools: [],
     modelCalls: 0,
-    startupModel: () => { try { return loadModelApi(env) || null } catch { return null } },
+    // The account's own model settings (B4 @openteamily/web model-api feature,
+    // in-process, sealed at rest) win over the manager-mounted startup file.
+    startupModel: () => { try { return userModelOverride() || loadModelApi(env) || null } catch { return null } },
   }
   const listenPort = port ?? (Number(env.OPENTEAMILY_BRIDGE_PORT) || DEFAULT_PORT)
   const baseURL = `http://127.0.0.1:${listenPort}/v1`
