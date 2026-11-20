@@ -8,6 +8,16 @@ export default function invites(host) {
   return {
     endpoints: {
       create: async (p) => bs().post(`${team(p)}/invites`, { role: p?.role, ttl_days: p?.ttl_days, max_uses: p?.max_uses, requires_approval: p?.requires_approval === true }),
+      // Wizard step 3 (#281): each row is one invite (role + optional approval), codes returned once.
+      async createMany(p) {
+        const rows = Array.isArray(p?.rows) ? p.rows.slice(0, 20) : []
+        if (!rows.length) throw Object.assign(new Error('rows must be a list of invites'), { code: 'invites/invalid' })
+        const invites = []
+        for (const row of rows) {
+          invites.push(await bs().post(`${team(p)}/invites`, { role: row?.role, ttl_days: row?.ttl_days ?? p?.ttl_days, max_uses: row?.max_uses ?? 1, requires_approval: row?.requires_approval === true }))
+        }
+        return { invites }
+      },
       list: async (p) => bs().get(`${team(p)}/invites`),
       freeze: async (p) => bs().patch(`${team(p)}/invites/${seg(p?.invite_id, 'invite_id')}`, { frozen: p?.frozen !== false }),
       revoke: async (p) => bs().patch(`${team(p)}/invites/${seg(p?.invite_id, 'invite_id')}`, { revoked: true }),
