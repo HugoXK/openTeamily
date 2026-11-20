@@ -1860,7 +1860,116 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const autoNote = document.getElementById('group-agent-auto-reply-note');
     if (autoNote) autoNote.hidden = which !== 'agents';
     document.getElementById('group-info-people').hidden = which !== 'people';
+    document.getElementById('group-info-invite').hidden = which !== 'people';
   }
+
+  const groupInvite = document.getElementById('group-invite-dialog');
+  const groupInviteQuery = document.getElementById('group-invite-query');
+  const groupInviteChoices = document.getElementById('group-invite-choices');
+  const groupInviteStatus = document.getElementById('group-invite-status');
+  const groupInviteSubmit = document.getElementById('group-invite-submit');
+  let inviteTarget = null;
+  let invitingMembers = false;
+
+  const inviteMatches = (target) => target && target.workspace === workspaceId() &&
+    currentSource === 'social' && currentConversation?.id === target.conversation;
+  const selectedInviteMembers = () => [...groupInviteChoices.querySelectorAll('input:checked')].map(box => box.value);
+
+  function syncGroupInviteSubmit(count = selectedInviteMembers().length) {
+    groupInviteSubmit.disabled = invitingMembers || count < 1 || count > 50;
+  }
+
+  function syncGroupInvite() {
+    const needle = groupInviteQuery.value.trim().toLocaleLowerCase();
+    let visible = 0;
+    for (const choice of groupInviteChoices.children) {
+      choice.hidden = !choice.textContent.toLocaleLowerCase().includes(needle);
+      if (!choice.hidden) visible++;
+    }
+    const count = selectedInviteMembers().length;
+    syncGroupInviteSubmit(count);
+    if (groupInviteChoices.children.length) {
+      groupInviteStatus.textContent = count > 50 ? '一次最多添加 50 位成员。'
+        : !visible ? '没有匹配的成员。'
+        : count ? `已选 ${count} 位成员` : '';
+    }
+  }
+
+  async function openGroupInvite() {
+    const conversation = currentConversation;
+    if (currentSource !== 'social' || conversation?.kind !== 'group' || groupInvite.open) return;
+    const target = {workspace: workspaceId(), conversation: conversation.id};
+    inviteTarget = target;
+    groupInviteQuery.value = '';
+    groupInviteChoices.replaceChildren();
+    groupInviteSubmit.disabled = true;
+    groupInviteStatus.textContent = '正在加载工作区成员…';
+    document.getElementById('group-invite-context').textContent = conversationLabel(conversation, currentUser?.id);
+    groupInvite.showModal();
+    groupInviteQuery.focus();
+    const result = await request('GET', `/v1/workspaces/${target.workspace}/members`).catch(() => ({status: 0}));
+    if (inviteTarget !== target || !inviteMatches(target) || !groupInvite.open) return;
+    if (result.status !== 200) {
+      groupInviteStatus.textContent = '无法加载工作区成员，请重新打开后再试。';
+      return;
+    }
+    const joined = new Set((currentConversation.members || []).map(member => member.user_id));
+    const candidates = memberChoices(result.body.items, currentUser?.id)
+      .filter(member => member.user_id && !member.suspended && !joined.has(member.user_id));
+    for (const member of candidates) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.value = member.handle || member.user_id;
+      label.append(box, document.createTextNode(member.username || box.value));
+      groupInviteChoices.append(label);
+    }
+    groupInviteStatus.textContent = candidates.length ? '' : '没有可添加的工作区成员。';
+    syncGroupInvite();
+  }
+
+  document.getElementById('chat-group-invite').addEventListener('click', openGroupInvite);
+  document.getElementById('group-info-invite').addEventListener('click', openGroupInvite);
+  document.getElementById('group-invite-cancel').addEventListener('click', () => groupInvite.close());
+  groupInvite.addEventListener('close', () => { if (!groupInvite.open) inviteTarget = null; });
+  groupInvite.addEventListener('cancel', event => { if (invitingMembers) event.preventDefault(); });
+  groupInviteQuery.addEventListener('input', syncGroupInvite);
+  groupInviteChoices.addEventListener('change', syncGroupInvite);
+  document.getElementById('group-invite-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const target = inviteTarget;
+    const memberIds = selectedInviteMembers();
+    if (invitingMembers || !inviteMatches(target) || !memberIds.length || memberIds.length > 50) return;
+    invitingMembers = true;
+    const cancel = document.getElementById('group-invite-cancel');
+    cancel.disabled = true;
+    groupInviteSubmit.disabled = true;
+    groupInviteSubmit.textContent = '添加中…';
+    try {
+      const path = `/v1/workspaces/${target.workspace}/social/conversations/${target.conversation}/members`;
+      const result = await request('POST', path, {member_ids: memberIds});
+      if (!inviteMatches(target) || inviteTarget !== target) return;
+      if (result.status !== 200 || result.body.conversation?.id !== target.conversation) {
+        groupInviteStatus.textContent = result.status === 403 ? '所选成员的权限有变化，请重新打开后再试。'
+          : result.status === 404 ? '群聊或工作区成员有变化，请刷新后再试。' : '无法添加成员，请重试。';
+        return;
+      }
+      currentConversation = result.body.conversation;
+      const title = conversationLabel(currentConversation, currentUser?.id);
+      applyChatIdentity(document, title, currentConversation);
+      setChatSubtitle(groupInfoCounts(currentConversation).text);
+      setGroupInfo(currentConversation);
+      groupInvite.close();
+      show('ok', '群成员已更新。');
+    } catch {
+      if (inviteMatches(target) && inviteTarget === target) groupInviteStatus.textContent = '暂时无法确认添加结果，可以重试。';
+    } finally {
+      invitingMembers = false;
+      cancel.disabled = false;
+      groupInviteSubmit.textContent = '添加';
+      syncGroupInviteSubmit();
+    }
+  });
 
   const pendingAutoReplies = new Set();
 
@@ -1920,6 +2029,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
     const group = Boolean(conversation && conversation.kind === 'group');
+    if (groupInvite.open && (!group || !inviteMatches(inviteTarget))) groupInvite.close();
     toggle.hidden = !group;
     if (!group) {
       panel.hidden = true;
@@ -1953,15 +2063,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function setSocialHeaderTools(social) {
     const invite = document.getElementById('chat-invite');
-    const unavailable = document.getElementById('chat-invite-unavailable');
+    const group = social && currentConversation?.kind === 'group';
+    document.getElementById('chat-group-invite').hidden = !group;
     const multi = document.getElementById('multi-select-toggle');
-    if (invite) invite.hidden = !social;
-    if (unavailable) unavailable.hidden = social;
+    if (invite) invite.hidden = !social || group;
     if (multi) multi.hidden = !social;
+    if (!social || group) {
+      const panel = document.getElementById('chat-invite-panel');
+      if (panel) panel.hidden = true;
+      invite?.setAttribute('aria-expanded', 'false');
+    }
     if (!social) {
       selecting = false; selectedMessages.clear(); syncForwardBar();
       renderPinned([]);
-      const panel = document.getElementById('chat-invite-panel'); if (panel) panel.hidden = true;
     }
   }
 

@@ -202,8 +202,8 @@
       </div>
       <div class="chat-actions">
         <button type="button" id="chat-back" title="返回会话列表" aria-label="返回会话列表">‹</button>
-        <button type="button" id="chat-invite-unavailable" disabled title="未实现：邀请">邀请</button>
         <button type="button" id="chat-invite" hidden aria-expanded="false" aria-controls="chat-invite-panel" title="为当前工作区生成邀请链接（所有者或管理员）">邀请</button>
+        <button type="button" id="chat-group-invite" hidden aria-haspopup="dialog">邀请成员</button>
         <button type="button" id="multi-select-toggle" hidden aria-pressed="false" title="选择多条消息后转发">多选</button>
         <button type="button" disabled title="未实现：语音或视频通话" aria-label="通话（尚未实现）"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h3l2 5-3 2a14 14 0 0 0 6 6l2-3 5 2v3a3 3 0 0 1-3 3C9 20 4 15 3 6a3 3 0 0 1 3-3Z"/></svg><span class="sr-only">通话</span></button>
         <button type="button" id="pin-conversation" hidden>置顶会话</button>
@@ -243,9 +243,23 @@
         <p id="group-agent-auto-reply-note" class="note">可为自己的智能体开启自动回复。新群消息可能触发回复，每个群每小时最多自动回复 3 次。</p>
         <p id="group-agent-auto-reply-status" class="note" role="status" hidden></p>
         <ul id="group-info-agents" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-agents"></ul>
+        <button type="button" class="group-info-link" id="group-info-invite" hidden aria-haspopup="dialog">添加成员</button>
         <ul id="group-info-people" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-people" hidden></ul>
       </section>
     </aside>
+    <dialog id="group-invite-dialog" aria-labelledby="group-invite-heading">
+      <form id="group-invite-form">
+        <h2 id="group-invite-heading">添加群成员</h2>
+        <p id="group-invite-context"></p>
+        <label><span class="sr-only">搜索可添加的工作区成员</span><input type="search" id="group-invite-query" placeholder="搜索工作区成员" maxlength="80" autocomplete="off"></label>
+        <div class="member-choices" id="group-invite-choices"></div>
+        <p id="group-invite-status" role="status"></p>
+        <div class="actions">
+          <button type="button" id="group-invite-cancel">取消</button>
+          <button type="submit" id="group-invite-submit" disabled>添加</button>
+        </div>
+      </form>
+    </dialog>
     <div id="message-context-menu" class="message-menu" role="menu" aria-label="消息操作" hidden>
       <div class="message-menu-reactions" id="message-menu-reactions"></div>
       <button type="button" role="menuitem" data-menu="reply">回复</button>

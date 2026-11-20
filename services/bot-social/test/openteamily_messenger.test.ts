@@ -72,6 +72,30 @@ test("groups: members, mentions notify, creator removes, members leave", async (
   assert.equal((await A.ok("GET", `/v1/ot/conversations/${g.id}`)).members.length, 1);
 });
 
+test("groups add multiple teammates atomically and notify each new member once", async () => {
+  const owner = await home(S.base, "batch-owner");
+  const first = await home(S.base, "batch-first");
+  const second = await home(S.base, "batch-second");
+  const outsider = await home(S.base, "batch-outside");
+  const team = await teamOf(owner, first, second);
+  const group = await owner.ok("POST", "/v1/ot/conversations", { kind: "group", title: "Review", team_id: team.id });
+  const path = `/v1/ot/conversations/${group.id}`;
+  const denied = await owner.call("POST", path + "/members", { handles: [first.handle, outsider.handle] });
+  assert.equal(denied.status, 403);
+  assert.equal((await first.call("GET", path)).status, 404);
+  assert.equal((await first.ok("GET", "/v1/ot/notifications")).notifications
+    .filter((notice: any) => notice.data.conversation_id === group.id).length, 0);
+  const added = await owner.ok("POST", path + "/members", { handles: [first.handle, second.handle] });
+  assert.equal(added.members.length, 3);
+  await owner.ok("POST", path + "/members", { handles: [first.handle, second.handle, first.handle] });
+  for (const person of [first, second]) {
+    assert.equal((await person.ok("GET", path)).id, group.id);
+    const notes = await person.ok("GET", "/v1/ot/notifications");
+    assert.equal(notes.notifications.filter((notice: any) =>
+      notice.kind === "messenger.added" && notice.data.conversation_id === group.id).length, 1);
+  }
+});
+
 test("group agents: the owner's DS-Bot gets mentions and auto-reply turns; auto replies capped at 3/hour", async () => {
   const A = await home(S.base, "agowner");
   const B = await home(S.base, "agpeer");

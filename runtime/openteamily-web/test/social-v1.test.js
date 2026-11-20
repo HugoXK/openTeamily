@@ -57,6 +57,11 @@ function fakeSocial() {
       return ok(200, { messages: [{ id: 'otm_1', author_id: 'own_bea', author_kind: 'member', author: { handle: 'bea.home', owner_id: 'own_bea', display_name: 'Bea' }, body: 'hi', created_at: 1_700_000_200_000, retracted: false }], read_seq: 2, last_seq: 3 })
     }
     if (path === '/v1/ot/conversations/otc_1') return ok(200, { id: 'otc_1', kind: 'dm', title: 'Bea', members: [{ handle: 'bea.home', display_name: 'Bea', owner_id: 'own_bea' }], unread: 0, updated_at: 1_700_000_200_000 })
+    if (path === '/v1/ot/conversations/otc_group') return ok(200, { id: 'otc_group', kind: 'group', team_id: 'ott_1' })
+    if (path === '/v1/ot/conversations/otc_other') return ok(200, { id: 'otc_other', kind: 'group', team_id: 'ott_other' })
+    if (path === '/v1/ot/conversations/otc_group/members' && init.method === 'POST') return ok(200, {
+      id: 'otc_group', kind: 'group', team_id: 'ott_1', members: [{ handle: 'bea.home', owner_id: 'own_bea' }],
+    })
     if (path === '/v1/ot/discover?kind=work' || path.startsWith('/v1/ot/discover?')) {
       return ok(200, { items: [{ id: 'otl_1', slug: 'my-essay', kind: 'work', work_kind: 'document', title: 'Essay', creator: { handle: 'ann.home', display_name: 'Ann' }, updated_at: 1_700_000_000_000, path: '/w/my-essay', likes: 3, liked: false, collected: false, following: false, own: true }] })
     }
@@ -97,6 +102,20 @@ test('invite create returns the one-time token; accept maps a pending request to
   const accepted = await invites(host).endpoints.v1({ method: 'POST', path: '/v1/invites/accept', body: { token: 'invite-code-once' } })
   assert.equal(accepted.status, 202)
   assert.equal(accepted.body.join_request.status, 'pending')
+})
+
+test('group invite sends one batch for the currently scoped workspace', async () => {
+  const { social, host } = setup()
+  const endpoint = messenger(host).endpoints.v1
+  const path = id => `/v1/workspaces/${WS}/social/conversations/${id}/members`
+  const payload = { method: 'POST', body: { member_ids: ['bea.home'] } }
+  const wrongTeam = await endpoint({ ...payload, path: path('otc_other') })
+  assert.equal(wrongTeam.status, 404)
+  const result = await endpoint({ ...payload, path: path('otc_group') })
+  assert.equal(result.status, 200)
+  assert.equal(result.body.conversation.members[0].username, 'bea')
+  assert.deepEqual(social.calls.filter(call => call.method === 'POST'),
+    [{ method: 'POST', path: '/v1/ot/conversations/otc_group/members', body: { handles: ['bea.home'], team_id: 'ott_1' } }])
 })
 
 test('directory and messenger v1 keep workspace ids and unix-second timestamps', async () => {

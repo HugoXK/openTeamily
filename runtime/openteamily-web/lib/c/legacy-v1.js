@@ -665,6 +665,20 @@ function messengerExtraRoutes(host) {
         return [200, method === 'GET' ? await bs.get(path) : await bs.post(path, body)]
       }) })),
     {
+      method: 'POST', path: re('\\/members'),
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const bs = client(host)
+          const team = await guard(bs, match[1])
+          const path = conv(match[2])
+          const group = await bs.get(path)
+          if (group.team_id && group.team_id !== team.id) throw new Fault(404, 'not_found', 'Conversation not found in this workspace')
+          const updated = await bs.post(path + '/members', { handles: body?.member_ids ?? [], team_id: team.id })
+          return [200, { conversation: conversationItem(updated, await meOf(bs, env), env, match[1]) }]
+        })
+      },
+    },
+    {
       method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/pin'),
       async handle({ match, body }) {
         return wrap(async () => {

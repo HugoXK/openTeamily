@@ -238,10 +238,27 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     const conv = memberOf(ot, params(req).id, me.ownerId);
     assert(conv.kind === "group", 400, "invalid_request", "members are added to groups only");
-    const o = ot.ownerByHandle(body(req).handle);
-    assertReachable(ot, me.ownerId, o, conv.team_id);
-    ot.run("INSERT OR IGNORE INTO ot_conversation_members(conversation_id, owner_id, read_seq, created_at) VALUES (?,?,?,?)", conv.id, o, conv.last_seq, ot.now());
-    ot.notify(o, "messenger.added", { conversation_id: conv.id, title: conv.title, by: ot.profileView(me.ownerId) });
+    const input = body(req);
+    const teamId = input.team_id ?? conv.team_id;
+    if (input.team_id !== undefined) {
+      assert(typeof teamId === "string" && (!conv.team_id || conv.team_id === teamId),
+        404, "not_found", "conversation not found in this team");
+      requireMember(ot, teamId, me.ownerId);
+    }
+    const handles = input.handles === undefined ? [input.handle] : input.handles;
+    assert(Array.isArray(handles) && handles.length >= 1 && handles.length <= 50
+      && handles.every(handle => typeof handle === "string" && handle.trim().length > 0 && handle.length <= 80),
+      400, "invalid_request", "Provide 1–50 member handles");
+    const owners = new Set<string>(handles.map(handle => ot.ownerByHandle(handle)));
+    const invitedBy = ot.profileView(me.ownerId);
+    ot.tx(() => {
+      for (const owner of owners) {
+        if (ot.get("SELECT 1 FROM ot_conversation_members WHERE conversation_id = ? AND owner_id = ?", conv.id, owner)) continue;
+        assertReachable(ot, me.ownerId, owner, teamId);
+        ot.run("INSERT INTO ot_conversation_members(conversation_id, owner_id, read_seq, created_at) VALUES (?,?,?,?)", conv.id, owner, conv.last_seq, ot.now());
+        ot.notify(owner, "messenger.added", { conversation_id: conv.id, title: conv.title, by: invitedBy });
+      }
+    });
     return conversationView(ot, conv, me.ownerId);
   });
   app.delete("/v1/ot/conversations/:id/members/:handle", async (req) => {

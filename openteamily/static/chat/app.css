@@ -1698,14 +1698,26 @@ html[data-theme-resolved="dark"] position: absolute; right: .5rem; bottom: -.625
 #message-list li > .message-more:focus-visible { opacity: 1; }
 #message-list li .message-reactions:not(:has(.reaction-chip)):not(:has(.reaction-picker:not([hidden]))) { bottom: .125rem; right: -1.875rem; }
 #message-list li.mine .message-reactions:not(:has(.reaction-chip)):not(:has(.reaction-picker:not([hidden]))) { right: auto; left: -1.875rem; }
-#save-message-dialog { width: min(30rem, calc(100vw - 2rem)); padding: 1.5rem; border: 1px solid var(--ot-line); border-radius: 1rem; background: var(--ot-surface); color: var(--ot-ink); }
-#save-message-dialog::backdrop { background: rgb(0 0 0 / 25%); }
-#save-message-dialog form { border: 0; padding: 0; box-shadow: none; background: transparent; }
-#save-message-dialog h2 { margin: 0; font-size: 1.125rem; }
-#save-message-dialog p { font-size: .875rem; line-height: 1.65; }
+#save-message-dialog, #group-invite-dialog { width: min(30rem, calc(100vw - 2rem)); padding: 1.5rem; border: 1px solid var(--ot-line); border-radius: 1rem; background: var(--ot-surface); color: var(--ot-ink); }
+#save-message-dialog::backdrop, #group-invite-dialog::backdrop { background: rgb(0 0 0 / 25%); }
+#save-message-dialog form, #group-invite-form { border: 0; padding: 0; box-shadow: none; background: transparent; }
+#save-message-dialog h2, #group-invite-heading { margin: 0; font-size: 1.125rem; }
+#save-message-dialog p, #group-invite-dialog p { font-size: .875rem; line-height: 1.65; }
 #save-message-dialog label { display: grid; gap: .5rem; font-size: .875rem; }
-#save-message-dialog .actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
+#save-message-dialog .actions, #group-invite-dialog .actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
 #save-message-dialog [role="alert"] { color: var(--ot-danger); }
+#group-invite-dialog { box-sizing: border-box; max-height: calc(100dvh - 2rem); }
+#group-invite-form { display: grid; gap: .75rem; }
+#group-invite-dialog p { margin: 0; }
+#group-invite-dialog .actions { margin-top: .25rem; }
+#group-invite-context { color: var(--ot-muted); overflow-wrap: anywhere; }
+#group-invite-query { width: 100%; }
+#group-invite-choices { max-height: min(16rem, 36dvh); overflow-y: auto; }
+#group-invite-choices label { min-height: 2.75rem; padding: .25rem .5rem; border-radius: .55rem; overflow-wrap: anywhere; }
+#group-invite-choices label:hover { background: var(--ot-surface-2); }
+#group-invite-choices input { flex: 0 0 auto; }
+#group-invite-status:empty { display: none; }
+#group-info-invite { min-height: 2.5rem; text-align: left; color: var(--ot-accent); }
 .search-hit[role="button"] { cursor: pointer; }
 .search-hit[role="button"]:hover, .search-hit[role="button"]:focus-visible { background: var(--ot-bg-accent); }
 #message-list li[data-search-jump="true"] { outline: 2px solid var(--ot-accent); outline-offset: 3px; }
