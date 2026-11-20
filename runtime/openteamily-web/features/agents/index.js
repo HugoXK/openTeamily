@@ -102,7 +102,9 @@ export function createAgents({ db, host }) {
       const items = []
       for (const row of all('SELECT * FROM agents ORDER BY id')) {
         const a = await native.ensure(row)
-        items.push({ agent_id: row.id, native_bot_id: a.native_bot_id, native_deleted: !!a.native_deleted })
+        const sessions = []
+        if (!a.native_deleted) for (const c of all('SELECT * FROM agent_conversations WHERE agent_id=?', row.id)) sessions.push(await native.session(a, `agent:${a.id}:${c.id}`, c.title))
+        items.push({ agent_id: row.id, native_bot_id: a.native_bot_id, native_deleted: !!a.native_deleted, sessions })
       }
       return { items }
     },
@@ -193,6 +195,7 @@ export function createAgents({ db, host }) {
     async messages(p) {
       const agent = load(ws(p), p.id)
       const convo = conversation(agent, p.conversation_id)
+      await native.session(agent, `agent:${agent.id}:${convo.id}`, convo.title)
       return { items: all('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created, id', convo.id).map((m) => ({ ...m, meta: JSON.parse(m.meta) })) }
     },
     // Send one message to the agent: a native DS-Bot turn on this conversation's session.
@@ -202,13 +205,15 @@ export function createAgents({ db, host }) {
       const text = typeof p.text === 'string' ? p.text.trim() : ''
       if (!text || text.length > LIMITS.text) fail('invalid', 'text must be 1–20000 characters', 400)
       const userId = newId()
-      run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', userId, convo.id, 'user', text, 'sent', now(), '{}')
+      run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', userId, convo.id, 'user', text, 'sent', now(), JSON.stringify({ nativePending:true }))
       const replyId = newId()
       try {
         const reply = await turn({ agent_id: agent.id, key: convo.id, text, request_id: `ot-agent:${userId}`, reply_language: p.reply_language })
+        run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({session_id:reply.session_id}), userId)
         run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', reply.text, 'succeeded', now(),
           JSON.stringify({ engine: 'ds-bot', session_id: reply.session_id, turn_id: reply.turn_id }))
       } catch (error) {
+        run('UPDATE agent_messages SET meta=? WHERE id=?', '{}', userId)
         run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', '', 'failed', now(), JSON.stringify({ error: String(error?.code ?? 'agents/failed') }))
         run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
         throw error
@@ -266,6 +271,8 @@ export default async function agents(host) {
   const db = await openDatabase(host, 'agents.sqlite3')
   const { endpoints, migrate } = createAgents({ db, host })
   await importPending({ host, db, migrate })
+  const timer = setTimeout(() => endpoints.reconcile().catch(() => host.log('native agent history reconciliation pending; retry agents/reconcile')), 10000)
+  timer.unref?.()
   const wrapped = {}
   for (const [name, fn] of Object.entries(endpoints)) wrapped[name] = async (payload) => fn(payload ?? {})
   return { pages: ['agents'], endpoints: wrapped, migrate }

@@ -61,7 +61,7 @@ export function apply(ctx, config = {}) {
       if (typeof text !== 'string' || !text.trim()) throw new Error('Text-only model returned no text')
       return text.slice(0, 20000)
     })
-    attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn, textOnly })
+    attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn, textOnly, exclusive: bridge.exclusive, legacySession: bridge.legacySession })
   }
   return attached
 }
