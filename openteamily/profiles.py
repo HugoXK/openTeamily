@@ -3,13 +3,16 @@
 Self-written for OpenTeamily; no upstream or Teamily source. The observed 2026-11-18
 profile editor fields are the basis (name, Teamily ID handle, bio, tags, gender,
 location, website, private life goals, avatar). This slice implements the text
-fields and private goals; avatar upload and social posts/follows/likes are not
+fields, private goals and the account avatar; social posts/follows/likes are not
 included. The public projection never returns goals, email, or account ids.
 """
+import hashlib
 import json
 import re
 from html import escape
 from urllib.parse import urlsplit
+
+from . import artifacts
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS user_profiles (
@@ -27,6 +30,14 @@ CREATE TABLE IF NOT EXISTS user_profiles (
  created INTEGER NOT NULL,
  updated INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS user_profile_handle ON user_profiles(handle_lower);
+CREATE TABLE IF NOT EXISTS user_avatars (
+ user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ mime TEXT NOT NULL CHECK(mime IN ('image/png','image/jpeg')),
+ byte_count INTEGER NOT NULL CHECK(byte_count >= 1 AND byte_count <= 2097152),
+ sha256 TEXT NOT NULL,
+ filename TEXT NOT NULL,
+ updated INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS user_avatar_digest ON user_avatars(sha256);
 '''
 
 NAME_MAX = 40
@@ -38,6 +49,11 @@ LOCATION_MAX = 80
 WEBSITE_MAX = 200
 GOAL_MAX = 200
 GOALS = ('health', 'finance', 'career', 'hobbies', 'family', 'productivity', 'other')
+# Avatars reuse the artifact object store (content-addressed bytes under
+# <data-dir>/artifact-objects/, private directories and 0600 files). Only the
+# MIME and the digest are kept in the database.
+AVATAR_MIMES = ('image/png', 'image/jpeg')
+AVATAR_MAX = artifacts.MAX_MEDIA_BYTES
 CONTROL = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
 HANDLE = re.compile(r'[a-z0-9](?:[a-z0-9._]{1,28})[a-z0-9]')
 RESERVED = {
@@ -213,6 +229,31 @@ def load(db, user_id):
 
 def load_handle(db, handle_lower):
     return db.execute('SELECT * FROM user_profiles WHERE handle_lower=?', (handle_lower,)).fetchone()
+
+
+def avatar_namespace(user_id):
+    """Object namespace for one account's avatar.
+
+    Artifact garbage collection only ever scans real workspace ids, so a
+    namespace derived from the user id cannot be removed by deleting an
+    artifact that happens to carry the same bytes.
+    """
+    return hashlib.sha256(('profile-avatar:' + user_id).encode('utf-8')).hexdigest()[:32]
+
+
+def load_avatar(db, user_id):
+    return db.execute('SELECT * FROM user_avatars WHERE user_id=?', (user_id,)).fetchone()
+
+
+def avatar_view(row):
+    if row is None:
+        return None
+    return {
+        'url': '/v1/profile/avatar?v=' + row['sha256'][:12],
+        'mime': row['mime'],
+        'bytes': row['byte_count'],
+        'updated': row['updated'],
+    }
 
 
 def default_handle(db, username):

@@ -1448,6 +1448,17 @@ html[data-theme-resolved="dark"] #message-list li[data-state="failed"] > p.faile
   font-weight: 650;
 }
 .stream-artifact-copy { display: grid; gap: 0.2rem; min-width: 0; }
+.stream-artifact-picture { grid-template-columns: minmax(0, 1fr); align-items: start; }
+.stream-artifact-image {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: 18rem;
+  object-fit: contain;
+  border-radius: 0.5rem;
+  background: #f4f1e8;
+}
 .stream-artifact-copy strong { font-size: 0.8125rem; font-weight: 650; }
 .stream-artifact-copy a { font-size: 0.75rem; }
 #social-agent-members.group-agent-note,
@@ -1591,7 +1602,85 @@ html[data-theme-resolved="dark"] .plus-create [data-tone="doc"] .plus-ico { colo
 /* A message with no reactions yet should not grow a row just for the hover "+😊". */
 #message-list li { position: relative; }
 #message-list li .message-reactions:not(:has(.reaction-chip)):not(:has(.reaction-picker:not([hidden]))) {
-  position: absolute; right: .5rem; bottom: -.625rem; margin: 0; z-index: 2;
+html[data-theme-resolved="dark"] position: absolute; right: .5rem; bottom: -.625rem; margin: 0; z-index: 2;
+}
+#message-list li .message-reactions:not(:has(.reaction-chip)) .reaction-add{ background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line); }html[data-theme-resolved="dark"] .session-pane{
+  background: var(--ot-surface);
+  border-right: 1px solid var(--ot-line);
+  /* No backdrop-filter here on purpose: it would make the pane a containing
+     block for the fixed compose dialog inside it, so the dialog would cover
+     the pane's own controls instead of the viewport and never close. The
+     glass is carried by the surfaces inside the pane, not by the pane. */
+  position: relative;
+  z-index: 5;
+}html[data-theme-resolved="dark"] .session-search{ background: var(--ot-surface-solid); border-color: var(--ot-line); }html[data-theme-resolved="dark"] .session-search:focus-within{
+  border-color: var(--ot-accent);
+  box-shadow: 0 0 0 4px var(--ot-accent-soft);
+}html[data-theme-resolved="dark"] #conversation-list button.session-row{
+  border-radius: 0.9rem;
+  padding: 0.55rem 0.6rem;
+  transition: background-color .16s var(--ot-ease), transform .16s var(--ot-ease);
+}html[data-theme-resolved="dark"] #conversation-list button.session-row:hover{ background: var(--ot-bg-accent); transform: translateX(1px); }html[data-theme-resolved="dark"] #conversation-list button.session-row[aria-current="true"]{
+  background: var(--ot-grad-soft);
+  box-shadow: inset 3px 0 0 var(--ot-accent), 0 8px 24px color-mix(in srgb, var(--ot-accent) 12%, transparent);
+}html[data-theme-resolved="dark"] #conversation-list .avatar{
+  background: var(--ot-grad);
+  color: #ffffff;
+  border: 0;
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--ot-accent) 30%, transparent);
+}html[data-theme-resolved="dark"] .chat-top{
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+}html[data-theme-resolved="dark"] .chat-identity .avatar{
+  background: var(--ot-grad);
+  color: #ffffff;
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--ot-accent) 30%, transparent);
+}html[data-theme-resolved="dark"] #message-scroller{ padding: 1.1rem 1.35rem 0.6rem; }html[data-theme-resolved="dark"] #message-list li{
+  border-radius: var(--ot-radius-lg);
+  border: 1px solid var(--ot-line);
+  box-shadow: var(--ot-shadow-sm);
+  background: var(--ot-surface);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+  animation: ot-rise .22s var(--ot-ease) both;
+}html[data-theme-resolved="dark"] #message-list li.user, html[data-theme-resolved="dark"] #message-list li.mine{
+  background: var(--ot-grad);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 14px 34px color-mix(in srgb, var(--ot-accent) 32%, transparent);
+}html[data-theme-resolved="dark"] #message-list li.user .role, html[data-theme-resolved="dark"] #message-list li.user .time, html[data-theme-resolved="dark"] #message-list li.mine .role, html[data-theme-resolved="dark"] #message-list li.mine .time{ color: rgba(255,255,255,0.78); }html[data-theme-resolved="dark"] #message-list li.agent{
+  background: var(--ot-grad-soft);
+  border: 1px dashed color-mix(in srgb, var(--ot-accent) 42%, transparent);
+}html[data-theme-resolved="dark"] .composer{
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+  transition: box-shadow .18s var(--ot-ease), border-color .18s var(--ot-ease);
+}html[data-theme-resolved="dark"] .composer:focus-within{
+  border-color: color-mix(in srgb, var(--ot-accent) 55%, transparent);
+  box-shadow: var(--ot-shadow), 0 0 0 4px var(--ot-accent-soft);
+}html[data-theme-resolved="dark"] .composer-row textarea, html[data-theme-resolved="dark"] .composer-row input{ background: transparent; }html[data-theme-resolved="dark"] .composer-row button[type="submit"]{
+  background: var(--ot-grad);
+  color: #ffffff;
+  border: 0;
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--ot-accent) 35%, transparent);
+}html[data-theme-resolved="dark"] .composer-tools button, html[data-theme-resolved="dark"] .composer button.icon{
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ot-muted);
+}html[data-theme-resolved="dark"] .composer-tools button:hover{ background: var(--ot-accent-soft); color: var(--ot-ink); }html[data-theme-resolved="dark"] .mention-chip, html[data-theme-resolved="dark"] .agent-chip{
+  background: var(--ot-surface);
+  border-color: var(--ot-line);
+  box-shadow: var(--ot-shadow-sm);
+}
+@media (max-width: 900px) {
 }
 #message-list li .message-reactions:not(:has(.reaction-chip)) .reaction-add { background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line); }
 
@@ -1628,3 +1717,32 @@ html[data-theme-resolved="dark"] .plus-create [data-tone="doc"] .plus-ico { colo
   #message-list li:focus-within .message-reactions .reaction-add,
   #message-list li .message-reactions:has(.reaction-picker:not([hidden])) .reaction-add { opacity: 1; }
 }
+
+#message-assist-dialog, #announcement-dialog {width:min(44rem,calc(100vw - 2rem));max-height:85vh;overflow:auto;border:1px solid var(--ot-line);border-radius:14px;padding:24px;color:var(--ot-ink);background:var(--ot-surface);}
+#message-assist-dialog::backdrop, #announcement-dialog::backdrop {background:#14281d55;}
+#message-assist-dialog input, #announcement-dialog textarea {display:block;width:100%;box-sizing:border-box;margin:8px 0 12px;font:inherit;}
+#message-assist-history {list-style:none;padding:0;}
+#message-assist-history li {padding:16px 0;border-bottom:1px solid var(--ot-line);}
+
+#resource-picker {width:min(40rem,calc(100vw - 2rem));max-height:85vh;overflow:auto;border:1px solid var(--ot-line);border-radius:14px;padding:24px;color:var(--ot-ink);background:var(--ot-surface);}
+#resource-picker::backdrop {background:#14281d55;}
+#resource-picker-list {list-style:none;padding:0;}
+#resource-picker-list button {width:100%;text-align:left;margin:4px 0;}
+
+.chat-document-card {display:block;padding:16px;border:1px solid var(--ot-line);border-radius:10px;text-decoration:none;color:var(--ot-ink);background:var(--ot-surface);}
+
+#message-list li > .body { margin: 0; line-height: 1.6; }
+.chat-link-card { display: block; margin-top: .5rem; padding: .5rem .65rem; border: 1px solid var(--ot-line); border-radius: .65rem; overflow-wrap: anywhere; color: var(--ot-accent-hover); font-size: .8125rem; }
+
+.composer-tools .composer-tool-link { width: 2rem; min-width: 2rem; min-height: 2rem; display: inline-flex; align-items: center; justify-content: center; color: var(--ot-muted); border-radius: .5rem; }
+.composer-tool-link:hover { background: var(--ot-bg-accent); color: var(--ot-ink); }
+.composer-emoji-grid { display: grid; grid-template-columns: repeat(6, minmax(2.5rem, 1fr)); gap: .5rem; margin: 1rem 0; }
+.composer-emoji-grid button { min-height: 2.75rem; font-size: 1.4rem; }
+#composer-emoji-dialog { width: min(90vw, 28rem); max-width: 100%; box-sizing: border-box; border: 1px solid var(--ot-line); border-radius: 1rem; background: var(--ot-surface); color: var(--ot-ink); padding: 1.25rem; }
+@media (pointer: coarse) { .composer-tools .composer-tool-link { min-width: 44px; min-height: 44px; } }
+/* Opaque, AA-safe primary actions in the existing dark palette. The shared
+   gradient/foreground combination is not safe for these new modal actions. */
+html[data-theme-resolved="dark"] #message-assist-submit,
+html[data-theme-resolved="dark"] #announcement-save { background: #6953c7; color: #ffffff; border-color: transparent; }
+html[data-theme-resolved="dark"] #message-assist-submit:hover,
+html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3; color: #ffffff; }
