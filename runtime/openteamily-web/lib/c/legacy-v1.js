@@ -8,6 +8,7 @@ import { compatHandler } from '../b4/compat.js'
 import { Fault } from '../b4/http.js'
 import { ownerId } from '../../featurekit/v1.js'
 import { sharedBotSocial, seg, qs } from './bot-social.js'
+import { replyPrompt } from './agent-replies.js'
 
 const HEX = /^[0-9a-f]{32}$/
 const WORK_LABELS = {
@@ -596,6 +597,160 @@ function messengerRoutes(host) {
   ]
 }
 
+// Remaining legacy messenger subroutes (message pin/react/edit/retract/delete/save,
+// forward, group agents, manual agent replies). Agent replies run as one native
+// turn on THIS user's DS-Bot; nothing falls back to the platform.
+function messengerExtraRoutes(host) {
+  const env = process.env
+  const base = '^\\/v1\\/workspaces\\/([0-9a-f]{32})\\/social\\/conversations\\/([A-Za-z0-9._-]{1,80})'
+  const re = (tail) => new RegExp(base + tail + '$')
+  const conv = (id) => `/v1/ot/conversations/${seg(id, 'conversation_id')}`
+  const msg = (id) => `/v1/ot/messages/${seg(id, 'message_id')}`
+  const page = async (bs, cid) => (await bs.get(`${conv(cid)}/messages` + qs({ limit: 100 }))).messages || []
+  const findMessage = async (bs, cid, mid) => {
+    const row = (await page(bs, cid)).find((m) => m.id === mid)
+    if (!row) throw new Fault(404, 'not_found', 'Message not found')
+    return row
+  }
+  const guard = async (bs, wid) => teamFor(bs, wid, 'Workspace', env)
+  return [
+    {
+      method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/pin'),
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const bs = client(host); await guard(bs, match[1])
+          await bs.post(`${msg(match[3])}/pin`, { on: body?.pinned !== false })
+          const me = await meOf(bs, env)
+          const pinned = (await page(bs, match[2])).filter((m) => m.pinned).map((m) => messageItem({ ...m, conversation_id: match[2] }, me, env, match[1]))
+          return [200, { pinned: body?.pinned !== false, pinned_messages: pinned }]
+        })
+      },
+    },
+    {
+      method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/reactions'),
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const bs = client(host); await guard(bs, match[1])
+          const data = await bs.post(`${msg(match[3])}/reactions`, { emoji: body?.emoji, on: body?.active !== false })
+          return [200, { reactions: data.reactions || [] }]
+        })
+      },
+    },
+    {
+      method: 'DELETE', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})'),
+      async handle({ match }) {
+        return wrap(async () => {
+          const bs = client(host); await guard(bs, match[1])
+          await bs.del(msg(match[3]))
+          return [204, {}]
+        })
+      },
+    },
+    {
+      method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/(edit|retract)'),
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const bs = client(host); await guard(bs, match[1])
+          const me = await meOf(bs, env)
+          if (match[4] === 'retract') {
+            await bs.del(msg(match[3]))
+            return [200, { message: messageItem({ ...(await findMessage(bs, match[2], match[3])), conversation_id: match[2] }, me, env, match[1]) }]
+          }
+          const data = await bs.patch(msg(match[3]), { body: body?.body })
+          return [200, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
+        })
+      },
+    },
+    {
+      method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/save'),
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const bs = client(host); await guard(bs, match[1])
+          const row = await findMessage(bs, match[2], match[3])
+          if (row.retracted || !row.body) throw new Fault(409, 'conflict', 'This message can no longer be saved')
+          const title = String(body?.title || row.body.slice(0, 40) || '消息').trim().slice(0, 80)
+          const out = await host.call('artifacts/create', { workspace_id: match[1], kind: 'document', title, body: row.body, idempotency_key: ('msg-save-' + match[3]).replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64) })
+          return [201, out]
+        })
+      },
+    },
+    {
+      method: 'POST', path: re('\\/forward'),
+      async handle({ match, body, idempotency_key: key }) {
+        return wrap(async () => {
+          const bs = client(host); await guard(bs, match[1])
+          const ids = Array.isArray(body?.message_ids) ? body.message_ids.slice(0, 20) : []
+          const target = body?.target_conversation_id
+          if (!ids.length || typeof target !== 'string') throw new Fault(400, 'invalid', 'Provide message_ids and target_conversation_id')
+          const rows = await page(bs, match[2])
+          const tag = String(key || Date.now()).slice(0, 40)
+          let forwarded = 0
+          for (const id of ids) {
+            const row = rows.find((m) => m.id === id)
+            if (!row || row.retracted || !row.body) continue
+            await bs.post(`${conv(target)}/messages`, { body: `[转发] ${row.body}`.slice(0, 4000), client_key: `fwd:${tag}:${id}`.slice(0, 80) })
+            forwarded++
+          }
+          return [201, { forwarded, target_conversation_id: target }]
+        })
+      },
+    },
+    {
+      method: 'POST', path: re('\\/agents'),
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const bs = client(host); await guard(bs, match[1])
+          const ids = Array.isArray(body?.agent_ids) ? body.agent_ids.slice(0, 10) : []
+          if (!ids.length) throw new Fault(400, 'invalid', 'Provide agent_ids')
+          for (const id of ids) {
+            const { agent } = await host.call('agents/get', { id, workspace_id: match[1] })
+            await bs.put(`${conv(match[2])}/agents/${seg(agent.id, 'agent_ref')}`, { name: String(agent.name).slice(0, 40), auto_reply: false })
+          }
+          return [201, { added: ids.length }]
+        })
+      },
+    },
+    {
+      method: 'POST', path: re('\\/agents\\/([A-Za-z0-9._:-]{1,80})\\/remove'),
+      async handle({ match }) {
+        return wrap(async () => {
+          const bs = client(host); await guard(bs, match[1])
+          await bs.del(`${conv(match[2])}/agents/${seg(match[3], 'agent_ref')}`)
+          return [200, { removed: true }]
+        })
+      },
+    },
+    {
+      method: 'POST', path: re('\\/agent-replies'),
+      async handle({ match, body, idempotency_key: key }) {
+        return wrap(async () => {
+          const bs = client(host); await guard(bs, match[1])
+          const ids = Array.isArray(body?.agent_ids) ? body.agent_ids.slice(0, 5) : []
+          const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : ''
+          if (!ids.length || !prompt || prompt.length > 4000) throw new Fault(400, 'invalid', 'Provide agent_ids and a 1–4000 character prompt')
+          const services = host.currentRuntime?.()
+          if (!services || typeof services.chatTurn !== 'function') throw new Fault(503, 'runtime_unavailable', 'DS-Bot chat service unavailable')
+          const conversation = await bs.get(conv(match[2]))
+          const context = (await page(bs, match[2])).slice(-12).map((m) => ({ author: m.author, body: m.body }))
+          const tag = String(key || Date.now()).slice(0, 40)
+          const me = await meOf(bs, env)
+          const replies = []
+          for (const id of ids) {
+            const agent = (conversation.agents || []).find((a) => a.agent_ref === id && a.mine)
+            if (!agent) throw new Fault(404, 'not_found', 'That agent of yours is not in this group')
+            const turn = await services.chatTurn(`social:${match[2]}:${id}`, replyPrompt({ agent_name: agent.name, conversation_title: conversation.title, mode: 'mention', context: [...context, { author: { display_name: me.display_name || 'member' }, body: prompt }] }), `otr:${tag}:${id}`)
+            const text = String(turn?.text ?? '').trim()
+            if (!text) continue
+            const posted = await bs.post(`${conv(match[2])}/agent-messages`, { agent_ref: id, body: text.slice(0, 4000), mode: 'mention', client_key: `m:${tag}:${id}`.slice(0, 80) })
+            replies.push(messageItem({ ...posted, conversation_id: match[2] }, me, env, match[1]))
+          }
+          return [201, { replies }]
+        })
+      },
+    },
+  ]
+}
+
 function discoverRoutes(host) {
   const env = process.env
   const feed = (kind) => async ({ query }) => wrap(async () => {
@@ -677,5 +832,5 @@ function discoverRoutes(host) {
 export function membersV1(host) { return compatHandler(membersRoutes(host)) }
 export function invitesV1(host) { return compatHandler(invitesRoutes(host)) }
 export function teamsV1(host) { return compatHandler(teamsRoutes(host)) }
-export function messengerV1(host) { return compatHandler(messengerRoutes(host)) }
+export function messengerV1(host) { return compatHandler([...messengerRoutes(host), ...messengerExtraRoutes(host)]) }
 export function discoverV1(host) { return compatHandler(discoverRoutes(host)) }

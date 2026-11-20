@@ -304,10 +304,12 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     for (const m of rows) {
       cursor = Math.max(cursor, m.rowseq);
       const mentions: string[] = JSON.parse(m.mentions);
-      const mentioned = mentions.includes(String(m.my_agent).toLowerCase()) || mentions.includes(String(m.my_agent_name).toLowerCase());
+      const conv = ot.get<any>("SELECT title, dm_key FROM ot_conversations WHERE id = ?", m.conversation_id);
+      // A public-homepage thread (visitor + creator's agent) addresses the agent directly.
+      const homepage = String(conv.dm_key ?? "").startsWith("agent:");
+      const mentioned = homepage || mentions.includes(String(m.my_agent).toLowerCase()) || mentions.includes(String(m.my_agent_name).toLowerCase());
       if (!mentioned && !m.my_auto) continue;
       const context = ot.all<any>("SELECT * FROM (SELECT * FROM ot_messages WHERE conversation_id = ? AND seq <= ? ORDER BY seq DESC LIMIT 12) ORDER BY seq", m.conversation_id, m.seq);
-      const conv = ot.get<any>("SELECT title FROM ot_conversations WHERE id = ?", m.conversation_id);
       items.push({ conversation_id: m.conversation_id, conversation_title: conv.title, agent_ref: m.my_agent, agent_name: m.my_agent_name, mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: context.map((c) => messageView(ot, c)) });
       if (items.length >= limit) break;
     }
