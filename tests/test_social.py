@@ -1,4 +1,5 @@
 """Human-to-human workspace messenger (issue #86). No agent or vendor is contacted."""
+import base64
 from dataclasses import replace
 from pathlib import Path
 import tempfile
@@ -222,9 +223,50 @@ class SocialMessengerTests(unittest.TestCase):
         # A later conversation Eve cannot join should not appear in Eve's workspace list.
         self.assertEqual(self.eve.call('GET', self.base())['status'], 404)
 
+    def test_unread_security_regressions_are_discoverable(self):
+        names = unittest.defaultTestLoader.getTestCaseNames(type(self))
+        self.assertIn('test_unread_is_per_user_and_read_ack_is_snapshot_bounded', names)
+        self.assertIn('test_read_ack_permissions_csrf_and_cross_conversation_ids', names)
 
-if __name__ == '__main__':
-    unittest.main()
+    def test_media_attachment_view_carries_the_mime_for_inline_rendering(self):
+        """An image shared in chat must reach the client as an image.
+
+        The messenger client used to draw every attachment as a document card,
+        so the mime type of the stored media never left the server. The message
+        view is the only place that knows it, so it has to carry it.
+        """
+        cid = self.create(self.alice, 'dm', [self.bob_id])['body']['conversation']['id']
+        boundary = '----openteamily-media-test'
+        png = base64.b64decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==')
+        parts = []
+        for name, value in (('kind', 'media'), ('title', 'sunset.png')):
+            parts.append(('--%s\r\nContent-Disposition: form-data; name="%s"\r\n\r\n%s\r\n'
+                          % (boundary, name, value)).encode('utf-8'))
+        parts.append(('--%s\r\nContent-Disposition: form-data; name="file"; filename="sunset.png"\r\n'
+                      'Content-Type: image/png\r\n\r\n' % boundary).encode('ascii') + png + b'\r\n')
+        parts.append(('--%s--\r\n' % boundary).encode('ascii'))
+        uploaded = self.alice.call(
+            'POST', '/v1/workspaces/%s/artifacts' % self.wid, raw=b''.join(parts),
+            headers={'CONTENT_TYPE': 'multipart/form-data; boundary=' + boundary,
+                     'HTTP_IDEMPOTENCY_KEY': 'media-upload-0001'})
+        self.assertEqual(uploaded['status'], 201, uploaded)
+        artifact = uploaded['body']['artifact']
+        self.assertEqual(artifact['media']['mime'], 'image/png')
+        sent = self.alice.call('POST', self.base() + '/' + cid + '/messages',
+                               {'body': '', 'artifact_id': artifact['id']},
+                               {'HTTP_IDEMPOTENCY_KEY': 'media-message-0001'})
+        self.assertEqual(sent['status'], 201, sent)
+        attachment = sent['body']['message']['attachment']
+        self.assertEqual(attachment['mime'], 'image/png',
+                         'the message view must carry the stored media mime; without it the client can only guess')
+        self.assertEqual(attachment['title'], 'sunset.png')
+        self.assertEqual(attachment['path'],
+                         '/v1/workspaces/%s/artifacts/%s/file' % (self.wid, artifact['id']))
+        # Reading the conversation again keeps the mime: the list query, not a
+        # one-off send response, is what the client renders on reload.
+        listing = self.alice.call('GET', self.base() + '/' + cid)
+        self.assertEqual(listing['body']['items'][0]['attachment']['mime'], 'image/png')
 
 
     def test_unread_is_per_user_and_read_ack_is_snapshot_bounded(self):
@@ -268,3 +310,7 @@ if __name__ == '__main__':
         self.assertEqual(self.bob.call('POST', base + '/read', {'message_id': 'bad'})['status'], 400)
         other = self.create(self.alice, 'dm', [self.carol_id], key='unread-other-create')['body']['conversation']['id']
         self.assertEqual(self.alice.call('POST', self.base() + '/' + other + '/read', {'message_id': sent})['status'], 404)
+
+
+if __name__ == '__main__':
+    unittest.main()
