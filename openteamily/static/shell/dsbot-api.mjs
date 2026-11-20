@@ -14,6 +14,7 @@ export const API_ROUTE = `${MOUNT}/api/openteamily`;
 export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/meetings(?:\/[0-9a-f]{32}(?:\/(?:remove|export))?)?$/, 'meetings'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory(?:\/[0-9a-f]{32}(?:\/(?:remove|export|dream(?:\/[0-9a-f]{32})?|versions(?:\/\d{1,8}(?:\/restore)?)?))?)?$/, 'memory'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/(?:profile|graph|(?:actions|links|preferences)(?:\/[0-9a-f]{32}(?:\/remove)?)?)$/, 'memory'],
 ];
 
 export function servedByDsBot(doc = globalThis.document) {
