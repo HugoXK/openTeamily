@@ -1,1 +1,1 @@
-{"version": 1, "mount": "/b", "passthrough": ["/api/"], "moved_pages": ["chat", "meetings", "memory", "skills"]}
+{"version": 1, "mount": "/b", "passthrough": ["/api/"], "moved_pages": ["chat", "meetings", "memory", "onboarding", "settings", "skills"]}

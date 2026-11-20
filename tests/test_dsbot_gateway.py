@@ -125,7 +125,7 @@ class GatewayTest(unittest.TestCase):
         self.assertIsNone(gw.target_for('/privacy/', routes))
 
     def test_shipped_routes_move_private_chat(self):
-        self.assertTrue({'chat', 'meetings', 'skills', 'memory'} <= gw.load_routes()['moved_pages'])
+        self.assertTrue({'chat', 'meetings', 'skills', 'memory', 'settings', 'onboarding'} <= gw.load_routes()['moved_pages'])
         self.assertEqual(gw.target_for('/chat/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fchat%2Fapp.mjs')
 
     def test_record_upstream_validation(self):
