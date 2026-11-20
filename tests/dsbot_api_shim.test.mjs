@@ -10,6 +10,10 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.deepEqual(movedTarget(`/v1/workspaces/${WS}/meetings?limit=20`, ORIGIN),
     { feature: 'meetings', path: `/v1/workspaces/${WS}/meetings?limit=20` });
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/export`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/memory?q=x`, ORIGIN).feature, 'memory');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${ID}/versions/3/restore`, ORIGIN).feature, 'memory');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${ID}/dream/${ID}`, ORIGIN).feature, 'memory');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/actions`, ORIGIN), null, 'not moved yet');
   assert.equal(movedTarget('/v1/auth/session', ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations`, ORIGIN), null);
   assert.equal(movedTarget(`https://evil.example/v1/workspaces/${WS}/meetings`, ORIGIN), null);

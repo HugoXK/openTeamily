@@ -34,6 +34,17 @@ export function verifyBundle(bundle, feature) {
 
 export function importBundle(store, feature, bundle, digest) {
   const tables = verifyBundle(bundle, feature)
+  // Upsert by original id without letting a replaced parent cascade-delete
+  // children that the same bundle is about to write again.
+  store.exec('PRAGMA foreign_keys=OFF')
+  try {
+    return importRows(store, feature, tables, digest)
+  } finally {
+    store.exec('PRAGMA foreign_keys=ON')
+  }
+}
+
+function importRows(store, feature, tables, digest) {
   return store.transaction(() => {
     if (store.get('SELECT 1 AS ok FROM ot_imports WHERE digest=?', digest)) return { skipped: true, rows: 0 }
     let count = 0

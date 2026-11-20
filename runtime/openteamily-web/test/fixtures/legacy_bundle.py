@@ -31,7 +31,23 @@ def seed_meetings(alice, bob, wid, bob_wid):
     return {'meeting_id': created['body']['meeting']['id'], 'title': '周会', 'foreign_title': 'bob 的会'}
 
 
-SEEDS = {'meetings': seed_meetings}
+def seed_memory(alice, bob, wid, bob_wid):
+    created = alice.call('POST', f'/v1/workspaces/{wid}/memory',
+                         {'title': '客户偏好', 'body': '喜欢简洁的周报。', 'topics': ['客户']},
+                         {'HTTP_IDEMPOTENCY_KEY': 'fixture-memory-0001'})
+    assert created['status'] == 201, created
+    page = created['body']['page']
+    edited = alice.call('POST', f'/v1/workspaces/{wid}/memory/{page["id"]}',
+                        {'revision': page['revision'], 'changes': {'body': '喜欢简洁的周报，周五发。'}})
+    assert edited['status'] == 200, edited
+    other = bob.call('POST', f'/v1/workspaces/{bob_wid}/memory', {'title': 'bob 的记忆', 'body': 'x'},
+                     {'HTTP_IDEMPOTENCY_KEY': 'fixture-memory-0002'})
+    assert other['status'] == 201, other
+    return {'page_id': page['id'], 'title': '客户偏好', 'body': '喜欢简洁的周报，周五发。', 'revision': 2,
+            'foreign_title': 'bob 的记忆'}
+
+
+SEEDS = {'meetings': seed_meetings, 'memory': seed_memory}
 
 
 def main(features):
