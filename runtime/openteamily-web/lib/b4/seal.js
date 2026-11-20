@@ -17,7 +17,22 @@ function parseKey(raw) {
   throw Object.assign(new Error('seal key file must hold 32 bytes or 64 hex characters'), { code: 'openteamily/seal-key' })
 }
 
-export function loadSealKey({ env = process.env, fallbackFile }) {
+// Transport keys must never fall back to a newly-generated local storage key.
+export function loadImportSealKey(env = process.env) {
+  try { return parseKey(readFileSync(env.OPENTEAMILY_SEAL_KEY_FILE || DEFAULT_KEY_FILE)) }
+  catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw Object.assign(new Error('runtime import key unavailable or invalid'), { code: 'openteamily/import-key' })
+  }
+}
+
+export function loadSealKey({ env = process.env, fallbackFile, preferFallback = false }) {
+  // Keep the key that encrypted an existing local store when a manager mount
+  // arrives later. Never rotate it just because transport configuration changed.
+  if (preferFallback) {
+    try { return parseKey(readFileSync(fallbackFile)) }
+    catch (error) { if (error.code !== 'ENOENT') throw error }
+  }
   const configured = env.OPENTEAMILY_SEAL_KEY_FILE || DEFAULT_KEY_FILE
   try { return parseKey(readFileSync(configured)) } catch (error) {
     if (env.OPENTEAMILY_SEAL_KEY_FILE && error?.code !== 'ENOENT') throw error
