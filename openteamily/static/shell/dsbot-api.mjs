@@ -12,6 +12,9 @@ export const API_ROUTE = `${MOUNT}/api/openteamily`;
 // Legacy route -> feature that serves it inside DS-Bot. Streams add rows as
 // features move; a feature the DS-Bot does not have yet falls back to /v1.
 export const MOVED = [
+  [/^\/v1\/team-templates$/, 'team-templates'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/team-templates\/[a-z0-9-]{3,40}$/, 'team-templates'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/notifications(?:\/read)?$/, 'social'],
   [/^\/v1\/automation-templates$/, 'automations'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/automations(?:\/(?:tick|[0-9a-f]{32}(?:\/(?:remove|runs(?:\/[0-9a-f]{32}(?:\/(?:cancel|retry|artifact))?)?)?))?)?$/, 'automations'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/api-keys(?:\/[0-9a-f]{32}\/revoke)?$/, 'agent-api'],

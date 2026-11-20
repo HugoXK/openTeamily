@@ -603,18 +603,6 @@ class App:
                 self.body(env, [])
                 db.execute('DELETE FROM sessions WHERE token_hash=?', (session['token_hash'],))
                 return 200, {'logged_out': True}, self.session_headers('', '', expires=True)
-            if path == '/v1/team-templates':
-                if method != 'GET' or query:
-                    refuse(400, 'invalid', 'Invalid template request')
-                return 200, {'items': [team_templates.view(item) for item in team_templates.TEMPLATES]}, []
-            template_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/team-templates/([a-z0-9-]{3,40})', path)
-            if template_path:
-                if method != 'POST' or query:
-                    refuse(400, 'invalid', 'Invalid template request')
-                return self.apply_team_template(db, session, now, env, *template_path.groups())
-            notification_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/notifications(/read)?', path)
-            if notification_path:
-                return self.notification_dispatch(db, session, method, query, env, *notification_path.groups(), now=now)
             if path == '/v1/profile/avatar':
                 if method == 'GET':
                     return self.profile_avatar(db, session, query)
@@ -1237,100 +1225,8 @@ class App:
         return 200, {'enabled':body['enabled'],'scope':scope,'skill_id':item['id']}, []
 
 
-    def reconcile_group_replies(self, db, row, now):
-        from .dsbot_gateway import workspace_moved_to_dsbot
-        if workspace_moved_to_dsbot(db, row['workspace_id'], 'messenger'):
-            return
-        for reply in social.reply_requests(db, row['id']):
-            if reply['status'] not in ('queued', 'running'):
-                continue
-            task = runtime_connect.load_task(db, reply['task_id']) if reply['task_id'] else None
-            if task is None:
-                status, error, text = 'failed', 'task_missing', ''
-            else:
-                task = runtime_connect.expire_task(db, task, now)
-                status, error, text = conversations.map_task_status(task)
-                if status == 'succeeded' and not text.strip():
-                    status, error, text = 'failed', 'empty_reply', ''
-                # Expose only fixed error codes, never arbitrary runtime diagnostics.
-                if status in ('failed', 'cancelled'):
-                    error = error if error in ('timeout', 'cancelled', 'empty_reply') else 'runtime_failed'
-                    text = ''
-            seq = social.next_seq(db, row['id']) if status == 'succeeded' else None
-            db.execute('UPDATE social_agent_replies SET status=?,error_code=?,body=?,seq=?,updated=? WHERE id=?',
-                       (status, error, text if status == 'succeeded' else '', seq, now, reply['id']))
-            if status == 'succeeded':
-                db.execute('UPDATE social_conversations SET updated=? WHERE id=?', (now, row['id']))
 
 
-    def apply_team_template(self, db, session, now, env, workspace_id, slug):
-        workspace = members.load(db, workspace_id, session['user_id'])
-        if workspace is None:
-            refuse(404, 'not_found', 'Workspace not found')
-        template = team_templates.BY_SLUG.get(slug)
-        if template is None:
-            refuse(404, 'not_found', 'Template not found')
-        if not agents.can_manage(members.role_of(db, workspace, session['user_id'])):
-            refuse(403, 'forbidden', 'Only workspace owners and admins can create agent teams')
-        body = self.body(env, ['title', 'member_ids'])
-        title = body.get('title') or template['name']
-        if not social.valid_title(title):
-            refuse(400, 'invalid', 'Provide a valid conversation title')
-        title = title.strip()
-        member_ids = body.get('member_ids', [])
-        if not isinstance(member_ids, list) or (member_ids and not social.valid_member_ids(member_ids)):
-            refuse(400, 'invalid', 'Provide up to 49 member ids')
-        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
-        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
-            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
-        humans = {session['user_id'], *member_ids}
-        if not humans.issubset(social.workspace_member_ids(db, workspace)):
-            refuse(400, 'invalid', 'Every member must belong to the workspace')
-        key_hash = digest('team-template:' + key)
-        request_hash = digest(json.dumps({'slug': slug, 'title': title, 'member_ids': sorted(member_ids)},
-                                         sort_keys=True, separators=(',', ':'), ensure_ascii=False))
-        prior = social.load_by_key(db, workspace['id'], key_hash)
-        if prior:
-            if prior['request_hash'] != request_hash:
-                refuse(409, 'conflict', 'Idempotency key was used for a different request')
-            return 200, {'conversation': social.conversation_item(db, prior), 'created_agents': []}, []
-        if len(humans) + len(template['agents']) > self.config.max_social_members_per_conversation:
-            refuse(429, 'quota', 'Conversation member limit reached')
-        if (db.execute('SELECT COUNT(*) FROM social_conversations WHERE workspace_id=?',
-                       (workspace['id'],)).fetchone()[0] >= self.config.max_social_conversations_per_workspace):
-            refuse(429, 'quota', 'Conversation capacity reached')
-        agent_ids, created = [], []
-        for index, spec in enumerate(template['agents']):
-            existing = db.execute('SELECT * FROM workspace_agents WHERE workspace_id=? AND name_hash=?',
-                                  (workspace['id'], agents.name_hash(spec['name']))).fetchone()
-            if existing is not None:
-                if existing['archived']:
-                    refuse(409, 'conflict', 'An archived agent already uses a template agent name: ' + spec['name'])
-                agent_ids.append(existing['id'])
-                continue
-            if (db.execute('SELECT COUNT(*) FROM workspace_agents WHERE workspace_id=?',
-                           (workspace['id'],)).fetchone()[0] >= self.config.max_agents_per_workspace):
-                refuse(429, 'quota', 'Agent capacity reached')
-            agent_id = uuid4().hex
-            payload = {'name': spec['name'], 'summary': spec['summary'], 'instructions': spec['instructions'],
-                       'category': spec['category']}
-            db.execute('INSERT INTO workspace_agents VALUES(?,?,?,?,?,?,1,?,?,?,0,?,?)',
-                       (agent_id, workspace['id'], spec['name'], agents.name_hash(spec['name']), spec['summary'],
-                        spec['instructions'], now, now, session['user_id'],
-                        digest(f'team-template-agent:{key}:{index}'),
-                        digest(json.dumps(payload, sort_keys=True, ensure_ascii=False))))
-            agents.store_category(db, agent_id, spec['category'], now)
-            agent_ids.append(agent_id)
-            created.append(agent_id)
-        conversation_id = uuid4().hex
-        db.execute('INSERT INTO social_conversations VALUES(?,?,?,?,?,?,?,?,?)',
-                   (conversation_id, workspace['id'], 'group', title, None, now, now, key_hash, request_hash))
-        for user_id in sorted(humans):
-            db.execute('INSERT INTO social_members VALUES(?,?,?,?)', (conversation_id, workspace['id'], user_id, now))
-        for agent_id in agent_ids:
-            db.execute('INSERT INTO social_agent_members VALUES(?,?,?)', (conversation_id, agent_id, now))
-        row = social.load(db, workspace['id'], conversation_id)
-        return 201, {'conversation': social.conversation_item(db, row), 'created_agents': created}, []
 
     def workspace_overview(self, db, session, method, query, workspace_id):
         """Read-only home summaries; never exposes prompts, bodies or transcripts."""
@@ -1397,34 +1293,6 @@ class App:
             'limit': limit,
         }, []
 
-    def notification_dispatch(self, db, session, method, query, env, workspace_id, reading, now=0):
-        workspace = members.load(db, workspace_id, session['user_id'])
-        if workspace is None:
-            refuse(404, 'not_found', 'Workspace not found')
-        uid = session['user_id']
-        if not reading and method == 'GET' and query in ('', 'filter=unread', 'filter=all'):
-            # Bring the requester's in-flight group agent requests up to date so a
-            # finished task shows up on the next poll without opening the group.
-            for conv in db.execute(
-                    "SELECT DISTINCT c.* FROM social_agent_replies r JOIN social_conversations c ON c.id=r.conversation_id "
-                    "WHERE r.workspace_id=? AND r.requested_by=? AND r.status IN ('queued','running') LIMIT 20",
-                    (workspace['id'], uid)).fetchall():
-                self.reconcile_group_replies(db, conv, now)
-            return 200, {'items': notifications.listing(db, workspace['id'], uid, query == 'filter=unread', now),
-                         'unread_count': notifications.unread_count(db, workspace['id'], uid, now),
-                         'limit': notifications.LIMIT}, []
-        if reading and method == 'POST' and not query:
-            body = self.body(env, ['notification_id', 'all'])
-            nid, every = body.get('notification_id'), body.get('all')
-            if every is True and nid is None:
-                notifications.mark_read(db, workspace['id'], uid, now=now)
-            elif every is None and isinstance(nid, str) and notifications.HEX32.fullmatch(nid):
-                if not notifications.mark_read(db, workspace['id'], uid, nid, now):
-                    refuse(404, 'not_found', 'Notification not found')
-            else:
-                refuse(400, 'invalid', 'Provide notification_id or all=true')
-            return 200, {'unread_count': notifications.unread_count(db, workspace['id'], uid, now)}, []
-        refuse(400, 'invalid', 'Invalid notification request')
 
 
     def custom_mcp_dispatch(self, env, user_id, method, path, query, now):
