@@ -116,6 +116,8 @@ function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: st
 }
 
 export function registerMessenger(app: FastifyInstance, ot: OtContext) {
+  const messageCols = new Set(ot.all<any>("PRAGMA table_info(ot_messages)").map(c => c.name));
+  if (!messageCols.has("revision")) ot.run("ALTER TABLE ot_messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
   app.post("/v1/ot/conversations", async (req, reply) => {
     const me = ot.me(req);
     const b = body(req);
@@ -264,18 +266,23 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     memberOf(ot, m.conversation_id, ownerId);
     return m;
   };
+  app.get("/v1/ot/messages/:id", async req => {
+    const me=ot.me(req), m=ownMessage(params(req).id,me.ownerId), cid=query(req).conversation_id;
+    assert(cid === undefined || cid === m.conversation_id,404,"message_not_found","message not in conversation");
+    return messageView(ot,m,me.ownerId);
+  });
   app.patch("/v1/ot/messages/:id", async (req) => {
     const me = ot.me(req);
     const m = ownMessage(params(req).id, me.ownerId);
     assert(m.author_id === me.ownerId && m.author_kind === "member" && !m.retracted, 403, "forbidden", "you can edit your own messages only");
-    ot.run("UPDATE ot_messages SET body = ?, edited_at = ? WHERE id = ?", text(body(req).body, "body", { min: 1, max: BODY_MAX, multiline: true }), ot.now(), m.id);
+    ot.run("UPDATE ot_messages SET body = ?, revision = revision + 1, edited_at = ? WHERE id = ?", text(body(req).body, "body", { min: 1, max: BODY_MAX, multiline: true }), ot.now(), m.id);
     return messageView(ot, ot.get("SELECT * FROM ot_messages WHERE id = ?", m.id), me.ownerId);
   });
   app.delete("/v1/ot/messages/:id", async (req) => {
     const me = ot.me(req);
     const m = ownMessage(params(req).id, me.ownerId);
     assert(m.author_id === me.ownerId, 403, "forbidden", "you can retract your own messages (or your agents') only");
-    ot.run("UPDATE ot_messages SET retracted = 1, body = '', edited_at = ? WHERE id = ?", ot.now(), m.id);
+    ot.run("UPDATE ot_messages SET retracted = 1, revision = revision + 1, body = '', edited_at = ? WHERE id = ?", ot.now(), m.id);
     return { retracted: true };
   });
   app.post("/v1/ot/messages/:id/reactions", async (req) => {
