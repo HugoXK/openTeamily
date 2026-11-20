@@ -84,6 +84,8 @@ def start_fake_provider(secret, body_text):
                 'model': body.get('model'),
                 'stream': bool(body.get('stream')),
                 'tools': len(body.get('tools') or []),
+                'tool_names': [t.get('function', {}).get('name', '') for t in body.get('tools') or []],
+                'tool_descriptions': ' '.join(str(t.get('function', {}).get('description', '')) for t in body.get('tools') or []),
                 'roles': [m.get('role') for m in messages if isinstance(m, dict)],
                 'system_chars': sum(len(json.dumps(m.get('content'))) for m in messages
                                     if isinstance(m, dict) and m.get('role') in ('system', 'developer')),
@@ -224,6 +226,28 @@ def main(argv):
         user = ApiClient(app)
         registered = user.register('alice')
         require(registered['status'] == 201, 'register failed: %r' % registered)
+        # Explicit in-process MCP fixture. No vendor account, secret or action.
+        def fixture_transport(url, headers, raw):
+            message = json.loads(raw)
+            if 'id' not in message:
+                return 202, {}, b''
+            result = {}
+            if message['method'] == 'initialize':
+                result = {'protocolVersion': '2025-03-26', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'explicit-ci-fixture', 'version': '1'}}
+            if message['method'] == 'tools/list':
+                result = {'tools': [{'name': 'fixture_status', 'description': 'EXPLICIT_CI_MCP_FIXTURE no external action', 'inputSchema': {'type': 'object', 'properties': {}}}]}
+            return 200, {'content-type': 'application/json'}, json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': result}).encode()
+        app.mcp_transport = fixture_transport
+        fixture = user.call('POST', '/v1/mcp/servers', {'name': 'EXPLICIT_CI_MCP_FIXTURE', 'url': 'https://mcp.example.test/mcp'})
+        require(fixture['status'] == 200, 'MCP fixture save failed: %r' % fixture)
+        catalogue = user.call('GET', '/v1/skills/catalog')['body']['items']
+        installed_skill = catalogue[0]
+        install = user.call('POST', '/v1/skills/bindings', {
+            'skill_id': installed_skill['id'], 'version': installed_skill['version'], 'digest': installed_skill['digest'],
+            'scope': 'account', 'enabled': True, 'permissions': ['model_context'],
+        })
+        require(install['status'] == 200, 'skill install failed: %r' % install)
+
         saved = user.call('POST', '/v1/model-api', {
             'revision': 0,
             'changes': {
@@ -381,11 +405,19 @@ def main(argv):
         require(ds_bot.get('request_id') == 'ot:' + reply['task_id'] and ds_bot.get('session_id') and ds_bot.get('bot_id'),
                 'missing DS-Bot session evidence: %r' % result, secrets)
         require(ds_bot.get('model_calls', 0) >= 1, 'DS-Bot turn made no model call: %r' % result, secrets)
+        require(ds_bot.get('skills'), 'DS-Bot did not attach installed skill capabilities', secrets)
+        require(ds_bot.get('tools', 0) >= 1, 'DS-Bot did not discover the explicit MCP fixture', secrets)
+        bindings = user.call('GET', '/v1/skills/bindings')['body']['items']
+        require(any(b.get('last_loaded_task') == reply['task_id'] for b in bindings), 'native skill receipt missing', secrets)
+
         require(ds_bot.get('history_verified') is True, 'DS-Bot native persisted history did not verify the request', secrets)
         # DS-Bot evidence 3: the model saw a DS-Bot-built request (system prompt + DS-Bot tools),
         # streamed through the loopback proxy, which rewrote the model name.
         dsbot_requests = [r for r in RECEIVED if r['stream'] and r['tools'] > 0 and r['system_chars'] > 200]
         require(dsbot_requests, 'model never received a DS-Bot request: %r' % RECEIVED, secrets)
+        require(any('OTMCP_' in ' '.join(r['tool_names']) or 'EXPLICIT_CI_MCP_FIXTURE' in r['tool_descriptions'] for r in dsbot_requests),
+                'explicit MCP fixture not visible in native DS-Bot model tools: %r' % RECEIVED, secrets)
+
         require(all(r['model'] == 'fake-model' for r in RECEIVED), 'proxy did not enforce the model: %r' % RECEIVED, secrets)
         print('DS-Bot evidence: bot=%s session=%s request=%s model_calls=%s tools_in_request=%s history_verified=%s' % (
             ds_bot.get('bot_id'), ds_bot.get('session_id'), ds_bot.get('request_id'), ds_bot.get('model_calls'),
