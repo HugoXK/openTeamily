@@ -35,18 +35,12 @@ export function apply(ctx, config = {}) {
   if (config.openteamilyBridge !== false && process.env.OPENTEAMILY_DS_BOT_BRIDGE !== '0') {
     const { bridge } = startBridge(rt, ctx)
     // Services for @openteamily/web features (chat, skills): native DS-Bot turns in
-    // this user's own runtime. One turn at a time, since conversations switch the
-    // Main Bot's active part.
-    let queue = Promise.resolve()
-    const chatTurn = (key, text, requestId) => {
-      const run = queue.then(async () => {
-        await bridge.setup()
-        await bridge.selectConversation(key)
-        return runTurn(rt, ctx, bridge.botId, text, requestId)
-      })
-      queue = run.catch(() => {})
-      return run
-    }
+    // this user's own runtime, serialized with management tasks by bridge.exclusive.
+    const chatTurn = (key, text, requestId) => bridge.exclusive(async () => {
+      await bridge.setup()
+      await bridge.selectConversation(key)
+      return runTurn(rt, ctx, bridge.botId, text, requestId)
+    })
     const mainBot = async () => { await bridge.setup(); return bridge.botId }
     attachRuntime({ rt, ctx, chatTurn, mainBot })
   }

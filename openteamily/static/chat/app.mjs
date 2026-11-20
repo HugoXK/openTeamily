@@ -4,6 +4,7 @@ export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
+import { dsbotServed, dsbotRoute, dsbotRequest } from './dsbot.mjs';
 
 export const SEARCH_TABS = [
   ['all', '全部'],
@@ -621,6 +622,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let sessions = [];
   let currentAgent = null;
   let personalAgentId = '';
+  const servedByDsbot = dsbotServed(document);
   let personalLook = null;
   let currentConversation = null;
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
@@ -648,6 +650,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function request(method, path, body, extra) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie), ...(extra || {})};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const plugin = servedByDsbot ? dsbotRoute(method, path, body, personalAgentId) : null;
+    if (plugin) return dsbotRequest(fetcher, plugin, personalAgentId, headers);
     const response = await fetcher(path, {
       method, headers, credentials: 'same-origin',
       body: body !== undefined ? JSON.stringify(body) : undefined,

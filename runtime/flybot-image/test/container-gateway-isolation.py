@@ -254,6 +254,12 @@ def main():
             status, _h, _b = browse(token, 'GET', '/b/')
             assert status == 200, f'DSH web index through the gateway: {status}'
 
+        # Moved page: /chat/ itself is served by each user's own DS-Bot.
+        for token, rt in ((token_a, a), (token_b, b)):
+            status, headers, body = browse(token, 'GET', '/chat/')
+            assert status == 200 and headers.get('x-openteamily-served-by') == f'ds-bot; instance={rt["id"]}', f'/chat/ moved: {status}'
+            status, headers, _b = browse(token, 'GET', '/chat/dsbot.mjs')
+            assert status == 200 and headers.get('x-openteamily-served-by', '').endswith(rt['id']), 'chat adapter bundled'
         # User A cannot steer to B: forged routing headers and B's own DSH cookie are dropped.
         status, headers, _b = browse(token_a, 'GET', '/b/api/openteamily/page?path=%2Fchat%2F',
                                      **{'X-OT-Upstream': b['address'], 'X-OT-Instance': b['id'],

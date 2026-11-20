@@ -101,7 +101,7 @@ class GatewayTest(unittest.TestCase):
 
     def test_platform_paths_and_tricks_are_not_forwarded(self):
         a = self.tokens['a' * 32]
-        for uri in ('/v1/auth/session', '/register/', '/chat/', '/bx', '/b/%2e%2e/x', '/b/a%2fb', '/b/../v1/', '//b/'):
+        for uri in ('/v1/auth/session', '/register/', '/privacy/', '/bx', '/b/%2e%2e/x', '/b/a%2fb', '/b/../v1/', '//b/'):
             self.assertEqual(self.call(a, uri=uri)[0], 404, uri)
 
     def test_unhealthy_or_blocked_runtime_is_not_routed(self):
@@ -123,6 +123,10 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.target_for('/chat/', routes), '/api/openteamily/page?path=%2Fchat%2F')
         self.assertEqual(gw.target_for('/', routes), '/api/openteamily/page?path=%2F')
         self.assertIsNone(gw.target_for('/skills/', routes))
+
+    def test_shipped_routes_move_private_chat(self):
+        self.assertIn('chat', gw.load_routes()['moved_pages'])
+        self.assertEqual(gw.target_for('/chat/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fchat%2Fapp.mjs')
 
     def test_record_upstream_validation(self):
         with self.store.transaction() as db:
