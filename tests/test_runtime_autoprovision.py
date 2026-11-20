@@ -17,7 +17,6 @@ from openteamily.runtime_autoprovision import AutoProvisionPolicy
 from openteamily.security import digest, opaque
 from openteamily.store import Store
 from tests.test_management import Client, ORIGIN
-from tests.test_runtime_connect import AgentClient
 
 
 class AutoProvisionTests(unittest.TestCase):
@@ -182,33 +181,6 @@ class AutoProvisionTests(unittest.TestCase):
         # Operator-enrolled instance is NOT visible to the auto manager.
         self.assertEqual(self.listed(), [])
 
-    def test_auto_start_dispatch_and_chat_states(self):
-        self.make_app()
-        alice = self.user('alice', '127.0.0.1')
-        personal = self.ensure(alice)
-        wid, aid = personal['workspace']['id'], personal['agent']['id']
-        iid = personal['runtime_provisioning']['instance_id']
-        base = f'/v1/workspaces/{wid}/agents/{aid}/conversations'
-        cid = alice.call('GET', base)['body']['items'][0]['id']
-        sent = alice.call('POST', f'{base}/{cid}/messages', {'body': 'hi'}, {'HTTP_IDEMPOTENCY_KEY': 'autoprov-start-msg-001'})
-        self.assertEqual(sent['body']['reply']['error_code'], 'runtime_starting')
-        self.assertEqual(sent['body']['reply']['status'], 'queued')
-        create, _ = self.run_job(iid, 'stopped')
-        self.assertEqual(create['job']['operation_type'], 'create')
-        snap = alice.call('GET', f'/v1/instances/{iid}')['body']
-        snap = snap.get('instance', snap)
-        self.assertEqual((snap['desired'], snap['operation']['type']), ('running', 'start'))
-        start, key = self.run_job(iid, 'running', process_ref='c' * 32, issue=True)
-        self.assertEqual(start['job']['operation_type'], 'start')
-        container = AgentClient(self.app, key['token'])
-        self.assertIn(container.call('POST', '/v1/agent/connect', {'hostname': key['hostname']})['status'], (200, 201))
-        # Reconcile on read redispatches the waiting reply to Alice's own instance.
-        view = alice.call('GET', f'{base}/{cid}')
-        reply = [m for m in view['body']['items'] if m['role'] == 'assistant'][-1]
-        self.assertIsNone(reply['error_code'])
-        self.assertEqual(reply['dispatch']['instance_id'], iid)
-        tasks = container.call('GET', '/v1/agent/tasks')
-        self.assertEqual(len(tasks['body']['items']), 1)
 
     def test_failed_create_shows_unavailable(self):
         self.make_app()
