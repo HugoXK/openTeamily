@@ -42,11 +42,12 @@ export function nativeGroupClient(host, raw) {
       await sync(await raw.get('/v1/ot/conversations/' + encodeURIComponent(cid)))
       const before = p?.cursor?.beforeSeq
       const data = await raw.get('/v1/ot/conversations/' + encodeURIComponent(cid) + '/messages?limit=100' + (Number.isInteger(before) ? '&before=' + before : ''))
+      const activity = await host.call('agents/groupActivity', { conversation_id: cid })
       return { roomId: p.roomId, items: (data.messages || []).map(m => ({
         id: m.id, kind: m.mine === true ? 'user' : 'bot',
         name: m.author?.name || m.author?.display_name || m.author?.handle || '',
         text: m.retracted ? '' : m.body, time: m.created_at, source_message_id: m.id, revision: m.revision,
-      })), cursor: data.messages?.[0]?.seq > 1 ? { beforeSeq: data.messages[0].seq } : null, running: false, speaking: null }
+      })), cursor: data.messages?.[0]?.seq > 1 ? { beforeSeq: data.messages[0].seq } : null, running: activity.running, speaking: activity.speaking }
     }
     const originalSend = rt.sendUser.bind(rt)
     rt.sendUser = async p => {
