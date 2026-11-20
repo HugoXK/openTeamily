@@ -127,7 +127,8 @@ export function createLegacyDispatch({ endpoints }) {
       }
     }
     try {
-      const result = await handler({ method: request.method, path, query, body }, { request, host: null })
+      const idempotency_key = request.headers.get('idempotency-key') || undefined
+      const result = await handler({ method: request.method, path, query, body, idempotency_key }, { request, host: null })
       const status = Number(result?.status) || 200
       return new Response(JSON.stringify(result?.body ?? {}), {
         status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
