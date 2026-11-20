@@ -48,6 +48,7 @@ def _via_artifact(table, order):
 
 # Parents come before children; the plugin imports in its own declared order.
 FEATURE_TABLES = {
+    'skill-secrets': [('skill_secrets', 'SELECT name,updated FROM skill_secrets WHERE user_id=? ORDER BY name')],
     'meetings': [
         ('meetings', 'SELECT m.* FROM meetings m JOIN workspaces w ON w.id = m.workspace_id '
                      'WHERE w.owner_id = ? ORDER BY m.id'),
@@ -207,6 +208,13 @@ def sealed_secrets(db, store, user_id, feature, seal_key):
         row = model_api.load_account(db, user_id)
         if row is not None and row['key_blob']:
             out['model_api_key'] = model_api.wrap(bytes(seal_key), model_api.secret(store, row))
+    elif feature == 'skill-secrets':
+        from . import skill_secrets
+        rows = db.execute('SELECT name,key_blob FROM skill_secrets WHERE user_id=? ORDER BY name', (user_id,)).fetchall()
+        if rows:
+            key = skill_secrets.wrapping_key(store)
+            for row in rows:
+                out['secret:' + row['name']] = model_api.wrap(bytes(seal_key), model_api.unwrap(key, row['key_blob']))
     elif feature == 'connectors':
         key = composio.user_key(store, db, user_id)
         if key:
@@ -219,7 +227,7 @@ def sealed_secrets(db, store, user_id, feature, seal_key):
 def build_with_secrets(db, store, user_id, feature, seal_key=None, now=None):
     """build() plus, for B4 features, sealed secrets and their digest."""
     bundle = build(db, user_id, feature, now)
-    if seal_key is not None and feature in ('model-api', 'connectors'):
+    if seal_key is not None and feature in ('model-api', 'connectors', 'skill-secrets'):
         secrets = sealed_secrets(db, store, user_id, feature, seal_key)
         bundle['seal_key_id'] = hashlib.sha256(bytes(seal_key)).hexdigest()
         bundle['secrets'] = secrets
