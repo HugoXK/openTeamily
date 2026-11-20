@@ -18,7 +18,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/team-templates\/[a-z0-9-]{3,40}$/, 'team-templates'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/notifications(?:\/read)?$/, 'social'],
   [/^\/v1\/(?:automation-templates|onboarding\/automations)$/, 'automations'],
-  [/^\/v1\/workspaces\/[0-9a-f]{32}\/automations(?:\/(?:tick|[0-9a-f]{32}(?:\/(?:remove|runs(?:\/[0-9a-f]{32}(?:\/(?:cancel|retry|artifact))?)?)?))?)?$/, 'automations'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/automations(?:\/(?:tick|[0-9a-f]{32}(?:\/(?:run|remove|runs(?:\/[0-9a-f]{32}(?:\/(?:cancel|retry|artifact))?)?)?))?)?$/, 'automations'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/api-keys(?:\/[0-9a-f]{32}\/revoke)?$/, 'agent-api'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents(?:\/[0-9a-f]{32}(?:\/(?:archive|conversations(?:\/[0-9a-f]{32}(?:\/messages(?:\/[0-9a-f]{32}\/artifact)?)?)?))?)?$/, 'agents'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/meetings(?:\/(?:draft|speech|transcribe)|\/[0-9a-f]{32}(?:\/(?:remove|export))?)?$/, 'meetings'],

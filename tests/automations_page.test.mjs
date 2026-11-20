@@ -121,6 +121,7 @@ class FakeNode {
       this._elements[name] = new FakeNode('input');
     }
     this._elements.template_id = new FakeNode('select');
+    this._elements.kind = new FakeNode('select');
     return this._elements;
   }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }

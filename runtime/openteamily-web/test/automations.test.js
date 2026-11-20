@@ -92,6 +92,34 @@ test('a due schedule fires inside DS-Bot once per slot and records the DS-Bot re
   assert.equal(feature.tick().length, 1, 'next day fires again')
 })
 
+test('manual execution queues only the named automation and leaves its scheduled slot free', async () => {
+  let finishTurn
+  const calls = []
+  const { e, feature } = fixture(args => new Promise(resolve => { calls.push(args); finishTurn = resolve }))
+  const draft = {workspace_id: W, template_id: 'custom', prompt: 'Respond once', participants: ['alice'],
+    schedule: {kind: 'now', time_zone: 'UTC'}}
+  const {automation: target} = e['automations/create']({...draft, title: '手动', idempotency_key: 'm'.repeat(16)})
+  const {automation: other} = e['automations/create']({...draft, title: '其他', idempotency_key: 'o'.repeat(16)})
+  const req = {method: 'POST', path: `/v1/workspaces/${W}/automations/${target.id}/run`,
+    body: {}, idempotency_key: 'q'.repeat(16)}
+  const accepted = await e['automations/v1'](req)
+  assert.equal(accepted.status, 202)
+  assert.equal(accepted.body.run.trigger, 'manual')
+  assert.equal((await e['automations/v1'](req)).body.run.id, accepted.body.run.id)
+  assert.equal((await e['automations/v1']({...req, idempotency_key: 'x'.repeat(16)})).status, 409)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].conversation, `automation:${target.id}`)
+  finishTurn({text: '完成'})
+  await Promise.all(feature.inflight.values())
+  assert.equal(e['automations/runs']({workspace_id: W, id: other.id}).items.length, 0)
+  assert.equal(e['automations/get']({workspace_id: W, id: target.id}).automation.enabled, false)
+  e['automations/update']({workspace_id: W, id: target.id, revision: 1, changes: {enabled: true}})
+  assert.equal(feature.tick().length, 1)
+  finishTurn({text: '定时完成'})
+  await Promise.all(feature.inflight.values())
+  assert.equal(e['automations/runs']({workspace_id: W, id: target.id}).items.length, 2)
+})
+
 test('failed runs are recorded; retry is idempotent; queued runs can be cancelled', async () => {
   let fail = true
   let release

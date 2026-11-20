@@ -34,6 +34,11 @@ export function automationsV1({ endpoints, log, personalBinding }) {
     }) },
     { pattern: /^\/v1\/automation-templates$/, handle: wrap(async () => ({ status: 200, body: await call('templates') })) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/tick$`), handle: wrap(async (req, workspaceId) => ({ status: 200, body: await call('tick', { workspace_id: workspaceId }) })) },
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/run$`), handle: wrap(async (req, workspaceId, id) => {
+      if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only POST is supported')
+      const result = await call('runNow', { workspace_id: workspaceId, id, idempotency_key: req.headers.get('idempotency-key') })
+      return { status: result.status, body: { run: result.run } }
+    }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/runs/${HEX}/(cancel|retry|artifact)$`), handle: wrap(async (req, workspaceId, id, runId, action) => {
       if (action === 'artifact') throw new FeatureError(503, 'unavailable', 'Saving a run to the works library is not in this DS-Bot yet')
       const payload = { workspace_id: workspaceId, id, run_id: runId, idempotency_key: req.headers.get('idempotency-key') }

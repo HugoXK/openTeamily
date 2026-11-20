@@ -66,6 +66,10 @@ CREATE INDEX IF NOT EXISTS ot_automation_run_list ON ot_automation_runs(automati
 CREATE TABLE IF NOT EXISTS ot_automation_retries (
  run_id TEXT NOT NULL, key_hash TEXT NOT NULL, new_run_id TEXT NOT NULL, created INTEGER NOT NULL,
  PRIMARY KEY(run_id, key_hash));
+CREATE TABLE IF NOT EXISTS ot_automation_manual_runs (
+ automation_id TEXT NOT NULL REFERENCES ot_automations(id) ON DELETE CASCADE,
+ key_hash TEXT NOT NULL, run_id TEXT NOT NULL REFERENCES ot_automation_runs(id) ON DELETE CASCADE,
+ PRIMARY KEY(automation_id, key_hash));
 `
 
 const sha = (text) => createHash('sha256').update(String(text)).digest('hex')
@@ -131,8 +135,9 @@ export function runView(row) {
   if (row.error_code === 'cancelled') status = 'cancelled'
   else if (row.error_code === 'timeout') status = 'timeout'
   const out = {
-    id: row.id, automation_id: row.automation_id, workspace_id: row.workspace_id, due_at: row.due_at,
+    id: row.id, automation_id: row.automation_id, workspace_id: row.workspace_id, due_at: row.due_at < 0 ? row.started : row.due_at,
     started: row.started, finished: row.finished, status, error_code: row.error_code,
+    ...(row.due_at < 0 ? { trigger: 'manual' } : {}),
     dispatch: { backend: 'ds-bot', ...(dispatch.ds_bot ? { ds_bot: dispatch.ds_bot } : {}) },
   }
   if (dispatch.result && typeof dispatch.result === 'object') out.result = dispatch.result
@@ -375,10 +380,36 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (cursor && !HEX32.test(cursor)) refuse(400, 'invalid', 'Invalid pagination parameters')
     const status = payload.status ?? ''
     if (status && !['queued', 'succeeded', 'failed', 'skipped'].includes(status)) refuse(400, 'invalid', 'Invalid run status')
-    const rows = status
-      ? all('SELECT * FROM ot_automation_runs WHERE automation_id=? AND id>? AND status=? ORDER BY id LIMIT ?', row.id, cursor, status, limit + 1)
-      : all('SELECT * FROM ot_automation_runs WHERE automation_id=? AND id>? ORDER BY id LIMIT ?', row.id, cursor, limit + 1)
+    const after = cursor && loadRun(row, cursor)
+    const params = [row.id]
+    let filter = 'automation_id=?'
+    if (status) { filter += ' AND status=?'; params.push(status) }
+    if (after) { filter += ' AND (started,id)<(?,?)'; params.push(after.started, after.id) }
+    const rows = all(`SELECT * FROM ot_automation_runs WHERE ${filter} ORDER BY started DESC, id DESC LIMIT ?`, ...params, limit + 1)
     return { items: rows.slice(0, limit).map(runView), cursor: rows.length > limit ? rows[limit - 1].id : null }
+  }
+
+  function runNow(payload) {
+    const row = load(workspaceOf(payload), payload.id)
+    const key = String(payload.idempotency_key ?? '')
+    if (!IDEM.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+    const keyHash = sha(key)
+    const outcome = tx(db, () => {
+      const prior = one(`SELECT r.* FROM ot_automation_manual_runs m JOIN ot_automation_runs r ON r.id=m.run_id
+        WHERE m.automation_id=? AND m.key_hash=?`, row.id, keyHash)
+      if (prior) return { status: 200, run: runView(prior) }
+      if (one("SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND status='queued'", row.id)) {
+        refuse(409, 'already_running', '这条自动化正在运行。')
+      }
+      // Keep manual runs and scheduled slots distinct.
+      const slot = Math.min(0, one('SELECT MIN(due_at) AS m FROM ot_automation_runs WHERE automation_id=?', row.id).m ?? 0) - 1
+      const id = insertRun(row, slot)
+      if (!id) refuse(429, 'quota', 'Automation run capacity reached')
+      run('INSERT INTO ot_automation_manual_runs VALUES(?,?,?)', row.id, keyHash, id)
+      return { status: 202, run: runView(one('SELECT * FROM ot_automation_runs WHERE id=?', id)) }
+    })
+    if (outcome.status === 202) void execute(outcome.run.id)
+    return outcome
   }
 
   function cancel(payload) {
@@ -455,6 +486,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       return { removed: view(row) }
     },
     'automations/runs': runs,
+    'automations/runNow': runNow,
     'automations/run': (p) => ({ run: runView(loadRun(load(workspaceOf(p), p?.id), p?.run_id)) }),
     'automations/cancel': cancel,
     'automations/retry': retry,
