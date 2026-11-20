@@ -1751,6 +1751,8 @@ class App:
                 if item['status'] != 'failed':
                     refuse(409, 'conflict', 'Only a failed run can be retried')
                 retried = scheduler.retry_run(db, row, item, now)
+                if retried == 'moved_to_dsbot':
+                    refuse(409, 'moved_to_dsbot', 'This automation now runs on your DS-Bot')
                 if retried is None:
                     refuse(429, 'quota', 'Automation run capacity reached')
                 run = retried[0]
