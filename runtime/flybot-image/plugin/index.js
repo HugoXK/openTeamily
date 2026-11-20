@@ -21,8 +21,8 @@ export function apply(ctx, config = {}) {
   // Install before core agent restoration, whose projections read old imports.
   normalizeImportedSession(ctx.sessions.prepare('openteamily-import-schema-' + globalThis.crypto.randomUUID()))
   const rt = createRuntime(ctx, config)
-  // OpenTeamily features (@openteamily/web) execute on this same DS-Bot runtime.
-  attachRuntime({ rt, ctx })
+  // Publish once, after the complete bridge services exist. Early pending imports
+  // must not capture a permanently incomplete frozen runtime handle.
   const collaboration = loadBotSocialConfig()
   const attached = applyOnRuntime(rt, ctx, {
     inboxPollMs: 15_000,
@@ -66,7 +66,7 @@ export function apply(ctx, config = {}) {
       return text.slice(0, 20000)
     })
     attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn, textOnly, exclusive: bridge.exclusive, legacySession: bridge.legacySession })
-  }
+  } else attachRuntime({ rt, ctx })
   return attached
 }
 
