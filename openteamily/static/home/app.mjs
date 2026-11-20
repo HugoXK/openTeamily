@@ -1,3 +1,4 @@
+import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 
 export const KIND_LABELS = {
@@ -175,7 +176,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     list.replaceChildren(...(items || []).map((item) => {
       const li = element('li');
       const link = element('a', 'home-row');
-      link.href = '/space';
+      link.href = spaceHref(selectedId, item && item.id);
       const title = element('strong', '', item.title);
       const meta = element('span', 'home-row-note', kindLabel(item.kind));
       const when = element('time', 'home-row-time', formatWhen(item.updated, now));
@@ -234,6 +235,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     renderStats(result.body.counts || null);
     const quickChat = document.querySelector('.home-actions a[href="/chat"]');
     if (quickChat) quickChat.href = '/chat#workspace=' + encodeURIComponent(selectedId);
+    const spaceLinks = document.querySelectorAll('a[href^="/space"]');
+    for (const link of spaceLinks) {
+      if (link.classList.contains('home-row')) continue;
+      link.href = spaceHref(selectedId);
+    }
     const notifications = document.getElementById('home-notifications');
     const unread = Number(result.body.unread_notifications) || 0;
     if (notifications) {
@@ -262,12 +268,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       loginPanel.hidden = true;
       mainPanel.hidden = false;
       greeting.textContent = `欢迎回来，${currentUser.username}`;
-      const [personalResult, listed, onboarding] = await Promise.all([
-        request('POST', '/v1/personal-agent'),
+      // Personal initialization creates the first workspace: do not race its listing.
+      const personalResult=await request('POST', '/v1/personal-agent');
+      const [listed, onboarding] = await Promise.all([
         request('GET', '/v1/workspaces?limit=100'),
         request('GET', '/v1/onboarding'),
       ]);
-      personal = personalResult.status === 200 ? personalResult.body.personal_agent : null;
+      personal = [200,201].includes(personalResult.status) ? personalResult.body.personal_agent : null;
       profile = onboarding.status === 200 ? onboarding.body.onboarding : null;
       workspaces = listed.status === 200 ? (listed.body.items || []) : [];
       const banner = document.getElementById('home-onboarding');

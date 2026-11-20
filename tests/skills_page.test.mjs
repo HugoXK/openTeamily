@@ -1,9 +1,10 @@
+import { mountSkillExecution, readinessLabels } from '../openteamily/static/skills/execution.mjs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  filterSkills, mountSkills, skillCountLabel,
+  accountButtonLabel, filterSkills, mountSkills, readInstalled, skillCountLabel, writeInstalled,
 } from '../openteamily/static/skills/app.mjs';
 
 class Element {
@@ -17,6 +18,7 @@ class Element {
     this.style = {};
     this.textContent = '';
     this.hidden = false;
+    this.disabled = false;
     this.value = '';
     this.classList = {
       add: (name) => { if (!this.className.split(' ').includes(name)) this.className = (this.className + ' ' + name).trim(); },
@@ -92,4 +94,125 @@ test('server refusal never invents installed or runtime-loaded state', async () 
   const svc=service({failWrite:true}),{doc,el}=fakeDocument();doc.cookie='';el('skills-scope').value='account';el('skills-permission').checked=true;
   await mountSkills(doc,{fetcher:svc.fetcher}).ready;await el('skills-list').children[0].children[2].handlers.click();
   assert.equal(el('skills-list').children[0].children[2].textContent,'安装');assert.equal(el('skills-error').textContent,'permission denied');
+});
+
+// The per-account library mark (issue #263) is a separate persisted record: it never
+// grants model context, so the binding button on the same card stays untouched.
+const LIBRARY = [
+  {id: 'meeting-notes', name: '会议纪要', version: '1.0.0', digest: 'a'.repeat(64), content: 'c'.repeat(120), permissions: ['model_context']},
+  {id: 'trip-plan', name: '行程规划', version: '1.0.0', digest: 'b'.repeat(64), content: 'd'.repeat(120), permissions: ['model_context']},
+];
+
+function okJson(payload) {
+  return {status: 200, ok: true, json: async () => payload};
+}
+
+test('accountButtonLabel names the library action instead of pretending to install', () => {
+  assert.equal(accountButtonLabel(false), '加入我的技能库');
+  assert.equal(accountButtonLabel(true), '移出我的技能库');
+});
+
+test('readInstalled asks the account endpoint with the session cookie', async () => {
+  const calls = [];
+  const installed = await readInstalled(async (url, options) => {
+    calls.push({url, options});
+    return okJson({installed: ['meeting-notes', 'trip-plan']});
+  });
+  assert.deepEqual([...installed], ['meeting-notes', 'trip-plan']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/v1/skills/installed');
+  assert.equal(calls[0].options.method, 'GET');
+  assert.equal(calls[0].options.credentials, 'same-origin');
+});
+
+test('writeInstalled posts an install and deletes a removal with the CSRF token', async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({url, options});
+    return okJson({installed: options.method === 'POST' ? ['meeting-notes'] : []});
+  };
+  const cookie = '__Host-ot_csrf=token-value';
+  const afterInstall = await writeInstalled('meeting-notes', true, {fetchImpl, cookie});
+  assert.deepEqual([...afterInstall], ['meeting-notes']);
+  assert.equal(calls[0].url, '/v1/skills/installed');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.headers['X-CSRF-Token'], 'token-value');
+  assert.deepEqual(JSON.parse(calls[0].options.body), {skill: 'meeting-notes'});
+  const afterRemoval = await writeInstalled('meeting-notes', false, {fetchImpl, cookie});
+  assert.deepEqual([...afterRemoval], []);
+  assert.equal(calls[1].options.method, 'DELETE');
+});
+
+test('a refused library write rejects with the server message instead of guessing', async () => {
+  const fetchImpl = async () => ({status: 403, ok: false, json: async () => ({error: {code: 'csrf', message: 'A valid CSRF token is required'}})});
+  await assert.rejects(() => writeInstalled('meeting-notes', true, {fetchImpl, cookie: ''}), /A valid CSRF token is required/);
+});
+
+test('the library mark round-trips through the page without a model-context binding', async () => {
+  const {doc, el} = fakeDocument();
+  doc.cookie = '__Host-ot_csrf=synthetic-csrf';
+  el('skills-scope').value = 'account';
+  const writes = [];
+  let library = new Set();
+  const fetcher = async (path) => okJson({items: []});
+  const mounted = mountSkills(doc, {
+    fetcher, catalogue: LIBRARY,
+    read: async () => new Set(library),
+    write: async (id, wanted) => {
+      writes.push([id, wanted]);
+      library = new Set(wanted ? [...library, id] : [...library].filter((value) => value !== id));
+      return new Set(library);
+    },
+  });
+  await mounted.ready;
+  assert.equal(el('skills-list').children.length, 2);
+  assert.equal(el('skills-list').children[0].children[3].textContent, '加入我的技能库');
+  await el('skills-list').children[0].children[3].handlers.click();
+  assert.deepEqual(writes, [['meeting-notes', true]]);
+  assert.equal(el('skills-list').children[0].children[3].textContent, '移出我的技能库');
+  assert.equal(el('skills-list').children[0].children[3].attributes['aria-pressed'], 'true');
+  assert.equal(el('skills-list').children[0].className.includes('is-in-library'), true);
+  assert.equal(el('skills-list').children[0].children[2].textContent, '安装');
+  assert.equal(el('skills-list').children[0].children[2].className, 'skill-install');
+  assert.equal(mounted.installed.has('meeting-notes'), true);
+  await el('skills-list').children[0].children[3].handlers.click();
+  assert.deepEqual(writes, [['meeting-notes', true], ['meeting-notes', false]]);
+  assert.equal(el('skills-list').children[0].children[3].textContent, '加入我的技能库');
+});
+
+test('execution readiness is authoritative, missing/stale versions cannot appear runnable', async () => {
+  const {doc,el}=fakeDocument();el('skills-scope').value='account';let code='runtime_upgrade_required';
+  const request=async(method,path)=>path.includes('/readiness')?{code,ready:code==='ready'}:{items:[]};
+  const app=mountSkillExecution(doc,{request,scope:el('skills-scope')});
+  const binding={scope:'account',skill_id:SKILLS[0].id,version:SKILLS[0].version,digest:SKILLS[0].digest};
+  app.setSkills(SKILLS,[binding]);await app.refresh();
+  assert.equal(el('skill-run-submit').disabled,true);assert.equal(el('skills-readiness').textContent,readinessLabels.runtime_upgrade_required);
+  code='ready';await app.refresh();assert.equal(el('skill-run-submit').disabled,false);assert.equal(el('skill-run-skill').value,SKILLS[0].id);
+  app.setSkills(SKILLS,[{...binding,digest:'stale'}]);assert.equal(el('skill-run-submit').disabled,true);
+});
+
+test('ambiguous skill-run retry keeps its idempotency key; only server history is shown', async () => {
+  const {doc,el}=fakeDocument();el('skills-scope').value='account';let attempt=0;const keys=[];
+  const request=async(method,path,body,key)=>{
+    if(method==='POST'){keys.push(key);if(++attempt===1)throw new Error('response lost');return {task:{id:'actual'}}}
+    if(path.includes('/readiness'))return {ready:true,code:'ready'};
+    return {items:[]};
+  };
+  const app=mountSkillExecution(doc,{request,scope:el('skills-scope'),keyFactory:()=>String(keys.length).padStart(20,'k')});
+  app.setSkills(SKILLS,[{scope:'account',skill_id:SKILLS[0].id,version:SKILLS[0].version,digest:SKILLS[0].digest}]);await app.refresh();
+  el('skill-run-prompt').value='real supplied task';
+  await el('skill-run-form').handlers.submit({preventDefault(){}});
+  assert.equal(el('skill-run-error').textContent,'response lost');
+  assert.match(el('skill-run-history').children[0].textContent,/暂无运行记录/);
+  await el('skill-run-form').handlers.submit({preventDefault(){}});
+  assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);
+});
+
+test('a load receipt without task success does not create a save or verified-success control', async () => {
+  const {doc,el}=fakeDocument();el('skills-scope').value='account';
+  const record={scope:'account',skill_id:SKILLS[0].id,loaded:true,verified:false,task:{id:'actual',status:'claimed',prompt:'task',result:null}};
+  const request=async(method,path)=>path.includes('/readiness')?{ready:true,code:'ready'}:{items:path.endsWith('/runs')?[record]:[]};
+  const app=mountSkillExecution(doc,{request,scope:el('skills-scope')});await app.refresh();
+  const row=el('skill-run-history').children[0];assert.match(row.children[1].textContent,/尚未成功/);
+  assert.equal(row.children.filter(e=>e.tagName==='BUTTON').length,1);assert.equal(row.children[4].textContent,'取消此任务');
 });

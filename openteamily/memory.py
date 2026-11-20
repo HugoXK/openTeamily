@@ -4,15 +4,30 @@ Self-written for OpenTeamily; no upstream, Timeline, Project, or Teamily
 source, fonts or marketing copy. Pages, next actions, topics and links are
 workspace-scoped. Pages and actions persist on create and can be edited or
 deleted. The graph is derived from optional page topics, [[Title]] mentions
-in page bodies, and optional manual links. This is not a profile, share/export,
-or Teamily memory parity, and it is not browser E2E acceptance.
+in page bodies, and optional manual links. Export covers one saved page as a
+Markdown file; it is not a workspace export, a share link, a profile, or
+Teamily memory parity, and it is not browser E2E acceptance.
 """
+from datetime import datetime, timezone
+import json
 import re
+from urllib.parse import quote
 
 from .search import snippet
 from .security import digest
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS memory_page_versions (
+ page_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ revision INTEGER NOT NULL CHECK(revision >= 1),
+ title TEXT NOT NULL,
+ body TEXT NOT NULL,
+ created INTEGER NOT NULL,
+ created_by TEXT NOT NULL REFERENCES users(id),
+ PRIMARY KEY(page_id, revision));
+CREATE INDEX IF NOT EXISTS memory_page_version_owner
+ ON memory_page_versions(workspace_id, page_id, revision);
 CREATE TABLE IF NOT EXISTS memory_pages (
  id TEXT PRIMARY KEY,
  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -66,16 +81,43 @@ CREATE TABLE IF NOT EXISTS memory_links (
  UNIQUE(workspace_id, key_hash),
  CHECK(left_id < right_id));
 CREATE INDEX IF NOT EXISTS memory_link_workspace ON memory_links(workspace_id, id);
+CREATE TABLE IF NOT EXISTS memory_suggestions (
+ id TEXT PRIMARY KEY,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ page_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL,
+ summary TEXT NOT NULL,
+ payload TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('open', 'accepted', 'ignored')),
+ created INTEGER NOT NULL,
+ decided INTEGER,
+ applied TEXT);
+CREATE INDEX IF NOT EXISTS memory_suggestion_page ON memory_suggestions(workspace_id, page_id, id);
 CREATE TABLE IF NOT EXISTS memory_profiles (
  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  professional TEXT NOT NULL, work_style TEXT NOT NULL, communication TEXT NOT NULL,
  revision INTEGER NOT NULL, updated INTEGER NOT NULL,
  PRIMARY KEY(workspace_id,user_id));
+CREATE TABLE IF NOT EXISTS memory_preferences (
+ id TEXT PRIMARY KEY,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ text TEXT NOT NULL,
+ text_hash TEXT NOT NULL,
+ position INTEGER NOT NULL,
+ created INTEGER NOT NULL,
+ key_hash TEXT NOT NULL,
+ request_hash TEXT NOT NULL,
+ UNIQUE(workspace_id, user_id, text_hash),
+ UNIQUE(workspace_id, user_id, key_hash));
+CREATE INDEX IF NOT EXISTS memory_preference_owner
+ ON memory_preferences(workspace_id, user_id, position, id);
 """
 
 TITLE_MAX = 80
 BODY_MAX = 8000
+PREFERENCE_MAX = 120
 ROW_SELECT = (
     'SELECT p.*, cu.username AS created_by_username, uu.username AS updated_by_username '
     'FROM memory_pages p '
@@ -354,3 +396,227 @@ def graph(db, workspace_id):
         'topics': topics,
         'counts': {'nodes': len(nodes), 'edges': len(edges), 'topics': len(topics)},
     }
+
+
+def valid_preference(value):
+    return (isinstance(value, str) and 1 <= len(value.strip()) <= PREFERENCE_MAX
+            and not re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', value))
+
+
+def preference_hash(text):
+    return digest(text.strip().casefold())
+
+
+def preference_view(row):
+    return {'id': row['id'], 'text': row['text'], 'created': row['created']}
+
+
+def preference_listing(db, workspace_id, user_id):
+    return db.execute(
+        'SELECT * FROM memory_preferences WHERE workspace_id=? AND user_id=? ORDER BY position, id',
+        (workspace_id, user_id),
+    ).fetchall()
+
+
+def load_preference(db, workspace_id, user_id, preference_id):
+    return db.execute(
+        'SELECT * FROM memory_preferences WHERE id=? AND workspace_id=? AND user_id=?',
+        (preference_id, workspace_id, user_id),
+    ).fetchone()
+EXPORT_NAME_MAX = 60
+EXPORT_STAMP = '%Y-%m-%dT%H:%M:%SZ'
+
+
+def export_flat(value):
+    """One front-matter line: whitespace folds so a title cannot add keys."""
+    return ' '.join(str(value or '').split())
+
+
+def export_quoted(value):
+    return '"' + export_flat(value).replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def export_filename(title):
+    """An ASCII-safe attachment name; the exact title travels in filename*."""
+    flat = re.sub(r'[^A-Za-z0-9._-]+', '-', export_flat(title))
+    flat = flat.strip('-._')[:EXPORT_NAME_MAX].strip('-._')
+    return (flat or 'memory') + '.md'
+
+
+def export_disposition(title):
+    """Content-Disposition with an ASCII fallback and an RFC 5987 name."""
+    return ('attachment; filename="' + export_filename(title) + '"; filename*=UTF-8\'\''
+            + quote(export_flat(title)[:TITLE_MAX] or 'memory', safe='') + '.md')
+
+
+def export_document(row, topics):
+    """One saved page as Markdown: YAML front matter, then the body verbatim."""
+    lines = ['---', 'title: ' + export_quoted(row['title'])]
+    names = [name for name in (export_flat(topic) for topic in topics or []) if name]
+    if names:
+        lines.append('topics:')
+        lines.extend('  - ' + export_quoted(name) for name in names)
+    else:
+        lines.append('topics: []')
+    lines.append('revision: %d' % row['revision'])
+    lines.append('updated: ' + datetime.fromtimestamp(row['updated'], timezone.utc).strftime(EXPORT_STAMP))
+    lines.append('---')
+    body = row['body']
+    document = '\n'.join(lines) + '\n\n' + body
+    return document if document.endswith('\n') else document + '\n'
+
+
+VERSION_KEEP = 50
+VERSION_ROW_SELECT = (
+    'SELECT v.*, u.username AS created_by_username FROM memory_page_versions v '
+    'JOIN users u ON u.id=v.created_by '
+)
+
+
+def version_view(row):
+    return {
+        'revision': row['revision'],
+        'title': row['title'],
+        'summary': snippet(row['body']) if row['body'].strip() else '（空白正文）',
+        'created': row['created'],
+        'created_by': row['created_by_username'],
+    }
+
+
+def version_body_view(row):
+    return {
+        'revision': row['revision'],
+        'title': row['title'],
+        'body': row['body'],
+        'created': row['created'],
+        'created_by': row['created_by_username'],
+    }
+
+
+def version_rows(db, workspace_id, page_id, before_revision, limit):
+    return db.execute(
+        VERSION_ROW_SELECT + 'WHERE v.workspace_id=? AND v.page_id=? AND v.revision<? '
+        'ORDER BY v.revision DESC LIMIT ?',
+        (workspace_id, page_id, before_revision, limit),
+    ).fetchall()
+
+
+def load_version(db, workspace_id, page_id, revision):
+    return db.execute(
+        VERSION_ROW_SELECT + 'WHERE v.workspace_id=? AND v.page_id=? AND v.revision=?',
+        (workspace_id, page_id, revision),
+    ).fetchone()
+
+
+def record_version(db, workspace_id, page_id, revision, title, body, now, user_id):
+    db.execute(
+        'INSERT OR IGNORE INTO memory_page_versions VALUES(?,?,?,?,?,?,?)',
+        (page_id, workspace_id, revision, title, body, now, user_id),
+    )
+    # A bounded history keeps the newest VERSION_KEEP revisions; pruning older
+    # snapshots never touches the current revision or the live page row.
+    db.execute(
+        'DELETE FROM memory_page_versions WHERE page_id=? AND revision<=?',
+        (page_id, revision - VERSION_KEEP),
+    )
+SUGGESTION_SELECT = 'SELECT * FROM memory_suggestions WHERE id=? AND workspace_id=? AND page_id=?'
+
+
+def suggestion_view(row):
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row['payload'])
+    except ValueError:
+        payload = {}
+    try:
+        applied = json.loads(row['applied']) if row['applied'] else None
+    except ValueError:
+        applied = None
+    return {
+        'id': row['id'],
+        'kind': row['kind'],
+        'summary': row['summary'],
+        'status': row['status'],
+        'created': row['created'],
+        'decided': row['decided'],
+        'detail': payload if isinstance(payload, dict) else {},
+        'applied': applied if isinstance(applied, dict) else None,
+    }
+
+
+def load_suggestion(db, workspace_id, page_id, suggestion_id):
+    return db.execute(SUGGESTION_SELECT, (suggestion_id, workspace_id, page_id)).fetchone()
+
+
+def paragraphs(body):
+    return [part.strip() for part in re.split(r'\n[ \t]*\n', body or '') if part.strip()]
+
+
+def _paragraph_key(text):
+    return re.sub(r'\s+', ' ', text).strip().casefold()
+
+
+def duplicate_paragraph(body):
+    """The first pair of byte-different paragraphs that say the same thing."""
+    seen = {}
+    for part in paragraphs(body):
+        key = _paragraph_key(part)
+        if key in seen:
+            return seen[key], part
+        seen.setdefault(key, part)
+    return None, None
+
+
+def propose(db, workspace_id, page, now, suggestion_id):
+    """One suggestion for this page, or None when there is honestly nothing to do."""
+    kept, dropped = duplicate_paragraph(page['body'])
+    if kept is None:
+        return None
+    payload = json.dumps({'kept': kept[:4000], 'dropped': dropped[:4000]},
+                         ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    summary = '这一页有 2 段重复的正文，可以合并成 1 段。'
+    db.execute('INSERT INTO memory_suggestions VALUES(?,?,?,?,?,?,?,?,?,?)',
+               (suggestion_id, workspace_id, page['id'], 'merge_paragraphs', summary, payload,
+                'open', now, None, None))
+    return load_suggestion(db, workspace_id, page['id'], suggestion_id)
+
+
+def merged_body(body, dropped):
+    """Drop later paragraphs that repeat the one the suggestion named; keep the first."""
+    key = _paragraph_key(dropped or '')
+    kept_any = False
+    out = []
+    for part in paragraphs(body):
+        if _paragraph_key(part) == key:
+            if kept_any:
+                continue
+            kept_any = True
+        out.append(part)
+    if not out:
+        return body
+    return '\n\n'.join(out) + ('\n' if body.endswith('\n') else '')
+
+
+def decide(db, workspace, page, suggestion, action, user_id, now):
+    """Apply or decline one suggestion. Accept is the only path that writes a page."""
+    status = 'accepted' if action == 'accept' else 'ignored'
+    applied = None
+    if action == 'accept':
+        try:
+            payload = json.loads(suggestion['payload'])
+        except ValueError:
+            payload = {}
+        dropped = payload.get('dropped') if isinstance(payload, dict) else ''
+        before = page['body']
+        after = merged_body(before, dropped)
+        if after == before:
+            applied = {'removed': None, 'note': '接受时这一页已经没有重复段落，正文未改动。'}
+        else:
+            db.execute('UPDATE memory_pages SET body=?, revision=revision+1, updated=?, updated_by=? WHERE id=?',
+                       (after, now, user_id, page['id']))
+            applied = {'removed': dropped, 'before_length': len(before), 'after_length': len(after)}
+    db.execute('UPDATE memory_suggestions SET status=?, decided=?, applied=? WHERE id=?',
+               (status, now, json.dumps(applied, ensure_ascii=False, sort_keys=True) if applied else None,
+                suggestion['id']))
+    return applied

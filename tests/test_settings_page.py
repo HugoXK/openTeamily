@@ -74,6 +74,29 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/memory/rich.mjs')['status'], 200)
         self.assertEqual(self.raw.call('GET', '/shell/thumb.mjs', query='x=1')['status'], 400)
 
+    def test_saved_document_deep_link_is_strict_html_only_not_authorization(self):
+        workspace, artifact = 'a' * 32, 'b' * 32
+        query = f'workspace={workspace}&artifact={artifact}'
+        for route in ('/space', '/artifacts'):
+            for pair in (query, f'artifact={artifact}&workspace={workspace}'):
+                for method in ('GET', 'HEAD'):
+                    response = self.raw.call(method, route, query=pair)
+                    self.assertEqual(response['status'], 200, (route, pair, method))
+                    self.assertIn("default-src 'none'", response['headers']['Content-Security-Policy'])
+            for invalid in (f'workspace={workspace}', f'artifact={artifact}',
+                            query + '&artifact=' + artifact, query + '&new=document',
+                            query + '&x=1', query + '&', 'x=1&' + query,
+                            query.replace('workspace=', '%77orkspace='),
+                            query.replace(workspace, '../' + workspace),
+                            query.replace(artifact, '%62' * 32),
+                            query.replace(artifact, 'B' * 32),
+                            query.replace(artifact, artifact[:-1])):
+                self.assertEqual(self.raw.call('GET', route, query=invalid)['status'], 400, invalid)
+        for asset in ('/artifacts/app.mjs', '/artifacts/app.css', '/skills/app.mjs', '/settings'):
+            self.assertEqual(self.raw.call('GET', asset, query=query)['status'], 400, asset)
+        self.assertEqual(self.raw.call('GET', '/space', query=query, origin='https://evil.test')['status'], 403)
+        self.assertEqual(self.raw.call('POST', '/space', query=query)['status'], 405)
+
     def test_page_rejects_cross_origin_queries_and_writes(self):
         self.assertEqual(self.raw.call('GET', '/settings', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/settings', host='evil.test')['status'], 403)
@@ -196,6 +219,19 @@ class SettingsPageTests(unittest.TestCase):
             self.assertEqual(page['headers']['Cache-Control'], 'no-store')
         self.assertEqual(self.raw.call('GET', '/settings/missing')['status'], 404)
         self.assertEqual(self.raw.call('GET', '/settings/appearance', query='q=1')['status'], 400)
+
+    def test_support_rows_link_the_pages_the_server_serves(self):
+        html = self.raw.call('GET', '/settings')['body'].decode()
+        for label, href in (('帮助中心', '/help'), ('服务条款', '/terms'), ('隐私政策', '/privacy')):
+            self.assertNotIn(f'disabled title="未接通：还没有 OpenTeamily {label}页"', html)
+            self.assertNotIn(f'disabled title="未实现：还没有 OpenTeamily {label}页"', html)
+            self.assertIn(f'<a class="settings-row" href="{href}">', html)
+            page = self.raw.call('GET', href)
+            self.assertEqual(page['status'], 200, href)
+            self.assertEqual(page['headers']['Content-Type'], 'text/html; charset=utf-8', href)
+            body = page['body'].decode()
+            self.assertIn(f'<title>{label} · OpenTeamily</title>', body)
+            self.assertIn(f'<h1>{label}</h1>', body)
 
     def test_channel_agent_api_and_connectors_pages_use_recorded_empty_states(self):
         html = self.raw.call('GET', '/settings/channels')['body'].decode()

@@ -130,6 +130,17 @@
   background: var(--ot-accent);
   color: var(--ot-surface);
 }
+.skill-install:disabled { cursor: progress; opacity: 0.7; }
+
+.skills-error {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.6rem;
+  background: var(--ot-danger-bg);
+  color: var(--ot-danger);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
 
 .skills-empty { margin-top: 0.75rem; }
 
@@ -153,3 +164,24 @@
 .skills-grid { align-items: start; }
 .skill-card { align-items: start; }
 #skills-error:empty { display: none; }
+
+.skills-execution {margin:1.25rem 0;padding:1.25rem;border:1px solid var(--ot-line);border-radius:1rem;background:var(--ot-surface);color:var(--ot-ink)}
+.skills-execution h2 {font-size:1rem;margin:0 0 .75rem}
+.skills-execution form,.skills-execution label {display:grid;gap:.5rem}
+.skills-execution form {gap:1rem;margin:1rem 0}
+.skills-execution textarea,.skills-execution select {width:100%;max-width:100%;box-sizing:border-box;font:inherit}
+.skills-execution button {min-height:2.5rem}
+#skill-run-history {list-style:none;padding:0}
+#skill-run-history li {padding:1rem 0;border-bottom:1px solid var(--ot-line)}
+#skill-run-history pre {white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:24rem;overflow:auto}
+.skill-card .skill-use {grid-column:2 / -1;justify-self:start;min-height:2.5rem}
+
+/* Opaque scoped primary states: the shared dark gradient carries dark ink. */
+#skill-run-submit {background:#097845;color:#fff;border-color:transparent}
+#skill-run-submit:hover {background:#076a3d;color:#fff}
+html[data-theme-resolved="dark"] #skill-run-submit {background:#097845;color:#fff;border-color:transparent}
+html[data-theme-resolved="dark"] #skill-run-submit:hover {background:#076a3d;color:#fff}
+#skill-run-history button,#skill-run-history a {display:inline-flex;align-items:center;margin:.4rem .5rem .25rem 0;vertical-align:middle}
+#skill-run-history a {white-space:nowrap;max-width:100%}
+
+.skill-import-panel{margin:1.5rem 0;padding:1rem;border:1px solid var(--ot-line);border-radius:12px}.skill-import-panel summary{cursor:pointer;font-weight:600}.skill-import-panel form{display:grid;gap:.8rem}.skill-import-panel textarea{box-sizing:border-box;width:100%;padding:.8rem;font:inherit;color:inherit;background:var(--ot-surface);border:1px solid var(--ot-line);border-radius:8px}.skill-copy>button,.skill-copy>a{display:inline-block;margin:.5rem .75rem .25rem 0}.skill-import-panel button:focus-visible,.skill-copy button:focus-visible{outline:3px solid #32704e;outline-offset:3px}

@@ -115,6 +115,30 @@ export function feedQuery(query, cursor = '', kind = '', creator = '') {
   return params.toString();
 }
 
+// The feed tab, category and search live in the URL so a filtered feed can be
+// shared and survives a refresh. `?tab=agents` stays the catalog switch, and the
+// default 动态 feed keeps an empty query string.
+export function feedStateFromSearch(search) {
+  const params = new URLSearchParams(typeof search === 'string' ? search : '');
+  const feed = params.get('feed');
+  const kind = params.get('kind') || '';
+  return {
+    tab: feed === 'following' || feed === 'collected' ? feed : 'activity',
+    kind: FEED_KINDS.includes(kind) ? kind : '',
+    query: (params.get('q') || '').slice(0, 80),
+  };
+}
+
+export function feedSearchText(state) {
+  const params = new URLSearchParams();
+  const tab = state && state.tab;
+  if (tab === 'following' || tab === 'collected') params.set('feed', tab);
+  if (state && state.kind && FEED_KINDS.includes(state.kind)) params.set('kind', state.kind);
+  if (state && state.query) params.set('q', state.query);
+  const text = params.toString();
+  return text ? '?' + text : '';
+}
+
 export function formatFeedTime(value) {
   if (!value) return '';
   const date = new Date(Number(value) * 1000);
@@ -277,7 +301,7 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
-export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), location = globalThis.location, history = globalThis.history } = {}) {
+export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), location = globalThis.location, history = globalThis.history, window = globalThis } = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
@@ -293,6 +317,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const agentsView = isAgentsCatalog(location);
   const teamsView = isTeamsCatalog(location);
   const catalogView = agentsView || teamsView;
+  const initialFeed = catalogView
+    ? {tab: 'activity', kind: '', query: ''}
+    : feedStateFromSearch(location && location.search);
 
   function setCurrent(id, on) {
     const node = document.getElementById(id);
@@ -356,7 +383,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     applyCatalogChrome();
   }
 
-  const feedState = {items: [], cursor: '', query: '', kind: '', tab: 'activity', loading: false, creator: ''};
+  const feedState = {items: [], cursor: '', query: initialFeed.query, kind: initialFeed.kind, tab: initialFeed.tab, loading: false, creator: ''};
   if (!catalogView) feedState.creator = creatorFromSearch(location && location.search);
   let feedRequest = 0;
 
@@ -367,6 +394,41 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (button) button.setAttribute('aria-selected', name === tab ? 'true' : 'false');
     }
     applyFeedNote();
+  }
+
+  function applyFeedChrome() {
+    for (const name of ['following', 'activity', 'collected']) {
+      const button = document.getElementById('feed-tab-' + name);
+      if (button) button.setAttribute('aria-selected', name === feedState.tab ? 'true' : 'false');
+    }
+    for (const kind of FEED_KINDS) {
+      const node = document.getElementById('feed-kind-' + (kind || 'all'));
+      if (node) node.setAttribute('aria-current', kind === feedState.kind ? 'true' : 'false');
+    }
+    const input = document.getElementById('feed-query');
+    if (input) input.value = feedState.query;
+  }
+
+  function feedUrl() {
+    const pathname = location && typeof location.pathname === 'string' ? location.pathname : '/discover';
+    return pathname + feedSearchText(feedState);
+  }
+
+  function pushFeedUrl() {
+    if (catalogView || !history || typeof history.pushState !== 'function') return;
+    history.pushState(null, '', feedUrl());
+  }
+
+  if (!catalogView && window && typeof window.addEventListener === 'function') {
+    window.addEventListener('popstate', () => {
+      const next = feedStateFromSearch(location && location.search);
+      feedState.tab = next.tab;
+      feedState.kind = next.kind;
+      feedState.query = next.query;
+      applyFeedChrome();
+      applyFeedNote();
+      loadFeed();
+    });
   }
 
   function applyFeedNote() {
@@ -782,7 +844,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         const node = document.getElementById('feed-kind-' + (candidate || 'all'));
         if (node) node.setAttribute('aria-current', candidate === kind ? 'true' : 'false');
       }
-      setFeedTab('activity');
+      pushFeedUrl();
       return loadFeed();
     });
   }
@@ -845,6 +907,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   if (feedSearch) {
     feedSearch.addEventListener('submit', event => {
       event.preventDefault();
+      const input = document.getElementById('feed-query');
+      feedState.query = input ? (input.value || '').trim() : '';
+      pushFeedUrl();
       loadFeed();
     });
   }
@@ -858,6 +923,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const button = document.getElementById('feed-tab-' + tab);
     if (button) button.addEventListener('click', () => {
       setFeedTab(tab);
+      pushFeedUrl();
       return loadFeed();
     });
   }
@@ -868,7 +934,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     await load();
   });
 
-  return load().then(() => { if (!catalogView) { setFeedTab('activity'); loadCreators(); return loadFeed(); } });
+  return load().then(() => { if (!catalogView) { setFeedTab(feedState.tab); applyFeedChrome(); loadCreators(); return loadFeed(); } });
 }
 
 if (globalThis.document && globalThis.document.getElementById('manage-list')) {
