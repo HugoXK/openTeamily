@@ -36,12 +36,12 @@
         <div class="account-sub">
           <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
           <div id="help-menu" hidden>
-            <button type="button" disabled title="未实现：还没有 OpenTeamily 帮助中心页">帮助中心</button>
+            <a href="/help" role="menuitem">帮助中心</a>
             <a href="/guide" role="menuitem">功能指引</a>
             <a href="/download" role="menuitem" aria-label="下载">下载</a>
             <a href="/settings#send-shortcut" role="menuitem">快捷键</a>
-            <button type="button" disabled title="未实现：还没有 OpenTeamily 服务条款页">服务条款</button>
-            <button type="button" disabled title="未实现：还没有 OpenTeamily 隐私政策页">隐私政策</button>
+            <a href="/terms" role="menuitem">服务条款</a>
+            <a href="/privacy" role="menuitem">隐私政策</a>
             <a href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" role="menuitem" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">报告问题</a>
           </div>
         </div>
@@ -61,7 +61,7 @@
         <span class="skills-mark" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M12 3 4 7v10l8 4 8-4V7l-8-4Z M8.5 10.5h7 M8.5 14h4.5"/></svg></span>
         技能库
       </h1>
-      <p class="note">这是本页自带的技能清单。安装与运行时加载未接通，按钮不可用，不会显示虚假的安装成功。</p>
+      <p class="note">原创建议型技能包含真实内容和版本摘要。安装绑定持久化，运行时校验并加载后才显示加载回执；不是执行脚本、自动联网或发送消息的权限。</p>
     </header>
     <div class="skills-toolbar">
       <label class="skills-search-label" for="skills-search">
@@ -70,8 +70,28 @@
       </label>
     </div>
     <p id="skills-count" class="skills-count" role="status" aria-live="polite"></p>
-    <ul id="skills-list" class="skills-grid"></ul>
+    <p id="skills-error" role="status" aria-live="polite"></p><label>安装范围<select id="skills-scope"><option value="account">我的账户（自己的管理任务运行时）</option></select></label><label><input type="checkbox" id="skills-permission">我已阅读内容，允许将所选技能加入模型上下文；不授权联网、文件执行或对外操作。</label><p class="note skills-runtime-note">需要<a href="/runtimes">自己的在线运行时</a>和<a href="/settings#model-api-form">模型配置</a>。智能体范围需工作区管理权限；旧运行时须升级，独立 DSH 会话尚未接入。</p>
+
+<details class="skill-import-panel"><summary>导入 / 升级私有指令包</summary>
+<p class="note">仅接受有真实指令内容的 JSON 包，不下载 URL、不解压归档、不安装脚本或工具。第三方内容不受信任；请勿粘贴凭据，内容将发给所配置的模型。每用户最多 25 个包、每包 10 个不可变版本；最多安装 10 种活动技能。需支持 v2 的新运行时。不是公共目录、签名认证或可执行技能安装器。</p>
+<form id="skill-import-form"><label for="skill-import-json">指令包 JSON（修改内容后删除旧 digest）</label><textarea id="skill-import-json" rows="8" maxlength="30000" spellcheck="false" required></textarea>
+<label><input id="skill-import-consent" type="checkbox">我已阅读内容；只导入私人模型上下文，不授予工具、文件或外部操作权限。</label>
+<button id="skill-import-template" type="button">填入原创核对模板</button><button id="skill-import-submit" type="submit">持久化导入（不自动安装）</button></form><p id="skill-import-status" role="status" aria-live="polite"></p></details>
+<details class="skill-import-panel"><summary>私有包历史与撤销记录（仅本人）</summary><button type="button" id="skill-package-history-refresh">刷新私有包历史</button><p id="skill-package-history-status" role="status"></p><ul id="skill-package-history"></ul></details>
+<ul id="skills-list" class="skills-grid"></ul>
     <p id="skills-empty" class="note skills-empty" hidden>没有匹配的技能</p>
+<section class="skills-execution" aria-labelledby="skill-execution-heading">
+<h2 id="skill-execution-heading">运行与验证</h2>
+<p id="skills-readiness" role="status">正在检查当前范围的运行时和模型配置…</p>
+<p><button id="skills-refresh" type="button">刷新状态与记录</button> · <a href="/install/flybot.pyz">下载当前 FlyBot</a> · <a href="/runtimes">连接 / 重启运行时</a> · <a href="/settings#model-api-form">模型配置</a></p>
+<p class="note" id="skill-scope-warning">试用只加载本次所选技能，不调用连接器、不发送消息。自动化范围安装后会在该任务定时运行时生效：仅使用安装者自己的兼容在线运行时，不自动回退到其他成员；输出对工作区成员可见。更新 zipapp 后须停止旧进程并用原来的私有 key-file 重启；不会替你执行命令或读取密钥。</p>
+<form id="skill-run-form"><label>本次使用的已安装技能<select id="skill-run-skill" required></select></label>
+<label>输入任务或源材料<textarea id="skill-run-prompt" rows="5" maxlength="4000" required placeholder="粘贴实际内容，并写明希望技能完成什么。不会自动访问网页或文件。"></textarea></label>
+<button id="skill-run-submit" type="submit">使用所选技能运行</button></form>
+<p id="skill-run-error" role="status" aria-live="polite"></p>
+<label>保存结果到工作区（成员可见）<select id="skill-result-workspace"></select></label>
+<ul id="skill-run-history" aria-label="当前范围最近的技能运行记录"></ul>
+</section>
   </section>
   </main>
 </body>
