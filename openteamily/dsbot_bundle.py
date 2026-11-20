@@ -48,6 +48,7 @@ def _via_artifact(table, order):
 
 # Parents come before children; the plugin imports in its own declared order.
 FEATURE_TABLES = {
+    'message-assists': [('message_assists', "SELECT a.*, t.status AS task_status, CASE WHEN json_valid(t.result) THEN json_extract(t.result,'$.text') ELSE NULL END AS result_text FROM message_assists a LEFT JOIN runtime_tasks t ON t.id=a.task_id AND t.user_id=a.user_id WHERE a.user_id=? ORDER BY a.created,a.id")],
     'skills': [
         ('imported_skill_heads', 'SELECT * FROM imported_skill_heads WHERE user_id=? ORDER BY skill_id'),
         ('imported_skill_versions', 'SELECT * FROM imported_skill_versions WHERE user_id=? ORDER BY skill_id,created,version'),

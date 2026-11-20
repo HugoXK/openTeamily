@@ -4,10 +4,21 @@ import { randomBytes,createHash } from 'node:crypto'
 import { compatHandler } from '../../lib/b4/compat.js'
 import { Fault } from '../../lib/b4/http.js'
 import { openJsonStore } from '../../lib/b4/json-store.js'
+import { importJsonBundles } from '../../lib/b4/importer.js'
+import { loadImportSealKey } from '../../lib/b4/seal.js'
 import { sharedBotSocial } from '../../lib/c/bot-social.js'
 const sha=x=>createHash('sha256').update(x).digest('hex')
 export default function messageAssists(host){
  const store=openJsonStore(host.featureDir(),'assists',()=>({items:[]}))
+ const imported=importJsonBundles({dataDir:host.dataDir,feature:{name:'message-assists',importTables:{message_assists:[]}},store,sealKey:loadImportSealKey(),log:host.log,
+  apply(draft,tables){
+   for(const r of tables.message_assists || []){
+    if(draft.items.some(x=>x.id===r.id))continue
+    const succeeded=r.task_status==='succeeded' && typeof r.result_text==='string'
+    draft.items.push({id:r.id,workspace_id:r.workspace_id,conversation_id:r.conversation_id,message_id:r.message_id,revision:r.source_revision,operation:r.operation,instruction:r.instruction,created:r.created,key_hash:r.key_hash,request_hash:r.request_hash,status:succeeded?'succeeded':'failed',text:succeeded?r.result_text:'',...(succeeded?{}:{error_code:r.task_status==='queued'||r.task_status==='claimed'?'migration_interrupted':'legacy_inference_failed'}),imported:true})
+   }
+   draft.items.sort((a,b)=>b.created-a.created || a.id.localeCompare(b.id))
+  }})
  const source=async(cid,mid)=>{
   const page=await sharedBotSocial(host).get('/v1/ot/conversations/'+encodeURIComponent(cid)+'/messages?limit=200')
   const found=page.messages.find(m=>m.id===mid)
@@ -15,7 +26,7 @@ export default function messageAssists(host){
   // A stable message endpoint preserves old-message assistance beyond the latest page.
   return sharedBotSocial(host).get('/v1/ot/messages/'+encodeURIComponent(mid)+'?conversation_id='+encodeURIComponent(cid))
  }
- return {endpoints:{v1:compatHandler(['GET','POST'].map(method=>({method,path:/^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/assists$/,
+ return {imported,endpoints:{v1:compatHandler(['GET','POST'].map(method=>({method,path:/^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/assists$/,
   async handle({match,body:b={},idempotency_key:key}){
    const bs=sharedBotSocial(host),base='/v1/ot/conversations/'+encodeURIComponent(match[2])
    const [team,conv]=await Promise.all([bs.get('/v1/ot/teams/by-workspace/'+match[1]),bs.get(base)])

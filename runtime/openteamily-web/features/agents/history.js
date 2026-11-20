@@ -9,7 +9,7 @@ export async function adoptThread({ rt, source, target, sessionId }) {
   const thread = threadOfPart(source, sessionId)
   if (!thread) throw Object.assign(new Error('Legacy agent Session has no native owner thread'), { code: 'agents/legacy-session-unowned', status: 409 })
   const part = thread.thread === 'current' ? { sessionId: currentSession(source), segments: source.segments || [] } : source.openParts[thread.index]
-  const ids = [part.sessionId, ...part.segments.map(s => s.sessionId)]
+  const ids = [part.sessionId, ...(part.segments || []).map(s => s.sessionId)]
   if (ids.some(id => rt.live.get(id)?.turn !== undefined)) throw Object.assign(new Error('Agent history is busy; retry migration'), { code:'agents/history-busy', status:409 })
   if (thread.thread === 'current') {
     const replacement = await rt.createSession(source.name, { dir: rt.workDirOf({ botId: source.id }) })
