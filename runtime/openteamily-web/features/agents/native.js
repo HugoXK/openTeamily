@@ -79,20 +79,21 @@ export function nativeAgents({ host, db }) {
       let m = one('SELECT * FROM native_agent_sessions WHERE conversation_key=?', key)
       const conversationId = key.slice(('agent:' + row.id + ':').length)
       const privateConversation = one('SELECT id FROM agent_conversations WHERE id=? AND agent_id=?', conversationId, row.id)
-      const legacyId = s.legacySession?.(key) || (privateConversation ? s.legacySession?.(conversationId) : undefined)
-      let adopted
-      if (legacyId) adopted = await adoptThread({ rt, source: rt.botOf(await s.mainBot()), target: bot, sessionId: legacyId })
+      const personal = privateConversation && one('SELECT 1 FROM native_personal_binding WHERE singleton=1 AND agent_id=? AND workspace_id=?', row.id, row.workspace_id)
+      const legacyIds = [...new Set([s.legacySession?.(key), privateConversation ? s.legacySession?.(conversationId) : undefined, personal ? s.legacySession?.('plugin:' + conversationId) : undefined].filter(Boolean))]
+      const adopted = []
+      for (const legacyId of legacyIds) adopted.push(await adoptThread({ rt, source: rt.botOf(await s.mainBot()), target: bot, sessionId: legacyId }))
       bot.openteamily.sessionKeys ??= {}
       if (!m) {
         const recovered = bot.openteamily.sessionKeys[key]
-        const sessionId = recovered || adopted || await rt.createSession(title || row.name, { dir: rt.workDirOf({ botId: bot.id }) })
-        if (!recovered && !adopted) { startOpenPart(bot, sessionId); rt.chatOwners.set(sessionId, bot.id) }
+        const sessionId = recovered || adopted[0] || await rt.createSession(title || row.name, { dir: rt.workDirOf({ botId: bot.id }) })
+        if (!recovered && !adopted.length) { startOpenPart(bot, sessionId); rt.chatOwners.set(sessionId, bot.id) }
         bot.openteamily.sessionKeys[key] = sessionId
         await rt.save()
         run('INSERT INTO native_agent_sessions VALUES(?,?,?)', key, row.id, sessionId)
         m = { session_id: sessionId }
-      } else if (adopted) await rt.save()
-      const counts = await importHistory({ db, rt, ctx: s.ctx, bot, conversationId, sessionId: m.session_id, secondarySessionId: adopted })
+      } else if (adopted.length) await rt.save()
+      const counts = await importHistory({ db, rt, ctx: s.ctx, bot, conversationId, sessionId: m.session_id, secondarySessionIds: adopted })
       return { ...m, history: counts }
     }
     const m = s.exclusive ? await s.exclusive(reconcile) : await reconcile()
