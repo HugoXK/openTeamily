@@ -1,6 +1,6 @@
 """Phase D: Flask must not queue a second infer once chat/agents run on DS-Bot.
 
-Group replies (C pages, still on the platform) keep the central path.
+Group replies stop queue/claim/model-access/reconcile after the C cutover.
 No model vendor is contacted.
 """
 from pathlib import Path
@@ -137,9 +137,8 @@ class LegacyInferCutoverTests(unittest.TestCase):
         self.assertEqual(replay['status'], 200)
         self.assertEqual(replay['body']['invocation']['error_code'], 'no_agent')
 
-    def test_group_replies_still_queue_while_c_pages_stay_on_the_platform(self):
-        self.publish_dsbot()
-        self.connect_runtime()
+    def test_group_replies_cannot_execute_twice_after_c_cutover(self):
+        runtime = self.connect_runtime()
         created = self.alice.call(
             'POST', f'/v1/workspaces/{self.wid}/social/conversations',
             {'kind': 'group', 'member_ids': [self.bob_id], 'agent_ids': [self.agent['id']]},
@@ -153,6 +152,23 @@ class LegacyInferCutoverTests(unittest.TestCase):
         self.assertEqual(sent['status'], 201, sent)
         self.assertEqual(sent['body']['reply']['status'], 'queued')
         self.assertIsNotNone(sent['body']['reply']['task_id'])
+        self.assertEqual(self.task_count(), 1)
+        task_id = sent['body']['reply']['task_id']
+        self.publish_dsbot()
+        polled = runtime.call('GET', '/v1/agent/tasks')
+        self.assertEqual(polled['status'], 200, polled)
+        self.assertNotIn(task_id, [item['id'] for item in polled['body']['items']])
+        claimed = runtime.call('POST', f'/v1/agent/tasks/{task_id}/claim', {})
+        self.assertEqual(claimed['status'], 409, claimed)
+        self.assertEqual(claimed['body']['error']['code'], 'moved_to_dsbot')
+        access = runtime.call('POST', f'/v1/agent/tasks/{task_id}/model-access', {})
+        self.assertEqual(access['status'], 409, access)
+        self.assertEqual(access['body']['error']['code'], 'moved_to_dsbot')
+        blocked = self.alice.call('POST', path + '/agent-replies',
+                                  {'agent_id': self.agent['id'], 'prompt': 'No central duplicate'},
+                                  {'HTTP_IDEMPOTENCY_KEY': 'legacy-infer-group-reply-02'})
+        self.assertEqual(blocked['status'], 409, blocked)
+        self.assertEqual(blocked['body']['error']['code'], 'moved_to_dsbot')
         self.assertEqual(self.task_count(), 1)
 
 

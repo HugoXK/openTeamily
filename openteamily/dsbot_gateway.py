@@ -52,6 +52,18 @@ PAGE_SEGMENT = re.compile(r'[a-z0-9][a-z0-9-]{0,40}')
 # here stays on the platform (auth, skill-secrets, /v1/onboarding/automations, the
 # Composio callback bounce page, workspace lists, C pages, automations/agents until B2).
 MOVED_APIS = (
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/members(?:/[A-Za-z0-9._-]{1,80}(?:/(?:remove|suspend|unsuspend))?)?$'), 'members'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/invites(?:/[A-Za-z0-9._-]{1,80}/(?:revoke|freeze|unfreeze))?$'), 'invites'),
+    (re.compile(r'^/v1/invites/accept$'), 'invites'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/join-requests(?:/[A-Za-z0-9._-]{1,80}/(?:approve|reject))?$'), 'invites'),
+    (re.compile(r'^/v1/join-requests$'), 'invites'),
+    (re.compile(r'^/v1/team-directory$'), 'teams'),
+    (re.compile(r'^/v1/team-directory/[A-Za-z0-9._-]{1,80}/join$'), 'teams'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/directory$'), 'teams'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/social/conversations(?:/[A-Za-z0-9._-]{1,80}(?:/[A-Za-z0-9._/-]{1,120})?)?$'), 'messenger'),
+    (re.compile(r'^/v1/discover/(?:agents|works|me/works)$'), 'discover'),
+    (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/engagement$'), 'discover'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
     (re.compile(r'^/v1/automation-templates$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:tick|[0-9a-f]{32}(?:/(?:remove|runs(?:/[0-9a-f]{32}(?:/(?:cancel|retry|artifact))?)?)?))?)?$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/api-keys(?:/[0-9a-f]{32}/revoke)?$'), 'agent-api'),
@@ -76,6 +88,12 @@ MOVED_APIS = (
 # Nginx locations that send a moved /v1 API to the owner's DS-Bot. More-specific
 # platform exceptions (automations, composio callback) are emitted first.
 MOVED_API_LOCATIONS = (
+    'location = /v1/invites/accept { return 418; }',
+    'location = /v1/join-requests { return 418; }',
+    'location = /v1/team-directory { return 418; }',
+    'location ^~ /v1/team-directory/ { return 418; }',
+    'location ^~ /v1/discover/ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:members|invites|join-requests|directory|social)(?:/|$) { return 418; }',
     'location = /v1/onboarding/automations { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
     'location = /v1/composio/callback { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
     'location = /v1/settings { return 418; }',
@@ -582,6 +600,7 @@ map $http_upgrade $ot_connection_upgrade { default upgrade; '' close; }
 server {
   listen __LISTEN__;
   server_name _;
+  absolute_redirect off;
   client_max_body_size 64m;
 __KEY_SETTING__
   location = /v1/internal { return 404; }

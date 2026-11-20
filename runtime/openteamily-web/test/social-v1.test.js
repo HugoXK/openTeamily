@@ -139,3 +139,14 @@ test('unknown workspace fails closed without creating membership or guessing an 
   assert.equal(result.body.error.code, 'membership_migration_required')
   assert.ok(social.calls.every(call => call.method === 'GET'))
 })
+
+
+test('browser-style embedded query reaches discover and writes reject query strings', async () => {
+  const { social, host } = setup()
+  const feed = await discover(host).endpoints.v1({ method: 'GET', path: '/v1/discover/works?q=essay&limit=5' })
+  assert.equal(feed.status, 200)
+  assert.ok(social.calls.some(c => c.path.includes('q=essay') && c.path.includes('limit=5')))
+  const blocked = await invites(host).endpoints.v1({ method: 'POST', path: `/v1/workspaces/${WS}/invites?x=1`, body: {} })
+  assert.equal(blocked.status, 400)
+  assert.equal((await teams(host).endpoints.v1({ method: 'GET', path: '/v1/team-directory?q=x', query: 'q=y' })).status, 400)
+})

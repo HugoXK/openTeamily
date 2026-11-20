@@ -126,7 +126,7 @@ class GatewayTest(unittest.TestCase):
 
     def test_shipped_routes_move_private_chat(self):
         self.assertTrue({'chat', 'meetings', 'skills', 'memory', 'settings', 'onboarding', 'automations', 'agents', 'artifacts'} <= gw.load_routes()['moved_pages'])
-        self.assertTrue({'members', 'team', 'messenger', 'discover'}.isdisjoint(gw.load_routes()['moved_pages']))
+        self.assertTrue({'members', 'team', 'messenger', 'discover'} <= gw.load_routes()['moved_pages'])
         self.assertEqual(gw.target_for('/chat/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fchat%2Fapp.mjs')
         self.assertEqual(gw.target_for('/settings', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings')
         self.assertEqual(gw.target_for('/settings/connectors', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings%2Fconnectors')
@@ -134,14 +134,32 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.target_for('/artifacts/', gw.load_routes()), '/api/openteamily/page?path=%2Fartifacts%2F')
         self.assertEqual(gw.target_for('/artifacts/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fartifacts%2Fapp.mjs')
         self.assertIsNone(gw.target_for('/share/' + 'A' * 43, gw.load_routes()))
-        self.assertIsNone(gw.target_for('/members/', gw.load_routes()))
-        self.assertIsNone(gw.target_for('/messenger/', gw.load_routes()))
-        self.assertIsNone(gw.target_for('/discover/', gw.load_routes()))
-        self.assertIsNone(gw.target_for('/team/', gw.load_routes()))
+        self.assertEqual(gw.target_for('/members/', gw.load_routes()), '/api/openteamily/page?path=%2Fmembers%2F')
+        self.assertEqual(gw.target_for('/messenger/', gw.load_routes()), '/api/openteamily/page?path=%2Fmessenger%2F')
+        self.assertEqual(gw.target_for('/discover/', gw.load_routes()), '/api/openteamily/page?path=%2Fdiscover%2F')
+        self.assertEqual(gw.target_for('/team/', gw.load_routes()), '/api/openteamily/page?path=%2Fteam%2F')
         ws, aid = 'a' * 32, 'b' * 32
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/export'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/revoke'), 'artifacts')
         self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'))
+
+    def test_c_api_routing_matches_plugin_features_without_platform_execution(self):
+        ws, ident = 'a' * 32, 'b' * 32
+        for path, feature in (
+            (f'/v1/workspaces/{ws}/members', 'members'),
+            (f'/v1/workspaces/{ws}/members/{ident}/remove', 'members'),
+            (f'/v1/workspaces/{ws}/invites', 'invites'),
+            ('/v1/invites/accept', 'invites'),
+            (f'/v1/workspaces/{ws}/join-requests', 'invites'),
+            ('/v1/team-directory', 'teams'),
+            (f'/v1/workspaces/{ws}/directory', 'teams'),
+            (f'/v1/workspaces/{ws}/social/conversations/{ident}/agent-replies', 'messenger'),
+            ('/v1/discover/works', 'discover'),
+            (f'/v1/workspaces/{ws}/agents/{ident}/discover', 'discover'),
+        ):
+            self.assertEqual(gw.moved_api(path), feature, path)
+        self.assertIsNone(gw.moved_api('/v1/teams'))
+        self.assertIsNone(gw.moved_api('/v1/workspaces'))
 
     def test_record_upstream_validation(self):
         with self.store.transaction() as db:
@@ -180,8 +198,11 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('location = /artifacts { return 418; }', conf)
         self.assertIn('location ^~ /artifacts/ { return 418; }', conf)
         self.assertIn('location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }', conf)
-        self.assertNotIn('location = /members { return 418; }', conf)
-        self.assertNotIn('location = /discover { return 418; }', conf)
+        self.assertIn('location = /members { return 418; }', conf)
+        self.assertIn('location = /discover { return 418; }', conf)
+        self.assertIn('absolute_redirect off;', conf)
+        self.assertIn('location @ot_login { return 302 /register/; }', conf)
+        self.assertIn('location ^~ /v1/discover/ { return 418; }', conf)
 
     def test_nginx_config_optional_social_path(self):
         routes = gw.load_routes()
