@@ -13,7 +13,7 @@
 //     }
 //   }
 //
-// host = { name, identity, dataDir, featureDir(), runtime(), currentRuntime(), log }
+// host = { name, identity, dataDir, featureDir(), runtime(), currentRuntime(), log, call(endpoint, payload) }
 // Features never edit core files: adding a directory is enough. Endpoint names are
 // namespaced by the directory name, so features cannot collide or shadow each other.
 import { mkdirSync, readdirSync } from 'node:fs'
@@ -24,8 +24,8 @@ import { runtime, currentRuntime } from './host.js'
 export const FEATURE_NAME = /^[a-z][a-z0-9-]{0,39}$/
 export const OP_NAME = /^[a-z][a-zA-Z0-9-]{0,63}$/
 
-export function featureHost({ name, identity, dataDir, log = () => {} }) {
-  return Object.freeze({
+export function featureHost({ name, identity, dataDir, log = () => {}, table = {} }) {
+  const host = Object.freeze({
     name,
     identity,
     dataDir,
@@ -37,7 +37,15 @@ export function featureHost({ name, identity, dataDir, log = () => {} }) {
     runtime,
     currentRuntime,
     log: (message) => log(`openteamily-web[${name}]: ${message}`),
+    // Call another feature's endpoint in-process (e.g. chat → 'memory/pages').
+    // Rejects with code 'openteamily/not-found' when that feature is absent.
+    async call(endpoint, payload = null) {
+      const handler = Object.hasOwn(table, endpoint) ? table[endpoint] : null
+      if (!handler) throw Object.assign(new Error(`Unknown OpenTeamily endpoint ${String(endpoint).slice(0, 80)}`), { code: 'openteamily/not-found' })
+      return handler(payload, { request: null, host, internal: true })
+    },
   })
+  return host
 }
 
 export function registerFeature(table, name, spec) {
@@ -68,7 +76,7 @@ export async function loadFeatures({ dir, identity, dataDir, log = console.error
       const mod = await import(pathToFileURL(join(dir, name, 'index.js')).href)
       const factory = mod.default
       if (typeof factory !== 'function') throw new Error('default export must be a factory function')
-      const host = featureHost({ name, identity, dataDir, log })
+      const host = featureHost({ name, identity, dataDir, log, table })
       registerFeature(table, name, await factory(host))
       loaded.push(name)
     } catch (error) {

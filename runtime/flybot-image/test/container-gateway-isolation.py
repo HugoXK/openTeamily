@@ -49,6 +49,41 @@ NGINX = os.environ.get('OT_GATEWAY_NGINX_IMAGE', 'nginx:1.27-alpine')
 COOKIE = 'ot_dev_session'
 SECRETS: list[str] = []
 
+FAKE_MODEL_WRITE = r"""
+const fs = require('node:fs')
+fs.mkdirSync('/data/secrets', { recursive: true, mode: 0o700 })
+fs.writeFileSync('/data/secrets/model-api.json', JSON.stringify({ provider: 'openai', api_key: 'ci-fake-model-key',
+  base_url: 'http://127.0.0.1:18799/v1', model: 'fake-model' }), { mode: 0o600 })
+"""
+FAKE_MODEL_SERVER = r"""
+require('node:http').createServer((req, res) => {
+  let raw = ''
+  req.on('data', (c) => { raw += c })
+  req.on('end', () => {
+    if (req.method !== 'POST' || !req.url.startsWith('/v1/chat/completions')) { res.writeHead(404); res.end(); return }
+    if (req.headers.authorization !== 'Bearer ci-fake-model-key') { res.writeHead(401); res.end('{}'); return }
+    let body = {}
+    try { body = JSON.parse(raw) } catch {}
+    const text = 'CI-DSBOT-REPLY profile=' + (raw.includes('CI-PROFILE-MARK') ? 'yes' : 'no')
+    const base = { id: 'chatcmpl-ci', object: 'chat.completion.chunk', created: Math.floor(Date.now() / 1000), model: 'fake-model' }
+    if (body.stream) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' })
+      res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: text }, finish_reason: null }] }) + '\n\n')
+      res.write('data: ' + JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }) + '\n\n')
+      res.end('data: [DONE]\n\n')
+      return
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ...base, object: 'chat.completion', choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }))
+  })
+}).listen(18799, '127.0.0.1')
+"""
+FAKE_MODEL_PROBE = r"""
+const s = require('node:net').connect(18799, '127.0.0.1', () => { s.end(); process.exit(0) })
+s.on('error', () => process.exit(1))
+"""
+
 
 def redact(text):
     out = str(text or '')
@@ -241,7 +276,34 @@ def main():
         status, _h, body = browse(token_a, 'GET', '/v1/auth/session')
         assert status == 200 and body == b'platform'
         assert pages[a['id']] != pages[b['id']]
-        print(json.dumps({'gateway_isolation': 'ok', 'runtimes': 2, 'served_by': 'ds-bot',
+
+        # B1: private chat executes as a native DS-Bot turn inside A's own runtime.
+        # A labeled fake OpenAI-compatible model runs on A's loopback; the operator
+        # model file is the one the manager would install (fake key, CI only).
+        docker('exec', a['name'], 'node', '-e', FAKE_MODEL_WRITE)
+        docker('exec', '-d', a['name'], 'node', '-e', FAKE_MODEL_SERVER)
+        wait_for(lambda: docker('exec', a['name'], 'node', '-e', FAKE_MODEL_PROBE, check=False).returncode == 0, 'fake model')
+
+        def call(token, endpoint, payload, timeout=20):
+            status, _h, body = request(edge_address, 'POST', '/b/api/openteamily',
+                                       {'Host': edge_address, 'Cookie': f'{COOKIE}={token}', 'Origin': public_origin,
+                                        'Content-Type': 'application/json'},
+                                       json.dumps({'endpoint': endpoint, 'payload': payload}), timeout=timeout)
+            result = json.loads(body)
+            assert status == 200 and result.get('ok'), f'{endpoint}: {status} {redact(body[:300])}'
+            return result['value']
+
+        call(token_a, 'personal/set', {'name': 'CI assistant', 'instructions': 'CI-PROFILE-MARK'})
+        convo = call(token_a, 'chat/create', {'title': 'CI chat'})
+        sent = call(token_a, 'chat/send', {'conversation_id': convo['id'], 'text': 'hello from the CI test account'}, timeout=150)
+        reply = sent['reply']
+        assert reply['text'].startswith('CI-DSBOT-REPLY'), f'reply: {redact(reply["text"][:200])}'
+        assert 'profile=yes' in reply['text'], 'personal agent instructions reach the DS-Bot turn'
+        assert reply['meta']['engine'] == 'ds-bot' and reply['meta']['session_id'], 'native DS-Bot session'
+        history = call(token_a, 'chat/messages', {'conversation_id': convo['id']})
+        assert [m['role'] for m in history['items']] == ['user', 'assistant']
+        assert call(token_b, 'chat/conversations', {})['items'] == [], "B never sees A's chats"
+        print(json.dumps({'gateway_isolation': 'ok', 'runtimes': 2, 'served_by': 'ds-bot', 'chat': 'ds-bot-native',
                           'instances': [a['id'], b['id']]}))
     except Exception as error:
         for name in started:
