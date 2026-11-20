@@ -13,6 +13,18 @@ export function mountWorkspaceEvents(document,{onInvalidate=()=>{},EventSource=g
     catch{show('无法建立实时连接，保留定时 / 手动刷新。');return;}
     show('连接实时更新…');
     source.addEventListener('open',()=>{if(wid===own&&generation===ownGeneration){retryAttempts=0;show('实时更新已连接（非模型逐字推送）。');}});
+    source.addEventListener('renew',()=>{
+      if(wid!==own||generation!==ownGeneration||closed)return;
+      // Server streams have a short bounded lease. Normal expiry must not be
+      // confused with an actual network error (whose handler stays unchanged).
+      disconnect();
+      show('实时更新已连接（正在续接）。');
+      const renewalGeneration=generation;
+      retryTimer=setTimer(()=>{
+        retryTimer=null;
+        if(wid===own&&generation===renewalGeneration&&!closed)connect();
+      },250);
+    });
     source.addEventListener('error',()=>{
       if(wid!==own||generation!==ownGeneration||closed)return;
       // Non-200 handshakes (including a temporary lease-limit429 during rapid
