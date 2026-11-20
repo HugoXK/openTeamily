@@ -14,6 +14,7 @@ export function samePerson(item, self) {
 export function conversationLabel(row, currentUserId) {
   if (!row) return '';
   if (row.kind === 'group') return row.title || '群聊';
+  if (row.direct && row.title) return row.title;
   const others = (row.members || []).filter(member => !samePerson(member, currentUserId));
   if (others.length) return others.map(member => member.username).join('、');
   return row.title || '单聊';

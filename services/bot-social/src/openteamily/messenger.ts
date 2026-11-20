@@ -9,6 +9,7 @@ import { assert } from "../errors.js";
 import { newId } from "../ids.js";
 import { body, handleKey, intParam, OtContext, optText, params, query, text } from "./core.js";
 import { shareTeam, requireMember } from "./teams.js";
+import { acceptedContact } from "./contacts.js";
 
 import { CHAT_FILE_BODY_LIMIT, CHAT_FILES_SCHEMA, attachmentView, decodeChatFile, readAttachment, saveAttachment } from "./chat-files.js";
 
@@ -90,6 +91,26 @@ function fixedPublicThread(conv: {dm_key?: string | null}) {
   return !!conv.dm_key?.startsWith("agent:");
 }
 
+export function ordinaryDirect(conv: {kind: string; team_id?: string | null; dm_key?: string | null}) {
+  return conv.kind === "dm" && !conv.team_id && !fixedPublicThread(conv);
+}
+
+function directReachable(ot: OtContext, owner: string, peer: string) {
+  return acceptedContact(ot, owner, peer) || shareTeam(ot, owner, peer);
+}
+
+export function requireDirectReach(ot: OtContext, conv: {id: string; kind: string; team_id?: string | null; dm_key?: string | null}, owner: string) {
+  if (!ordinaryDirect(conv)) return;
+  const peer = ot.get<{owner_id: string}>("SELECT owner_id FROM ot_conversation_members WHERE conversation_id=? AND owner_id<>?", conv.id, owner);
+  assert(peer && directReachable(ot, owner, peer.owner_id), 403, "not_reachable", "请先建立联系人关系。");
+}
+
+function directConversation(ot: OtContext, id: string, owner: string) {
+  const conv = memberOf(ot, id, owner);
+  assert(ordinaryDirect(conv), 404, "conversation_not_found", "no such direct conversation");
+  return conv;
+}
+
 function publicParticipant(ot: OtContext, conv: any, owner: string) {
   return !fixedPublicThread(conv) || conv.created_by === owner || publicListing(ot, conv)?.owner_id === owner;
 }
@@ -153,6 +174,7 @@ function conversationView(ot: OtContext, c: any, viewer: string) {
     LIMIT 1`, c.id, published.chat_from, c.created_by, ot.now() - 180_000, published.owner_id, published.ref);
   return {
     ...(fixedPublicThread(c) ? {public_agent: {open, pending, publisher: published ? ot.profileView(published.owner_id).display_name : ""}} : {}),
+    ...(ordinaryDirect(c) ? {direct: {open: Boolean(peer && directReachable(ot, viewer, peer.owner_id))}} : {}),
     id: c.id, kind: c.kind, title: c.kind === "dm" ? (peer ? ot.profileView(peer.owner_id).display_name : c.title) : c.title,
     team_id: c.team_id, members: members.map((m) => ot.profileView(m.owner_id)),
     agents: ot.all<any>("SELECT agent_ref, owner_id, name, auto_reply FROM ot_conversation_agents WHERE conversation_id = ?", c.id).map((a) => ({ agent_ref: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, owner: ot.profileView(a.owner_id), mine: a.owner_id === viewer })),
@@ -233,7 +255,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     if (b.kind === "dm") {
       const peer = ot.ownerByHandle(b.peer);
       assert(peer !== me.ownerId, 400, "invalid_request", "pick another member");
-      assertReachable(ot, me.ownerId, peer);
+      assert(directReachable(ot, me.ownerId, peer), 403, "not_reachable", "请先建立联系人关系。");
       const key = [me.ownerId, peer].sort().join(":");
       const existing = ot.get<any>("SELECT * FROM ot_conversations WHERE dm_key = ?", key);
       if (existing) return reply.status(200).send(conversationView(ot, existing, me.ownerId));
@@ -262,12 +284,23 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
 
   app.get("/v1/ot/conversations", async (req) => {
     const me = ot.me(req);
-    const scope = query(req).scope;
-    assert(scope === undefined || scope === "public" || scope === "member", 400, "invalid_request", "Invalid conversation scope");
-    const filter = scope === "public" ? " AND c.dm_key LIKE 'agent:%'"
+    const {scope, team_id} = query(req);
+    assert(scope === undefined || scope === "public" || scope === "member" || scope === "personal", 400, "invalid_request", "Invalid conversation scope");
+    let filter = scope === "public" ? " AND c.dm_key LIKE 'agent:%'"
+      : scope === "personal" ? " AND (c.dm_key LIKE 'agent:%' OR (c.kind='dm' AND c.team_id IS NULL))"
       : scope === "member" ? " AND (c.dm_key IS NULL OR c.dm_key NOT LIKE 'agent:%')" : "";
+    const args = [me.ownerId];
+    if (team_id !== undefined) {
+      assert(scope === "member" && typeof team_id === "string", 400, "invalid_request", "Invalid team scope");
+      requireMember(ot, team_id, me.ownerId);
+      filter += ` AND (c.team_id=? OR (c.kind='dm' AND c.team_id IS NULL AND EXISTS (
+        SELECT 1 FROM ot_conversation_members peer JOIN ot_team_members teammate
+          ON teammate.owner_id=peer.owner_id AND teammate.team_id=? AND teammate.suspended=0
+        WHERE peer.conversation_id=c.id AND peer.owner_id<>?)))`;
+      args.push(team_id, team_id, me.ownerId);
+    }
     const rows = ot.all<any>(`SELECT c.* FROM ot_conversations c JOIN ot_conversation_members m ON m.conversation_id=c.id
-      WHERE m.owner_id=?${filter} ORDER BY m.pinned DESC,c.updated_at DESC LIMIT 200`, me.ownerId);
+      WHERE m.owner_id=?${filter} ORDER BY m.pinned DESC,c.updated_at DESC LIMIT 200`, ...args);
     const list = rows.filter(c => publicParticipant(ot, c, me.ownerId)).map((c) => conversationView(ot, c, me.ownerId));
     return { conversations: list, unread: list.reduce((n, c) => n + (c.muted ? 0 : c.unread), 0) };
   });
@@ -482,10 +515,12 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       400, "invalid_request", "Send a single file per message");
     const clientKey = optText(b.client_key, "client_key", { min: 1, max: 80 }) ?? null;
     const msg = ot.tx(() => {
-      const workspace = sourceConversation || b.attachment !== undefined
+      const direct = b.direct === true;
+      const workspace = !direct && (sourceConversation || b.attachment !== undefined)
         ? text(b.workspace, "workspace", {min: 32, max: 32}) : "";
-      const conv = workspace ? workspaceConversation(ot, workspace, params(req).id, me.ownerId).conv
-        : memberOf(ot, params(req).id, me.ownerId);
+      const conv = direct ? directConversation(ot, params(req).id, me.ownerId)
+        : workspace ? workspaceConversation(ot, workspace, params(req).id, me.ownerId).conv
+          : memberOf(ot, params(req).id, me.ownerId);
       if (clientKey) {
         const previous = ot.get<any>(
           "SELECT * FROM ot_messages WHERE conversation_id=? AND author_id=? AND client_key=?", conv.id, me.ownerId, clientKey,
@@ -503,10 +538,12 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
           assert(sent < MENTION_PER_HOUR, 429, "agent_reply_limit", "本会话发送频率已达上限，请稍后重试。");
         }
       }
+      requireDirectReach(ot, conv, me.ownerId);
       const voice = b.voice === undefined ? null : voiceData(b.voice);
       let file = b.attachment === undefined ? null : decodeChatFile(b.attachment);
       if (sourceConversation && sourceMessage) {
-        workspaceConversation(ot, workspace, sourceConversation, me.ownerId);
+        if (direct) directConversation(ot, sourceConversation, me.ownerId);
+        else workspaceConversation(ot, workspace, sourceConversation, me.ownerId);
         file = readAttachment(ot, sourceConversation, sourceMessage);
       }
       const bodyText = text(b.body || file?.title || (voice ? "语音消息" : b.body), "body", {min: 1, max: BODY_MAX, multiline: true});
@@ -528,6 +565,13 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     const {workspace, id, message} = params(req);
     const {conv} = workspaceConversation(ot, workspace, id, me.ownerId);
+    const file = readAttachment(ot, conv.id, message);
+    return {title: file.title, mime: file.mime, data: file.data.toString("base64")};
+  });
+  app.get("/v1/ot/conversations/:id/messages/:message/file", async req => {
+    const me = ot.me(req);
+    const {id, message} = params(req);
+    const conv = directConversation(ot, id, me.ownerId);
     const file = readAttachment(ot, conv.id, message);
     return {title: file.title, mime: file.mime, data: file.data.toString("base64")};
   });

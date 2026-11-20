@@ -53,7 +53,7 @@ function fakeSocial() {
     }
     if (path === '/v1/ot/invites/accept') return ok(200, { status: 'pending', team_id: 'ott_1', request_id: 'otjr_1' })
     if (path === '/v1/ot/directory' || path.startsWith('/v1/ot/directory?')) return ok(200, { teams: [{ id: 'ott_1', workspace_id: WS, name: 'Studio', summary: 's', member_count: 2, membership: null }] })
-    if (path === '/v1/ot/conversations?scope=member' && init.method === 'GET') {
+    if (path === '/v1/ot/conversations?scope=member&team_id=ott_1' && init.method === 'GET') {
       return ok(200, { conversations: [{ id: 'otc_1', kind: 'dm', title: 'Bea', members: [{ handle: 'bea.home', display_name: 'Bea', owner_id: 'own_bea' }, { handle: 'ann.home', display_name: 'Ann', owner_id: 'own_ann', platform_user_id: 'b'.repeat(32) }], unread: 1, read_seq: 2, updated_at: 1_700_000_200_000, last_message: { body: 'hi', retracted: false } }] })
     }
     if (path === '/v1/ot/conversations' && init.method === 'POST') return ok(201, { id: 'otc_2', kind: 'dm', title: 'Bea', members: [{ handle: 'bea.home', display_name: 'Bea', owner_id: 'own_bea' }], unread: 0, updated_at: 1_700_000_200_000 })

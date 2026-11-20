@@ -730,15 +730,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentSource = 'agent';
   const autoTranslation = mountGroupTranslation(document,{request});
   const chatCalls = mountChatCalls(document, {request, context: () => {
-    if (!servedByDsbot || currentSource !== 'social' || !currentConversation || currentConversation.public_agent) return null;
+    if (!servedByDsbot || currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
     return {wid: workspaceId(), cid: currentConversation.id, title: conversationLabel(currentConversation, currentUser?.id)};
   }});
   const agentMentions = mountAgentMentions(document, () => {
-    if (currentSource !== 'social' || currentConversation?.kind !== 'group' || currentConversation.public_agent) return null;
+    if (currentSource !== 'social' || currentConversation?.kind !== 'group' || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
     return {scope: `${workspaceId()}/${currentConversation.id}`, agents: currentConversation.agent_members || []};
   });
   function voiceContext() {
-    if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent) return null;
+    if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
     const wid = workspaceId();
     const cid = currentConversation.id;
     return {wid, cid, scope: `${wid}/${cid}`};
@@ -835,7 +835,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     pendingBubble = null;
     const pending = pendingSends.get(sendScope());
     const button = document.getElementById('chat-send');
-    if (button) button.disabled = Boolean(pending) || (currentSource === 'social' && currentConversation?.public_agent?.open === false);
+    if (button) button.disabled = Boolean(pending) || (currentSource === 'social' && (currentConversation?.public_agent?.open === false || currentConversation?.direct?.open === false));
     if (!pending) return;
     const bubble = document.createElement('li');
     bubble.className = currentSource === 'social' ? 'mine' : 'user';
@@ -2108,12 +2108,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function showPublicChatState(state) {
     const notice = document.getElementById('public-chat-status');
+    const directClosed = currentSource === 'social' && currentConversation?.direct?.open === false;
     if (notice) {
       notice.textContent = state?.open === false ? '发布者已关闭访客聊天。'
-        : state?.pending ? '正在等待智能体回复…' : '';
+        : directClosed ? '联系人关系已解除，仍可查看历史消息。'
+          : state?.pending ? '正在等待智能体回复…' : '';
       notice.hidden = !notice.textContent;
     }
-    document.getElementById('chat-body').disabled = state?.open === false;
+    document.getElementById('chat-body').disabled = state?.open === false || directClosed;
   }
 
   function setSocialHeaderTools(social) {
@@ -2203,7 +2205,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const result = await request('GET', `${socialBase()}/${conversationId}`);
     if (open !== socialOpen || workspaceId() !== wid || currentSource !== 'social') return false;
     if (result.status !== 200) {
-      if (refresh && currentConversation?.public_agent?.open) {
+      if (refresh && (currentConversation?.public_agent?.open || currentConversation?.direct?.open)) {
         schedulePoll(8000);
         return false;
       }
@@ -2211,10 +2213,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return false;
     }
     const updated = result.body.conversation;
-    if (refresh && currentConversation?.id === updated.id && updated.public_agent
-      && JSON.stringify(currentConversation.public_agent) === JSON.stringify(updated.public_agent)
+    if (refresh && currentConversation?.id === updated.id && (updated.public_agent || updated.direct)
+      && JSON.stringify(currentConversation.public_agent || currentConversation.direct) === JSON.stringify(updated.public_agent || updated.direct)
       && JSON.stringify(lastSocialItems) === JSON.stringify(result.body.items)) {
-      if (updated.public_agent.open) schedulePoll(updated.public_agent.pending ? 2000 : 8000);
+      if (updated.public_agent?.open || updated.direct?.open) schedulePoll(updated.public_agent?.pending ? 2000 : 8000);
       return true;
     }
     if (!currentConversation || currentConversation.id !== updated.id) {
@@ -2265,7 +2267,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     renderSessions();
-    if (publicChat?.open) schedulePoll(publicChat.pending ? 2000 : 8000);
+    if (publicChat?.open || currentConversation.direct?.open) schedulePoll(publicChat?.pending ? 2000 : 8000);
     else if ((result.body.agent_replies || []).some(item => ['queued', 'running'].includes(item.status))) schedulePoll();
     return open === socialOpen && workspaceId() === wid && currentSource === 'social';
   }
@@ -2277,16 +2279,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentConversation && currentAgent && currentSource === 'agent') {
         openAgentConversation(currentAgent.id, currentConversation.id);
       } else if (currentConversation && currentSource === 'social' && !socialHistory?.readingHistory) {
-        const isPublic = Boolean(currentConversation.public_agent);
-        if (!isPublic || document.visibilityState !== 'hidden') {
-          openSocialConversation(currentConversation.id, {refresh: isPublic});
+        const accountThread = Boolean(currentConversation.public_agent || currentConversation.direct);
+        if (!accountThread || document.visibilityState !== 'hidden') {
+          openSocialConversation(currentConversation.id, {refresh: accountThread});
         }
       }
     }, delay);
   }
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && currentSource === 'social' && currentConversation?.public_agent?.open
+    if (document.visibilityState === 'visible' && currentSource === 'social' && (currentConversation?.public_agent || currentConversation?.direct)
       && !pollTimer && !socialHistory?.readingHistory) {
       void openSocialConversation(currentConversation.id, {refresh: true});
     }
@@ -2423,7 +2425,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const dialog = document.getElementById('compose-dialog');
     dialog.hidden = false;
     const isGroup = mode === 'group';
-    document.getElementById('compose-dialog-title').textContent = isGroup ? '新建群组' : '添加联系人';
+    document.getElementById('compose-dialog-title').textContent = isGroup ? '新建群组' : '工作区私聊';
     document.getElementById('compose-members-legend').textContent = isGroup ? '成员' : '选择一位成员，开始单聊';
     document.getElementById('compose-intro').hidden = !isGroup;
     document.getElementById('compose-mode-switch').hidden = !isGroup;
@@ -3263,7 +3265,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     context: () => {
       if (!servedByDsbot || !currentUser) return null;
       if (currentSource === 'agent' && currentAgent) return {scope:sendScope(), private:true, owner:currentUser.id};
-      if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent) return null;
+      if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
       const wid = workspaceId(), cid = currentConversation.id;
       return {scope:sendScope(), owner:currentUser.id, path:`/v1/workspaces/${wid}/social/conversations/${cid}/messages`};
     },
@@ -3438,6 +3440,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const menu = document.getElementById('compose-menu');
     const button = document.getElementById('new-conversation');
     const open = menu.hidden;
+    document.getElementById('compose-add-contact').hidden = servedByDsbot
+      && workspaces.some(space => space.id === workspaceId() && space.kind === 'personal');
     const meetingNotes = document.getElementById('compose-meeting-notes');
     if (open && meetingNotes) meetingNotes.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), new: '1'});
     menu.hidden = !open;
@@ -3684,6 +3688,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           currentConversation.public_agent = {...currentConversation.public_agent, open: false, pending: false};
           showPublicChatState(currentConversation.public_agent);
         }
+        if (result.status === 403 && currentConversation?.direct) void openSocialConversation(conversationId, {refresh:true});
         show('error', attachmentError || messageFor(result.body.error, '发送失败，已保留草稿。'));
         return;
       }
@@ -3806,7 +3811,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function syncPlusState() {
     const social = currentSource === 'social' && Boolean(currentConversation);
     const agent = currentSource === 'agent' && Boolean(currentAgent);
-    const available = servedByDsbot && ((social && !currentConversation.public_agent) || agent);
+    const available = servedByDsbot && ((social && !currentConversation.public_agent && currentConversation.direct?.open !== false) || agent);
     for (const button of document.querySelectorAll('[data-plus-attach]')) {
       button.disabled = !available;
       if (button.dataset.plusAttach === 'video') button.hidden = agent;

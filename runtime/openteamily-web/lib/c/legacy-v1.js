@@ -90,6 +90,7 @@ function conversationItem(row, me, env, workspaceId) {
     workspace_id: workspaceId,
     kind: row.kind,
     ...(row.public_agent ? {public_agent: row.public_agent} : {}),
+    ...(row.direct ? {direct: row.direct} : {}),
     native_room_id: row.native_room_id || null,
     native_session_id: row.native_session_id || null,
     title: row.title || '',
@@ -192,7 +193,7 @@ function rethrow(error) {
   throw new Fault(status === 410 ? 404 : status, mapped, error?.message || 'Bot Social request failed')
 }
 
-async function wrap(fn) {
+export async function wrap(fn) {
   try { return await fn() } catch (error) { rethrow(error) }
 }
 
@@ -533,13 +534,12 @@ function teamsRoutes(host) {
 async function messengerScope(host, bs, workspace, conversationId, messageId) {
   const binding = await host.call?.('agents/personal-binding', {})
   if (binding?.workspace_id !== workspace) {
-    await teamFor(bs, workspace, 'Workspace', process.env)
-    return {personal: false}
+    return {personal: false, team: await teamFor(bs, workspace, 'Workspace', process.env)}
   }
   if (!conversationId) return {personal: true}
   const path = '/v1/ot/conversations/' + seg(conversationId, 'conversation_id')
   const conversation = await bs.get(path)
-  if (!conversation.public_agent) throw new Fault(404, 'not_found', '该会话不在个人工作区。')
+  if (!conversation.public_agent && !conversation.direct) throw new Fault(404, 'not_found', '该会话不在个人工作区。')
   if (messageId) await bs.get('/v1/ot/messages/' + seg(messageId, 'message_id') + qs({conversation_id: conversationId}))
   return {personal: true, conversation}
 }
@@ -554,10 +554,10 @@ function messengerRoutes(host) {
       async handle({ match, query }) {
         return wrap(async () => {
           const bs = client(host)
-          const {personal} = await messengerScope(host, bs, match[1])
+          const {personal, team} = await messengerScope(host, bs, match[1])
           const me = await meOf(bs, env)
-          const data = await bs.get('/v1/ot/conversations?scope=' + (personal ? 'public' : 'member'))
-          const items = (data.conversations || []).filter(c => Boolean(c.public_agent) === personal)
+          const data = await bs.get('/v1/ot/conversations' + qs({scope: personal ? 'personal' : 'member', team_id: team?.id}))
+          const items = (data.conversations || []).filter(c => personal ? (c.public_agent || c.direct) : !c.public_agent)
             .map(c => conversationItem(c, me, env, match[1]))
           return [200, { items, cursor: null }]
         })
@@ -568,7 +568,8 @@ function messengerRoutes(host) {
       async handle({ match, body }) {
         return wrap(async () => {
           const bs = client(host)
-          const team = await teamFor(bs, match[1], 'Workspace', env)
+          const {personal, team} = await messengerScope(host, bs, match[1])
+          if (personal && body?.kind !== 'dm') throw new Fault(400, 'invalid', '请在工作区内创建群聊。')
           const me = await meOf(bs, env)
           const kind = body?.kind
           const ids = Array.isArray(body?.member_ids) ? body.member_ids : []
@@ -639,9 +640,9 @@ function messengerRoutes(host) {
       async handle({ match, body, idempotency_key }) {
         return wrap(async () => {
           const bs = client(host)
-          await messengerScope(host, bs, match[1], match[2])
+          const scope = await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
-          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, voice: body?.voice, attachment: body?.attachment, workspace: match[1], client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
+          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, voice: body?.voice, attachment: body?.attachment, workspace: match[1], direct: Boolean(scope.conversation?.direct), client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
         })
       },
@@ -683,6 +684,11 @@ function messengerExtraRoutes(host) {
   const page = async (bs, cid) => (await bs.get(`${conv(cid)}/messages` + qs({ limit: 100 }))).messages || []
   const findMessage = (bs, cid, mid) => bs.get(msg(mid) + qs({conversation_id: cid}))
   const guard = async (bs, wid) => teamFor(bs, wid, 'Workspace', env)
+  const callTeam = async (bs, workspace, cid) => {
+    const scope = await messengerScope(host, bs, workspace, cid)
+    if (scope.personal && !scope.conversation?.direct) throw new Fault(404, 'not_found', '该会话没有通话功能。')
+    return scope.team?.id
+  }
   return [
     {
       method: 'POST', path: /^\/v1\/meeting-calls\/(create|preview|join|poll|signal|leave|end)$/,
@@ -692,7 +698,10 @@ function messengerExtraRoutes(host) {
       method: 'GET', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/file'),
       handle: ({ match, query }) => wrap(async () => {
         const [, workspace, conversation, message] = match
-        const file = await client(host).get(`/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}/messages/${seg(message)}/file`)
+        const bs = client(host)
+        const scope = await messengerScope(host, bs, workspace, conversation)
+        const path = scope.conversation?.direct ? conv(conversation) : `/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}`
+        const file = await bs.get(path + '/messages/' + seg(message) + '/file')
         const inline = /^(image|audio|video)\//.test(file.mime) && new URLSearchParams(query).get('download') !== '1'
         return [200, null, {filename: file.title, content_type: file.mime, data: file.data, inline}]
       }),
@@ -701,16 +710,16 @@ function messengerExtraRoutes(host) {
       method: 'GET', path: re('\\/call'),
       handle: async ({ match }) => wrap(async () => {
         const bs = client(host)
-        const team = await guard(bs, match[1])
-        return [200, await bs.get(conv(match[2]) + '/call' + qs({team_id: team.id}))]
+        const teamId = await callTeam(bs, match[1], match[2])
+        return [200, await bs.get(conv(match[2]) + '/call' + qs({team_id: teamId}))]
       }),
     },
     {
       method: 'POST', path: re('\\/call\\/(join|poll|signal|leave)'),
       handle: async ({ match, body }) => wrap(async () => {
         const bs = client(host)
-        const team = await guard(bs, match[1])
-        return [200, await bs.post(conv(match[2]) + '/call/' + match[3], {...body, team_id: team.id})]
+        const teamId = await callTeam(bs, match[1], match[2])
+        return [200, await bs.post(conv(match[2]) + '/call/' + match[3], {...body, team_id: teamId})]
       }),
     },
     ...['GET','POST'].map(method=>({method,path:re('\\/(translation|translations)'),
@@ -794,7 +803,11 @@ function messengerExtraRoutes(host) {
         return wrap(async () => {
           const [, workspace, conversation, message] = match
           if (!Number.isInteger(body?.revision) || body.revision < 1) throw new Fault(400, 'invalid', 'Provide the message revision')
-          const row = await client(host).get(`/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}/messages/${seg(message)}`)
+          const bs = client(host)
+          const scope = await messengerScope(host, bs, workspace, conversation)
+          const row = scope.conversation?.direct
+            ? {...await findMessage(bs, conversation, message), title: scope.conversation.title}
+            : await bs.get(`/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}/messages/${seg(message)}`)
           if (row.revision !== body.revision) throw new Fault(409, 'conflict', '消息已修改，请刷新后再保存。')
           const {status, artifact} = await host.call('artifacts/saveChatMessage', {
             workspace_id: workspace, conversation_id: conversation, message_id: message,
@@ -808,10 +821,15 @@ function messengerExtraRoutes(host) {
       method: 'POST', path: re('\\/forward'),
       async handle({ match, body, idempotency_key: key }) {
         return wrap(async () => {
-          const bs = client(host); await guard(bs, match[1])
+          const bs = client(host)
+          const source = await messengerScope(host, bs, match[1], match[2])
           const ids = Array.isArray(body?.message_ids) ? body.message_ids.slice(0, 20) : []
           const target = body?.target_conversation_id
           if (!ids.length || typeof target !== 'string') throw new Fault(400, 'invalid', 'Provide message_ids and target_conversation_id')
+          if (source.personal) {
+            const destination = await messengerScope(host, bs, match[1], target)
+            if (!source.conversation?.direct || !destination.conversation?.direct) throw new Fault(400, 'invalid', '请选择联系人会话。')
+          }
           const rows = await page(bs, match[2])
           const tag = String(key || Date.now()).slice(0, 40)
           let forwarded = 0
@@ -821,7 +839,7 @@ function messengerExtraRoutes(host) {
             const voice = row.voice ? await bs.get(`${conv(match[2])}/messages/${seg(id, 'message_id')}/voice`) : undefined
             const attachment_from = row.attachment ? {conversation_id: match[2], message_id: id} : undefined
             await bs.post(`${conv(target)}/messages`, { body: `[转发] ${row.body}`.slice(0, 4000), voice,
-              workspace: match[1], attachment_from, client_key: `fwd:${tag}:${id}`.slice(0, 80) })
+              workspace: match[1], direct: source.personal, attachment_from, client_key: `fwd:${tag}:${id}`.slice(0, 80) })
             forwarded++
           }
           return [201, { forwarded, target_conversation_id: target }]
