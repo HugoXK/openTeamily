@@ -124,6 +124,19 @@ def workspace_moved_to_dsbot(db, workspace_id, page, routes=None):
     return bool(row) and owner_dsbot_ready(db, row[0])
 
 
+def workspace_conversation_moved_to_dsbot(db, workspace_id, routes=None):
+    """True when agent/chat conversations already run on the owner's DS-Bot.
+
+    Flask must not queue a second ``runtime_connect`` infer for those
+    conversations (send, reconcile, or the leftover External Agent API
+    handler). Group replies stay on the platform until C pages move, so
+    they keep using the central infer path.
+    """
+    routes = routes or load_routes()
+    return any(workspace_moved_to_dsbot(db, workspace_id, page, routes)
+               for page in ('agents', 'chat'))
+
+
 def moved_api(path):
     """Return the plugin feature that serves this /v1 path, or None."""
     if not isinstance(path, str) or not path.startswith('/v1/') or len(path) > 512:
