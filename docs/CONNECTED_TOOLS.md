@@ -139,3 +139,29 @@ Composio output → next model message. All credentials/data are test fixtures.
 `node --test tests/agent_loop.test.mjs` covers container fake-model tool rounds,
 request identity/call IDs, pending decisions, denial/unknown without retries and
 hallucinated tool rejection. Full Python/Node suites are also required by CI.
+
+
+## Group, scheduled and standalone DSH principals
+
+Related #10, #6, #11. The private conversation path above is unchanged.
+
+These scopes can use the same discovery/approval/execute broker only when an
+**explicit same-user principal** is attached:
+
+- Group agent replies (#124 protocol unchanged): if the requesting member's own
+  runtime runs the infer task, that member's Composio tools are attached. A
+  request that lands on another member's runtime does not inherit anyone else's
+  key. Leaving the conversation fails closed.
+- Scheduled automations: `GET`/`POST /v1/workspaces/{id}/automations/{id}/connected-tools`
+  stores a per-user opt-in (`{enabled, revision}`). A tick attaches tools only
+  when the selected runtime belongs to that same opted-in user. Skill bindings
+  never create a Composio grant.
+- Standalone or workspace-submitted infer tasks: pass `"connected_tools": true`
+  on `POST /v1/runtime/tasks`, or `POST /v1/runtime/tasks/{id}/connected-tools`
+  with `{action:"attach","scope":"dsh"}` from the signed-in session. The runtime
+  bearer and Agent API gateway cannot mint this principal. `{action:"revoke"}`
+  disables it. Workspace tasks without the flag still have no tools.
+
+There is still no administrator Composio fallback. Every call still needs the
+principal user's one-shot approval. Synthetic tests are not real-vendor
+acceptance.

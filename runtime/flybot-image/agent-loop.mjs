@@ -2,6 +2,7 @@
 // Uses the lease-injected runtime key file. Never writes the token to stdout.
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { validateModelEndpoint, fetchHttpTask, MODEL_HTTP_FORMAT, MODEL_HTTP_HEADER } from './model-http-policy.mjs'
 
 export const DEFAULT_KEY_FILE = '/run/secrets/openteamily-runtime-key.json'
 
@@ -36,6 +37,7 @@ async function call(origin, token, method, path, body) {
       'Authorization': 'Bearer ' + token,
       'Content-Type': 'application/json',
       'Accept': 'application/json',
+      ...(path.endsWith('/model-access') ? {[MODEL_HTTP_HEADER]: MODEL_HTTP_FORMAT} : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
@@ -50,16 +52,22 @@ async function call(origin, token, method, path, body) {
 }
 
 export async function infer(modelApi, prompt, bridge = null, fetcher = globalThis.fetch) {
-  const base = String(modelApi.base_url || '').replace(/\/+$/, '')
+  const httpTask = validateModelEndpoint(modelApi?.base_url, modelApi?.http_endpoint_grant)
+  const base = httpTask ? modelApi.base_url : String(modelApi.base_url || '').replace(/\/+$/, '')
+  const transport = httpTask && fetcher === globalThis.fetch
+    ? (_target, init) => fetchHttpTask(base, modelApi.http_endpoint_grant, init) : fetcher
   const messages = [{ role: 'user', content: prompt }]
   const tools = bridge ? (await bridge.discover()).tools || [] : []
   for (let round = 0; round < 5; round += 1) {
-    const response = await fetcher(base + '/chat/completions', {
+    const response = await transport(base + '/chat/completions', {
       method: 'POST', signal: AbortSignal.timeout(30000),
+      ...(httpTask ? {redirect: 'error'} : {}),
       headers: { 'Authorization': 'Bearer ' + modelApi.api_key, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: modelApi.model, messages,
         ...(tools.length ? {tools, parallel_tool_calls: false} : {}) }),
     })
+    if (httpTask && (response.redirected || (response.status >= 300 && response.status < 400)
+        || (response.url && response.url !== base + '/chat/completions'))) throw new Error('Model redirect rejected')
     const parsed = await response.json()
     const message = parsed?.choices?.[0]?.message
     if (!response.ok || !message) throw new Error('model provider returned an unexpected body')
@@ -112,8 +120,8 @@ export function loadSkillMaterial(items, prompt) {
       || typeof item.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(item.id) || seen.has(item.id)
       || typeof item.name !== 'string' || item.name.length > 120
       || typeof item.version !== 'string' || item.version.length > 32 || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(item.version)
-      || JSON.stringify(item.permissions) !== '["model_context"]' || item.format !== 'openteamily.prompt-skill.v1'
-      || item.source !== 'bundled-original' || typeof item.content !== 'string' || !item.content.length || item.content.length > 6000
+      || JSON.stringify(item.permissions) !== '["model_context"]' || !((item.format === 'openteamily.prompt-skill.v1' && item.source === 'bundled-original') || (item.format === 'openteamily.prompt-skill.v2' && item.source === 'user-imported'))
+       || typeof item.content !== 'string' || !item.content.length || item.content.length > 6000
       || item.content.includes('\0') || createHash('sha256').update(item.content).digest('hex') !== item.digest) throw new Error('Skill integrity or permissions rejected')
     seen.add(item.id)
   }
@@ -122,7 +130,7 @@ export function loadSkillMaterial(items, prompt) {
 
 export async function runCycle(config, { requester = call, inferer = infer, once = true } = {}) {
   const { origin, token, hostname } = config
-  await requester(origin, token, 'POST', '/v1/agent/connect', { hostname, skill_formats: ['openteamily.prompt-skill.v1'] })
+  await requester(origin, token, 'POST', '/v1/agent/connect', { hostname, skill_formats: ['openteamily.prompt-skill.v1','openteamily.prompt-skill.v2'] })
   await requester(origin, token, 'POST', '/v1/agent/heartbeat', {})
   const listed = await requester(origin, token, 'GET', '/v1/agent/tasks')
   const processed = []
@@ -140,7 +148,7 @@ export async function runCycle(config, { requester = call, inferer = infer, once
         status = 'succeeded'
         result = { echo: payload.prompt }
       } else if (payload.kind === 'infer') {
-        const access = await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/model-access`, {skill_format: 'openteamily.prompt-skill.v1'})
+        const access = await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/model-access`, {skill_format: 'openteamily.prompt-skill.v2'})
         modelApi = access.model_api
         const bridge = access.connected_tools ? toolBridge(origin, token, payload, requester) : null
         stage = 'skill verification/loading'

@@ -29,7 +29,7 @@ def readiness(app, db, uid, scope, now):
         return result | {'code': 'runtime_offline'}
     result['connection_id'] = target['id']
     result['hostname'] = target['hostname']
-    if not skill_packages.supports(db, target['id']):
+    if not skill_packages.supports(db, target['id'], skill_packages.required_formats(db,uid,scope)):
         return result | {'code': 'runtime_upgrade_required'}
     owner = db.execute('SELECT owner_id FROM workspaces WHERE id=?', (wid,)).fetchone() if wid else None
     public, secret, source = model_api.resolve(db, app.store, workspace_id=wid, user_id=owner['owner_id'] if owner else uid)
@@ -101,7 +101,7 @@ def dispatch(app, db, session, method, path, query, now, env, refuse):
         if prior['request_hash'] != request_hash:
             refuse(409, 'conflict', 'Idempotency key was used for a different skill run')
         return 200, run_view(db, prior, now), []
-    item = skill_packages.resolve(ident)
+    item = skill_packages.resolve(ident,db,uid)
     binding = db.execute('SELECT * FROM skill_bindings WHERE user_id=? AND scope=? AND skill_id=?', (uid, scope, ident)).fetchone()
     if item is None or binding is None or binding['digest'] != item['digest'] or binding['version'] != item['version']:
         refuse(409, 'skill_not_installed', 'Install the current skill version in this scope first')

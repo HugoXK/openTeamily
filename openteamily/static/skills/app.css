@@ -172,3 +172,5 @@ html[data-theme-resolved="dark"] #skill-run-submit {background:#097845;color:#ff
 html[data-theme-resolved="dark"] #skill-run-submit:hover {background:#076a3d;color:#fff}
 #skill-run-history button,#skill-run-history a {display:inline-flex;align-items:center;margin:.4rem .5rem .25rem 0;vertical-align:middle}
 #skill-run-history a {white-space:nowrap;max-width:100%}
+
+.skill-import-panel{margin:1.5rem 0;padding:1rem;border:1px solid var(--ot-line);border-radius:12px}.skill-import-panel summary{cursor:pointer;font-weight:600}.skill-import-panel form{display:grid;gap:.8rem}.skill-import-panel textarea{box-sizing:border-box;width:100%;padding:.8rem;font:inherit;color:inherit;background:var(--ot-surface);border:1px solid var(--ot-line);border-radius:8px}.skill-copy>button,.skill-copy>a{display:inline-block;margin:.5rem .75rem .25rem 0}.skill-import-panel button:focus-visible,.skill-copy button:focus-visible{outline:3px solid #32704e;outline-offset:3px}
