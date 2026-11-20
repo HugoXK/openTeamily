@@ -49,7 +49,19 @@ export function apply(ctx, config = {}) {
       await rt.applyModel(rt.botOf(botId), { force: true })
       return runTurn(rt, ctx, botId, text, requestId)
     })
-    attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn })
+    const textOnly = prompt => bridge.exclusive(async () => {
+      await bridge.setup()
+      const response = await fetch(bridge.baseURL + '/chat/completions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token },
+        body: JSON.stringify({ model: 'openteamily-model', messages: [{ role: 'user', content: prompt }], stream: false }),
+        signal: AbortSignal.timeout(170000), redirect: 'error',
+      })
+      if (!response.ok) throw new Error('Text-only model inference failed')
+      const data = await response.json(), text = data.choices?.[0]?.message?.content
+      if (typeof text !== 'string' || !text.trim()) throw new Error('Text-only model returned no text')
+      return text.slice(0, 20000)
+    })
+    attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn, textOnly })
   }
   return attached
 }
