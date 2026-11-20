@@ -142,7 +142,7 @@ class GatewayTest(unittest.TestCase):
         ws, aid = 'a' * 32, 'b' * 32
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/export'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/revoke'), 'artifacts')
-        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'))
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'), 'discover')
 
     def test_c_api_routing_matches_plugin_features_without_platform_execution(self):
         ws, ident = 'a' * 32, 'b' * 32
@@ -159,8 +159,8 @@ class GatewayTest(unittest.TestCase):
             (f'/v1/workspaces/{ws}/agents/{ident}/discover', 'discover'),
         ):
             self.assertEqual(gw.moved_api(path), feature, path)
-        self.assertIsNone(gw.moved_api('/v1/teams'))
-        self.assertIsNone(gw.moved_api('/v1/workspaces'))
+        self.assertEqual(gw.moved_api('/v1/teams'), 'teams')
+        self.assertEqual(gw.moved_api('/v1/workspaces'), 'teams')
 
     def test_record_upstream_validation(self):
         with self.store.transaction() as db:
