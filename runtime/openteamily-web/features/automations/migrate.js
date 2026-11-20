@@ -40,6 +40,10 @@ export function verifyOfficial(bundle) {
 
 export async function importOfficialBundle(endpoints, bundle) {
   const tables = verifyOfficial(bundle)
+  const automationsById = new Map((tables.automations ?? []).map(row => [row.id, row]))
+  for (const row of tables.automation_runs ?? []) {
+    if (automationsById.get(row.automation_id)?.workspace_id !== row.workspace_id) throw new Error('run ownership mismatch')
+  }
   const editors = new Map((tables.automation_editors ?? []).map((row) => [row.automation_id, row]))
   const automations = (tables.automations ?? []).map((row) => {
     const editor = editors.get(row.id) ?? {}
