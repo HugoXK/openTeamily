@@ -19,7 +19,7 @@ from wsgiref.simple_server import make_server
 import test_runtime as fixtures
 from openteamily.lifecycle import RuntimeFault, RuntimePolicy, ManagerIdentity
 from openteamily.manager.client import ManagerClient
-from openteamily.manager.engine import Registry, Runner, ComposeEngine, manifest, compatible_manifest_upgrade, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET, compose_bytes
+from openteamily.manager.engine import Registry, Runner, ComposeEngine, manifest, compatible_manifest_upgrade, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET, SOCIAL_SOCKET_BIND, SOCIAL_SOCKET_SOURCE, SOCIAL_SOCKET_TARGET, compose_bytes
 from openteamily.manager.safety import ManagerError, write_new, replace_private, instance_lock, redact
 from openteamily.manager.worker import ManagerWorker
 from openteamily.manager.__main__ import main
@@ -28,6 +28,36 @@ from openteamily.operator_config import load_manager_auth
 from openteamily.security import digest
 
 IMAGE = 'operator/runtime@sha256:' + 'a' * 64
+
+
+class BotSocialSocketManifestTests(unittest.TestCase):
+    def test_local_bot_social_socket_manifest_upgrade_is_opt_in_and_read_only(self):
+        iid = 'a' * 32
+        entry = {'image': IMAGE, 'healthcheck': None, 'publish_port': None}
+        original = manifest(iid, entry)
+        expected = manifest(iid, entry, bot_social_socket=True)
+        self.assertEqual(compatible_manifest_upgrade(original, expected), {'added': [SOCIAL_SOCKET_TARGET]})
+        self.assertEqual(expected['services']['flybot']['volumes'][-1], SOCIAL_SOCKET_BIND)
+        different_source = deepcopy(expected)
+        different_source['services']['flybot']['volumes'][-1]['source'] = 'different'
+        self.assertIsNone(compatible_manifest_upgrade(original, different_source))
+        config = {
+            'version': 1, 'execution_enabled': False, 'base_url': 'http://127.0.0.1:8080',
+            'server_host': 'account.test', 'manager_id': 'local', 'token': 'fixture', 'docker': '/bin/false',
+            'socket': '/var/run/docker.sock', 'instances': {iid: entry}, 'bot_social_socket': True,
+        }
+        with tempfile.TemporaryDirectory() as data_dir:
+            root = Path(data_dir)
+            path = root / 'manager.json'
+            write_new(path, config)
+            with self.assertRaisesRegex(ManagerError, 'bot_social_socket_directory'):
+                Registry(str(path))
+            socket_dir = root / SOCIAL_SOCKET_SOURCE
+            socket_dir.mkdir(mode=0o755)
+            registry = Registry(str(path))
+            _, stored = registry.entry(iid)
+            self.assertEqual(json.loads(stored.read_text()), expected)
+
 
 def assert_container_readable_secret(test, path):
     info = path.stat()

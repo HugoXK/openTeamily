@@ -326,6 +326,20 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('proxy_set_header X-OT-Owner-Username $ot_owner_username;', browser)
         self.assertIn('proxy_set_header X-OT-Owner-Username "";', external)
 
+    def test_bot_social_socket_routes_only_shared_runtime_api(self):
+        routes = gw.load_routes()
+        conf = gw.nginx_config(routes, '127.0.0.1:8080', 8081, key=KEY, bot_social='bot-social:8787',
+                               bot_social_socket=True)
+        public, private = conf.split('listen unix:' + gw.SOCIAL_SOCKET_PATH + ';')
+        self.assertIn('location ^~ /social/', public)
+        self.assertIn('location ^~ /v1/ot/ops/ { return 404; }', private)
+        self.assertIn('location ^~ /v1/ot/', private)
+        self.assertIn('proxy_pass http://bot-social:8787;', private)
+        self.assertIn('location / { return 404; }', private)
+        self.assertNotIn('auth_request', private)
+        with self.assertRaises(ValueError):
+            gw.nginx_config(routes, '127.0.0.1:8080', 8081, key=KEY, bot_social_socket=True)
+
 
 
     def test_moved_v1_apis_go_to_the_owners_dsbot(self):

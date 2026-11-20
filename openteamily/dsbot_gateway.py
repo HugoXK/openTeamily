@@ -680,6 +680,7 @@ __DSBOT_LOCATIONS__
 
 
 SOCIAL_UPSTREAM = re.compile(r'^[0-9A-Za-z.\-]+:\d{2,5}$')
+SOCIAL_SOCKET_PATH = '/run/openteamily-social/bot-social.sock'
 
 # Isolated OpenTeamily Bot Social is reached at /social/ on the existing public
 # origin. The prefix is stripped; the container sees /v1/... and /healthz.
@@ -718,7 +719,7 @@ def social_location(upstream):
     )
 
 
-def nginx_config(routes, platform, listen, key_include=None, key=None, bot_social=None):
+def nginx_config(routes, platform, listen, key_include=None, key=None, bot_social=None, bot_social_socket=False):
     """Render the edge config.
 
     Production passes ``key_include``: the absolute path of an operator-owned nginx
@@ -753,9 +754,34 @@ def nginx_config(routes, platform, listen, key_include=None, key=None, bot_socia
         locations.append(f'  location = /{page} {{ return 418; }}')
         locations.append(f'  location ^~ /{page}/ {{ return 418; }}')
     social = social_location(bot_social) if bot_social else ''
-    return (NGINX_TEMPLATE.replace('__LISTEN__', str(listen)).replace('__PLATFORM__', platform)
+    configuration = (NGINX_TEMPLATE.replace('__LISTEN__', str(listen)).replace('__PLATFORM__', platform)
             .replace('__KEY_SETTING__', setting).replace('__DSBOT_LOCATIONS__', '\n'.join(locations))
             .replace('__SOCIAL_LOCATION__', social))
+    if not bot_social_socket:
+        return configuration
+    if not bot_social:
+        raise ValueError('The Bot Social socket requires a Bot Social upstream')
+    return configuration + f'''server {{
+  listen unix:{SOCIAL_SOCKET_PATH};
+  server_name _;
+  client_max_body_size 64m;
+  location = /v1/ot/ops {{ return 404; }}
+  location ^~ /v1/ot/ops/ {{ return 404; }}
+  location ^~ /v1/ot/ {{
+    proxy_pass http://{bot_social};
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For "";
+    proxy_set_header Forwarded "";
+    proxy_set_header Cookie "";
+    proxy_set_header X-OT-Gateway-Key "";
+    proxy_redirect off;
+    proxy_connect_timeout 2s;
+  }}
+  location / {{ return 404; }}
+}}
+'''
 
 
 def main(argv=None):
@@ -770,9 +796,12 @@ def main(argv=None):
     render.add_argument('--routes', default=str(ROUTES_FILE))
     render.add_argument('--bot-social', default=None,
                         help='host:port of the isolated OpenTeamily Bot Social (compose service, e.g. bot-social:8787). Adds /social/ on this origin.')
+    render.add_argument('--bot-social-socket', action='store_true',
+                        help='Also serve the account runtime collaboration API over the fixed Unix socket')
     args = parser.parse_args(argv)
     print(nginx_config(load_routes(args.routes), args.platform, args.listen,
-                       key_include=args.key_include, bot_social=args.bot_social), end='')
+                       key_include=args.key_include, bot_social=args.bot_social,
+                       bot_social_socket=args.bot_social_socket), end='')
 
 
 if __name__ == '__main__':
