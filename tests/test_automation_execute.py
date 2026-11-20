@@ -37,7 +37,7 @@ class AutomationExecuteTests(unittest.TestCase):
         self.app = App(self.store, Config('https://management.test', allow_registration=True,
                                           runtime_heartbeat_seconds=45, runtime_task_timeout_seconds=30),
                        clock=lambda: self.now)
-        self.assertIsInstance(self.app.automation_backend, AgentAutomationBackend)
+        self.assertIsInstance(self.app.automation_backend.inner, AgentAutomationBackend)
         self.alice = Client(self.app)
         self.alice.register('alice')
         self.bob = Client(self.app, peer='127.0.0.2')
