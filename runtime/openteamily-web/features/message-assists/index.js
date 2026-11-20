@@ -31,8 +31,13 @@ export default async function messageAssists(host){
  return {imported,endpoints:{v1:compatHandler([...automatic,...['GET','POST'].map(method=>({method,path:/^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/assists$/,
   async handle({match,body:b={},idempotency_key:key}){
    const bs=sharedBotSocial(host),base='/v1/ot/conversations/'+encodeURIComponent(match[2])
-   const [team,conv]=await Promise.all([bs.get('/v1/ot/teams/by-workspace/'+match[1]),bs.get(base)])
-   if(conv.team_id!==team.id)throw new Fault(404,'not_found','Conversation not in this workspace')
+   const [binding,conv]=await Promise.all([host.call?.('agents/personal-binding',{}),bs.get(base)])
+   if(binding?.workspace_id===match[1]){
+    if(!conv.account_group&&!conv.direct)throw new Fault(404,'not_found','Conversation not in this workspace')
+   }else{
+    const team=await bs.get('/v1/ot/teams/by-workspace/'+match[1])
+    if(conv.team_id!==team.id)throw new Fault(404,'not_found','Conversation not in this workspace')
+   }
    if(method==='GET'){
     const items=[]
     for(const row of store.read().items.filter(r=>r.conversation_id===conv.id).slice(0,30)){

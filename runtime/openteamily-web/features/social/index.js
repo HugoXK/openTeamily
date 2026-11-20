@@ -25,14 +25,20 @@ export default function social(host) {
           handle: ({match, body}) => wrap(async () => [200, await bs().post('/v1/ot/contacts/' + match[1], {action: body?.action})]) },
         { method: 'GET', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/notifications$/,
           async handle({ match, query }) {
-            await bs().get('/v1/ot/teams/by-workspace/' + match[1])
-            const data = await bs().get('/v1/ot/notifications' + qs({ limit: 200, workspace_id: match[1], unread: new URLSearchParams(query).get('filter') === 'unread' ? '1' : undefined }))
+            const binding = await host.call?.('agents/personal-binding', {})
+            const personal = binding?.workspace_id === match[1]
+            if (!personal) await bs().get('/v1/ot/teams/by-workspace/' + match[1])
+            const scope = personal ? {personal:'1'} : {workspace_id:match[1]}
+            const data = await bs().get('/v1/ot/notifications' + qs({ limit: 200, ...scope, unread: new URLSearchParams(query).get('filter') === 'unread' ? '1' : undefined }))
             return [200, { items: data.notifications.map(n => ({ ...n.data, id: n.id, seq: n.seq, kind: n.kind, created: Math.floor(n.created_at / 1000), read: n.read })), unread_count: data.unread, limit: 200 }]
           } },
         { method: 'POST', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/notifications\/read$/,
           async handle({ match, body }) {
-            await bs().get('/v1/ot/teams/by-workspace/' + match[1])
-            const result = await bs().post('/v1/ot/notifications/read', { notification_id: body?.notification_id, all: body?.all, workspace_id: match[1] })
+            const binding = await host.call?.('agents/personal-binding', {})
+            const personal = binding?.workspace_id === match[1]
+            if (!personal) await bs().get('/v1/ot/teams/by-workspace/' + match[1])
+            const scope = personal ? {personal:true} : {workspace_id:match[1]}
+            const result = await bs().post('/v1/ot/notifications/read', { notification_id: body?.notification_id, all: body?.all, ...scope })
             return [200, { unread_count: result.unread }]
           } },
       ]),

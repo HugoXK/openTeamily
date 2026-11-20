@@ -80,7 +80,10 @@ function privateHit(row, text) {
 }
 
 async function sharedHits(host, workspace, {text, limit, conversationId}, before) {
-  const page = await sharedBotSocial(host).get(`/v1/ot/workspaces/${workspace}/messages/search` + qs({
+  const binding = await host.call?.('agents/personal-binding', {})
+  const path = binding?.workspace_id === workspace
+    ? '/v1/ot/messages/personal-search' : `/v1/ot/workspaces/${workspace}/messages/search`
+  const page = await sharedBotSocial(host).get(path + qs({
     q: text, limit: limit + 1, before, conversation_id: conversationId,
   }))
   if (!Array.isArray(page?.items)) throw new Error('Invalid Bot Social search response')

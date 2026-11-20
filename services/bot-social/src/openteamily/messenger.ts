@@ -4,7 +4,7 @@
 // hands its owner's DS-Bot the messages it should answer (agent inbox); the reply is generated in
 // that DS-Bot and posted back here. Automatic (un-@'d) group replies are capped at 3 per hour per
 // conversation (#346). OpenTeamily semantics; not Teamily parity.
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
 import { body, handleKey, intParam, OtContext, optText, params, query, text } from "./core.js";
@@ -21,7 +21,12 @@ CREATE TABLE IF NOT EXISTS ot_group_announcements (
 CREATE TABLE IF NOT EXISTS ot_conversations (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('dm','group')), title TEXT NOT NULL DEFAULT '',
   team_id TEXT, dm_key TEXT UNIQUE, created_by TEXT NOT NULL, last_seq INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, account_group INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS ot_group_requests (
+  owner_id TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
+  conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE,
+  PRIMARY KEY (owner_id, request_key)
 );
 CREATE TABLE IF NOT EXISTS ot_conversation_members (
   conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE, owner_id TEXT NOT NULL,
@@ -105,9 +110,9 @@ export function requireDirectReach(ot: OtContext, conv: {id: string; kind: strin
   assert(peer && directReachable(ot, owner, peer.owner_id), 403, "not_reachable", "请先建立联系人关系。");
 }
 
-function directConversation(ot: OtContext, id: string, owner: string) {
+function accountConversation(ot: OtContext, id: string, owner: string) {
   const conv = memberOf(ot, id, owner);
-  assert(ordinaryDirect(conv), 404, "conversation_not_found", "no such direct conversation");
+  assert(ordinaryDirect(conv) || conv.account_group === 1, 404, "conversation_not_found", "no such personal conversation");
   return conv;
 }
 
@@ -175,6 +180,7 @@ function conversationView(ot: OtContext, c: any, viewer: string) {
   return {
     ...(fixedPublicThread(c) ? {public_agent: {open, pending, publisher: published ? ot.profileView(published.owner_id).display_name : ""}} : {}),
     ...(ordinaryDirect(c) ? {direct: {open: Boolean(peer && directReachable(ot, viewer, peer.owner_id))}} : {}),
+    ...(c.account_group === 1 ? {account_group: true} : {}),
     id: c.id, kind: c.kind, title: c.kind === "dm" ? (peer ? ot.profileView(peer.owner_id).display_name : c.title) : c.title,
     team_id: c.team_id, members: members.map((m) => ot.profileView(m.owner_id)),
     agents: ot.all<any>("SELECT agent_ref, owner_id, name, auto_reply FROM ot_conversation_agents WHERE conversation_id = ?", c.id).map((a) => ({ agent_ref: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, owner: ot.profileView(a.owner_id), mine: a.owner_id === viewer })),
@@ -184,10 +190,12 @@ function conversationView(ot: OtContext, c: any, viewer: string) {
 }
 
 /** Everyone a member may start a conversation with: someone sharing an active team. */
-function assertReachable(ot: OtContext, from: string, to: string, teamId?: string | null) {
+function assertReachable(ot: OtContext, from: string, to: string, teamId?: string | null, accountGroup = false) {
   if (teamId) {
     const r = ot.get<any>("SELECT 1 FROM ot_team_members WHERE team_id = ? AND owner_id = ? AND suspended = 0", teamId, to);
     assert(r, 403, "not_in_team", "that member is not in this team");
+  } else if (accountGroup) {
+    assert(acceptedContact(ot, from, to), 403, "not_reachable", "请选择已确认的联系人。");
   } else {
     assert(shareTeam(ot, from, to), 403, "not_reachable", "you can message members of your teams");
   }
@@ -243,6 +251,9 @@ function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: st
 }
 
 export function registerMessenger(app: FastifyInstance, ot: OtContext) {
+  if (!ot.all<{name:string}>("PRAGMA table_info(ot_conversations)").some(col => col.name === "account_group")) {
+    ot.run("ALTER TABLE ot_conversations ADD COLUMN account_group INTEGER NOT NULL DEFAULT 0");
+  }
   const messageCols = new Set(ot.all<any>("PRAGMA table_info(ot_messages)").map(c => c.name));
   if (!messageCols.has("revision")) ot.run("ALTER TABLE ot_messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
   const agentCols = new Set(ot.all<any>("PRAGMA table_info(ot_conversation_agents)").map(c => c.name));
@@ -267,19 +278,42 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       return reply.status(201).send(conversationView(ot, ot.get("SELECT * FROM ot_conversations WHERE id = ?", id), me.ownerId));
     }
     assert(b.kind === "group", 400, "invalid_request", "kind must be dm or group");
-    const title = text(b.title, "title", { min: 1, max: 80 });
+    const title = text(b.title ?? "新群聊", "title", { min: 1, max: 80 });
     const teamId = b.team_id ? String(b.team_id) : null;
+    const accountGroup = b.account_group === true;
+    assert(!accountGroup || !teamId, 400, "invalid_request", "A personal group has no team");
     if (teamId) requireMember(ot, teamId, me.ownerId);
     assert(Array.isArray(b.members ?? []) && (b.members ?? []).length <= 50, 400, "invalid_request", "members must be a list of at most 50 handles");
     const others = [...new Set((b.members ?? []).map((h: unknown) => ot.ownerByHandle(h)))].filter((o) => o !== me.ownerId) as string[];
-    for (const o of others) assertReachable(ot, me.ownerId, o, teamId);
-    const id = newId("otc"); const now = ot.now();
-    ot.tx(() => {
-      ot.run("INSERT INTO ot_conversations(id, kind, title, team_id, created_by, created_at, updated_at) VALUES (?, 'group', ?, ?, ?, ?, ?)", id, title, teamId, me.ownerId, now, now);
+    const selected = b.agents ?? [];
+    assert(Array.isArray(selected) && selected.length <= 10, 400, "invalid_request", "Select at most 10 agents");
+    const agents = new Map<string,string>();
+    for (const agent of selected) {
+      const ref = text(agent?.agent_ref, "agent_ref", {min:1, max:80});
+      assert(AGENT_REF.test(ref), 400, "invalid_request", "Invalid agent identifier");
+      agents.set(ref, text(agent?.name, "name", {min:1, max:40}));
+    }
+    assert(!accountGroup || (others.length < 50 && others.length + agents.size > 0), 400, "invalid_request", "请选择联系人或智能体。");
+    const key = optText(b.idempotency_key, "idempotency_key", {min:16,max:80});
+    const fingerprint = JSON.stringify([title, teamId, accountGroup, others.slice().sort(), [...agents].sort()]);
+    const result = ot.tx(() => {
+      const prior = key && ot.get<{conversation_id:string; fingerprint:string}>(
+        "SELECT conversation_id,fingerprint FROM ot_group_requests WHERE owner_id=? AND request_key=?", me.ownerId, key);
+      if (prior) {
+        assert(prior.fingerprint === fingerprint, 409, "conflict", "Idempotency key reused");
+        return {conv:memberOf(ot, prior.conversation_id, me.ownerId), created:false};
+      }
+      for (const o of others) assertReachable(ot, me.ownerId, o, teamId, accountGroup);
+      const id = newId("otc"); const now = ot.now();
+      ot.run("INSERT INTO ot_conversations(id,kind,title,team_id,created_by,created_at,updated_at,account_group) VALUES (?,'group',?,?,?,?,?,?)",
+        id, title, teamId, me.ownerId, now, now, Number(accountGroup));
       for (const o of [me.ownerId, ...others]) ot.run("INSERT INTO ot_conversation_members(conversation_id, owner_id, created_at) VALUES (?,?,?)", id, o, now);
+      for (const [ref, name] of agents) ot.run("INSERT INTO ot_conversation_agents(conversation_id,agent_ref,owner_id,name,created_at) VALUES (?,?,?,?,?)", id, ref, me.ownerId, name, now);
+      for (const o of others) ot.notify(o, "messenger.added", {conversation_id:id, title, by:ot.profileView(me.ownerId), ...(teamId ? {team_id:teamId} : {})});
+      if (key) ot.run("INSERT INTO ot_group_requests VALUES (?,?,?,?)", me.ownerId, key, fingerprint, id);
+      return {conv:memberOf(ot, id, me.ownerId), created:true};
     });
-    for (const o of others) ot.notify(o, "messenger.added", { conversation_id: id, title, by: ot.profileView(me.ownerId) });
-    return reply.status(201).send(conversationView(ot, ot.get("SELECT * FROM ot_conversations WHERE id = ?", id), me.ownerId));
+    return reply.status(result.created ? 201 : 200).send(conversationView(ot, result.conv, me.ownerId));
   });
 
   app.get("/v1/ot/conversations", async (req) => {
@@ -287,7 +321,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const {scope, team_id} = query(req);
     assert(scope === undefined || scope === "public" || scope === "member" || scope === "personal", 400, "invalid_request", "Invalid conversation scope");
     let filter = scope === "public" ? " AND c.dm_key LIKE 'agent:%'"
-      : scope === "personal" ? " AND (c.dm_key LIKE 'agent:%' OR (c.kind='dm' AND c.team_id IS NULL))"
+      : scope === "personal" ? " AND (c.dm_key LIKE 'agent:%' OR (c.kind='dm' AND c.team_id IS NULL) OR c.account_group=1)"
       : scope === "member" ? " AND (c.dm_key IS NULL OR c.dm_key NOT LIKE 'agent:%')" : "";
     const args = [me.ownerId];
     if (team_id !== undefined) {
@@ -331,7 +365,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const input = body(req);
     const teamId = input.team_id ?? conv.team_id;
     if (input.team_id !== undefined) {
-      assert(typeof teamId === "string" && (!conv.team_id || conv.team_id === teamId),
+      assert(!conv.account_group && typeof teamId === "string" && (!conv.team_id || conv.team_id === teamId),
         404, "not_found", "conversation not found in this team");
       requireMember(ot, teamId, me.ownerId);
     }
@@ -342,10 +376,14 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const owners = new Set<string>(handles.map(handle => ot.ownerByHandle(handle)));
     const invitedBy = ot.profileView(me.ownerId);
     ot.tx(() => {
+      const count = ot.get<{n:number}>("SELECT COUNT(*) AS n FROM ot_conversation_members WHERE conversation_id=?", conv.id)?.n ?? 0;
+      let added = 0;
       for (const owner of owners) {
         if (ot.get("SELECT 1 FROM ot_conversation_members WHERE conversation_id = ? AND owner_id = ?", conv.id, owner)) continue;
-        assertReachable(ot, me.ownerId, owner, teamId);
+        assert(!conv.account_group || count + added < 50, 409, "quota", "群成员已达上限。");
+        assertReachable(ot, me.ownerId, owner, teamId, conv.account_group === 1);
         ot.run("INSERT INTO ot_conversation_members(conversation_id, owner_id, read_seq, created_at) VALUES (?,?,?,?)", conv.id, owner, conv.last_seq, ot.now());
+        added++;
         ot.notify(owner, "messenger.added", { conversation_id: conv.id, title: conv.title, by: invitedBy,
           ...(teamId ? { team_id: teamId } : {}) });
       }
@@ -367,7 +405,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   });
 
   const announcement = (cid: string) => ot.get<any>("SELECT * FROM ot_group_announcements WHERE conversation_id=?", cid) ?? { body: "", revision: 0 };
-  const canAnnounce = (conv: any, owner: string) => !!conv.team_id && !!ot.get("SELECT 1 FROM ot_team_members WHERE team_id=? AND owner_id=? AND role IN ('owner','admin') AND suspended=0", conv.team_id, owner);
+  const canAnnounce = (conv: any, owner: string) => conv.account_group === 1 ? conv.created_by === owner
+    : !!conv.team_id && !!ot.get("SELECT 1 FROM ot_team_members WHERE team_id=? AND owner_id=? AND role IN ('owner','admin') AND suspended=0", conv.team_id, owner);
   app.get("/v1/ot/conversations/:id/announcement", async req => {
     const me = ot.me(req), conv = memberOf(ot, params(req).id, me.ownerId);
     assert(conv.kind === "group", 400, "invalid_request", "announcements require a group");
@@ -387,9 +426,10 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   });
 
   // ---- messages
-  app.get("/v1/ot/workspaces/:workspace/messages/search", async req => {
+  const searchMessages = async (req: FastifyRequest) => {
     const me = ot.me(req);
-    const team = workspaceTeam(ot, params(req).workspace, me.ownerId);
+    const {workspace} = params(req);
+    const team = workspace ? workspaceTeam(ot, workspace, me.ownerId) : null;
 
     const q = query(req);
     const term = text(q.q, "q", { min: 1, max: 80 });
@@ -401,6 +441,13 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     assert(q.conversation_id === undefined || (typeof q.conversation_id === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(q.conversation_id)),
       400, "invalid_request", "Invalid conversation");
     const conversation = q.conversation_id ?? null;
+    const scope = team
+      ? `(c.team_id=? OR (c.kind='dm' AND c.team_id IS NULL AND EXISTS (
+          SELECT 1 FROM ot_conversation_members peer
+          JOIN ot_team_members teammate ON teammate.owner_id=peer.owner_id AND teammate.team_id=? AND teammate.suspended=0
+          WHERE peer.conversation_id=c.id AND peer.owner_id<>?)))`
+      : "(c.account_group=1 OR (c.kind='dm' AND c.team_id IS NULL))";
+    const scopeArgs = team ? [team.id, team.id, me.ownerId] : [];
     const rows = ot.all<any>(`SELECT m.id, m.conversation_id, m.rowseq, m.body, m.created_at,
       CASE WHEN c.kind='dm' THEN (
         SELECT p.display_name FROM ot_conversation_members peer JOIN ot_profiles p ON p.owner_id=peer.owner_id
@@ -410,25 +457,25 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       JOIN ot_conversations c ON c.id=m.conversation_id
       JOIN ot_conversation_members mine ON mine.conversation_id=c.id AND mine.owner_id=?
       WHERE m.retracted=0 AND (? IS NULL OR c.id=?)
-        AND (c.team_id=? OR (c.kind='dm' AND c.team_id IS NULL AND EXISTS (
-          SELECT 1 FROM ot_conversation_members peer
-          JOIN ot_team_members teammate ON teammate.owner_id=peer.owner_id AND teammate.team_id=? AND teammate.suspended=0
-          WHERE peer.conversation_id=c.id AND peer.owner_id<>?)))
+        AND ${scope}
         AND (?=0 OR m.created_at<? OR (m.created_at=? AND m.rowseq<?))
         AND instr(lower(m.body),lower(?))>0
       ORDER BY m.created_at DESC, m.rowseq DESC LIMIT ?`,
-    me.ownerId, me.ownerId, conversation, conversation, team.id, team.id, me.ownerId,
+    me.ownerId, me.ownerId, conversation, conversation, ...scopeArgs,
     beforeRow, beforeTime, beforeTime, beforeRow, term, limit + 1);
     const items = rows.slice(0, limit).map(row => ({
       conversation_id: row.conversation_id, message_id: row.id, title: row.title || "会话",
       body: row.body, created_ms: row.created_at, cursor: `${row.created_at}:${row.rowseq}`,
     }));
     return { items, more: rows.length > limit };
-  });
-  app.post("/v1/ot/workspaces/:workspace/conversations/:id/translation-sources", async req => {
+  };
+  app.get("/v1/ot/workspaces/:workspace/messages/search", searchMessages);
+  app.get("/v1/ot/messages/personal-search", searchMessages);
+  const translationSources = async (req: FastifyRequest) => {
     const me = ot.me(req);
     const {workspace, id} = params(req);
-    const {conv} = workspaceConversation(ot, workspace, id, me.ownerId);
+    const conv = workspace ? workspaceConversation(ot, workspace, id, me.ownerId).conv
+      : accountConversation(ot, id, me.ownerId);
     const input = body(req).items;
     assert(Array.isArray(input) && input.length <= 6, 400, "invalid_request", "Provide at most six message revisions");
     const sources = [];
@@ -447,7 +494,9 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       if (source?.body.trim()) sources.push(source);
     }
     return {sources};
-  });
+  };
+  app.post("/v1/ot/workspaces/:workspace/conversations/:id/translation-sources", translationSources);
+  app.post("/v1/ot/conversations/:id/translation-sources", translationSources);
   app.get("/v1/ot/workspaces/:workspace/conversations/:id/messages/:message", async req => {
     const me = ot.me(req);
     const {workspace, id, message} = params(req);
@@ -518,7 +567,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const direct = b.direct === true;
       const workspace = !direct && (sourceConversation || b.attachment !== undefined)
         ? text(b.workspace, "workspace", {min: 32, max: 32}) : "";
-      const conv = direct ? directConversation(ot, params(req).id, me.ownerId)
+      const conv = direct ? accountConversation(ot, params(req).id, me.ownerId)
         : workspace ? workspaceConversation(ot, workspace, params(req).id, me.ownerId).conv
           : memberOf(ot, params(req).id, me.ownerId);
       if (clientKey) {
@@ -542,7 +591,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const voice = b.voice === undefined ? null : voiceData(b.voice);
       let file = b.attachment === undefined ? null : decodeChatFile(b.attachment);
       if (sourceConversation && sourceMessage) {
-        if (direct) directConversation(ot, sourceConversation, me.ownerId);
+        if (direct) accountConversation(ot, sourceConversation, me.ownerId);
         else workspaceConversation(ot, workspace, sourceConversation, me.ownerId);
         file = readAttachment(ot, sourceConversation, sourceMessage);
       }
@@ -571,7 +620,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   app.get("/v1/ot/conversations/:id/messages/:message/file", async req => {
     const me = ot.me(req);
     const {id, message} = params(req);
-    const conv = directConversation(ot, id, me.ownerId);
+    const conv = accountConversation(ot, id, me.ownerId);
     const file = readAttachment(ot, conv.id, message);
     return {title: file.title, mime: file.mime, data: file.data.toString("base64")};
   });

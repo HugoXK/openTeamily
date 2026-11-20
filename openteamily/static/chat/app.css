@@ -1156,7 +1156,7 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
 /* Create menu: floating card with icon-width gutter, as captured. */
 .compose-menu { position: relative; }
 #compose-menu {
-  position: absolute; top: calc(100% + .375rem); left: 0; z-index: 20; min-width: 11rem; padding: .375rem;
+  position: absolute; top: calc(100% + .375rem); left: auto; right: 0; z-index: 20; min-width: 11rem; padding: .375rem;
   border: 1px solid var(--ot-line); border-radius: .75rem; background: var(--ot-surface); box-shadow: var(--ot-shadow-lg);
   display: grid; gap: 1px;
 }
