@@ -66,6 +66,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/directory$'), 'teams'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/social/conversations(?:/[A-Za-z0-9._-]{1,80}(?:/[A-Za-z0-9._/-]{1,120})?)?$'), 'messenger'),
     (re.compile(r'^/v1/discover/(?:agents|works|me/works)$'), 'discover'),
+    (re.compile(r'^/v1/discover/agents/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/start$'), 'discover'),
     (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/engagement$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
     (re.compile(r'^/v1/automation-templates$'), 'automations'),
@@ -97,6 +98,7 @@ MOVED_API_LOCATIONS = (
     'location ~ ^/v1/skills/(?:scopes|readiness|runs)$ { return 418; }',
     'location ^~ /v1/runtime/ { return 418; }',
     'location = /v1/workspaces { return 418; }',
+    'location = /v1/agent-homepages/start { return 410; }',
     'location = /v1/teams { return 418; }',
     'location = /v1/team-directory { return 418; }',
     'location ^~ /v1/team-directory/ { return 418; }',
@@ -708,6 +710,21 @@ def social_location(upstream):
         '    proxy_set_header X-Forwarded-Prefix /social;\n'
         '    proxy_set_header X-OT-Gateway-Key "";\n'
         '    proxy_read_timeout 60s;\n'
+        '    proxy_redirect off;\n'
+        '  }\n'
+        # Public agent homepages (/a/<slug>), works (/w/<slug>) and read-only shares
+        # (/share/<token>) on the site root are rendered by the dedicated Bot Social.
+        # Site cookies and credentials never reach it.
+        '  location ~ ^/(?:a|w|share)/ {\n'
+        '    limit_except GET HEAD { deny all; }\n'
+        f'    proxy_pass http://{upstream};\n'
+        '    proxy_http_version 1.1;\n'
+        '    proxy_set_header Host $host;\n'
+        '    proxy_set_header Cookie "";\n'
+        '    proxy_set_header Authorization "";\n'
+        '    proxy_set_header X-OT-Gateway-Key "";\n'
+        '    proxy_hide_header Set-Cookie;\n'
+        '    proxy_read_timeout 30s;\n'
         '    proxy_redirect off;\n'
         '  }'
     )

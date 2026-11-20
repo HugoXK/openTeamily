@@ -609,6 +609,12 @@ function discoverRoutes(host) {
     return [200, { items, cursor: data.next_before ?? null }]
   })
   return [
+    {
+      method: 'POST', path: /^\/v1\/discover\/agents\/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])\/start$/,
+      async handle({ match }) {
+        return wrap(async () => [200, await client(host).post(`/v1/ot/discover/${seg(match[1], 'slug')}/start`)])
+      },
+    },
     { method: 'GET', path: /^\/v1\/discover\/agents$/, handle: feed('agent') },
     { method: 'GET', path: /^\/v1\/discover\/works$/, handle: feed('work') },
     { method: 'GET', path: /^\/v1\/discover\/me\/works$/, handle: feed('work') },

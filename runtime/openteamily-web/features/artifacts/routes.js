@@ -1,3 +1,4 @@
+import { sharedBotSocial } from '../../lib/c/bot-social.js'
 // Legacy /v1 artifact routes, executed inside this user's DS-Bot. The browser
 // shim turns the works-library page's existing fetches into artifacts/v1.
 import { pagination, refuse, requireBodyKeys } from '../../featurekit/http.js'
@@ -123,13 +124,29 @@ export async function shares(req, workspaceId, artifactId, shareId, revoking) {
   if (!shareId && req.method === 'POST' && !req.queryString) {
     if (!canEdit('owner', req.owner, row)) refuse(403, 'forbidden', 'Not allowed to share this document')
     const body = requireBodyKeys(await req.json(), ['expires_in'])
-    return createShare(req.store, row, req.owner, req.now, body.expires_in)
+    const created = createShare(req.store, row, req.owner, req.now, body.expires_in)
+    // Public /share/<token> pages are served by the dedicated Bot Social from this
+    // read-only snapshot; only the token hash leaves this DS-Bot.
+    const item = req.store.get('SELECT * FROM artifact_shares WHERE id=?', created.body.share.id)
+    try {
+      await sharedBotSocial(req.host).put('/v1/ot/public-shares', {
+        token_hash: item.token_hash, ref: row.id, title: row.title, kind: row.kind,
+        body: String(row.body ?? '').slice(0, 200000), expires_at: item.expires ? item.expires * 1000 : null,
+      })
+    } catch {
+      revokeShare(req.store, row.id, item.id, req.now)
+      refuse(503, 'unavailable', 'Bot Social is not reachable; the share link was not created')
+    }
+    return created
   }
   if (shareId && revoking) {
     if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid artifact request')
     if (!canEdit('owner', req.owner, row)) refuse(403, 'forbidden', 'Not allowed to share this document')
     await req.json()
-    return revokeShare(req.store, row.id, shareId, req.now)
+    const revoked = revokeShare(req.store, row.id, shareId, req.now)
+    const item = req.store.get('SELECT * FROM artifact_shares WHERE id=?', shareId)
+    if (item) await sharedBotSocial(req.host).del(`/v1/ot/public-shares/${item.token_hash}`).catch(() => {})
+    return revoked
   }
   refuse(400, 'invalid', 'Invalid artifact request')
 }
