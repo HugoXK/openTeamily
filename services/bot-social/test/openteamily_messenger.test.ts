@@ -72,6 +72,67 @@ test("groups: members, mentions notify, creator removes, members leave", async (
   assert.equal((await A.ok("GET", `/v1/ot/conversations/${g.id}`)).members.length, 1);
 });
 
+test("groups add multiple teammates atomically and notify each new member once", async () => {
+  const owner = await home(S.base, "batch-owner");
+  const first = await home(S.base, "batch-first");
+  const second = await home(S.base, "batch-second");
+  const outsider = await home(S.base, "batch-outside");
+  const team = await teamOf(owner, first, second);
+  const group = await owner.ok("POST", "/v1/ot/conversations", { kind: "group", title: "Review", team_id: team.id });
+  const path = `/v1/ot/conversations/${group.id}`;
+  const denied = await owner.call("POST", path + "/members", { handles: [first.handle, outsider.handle] });
+  assert.equal(denied.status, 403);
+  assert.equal((await first.call("GET", path)).status, 404);
+  assert.equal((await first.ok("GET", "/v1/ot/notifications")).notifications
+    .filter((notice: any) => notice.data.conversation_id === group.id).length, 0);
+  const added = await owner.ok("POST", path + "/members", { handles: [first.handle, second.handle] });
+  assert.equal(added.members.length, 3);
+  await owner.ok("POST", path + "/members", { handles: [first.handle, second.handle, first.handle] });
+  for (const person of [first, second]) {
+    assert.equal((await person.ok("GET", path)).id, group.id);
+    const notes = await person.ok("GET", "/v1/ot/notifications");
+    assert.equal(notes.notifications.filter((notice: any) =>
+      notice.kind === "messenger.added" && notice.data.conversation_id === group.id).length, 1);
+  }
+});
+
+test("live calls notify members and relay signals only to their target peer", async () => {
+  const owner = await home(S.base, "call-owner");
+  const member = await home(S.base, "call-member");
+  const outsider = await home(S.base, "call-outside");
+  const team = await teamOf(owner, member, outsider);
+  const group = await owner.ok("POST", "/v1/ot/conversations", {kind: "group", title: "Standup", team_id: team.id, members: [member.handle]});
+  const root = `/v1/ot/conversations/${group.id}/call`;
+  const first = "tab-owner-123456789";
+  const second = "tab-member-12345678";
+  assert.equal((await outsider.call("GET", root)).status, 404);
+  assert.deepEqual(await member.ok("GET", root), {call: null});
+  const started = await owner.ok("POST", root + "/join", {kind: "video", start: true, peer_id: first});
+  const callId = started.call.id;
+  assert.equal(started.call.kind, "video");
+  assert.equal((await owner.ok("POST", root + "/join", {kind: "video", start: true, peer_id: first})).call.id, callId);
+  assert.equal((await owner.call("POST", root + "/join", {kind: "video", start: true, peer_id: "tab-duplicate-12345678"})).status, 409);
+  const notes = await member.ok("GET", "/v1/ot/notifications");
+  assert.equal(notes.notifications.filter((note: any) => note.kind === "messenger.call" && note.data.conversation_id === group.id).length, 1);
+  const joined = await member.ok("POST", root + "/join", {kind: "video", peer_id: second});
+  assert.equal(joined.call.id, callId);
+  assert.equal(joined.call.peers.length, 2);
+  const signal = {call_id: callId, peer_id: first, to: second, client_key: "signal-once-123456",
+    description: {type: "offer", sdp: "v=0\r\n"}};
+  await owner.ok("POST", root + "/signal", signal);
+  await owner.ok("POST", root + "/signal", signal);
+  assert.equal((await outsider.call("POST", root + "/poll", {call_id: callId, peer_id: second})).status, 404);
+  assert.equal((await member.call("POST", root + "/poll", {call_id: callId, peer_id: first})).status, 404);
+  assert.deepEqual((await owner.ok("POST", root + "/poll", {call_id: callId, peer_id: first})).signals, []);
+  const received = await member.ok("POST", root + "/poll", {call_id: callId, peer_id: second});
+  assert.equal(received.signals.length, 1);
+  assert.deepEqual(received.signals[0].description, signal.description);
+  await owner.ok("POST", root + "/leave", {call_id: callId, peer_id: first});
+  assert.equal((await member.ok("GET", root)).call.peers.length, 1);
+  await member.ok("POST", root + "/leave", {call_id: callId, peer_id: second});
+  assert.deepEqual(await member.ok("GET", root), {call: null});
+});
+
 test("group agents: the owner's DS-Bot gets mentions and auto-reply turns; auto replies capped at 3/hour", async () => {
   const A = await home(S.base, "agowner");
   const B = await home(S.base, "agpeer");
@@ -262,4 +323,33 @@ test("workspace message search requires active workspace and conversation member
   await A.ok("PATCH", `/v1/ot/teams/${primary.id}/members/${B.handle}`, {suspended: true});
   assert.equal((await B.call("GET", search)).status, 404);
   assert.deepEqual((await A.ok("GET", search + "&conversation_id=" + dm.id)).items, []);
+});
+
+test("standalone video meetings grant access to the call only, and only its host can end it", async () => {
+  const host = await home(S.base, "meeting-host");
+  const guest = await home(S.base, "meeting-guest");
+  const outsider = await home(S.base, "meeting-outsider");
+  await teamOf(host);
+  await teamOf(guest);
+  const path = "/v1/ot/meeting-calls";
+  const input = {title: "Design review", peer_id: "meeting-host-browser"};
+  assert.equal((await host.call("POST", path + "/create", {title: input.title})).status, 400);
+  const created = await host.ok("POST", path + "/create", input);
+  assert.equal(created.meeting.host, true);
+  assert.match(created.meeting.code, /^[\w-]{24}$/);
+  assert.deepEqual((await host.ok("POST", path + "/create", input)).meeting, created.meeting);
+  assert.equal((await guest.call("POST", path + "/preview", {code: "a".repeat(24)})).status, 404);
+  assert.deepEqual(await guest.ok("POST", path + "/preview", {code: created.meeting.code}), {title: input.title});
+  const joined = await guest.ok("POST", path + "/join", {code: created.meeting.code, peer_id: "meeting-guest-browser"});
+  assert.deepEqual(joined.meeting, {title: input.title, host: false});
+  assert.equal(joined.call.id, created.call.id);
+  assert.deepEqual((await guest.ok("GET", "/v1/ot/conversations")).conversations, []);
+  assert.deepEqual((await host.ok("GET", "/v1/ot/conversations")).conversations, []);
+  const guestPeer = {call_id: joined.call.id, peer_id: joined.peer_id};
+  assert.equal((await guest.ok("POST", path + "/poll", guestPeer)).call.peers.length, 2);
+  assert.equal((await outsider.call("POST", path + "/poll", guestPeer)).status, 404);
+  assert.equal((await guest.call("POST", path + "/end", guestPeer)).status, 403);
+  await host.ok("POST", path + "/end", {call_id: created.call.id, peer_id: created.peer_id});
+  assert.equal((await guest.call("POST", path + "/poll", guestPeer)).status, 404);
+  assert.equal((await guest.call("POST", path + "/preview", {code: created.meeting.code})).status, 404);
 });

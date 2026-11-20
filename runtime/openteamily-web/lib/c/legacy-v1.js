@@ -171,6 +171,10 @@ function rethrow(error) {
     not_reachable: 'invalid',
     not_in_team: 'invalid',
     too_many_teams: 'quota',
+    call_full: 'call_full',
+    call_already_joined: 'call_already_joined',
+    call_ended: 'call_ended',
+    meeting_ended: 'meeting_ended',
   })[code] || (status === 404 ? 'not_found' : status === 403 ? 'forbidden' : status === 409 ? 'conflict' : status === 410 ? 'not_found' : status === 429 ? 'quota' : code || 'internal')
   throw new Fault(status === 410 ? 404 : status, mapped, error?.message || 'Bot Social request failed')
 }
@@ -656,6 +660,26 @@ function messengerExtraRoutes(host) {
   }
   const guard = async (bs, wid) => teamFor(bs, wid, 'Workspace', env)
   return [
+    {
+      method: 'POST', path: /^\/v1\/meeting-calls\/(create|preview|join|poll|signal|leave|end)$/,
+      handle: ({ match, body }) => wrap(async () => [200, await client(host).post('/v1/ot/meeting-calls/' + match[1], body)]),
+    },
+    {
+      method: 'GET', path: re('\\/call'),
+      handle: async ({ match }) => wrap(async () => {
+        const bs = client(host)
+        const team = await guard(bs, match[1])
+        return [200, await bs.get(conv(match[2]) + '/call' + qs({team_id: team.id}))]
+      }),
+    },
+    {
+      method: 'POST', path: re('\\/call\\/(join|poll|signal|leave)'),
+      handle: async ({ match, body }) => wrap(async () => {
+        const bs = client(host)
+        const team = await guard(bs, match[1])
+        return [200, await bs.post(conv(match[2]) + '/call/' + match[3], {...body, team_id: team.id})]
+      }),
+    },
     ...['GET','POST'].map(method=>({method,path:/^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/assists$/,
       async handle(p){ const out=await host.call('message-assists/v1',{method,path:p.match[0],body:p.body,idempotency_key:p.idempotency_key});return [out.status,out.body] } })),
     ...['GET', 'POST'].map(method => ({ method, path: /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/announcement$/,
@@ -664,6 +688,20 @@ function messengerExtraRoutes(host) {
         const path = '/v1/ot/conversations/' + encodeURIComponent(match[2]) + '/announcement'
         return [200, method === 'GET' ? await bs.get(path) : await bs.post(path, body)]
       }) })),
+    {
+      method: 'POST', path: re('\\/members'),
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const bs = client(host)
+          const team = await guard(bs, match[1])
+          const path = conv(match[2])
+          const group = await bs.get(path)
+          if (group.team_id && group.team_id !== team.id) throw new Fault(404, 'not_found', 'Conversation not found in this workspace')
+          const updated = await bs.post(path + '/members', { handles: body?.member_ids ?? [], team_id: team.id })
+          return [200, { conversation: conversationItem(updated, await meOf(bs, env), env, match[1]) }]
+        })
+      },
+    },
     {
       method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/pin'),
       async handle({ match, body }) {

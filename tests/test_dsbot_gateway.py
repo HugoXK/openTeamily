@@ -181,6 +181,8 @@ class GatewayTest(unittest.TestCase):
             ('/v1/team-directory', 'teams'),
             (f'/v1/workspaces/{ws}/directory', 'teams'),
             (f'/v1/workspaces/{ws}/social/conversations/{ident}/agent-replies', 'messenger'),
+            ('/v1/meeting-calls/create', 'messenger'),
+            ('/v1/meeting-calls/join', 'messenger'),
             ('/v1/discover/works', 'discover'),
             (f'/v1/workspaces/{ws}/agents/{ident}/discover', 'discover'),
         ):

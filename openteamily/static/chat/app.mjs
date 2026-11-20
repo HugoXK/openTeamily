@@ -1,5 +1,6 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { mountAgentMentions } from './mentions.mjs';
+import { mountChatCalls } from './calls.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
@@ -536,6 +537,15 @@ export function notificationSummary(item) {
     const author = item.by?.display_name || item.by?.handle || '成员';
     return `${author} 提及了你`;
   }
+  if (item.kind === 'messenger.added') {
+    const author = item.by?.display_name || item.by?.handle || '成员';
+    return `${author} 将你加入「${item.title || '群聊'}」`;
+  }
+  if (item.kind === 'messenger.call') {
+    const author = item.by?.display_name || item.by?.handle || '成员';
+    const kind = item.call_kind === 'video' ? '视频通话' : '语音通话';
+    return item.title ? `${author} 在「${item.title}」发起了${kind}` : `${author} 发起了${kind}`;
+  }
   const where = item.conversation_kind === 'dm' ? '单聊' : (item.conversation_title || '群聊');
   if (item.kind === 'automation_reminder') {
     return `提醒到点：${item.title || '回看一条消息'}`;
@@ -715,6 +725,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentConversation = null;
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
+  const chatCalls = mountChatCalls(document, {request, context: () => {
+    if (!servedByDsbot || currentSource !== 'social' || !currentConversation) return null;
+    return {wid: workspaceId(), cid: currentConversation.id, title: conversationLabel(currentConversation, currentUser?.id)};
+  }});
   const agentMentions = mountAgentMentions(document, () => {
     if (currentSource !== 'social' || currentConversation?.kind !== 'group') return null;
     return {scope: `${workspaceId()}/${currentConversation.id}`, agents: currentConversation.agent_members || []};
@@ -1752,6 +1766,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const workspaceEvents=mountWorkspaceEvents(document,{onInvalidate:async(event)=>{
     if(event.workspace!==workspaceId()||document.visibilityState==='hidden')return;
+    if (event.changed.includes('notifications')) void chatCalls.refresh();
     await loadSessions();
     if(event.workspace!==workspaceId())return;
     if(!event.initial&&event.changed.includes('social')&&currentSource==='social'&&currentConversation){
@@ -1860,7 +1875,116 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const autoNote = document.getElementById('group-agent-auto-reply-note');
     if (autoNote) autoNote.hidden = which !== 'agents';
     document.getElementById('group-info-people').hidden = which !== 'people';
+    document.getElementById('group-info-invite').hidden = which !== 'people';
   }
+
+  const groupInvite = document.getElementById('group-invite-dialog');
+  const groupInviteQuery = document.getElementById('group-invite-query');
+  const groupInviteChoices = document.getElementById('group-invite-choices');
+  const groupInviteStatus = document.getElementById('group-invite-status');
+  const groupInviteSubmit = document.getElementById('group-invite-submit');
+  let inviteTarget = null;
+  let invitingMembers = false;
+
+  const inviteMatches = (target) => target && target.workspace === workspaceId() &&
+    currentSource === 'social' && currentConversation?.id === target.conversation;
+  const selectedInviteMembers = () => [...groupInviteChoices.querySelectorAll('input:checked')].map(box => box.value);
+
+  function syncGroupInviteSubmit(count = selectedInviteMembers().length) {
+    groupInviteSubmit.disabled = invitingMembers || count < 1 || count > 50;
+  }
+
+  function syncGroupInvite() {
+    const needle = groupInviteQuery.value.trim().toLocaleLowerCase();
+    let visible = 0;
+    for (const choice of groupInviteChoices.children) {
+      choice.hidden = !choice.textContent.toLocaleLowerCase().includes(needle);
+      if (!choice.hidden) visible++;
+    }
+    const count = selectedInviteMembers().length;
+    syncGroupInviteSubmit(count);
+    if (groupInviteChoices.children.length) {
+      groupInviteStatus.textContent = count > 50 ? '一次最多添加 50 位成员。'
+        : !visible ? '没有匹配的成员。'
+        : count ? `已选 ${count} 位成员` : '';
+    }
+  }
+
+  async function openGroupInvite() {
+    const conversation = currentConversation;
+    if (currentSource !== 'social' || conversation?.kind !== 'group' || groupInvite.open) return;
+    const target = {workspace: workspaceId(), conversation: conversation.id};
+    inviteTarget = target;
+    groupInviteQuery.value = '';
+    groupInviteChoices.replaceChildren();
+    groupInviteSubmit.disabled = true;
+    groupInviteStatus.textContent = '正在加载工作区成员…';
+    document.getElementById('group-invite-context').textContent = conversationLabel(conversation, currentUser?.id);
+    groupInvite.showModal();
+    groupInviteQuery.focus();
+    const result = await request('GET', `/v1/workspaces/${target.workspace}/members`).catch(() => ({status: 0}));
+    if (inviteTarget !== target || !inviteMatches(target) || !groupInvite.open) return;
+    if (result.status !== 200) {
+      groupInviteStatus.textContent = '无法加载工作区成员，请重新打开后再试。';
+      return;
+    }
+    const joined = new Set((currentConversation.members || []).map(member => member.user_id));
+    const candidates = memberChoices(result.body.items, currentUser?.id)
+      .filter(member => member.user_id && !member.suspended && !joined.has(member.user_id));
+    for (const member of candidates) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.value = member.handle || member.user_id;
+      label.append(box, document.createTextNode(member.username || box.value));
+      groupInviteChoices.append(label);
+    }
+    groupInviteStatus.textContent = candidates.length ? '' : '没有可添加的工作区成员。';
+    syncGroupInvite();
+  }
+
+  document.getElementById('chat-group-invite').addEventListener('click', openGroupInvite);
+  document.getElementById('group-info-invite').addEventListener('click', openGroupInvite);
+  document.getElementById('group-invite-cancel').addEventListener('click', () => groupInvite.close());
+  groupInvite.addEventListener('close', () => { if (!groupInvite.open) inviteTarget = null; });
+  groupInvite.addEventListener('cancel', event => { if (invitingMembers) event.preventDefault(); });
+  groupInviteQuery.addEventListener('input', syncGroupInvite);
+  groupInviteChoices.addEventListener('change', syncGroupInvite);
+  document.getElementById('group-invite-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const target = inviteTarget;
+    const memberIds = selectedInviteMembers();
+    if (invitingMembers || !inviteMatches(target) || !memberIds.length || memberIds.length > 50) return;
+    invitingMembers = true;
+    const cancel = document.getElementById('group-invite-cancel');
+    cancel.disabled = true;
+    groupInviteSubmit.disabled = true;
+    groupInviteSubmit.textContent = '添加中…';
+    try {
+      const path = `/v1/workspaces/${target.workspace}/social/conversations/${target.conversation}/members`;
+      const result = await request('POST', path, {member_ids: memberIds});
+      if (!inviteMatches(target) || inviteTarget !== target) return;
+      if (result.status !== 200 || result.body.conversation?.id !== target.conversation) {
+        groupInviteStatus.textContent = result.status === 403 ? '所选成员的权限有变化，请重新打开后再试。'
+          : result.status === 404 ? '群聊或工作区成员有变化，请刷新后再试。' : '无法添加成员，请重试。';
+        return;
+      }
+      currentConversation = result.body.conversation;
+      const title = conversationLabel(currentConversation, currentUser?.id);
+      applyChatIdentity(document, title, currentConversation);
+      setChatSubtitle(groupInfoCounts(currentConversation).text);
+      setGroupInfo(currentConversation);
+      groupInvite.close();
+      show('ok', '群成员已更新。');
+    } catch {
+      if (inviteMatches(target) && inviteTarget === target) groupInviteStatus.textContent = '暂时无法确认添加结果，可以重试。';
+    } finally {
+      invitingMembers = false;
+      cancel.disabled = false;
+      groupInviteSubmit.textContent = '添加';
+      syncGroupInviteSubmit();
+    }
+  });
 
   const pendingAutoReplies = new Set();
 
@@ -1920,6 +2044,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
     const group = Boolean(conversation && conversation.kind === 'group');
+    if (groupInvite.open && (!group || !inviteMatches(inviteTarget))) groupInvite.close();
     toggle.hidden = !group;
     if (!group) {
       panel.hidden = true;
@@ -1953,15 +2078,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function setSocialHeaderTools(social) {
     const invite = document.getElementById('chat-invite');
-    const unavailable = document.getElementById('chat-invite-unavailable');
+    const group = social && currentConversation?.kind === 'group';
+    document.getElementById('chat-group-invite').hidden = !group;
     const multi = document.getElementById('multi-select-toggle');
-    if (invite) invite.hidden = !social;
-    if (unavailable) unavailable.hidden = social;
+    if (invite) invite.hidden = !social || group;
     if (multi) multi.hidden = !social;
+    if (!social || group) {
+      const panel = document.getElementById('chat-invite-panel');
+      if (panel) panel.hidden = true;
+      invite?.setAttribute('aria-expanded', 'false');
+    }
     if (!social) {
       selecting = false; selectedMessages.clear(); syncForwardBar();
       renderPinned([]);
-      const panel = document.getElementById('chat-invite-panel'); if (panel) panel.hidden = true;
     }
   }
 
@@ -1987,6 +2116,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncMuteButton();
     currentSource = 'agent';
     currentAgent = agent;
+    chatCalls.sync();
     voiceRecorder.refresh();
     document.getElementById('social-agent-members').hidden = true;
     setDirectoryLink({source: 'agent'});
@@ -2039,6 +2169,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentConversation = result.body.conversation;
     setSocialHistory({wid, cid: conversationId, cursor: result.body.cursor ?? null});
+    chatCalls.sync();
     agentMentions.refresh();
     voiceRecorder.refresh();
     setSessionsOpen(false);
@@ -2441,6 +2572,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             currentAgent = agents.find(entry => entry.id === item.id) || null;
             currentConversation = null;
             currentSource = 'agent';
+            chatCalls.sync();
             socialOpen += 1;
             setSocialHistory(null);
             if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
@@ -2519,6 +2651,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (session.status !== 200) {
       currentUser = null;
       currentConversation = null;
+      chatCalls.sync();
       socialOpen += 1;
       setSocialHistory(null);
       voiceRecorder.refresh();
@@ -2534,6 +2667,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
+    if (servedByDsbot) chatCalls.resumeMeeting();
     document.getElementById('session-pane').hidden = false;
     document.body.classList.add('chat-open');
     setSessionsOpen(true);
@@ -2719,6 +2853,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentAgent = null;
     currentConversation = null;
     currentSource = 'agent';
+    chatCalls.sync();
     voiceRecorder.refresh();
     clearVoicePlayers();
     stopPolling();
@@ -3190,6 +3325,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     menu.hidden = !open;
     button.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
+  for (const [id, action] of [['start-video-meeting', 'create'], ['join-video-meeting', 'join']]) {
+    const button = document.getElementById(id);
+    button.hidden = !servedByDsbot;
+    button.addEventListener('click', () => {
+      closeComposeMenu();
+      document.getElementById('new-conversation').focus();
+      chatCalls.openMeeting(action);
+    });
+  }
   document.getElementById('group-agent-form').addEventListener('submit', async event => {
     event.preventDefault();
     if (groupReplyBusy || currentSource !== 'social' || !currentConversation) return;

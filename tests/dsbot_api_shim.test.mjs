@@ -68,6 +68,9 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget(`/v1/workspaces/${WS}/directory`, ORIGIN).feature, 'teams');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations?limit=20`, ORIGIN).feature, 'messenger');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations/otc_01/messages`, ORIGIN).feature, 'messenger');
+  for (const action of ['create', 'preview', 'join', 'poll', 'signal', 'leave', 'end']) {
+    assert.equal(movedTarget('/v1/meeting-calls/' + action, ORIGIN).feature, 'messenger');
+  }
   assert.equal(movedTarget('/v1/discover/agents?q=x', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/me/works?tab=following', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/works/my-essay/engagement', ORIGIN).feature, 'discover');

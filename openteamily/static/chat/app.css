@@ -1698,14 +1698,59 @@ html[data-theme-resolved="dark"] position: absolute; right: .5rem; bottom: -.625
 #message-list li > .message-more:focus-visible { opacity: 1; }
 #message-list li .message-reactions:not(:has(.reaction-chip)):not(:has(.reaction-picker:not([hidden]))) { bottom: .125rem; right: -1.875rem; }
 #message-list li.mine .message-reactions:not(:has(.reaction-chip)):not(:has(.reaction-picker:not([hidden]))) { right: auto; left: -1.875rem; }
-#save-message-dialog { width: min(30rem, calc(100vw - 2rem)); padding: 1.5rem; border: 1px solid var(--ot-line); border-radius: 1rem; background: var(--ot-surface); color: var(--ot-ink); }
-#save-message-dialog::backdrop { background: rgb(0 0 0 / 25%); }
-#save-message-dialog form { border: 0; padding: 0; box-shadow: none; background: transparent; }
-#save-message-dialog h2 { margin: 0; font-size: 1.125rem; }
-#save-message-dialog p { font-size: .875rem; line-height: 1.65; }
+#save-message-dialog, #group-invite-dialog { width: min(30rem, calc(100vw - 2rem)); padding: 1.5rem; border: 1px solid var(--ot-line); border-radius: 1rem; background: var(--ot-surface); color: var(--ot-ink); }
+#save-message-dialog::backdrop, #group-invite-dialog::backdrop { background: rgb(0 0 0 / 25%); }
+#save-message-dialog form, #group-invite-form { border: 0; padding: 0; box-shadow: none; background: transparent; }
+#save-message-dialog h2, #group-invite-heading { margin: 0; font-size: 1.125rem; }
+#save-message-dialog p, #group-invite-dialog p { font-size: .875rem; line-height: 1.65; }
 #save-message-dialog label { display: grid; gap: .5rem; font-size: .875rem; }
-#save-message-dialog .actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
+#save-message-dialog .actions, #group-invite-dialog .actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }
 #save-message-dialog [role="alert"] { color: var(--ot-danger); }
+#group-invite-dialog { box-sizing: border-box; max-height: calc(100dvh - 2rem); }
+#group-invite-form { display: grid; gap: .75rem; }
+#group-invite-dialog p { margin: 0; }
+#group-invite-dialog .actions { margin-top: .25rem; }
+#group-invite-context { color: var(--ot-muted); overflow-wrap: anywhere; }
+#group-invite-query { width: 100%; }
+#group-invite-choices { max-height: min(16rem, 36dvh); overflow-y: auto; }
+#group-invite-choices label { min-height: 2.75rem; padding: .25rem .5rem; border-radius: .55rem; overflow-wrap: anywhere; }
+#group-invite-choices label:hover { background: var(--ot-surface-2); }
+#group-invite-choices input { flex: 0 0 auto; }
+#group-invite-status:empty { display: none; }
+#group-info-invite { min-height: 2.5rem; text-align: left; color: var(--ot-accent); }
+
+#chat-call-incoming { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+#chat-call-incoming[hidden], #chat-call-dialog [hidden] { display: none; }
+#chat-call-dialog {
+  box-sizing: border-box;
+  width: min(42rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  padding: 1.25rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+#chat-call-dialog::backdrop { background: rgb(0 0 0 / 40%); }
+#chat-call-dialog h2 { margin: 0; font-size: 1.125rem; }
+#chat-call-dialog p { margin: .45rem 0; overflow-wrap: anywhere; }
+#chat-call-dialog .actions { margin-top: .75rem; gap: .5rem; }
+#chat-call-dialog .actions button { min-height: 2.75rem; }
+#chat-call-choices button:last-child, #chat-call-join { background: var(--ot-accent); color: var(--ot-on-accent, white); border: 0; }
+#chat-call-footer { justify-content: flex-end; }
+#chat-call-media { display: grid; gap: .5rem; margin-top: .75rem; }
+#chat-call-media:has(#chat-call-peers > div) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#chat-call-peers { display: contents; }
+#chat-call-local, #chat-call-peers > div {
+  display: grid;
+  gap: .25rem;
+  padding: .5rem;
+  background: var(--ot-surface-2);
+  border-radius: .65rem;
+  overflow-wrap: anywhere;
+}
+#chat-call-media video { width: 100%; max-height: 24dvh; aspect-ratio: 16 / 9; object-fit: contain; border-radius: .45rem; background: #16201a; }
+#chat-call-media:not(:has(#chat-call-peers > div)) #chat-call-local { justify-self: start; width: min(11rem, 100%); }
 .search-hit[role="button"] { cursor: pointer; }
 .search-hit[role="button"]:hover, .search-hit[role="button"]:focus-visible { background: var(--ot-bg-accent); }
 #message-list li[data-search-jump="true"] { outline: 2px solid var(--ot-accent); outline-offset: 3px; }
@@ -1871,3 +1916,42 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   margin: .5rem auto 1rem;
   background: var(--ot-surface);
 }
+
+#chat-call-dialog[data-prejoin] { width: min(27rem, calc(100vw - 1.5rem)); }
+#chat-call-conversation:empty, #chat-call-status:empty, #chat-meeting-share-status:empty { display: none; }
+#chat-call-conversation, #chat-call-status, #chat-meeting-share-status {
+  color: var(--ot-muted);
+  font-size: .875rem;
+}
+#chat-meeting-form { display: grid; gap: .875rem; margin-top: 1rem; }
+#chat-meeting-field, #chat-meeting-share { display: grid; gap: .375rem; font-size: .875rem; }
+#chat-meeting-form fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: .5rem;
+  padding: 0;
+  border: 0;
+  margin: 0;
+  background: none;
+  box-shadow: none;
+}
+#chat-meeting-form legend { margin-bottom: .375rem; padding: 0; font-size: .875rem; }
+#chat-meeting-form fieldset label {
+  display: inline-flex;
+  align-items: center;
+  gap: .375rem;
+  padding: .375rem .625rem;
+  min-height: 2.5rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .625rem;
+}
+#chat-meeting-form input[type="checkbox"] { accent-color: var(--ot-accent); }
+#chat-meeting-field input, #chat-meeting-link { min-width: 0; width: 100%; min-height: 2.75rem; box-sizing: border-box; }
+#chat-meeting-share { margin-top: 1rem; }
+#chat-meeting-share > div { display: flex; gap: .5rem; }
+#chat-meeting-copy { flex: 0 0 auto; }
+#chat-meeting-submit { background: var(--ot-accent); color: var(--ot-on-accent, white); border: 0; }
+#chat-meeting-end { color: var(--ot-danger); }
+#chat-meeting-hangup { background: var(--ot-danger); color: white; border: 0; }
+#chat-call-controls:not([hidden]) ~ #chat-call-footer #chat-call-close { background: var(--ot-danger); color: white; border: 0; }
