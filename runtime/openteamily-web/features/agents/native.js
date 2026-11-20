@@ -77,7 +77,9 @@ export function nativeAgents({ host, db }) {
     const bot = rt.botOf(mapped.native_bot_id)
     const reconcile = async () => {
       let m = one('SELECT * FROM native_agent_sessions WHERE conversation_key=?', key)
-      const legacyId = s.legacySession?.(key)
+      const conversationId = key.slice(('agent:' + row.id + ':').length)
+      const privateConversation = one('SELECT id FROM agent_conversations WHERE id=? AND agent_id=?', conversationId, row.id)
+      const legacyId = s.legacySession?.(key) || (privateConversation ? s.legacySession?.(conversationId) : undefined)
       let adopted
       if (legacyId) adopted = await adoptThread({ rt, source: rt.botOf(await s.mainBot()), target: bot, sessionId: legacyId })
       bot.openteamily.sessionKeys ??= {}
@@ -90,8 +92,7 @@ export function nativeAgents({ host, db }) {
         run('INSERT INTO native_agent_sessions VALUES(?,?,?)', key, row.id, sessionId)
         m = { session_id: sessionId }
       } else if (adopted) await rt.save()
-      const conversationId = key.slice(('agent:' + row.id + ':').length)
-      const counts = await importHistory({ db, rt, ctx: s.ctx, bot, conversationId, sessionId: m.session_id })
+      const counts = await importHistory({ db, rt, ctx: s.ctx, bot, conversationId, sessionId: m.session_id, secondarySessionId: adopted })
       return { ...m, history: counts }
     }
     const m = s.exclusive ? await s.exclusive(reconcile) : await reconcile()
