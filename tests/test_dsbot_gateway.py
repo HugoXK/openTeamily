@@ -127,6 +127,9 @@ class GatewayTest(unittest.TestCase):
     def test_shipped_routes_move_private_chat(self):
         self.assertTrue({'chat', 'meetings', 'skills', 'memory', 'settings', 'onboarding'} <= gw.load_routes()['moved_pages'])
         self.assertEqual(gw.target_for('/chat/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fchat%2Fapp.mjs')
+        self.assertEqual(gw.target_for('/settings', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings')
+        self.assertEqual(gw.target_for('/settings/connectors', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings%2Fconnectors')
+        self.assertEqual(gw.target_for('/onboarding', gw.load_routes()), '/api/openteamily/page?path=%2Fonboarding')
 
     def test_record_upstream_validation(self):
         with self.store.transaction() as db:
@@ -157,7 +160,11 @@ class GatewayTest(unittest.TestCase):
             gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081)
         with self.assertRaises(ValueError):
             gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key_include='../x')
-        self.assertIn('set $ot_gateway_key "' + 'k' * 40 + '";', gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40))
+        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
+        self.assertIn('set $ot_gateway_key "' + 'k' * 40 + '";', conf)
+        self.assertIn('location = /settings { return 418; }', conf)
+        self.assertIn('location ^~ /settings/ { return 418; }', conf)
+        self.assertIn('location = /onboarding { return 418; }', conf)
 
     def report(self, iid, body, manager_token):
         import io
