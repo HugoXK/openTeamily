@@ -1,3 +1,4 @@
+import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 // Authorized saved-result links select a real workspace and fetch the actual editor record.
 export function artifactTargetFromSearch(search) {
@@ -286,7 +287,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
   let currentUser = null;
-  let workspaces = [];
+  let workspaceLoad = 0;
   let current = null;
   let draftKind = 'document';
   let catalogKind = 'all';
@@ -302,6 +303,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let meetingError = '';
   let meetingLoadedFor = '';
   let meetingLoading = false;
+  let meetingRequest = 0;
   // A delete question is bound to the workspace and artifact it was asked about;
   // leaving that workspace retires it instead of letting the answer land elsewhere.
   let pendingDeleteCancel = null;
@@ -680,7 +682,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function syncViewUrl() {
     const view = document.defaultView;
     if (!view || !view.history || !view.history.replaceState) return;
-    const url = worksPath() + queryForView(catalogKind, catalogScope);
+    const fragment = catalogKind === 'meetings' && workspaceId() ? '#workspace=' + encodeURIComponent(workspaceId()) : '';
+    const url = worksPath() + queryForView(catalogKind, catalogScope) + fragment;
     view.history.replaceState({}, '', url);
   }
 
@@ -688,6 +691,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     catalogKind = kind || 'all';
     catalogScope = scope || 'all';
     if (catalogKind === 'meetings') catalogScope = 'all';
+    const searchLabel = catalogKind === 'meetings' ? '搜索会议' : '搜索作品';
+    search.placeholder = searchLabel;
+    search.setAttribute('aria-label', searchLabel);
     for (const item of document.querySelectorAll('.artifact-kinds [data-kind]')) {
       if (item.getAttribute('data-kind') === catalogKind) item.setAttribute('aria-current', 'page');
       else item.removeAttribute('aria-current');
@@ -760,21 +766,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function loadMeetings() {
     const id = workspaceId();
+    if (!id || meetingLoadedFor === id) return;
+    const seq = ++meetingRequest;
     meetingItems = [];
     meetingError = '';
     meetingLoadedFor = id;
-    if (!id) return;
     meetingLoading = true;
-    const listed = await request('GET', `/v1/workspaces/${id}/meetings?limit=50`);
+    renderCatalog();
+    const listed = await request('GET', `/v1/workspaces/${id}/meetings?limit=100`).catch(() => ({status: 0, body: {}}));
+    if (seq !== meetingRequest || workspaceId() !== id) return;
     meetingLoading = false;
-    if (listed.status !== 200) {
-      meetingItems = [];
+    if (listed.status === 200) {
+      meetingItems = listed.body.items || [];
+    } else {
+      meetingLoadedFor = '';
       meetingError = messageFor(listed.body.error, '无法读取会议纪要。');
-      show('error', meetingError);
-      return;
     }
-    meetingItems = listed.body.items || [];
-    meetingError = '';
+    if (catalogKind === 'meetings') renderCatalog();
   }
 
   function renderMeetings() {
@@ -782,7 +790,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const empty = document.getElementById('list-empty');
     const emptyMeetings = document.getElementById('empty-meetings');
     const errorBox = document.getElementById('meetings-error');
-    const rows = meetingRows(meetingsForScope(meetingItems, {
+    const needle = search.value.trim().toLocaleLowerCase();
+    const matches = meetingItems.filter(item => [item.title, ...(item.attendees || [])]
+      .some(value => String(value).toLocaleLowerCase().includes(needle)));
+    const rows = meetingRows(meetingsForScope(matches, {
       scope: meetingScope,
       username: currentUser && currentUser.username,
       userId: currentUser && currentUser.id,
@@ -800,12 +811,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const emptyKind = document.getElementById('empty-kind');
     if (emptyKind) emptyKind.hidden = true;
-    if (emptyMeetings) emptyMeetings.hidden = Boolean(meetingError) || rows.length > 0 || meetingLoading;
-    if (empty) empty.hidden = Boolean(meetingError) || rows.length > 0;
+    const waiting = document.getElementById('meetings-loading');
+    if (waiting) waiting.hidden = !meetingLoading;
+    const noMatch = document.getElementById('meetings-no-match');
+    const filtered = Boolean(needle) || meetingScope === 'joined';
+    if (noMatch) noMatch.hidden = !filtered || Boolean(meetingError) || meetingLoading || rows.length > 0;
+    if (emptyMeetings) emptyMeetings.hidden = filtered || Boolean(meetingError) || rows.length > 0 || meetingLoading || !workspaceId();
+    if (empty) empty.hidden = !meetingError && rows.length > 0;
+    const retry = document.getElementById('retry-meetings');
+    if (retry) retry.hidden = !meetingError;
+    const create = document.getElementById('new-meeting-in-space');
+    if (create) {
+      create.hidden = !workspaceId();
+      create.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), new: '1'});
+    }
     for (const row of rows) {
       const item = document.createElement('li');
-      item.className = 'artifact-item';
+      item.className = 'meeting-item';
       item.dataset.kind = 'meetings';
+      const link = document.createElement('a');
+      link.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), meeting: row.id});
       const title = document.createElement('span');
       title.className = 'meeting-title';
       title.textContent = row.title;
@@ -815,7 +840,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const actions = document.createElement('span');
       actions.className = 'note meeting-actions';
       actions.textContent = row.actionLabel;
-      item.append(title, when, actions);
+      link.append(title, when, actions);
+      item.appendChild(link);
       list.appendChild(item);
     }
     return rows;
@@ -1320,6 +1346,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const banner=document.getElementById('artifact-live-update');if(banner)banner.hidden=true;
   });
   async function loadList() {
+    if (catalogKind === 'meetings') {
+      listGeneration += 1;
+      workspaceEvents.start('');
+      await loadMeetings();
+      return;
+    }
     workspaceEvents.start(workspaceId());
     const generation = ++listGeneration;
     const id = workspaceId();
@@ -1336,8 +1368,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderCatalog();
   }
 
+  function fillWorkspaces(items, selected) {
+    workspaceSelect.textContent = '';
+    for (const item of items) {
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = item.name;
+      workspaceSelect.appendChild(option);
+    }
+    if (items.some(item => item.id === selected)) workspaceSelect.value = selected;
+  }
+
   async function load() {
+    const seq = ++workspaceLoad;
     const session = await request('GET', '/v1/auth/session');
+    if (seq !== workspaceLoad) return;
     if (session.status === 401) {
       loginPanel.hidden = false;
       mainPanel.hidden = true;
@@ -1355,24 +1400,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = currentUser.username;
-    const space = await request('GET', '/v1/workspaces?limit=100');
+    const requested = artifactTargetFromSearch(document.defaultView?.location?.search);
+    const fragment = new URLSearchParams((document.defaultView?.location?.hash || '').slice(1));
+    const linkedWorkspace = requested?.workspace || (catalogKind === 'meetings' ? fragment.get('workspace') : '');
+    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100');
+    if (linkedWorkspace && !space.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
+      const shared = await supplemental;
+      if (shared.status === 200) space = shared;
+      supplemental = null;
+    }
+    if (seq !== workspaceLoad) return;
     if (space.status !== 200) {
-      show('error', messageFor(space.body.error, '无法读取工作区。'));
+      show('error', '无法读取工作区。');
       return;
     }
-    workspaces = space.body.items || [];
-    const requested=artifactTargetFromSearch(document.defaultView?.location?.search);
-    const previous = workspaceSelect.value;
-    workspaceSelect.textContent = '';
-    for (const item of workspaces) {
-      const option = document.createElement('option');
-      option.value = item.id;
-      option.textContent = item.name;
-      workspaceSelect.appendChild(option);
-    }
-    if (previous && [...workspaceSelect.options].some(option => option.value === previous)) {
-      workspaceSelect.value = previous;
-    }
+    const workspaces = space.body.items || [];
+    fillWorkspaces(workspaces, linkedWorkspace || workspaceId());
+    void supplemental?.then(shared => {
+      if (seq === workspaceLoad && shared.status === 200) fillWorkspaces(shared.body.items, workspaceId());
+    });
     if (!workspaces.length) {
       allItems = [];
       document.getElementById('artifact-list').textContent = '';
@@ -1385,6 +1431,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (emptyMessage) emptyMessage.textContent = '这个工作区还没有作品。';
     form.hidden = true;
     listPanel.hidden = false;
+    if (catalogKind === 'meetings' && linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
+      workspaceSelect.value = '';
+      meetingError = '无法打开此工作区的会议资料。请选择其他工作区。';
+      renderCatalog();
+      return;
+    }
     if(requested){
       if(requested.invalid||!workspaces.some(w=>w.id===requested.workspace)){
         await loadList();show('error','文档链接无效，或你没有访问该工作区的权限。');return;
@@ -1414,11 +1466,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     meetingLoadedFor = '';
     meetingItems = [];
     meetingError = '';
-    loadList().then(() => {
-      if (catalogKind === 'meetings') loadMeetings().then(() => renderCatalog());
-    });
+    meetingLoading = false;
+    if (catalogKind === 'meetings') syncViewUrl();
+    void loadList();
   });
-  search.addEventListener('input', () => loadList());
+  search.addEventListener('input', () => {
+    if (catalogKind === 'meetings') renderMeetings();
+    else void loadList();
+  });
+  document.getElementById('retry-meetings')?.addEventListener('click', () => loadMeetings());
 
   document.getElementById('new-artifact').addEventListener('click', () => {
     draftKind = 'document';
@@ -1514,17 +1570,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const kind = button.getAttribute('data-kind') || 'all';
       const scope = kind === 'meetings' ? 'all' : (catalogScope === 'favorites' || catalogScope === 'memory' || catalogScope === 'mine' ? catalogScope : 'all');
       applyView(kind, scope);
-      if (kind === 'meetings' && meetingLoadedFor !== workspaceId()) {
-        meetingLoading = true;
-        renderCatalog();
-        await loadMeetings();
-        renderCatalog();
-      }
+      await loadList();
     });
   }
   for (const button of document.querySelectorAll('.artifact-scopes [data-scope]')) {
     button.addEventListener('click', () => {
+      const leavingMeetings = catalogKind === 'meetings';
       applyView('all', button.getAttribute('data-scope') || 'all');
+      if (leavingMeetings) void loadList();
     });
   }
   for (const button of document.querySelectorAll('.meeting-scopes [data-meeting-scope]')) {
@@ -2289,6 +2342,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     view.addEventListener('popstate', () => {
       const next = viewFromSearch(view.location.search);
       applyView(next.kind, next.scope, {sync: false});
+      void loadList();
     });
   }
   return load().then(() => {

@@ -738,8 +738,15 @@ body.app-workspace:not(.chat-open) > main > #main-panel { padding: .65rem .75rem
 #layout-note { font-size: .75rem; margin: .6rem 0; }
 #editor-form { max-width: 64rem; margin: .5rem auto; box-shadow: none; }
 @media (max-width: 850px) { .artifacts-workspace { grid-template-columns: 11rem minmax(0,1fr); } }
-@media (max-width: 650px) {
-  .artifacts-workspace { display: flex; flex-direction: column; }
+@media (max-width: 700px) {
+  #list-panel.artifacts-workspace:not([hidden]) {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow-y: auto;
+  }
+  #list-panel > .artifact-dir,
+  #list-panel > .artifact-main { flex: 0 0 auto; min-width: 0; }
   .artifact-dir { border-right: 0; border-bottom: 1px solid var(--ot-line); overflow: visible; }
   .artifact-kinds { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; }
   .artifact-kinds button { flex: 0 0 auto; width: auto; }
@@ -1122,4 +1129,86 @@ body.app-workspace #document-rich:focus-visible { outline: none; }
 #agent-task-list button {
   min-height: 2.5rem;
   padding: 0 0.9rem;
+}
+
+#main-panel.is-meetings .new-menu-wrap,
+#main-panel.is-meetings #workspace-events-status,
+#main-panel.is-meetings #workspace-events-retry { display: none; }
+
+#main-panel.is-meetings #artifact-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: .5rem;
+}
+
+#artifact-list li.meeting-item {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.meeting-item > a {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .2rem .75rem;
+  padding: .7rem .85rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .75rem;
+  color: var(--ot-ink);
+  text-decoration: none;
+}
+
+.meeting-item > a:hover, .meeting-item > a:focus-visible {
+  background: var(--ot-surface-2);
+  border-color: var(--ot-accent);
+}
+
+.meeting-item .meeting-title { font-weight: 650; overflow-wrap: anywhere; }
+.meeting-item .note { margin: 0; color: var(--ot-muted); font-size: .75rem; }
+.meeting-item .meeting-actions { grid-column: 1 / -1; }
+
+@media (max-width: 700px) {
+  .meeting-item > a { grid-template-columns: minmax(0, 1fr); }
+}
+
+#new-meeting-in-space {
+  border-radius: 999px;
+  padding: .45rem .8rem;
+  background: var(--ot-accent);
+  color: var(--ot-on-accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+@media (max-width: 700px) {
+  #main-panel.is-meetings .artifacts-top {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: .6rem;
+  }
+  #main-panel.is-meetings #meetings-chrome {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: .6rem;
+  }
+  #main-panel.is-meetings #meetings-caption { display: none; }
+  #main-panel.is-meetings .meeting-scopes { grid-column: 1 / -1; }
+  #main-panel.is-meetings .meeting-scopes button { white-space: nowrap; }
+  #main-panel.is-meetings .workspace-picker { margin: 0; }
+  #main-panel.is-meetings .artifact-kinds {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: .25rem;
+  }
+  #main-panel.is-meetings .artifact-kinds button {
+    min-width: 0;
+    min-height: 2.25rem;
+    padding-inline: .35rem;
+    gap: .3rem;
+    white-space: nowrap;
+  }
 }

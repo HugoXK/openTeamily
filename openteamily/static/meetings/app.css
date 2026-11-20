@@ -79,3 +79,11 @@
 .attendee-matches button:hover,
 .attendee-matches button[aria-selected="true"] { background: var(--ot-bg-accent); }
 .attendee-matches .note { padding: 0.45rem 0.55rem; font-size: 0.8rem; color: var(--ot-muted); }
+
+#meeting-library {
+  color: var(--ot-muted);
+  font-size: .85rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+#meeting-library:hover, #meeting-library:focus-visible { color: var(--ot-accent); }
