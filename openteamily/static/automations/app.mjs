@@ -482,7 +482,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function stopRunPoll() {
     if (runTimer) {
-      globalThis.clearInterval(runTimer);
+      globalThis.clearTimeout(runTimer);
       runTimer = 0;
     }
   }
@@ -636,21 +636,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadRuns();
   }
 
+  function scheduleRunPoll(pending) {
+    if (!pending && !current?.enabled) return;
+    runTimer = globalThis.setTimeout(() => {
+      runTimer = 0;
+      void loadRuns();
+    }, pending ? 3000 : 12000);
+  }
+
   async function loadRuns() {
+    stopRunPoll();
     const panel = document.getElementById('run-panel');
     if (!panel) return;
     if (!current || !current.id || !workspaceId()) {
       panel.hidden = true;
-      stopRunPoll();
       return;
     }
     const workspace = workspaceId(), automation = current.id;
     const seq = ++runRequest;
     const wanted = runFilter === 'all' ? '' : `&status=${runFilter}`;
-    const listed = await request('GET', `/v1/workspaces/${workspace}/automations/${automation}/runs?limit=20${wanted}`);
+    const listed = await request('GET', `/v1/workspaces/${workspace}/automations/${automation}/runs?limit=20${wanted}`)
+      .catch(() => ({status: 0, body: {}}));
     if (seq !== runRequest || workspaceId() !== workspace || current?.id !== automation || form.hidden) return;
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法读取运行记录。'));
+      scheduleRunPoll(recentRuns.some(item => item.status === 'queued'));
       return;
     }
     const items = listed.body.items || [];
@@ -658,10 +668,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pending = items.some(item => item.status === 'queued');
     runButton.disabled = pending || manualPending.has(automation);
     runButton.textContent = pending ? '运行中…' : '运行一次';
-    if (pending && !runTimer) {
-      runTimer = globalThis.setInterval(() => { loadRuns(); }, 3000);
-    }
-    if (!pending) stopRunPoll();
+    scheduleRunPoll(pending);
   }
 
   async function renderProviders() {

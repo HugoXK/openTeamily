@@ -268,23 +268,22 @@ function postCount(calls, fragment) {
   return calls.filter(entry => entry.startsWith('POST ') && entry.includes(fragment)).length;
 }
 
-// A queued run starts a 3 s poll through globalThis.setInterval. Stub it while a
-// test drives the editor so `node --test` can exit, and restore it afterwards.
-function holdRunPolling() {
-  const saved = {setInterval: globalThis.setInterval, clearInterval: globalThis.clearInterval};
-  globalThis.setInterval = () => 0;
-  globalThis.clearInterval = () => {};
+// Stub poll timers while the editor is mounted in Node.
+function holdRunPolling(schedule = () => 0) {
+  const saved = {setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout};
+  globalThis.setTimeout = schedule;
+  globalThis.clearTimeout = () => {};
   return () => {
-    globalThis.setInterval = saved.setInterval;
-    globalThis.clearInterval = saved.clearInterval;
+    globalThis.setTimeout = saved.setTimeout;
+    globalThis.clearTimeout = saved.clearTimeout;
   };
 }
 
 async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 'ws1', name: '团队'}],
-  search = '', pushes = [], windowHandlers = {}} = {}) {
+  search = '', pushes = [], windowHandlers = {}, schedulePoll, getRuns} = {}) {
   // The click handlers resolve `document` and the run poll from globals, so both
   // stay installed until the test calls restore().
-  const restorePolling = holdRunPolling();
+  const restorePolling = holdRunPolling(schedulePoll);
   const {doc, elements} = fakeDocument();
   const view = {
     location: {search},
@@ -305,7 +304,8 @@ async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 
     const listedRuns = path.match(/^\/v1\/workspaces\/([^/]+)\/automations\/([^/]+)\/runs\?limit=20(?:&status=([a-z]+))?$/);
     if (method === 'GET' && listedRuns) {
       const wanted = listedRuns[3] || '';
-      const rows = runs.filter(item => !wanted || item.status === wanted);
+      const allRows = getRuns ? await getRuns() : runs;
+      const rows = allRows.filter(item => !wanted || item.status === wanted);
       return {status: 200, json: async () => ({items: listedRuns[2] === 'a1' ? rows : []})};
     }
     if (method === 'POST' && /^\/v1\/workspaces\/[^/]+\/automations\/[^/]+\/remove$/.test(path)) {
@@ -346,6 +346,38 @@ async function openFirst(elements) {
   openButtonIn(list.children[0]).handlers.click[0]();
   await flush();
 }
+
+test('run polling waits for the current request and keeps watching an enabled schedule', async () => {
+  const timers = [];
+  const {promise: nextRuns, resolve: resolveNext} = Promise.withResolvers();
+  let requests = 0;
+  const queued = {id: 'r1', status: 'queued', started: 1795085700};
+  const succeeded = {...queued, status: 'succeeded'};
+  const {elements, restore} = await mountEditor({
+    schedulePoll(callback, delay) {
+      timers.push({callback, delay});
+      return timers.length;
+    },
+    getRuns: () => ++requests === 1 ? [queued] : nextRuns,
+  });
+  try {
+    await openFirst(elements);
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].delay, 3000);
+    timers.shift().callback();
+    await flush();
+    assert.equal(requests, 2);
+    assert.equal(timers.length, 0, 'a slow request must have time to finish');
+    resolveNext([succeeded]);
+    await flush();
+    assert.match(elements.get('run-list').textContent, /已完成/);
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].delay, 12000, 'an enabled task still watches for scheduled runs');
+  } finally {
+    resolveNext([succeeded]);
+    restore();
+  }
+});
 
 function alertdialogIn(parent) {
   return parent.children.find(node => node.getAttribute('role') === 'alertdialog');
