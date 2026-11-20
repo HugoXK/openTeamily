@@ -1262,7 +1262,8 @@ class App:
         if match:
             if method == 'POST':
                 self.body(env, [])
-                created, result = runtime.create(owner, match[1], env.get('HTTP_IDEMPOTENCY_KEY', ''))
+                created, result = runtime.create(owner, match[1], env.get('HTTP_IDEMPOTENCY_KEY', ''),
+                                                 per_user=self.auto_provision.enabled)
                 return 201 if created else 200, self.with_model_api(match[1], result), []
             limit, cursor, _ = self.pagination(query)
             return 200, self.with_model_api(match[1], runtime.listing(owner, match[1], limit, cursor)), []
