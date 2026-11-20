@@ -1,0 +1,58 @@
+// Memory tables inside the user's DS-Bot (legacy openteamily/memory.py SCHEMA,
+// minus references to platform users/workspaces). ot_users maps legacy user
+// ids to usernames for display; is_owner marks this DS-Bot's account.
+export const MIGRATIONS = [`
+CREATE TABLE IF NOT EXISTS ot_users (id TEXT PRIMARY KEY, username TEXT NOT NULL, is_owner INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS memory_pages (
+ id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL, title_hash TEXT NOT NULL, body TEXT NOT NULL,
+ revision INTEGER NOT NULL CHECK(revision >= 1), created INTEGER NOT NULL, updated INTEGER NOT NULL,
+ created_by TEXT NOT NULL, updated_by TEXT NOT NULL, key_hash TEXT NOT NULL, request_hash TEXT NOT NULL,
+ UNIQUE(workspace_id, key_hash), UNIQUE(workspace_id, title_hash));
+CREATE TABLE IF NOT EXISTS memory_page_versions (
+ page_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE, workspace_id TEXT NOT NULL,
+ revision INTEGER NOT NULL CHECK(revision >= 1), title TEXT NOT NULL, body TEXT NOT NULL, created INTEGER NOT NULL,
+ created_by TEXT NOT NULL, PRIMARY KEY(page_id, revision));
+CREATE INDEX IF NOT EXISTS memory_page_version_owner ON memory_page_versions(workspace_id, page_id, revision);
+CREATE TABLE IF NOT EXISTS memory_actions (
+ id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL, notes TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('open', 'done')), due_at INTEGER CHECK(due_at IS NULL OR due_at >= 0),
+ memory_page_id TEXT REFERENCES memory_pages(id) ON DELETE SET NULL, revision INTEGER NOT NULL CHECK(revision >= 1),
+ created INTEGER NOT NULL, updated INTEGER NOT NULL, created_by TEXT NOT NULL, updated_by TEXT NOT NULL,
+ key_hash TEXT NOT NULL, request_hash TEXT NOT NULL, UNIQUE(workspace_id, key_hash));
+CREATE TABLE IF NOT EXISTS memory_page_topics (
+ page_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE, workspace_id TEXT NOT NULL,
+ name TEXT NOT NULL, name_hash TEXT NOT NULL, PRIMARY KEY (page_id, name_hash));
+CREATE INDEX IF NOT EXISTS memory_page_topic_workspace ON memory_page_topics(workspace_id, name_hash, page_id);
+CREATE TABLE IF NOT EXISTS memory_links (
+ id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
+ left_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE,
+ right_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE,
+ created INTEGER NOT NULL, created_by TEXT NOT NULL, key_hash TEXT NOT NULL, request_hash TEXT NOT NULL,
+ UNIQUE(workspace_id, left_id, right_id), UNIQUE(workspace_id, key_hash), CHECK(left_id < right_id));
+CREATE INDEX IF NOT EXISTS memory_link_workspace ON memory_links(workspace_id, id);
+CREATE TABLE IF NOT EXISTS memory_suggestions (
+ id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, page_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL, summary TEXT NOT NULL, payload TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('open', 'accepted', 'ignored')), created INTEGER NOT NULL, decided INTEGER, applied TEXT);
+CREATE INDEX IF NOT EXISTS memory_suggestion_page ON memory_suggestions(workspace_id, page_id, id);
+CREATE TABLE IF NOT EXISTS memory_profiles (
+ workspace_id TEXT NOT NULL, user_id TEXT NOT NULL, professional TEXT NOT NULL, work_style TEXT NOT NULL,
+ communication TEXT NOT NULL, revision INTEGER NOT NULL, updated INTEGER NOT NULL, PRIMARY KEY(workspace_id, user_id));
+CREATE TABLE IF NOT EXISTS memory_preferences (
+ id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, user_id TEXT NOT NULL, text TEXT NOT NULL, text_hash TEXT NOT NULL,
+ position INTEGER NOT NULL, created INTEGER NOT NULL, key_hash TEXT NOT NULL, request_hash TEXT NOT NULL,
+ UNIQUE(workspace_id, user_id, text_hash), UNIQUE(workspace_id, user_id, key_hash));
+CREATE INDEX IF NOT EXISTS memory_preference_owner ON memory_preferences(workspace_id, user_id, position, id);
+`]
+
+export const IMPORT_TABLES = {
+  ot_users: ['id', 'username', 'is_owner'],
+  memory_pages: ['id', 'workspace_id', 'title', 'title_hash', 'body', 'revision', 'created', 'updated', 'created_by', 'updated_by', 'key_hash', 'request_hash'],
+  memory_page_versions: ['page_id', 'workspace_id', 'revision', 'title', 'body', 'created', 'created_by'],
+  memory_page_topics: ['page_id', 'workspace_id', 'name', 'name_hash'],
+  memory_links: ['id', 'workspace_id', 'left_id', 'right_id', 'created', 'created_by', 'key_hash', 'request_hash'],
+  memory_actions: ['id', 'workspace_id', 'title', 'notes', 'status', 'due_at', 'memory_page_id', 'revision', 'created', 'updated', 'created_by', 'updated_by', 'key_hash', 'request_hash'],
+  memory_suggestions: ['id', 'workspace_id', 'page_id', 'kind', 'summary', 'payload', 'status', 'created', 'decided', 'applied'],
+  memory_profiles: ['workspace_id', 'user_id', 'professional', 'work_style', 'communication', 'revision', 'updated'],
+  memory_preferences: ['id', 'workspace_id', 'user_id', 'text', 'text_hash', 'position', 'created', 'key_hash', 'request_hash'],
+}

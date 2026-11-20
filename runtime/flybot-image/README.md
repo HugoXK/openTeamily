@@ -158,3 +158,26 @@ See `openteamily/manager/engine.py` `manifest()`: service `flybot`, user
 `1000:1000`, read-only, volume `/data`, tmpfs `/tmp`, a single read-only bind
 of the model API secret at `/run/secrets/openteamily-model-api.json`,
 published `127.0.0.1:<port>->8080/tcp`, optional HEALTHCHECK.
+
+## Chat runs on DS-Bot (ds-bot-bridge.mjs)
+
+Management chat tasks are no longer answered by a direct `/chat/completions`
+call. The DSH plugin starts `ds-bot-bridge.mjs` in-process, which:
+
+- polls `/v1/agent` (same bounded backoff/stop rules as `agent-loop.mjs`) and
+  hands each `infer` task to this runtime's DS-Bot Main Bot via `rt.sendUser`;
+  the Bot's reply from that DS-Bot turn is posted as the task result with
+  `engine: "ds-bot"` and the bot/session/request ids;
+- serves a loopback-only (`127.0.0.1:${OPENTEAMILY_BRIDGE_PORT:-18731}`)
+  OpenAI-compatible proxy registered as DS-Bot provider `openteamily`
+  (model `openteamily-model`). DS-Bot holds only a per-boot placeholder token;
+  the proxy injects the task-scoped `model_api` (exact-HTTP grant: no
+  redirects, IPv4, granted path only; otherwise HTTPS). `launch.mjs` no longer
+  exports provider keys into DSH's environment;
+- installs digest-verified skills as native DS-Bot skill capabilities
+  (`ot-skill-<hash>`) attached to the Bot, then sends the skills ack;
+- exposes connected app tools (Composio) as the `ot-tools` streamable-HTTP MCP
+  capability that proxies `/v1/agent/tasks/{id}/tools`; credentials stay on
+  the server and every call still needs the owner's approval there.
+
+Set `OPENTEAMILY_DS_BOT_BRIDGE=0` to disable the bridge (no management chat).
