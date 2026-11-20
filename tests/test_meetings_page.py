@@ -14,7 +14,8 @@ class MeetingsPageTests(unittest.TestCase):
         html = page['body'].decode()
         for ident in ('main-panel', 'meeting-list', 'meeting-form', 'meeting-title',
                       'meeting-started-at', 'meeting-attendees', 'meeting-summary',
-                      'meeting-transcript', 'action-list', 'add-action', 'save-meeting'):
+                      'meeting-transcript', 'action-list', 'add-action', 'save-meeting',
+                      'export-meeting'):
             self.assertIn('id="%s"' % ident, html)
         self.assertIn('href="/meetings/app.css"', html)
         self.assertEqual(self.raw.call('GET', '/meetings/app.mjs')['status'], 200)

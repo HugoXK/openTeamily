@@ -56,7 +56,7 @@
   <section id="login-panel" hidden>
     <h2>登录</h2>
     <form id="login-form" method="post" action="/v1/auth/login">
-      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>用户名 <input type="text" id="username" name="username" required autocomplete="username" maxlength="64"></label>
       <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
       <button type="submit">登录</button>
     </form>
@@ -67,6 +67,7 @@
       <p class="note">对照里记录的 Teamily 下载页列出了网页版和移动、桌面客户端，但没有留下版式截图。本页只提供 OpenTeamily 已经存在的安装方式，不假装有官方 iOS、Android、macOS 或 Windows 客户端。</p>
     </header>
     <p id="whoami"></p>
+    <p id="download-platform" class="note">当前平台：<span id="download-platform-value">未知平台</span>（按浏览器信息识别，不是服务端上报）。</p>
     <section id="download-web">
       <h2>网页版</h2>
       <p>当前就是浏览器里的 OpenTeamily / FlyBot 管理面，没有单独的安装包。</p>
@@ -77,6 +78,7 @@
       <p><a href="/install/flybot.pyz">下载 flybot.pyz</a></p>
       <p>下载后显式启动，例如：</p>
       <pre id="daemon-command">python3 flybot.pyz daemon start --origin __ORIGIN__ --key-file ./runtime-key</pre>
+      <p class="note">这条命令的出处是仓库里的 <code>openteamily/flybot.py</code>（<code>daemon start --origin --key-file</code> 都在它的命令行帮助里）；本页没有别的安装命令，也没有别的客户端可下。</p>
       <p class="note">也可以使用源码树里的 <code>python3 -m openteamily.flybot</code>。运行时密钥在「运行时」页生成。</p>
       <p><a href="/runtimes">打开运行时页</a></p>
     </section>

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   csrfCookie, listQuery, visibleArtifacts, artifactMatchesType,
   artifactMatchesModified, viewFromSearch, queryForView, FILE_TYPE_LABELS,
   sessionFilterChoices, applyDirectoryCollapsed, artifactDeletePrompt, mount,
+  meetingRows, meetingActionLabel, meetingTimeLabel, meetingsForScope,
 } from '../openteamily/static/artifacts/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
@@ -231,7 +233,10 @@ function fakeDocument() {
       created.push(node);
       return node;
     },
-    querySelectorAll() { return []; },
+    querySelectorAll(selector) {
+      if (doc.kindButtons && String(selector).includes('data-kind')) return doc.kindButtons;
+      return [];
+    },
     querySelector() { return null; },
     addEventListener(type, handler) { (doc.handlers[type] ||= []).push(handler); },
     removeEventListener(type, handler) {
@@ -252,8 +257,17 @@ function reply({status = 200, body = {}} = {}) {
   return {status, json: async () => body};
 }
 
-async function openArtifactsPage({items = [], artifact, workspaces = [{id: 'w1', name: 'Desk'}], tasks = [], saveReply = null} = {}) {
+async function openArtifactsPage({items = [], artifact, meetings = [], meetingsStatus = 200, meetingsError = null,
+                                  withKinds = false, workspaces = [{id: 'w1', name: 'Desk'}], tasks = [], saveReply = null} = {}) {
   const {doc, elements, created, form} = fakeDocument();
+  if (withKinds) {
+    doc.kindButtons = ['all', 'website', 'document', 'media', 'messages', 'meetings'].map((kind) => {
+      const node = new FakeNode('button');
+      node.setAttribute('data-kind', kind);
+      node.ownerDocument = doc;
+      return node;
+    });
+  }
   const calls = [];
   const saveCalls = [];
   let listed = items.slice();
@@ -266,6 +280,10 @@ async function openArtifactsPage({items = [], artifact, workspaces = [{id: 'w1',
     if (path === '/v1/workspaces?limit=100') return reply({body: {items: workspaces}});
     if (path === '/v1/workspaces/w2/artifacts') return reply({body: {items: []}});
     if (path === '/v1/workspaces/w1/artifacts') return reply({body: {items: listed}});
+    if (path === '/v1/workspaces/w1/meetings?limit=50') {
+      if (meetingsStatus !== 200) return reply({status: meetingsStatus, body: meetingsError || {}});
+      return reply({body: {items: meetings, cursor: null}});
+    }
     if (path === '/v1/runtime/tasks' && method === 'GET') return reply({body: {items: tasks}});
     const taskSave = /^\/v1\/runtime\/tasks\/([0-9a-f]+)\/artifact$/.exec(path);
     if (taskSave && method === 'POST') {
@@ -304,6 +322,12 @@ async function openArtifactsPage({items = [], artifact, workspaces = [{id: 'w1',
   }
   return {
     doc, elements, created, form, calls, saveCalls,
+    async openKind(kind) {
+      const button = (doc.kindButtons || []).find((node) => node.getAttribute('data-kind') === kind);
+      assert.ok(button, `kind button ${kind} must exist`);
+      await button.dispatch('click');
+    },
+    meetingCalls() { return calls.filter(call => call.path === '/v1/workspaces/w1/meetings?limit=50'); },
     removeCalls() { return calls.filter(call => call.path === '/v1/workspaces/w1/artifacts/a1/remove'); },
     alertdialog() { return created.filter(node => node.getAttribute('role') === 'alertdialog' && node.parentNode); },
     close() {
@@ -605,6 +629,111 @@ test('?new= only opens known 新建 editors', () => {
   assert.equal(newKindButtonId('image'), '');
 });
 
+test('meetingRows sorts newest first and labels action items honestly', () => {
+  const rows = meetingRows([
+    {id: 'm1', title: '周会', started_at: 1700000000, action_count: 2, done_count: 1},
+    {id: 'm2', title: '评审', started_at: 1700003600, action_count: 0, done_count: 0},
+    {id: 'm3', title: '复盘', started_at: 1699996400, action_count: 3, done_count: 3},
+  ]);
+  assert.deepEqual(rows.map((row) => row.title), ['评审', '周会', '复盘']);
+  assert.equal(rows[0].actionLabel, '尚无行动项');
+  assert.equal(rows[1].actionLabel, '2 项行动项，1 项已完成');
+  assert.equal(rows[2].actionLabel, '3 项行动项，全部完成');
+  assert.equal(meetingActionLabel(1, 0), '1 项行动项');
+  assert.equal(meetingActionLabel(undefined, undefined), '尚无行动项');
+  assert.match(meetingTimeLabel(1700000000), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  assert.equal(meetingTimeLabel(0), '');
+  assert.equal(meetingTimeLabel('nope'), '');
+});
+
+test('meetingsForScope keeps the workspace list unless the joined scope is selected', () => {
+  const items = [
+    {id: 'm1', title: '周会', attendees: ['alice'], created_by: 'u2'},
+    {id: 'm2', title: '评审', attendees: ['bob'], created_by: 'u2'},
+    {id: 'm3', title: '复盘', attendees: [], created_by: 'u1'},
+  ];
+  assert.deepEqual(meetingsForScope(items).map((row) => row.id), ['m1', 'm2', 'm3']);
+  assert.deepEqual(meetingsForScope(items, {scope: 'all'}).map((row) => row.id), ['m1', 'm2', 'm3']);
+  assert.deepEqual(
+    meetingsForScope(items, {scope: 'joined', username: 'alice', userId: 'u1'}).map((row) => row.id),
+    ['m1', 'm3'],
+  );
+  assert.deepEqual(meetingsForScope(items, {scope: 'joined', username: 'ALICE'}).map((row) => row.id), ['m1']);
+  assert.deepEqual(meetingsForScope(items, {scope: 'joined'}).map((row) => row.id), []);
+});
+
+test('the meetings kind renders the workspace meetings from the existing endpoint', async () => {
+  const page = await openArtifactsPage({withKinds: true, meetings: [
+    {id: 'm1', title: '设计周会', started_at: 1700000000, action_count: 2, done_count: 0},
+    {id: 'm2', title: '发布复盘', started_at: 1700007200, action_count: 1, done_count: 1},
+  ]});
+  try {
+    await page.openKind('meetings');
+    assert.equal(page.meetingCalls().length, 1, 'the meetings tab reads the endpoint once');
+    assert.equal(page.meetingCalls()[0].method, 'GET');
+    const list = page.elements.get('artifact-list');
+    const rows = list.children.filter((child) => String(child.className || '').includes('artifact-item'));
+    assert.equal(rows.length, 2, 'two meetings must be listed');
+    assert.match(rows[0].textContent, /发布复盘/);
+    assert.match(rows[1].textContent, /设计周会/);
+    assert.match(rows[0].textContent, /1 项行动项，全部完成/);
+    assert.match(rows[1].textContent, /2 项行动项/);
+    assert.equal(page.elements.get('empty-meetings').hidden, true);
+    assert.equal(page.elements.get('meetings-error').hidden, true);
+  } finally {
+    page.close();
+  }
+});
+
+test('an empty meetings workspace shows the honest empty state, not an error', async () => {
+  const page = await openArtifactsPage({withKinds: true, meetings: []});
+  try {
+    await page.openKind('meetings');
+    assert.equal(page.elements.get('empty-meetings').hidden, false);
+    assert.equal(page.elements.get('meetings-error').hidden, true);
+    assert.equal(page.elements.get('meetings-error').textContent, '');
+  } finally {
+    page.close();
+  }
+});
+
+test('a failing meetings request shows the server reason instead of an empty list', async () => {
+  const page = await openArtifactsPage({
+    withKinds: true, meetingsStatus: 500,
+    meetingsError: {error: {code: 'internal', message: 'listing failed in the store'}},
+  });
+  try {
+    await page.openKind('meetings');
+    const errorBox = page.elements.get('meetings-error');
+    assert.equal(errorBox.hidden, false);
+    assert.match(errorBox.textContent, /listing failed in the store/);
+    assert.equal(page.elements.get('empty-meetings').hidden, true, 'a failure must not read as "no meetings"');
+    const list = page.elements.get('artifact-list');
+    assert.equal(list.children.filter((child) => String(child.className || '').includes('artifact-item')).length, 0);
+  } finally {
+    page.close();
+  }
+});
+
+// The artworks empty state is the place a user learns how content gets into the
+// library. Its image entry claimed there was no way to save a chat picture even
+// though the chat composer uploads every attachment into this same library
+// before it sends the message, so the disabled promise was simply false.
+
+test('the artworks empty state points at the real chat picture flow', () => {
+  const html = readFileSync(new URL('../openteamily/static/artifacts/index.html', import.meta.url), 'utf8');
+  const start = html.indexOf('id="empty-save-image"');
+  assert.ok(start > -1, 'the starred empty state still offers a picture entry');
+  const open = html.lastIndexOf('<', start);
+  const tag = html.slice(open, html.indexOf('>', start) + 1);
+  assert.match(tag, /^<a\b/, 'the picture entry must be a real link, not a disabled button');
+  assert.match(tag, /href="\/chat"/, 'it has to reach the page that can actually attach a picture');
+  assert.doesNotMatch(tag, /\bdisabled\b/, 'a working entry cannot be disabled');
+  const copy = html.slice(open, html.indexOf('</a>', start)).replace(/\s+/g, ' ');
+  assert.doesNotMatch(copy, /未实现/, 'the copy must not claim the feature is missing');
+  assert.match(copy, /作品库/, 'the copy names where the picture lands');
+});
+
 test('saving a completed task artifact posts the task id and lists the document', async () => {
   const page = await openArtifactsPage({
     items: [],
@@ -713,4 +842,13 @@ test('an older workspace list cannot overwrite the current selected workspace', 
     assert.equal(artifactRows(elements.get('artifact-list')).length, 1);
     assert.equal(artifactRows(elements.get('artifact-list'))[0].children[0].textContent, 'New workspace document');
   } finally { if (saved === undefined) delete globalThis.document; else globalThis.document=saved; }
+});
+
+
+test('saved result deep links require an exact authorized workspace and artifact id pair', async () => {
+  const {artifactTargetFromSearch}=await import('../openteamily/static/artifacts/app.mjs');
+  const wid='a'.repeat(32),aid='b'.repeat(32);
+  assert.deepEqual(artifactTargetFromSearch('?workspace='+wid+'&artifact='+aid),{workspace:wid,artifact:aid});
+  assert.equal(artifactTargetFromSearch('?new=document'),null);
+  for(const query of ['?artifact='+aid,'?workspace='+wid,'?workspace=../private&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&new=document','?workspace='+wid+'&artifact='+aid+'&x=1'])assert.deepEqual(artifactTargetFromSearch(query),{invalid:true});
 });

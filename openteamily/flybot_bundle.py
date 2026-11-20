@@ -15,6 +15,7 @@ def build():
     with zipfile.ZipFile(buffer, 'w', compression=zipfile.ZIP_DEFLATED) as bundle:
         # Shebang is added by zipapp after this archive is built.
         bundle.writestr('__main__.py', source)
+        bundle.writestr('model_http_policy.py', (Path(__file__).resolve().parent / 'model_http_policy.py').read_bytes())
     data = buffer.getvalue()
     # zipapp.create_archive adds a python shebang so `python flybot.pyz` works.
     output = io.BytesIO()

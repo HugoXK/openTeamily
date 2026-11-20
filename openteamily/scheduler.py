@@ -14,7 +14,7 @@ import threading
 import time
 from uuid import uuid4
 
-from . import automations, members, model_api, runtime_connect
+from . import automations, members, model_api, runtime_connect, skill_packages
 
 
 class NullAutomationBackend:
@@ -138,9 +138,20 @@ class AgentAutomationBackend:
         if db is None or not isinstance(payload, dict):
             return {'status': 'failed', 'error_code': 'runtime_failure', 'instance_ids': []}
         now = int(payload.get('now') or 0)
-        connection = pick_connection(
-            db, payload['workspace_id'], now, self.stale, payload.get('preferred_agents'),
-        )
+        scope = 'automation:'+payload['workspace_id']+':'+payload['automation_id']
+        owners = db.execute('SELECT DISTINCT user_id FROM skill_bindings WHERE scope=?',(scope,)).fetchall()
+        skill_owner = None
+        if owners:
+            if len(owners) != 1 or skill_packages.scope_context(db,owners[0]['user_id'],scope) is None:
+                return {'status':'failed','error_code':'skill_scope_revoked','instance_ids':[]}
+            skill_owner = owners[0]['user_id']
+            connection = runtime_connect.online_connection(db,skill_owner,now,self.stale,personal=True)
+            if connection and not skill_packages.supports(db,connection['id'],skill_packages.required_formats(db,skill_owner,scope)):
+                return {'status':'failed','error_code':'runtime_upgrade_required','instance_ids':[]}
+        else:
+            connection = pick_connection(
+                db, payload['workspace_id'], now, self.stale, payload.get('preferred_agents'),
+            )
         if connection is None:
             return {'status': 'queued', 'error_code': 'no_agent', 'instance_ids': []}
         prompt = payload.get('prompt')
@@ -153,6 +164,15 @@ class AgentAutomationBackend:
             )
         except ValueError:
             return {'status': 'failed', 'error_code': 'quota', 'instance_ids': []}
+        if skill_owner:
+            db.execute('INSERT INTO skill_task_owners VALUES(?,?,?)',(task['id'],skill_owner,scope))
+            material = skill_packages.material(db,task['id'])
+            count = db.execute('SELECT COUNT(*) FROM skill_bindings WHERE user_id=? AND scope=?',(skill_owner,scope)).fetchone()[0]
+            if not material or len(material) != count:
+                runtime_connect.cancel_task(db,task,now)
+                return {'status':'failed','error_code':'skill_version_changed','instance_ids':[]}
+            db.execute('INSERT INTO skill_task_selection VALUES(?,?)',(task['id'],json.dumps(material,sort_keys=True)))
+            db.execute('INSERT INTO skill_runs VALUES(?,?,?,?,?,?,?)',(task['id'],skill_owner,scope,'*','automation:'+task['id'],'',now))
         return {
             'status': 'queued',
             'task_id': task['id'],
@@ -264,6 +284,10 @@ class Scheduler:
                 'INSERT INTO automation_runs VALUES(?,?,?,?,?,?,?,?,?)',
                 (run_id, row['id'], row['workspace_id'], due, now, None, 'queued', None, '{}'),
             )
+        return self._dispatch(db, row, run_id, due, now)
+
+    def _dispatch(self, db, row, run_id, due, now):
+        """Hand one already-inserted queued run to the backend and record the outcome."""
         public, secret, source = model_api.resolve(
             db, self.store, workspace_id=row['workspace_id'],
         )
@@ -286,6 +310,30 @@ class Scheduler:
         else:
             self._finish(db, run_id, now, status, error, dispatch)
         return automations.run_view(db.execute('SELECT * FROM automation_runs WHERE id=?', (run_id,)).fetchone())
+
+    def retry_run(self, db, row, source, now):
+        """Queue a fresh run for a finished one. The source run is not touched.
+
+        Returns None when the automation already holds the maximum number of
+        runs, so the caller can answer 429 instead of silently dropping work.
+        """
+        count = db.execute(
+            'SELECT COUNT(*) FROM automation_runs WHERE automation_id=?', (row['id'],)
+        ).fetchone()[0]
+        if count >= self.max_runs:
+            return None
+        # (automation_id, due_at) is unique and a retry is its own slot, so the
+        # retry gets the first free instant at or after now.
+        due = int(now)
+        while db.execute('SELECT 1 FROM automation_runs WHERE automation_id=? AND due_at=?',
+                         (row['id'], due)).fetchone() is not None:
+            due += 1
+        run_id = uuid4().hex
+        db.execute(
+            'INSERT INTO automation_runs VALUES(?,?,?,?,?,?,?,?,?)',
+            (run_id, row['id'], row['workspace_id'], due, now, None, 'queued', None, '{}'),
+        )
+        return self._dispatch(db, row, run_id, due, now), run_id
 
     def _reconcile_one(self, db, run, now):
         if run['status'] != 'queued':
