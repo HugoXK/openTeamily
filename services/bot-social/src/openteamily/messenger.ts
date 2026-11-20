@@ -11,6 +11,10 @@ import { body, handleKey, intParam, OtContext, optText, params, query, text } fr
 import { shareTeam, requireMember } from "./teams.js";
 
 export const MESSENGER_SCHEMA = `
+CREATE TABLE IF NOT EXISTS ot_group_announcements (
+  conversation_id TEXT PRIMARY KEY, body TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL, updated_by TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ot_conversations (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('dm','group')), title TEXT NOT NULL DEFAULT '',
   team_id TEXT, dm_key TEXT UNIQUE, created_by TEXT NOT NULL, last_seq INTEGER NOT NULL DEFAULT 0,
@@ -58,7 +62,7 @@ const messageView = (ot: OtContext, m: any, viewer?: string) => ({
   id: m.id, conversation_id: m.conversation_id, seq: m.seq,
   author: m.author_kind === "agent" ? { kind: "agent", agent_ref: m.agent_ref, name: m.agent_name, owner: ot.profileView(m.author_id) } : { kind: "member", ...ot.profileView(m.author_id) },
   mine: viewer ? m.author_id === viewer && m.author_kind === "member" : undefined,
-  body: m.retracted ? "" : m.body, retracted: !!m.retracted, edited_at: m.edited_at, created_at: m.created_at,
+  body: m.retracted ? "" : m.body, revision: m.revision, retracted: !!m.retracted, edited_at: m.edited_at, created_at: m.created_at,
   mentions: JSON.parse(m.mentions), reply_to: m.reply_to, pinned: !!m.pinned_by,
   reactions: ot.all<any>("SELECT emoji, COUNT(*) AS n, SUM(owner_id = ?) AS me FROM ot_reactions WHERE message_id = ? GROUP BY emoji", viewer ?? "", m.id).map((r) => ({ emoji: r.emoji, count: r.n, mine: !!r.me })),
 });
@@ -190,6 +194,26 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       ot.run("DELETE FROM ot_conversation_agents WHERE conversation_id = ? AND owner_id = ?", conv.id, o);
     });
     return { removed: true };
+  });
+
+  const announcement = (cid: string) => ot.get<any>("SELECT * FROM ot_group_announcements WHERE conversation_id=?", cid) ?? { body: "", revision: 0 };
+  const canAnnounce = (conv: any, owner: string) => !!conv.team_id && !!ot.get("SELECT 1 FROM ot_team_members WHERE team_id=? AND owner_id=? AND role IN ('owner','admin') AND suspended=0", conv.team_id, owner);
+  app.get("/v1/ot/conversations/:id/announcement", async req => {
+    const me = ot.me(req), conv = memberOf(ot, params(req).id, me.ownerId);
+    assert(conv.kind === "group", 400, "invalid_request", "announcements require a group");
+    return { announcement: announcement(conv.id), can_edit: canAnnounce(conv, me.ownerId) };
+  });
+  app.post("/v1/ot/conversations/:id/announcement", async req => {
+    const me = ot.me(req), conv = memberOf(ot, params(req).id, me.ownerId), b = body(req);
+    assert(conv.kind === "group", 400, "invalid_request", "announcements require a group");
+    assert(canAnnounce(conv, me.ownerId), 403, "forbidden", "only team owners and admins may publish");
+    const content = text(b.body, "body", { max: 2000, multiline: true });
+    ot.tx(() => {
+      const current = announcement(conv.id);
+      assert(Number.isInteger(b.revision) && b.revision === current.revision, 409, "conflict", "announcement changed; reload");
+      ot.run("INSERT INTO ot_group_announcements VALUES(?,?,?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET body=excluded.body,revision=excluded.revision,updated_at=excluded.updated_at,updated_by=excluded.updated_by", conv.id, content, current.revision + 1, ot.now(), me.ownerId);
+    });
+    return { announcement: announcement(conv.id), can_edit: true };
   });
 
   // ---- messages

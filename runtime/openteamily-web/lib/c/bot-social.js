@@ -7,6 +7,7 @@
 // @flybot/social's one-call onboarding saved for that server ($DSH_HOME/bot/flybot-social.json,
 // mode 0600). The token is read on use, sent only as a Bearer header to that exact server, and
 // never returned, logged or put in an error message.
+import { nativeGroupClient } from './native-groups.js'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -129,6 +130,6 @@ export function qs(params) {
 let shared
 export function sharedBotSocial(host) {
   shared ??= createBotSocial({ dataDir: host.dataDir })
-  return shared
+  return nativeGroupClient(host, shared)
 }
 export function setSharedBotSocial(client) { shared = client }

@@ -24,3 +24,21 @@ agent-session parts need explicit history-preserving adoption; Bot Social groups
 need native group/remote-human participant mapping; reverse creation from the
 native UI needs explicit workspace assignment. Group membership/history remains
 canonical in Bot Social, and compatibility tables retain all legacy history.
+
+## Shared group increment
+
+Bot Social conversation reads now reconcile a real native roster room/Session,
+with `openteamily.conversation_id` pointing to the canonical shared conversation.
+The group exposes native_room_id/native_session_id. Local agent participants use
+mapped native Bot IDs; human participants remain remote humans, never fake Bots.
+Native room-chat reads Bot Social directly, including edits/retractions/history
+paging. Native text send/title/agent membership/announcement changes are routed
+to that same shared record. Native delete leaves the shared conversation for the
+current member and archives its local room; it does not delete other people's
+history. Unsupported native-only settings fail visibly instead of diverging.
+
+Remaining: native remote-human participant editor integration; reverse native
+creation requires explicit workspace selection; initial reconciliation still
+requires a conversation read; plugin-only historical agent messages need native
+Session event import. Do not label full feature parity accepted until test-account
+native-view consistency evidence exists after deployment.
