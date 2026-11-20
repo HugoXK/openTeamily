@@ -29,8 +29,37 @@ function redact(value) {
   return String(value || '').replace(/[A-Za-z0-9_-]{16,}/g, '[redacted]')
 }
 
-async function call(origin, token, method, path, body) {
-  const response = await fetch(origin + path, {
+// Transient management-plane failures (web restart, brief proxy 502, rate limit)
+// are retried with capped exponential backoff + jitter. Auth/policy failures
+// (401/403, 409 capability/policy, 400/404, invalid key file) still stop the loop.
+export const TRANSIENT_STATUS = new Set([408, 429, 502, 503, 504])
+export const BACKOFF = Object.freeze({ baseMs: 1000, maxMs: 60000, maxAttempts: 1440 })
+
+export function parseRetryAfter(value, nowMs = Date.now()) {
+  if (value === null || value === undefined || value === '') return null
+  const text = String(value).trim()
+  if (/^[0-9]{1,6}$/.test(text)) return Number(text) * 1000
+  const at = Date.parse(text)
+  return Number.isFinite(at) ? Math.max(0, at - nowMs) : null
+}
+
+export function isTransient(error) {
+  if (!error) return false
+  if (error.transport === true) return true
+  return typeof error.status === 'number' && TRANSIENT_STATUS.has(error.status)
+}
+
+export function backoffDelay(attempt, { baseMs = BACKOFF.baseMs, maxMs = BACKOFF.maxMs, random = Math.random, retryAfterMs = null } = {}) {
+  const ceiling = Math.min(maxMs, baseMs * 2 ** Math.min(Math.max(attempt - 1, 0), 30))
+  const jittered = Math.floor(ceiling / 2 + random() * (ceiling / 2))
+  if (typeof retryAfterMs === 'number' && retryAfterMs >= 0) return Math.min(maxMs, Math.max(jittered, retryAfterMs))
+  return jittered
+}
+
+export async function call(origin, token, method, path, body) {
+  let response
+  try {
+    response = await fetch(origin + path, {
     method,
     signal: AbortSignal.timeout(20000),
     headers: {
@@ -40,12 +69,22 @@ async function call(origin, token, method, path, body) {
       ...(path.endsWith('/model-access') ? {[MODEL_HTTP_HEADER]: MODEL_HTTP_FORMAT} : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
-  })
+    })
+  } catch {
+    // Connection refused/reset, DNS, timeout: no HTTP status reached us.
+    const error = new Error('agent request transport failure')
+    error.transport = true
+    throw error
+  }
   let parsed = {}
   try { parsed = await response.json() } catch { parsed = {} }
   if (!response.ok) {
     const error = new Error('agent request failed')
     error.status = response.status
+    if (response.status === 429 || response.status === 503) {
+      const after = parseRetryAfter(response.headers.get('retry-after'))
+      if (after !== null) error.retryAfterMs = after
+    }
     throw error
   }
   return parsed
@@ -176,7 +215,9 @@ export async function runCycle(config, { requester = call, inferer = infer, once
   return processed
 }
 
-export async function main(env = process.env, log = console.error) {
+export async function main(env = process.env, log = console.error, {
+  cycle = runCycle, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), random = Math.random,
+} = {}) {
   let config
   try {
     config = loadRuntimeKey(env)
@@ -190,16 +231,34 @@ export async function main(env = process.env, log = console.error) {
   }
   const poll = Math.max(1, Number(env.OPENTEAMILY_AGENT_POLL || 2))
   const once = env.OPENTEAMILY_AGENT_ONCE === '1'
-  try {
-    do {
-      await runCycle(config)
-      if (once) return 0
-      await new Promise(resolve => setTimeout(resolve, poll * 1000))
-    } while (true)
-  } catch (error) {
-    log('agent-loop: ' + redact(error && error.message))
-    return 1
-  }
+  const limit = Number(env.OPENTEAMILY_AGENT_RETRY_LIMIT)
+  const maxAttempts = Number.isInteger(limit) && limit >= 0 && limit <= 100000 && env.OPENTEAMILY_AGENT_RETRY_LIMIT !== undefined
+    ? limit : BACKOFF.maxAttempts
+  let failures = 0
+  do {
+    try {
+      // Each cycle re-sends connect + heartbeat, so a recovered web sees the runtime again.
+      await cycle(config)
+      if (failures) log('agent-loop: management API reachable again; polling resumed')
+      failures = 0
+    } catch (error) {
+      if (once || !isTransient(error)) {
+        log('agent-loop: ' + redact(error && error.message) + (error && error.status ? ' (HTTP ' + error.status + ')' : '') + '; stopping')
+        return 1
+      }
+      failures += 1
+      if (failures > maxAttempts) {
+        log('agent-loop: management API still unreachable after ' + maxAttempts + ' retries; stopping')
+        return 1
+      }
+      const delay = backoffDelay(failures, { random, retryAfterMs: error.retryAfterMs ?? null })
+      log('agent-loop: transient ' + (error.status ? 'HTTP ' + error.status : 'transport') + ' failure; retry ' + failures + ' in ' + Math.round(delay / 1000) + 's')
+      await sleep(delay)
+      continue
+    }
+    if (once) return 0
+    await sleep(poll * 1000)
+  } while (true)
 }
 
 const entry = process.argv[1] ? process.argv[1].endsWith('agent-loop.mjs') : false

@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "mount": "/b",
+  "passthrough": ["/api/"],
+  "moved_pages": []
+}

@@ -158,10 +158,18 @@ class Registry:
         self.root = Path(config_path).parent
         self.config = read_private(config_path)
         self.upgrades = {}
+        # Server-assigned (auto-provisioned) instances adopted for this invocation
+        # only, from the operator's auto_instances template; never written back.
+        self.adopted = {}
         cfg = self.config
-        require(isinstance(cfg, dict) and set(cfg) == {'version', 'execution_enabled', 'base_url', 'server_host', 'manager_id', 'token', 'docker', 'socket', 'instances'}, 'config_fields')
+        base = {'version', 'execution_enabled', 'base_url', 'server_host', 'manager_id', 'token', 'docker', 'socket', 'instances'}
+        require(isinstance(cfg, dict) and set(cfg) in (base, base | {'auto_instances'}), 'config_fields')
         require(type(cfg['version']) is int and cfg['version'] == 1 and type(cfg['execution_enabled']) is bool, 'config_version')
-        require(isinstance(cfg['instances'], dict) and 1 <= len(cfg['instances']) <= 100, 'registry_limit')
+        auto = cfg.get('auto_instances')
+        if auto is not None:
+            require(isinstance(auto, dict) and set(auto) == {'image', 'healthcheck'}, 'auto_instances_fields')
+            manifest('0' * 32, {**auto, 'publish_port': None})
+        require(isinstance(cfg['instances'], dict) and (0 if auto is not None else 1) <= len(cfg['instances']) <= 100, 'registry_limit')
         ports = []
         for iid, entry in cfg['instances'].items():
             manifest(iid, entry)
@@ -173,12 +181,34 @@ class Registry:
             secrets.mkdir(mode=0o700)
         trusted_path(str(secrets), directory=True, private=True)
 
+    def adopt(self, iid, snapshot):
+        """Accept a server-assigned auto-provisioned instance from the authenticated listing.
+
+        The server only lists instances this manager is granted. The local template
+        still pins the image (must equal the server image_ref), uses no published
+        port, and the instance's own ot-<id> volume and secret files.
+        """
+        check_id(iid)
+        auto = self.config.get('auto_instances')
+        require(auto is not None, 'instance_not_registered')
+        require(iid not in self.config['instances'], 'instance_already_registered')
+        require(isinstance(snapshot, dict) and snapshot.get('id') == iid and snapshot.get('provisioning') == 'auto' and
+                snapshot.get('backend_mode') == 'compose' and snapshot.get('image_ref') == auto['image'] and
+                snapshot.get('volume_ref') == 'ot-' + iid, 'auto_instance_mismatch')
+        require(len(self.adopted) < 1000, 'registry_limit')
+        self.adopted[iid] = {'image': auto['image'], 'healthcheck': auto['healthcheck'], 'publish_port': None}
+        return self.adopted[iid]
+
+    def lookup(self, iid):
+        entry = self.config['instances'].get(iid) or self.adopted.get(iid)
+        require(entry is not None, 'instance_not_registered')
+        return entry
+
     def entry(self, iid, snapshot=None):
         check_id(iid)
         # Freeze registry for this invocation; detect replacement or a permission change.
         require(read_private(self.config_path) == self.config, 'registry_changed')
-        require(iid in self.config['instances'], 'instance_not_registered')
-        entry = self.config['instances'][iid]
+        entry = self.lookup(iid)
         expected = manifest(iid, entry)
         path = self.root / ('compose-' + iid + '.json')
         if not path.exists() and not path.is_symlink():
@@ -314,7 +344,8 @@ class ComposeEngine:
                 # New manager + old pinned image must fail before writing a key
                 # file that an older launcher could export to an unsafe SDK.
                 from ..model_http_policy import FORMAT
-                image = self.registry.config['instances'][iid]['image']
+                lookup = getattr(self.registry, 'lookup', None)
+                image = (lookup(iid) if lookup else self.registry.config['instances'][iid])['image']
                 raw_labels, _ = self.runner.run(['image', 'inspect', image, '--format', '{{json .Config.Labels}}'], heartbeat=heartbeat)
                 labels = json_loads(raw_labels)
                 require(isinstance(labels, dict) and labels.get('io.openteamily.model-http') == FORMAT, 'runtime_upgrade_required')
