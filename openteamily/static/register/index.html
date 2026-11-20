@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>创建账户 · OpenTeamily</title>
+  <link rel="stylesheet" href="/register/app.css">
+  <script type="module" src="/register/app.mjs"></script>
+</head>
+<body>
+<main>
+  <p class="brand">OpenTeamily</p>
+  <h1>创建账户</h1>
+  <p id="register-policy" role="status">正在读取本实例注册策略…</p><p>创建本实例的账户。仅在管理员开放注册时可用；第三方服务密钥稍后在设置中填写。</p>
+  <form id="register-form" method="post" action="/v1/auth/register">
+    <label for="register-username">用户名</label>
+    <input type="text" id="register-username" name="username" autocomplete="username" required minlength="3" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{2,63}" aria-describedby="username-help">
+    <p id="username-help" class="hint">3–64 位字母、数字、下划线、点或短横线，以字母或数字开头。</p>
+    <label for="register-password">密码</label>
+    <input id="register-password" name="password" type="password" autocomplete="new-password" required minlength="12" maxlength="256" aria-describedby="password-help">
+    <p id="password-help" class="hint">12–256 个字符。不要填写第三方 API key。</p>
+    <button id="register-submit" type="submit">创建账户并继续</button>
+    <p id="register-status" role="status" aria-live="polite"></p>
+  </form>
+  <noscript>请启用 JavaScript 后注册。账户信息仅通过同源 POST 提交。</noscript>
+  <a href="/settings">已有账户？登录</a>
+  <nav class="registration-help" aria-label="注册帮助与条款"><button id="help-menu-button" type="button" aria-expanded="false" aria-controls="help-menu">帮助与条款</button><div id="help-menu" role="menu" hidden>
+    <a href="/help" role="menuitem">帮助中心</a>
+    <a href="/guide" role="menuitem">功能指引</a>
+    <a href="/terms" role="menuitem">服务条款</a>
+    <a href="/privacy" role="menuitem">隐私政策</a>
+  </div></nav>
+</main>
+</body>
+</html>

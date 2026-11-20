@@ -220,6 +220,19 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/settings/missing')['status'], 404)
         self.assertEqual(self.raw.call('GET', '/settings/appearance', query='q=1')['status'], 400)
 
+    def test_support_rows_link_the_pages_the_server_serves(self):
+        html = self.raw.call('GET', '/settings')['body'].decode()
+        for label, href in (('帮助中心', '/help'), ('服务条款', '/terms'), ('隐私政策', '/privacy')):
+            self.assertNotIn(f'disabled title="未接通：还没有 OpenTeamily {label}页"', html)
+            self.assertNotIn(f'disabled title="未实现：还没有 OpenTeamily {label}页"', html)
+            self.assertIn(f'<a class="settings-row" href="{href}">', html)
+            page = self.raw.call('GET', href)
+            self.assertEqual(page['status'], 200, href)
+            self.assertEqual(page['headers']['Content-Type'], 'text/html; charset=utf-8', href)
+            body = page['body'].decode()
+            self.assertIn(f'<title>{label} · OpenTeamily</title>', body)
+            self.assertIn(f'<h1>{label}</h1>', body)
+
     def test_channel_agent_api_and_connectors_pages_use_recorded_empty_states(self):
         html = self.raw.call('GET', '/settings/channels')['body'].decode()
         self.assertIn('data-settings-page="channels"', html)
