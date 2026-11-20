@@ -23,7 +23,7 @@ import { join } from 'node:path'
 import { startOpenPart } from '../ds-bot-upstream/ds-bot/src/host/threads.js'
 import { request as httpsRequest } from 'node:https'
 import { call, loadSkillMaterial, main as agentMain, toolBridge } from './agent-loop.mjs'
-import { streamHttpTask, validateModelEndpoint } from './model-http-policy.mjs'
+import { STREAM_LIMIT, streamHttpTask, validateModelEndpoint } from './model-http-policy.mjs'
 import { loadModelApi, redact } from './model-api.js'
 
 export const PROVIDER = 'openteamily'
@@ -76,6 +76,9 @@ export async function forwardModel(modelApi, raw, res, { httpRequester = httpReq
   }
   const relay = (status, upstreamHeaders, stream) => new Promise(resolve => {
     res.writeHead(status, { 'Content-Type': upstreamHeaders['content-type'] || 'application/json', 'Cache-Control': 'no-store' })
+    let bytes = 0
+    stream.on('data', chunk => { bytes += chunk.length; if (bytes > STREAM_LIMIT) stream.destroy(new Error('model response too large')) })
+    res.on('close', () => { if (!res.writableFinished) stream.destroy() })
     stream.pipe(res)
     stream.on('end', resolve)
     stream.on('error', () => { res.destroy(); resolve() })
@@ -332,6 +335,7 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
       let turn
       const deadlineMs = payload.deadline ? payload.deadline * 1000 - Date.now() - 2000 : 170000
       try { turn = await runTurn(rt, ctx, botId, payload.prompt, requestId, Math.max(5000, Math.min(deadlineMs, 600000))) }
+      catch (error) { await rt.stopChat?.(botId).catch(() => {}); throw error }
       finally { clearInterval(beat) }
       if (!active.modelCalls) throw new Error('DS-Bot turn did not use the OpenTeamily model')
       // Read through DSH's native history API, not grep over its binary store.
@@ -383,7 +387,7 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     return processed
   }
 
-  return { state, setup: ensureSetup, cycle, infer, syncSkills, syncTools, port: listenPort, baseURL, get botId() { return botId } }
+  return { state, setup: ensureSetup, cycle, infer, syncSkills, syncTools, selectConversation, port: listenPort, baseURL, get botId() { return botId } }
 }
 
 // Plugin entry: start the loopback server and the management task loop.

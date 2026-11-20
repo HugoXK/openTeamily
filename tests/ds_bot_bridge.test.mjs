@@ -1,5 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { EventEmitter } from 'node:events'
@@ -208,4 +211,37 @@ test('tampered skill material is rejected before DS-Bot sees it', async () => {
   assert.equal(posted.status, 'failed')
   assert.match(posted.result.error, /skill/)
   assert.ok(!fake.log.some(e => e[0] === 'sendUser'))
+})
+
+
+test('separate conversations use separate native DS-Bot threads and reuse persisted mapping', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'ot-chats-'))
+  const fake = fakeRuntime()
+  const bot = fake.rt.botOf('bot1')
+  let created = 0
+  fake.rt.chatOf = () => bot.sessionId || bot.id
+  fake.rt.createSession = async () => 'session-' + (++created)
+  fake.rt.workDirOf = () => '/data/workspace'
+  fake.rt.chatOwners = new Map()
+  fake.rt.save = async () => {}
+  fake.rt.applyModel = async () => {}
+  fake.rt.applyPermission = async () => {}
+  fake.rt.switchPart = async (_id, sid) => { bot.sessionId = sid }
+  const bridge = createBridge(fake.rt, fake.ctx, { env: { DSH_HOME: home }, port: 1 })
+  fake.bind(bridge.state)
+  try {
+    await bridge.setup()
+    await bridge.selectConversation('conv-a')
+    const a = fake.rt.chatOf('bot1')
+    await bridge.selectConversation('conv-b')
+    assert.notEqual(fake.rt.chatOf('bot1'), a)
+    await bridge.selectConversation('conv-a')
+    assert.equal(fake.rt.chatOf('bot1'), a)
+    const restarted = createBridge(fake.rt, fake.ctx, { env: { DSH_HOME: home }, port: 1 })
+    fake.bind(restarted.state)
+    await restarted.setup()
+    await restarted.selectConversation('conv-a')
+    assert.equal(fake.rt.chatOf('bot1'), a)
+    assert.equal(created, 2)
+  } finally { rmSync(home, { recursive: true, force: true }) }
 })
