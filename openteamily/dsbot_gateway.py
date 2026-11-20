@@ -57,6 +57,8 @@ MOVED_APIS = (
     (re.compile(r'^/v1/invites/accept$'), 'invites'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/join-requests(?:/[A-Za-z0-9._-]{1,80}/(?:approve|reject))?$'), 'invites'),
     (re.compile(r'^/v1/join-requests$'), 'invites'),
+    (re.compile(r'^/v1/skills/(?:scopes|readiness|runs)$'), 'skills'),
+    (re.compile(r'^/v1/runtime/(?:connections|tasks(?:/[0-9a-f]{32}/(?:cancel|artifact))?)$'), 'skills'),
     (re.compile(r'^/v1/workspaces$'), 'teams'),
     (re.compile(r'^/v1/teams$'), 'teams'),
     (re.compile(r'^/v1/team-directory$'), 'teams'),
@@ -92,6 +94,8 @@ MOVED_APIS = (
 MOVED_API_LOCATIONS = (
     'location = /v1/invites/accept { return 418; }',
     'location = /v1/join-requests { return 418; }',
+    'location ~ ^/v1/skills/(?:scopes|readiness|runs)$ { return 418; }',
+    'location ^~ /v1/runtime/ { return 418; }',
     'location = /v1/workspaces { return 418; }',
     'location = /v1/teams { return 418; }',
     'location = /v1/team-directory { return 418; }',

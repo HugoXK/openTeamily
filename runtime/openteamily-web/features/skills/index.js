@@ -2,6 +2,7 @@
 // Main Bot (moved from skill_installs.py / skill_execution.py). Instruction-only.
 import { createHash } from 'node:crypto'
 import { fail } from '../../src/store.js'
+import { skillRunsV1 } from './runs.js'
 
 const NAME = /^[a-z0-9][a-z0-9-]{1,47}$/
 const PREFIX = 'ot-user-skill-'
@@ -29,6 +30,7 @@ export default function skills(host) {
   return {
     pages: ['skills'],
     endpoints: {
+      v1: skillRunsV1(host, { boundName, userSkillName }),
       async list() {
         const { rt, botId } = await ready()
         const attached = [...(rt.botOf(botId)?.capabilities ?? [])].filter((name) => typeof name === 'string')

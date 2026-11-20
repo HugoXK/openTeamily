@@ -35,6 +35,8 @@ export const MOVED = [
   [/^\/v1\/composio\/approvals(?:\/[0-9a-f]{32})?$/, 'connectors'],
   [/^\/v1\/mcp\/servers(?:\/[0-9a-f]{32})?$/, 'connectors'],
   // Stream C: workspaces/teams, members, invites, directory, messenger and discover (Bot Social).
+  [/^\/v1\/skills\/(?:scopes|readiness|runs)$/, 'skills'],
+  [/^\/v1\/runtime\/(?:connections|tasks(?:\/[0-9a-f]{32}\/(?:cancel|artifact))?)$/, 'skills'],
   [/^\/v1\/workspaces$/, 'teams'],
   [/^\/v1\/teams$/, 'teams'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/members(?:\/[A-Za-z0-9._-]{1,80}(?:\/(?:remove|suspend|unsuspend))?)?$/, 'members'],
