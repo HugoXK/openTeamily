@@ -19,6 +19,8 @@ from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
+from .lifecycle import RuntimeFault
+from .runtime_autoprovision import owned_instance
 from .security import digest
 
 ROUTES_FILE = Path(__file__).with_name('dsbot_routes.json')
@@ -344,13 +346,11 @@ def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_s
                          (digest(token), now)).fetchone()
     if session is None:
         raise GatewayError(401, 'unauthorized')
-    row = db.execute(
-        "SELECT i.id, u.address, u.auth_cookie FROM instances i JOIN dsbot_upstreams u ON u.instance_id=i.id "
-        "WHERE i.owner_id=? AND i.desired='running' AND i.observed='running' AND i.health='healthy' "
-        "AND i.blocked=0 AND i.observed_revision=i.revision ORDER BY i.created, i.id LIMIT 1",
-        (session[0],)).fetchone()
-    if row is None:
-        raise GatewayError(503, 'dsbot_not_ready')
+    try:
+        instance_id = owned_instance(db, session[0])
+    except RuntimeFault as error:
+        raise GatewayError(503, 'dsbot_not_ready') from error
+    row = _upstream_row(db, instance_id)
     address = validate_address(row[1])
     return [
         ('X-OT-Upstream', address),

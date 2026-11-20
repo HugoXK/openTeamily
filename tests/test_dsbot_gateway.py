@@ -67,6 +67,23 @@ class GatewayTest(unittest.TestCase):
         gw.mount(lambda e, s: s('200 OK', []) or [b'app'], self.app)(env, start)
         return seen['status'], seen['headers']
 
+    def test_provisioned_instance_is_not_replaced_by_a_healthy_legacy_instance(self):
+        owner, canonical, legacy = 'a' * 32, '1' * 32, '3' * 32
+        with self.store.transaction() as db:
+            db.execute("INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,"
+                       "desired,revision,operation_id,operation_type,observed,observed_revision,health,create_key,created) "
+                       "VALUES(?,?,?,'p','compose','img','legacy-volume','running',1,'op','create','running',1,'healthy','legacy',0)",
+                       (legacy, '0' * 32, owner))
+            gw.record_upstream(db, legacy, '172.30.0.13:8080', 'dsh-auth-legacy=' + 'S' * 20, 1)
+        self.assertEqual(self.call(self.tokens[owner])[0], 503)
+        with self.store.transaction() as db:
+            db.execute('INSERT INTO runtime_auto_provisions VALUES(?,?,?,?,?,?)',
+                       (owner, '0' * 32, 'a' * 32, canonical, 'manager', 1))
+        self.assertEqual(self.call(self.tokens[owner])[1]['X-OT-Instance'], canonical)
+        with self.store.transaction() as db:
+            db.execute("UPDATE instances SET health='unknown' WHERE id=?", (canonical,))
+        self.assertEqual(self.call(self.tokens[owner])[0], 503)
+
     def test_each_user_reaches_only_their_own_dsbot(self):
         a, b = self.tokens['a' * 32], self.tokens['b' * 32]
         status, headers = self.call(a)

@@ -1,8 +1,10 @@
 # Architecture
 
-OpenTeamily runs every user's work on that user's own isolated **DS-Bot**. The
-central site only registers and signs people in, provisions their DS-Bot, and
-routes requests to it.
+OpenTeamily assigns **one isolated DS-Bot instance per user**. The management
+plane provisions and routes to that instance by user identity. The runtime keeps
+a stable instance ID independent of the user and workspace IDs. Joining or
+switching workspaces reuses the same runtime. Workspace membership defines access
+to shared data in the dedicated Bot Social service.
 
 | Boundary | Responsibility |
 |---|---|
