@@ -67,6 +67,10 @@ def deliver(engine, client, iid, heartbeat=lambda: None):
             raw = (json.dumps(item['bundle'], ensure_ascii=False, separators=(',', ':')) + '\n').encode()
             fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
+                # docker cp -a preserves these runtime ownership bits. A root
+                # exec inside hardened runtimes cannot chown (CAP_CHOWN absent).
+                os.fchown(fd, 1000, 1000)
+                os.fchmod(fd, 0o600)
                 os.write(fd, raw)
             finally:
                 os.close(fd)
@@ -79,15 +83,12 @@ def deliver(engine, client, iid, heartbeat=lambda: None):
             heartbeat=heartbeat, timeout=10)
         for filename in written:
             engine.runner.run(
-                ['cp', str(staging / filename), f'{container}:/data/openteamily/import/{filename}'],
+                ['cp', '-a', str(staging / filename), f'{container}:/data/openteamily/import/{filename}'],
                 heartbeat=heartbeat, timeout=15)
-            # docker cp may create the file as root; fix ownership if exec works.
-            try:
-                engine.runner.run(
-                    ['exec', '-u', '0:0', container, 'chown', '1000:1000', f'/data/openteamily/import/{filename}'],
-                    heartbeat=heartbeat, timeout=10)
-            except ManagerError:
-                pass
+            # Never mark delivery successful if the actual runtime cannot read it.
+            engine.runner.run(
+                ['exec', '-u', '1000:1000', container, 'test', '-r', f'/data/openteamily/import/{filename}'],
+                heartbeat=heartbeat, timeout=10)
         for filename in written:
             feature = filename.rsplit('-v', 1)[0]
             engine.runner.run(
