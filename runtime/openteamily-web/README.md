@@ -34,4 +34,4 @@ Pages served by the DS-Bot load `openteamily/static/shell/dsbot-api.mjs`, which
 turns a moved feature's legacy `/v1` calls and download links into
 `POST /b/api/openteamily {endpoint: '<name>/v1'}`; on legacy pages it does nothing.
 
-Moved so far: meetings; memory (pages, revisions/restore, export, 做梦, actions, links, graph, profile, preferences; `memory/pages` for chat recall, `memory/personal`); search (messages, resources, search/all).
+Moved so far: meetings; memory (pages, revisions/restore, export, 做梦, actions, links, graph, profile, preferences; `memory/pages` for chat recall, `memory/personal`); search (messages, resources, search/all); artifacts (`artifacts/create` for B2 team-run step output).
