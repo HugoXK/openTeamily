@@ -177,7 +177,7 @@ def main():
         def platform(env, start):
             start('200 OK', [('Content-Type', 'text/plain')])
             return [b'platform']
-        conf = gw.nginx_config(gw.load_routes(), f'{gateway_ip}:{platform_port}', 8081, '"' + key + '"')
+        conf = gw.nginx_config(gw.load_routes(), f'{gateway_ip}:{platform_port}', 8081, key=key)
         conf_path = Path(tmp.name) / 'edge.conf'
         conf_path.write_text(conf)
         os.chmod(conf_path, 0o644)

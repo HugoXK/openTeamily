@@ -1,4 +1,5 @@
 """Platform → own DS-Bot gateway decisions (docs/DSBOT_PLUGIN_ARCHITECTURE.md §4)."""
+import json
 import os
 import secrets
 import tempfile
@@ -7,6 +8,7 @@ import unittest
 
 from openteamily import dsbot_gateway as gw
 from openteamily import lifecycle
+from openteamily.lifecycle import ManagerAuth, ManagerIdentity
 from openteamily.security import digest
 from openteamily.store import Store
 
@@ -141,12 +143,52 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual((seen['s'], body), ('200 OK', [b'app']))
 
     def test_nginx_config_strips_client_credentials(self):
-        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, '$ot_gateway_key')
+        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key_include='/etc/nginx/ot-gateway-key.conf')
         for line in ('location = /v1/platform/route { return 404; }', 'auth_request /_ot_authz;',
                      'proxy_set_header Cookie $ot_cookie;', 'proxy_hide_header Set-Cookie;',
-                     'proxy_set_header X-OT-Gateway-Key $ot_gateway_key;', 'location ^~ /b/ { return 418; }',
+                     'proxy_set_header X-OT-Gateway-Key $ot_gateway_key;', 'include /etc/nginx/ot-gateway-key.conf;', 'location ^~ /b/ { return 418; }',
                      'location ^~ /api/ { return 418; }', 'proxy_set_header Upgrade $http_upgrade;'):
             self.assertIn(line, conf)
+        with self.assertRaises(ValueError):
+            gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081)
+        with self.assertRaises(ValueError):
+            gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key_include='../x')
+        self.assertIn('set $ot_gateway_key "' + 'k' * 40 + '";', gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40))
+
+    def report(self, iid, body, manager_token):
+        import io
+        raw = json.dumps(body).encode()
+        env = {'REQUEST_METHOD': 'POST', 'PATH_INFO': f'/v1/internal/instances/{iid}/dsbot-upstream',
+               'REMOTE_ADDR': '127.0.0.1', 'CONTENT_LENGTH': str(len(raw)), 'wsgi.input': io.BytesIO(raw),
+               'HTTP_AUTHORIZATION': f'Bearer manager-a.{manager_token}'}
+        seen = {}
+        out = b''.join(gw.mount(None, self.app)(env, lambda st, h: seen.setdefault('s', int(st.split()[0]))))
+        return seen['s'], json.loads(out)
+
+    def test_manager_reports_upstream_for_granted_running_process_only(self):
+        token = secrets.token_urlsafe(32)
+        self.app.manager_auth = ManagerAuth([ManagerIdentity('manager-a', digest(token), frozenset({'1' * 32}), 'compose')])
+        with self.store.transaction() as db:
+            db.execute("UPDATE instances SET process_ref=? WHERE id=?", ('f' * 32, '1' * 32))
+            db.execute("UPDATE instances SET process_ref=? WHERE id=?", ('e' * 32, '2' * 32))
+        good = {'address': '172.30.0.21:8080', 'auth_cookie': 'dsh-auth-172.30.0.21:8080=' + 'Z' * 30, 'process_ref': 'f' * 32}
+        self.assertEqual(self.report('1' * 32, good, token), (200, {'recorded': True}))
+        self.assertEqual(self.call(self.tokens['a' * 32])[1]['X-OT-Upstream'], '172.30.0.21:8080')
+        self.assertEqual(self.report('2' * 32, dict(good, process_ref='e' * 32), token)[0], 403)
+        self.assertEqual(self.report('1' * 32, dict(good, process_ref='0' * 32), token)[0], 409)
+        self.assertEqual(self.report('1' * 32, dict(good, address='8.8.8.8:8080'), token)[0], 400)
+        self.assertEqual(self.report('1' * 32, good, 'x' * 43)[0], 401)
+        self.assertEqual(self.report('1' * 32, dict(good, extra=1), token)[0], 400)
+
+    def test_operator_key_file_must_be_private(self):
+        path = os.path.join(self.tmp.name, 'gw.json')
+        with open(path, 'w') as f:
+            json.dump({'version': 1, 'key': 'q' * 40}, f)
+        os.chmod(path, 0o644)
+        with self.assertRaises(ValueError):
+            gw.load_operator_key(path)
+        os.chmod(path, 0o600)
+        self.assertEqual(gw.load_operator_key(path), 'q' * 40)
 
 
 if __name__ == '__main__':

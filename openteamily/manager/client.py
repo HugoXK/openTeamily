@@ -211,6 +211,15 @@ class ManagerClient:
         return doc
 
 
+    def dsbot_upstream(self, iid, address, auth_cookie, process_ref):
+        """Report a running runtime's private address and DSH session cookie (never logged)."""
+        check_id(iid)
+        require(isinstance(process_ref, str) and HEX.fullmatch(process_ref), 'process_ref')
+        data = self.call('POST', f'/v1/internal/instances/{iid}/dsbot-upstream',
+                         {'address': address, 'auth_cookie': auth_cookie, 'process_ref': process_ref})
+        require(data.get('recorded') is True, 'response_shape')
+        return True
+
     def recover(self, iid, revision, operation_id):
         check_id(iid)
         require(type(revision) is int and revision > 0 and isinstance(operation_id, str) and KEY.fullmatch(operation_id), 'recovery_fields')
