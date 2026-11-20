@@ -75,8 +75,38 @@ export const FEED_FOLLOWING_EMPTY_TITLE = '关注列表暂无动态';
 export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显示在这里。';
 export const FEED_FOLLOWING_NOTE = '这里只展示你关注的作者已公开的作品，不是推荐或奖励活动。';
 export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。支持点赞、收录和关注作者；其他分类尚未接通。';
+// A read that did not work is not evidence that the feed is empty, so it gets
+// its own sentence instead of borrowing the empty or no-match one.
+export const FEED_LOAD_FAILED_NOTE = '作品列表没读出来，这不代表没有作品。稍后重试。';
 
 export const FEED_KINDS = ['', 'website', 'image', 'audio', 'slides', 'video'];
+
+// One decision for the note under the feed: the failure flag wins over every
+// "there is nothing here" sentence, and it also suppresses the dedicated
+// empty-following block, which would otherwise claim the followed people
+// published nothing.
+export function feedNoteFor(state, signedIn) {
+  const items = (state && state.items) || [];
+  const loading = Boolean(state && state.loading);
+  // A signed-out visitor asking for a private tab gets the real reason first:
+  // the request was refused because nobody is signed in, not because it broke.
+  if (state && state.tab !== 'activity' && !signedIn) {
+    return {note: '请先登录，再查看关注或收录作品。', followingEmpty: false};
+  }
+  if (state && state.failed) return {note: FEED_LOAD_FAILED_NOTE, followingEmpty: false};
+  if (state && state.tab === 'following') {
+    return {note: FEED_FOLLOWING_NOTE, followingEmpty: !items.length && !loading};
+  }
+  if (state && state.tab === 'collected') {
+    return {note: '这里只展示你收录且仍公开的作品。', followingEmpty: false};
+  }
+  const filtered = Boolean(state && (state.query || state.kind)) && !items.length && !loading;
+  return {
+    note: filtered ? FEED_SEARCH_EMPTY_NOTE
+      : (items.length ? FEED_ACTIVITY_LISTED_NOTE : FEED_ACTIVITY_EMPTY_NOTE),
+    followingEmpty: false,
+  };
+}
 
 export function feedQuery(query, cursor = '', kind = '') {
   const params = new URLSearchParams({limit: '12'});
@@ -377,7 +407,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     applyCatalogChrome();
   }
 
-  const feedState = {items: [], cursor: '', query: initialFeed.query, kind: initialFeed.kind, tab: initialFeed.tab, loading: false};
+  const feedState = {items: [], cursor: '', query: initialFeed.query, kind: initialFeed.kind, tab: initialFeed.tab, loading: false, failed: false};
   let feedRequest = 0;
 
   function setFeedTab(tab) {
@@ -429,15 +459,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const followingEmpty = document.getElementById('feed-following-empty');
     const gridSection = document.getElementById('feed-activity-empty');
     const searchNote = document.getElementById('feed-search-note');
-    if (followingEmpty) followingEmpty.hidden = !(currentUser && feedState.tab === 'following' && !feedState.items.length && !feedState.loading);
+    const decision = feedNoteFor(feedState, Boolean(currentUser));
+    if (followingEmpty) followingEmpty.hidden = !decision.followingEmpty;
     if (gridSection) gridSection.hidden = false;
     if (searchNote) searchNote.hidden = true;
-    if (!note) return;
-    if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
-    else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
-    else if (feedState.tab === 'collected') note.textContent = '这里只展示你收录且仍公开的作品。';
-    else note.textContent = (feedState.query || feedState.kind) && !feedState.items.length && !feedState.loading
-      ? FEED_SEARCH_EMPTY_NOTE : (feedState.items.length ? FEED_ACTIVITY_LISTED_NOTE : FEED_ACTIVITY_EMPTY_NOTE);
+    if (note) note.textContent = decision.note;
   }
 
   const previewCache = new Map();
@@ -581,6 +607,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       feedState.items = [];
       feedState.cursor = '';
       feedState.query = query;
+      feedState.failed = false;
     }
     feedState.loading = true;
     const error = document.getElementById('feed-error');
@@ -598,6 +625,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (seq !== feedRequest) return;
     feedState.loading = false;
     if (result.status !== 200) {
+      // Only a first page that could not be read makes the list unknown; a
+      // failed "load more" keeps the pages already on screen.
+      feedState.failed = !append;
       if (error) {
         error.hidden = false;
         error.textContent = (result.body && result.body.error && result.body.error.message)
