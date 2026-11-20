@@ -120,7 +120,7 @@ test('template links the web-slot host and loads the social client without bundl
   const host = JSON.parse(readFileSync(join(root, '..', 'flybot-web-slots', 'package.json'), 'utf8'))
   assert.equal(host.name, '@openteamily/flybot-web-slots')
   const socialWeb = JSON.parse(readFileSync(join(root, '..', 'flybot-web-slots', 'social-web', 'package.json'), 'utf8'))
-  assert.equal(socialWeb.exports['./client'], '../../../flybot/plugins/social/client.js')
+  assert.equal(socialWeb.exports['./client'], './client.js')
 })
 
 test('template bundles the OpenTeamily DS-Bot plugin and its pages stage', () => {
