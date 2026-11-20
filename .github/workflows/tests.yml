@@ -70,6 +70,10 @@ jobs:
       - run: node --test tests/docs_pages.test.mjs
       - run: node --test tests/onboarding_step2.test.mjs
       - run: node --test tests/follow_work_notify.test.mjs
+      # The census is a derived artifact of the checked-in source: regenerate it in the
+      # merge tree before the suite so a stale snapshot cannot turn this job red.
+      - name: Regenerate derived control census
+        run: python scripts/visible_inventory.py
       - name: Python tests with explicit trusted runner Node
         run: |
           install -d -m 0700 "$RUNNER_TEMP/openteamily-planner-bin"
