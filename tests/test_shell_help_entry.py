@@ -73,7 +73,8 @@ def help_entries(page):
 
 class ShellHelpEntryTests(unittest.TestCase):
     def test_every_shell_page_links_the_guide_under_its_own_name(self):
-        self.assertEqual(len(PAGES), 21, f'expected the 21 pages with the account menu, found {[str(p) for p in PAGES]}')
+        self.assertTrue(any(p.parent.name=='register' for p in PAGES),'registration must carry the real help/terms menu too')
+        self.assertEqual(len(PAGES), 22, f'expected the 22 pages with the account menu, found {[str(p) for p in PAGES]}')
         for page in PAGES:
             with self.subTest(page=page):
                 entries = help_entries(page)

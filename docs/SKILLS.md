@@ -28,7 +28,7 @@ No archive upload/extraction, scripts, filesystem paths, shell permission, crede
 
 Covered: personal management inference/private agent chat and agent-scoped management tasks dispatched onto the initiating user's own upgraded runtime; private message-assistance tasks can use account skills without gaining any connected-tool grant. The model remains platform default + user override. Composio remains user-supplied and its existing approval broker is unchanged.
 
-**Not implemented:** a third-party registry, package uploads/downloads, signatures/upgrades/migrations for arbitrary packages, executable/filesystem skills, dynamic SDK tools, standalone upstream DSH session loading, schedule-specific skill material, or delegated/shared-runtime grants. A skill that asks for an external action does not authorize one. Real inference still requires an operator-configured model and online runtime; a persisted binding alone cannot manufacture those dependencies.
+**Not implemented:** a third-party registry, package uploads/downloads, signatures/upgrades/migrations for arbitrary packages, executable/filesystem skills, dynamic SDK tools, standalone upstream DSH session loading, delegated/shared-runtime grants. A skill that asks for an external action does not authorize one. Real inference still requires an operator-configured model and online runtime; a persisted binding alone cannot manufacture those dependencies.
 
 ## 「我的技能库」标记（per-account library）
 
@@ -45,3 +45,18 @@ Covered: personal management inference/private agent chat and agent-scoped manag
 - `scripts/ci_ui_screenshots.mjs`: real local page → SQLite install/reload → actual daemon → local synthetic model → loading receipt → uninstall/reload, with content and 390px captures. Python tests separately inspect provider request content.
 
 Private after screenshots live outside the repository. Older `docs/screenshots/skills` demo captures, if present, are historical UI-only evidence and must not be used as lifecycle acceptance. No Teamily skill installation/execution reference scene exists; that parity is **unverified**.
+
+
+## Skills/runtime completion follow-up
+
+The library now offers real readiness diagnosis and an explicit **使用技能** flow. `/v1/skills/scopes` lists only accessible active administrative scopes; old bindings remain revocable after access is lost. `/v1/skills/readiness?scope=…` distinguishes offline, legacy runtime, delegated runtime, missing model, unsupported provider and ready. Runtime capability advertisements are persisted and reset on a legacy reconnect; they are not inference proof. Download `/install/flybot.pyz`, stop the old daemon, and restart with its existing private key-file. No automatic host install, restart, key discovery or package execution occurs.
+
+`POST /v1/skills/runs` requires CSRF, a 16–64-character Idempotency-Key, an exact current installed skill, scope and 1–4000-character input. It pins **only the selected content/version/digest**, not all installed instructions, creates a real runtime task and grants no connected tools. Stable replay returns the original task; different input with the same key is rejected. GET returns the user's latest50 persisted run records and exact selected versions. A successful task, nonempty model result and exact material acknowledgement are all required for `verified`; acknowledgement alone is not success or quality acceptance. Cancel and explicit save-to-workspace use existing authorized runtime-task APIs. Saving makes the result visible to members; the returned link selects the actual workspace/document editor. No external sends or public shares occur.
+
+### Explicit scheduled skills
+
+Install into an `automation:<workspace-id>:<automation-id>` scope to opt that existing automation into skill loading. It requires active workspace administration and has one installing owner at a time. The scheduler uses **that owner's own compatible personal runtime only**, with no fallback to another member and no inherited private account skills. It pins the complete installed automation manifest, uses the existing workspace model-resolution policy, and records the actual task/result/receipt in the same history. Missing runtime queues with `no_agent`; incompatible runtime fails with `runtime_upgrade_required`; role loss/version mismatch fails closed. Uninstall cancels selected active tasks even before first model access. Already-sent provider input cannot be recalled. Revoke all bindings before transferring ownership. No Composio grants were added to automation.
+
+Two actual usability defects are corrected: regular workspace members' account-installed skills can reach their own runtime in agent conversations (without granting admin-only agent bindings), and task-local claim/result404/409 races no longer kill either Python or container poller. Auth/network errors remain errors; inference is never automatically replayed.
+
+Still absent: third-party registry/upload/archive/signature distribution, arbitrary filesystem or executable packages, standalone DSH session loading, delegated/shared-runtime grants, real-vendor quality acceptance, and Teamily skill-operation reference evidence. These are not all credential blockers: the first five need additional engineering/protocol work. Controlled local provider tests assert real model-request material and post-uninstall absence, not real-vendor acceptance.

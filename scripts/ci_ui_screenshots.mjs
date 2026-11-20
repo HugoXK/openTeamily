@@ -99,11 +99,16 @@ async function waitForStoredValue(page, selector, expected, timeout = 15000) {
 
 async function waitForLocatorText(page, selector, expected, timeout = 15000) {
   await page.locator(selector).waitFor({ state: 'visible', timeout });
-  await page.waitForFunction(
-    ({ selector, expected }) => (document.querySelector(selector)?.innerText || '').includes(expected),
-    { selector, expected },
-    { timeout },
-  );
+  try {
+    await page.waitForFunction(
+      ({ selector, expected }) => (document.querySelector(selector)?.innerText || '').includes(expected),
+      { selector, expected },
+      { timeout },
+    );
+  } catch (error) {
+    const transport=await page.evaluate(()=>document.querySelector('#workspace-events-status')?.textContent||'not on this page');
+    throw new Error(`Text assertion ${selector} expected ${JSON.stringify(expected)}; live status=${transport}; ${String(error)}`);
+  }
 }
 
 
@@ -211,7 +216,78 @@ async function main() {
       'unauthenticated /settings shows an empty login form',
     );
     screenshots.push(path.basename(await shot(loginPage, outDir, '01-settings-login.png')));
+    // A genuinely new synthetic account uses the form, actual session cookie,
+    // race-free first workspace and ordinary non-operator agent creation.
+    try {
+      await loginPage.goto(origin+'/',{waitUntil:'load'});
+      await loginPage.locator('#login-panel').waitFor({state:'visible'});
+      for(const width of [1280,390,471]){
+        await loginPage.setViewportSize({width,height:900});
+        await loginPage.locator('.login-register-button').waitFor({state:'visible'});
+        const geometry=await loginPage.evaluate(()=>{
+          const a=document.querySelector('#username'),b=document.querySelector('#password'),ar=a.getBoundingClientRect(),br=b.getBoundingClientRect();
+          return {type:a.type,aw:ar.width,bw:br.width,ah:ar.height,bh:br.height,ab:getComputedStyle(a).backgroundColor,bb:getComputedStyle(b).backgroundColor,overflow:document.documentElement.scrollWidth>innerWidth};
+        });
+        record('mobile_login_entry_'+width,geometry.type==='text'&&Math.abs(geometry.aw-geometry.bw)<1&&Math.abs(geometry.ah-geometry.bh)<1&&geometry.ah>=44&&geometry.ab===geometry.bb&&!geometry.overflow,'Actual computed username/password geometry plus visible registration entry: '+JSON.stringify(geometry));
+        if(width===390)screenshots.push(path.basename(await shot(loginPage,outDir,'116a-login-registration-390.png')));
+      }
+      screenshots.push(path.basename(await shot(loginPage,outDir,'116-mobile-login-registration-entry.png')));
+      await loginPage.locator('.login-register-button').click();
+      await waitForLocatorText(loginPage,'#register-policy','已开放注册');
+      screenshots.push(path.basename(await shot(loginPage,outDir,'109-registration-form.png')));
+      await loginPage.locator('#register-username').fill('ci-new-account');
+      await loginPage.locator('#register-password').fill(password);
+      await loginPage.locator('#register-submit').click();
+      await loginPage.waitForURL(origin+'/');
+      await waitForLocatorText(loginPage,'#home-greeting','ci-new-account');
+      await loginPage.waitForFunction(()=>document.querySelector('#home-workspace')?.options.length>0);
+      const session=await(await anonymous.request.get(origin+'/v1/auth/session')).json();
+      const spaces=await(await anonymous.request.get(origin+'/v1/workspaces?limit=100')).json();
+      record('registration_real_session_first_workspace',session.user?.username==='ci-new-account'&&spaces.items?.length===1,'Form registration verified cookie session before navigating; personal initialization completed before the first workspace listing. Not an operator-admin grant.');
+      screenshots.push(path.basename(await shot(loginPage,outDir,'110-new-account-first-home.png')));
+      // Keep the new mobile account at471px through normal agent use/reload.
+      await loginPage.goto(origin+'/agents#workspace='+spaces.items[0].id,{waitUntil:'load'});
+      await loginPage.locator('#open-create').click();
+      await loginPage.locator('#create-form input[name="name"]').fill('New account persisted agent');
+      await loginPage.locator('#create-form textarea[name="instructions"]').fill('Use only supplied source material. No external operations.');
+      await loginPage.locator('#create-form button[type="submit"]').click();
+      await waitForLocatorText(loginPage,'#agent-list','New account persisted agent');
+      await loginPage.reload({waitUntil:'load'});
+      await waitForLocatorText(loginPage,'#agent-list','New account persisted agent');
+      record('registration_create_agent_reload',true,'New synthetic account created its own agent via the real form and read it after reload. Controlled-provider full task path is covered separately in Python.');
+      screenshots.push(path.basename(await shot(loginPage,outDir,'111-new-account-agent-reload.png')));
+    }catch(error){record('registration_full_new_account',false,String(error));}
     await anonymous.close();
+
+    const desktopRegistration = await browser.newContext({viewport:{width:1280,height:900},locale:'zh-CN'});
+    try {
+      const desktop = await desktopRegistration.newPage();
+      await desktop.goto(origin+'/settings',{waitUntil:'load'});
+      await desktop.locator('.login-register-button').waitFor({state:'visible'});
+      await desktop.locator('.login-register-button').click();
+      await waitForLocatorText(desktop,'#register-policy','已开放注册');
+      screenshots.push(path.basename(await shot(desktop,outDir,'117-desktop-registration-form.png')));
+      await desktop.locator('#register-username').fill('ci-new-desktop');
+      await desktop.locator('#register-password').fill(password);
+      await desktop.locator('#register-submit').click();
+      await desktop.waitForURL(origin+'/');
+      await waitForLocatorText(desktop,'#home-greeting','ci-new-desktop');
+      await desktop.waitForFunction(()=>document.querySelector('#home-workspace')?.options.length>0);
+      const session=await(await desktopRegistration.request.get(origin+'/v1/auth/session')).json();
+      const spaces=await(await desktopRegistration.request.get(origin+'/v1/workspaces?limit=100')).json();
+      record('desktop_registration_real_session',session.user?.username==='ci-new-desktop'&&spaces.items?.length===1,'Desktop settings login entry -> real form -> cookie session -> initialized personal workspace.');
+      await desktop.goto(origin+'/agents#workspace='+spaces.items[0].id,{waitUntil:'load'});
+      await desktop.locator('#open-create').click();
+      await desktop.locator('#create-form input[name="name"]').fill('Desktop account persisted agent');
+      await desktop.locator('#create-form textarea[name="instructions"]').fill('Synthetic test; no external operations.');
+      await desktop.locator('#create-form button[type="submit"]').click();
+      await waitForLocatorText(desktop,'#agent-list','Desktop account persisted agent');
+      await desktop.reload({waitUntil:'load'});
+      await waitForLocatorText(desktop,'#agent-list','Desktop account persisted agent');
+      record('desktop_registration_normal_use',true,'Second independent new desktop account can create and reload its own agent.');
+      screenshots.push(path.basename(await shot(desktop,outDir,'118-desktop-registration-agent-reload.png')));
+    }catch(error){record('desktop_registration_full_new_account',false,String(error));}
+    finally{await desktopRegistration.close();}
 
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'zh-CN' });
     const login = await context.request.post(`${origin}/v1/auth/login`, {
@@ -224,6 +300,7 @@ async function main() {
     }
 
     const page = await context.newPage();
+    page.on('response', response=>{if(new URL(response.url()).pathname.endsWith('/events'))console.log('Synthetic SSE handshake status='+response.status());});
 
     await page.goto(`${origin}/settings`, { waitUntil: 'load' });
     await page.locator('#settings-panel').waitFor({ state: 'visible', timeout: 15000 });
@@ -1085,34 +1162,34 @@ async function main() {
       await page.locator('#empty-meetings').waitFor({ state: 'visible', timeout: 8000 });
       const meetings = await visibleText(page.locator('#empty-meetings'));
       record(
-        'artifacts_meetings_unimplemented',
-        meetings.includes('未实现') && meetings.includes('还没有录过音的会议'),
+        'artifacts_meetings_empty',
+        meetings.includes('还没有会议纪要') && !meetings.includes('未实现'),
         meetings || 'meetings empty missing',
       );
       screenshots.push(path.basename(await shot(page, outDir, '31-artifacts-meetings-empty.png')));
       const joined = await visibleText(page.locator('#meetings-chrome'));
       record(
-        'artifacts_meetings_joined',
-        joined.includes('我参加的') && joined.includes('你参加或组织过的录音会议，最新的在前。') && !(await page.locator('#filter-button').isVisible()) && !(await page.locator('#layout-toggle').isVisible()),
+        'artifacts_meetings_chrome',
+        joined.includes('我的会议') && joined.includes('这个工作区的会议纪要，最新的在前。') && !(await page.locator('#filter-button').isVisible()) && !(await page.locator('#layout-toggle').isVisible()),
         joined || 'meetings chrome missing',
       );
-      await page.locator('.meeting-scopes [data-meeting-scope="all"]').click();
-      await waitForLocatorText(page, '#meetings-caption', '你所在群里的录音会议');
-      const meetingsAll = await visibleText(page.locator('#meetings-chrome'));
+      await page.locator('.artifact-kinds [data-kind="all"]').click();
+      await page.waitForTimeout(300);
+      const chromeRetired = await page.locator('#meetings-chrome').evaluate((node) => node.hidden);
       record(
-        'artifacts_meetings_all',
-        meetingsAll.includes('全部') && meetingsAll.includes('你所在群里的录音会议'),
-        meetingsAll || 'meetings all caption missing',
+        'artifacts_meetings_leaves',
+        chromeRetired && await page.locator('#filter-button').isVisible(),
+        chromeRetired ? 'meetings chrome retired, filters back' : 'meetings chrome still shown',
       );
-      screenshots.push(path.basename(await shot(page, outDir, '37-space-meetings-all.png')));
-      await page.locator('.meeting-scopes [data-meeting-scope="joined"]').click();
-      await waitForLocatorText(page, '#meetings-caption', '你参加或组织过的录音会议，最新的在前。');
+      screenshots.push(path.basename(await shot(page, outDir, '37-artifacts-back-from-meetings.png')));
+      await page.locator('.artifact-kinds [data-kind="meetings"]').click();
+      await page.locator('#empty-meetings').waitFor({ state: 'visible', timeout: 8000 });
       const meetingsChromeView = await visibleText(page.locator('#main-panel'));
       record(
         'space_meetings_chrome',
         meetingsChromeView.includes('我的会议')
-          && meetingsChromeView.includes('还没有录过音的会议')
-          && meetingsChromeView.includes('在会议中开启录音后，回放和纪要会出现在这里。')
+          && meetingsChromeView.includes('还没有会议纪要')
+          && meetingsChromeView.includes('在「会议」页记下纪要后，这里会按时间倒序列出。')
           && await page.locator('#empty-meetings .empty-hero svg').count() === 1
           && await page.locator('#meetings-title').isVisible()
           && await page.locator('#artifact-notify').getAttribute('aria-label') === '通知'
@@ -1178,10 +1255,20 @@ async function main() {
       await selectWorkspace(page, ready.workspace_name);
       await page.locator('#empty-starred').waitFor({ state: 'visible', timeout: 8000 });
       const starred = await visibleText(page.locator('#empty-starred'));
+      // The picture entry is a real link into /chat; the old disabled button
+      // claimed there was no way to save a chat picture, which was false.
+      const picture = await page.evaluate(() => {
+        const node = document.getElementById('empty-save-image');
+        if (!node) return null;
+        return {tag: node.tagName, href: node.getAttribute('href'),
+                disabled: node.hasAttribute('disabled'),
+                text: (node.textContent || '').replace(/\s+/g, ' ')};
+      });
       record(
         'artifacts_starred_empty',
-        starred.includes('暂无收藏') && starred.includes('保存聊天中的消息') && starred.includes('保存聊天中的图片') && starred.includes('保存智能体成果') && starred.includes('未实现'),
-        starred || 'starred empty missing',
+        starred.includes('暂无收藏') && starred.includes('保存聊天中的消息') && starred.includes('保存聊天中的图片') && starred.includes('保存智能体成果')
+          && picture !== null && picture.tag === 'A' && picture.href === '/chat' && !picture.disabled && !picture.text.includes('未实现'),
+        JSON.stringify({starred, picture}),
       );
       screenshots.push(path.basename(await shot(page, outDir, '34-space-starred-empty.png')));
     } catch (error) {
@@ -2160,10 +2247,23 @@ async function main() {
         await page.locator('#onboarding-look select[name="color"]').selectOption('天空蓝');
         await page.locator('#onboarding-look-form button[type="submit"]').click();
         await waitForLocatorText(page, '#onboarding-look-preview', '颜色：天空蓝');
+        // Step 2 reads the user's real Composio connections now. This fixture has no
+        // personal Composio key, so GET /v1/composio/connections answers 409 and the
+        // list cannot be read: every row must say 未接入 (8 of them), and no row may
+        // claim 已连接 -- 未连接 would assert the app is known to be disconnected,
+        // which nobody asked. The connected wording (state=connected -> 已连接) is
+        // pinned in tests/onboarding_step2.test.mjs instead of here: this harness has
+        // no Composio key, and seeding a fake connection would make the screenshot a
+        // false claim about the real Composio state.
+        const appStates = await page.locator('#onboarding-apps .app-state').allTextContents();
+        const rowsUnreadable = appStates.length === 8 && appStates.every((text) => text.trim() === '· 未接入');
+        record('onboarding_connectors_honest',
+          rowsUnreadable && !appsText.includes('已连接'),
+          `No Composio key: ${appStates.length}/8 rows say 未接入, none claims 已连接 | ${(appsText || 'apps empty').slice(0, 240)}`);
         record('onboarding_steps_2_4',
-          appsText.includes('Gmail · 未连接') && !appsText.includes('已连接') && connectDisabled
+          connectDisabled
           && (await visibleText(page.locator('#onboarding-steps-meta'))).includes('形象已保存'),
-          'Steps 2-4 wizard: apps honestly unconnected with disabled connect buttons, picks and look saved');
+          `Steps 2-4 wizard: connect buttons disabled, picks and look saved | ${(appsText || 'apps empty').slice(0, 240)}`);
         screenshots.push(path.basename(await shot(page, outDir, '87-onboarding-steps.png')));
         await page.locator('#onboarding-enter').click();
         await page.waitForURL(url => url.pathname === '/chat');
@@ -2213,6 +2313,53 @@ async function main() {
       await page.reload({waitUntil:'load'});
       await waitForLocatorText(page,'#skills-list','历史任务已有加载回执');
       record('skills_daemon_loaded',await page.evaluate(async id=>{const d=await(await fetch('/v1/skills/bindings')).json();return d.items.some(i=>i.skill_id==='meeting-notes'&&i.last_loaded_task===id)},task),'Upgraded daemon verified exact package digests and acknowledged context loading before successful synthetic inference; Python tests inspect model request content');
+      await page.locator('.skill-card').filter({has:page.locator('button[data-skill="meeting-notes"]')}).locator('.skill-use').click();
+      await page.waitForFunction(()=>!document.getElementById('skill-run-submit').disabled);
+      // Computed enabled primary states, not token-only or mixed-theme inference.
+      const skillContrasts=[];
+      for(const theme of ['light','dark']) {
+        await page.evaluate(value=>{document.documentElement.dataset.themeResolved=value},theme);
+        for(const state of ['normal','hover']) {
+          if(state==='hover')await page.locator('#skill-run-submit').hover();else await page.mouse.move(0,0);
+          const measured=await page.locator('#skill-run-submit').evaluate(e=>{
+            for(const animation of e.getAnimations())animation.finish();
+            const s=getComputedStyle(e),lum=color=>{const c=color.match(/[\d.]+/g).slice(0,3).map(Number).map(n=>{n/=255;return n<=.04045?n/12.92:((n+.055)/1.055)**2.4});return .2126*c[0]+.7152*c[1]+.0722*c[2]};
+            const a=lum(s.color),b=lum(s.backgroundColor);
+            return {ratio:(Math.max(a,b)+.05)/(Math.min(a,b)+.05),color:s.color,background:s.backgroundColor,image:s.backgroundImage,opacity:s.opacity};
+          });
+          skillContrasts.push({theme,state,...measured});
+        }
+        if(theme==='dark')screenshots.push(path.basename(await shot(page,outDir,'107-skills-run-dark-hover.png')));
+      }
+      record('skills_run_primary_contrast',skillContrasts.every(s=>s.ratio>=4.5&&s.image==='none'&&s.opacity==='1'),'Actual enabled normal/hover, light/dark primary contrast: '+JSON.stringify(skillContrasts));
+      await page.evaluate(()=>{document.documentElement.dataset.themeResolved='light'});
+      await page.mouse.move(0,0);
+      await page.locator('#skill-run-prompt').fill('[SYNTHETIC CI] Use only the selected meeting skill on: We decided to test the full run and document path.');
+      await page.locator('#skill-run-submit').click();
+      await waitForApi(page,'/v1/skills/runs',d=>d.items?.some(r=>r.verified&&r.task.prompt.includes('full run and document path')));
+      await page.locator('#skills-refresh').click();
+      await waitForLocatorText(page,'#skill-run-history',ready.provider_text);
+      record('skills_explicit_run_verified',true,'Real selected-skill task completed in the daemon with exact material receipt; synthetic provider only, no tools or vendor acceptance');
+      await page.locator('.skills-execution').scrollIntoViewIfNeeded();
+      screenshots.push(path.basename(await shot(page,outDir,'104-skills-explicit-run.png')));
+      await page.reload({waitUntil:'load'});
+      await waitForLocatorText(page,'#skill-run-history',ready.provider_text);
+      record('skills_run_history_reload',true,'Actual selected-skill result and load proof survive reload');
+      await page.locator('#skill-result-workspace').selectOption(ready.workspace_id);
+      await page.getByRole('button',{name:'保存结果为工作区文档',exact:true}).first().click();
+      const savedSkill=page.locator('#skill-run-history a').first();await savedSkill.waitFor({state:'visible'});
+      record('skills_result_document',await savedSkill.getAttribute('href')!=='','Explicit result save returned a real authorized document, not a simulated download');
+      screenshots.push(path.basename(await shot(page,outDir,'105-skills-result-document.png')));
+      const savedHref=await savedSkill.getAttribute('href');
+      await page.goto(origin+savedHref,{waitUntil:'load'});
+      await page.locator('#editor-form').waitFor({state:'visible'});
+      await waitForStoredValue(page,'#editor-form textarea[name="body"]',ready.provider_text);
+      record('skills_saved_document_real_editor',true,'Saved-result deep link selected the authorized workspace and loaded the actual persisted text in the rich editor');
+      screenshots.push(path.basename(await shot(page,outDir,'106-skills-result-editor.png')));
+      await page.goto(origin+'/skills',{waitUntil:'load'});
+      await page.waitForFunction(()=>document.querySelector('button[data-skill="meeting-notes"]')?.textContent==='卸载');
+
+      await page.locator('.skill-card').filter({has:page.locator('button[data-skill="meeting-notes"]')}).scrollIntoViewIfNeeded();
       await page.locator('.skill-card').filter({has:page.locator('button[data-skill="meeting-notes"]')}).locator('summary').click();
       screenshots.push(path.basename(await shot(page,outDir,'97-skills-loaded-content.png')));
       await page.setViewportSize({width:390,height:844});
@@ -2226,6 +2373,87 @@ async function main() {
       record('skills_uninstall_reload',await page.evaluate(async()=>!(await(await fetch('/v1/skills/bindings')).json()).items.some(i=>i.skill_id==='meeting-notes')),'Actual binding removed; Python/container tests assert subsequent model prompts omit the removed skill');
       screenshots.push(path.basename(await shot(page,outDir,'99-skills-uninstalled.png')));
     } catch(error) { record('skills_runtime_lifecycle',false,String(error)+'; '+await page.locator('#skills-error').textContent().catch(()=>'(not on skill page)')+'; '+(await page.locator('#skills-list').textContent().catch(()=>''))); }
+
+    try {
+      await page.goto(origin+'/skills',{waitUntil:'load'});
+      await page.locator('details:has(#skill-import-form) > summary').click();
+      await page.locator('#skill-import-template').click();
+      await page.locator('#skill-import-consent').check();
+      await page.locator('#skill-import-submit').click();
+      await waitForLocatorText(page,'#skill-import-status','未自动安装');
+      await page.reload({waitUntil:'load'});
+      const imported=page.locator('.skill-card').filter({has:page.locator('button[data-skill="import-evidence-check"]')});
+      await imported.waitFor({state:'visible'});
+      await page.locator('#skills-permission').check();
+      await imported.locator('.skill-install').click();
+      await waitForLocatorText(page,'#skills-error','内容与绑定已安装');
+      await imported.locator('.skill-use').click();
+      await page.waitForFunction(()=>!document.getElementById('skill-run-submit').disabled);
+      await page.locator('#skill-run-prompt').fill('[SYNTHETIC CI IMPORT] Verify the evidence: the supplied fixture completed.');
+      await page.locator('#skill-run-submit').click();
+      await waitForApi(page,'/v1/skills/runs',d=>d.items?.some(r=>r.skill_id==='import-evidence-check'&&r.verified));
+      await page.locator('#skills-refresh').click();
+      await waitForLocatorText(page,'#skill-run-history',ready.provider_text);
+      record('imported_skill_actual_runtime_v2',true,'Original user-imported JSON persisted through reload, separately installed, loaded/acknowledged by the actual daemon and used by the controlled model. Python asserts exact imported model context. No executable or publisher-signature claim.');
+      screenshots.push(path.basename(await shot(page,outDir,'112-imported-skill-real-run.png')));
+      await imported.getByRole('button',{name:'管理版本',exact:true}).click();
+      await waitForLocatorText(page,'#skill-import-status','编辑已有包');
+      const newer=JSON.parse(await page.locator('#skill-import-json').inputValue());newer.version='1.1.0';newer.content+=' Version two evidence requires explicit renewed consent.';delete newer.digest;
+      await page.locator('#skill-import-json').fill(JSON.stringify(newer,null,2));
+      await page.locator('#skill-import-consent').check();await page.locator('#skill-import-submit').click();
+      await waitForLocatorText(page,'#skill-import-status','未自动安装');
+      await waitForLocatorText(page,'#skills-list','版本已变化');
+      await page.locator('#skills-permission').check();await imported.getByRole('button',{name:'重新安装当前版本',exact:true}).click();
+      await waitForLocatorText(page,'#skills-error','新版本绑定已保存');
+      screenshots.push(path.basename(await shot(page,outDir,'113-imported-skill-version-upgrade.png')));
+      page.once('dialog',dialog=>dialog.accept());await imported.getByRole('button',{name:'撤销私有包',exact:true}).click();
+      await waitForLocatorText(page,'#skill-import-status','包已撤销');await page.reload({waitUntil:'load'});
+      record('imported_skill_revoke_reload',await page.locator('button[data-skill="import-evidence-check"]').count()===0,'Revocation removed the package from available catalogue and all persisted bindings. Historical owned export remains available; later task model context omission is asserted in Python.');
+    }catch(error){record('imported_skill_lifecycle',false,String(error));}
+
+    try {
+      // A real server revision invalidation must preserve the editor draft.
+      const created=await page.evaluate(async wid=>{
+        const csrf=document.cookie.split(/;\s*/).find(v=>v.startsWith('ot_dev_csrf=')).split('=')[1];
+        const response=await fetch(`/v1/workspaces/${wid}/artifacts`,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':'functional-export-live001'},body:JSON.stringify({title:'Functional export evidence',body:'Original Chinese evidence 中文 123.'})});
+        const data=await response.json();if(!response.ok)throw Error('Synthetic artifact creation failed');return data.artifact;
+      },ready.workspace_id);
+      await page.goto(origin+'/space?workspace='+ready.workspace_id+'&artifact='+created.id,{waitUntil:'load'});
+      await page.locator('#editor-form').waitFor({state:'visible'});
+      await waitForLocatorText(page,'#workspace-events-status','已连接');
+      await page.evaluate(async({wid,id})=>{
+        const csrf=document.cookie.split(/;\s*/).find(v=>v.startsWith('ot_dev_csrf=')).split('=')[1];
+        const response=await fetch(`/v1/workspaces/${wid}/artifacts/${id}`,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({revision:1,changes:{body:'SERVER VERSION TWO 中文 456.'}})});
+        if(!response.ok)throw Error('Synthetic second revision failed');
+      },{wid:ready.workspace_id,id:created.id});
+      await page.locator('#artifact-live-update').waitFor({state:'visible'});
+      record('document_sse_preserves_local_draft',await page.locator('#editor-form textarea[name="body"]').inputValue()==='Original Chinese evidence 中文 123.','Real authenticated SSE notified an actual SQLite revision change without replacing the local editor; no CRDT/collaboration claim.');
+      screenshots.push(path.basename(await shot(page,outDir,'114-document-live-revision-preserved.png')));
+      page.once('dialog',dialog=>dialog.accept());await page.locator('#artifact-live-load').click();
+      await waitForStoredValue(page,'#editor-form textarea[name="body"]','SERVER VERSION TWO 中文 456.');
+      for(const format of ['docx','pdf']){
+        await page.locator('#export-format').selectOption(format);
+        const downloadPromise=page.waitForEvent('download');await page.locator('#export-artifact').click();const download=await downloadPromise;
+        const file=path.join(outDir,'export-evidence.'+format);await download.saveAs(file);
+        const bytes=fs.readFileSync(file);record('real_'+format+'_download',format==='docx'?bytes.subarray(0,2).toString()==='PK':bytes.subarray(0,5).toString()==='%PDF-','Actual browser attachment download, not renamed plain text. Python inspects XML, immutable revisions, Unicode PDF extraction and negative permissions.');
+      }
+      screenshots.push(path.basename(await shot(page,outDir,'115-real-typed-export-controls.png')));
+    }catch(error){record('document_live_export_path',false,String(error));}
+
+    try {
+      const created=await page.evaluate(async wid=>{
+        const csrf=document.cookie.split(/;\s*/).find(v=>v.startsWith('ot_dev_csrf=')).split('=')[1];
+        const response=await fetch(`/v1/workspaces/${wid}/artifacts`,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':'functional-pptx-export001'},body:JSON.stringify({title:'PPTX evidence 中文',kind:'slides',slides:{schema:'openteamily.slides.v1',slides:[{title:'目标',bullets:['统一入口','中文 123']},{title:'下一步',bullets:['接入运行时']}]}})});
+        const data=await response.json();if(!response.ok)throw Error('Synthetic slides artifact creation failed: '+JSON.stringify(data));return data.artifact;
+      },ready.workspace_id);
+      await page.goto(origin+'/space?workspace='+ready.workspace_id+'&artifact='+created.id,{waitUntil:'load'});
+      await page.locator('#export-format').selectOption('pptx');
+      const downloadPromise=page.waitForEvent('download');await page.locator('#export-artifact').click();const download=await downloadPromise;
+      const file=path.join(outDir,'export-evidence.pptx');await download.saveAs(file);
+      const bytes=fs.readFileSync(file);
+      record('real_pptx_download',bytes.subarray(0,2).toString()==='PK','Actual browser PPTX attachment for a slides artifact; Python asserts title/bullet XML, history, and the absence of macros or external relationships.');
+      screenshots.push(path.basename(await shot(page,outDir,'116-real-pptx-export-controls.png')));
+    }catch(error){record('slides_pptx_export_path',false,String(error));}
 
     try {
       await page.goto(`${origin}/chat#workspace=${ready.workspace_id}&social=${ready.social_group_id}`,{waitUntil:'load'});
