@@ -1,0 +1,226 @@
+{
+  "slug": "ev382",
+  "generated_at": "2026-11-20T04:08:30.904Z",
+  "sides": [
+    {
+      "name": "before",
+      "ref": "f7fa182955a498344117d4f23b712b215a9c0a5f",
+      "url": "http://127.0.0.1:8101"
+    }
+  ],
+  "images": [
+    {
+      "arm": "before",
+      "file": "before/ev382__before__zh-CN__light__1440x900__profile.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "light",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 42999
+      },
+      "viewport_size_ok": true,
+      "sha256": "b4b60035de23b4d5ff19b7be9c9b978cfbe3b1cc0b08ac18d7972b9308016ac6",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "textLength": 128,
+        "visibleDialogs": 0
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/ev382__before__zh-CN__dark__1440x900__profile.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 41638
+      },
+      "viewport_size_ok": true,
+      "sha256": "d00ed04c3db0a64e8282d4defb79c59617d445366fa0c9bf1e4c59e4f78a6adf",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "textLength": 128,
+        "visibleDialogs": 0
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/ev382__before__en__light__1440x900__profile.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "en",
+      "theme": "light",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 42999
+      },
+      "viewport_size_ok": true,
+      "sha256": "b4b60035de23b4d5ff19b7be9c9b978cfbe3b1cc0b08ac18d7972b9308016ac6",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "textLength": 128,
+        "visibleDialogs": 0
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/ev382__before__en__dark__1440x900__profile.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "en",
+      "theme": "dark",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 41638
+      },
+      "viewport_size_ok": true,
+      "sha256": "d00ed04c3db0a64e8282d4defb79c59617d445366fa0c9bf1e4c59e4f78a6adf",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "textLength": 128,
+        "visibleDialogs": 0
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/ev382__before__zh-CN__light__390x844__profile.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "zh-CN",
+      "theme": "light",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 37397
+      },
+      "viewport_size_ok": true,
+      "sha256": "174988d743f34a5db16bd2dbf3947e32036d833c6088ce1bea78d23193e6eeb7",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "textLength": 128,
+        "visibleDialogs": 0
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/ev382__before__zh-CN__dark__390x844__profile.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 35760
+      },
+      "viewport_size_ok": true,
+      "sha256": "fc912d983d006838a216bebf0eb83eca48b9fc025d06b457e4b1daeb1bd0662a",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "textLength": 128,
+        "visibleDialogs": 0
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/ev382__before__en__light__390x844__profile.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "en",
+      "theme": "light",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 37397
+      },
+      "viewport_size_ok": true,
+      "sha256": "174988d743f34a5db16bd2dbf3947e32036d833c6088ce1bea78d23193e6eeb7",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "textLength": 128,
+        "visibleDialogs": 0
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/ev382__before__en__dark__390x844__profile.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "en",
+      "theme": "dark",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 35764
+      },
+      "viewport_size_ok": true,
+      "sha256": "d0c5e3419fdaa046d19d91a446a8c09759967e51a844e2eb369ce72f8b560be7",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "textLength": 128,
+        "visibleDialogs": 0
+      },
+      "console": []
+    }
+  ],
+  "failures": [],
+  "arms": {
+    "before": {
+      "ref": "f7fa182955a498344117d4f23b712b215a9c0a5f",
+      "count": 8
+    }
+  },
+  "grid": {
+    "viewports": [
+      "1440x900",
+      "390x844"
+    ],
+    "locales": [
+      "zh-CN",
+      "en"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ]
+  }
+}
