@@ -25,7 +25,14 @@ def _container(engine, iid):
 
 
 def deliver(engine, client, iid, heartbeat=lambda: None):
-    """Install the seal key, fetch sealed bundles, copy them into the volume."""
+    """Install the seal key, fetch sealed bundles, copy them into the volume.
+
+    `.copied-<feature>-v1` is only a copy marker, never proof of import. The
+    runtime removes a bundle file only after a verified import, so a marker plus
+    a still-present bundle means the import was rejected or not yet consumed;
+    the next poll copies that feature again. A real import receipt is a
+    follow-up; until then marker + missing bundle is the retry boundary.
+    """
     require(re.fullmatch(r'[0-9a-f]{32}', iid or ''), 'instance_id')
     path, key = engine.install_seal_key(iid)
     # Additive compose bind; a later no-delete recreate attaches it. The job still
@@ -37,15 +44,25 @@ def deliver(engine, client, iid, heartbeat=lambda: None):
     container = _container(engine, iid)
     inspect, _ = engine.runner.run(['inspect', '-f', '{{.State.Running}}', container], heartbeat=heartbeat, timeout=10)
     require(inspect.strip() == 'true', 'instance_not_running')
-    def delivered(name):
-        marker = f'/data/openteamily/import/.delivered-{name}-v{VERSION}'
+    def exists(path):
         try:
-            engine.runner.run(['exec', '-u', '1000:1000', container, 'test', '-f', marker], heartbeat=heartbeat, timeout=10)
+            engine.runner.run(['exec', '-u', '1000:1000', container, 'test', '-f', path], heartbeat=heartbeat, timeout=10)
             return True
         except ManagerError:
             return False
 
-    if all(delivered(name) for name in FEATURES):
+    def copied(name):
+        return exists(f'/data/openteamily/import/.copied-{name}-v{VERSION}')
+
+    def present(name):
+        return exists(f'/data/openteamily/import/{name}-v{VERSION}.bundle')
+
+    def settled(name):
+        # The runtime deletes the bundle only after import, so a copy marker with
+        # no bundle left is the best available completion signal.
+        return copied(name) and not present(name)
+
+    if all(settled(name) for name in FEATURES):
         return {'status': 'already-imported', 'instance_id': iid, 'version': VERSION, 'features': list(FEATURES)}
     data = client.dsbot_import(iid, key.hex())
     require(isinstance(data, dict) and data.get('owner_imported') is True, 'import_shape')
@@ -59,7 +76,7 @@ def deliver(engine, client, iid, heartbeat=lambda: None):
             require(isinstance(item, dict) and set(item) >= {'name', 'bundle'}, 'import_shape')
             name = item['name']
             require(name in FEATURES or re.fullmatch(r'[a-z][a-z0-9-]{0,39}', name or ''), 'import_feature')
-            if delivered(name):
+            if settled(name):
                 continue
             filename = f'{name}-v{VERSION}.bundle'
             require(BUNDLE_NAME.fullmatch(filename), 'import_feature')
@@ -93,7 +110,7 @@ def deliver(engine, client, iid, heartbeat=lambda: None):
             feature = filename.rsplit('-v', 1)[0]
             engine.runner.run(
                 ['exec', '-u', '1000:1000', container, 'sh', '-c',
-                 f'touch /data/openteamily/import/.delivered-{feature}-v{VERSION}'],
+                 f'touch /data/openteamily/import/.copied-{feature}-v{VERSION}'],
                 heartbeat=heartbeat, timeout=10)
     finally:
         for child in staging.glob('*.bundle'):
@@ -101,4 +118,4 @@ def deliver(engine, client, iid, heartbeat=lambda: None):
                 child.unlink()
             except FileNotFoundError:
                 pass
-    return {'status': 'imported', 'instance_id': iid, 'features': written, 'seal_key': 'installed'}
+    return {'status': 'delivered', 'instance_id': iid, 'features': written, 'seal_key': 'installed'}
