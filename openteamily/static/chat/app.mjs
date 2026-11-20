@@ -4,6 +4,7 @@ export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
+import { dsbotServed, dsbotRoute, dsbotRequest } from './dsbot.mjs';
 
 export const SEARCH_TABS = [
   ['all', '全部'],
@@ -316,10 +317,26 @@ export function groupAgentSummary(conversation) {
     + '。可明确请求一次回复。未接通：群内自动回复、@Agent 和任务委派。' : '';
 }
 
+// Personal-runtime states from server-side auto-provisioning (operator opt-in).
+export const RUNTIME_WAIT_ERRORS = {
+  runtime_starting: '你的专属运行时正在创建或启动，就绪后会自动回复',
+  runtime_capacity: '平台专属运行时名额已满，请联系管理员扩容，或连接你自己的运行时',
+  runtime_unavailable: '你的专属运行时创建或启动失败，请联系管理员处理',
+};
+
+export function sendNotice(reply) {
+  const code = reply && reply.error_code;
+  if (code === 'no_agent') return {kind: 'error', text: '消息已保存，正在等待已连接的运行时。'};
+  if (code === 'runtime_starting') return {kind: 'ok', text: '消息已保存。' + RUNTIME_WAIT_ERRORS[code] + '。'};
+  if (RUNTIME_WAIT_ERRORS[code]) return {kind: 'error', text: '消息已保存。' + RUNTIME_WAIT_ERRORS[code] + '。'};
+  return {kind: 'ok', text: '已发送。'};
+}
+
 export function groupReplyStatus(reply) {
   const labels = {queued: '等待执行', running: '执行中', succeeded: '已完成', failed: '失败', cancelled: '已取消'};
   const errors = {no_agent: '没有可用运行时连接', quota: '运行时任务容量已满', timeout: '执行超时',
-    runtime_failed: '运行时执行失败', empty_reply: '运行时未返回正文', task_missing: '运行时任务丢失', cancelled: '已取消'};
+    runtime_failed: '运行时执行失败', empty_reply: '运行时未返回正文', task_missing: '运行时任务丢失', cancelled: '已取消',
+    ...RUNTIME_WAIT_ERRORS};
   return (labels[reply.status] || '未知状态') + (reply.error_code ? '：' + (errors[reply.error_code] || '请求失败') : '');
 }
 
@@ -520,6 +537,82 @@ export function notificationSummary(item) {
 
 // A reminder is not a separate store: it is a one-shot automation created from the
 // message, and its due time is listed as a derived notification.
+
+function zoneClock(ts, zone) {
+  try {
+    const format = new Intl.DateTimeFormat('en-US', {
+      timeZone: zone, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+    const parts = {};
+    for (const part of format.formatToParts(new Date(ts))) {
+      if (part.type !== 'literal') parts[part.type] = Number(part.value);
+    }
+    if (!Number.isFinite(parts.year)) return null;
+    return {...parts, hour: parts.hour % 24};
+  } catch {
+    return null;
+  }
+}
+
+export function zonedInstant(dateText, timeText, zone) {
+  const [year, month, day] = String(dateText || '').split('-').map(Number);
+  const [hour, minute] = String(timeText || '').split(':').map(Number);
+  if (![year, month, day, hour, minute].every(Number.isFinite)) return null;
+  const guess = Date.UTC(year, month - 1, day, hour, minute);
+  const first = zoneClock(guess, zone);
+  if (!first) return null;
+  const offset = Date.UTC(first.year, first.month - 1, first.day, first.hour, first.minute, first.second) - guess;
+  const settled = zoneClock(guess - offset, zone);
+  const finalOffset = settled
+    ? Date.UTC(settled.year, settled.month - 1, settled.day, settled.hour, settled.minute, settled.second) - (guess - offset)
+    : offset;
+  return guess - finalOffset;
+}
+
+export function zoneDayKey(ts, zone) {
+  const clock = zoneClock(ts, zone);
+  if (!clock) return '';
+  return `${clock.year}-${String(clock.month).padStart(2, '0')}-${String(clock.day).padStart(2, '0')}`;
+}
+
+// One-shot automations that already came due, shown in the chat sidebar.
+// Participants may be {user_id, username} (legacy) or {username} (DS-Bot plugin).
+export function dueReminders(items, user, now = Date.now()) {
+  const userId = user && typeof user === 'object' ? user.id : user;
+  const username = user && typeof user === 'object' ? user.username : undefined;
+  const today = [];
+  const older = [];
+  for (const item of items || []) {
+    if (!item || item.enabled === false || item.enabled === 0) continue;
+    const schedule = item.schedule || {};
+    if (schedule.kind !== 'once' || !schedule.date || !schedule.time || !schedule.time_zone) continue;
+    const mine = (item.participants || []).some(person => person && (
+      (userId && person.user_id === userId)
+      || (username && person.username === username)
+      || (!person.user_id && person.username && (person.username === userId || person.username === username))
+    ));
+    if (!mine) continue;
+    const due = zonedInstant(schedule.date, schedule.time, schedule.time_zone);
+    if (due === null || due > now) continue;
+    const row = {id: item.id, title: item.title || '', due, schedule};
+    if (zoneDayKey(due, schedule.time_zone) === zoneDayKey(now, schedule.time_zone)) today.push(row);
+    else older.push(row);
+  }
+  today.sort((left, right) => right.due - left.due);
+  older.sort((left, right) => right.due - left.due);
+  return {today, older};
+}
+
+export function reminderDueLabel(item, now = Date.now()) {
+  const zone = (item.schedule && item.schedule.time_zone) || 'UTC';
+  const clock = zoneClock(item.due, zone);
+  const time = clock ? `${String(clock.hour).padStart(2, '0')}:${String(clock.minute).padStart(2, '0')}` : (item.schedule && item.schedule.time) || '';
+  if (zoneDayKey(item.due, zone) === zoneDayKey(now, zone)) return `今天 ${time} 到点`;
+  return `${String((item.schedule && item.schedule.date) || '').slice(5)} ${time} 到点`;
+}
+
 export const REMINDER_CHOICES = [['remind-1h', 'later'], ['remind-tomorrow', 'tomorrow']];
 
 function zonedParts(moment, timeZone) {
@@ -605,6 +698,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let sessions = [];
   let currentAgent = null;
   let personalAgentId = '';
+  const servedByDsbot = dsbotServed(document);
   let personalLook = null;
   let currentConversation = null;
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
@@ -632,6 +726,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function request(method, path, body, extra) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie), ...(extra || {})};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const plugin = servedByDsbot ? dsbotRoute(method, path, body, personalAgentId) : null;
+    if (plugin) return dsbotRequest(fetcher, plugin, personalAgentId, headers);
     const response = await fetcher(path, {
       method, headers, credentials: 'same-origin',
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -1356,8 +1452,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const handle = globalThis.setInterval(() => {
       if (document.visibilityState === 'hidden' || !currentUser) return;
       loadNotifications();
+      loadDueReminders();
     }, NOTIFICATION_POLL_MS);
     if (handle && typeof handle.unref === 'function') handle.unref();
+  }
+
+
+  let dueSeq = 0;
+
+  function renderDueReminders(state) {
+    const panel = document.getElementById('due-reminders');
+    const heading = document.getElementById('due-reminders-heading');
+    const note = document.getElementById('due-reminders-note');
+    const list = document.getElementById('due-reminders-list');
+    if (!panel || !heading || !note || !list) return;
+    const model = state || {};
+    const today = model.today || [];
+    const older = model.older || [];
+    const failed = Boolean(model.failed);
+    panel.hidden = !failed && today.length + older.length === 0;
+    heading.textContent = failed ? '今天到点的提醒' : `今天到点的提醒 ${today.length} 条`;
+    note.hidden = !failed && older.length === 0;
+    note.textContent = failed ? '读不到到点的提醒。'
+      : (older.length ? `另有 ${older.length} 条更早到点的提醒。` : '');
+    if (failed) { list.replaceChildren(); return; }
+    list.replaceChildren(...[...today, ...older].map(item => {
+      const row = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = '/automations';
+      link.textContent = item.title || '提醒';
+      const when = document.createElement('span');
+      when.className = 'note';
+      when.textContent = reminderDueLabel(item, Date.now());
+      link.append(when);
+      row.append(link);
+      return row;
+    }));
+  }
+
+  async function loadDueReminders() {
+    const wid = workspaceId();
+    if (!wid || !currentUser) return;
+    const token = ++dueSeq;
+    let result;
+    try { result = await request('GET', `/v1/workspaces/${wid}/automations`); } catch { result = {status: 0, body: {}}; }
+    if (token !== dueSeq || workspaceId() !== wid) return;
+    if (result.status !== 200) { renderDueReminders({failed: true}); return; }
+    renderDueReminders(dueReminders(result.body.items || [], currentUser, Date.now()));
   }
 
   function setNotificationsOpen(open) {
@@ -1384,6 +1525,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const sequence = ++sessionsRequest;
     const user = currentUser;
     loadNotifications();
+    loadDueReminders();
     const id = workspaceId();
     if (id !== sessionsWorkspace || user !== sessionsUser || !id) {
       sessionsWorkspace = id; sessionsUser = user;
@@ -2217,25 +2359,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-search-status').textContent = state.error || (state.hits.length ? '已显示 ' + state.hits.length + ' 条消息' : '没有找到匹配的消息。试试其他关键词。');
     document.getElementById('conversation-search-more').hidden = !state.cursor;
   }
+  // One jump-and-highlight action for both message hits and attachment hits: a
+  // search result never opens a second view, it scrolls the real message back in.
+  function jumpToMessage(messageId) {
+    const list = document.getElementById('message-list');
+    const target = Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
+    if (!target) {
+      document.getElementById('conversation-search-status').textContent = '这条消息不在当前已加载的消息窗口里，请加载更多消息后重试。';
+      return;
+    }
+    target.scrollIntoView?.({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+    target.tabIndex = -1; target.focus?.({preventScroll: true});
+    for (const node of Array.from(list.children || [])) delete node.dataset.searchJump;
+    target.dataset.searchJump = 'true';
+    setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
+  }
   function searchHitRow(hit, query) {
     const li = document.createElement('li');
     li.className = 'search-hit';
     li.tabIndex = 0;
     li.setAttribute('role', 'button');
     li.setAttribute('aria-label', '跳到这条消息');
-    const jump = () => {
-      const list = document.getElementById('message-list');
-      const target = Array.from(list.children || []).find(node => node.dataset.messageId === hit.messageId);
-      if (!target) {
-        document.getElementById('conversation-search-status').textContent = '这条消息不在当前已加载的消息窗口里，请加载更多消息后重试。';
-        return;
-      }
-      target.scrollIntoView({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
-      target.tabIndex = -1; target.focus({preventScroll: true});
-      for (const node of Array.from(list.children || [])) delete node.dataset.searchJump;
-      target.dataset.searchJump = 'true';
-      setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
-    };
+    const jump = () => jumpToMessage(hit.messageId);
     li.addEventListener('click', jump);
     li.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
@@ -2260,6 +2405,129 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }));
     li.append(avatar, head, text);
     return li;
+  }
+  // The conversation search covers three scopes of the SAME conversation. The
+  // photo and file scopes read the attachment fields the message rows already
+  // carry (social.py MESSAGE_ROWS -> attachment{id,title,kind,revision,path}),
+  // paged through the existing messages endpoint; no second list is invented.
+  const CONVERSATION_SCOPE_NOTES = {
+    messages: '· 搜索当前会话里你有权查看的消息。',
+    photos: '· 只读取当前会话消息里已有的图片附件。',
+    files: '· 只读取当前会话消息里已有的文件附件。',
+  };
+  const ATTACHMENT_PAGE_LIMIT = 100; // the messages endpoint caps limit at 100
+  const ATTACHMENT_MAX_PAGES = 50;
+  let conversationScope = 'messages';
+  function setConversationScope(tab) {
+    conversationScope = tab;
+    for (const name of ['messages', 'photos', 'files']) {
+      const button = document.getElementById('conversation-search-tab-' + name);
+      if (button) button.setAttribute('aria-selected', String(name === tab));
+    }
+    const note = document.getElementById('conversation-search-scope-note');
+    if (note) note.textContent = CONVERSATION_SCOPE_NOTES[tab] || CONVERSATION_SCOPE_NOTES.messages;
+    const more = document.getElementById('conversation-search-more');
+    if (more) more.hidden = true;
+  }
+  async function conversationAttachments(conversation) {
+    const items = [];
+    let cursor = '';
+    let truncated = false;
+    for (let page = 0; page < ATTACHMENT_MAX_PAGES; page += 1) {
+      const params = new URLSearchParams({limit: String(ATTACHMENT_PAGE_LIMIT)});
+      if (cursor) params.set('cursor', cursor);
+      const result = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages?${params}`);
+      if (result.status !== 200) throw new Error('读不到当前会话的附件。');
+      items.push(...(result.body.items || []));
+      cursor = result.body.cursor || '';
+      if (!cursor) return {items, truncated: false};
+      truncated = true;
+    }
+    return {items, truncated};
+  }
+  function attachmentHitRow(item) {
+    const li = document.createElement('li');
+    li.className = 'search-hit';
+    li.tabIndex = 0;
+    li.setAttribute('role', 'button');
+    li.setAttribute('aria-label', '跳到这条消息');
+    const jump = () => jumpToMessage(item.id);
+    li.addEventListener('click', jump);
+    li.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
+    });
+    const attachment = item.attachment || {};
+    const photo = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
+    const avatar = document.createElement('span');
+    avatar.className = 'search-hit-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    avatar.textContent = photo ? '照' : '件';
+    const head = document.createElement('span');
+    head.className = 'search-hit-head';
+    const name = document.createElement('strong');
+    name.textContent = attachment.title || (photo ? '未命名照片' : '未命名文件');
+    const when = document.createElement('time');
+    when.textContent = item.created ? formatSessionTime(item.created) : '';
+    head.append(name, when);
+    const text = document.createElement('span');
+    text.className = 'search-hit-text';
+    text.textContent = (photo ? '照片' : '文件') + ' · 点开回到这条消息';
+    li.append(avatar, head, text);
+    return li;
+  }
+  async function searchCurrentAttachments(scope) {
+    const conversation = currentConversation;
+    const list = document.getElementById('conversation-search-results');
+    const status = document.getElementById('conversation-search-status');
+    if (!list || !status) return;
+    list.replaceChildren();
+    if (!conversation) { status.textContent = '请先打开一个会话。'; return; }
+    if (currentSource !== 'social') {
+      status.textContent = '智能体会话的消息数据里没有附件字段，读不到照片和文件。';
+      return;
+    }
+    status.textContent = '正在读取当前会话的附件…';
+    const wid = workspaceId();
+    let found;
+    try {
+      found = await conversationAttachments(conversation);
+    } catch (failure) {
+      if (currentConversation && currentConversation.id === conversation.id) {
+        status.textContent = failure.message || '读不到当前会话的附件。';
+      }
+      return;
+    }
+    if (workspaceId() !== wid || !currentConversation || currentConversation.id !== conversation.id) return;
+    if (conversationScope !== scope) return;
+    const photos = scope === 'photos';
+    const hits = found.items.filter(item => {
+      const attachment = item.attachment;
+      if (!attachment) return false;
+      const image = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
+      return photos ? image : !image;
+    });
+    for (const item of hits) list.append(attachmentHitRow(item));
+    if (hits.length) {
+      status.textContent = (photos ? '已显示 ' + hits.length + ' 张照片' : '已显示 ' + hits.length + ' 个文件')
+        + (found.truncated ? ' · 只读取了最近 ' + (ATTACHMENT_PAGE_LIMIT * ATTACHMENT_MAX_PAGES) + ' 条消息' : '');
+    } else {
+      status.textContent = photos ? '这个会话里还没有照片。' : '这个会话里还没有文件。';
+    }
+  }
+  for (const scope of ['messages', 'photos', 'files']) {
+    const button = document.getElementById('conversation-search-tab-' + scope);
+    if (!button) continue;
+    button.addEventListener('click', async () => {
+      setConversationScope(scope);
+      const list = document.getElementById('conversation-search-results');
+      if (scope === 'messages') {
+        const query = (document.getElementById('conversation-search-query').value || '').trim();
+        if (query) await searchCurrentConversation();
+        else { if (list) list.replaceChildren(); document.getElementById('conversation-search-status').textContent = ''; }
+        return;
+      }
+      await searchCurrentAttachments(scope);
+    });
   }
   const groupInfoToggle = document.getElementById('group-info-toggle');
   if (groupInfoToggle) {
@@ -2590,10 +2858,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     document.getElementById('chat-body').value = '';
-    show(result.body.reply && result.body.reply.error_code === 'no_agent' ? 'error' : 'ok',
-         result.body.reply && result.body.reply.error_code === 'no_agent'
-           ? '消息已保存，正在等待已连接的运行时。'
-           : '已发送。');
+    const notice = sendNotice(result.body.reply);
+    show(notice.kind, notice.text);
     await loadSessions();
     await openAgentConversation(currentAgent.id, currentConversation.id);
   }

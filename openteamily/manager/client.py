@@ -97,6 +97,25 @@ class ManagerClient:
             cursor = nxt
         raise ManagerError('list_limit')
 
+    def assigned(self, max_items=1000):
+        """All instances the server currently authorizes for this manager (static + auto-assigned)."""
+        cursor, items = '', []
+        for _ in range(max_items // 100 + 1):
+            data = self.call('GET', '/v1/internal/instances?' + urlencode({'limit': 100, 'cursor': cursor}))
+            page = data.get('items')
+            require(isinstance(page, list) and len(page) <= 100, 'response_shape')
+            for item in page:
+                require(isinstance(item, dict), 'response_shape')
+                check_id(item.get('id'))
+                items.append(item)
+            nxt = data.get('cursor')
+            if nxt is None:
+                return items[:max_items]
+            check_id(nxt)
+            require(nxt > cursor, 'cursor_not_advancing')
+            cursor = nxt
+        raise ManagerError('list_limit')
+
     def claim(self, iid):
         check_id(iid)
         data = self.call('POST', '/v1/internal/jobs/claim', {'instance_id': iid})
@@ -191,6 +210,23 @@ class ManagerClient:
             require(isinstance(doc[key], str) and doc[key], 'runtime_key_shape')
         return doc
 
+
+    def dsbot_upstream(self, iid, address, auth_cookie, process_ref):
+        """Report a running runtime's private address and DSH session cookie (never logged)."""
+        check_id(iid)
+        require(isinstance(process_ref, str) and HEX.fullmatch(process_ref), 'process_ref')
+        data = self.call('POST', f'/v1/internal/instances/{iid}/dsbot-upstream',
+                         {'address': address, 'auth_cookie': auth_cookie, 'process_ref': process_ref})
+        require(data.get('recorded') is True, 'response_shape')
+        return True
+
+    def dsbot_import(self, iid, seal_key_hex):
+        """Fetch this owner's sealed import bundles. seal_key_hex is 64 hex chars; never logged."""
+        check_id(iid)
+        require(isinstance(seal_key_hex, str) and re.fullmatch(r'[0-9a-f]{64}', seal_key_hex), 'seal_key')
+        data = self.call('POST', f'/v1/internal/instances/{iid}/dsbot-import', {'seal_key': seal_key_hex})
+        require(isinstance(data, dict) and data.get('owner_imported') is True, 'import_shape')
+        return data
 
     def recover(self, iid, revision, operation_id):
         check_id(iid)
