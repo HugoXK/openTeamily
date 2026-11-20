@@ -56,6 +56,12 @@ class AutomationsPageTests(unittest.TestCase):
         self.assertIn('text/javascript', script['headers']['Content-Type'])
         self.assertEqual(self.raw.call('GET', '/automations/missing')['status'], 404)
 
+    def test_run_rows_are_served_with_an_in_place_expander(self):
+        script = self.raw.call('GET', '/automations/app.mjs')
+        source = script['body'].decode()
+        self.assertIn('aria-expanded', source)
+        self.assertIn('这次运行没有留下输出', source)
+
     def test_page_rejects_cross_origin_queries_and_writes(self):
         self.assertEqual(self.raw.call('GET', '/automations', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/automations', query='q=1')['status'], 400)

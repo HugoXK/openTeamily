@@ -427,6 +427,81 @@ body.app-workspace #main-panel {
   font-size: 0.875rem;
 }
 
+#run-list .run-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+#run-list .run-head {
+  gap: 0.35rem 0.75rem;
+}
+
+.run-toggle {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.15rem 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.run-toggle::after {
+  content: '▾';
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--ot-muted, #6b7280);
+}
+
+.run-toggle[aria-expanded="false"]::after {
+  content: '▸';
+}
+
+.run-toggle:hover {
+  color: var(--ot-accent, #2563eb);
+}
+
+.run-toggle:focus-visible {
+  outline: 2px solid var(--ot-accent, #2563eb);
+  outline-offset: 2px;
+  border-radius: 0.35rem;
+}
+
+#run-list .run-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+}
+
+#run-list .run-detail[hidden] {
+  display: none;
+}
+
+#run-list .run-detail dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+}
+
+#run-list .run-detail dt {
+  color: var(--ot-muted, #6b7280);
+  white-space: nowrap;
+}
+
+#run-list .run-detail dd {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .row-confirm {
   display: inline-flex;
   flex-wrap: wrap;

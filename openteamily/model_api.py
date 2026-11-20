@@ -124,7 +124,28 @@ def insecure_http_allowed(hostname):
     return bool(address.is_private and not address.is_unspecified)
 
 
-def valid_base_url(value):
+def local_model_http_allowed(hostname):
+    """Keep local/private development; do not treat reserved/docs as private.
+
+    Deliberately model-specific: management origin policy remains unchanged.
+    """
+    if hostname == 'localhost':
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    if address.is_loopback:
+        return True
+    if address.is_unspecified or address.is_multicast or address.is_reserved:
+        return False
+    if address.version == 6:
+        return address.is_loopback or address in ipaddress.IPv6Network('fc00::/7') or address.is_link_local
+    return any(address in ipaddress.IPv4Network(net) for net in
+               ('10.0.0.0/8', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16'))
+
+
+def valid_base_url(value, http_policy=None):
     if not isinstance(value, str) or not 8 <= len(value) <= 512 or any(ord(c) < 32 for c in value):
         return False
     try:
@@ -135,9 +156,28 @@ def valid_base_url(value):
         return False
     if not parts.hostname or parts.query or parts.fragment:
         return False
-    if parts.scheme == 'http' and not insecure_http_allowed(parts.hostname):
-        return False
+    if parts.scheme == 'http' and not local_model_http_allowed(parts.hostname):
+        return bool(http_policy and http_policy.allows(value))
     return True
+
+
+class ModelEndpointError(ValueError):
+    def __init__(self, code):
+        self.code = code
+        super().__init__('Model endpoint is not authorized or runtime requires upgrade')
+
+
+def endpoint_grant(base, http_policy=None, capability=None):
+    # Recheck resolved settings at BOTH secret-issuance boundaries. Never trust a
+    # stored grant, user field, or the fact that the row passed validation once.
+    if not valid_base_url(base, http_policy):
+        raise ModelEndpointError('model_endpoint_not_allowed')
+    if urlsplit(base).scheme == 'http' and not local_model_http_allowed(urlsplit(base).hostname):
+        from .model_http_policy import FORMAT
+        if capability != FORMAT:
+            raise ModelEndpointError('runtime_upgrade_required')
+        return http_policy.grant_for(base)
+    return None
 
 
 def valid_api_key(value):
@@ -214,14 +254,18 @@ def effective_view(public, source):
 CONTAINER_SOURCE = {'platform': 'platform', 'account': 'user', 'workspace': 'user'}
 
 
-def container_payload(public, key, source):
+def container_payload(public, key, source, *, http_policy=None, capability=None):
     """Return the JSON object the FlyBot image launcher expects, or None."""
     if not key or not public or not public.get('provider') or not public.get('base_url') or not public.get('model'):
         return None
     mapped = CONTAINER_SOURCE.get(source)
     if mapped is None:
         return None
+    grant = endpoint_grant(public['base_url'], http_policy, capability)
+    if grant and public['provider'] not in ('openai', 'custom'):
+        raise ModelEndpointError('model_endpoint_not_allowed')
     return {
+        **({'http_endpoint_grant': grant} if grant else {}),
         'provider': public['provider'],
         'base_url': public['base_url'],
         'model': public['model'],
