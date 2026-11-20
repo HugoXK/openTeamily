@@ -86,6 +86,7 @@
           <label>标题 <input id="meeting-title" maxlength="120" required></label>
           <label>开始时间 <input id="meeting-started-at" type="datetime-local" required></label>
           <label>参会人 <input id="meeting-attendees" maxlength="2000" placeholder="用逗号分隔"></label>
+          <ul id="attendee-matches" class="attendee-matches" role="listbox" aria-label="成员候选" hidden></ul>
           <label>摘要 <textarea id="meeting-summary" maxlength="8000" rows="3"></textarea></label>
           <label>转写/正文 <textarea id="meeting-transcript" maxlength="40000" rows="6"></textarea></label>
           <fieldset>
