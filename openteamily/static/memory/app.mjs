@@ -1,4 +1,5 @@
 import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
+import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
 export function recentlyUpdatedCount(pages, now = Date.now(), days = 7) {
   const since = now / 1000 - days * 86400;
   return (pages || []).filter((page) => Number(page.updated || 0) >= since).length;
@@ -373,7 +374,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const newPageButton = document.getElementById('new-page');
   const listPanel = document.getElementById('list-panel');
   let currentUser = null;
-  let workspaces = [];
+  let sessionRequest = 0;
   let currentPage = null;
   let currentAction = null;
   let pageChoices = [];
@@ -862,8 +863,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderPageLinks();
   }
 
+  function fillWorkspaces(items) {
+    const previous = workspaceId();
+    workspaceSelect.replaceChildren();
+    for (const space of items) {
+      const option = document.createElement('option');
+      option.value = space.id;
+      option.textContent = space.name;
+      workspaceSelect.appendChild(option);
+    }
+    if (items.some(item => item.id === previous)) workspaceSelect.value = previous;
+    if (!workspaceSelect.value && items[0]) workspaceSelect.value = items[0].id;
+  }
+
   async function loadSession() {
+    const seq = ++sessionRequest;
     const session = await request('GET', '/v1/auth/session');
+    if (seq !== sessionRequest) return;
     if (session.status !== 200 || !session.body.user) {
       currentUser = null;
       loginPanel.hidden = false;
@@ -879,18 +895,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = '已登录：' + currentUser.username;
-    const prefs = await request('GET', '/v1/settings');
-    if (prefs.status === 200) applyTheme(prefs.body.settings);
-    const listed = await request('GET', '/v1/workspaces');
-    workspaces = listed.status === 200 && listed.body.items ? listed.body.items : [];
-    workspaceSelect.replaceChildren();
-    for (const space of workspaces) {
-      const option = document.createElement('option');
-      option.value = space.id;
-      option.textContent = space.name;
-      workspaceSelect.appendChild(option);
-    }
-    if (!workspaceSelect.value && workspaces[0]) workspaceSelect.value = workspaces[0].id;
+    void request('GET', '/v1/settings').then(prefs => {
+      if (seq === sessionRequest && prefs.status === 200) applyTheme(prefs.body.settings);
+    }).catch(() => {});
+    const {initial, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces');
+    if (seq !== sessionRequest) return;
+    fillWorkspaces(initial.status === 200 ? (initial.body.items || []) : []);
+    if (initial.status !== 200) show('error', '无法读取工作区，请刷新重试。');
+    void supplemental?.then(result => {
+      if (seq === sessionRequest && result.status === 200) fillWorkspaces(result.body.items);
+    });
     await loadWorkspace();
   }
 

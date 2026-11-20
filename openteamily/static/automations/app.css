@@ -40,6 +40,15 @@ body.app-workspace #main-panel {
   align-items: center;
 }
 
+#workspace-status {
+  color: var(--ot-muted);
+  font-size: 0.75rem;
+}
+
+#workspace-status:empty {
+  display: none;
+}
+
 .workspace-field,
 .pill-search {
   display: flex;
@@ -138,8 +147,10 @@ body.app-workspace #main-panel {
 }
 
 #automation-list button.link {
+  width: 100%;
   background: none;
   border: 0;
+  min-width: 0;
   padding: 0;
   color: var(--ot-ink);
   font: inherit;
@@ -147,6 +158,8 @@ body.app-workspace #main-panel {
   cursor: pointer;
   text-align: left;
   text-decoration: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 #automation-list button.link:hover {

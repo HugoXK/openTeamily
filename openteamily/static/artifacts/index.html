@@ -76,6 +76,7 @@
       </nav>
       <div id="meetings-chrome" hidden>
         <h1 class="meetings-title" id="meetings-title">我的会议</h1>
+        <a id="new-meeting-in-space" href="/meetings" hidden>新建会议</a>
         <p id="meetings-caption">这个工作区的会议纪要，最新的在前。</p>
         <div class="meeting-scopes" role="tablist" aria-label="会议范围">
           <button type="button" data-meeting-scope="joined">我参加的</button>
@@ -247,11 +248,13 @@
             <button type="button" id="new-website">新建网站</button>
           </div>
           <p id="meetings-error" class="note" role="alert" hidden></p>
+          <button type="button" id="retry-meetings" hidden>重新加载</button>
+          <p id="meetings-loading" class="note" role="status" hidden>正在加载会议…</p>
+          <p id="meetings-no-match" class="note" hidden>没有符合当前条件的会议。</p>
           <div id="empty-meetings" hidden>
             <div class="empty-hero" aria-hidden="true"><span class="empty-cta-icon" data-tone="wave" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M11 7h2v10h-2V7z"/><path fill="currentColor" d="M8.1 9.2c1.15 1.05 1.15 4.55 0 5.6l-1.25-1.05c.7-.8.7-2.7 0-3.5l1.25-1.05zm7.8 0 1.25 1.05c-.7.8-.7 2.7 0 3.5l-1.25 1.05c-1.15-1.05-1.15-4.55 0-5.6zM5.6 7.3c2.05 1.85 2.05 7.55 0 9.4l-1.35-1.1c1.55-1.55 1.55-5.65 0-7.2l1.35-1.1zm12.8 0 1.35 1.1c-1.55 1.55-1.55 5.65 0 7.2l-1.35 1.1c-2.05-1.85-2.05-7.55 0-9.4z"/></svg></span></div>
             <h2>还没有会议纪要</h2>
             <p>在「会议」页记下纪要后，这里会按时间倒序列出。</p>
-            <p class="note">这里只列这个工作区已有的会议纪要，不生成、不录音。</p>
           </div>
           <p id="list-empty-message" class="note" hidden>这个工作区还没有作品。</p>
         </div>

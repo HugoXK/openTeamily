@@ -1,3 +1,5 @@
+import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
+
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -366,10 +368,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
   const runButton = document.getElementById('tick-automation');
+  const newButton = document.getElementById('new-automation');
+  const saveButton = document.getElementById('save-automation');
+  const backButton = document.getElementById('cancel-editor');
+  const tabs = document.querySelectorAll('.tabs [data-category]');
+  const workspaceStatus = document.getElementById('workspace-status');
   let currentUser = null;
-  let workspaces = [];
+  let loadRequest = 0;
   let templates = [];
+  let templateState = 'loading';
   let current = null;
+  let draftSave = null;
   let category = 'mine';
   let runTimer = 0;
   let runRequest = 0;
@@ -479,7 +488,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function stopRunPoll() {
     if (runTimer) {
-      globalThis.clearInterval(runTimer);
+      globalThis.clearTimeout(runTimer);
       runTimer = 0;
     }
   }
@@ -633,21 +642,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadRuns();
   }
 
+  function scheduleRunPoll(pending) {
+    if (!pending && !current?.enabled) return;
+    runTimer = globalThis.setTimeout(() => {
+      runTimer = 0;
+      void loadRuns();
+    }, pending ? 3000 : 12000);
+  }
+
   async function loadRuns() {
+    stopRunPoll();
     const panel = document.getElementById('run-panel');
     if (!panel) return;
     if (!current || !current.id || !workspaceId()) {
       panel.hidden = true;
-      stopRunPoll();
       return;
     }
     const workspace = workspaceId(), automation = current.id;
     const seq = ++runRequest;
     const wanted = runFilter === 'all' ? '' : `&status=${runFilter}`;
-    const listed = await request('GET', `/v1/workspaces/${workspace}/automations/${automation}/runs?limit=20${wanted}`);
+    const listed = await request('GET', `/v1/workspaces/${workspace}/automations/${automation}/runs?limit=20${wanted}`)
+      .catch(() => ({status: 0, body: {}}));
     if (seq !== runRequest || workspaceId() !== workspace || current?.id !== automation || form.hidden) return;
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法读取运行记录。'));
+      scheduleRunPoll(recentRuns.some(item => item.status === 'queued'));
       return;
     }
     const items = listed.body.items || [];
@@ -655,10 +674,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pending = items.some(item => item.status === 'queued');
     runButton.disabled = pending || manualPending.has(automation);
     runButton.textContent = pending ? '运行中…' : '运行一次';
-    if (pending && !runTimer) {
-      runTimer = globalThis.setInterval(() => { loadRuns(); }, 3000);
-    }
-    if (!pending) stopRunPoll();
+    scheduleRunPoll(pending);
   }
 
   async function renderProviders() {
@@ -685,13 +701,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function fillTemplates() {
     const select = form.elements.template_id;
+    const selected = select.value;
     select.textContent = '';
-    for (const item of templates) {
+    const available = templates.some(item => item.id === 'custom')
+      ? templates : [{id: 'custom', title: '自定义'}, ...templates];
+    for (const item of available) {
       const option = document.createElement('option');
       option.value = item.id;
       option.textContent = item.title;
       select.appendChild(option);
     }
+    if (available.some(item => item.id === selected)) select.value = selected;
+  }
+
+  async function loadTemplates(seq) {
+    templateState = 'loading';
+    const catalog = await request('GET', '/v1/automation-templates').catch(() => ({status: 0}));
+    if (seq !== loadRequest) return;
+    templateState = catalog.status === 200 ? 'ready' : 'failed';
+    templates = catalog.status === 200 ? (catalog.body.items || []) : [];
+    fillTemplates();
+    if (category !== 'mine' && !listPanel.hidden) await loadList();
   }
 
   function openEditor(item) {
@@ -699,6 +729,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     // drops the question instead of showing it again above a different item.
     closeConfirm({restoreFocus: false});
     current = item;
+    draftSave = null;
     recentRuns = [];
     stopRunPoll();
     listPanel.hidden = true;
@@ -715,6 +746,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     loadRuns();
   }
 
+  function selectCategory(value) {
+    category = value;
+    for (const tab of tabs) {
+      tab.setAttribute('aria-selected', tab.dataset.category === category ? 'true' : 'false');
+    }
+  }
+
   async function loadList() {
     const id = workspaceId();
     if (!id) return;
@@ -722,7 +760,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const list = document.getElementById('automation-list');
     const empty = document.getElementById('list-empty');
     if (category === 'work' || category === 'life') {
-      empty.textContent = '没有匹配的模板。';
+      empty.textContent = {
+        loading: '正在加载模板…', failed: '无法加载模板。', ready: '没有匹配的模板。',
+      }[templateState];
       renderCatalog(
         catalogItems(templates, category, search.value),
         list,
@@ -750,8 +790,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderList(listed.body.items || [], list, empty, item => openEditor(item));
   }
 
+  function fillWorkspaces(items) {
+    const previous = workspaceId();
+    workspaceSelect.textContent = '';
+    for (const item of items) {
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = item.name;
+      workspaceSelect.appendChild(option);
+    }
+    if (items.some(item => item.id === previous)) workspaceSelect.value = previous;
+  }
+
   async function load() {
+    const seq = ++loadRequest;
+    newButton.disabled = true;
+    workspaceStatus.textContent = '';
     const session = await request('GET', '/v1/auth/session');
+    if (seq !== loadRequest) return;
     if (session.status === 401) {
       loginPanel.hidden = false;
       mainPanel.hidden = true;
@@ -767,39 +823,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
-    const [space, catalog] = await Promise.all([
-      request('GET', '/v1/workspaces?limit=100'),
-      request('GET', '/v1/automation-templates'),
-    ]);
+    const catalog = loadTemplates(seq);
+    const {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100');
+    if (seq !== loadRequest) return;
     if (space.status !== 200) {
       show('error', messageFor(space.body.error, '无法读取工作区。'));
-      return;
+      return catalog;
     }
-    workspaces = space.body.items || [];
-    templates = catalog.status === 200 ? (catalog.body.items || []) : [];
-    fillTemplates();
-    const previous = workspaceSelect.value;
-    workspaceSelect.textContent = '';
-    for (const item of workspaces) {
-      const option = document.createElement('option');
-      option.value = item.id;
-      option.textContent = item.name;
-      workspaceSelect.appendChild(option);
-    }
-    if (previous && [...workspaceSelect.options].some(option => option.value === previous)) {
-      workspaceSelect.value = previous;
-    }
-    if (!workspaces.length) {
+    const items = space.body.items || [];
+    fillWorkspaces(items);
+    if (!items.length) {
       document.getElementById('automation-list').textContent = '';
       document.getElementById('list-empty').hidden = false;
       document.getElementById('list-empty').textContent = '还没有工作区。';
-      return;
+      return catalog;
     }
+    newButton.disabled = false;
     document.getElementById('list-empty').textContent = '这个分类下还没有自动化。';
     form.hidden = true;
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
-    await loadList();
+    void supplemental?.then(result => {
+      if (seq !== loadRequest) return;
+      if (result.status === 200) fillWorkspaces(result.body.items);
+      else workspaceStatus.textContent = '团队工作区暂时无法加载。';
+    });
+    await Promise.all([loadList(), catalog]);
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -842,12 +891,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       loadRuns();
     });
   }
-  for (const tab of document.querySelectorAll('.tabs [data-category]')) {
+  for (const tab of tabs) {
     tab.addEventListener('click', async () => {
-      category = tabCategory(tab.dataset.category);
-      for (const button of document.querySelectorAll('.tabs [data-category]')) {
-        button.setAttribute('aria-selected', button === tab ? 'true' : 'false');
-      }
+      selectCategory(tabCategory(tab.dataset.category));
       form.hidden = true;
       listPanel.hidden = false;
       closeConfirm({restoreFocus: false});
@@ -859,12 +905,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
-  document.getElementById('new-automation').addEventListener('click', () => {
+  newButton.addEventListener('click', () => {
     openEditor(null);
   });
   form.elements.kind.addEventListener('change', () => syncScheduleFields(form));
 
-  document.getElementById('cancel-editor').addEventListener('click', async () => {
+  backButton.addEventListener('click', async () => {
     closeConfirm({restoreFocus: false});
     current = null;
     form.hidden = true;
@@ -878,8 +924,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (saveButton.disabled) return;
     const values = readEditor(form);
-    if (!workspaceId()) {
+    const workspace = workspaceId();
+    if (!workspace) {
       show('error', '先选择一个工作区。');
       return;
     }
@@ -887,26 +935,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', '请填写标题和至少一名参与成员。');
       return;
     }
+    const item = current?.id ? current : null;
+    const path = `/v1/workspaces/${workspace}/automations`;
+    const {template_id, ...changes} = values;
+    saveButton.disabled = true;
+    backButton.disabled = true;
+    saveButton.textContent = '保存中…';
     let result;
-    if (current && current.id) {
-      const changes = {
-        title: values.title, prompt: values.prompt, schedule: values.schedule,
-        participants: values.participants, enabled: values.enabled,
-        intent: values.intent, scope: values.scope, agents: values.agents,
-      };
-      result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${current.id}`,
-                             {revision: current.revision, changes});
-    } else {
-      result = await request('POST', `/v1/workspaces/${workspaceId()}/automations`, {
-        title: values.title, prompt: values.prompt, template_id: values.template_id,
-        schedule: values.schedule, participants: values.participants,
-        intent: values.intent, scope: values.scope, agents: values.agents,
-      }, {'Idempotency-Key': idempotencyKey()});
-      if (result.status === 201 && values.enabled && result.body.automation) {
-        const created = result.body.automation;
-        result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/${created.id}`,
-                               {revision: created.revision, changes: {enabled: true}});
+    try {
+      if (item) {
+        result = await request('POST', `${path}/${item.id}`, {revision: item.revision, changes});
+      } else {
+        const content = JSON.stringify([workspace, values]);
+        if (draftSave?.content !== content) draftSave = {content, key: idempotencyKey()};
+        result = await request('POST', path, {...changes, template_id}, {'Idempotency-Key': draftSave.key});
       }
+    } catch {
+      show('error', '暂时无法确认是否保存成功，请重试。');
+      return;
+    } finally {
+      saveButton.disabled = false;
+      backButton.disabled = false;
+      saveButton.textContent = '保存';
     }
     if (result.status === 409) {
       show('error', '自动化已在别处更新，请重新打开后再保存。');
@@ -918,6 +968,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     current = result.body.automation;
+    if (!item) {
+      selectCategory('mine');
+      search.value = '';
+    }
     closeConfirm({restoreFocus: false});
     fillEditor(form, current, currentUser && currentUser.username);
     form.elements.template_id.disabled = true;
@@ -1011,7 +1065,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   return load().then(() => {
     const view = document.defaultView;
     const wanted = templateFromSearch(view && view.location && view.location.search);
-    if (!wanted || mainPanel.hidden || !workspaceId()) return;
+    if (!wanted || mainPanel.hidden || !workspaceId() || !form.hidden) return;
     const template = templates.find(item => item.id === wanted);
     if (!template) return;
     openEditor(draftFromTemplate(template, currentUser && currentUser.username));

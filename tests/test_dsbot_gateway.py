@@ -91,9 +91,11 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(headers['X-OT-Upstream'], '172.30.0.11:8080')
         self.assertEqual(headers['X-OT-Instance'], '1' * 32)
         self.assertEqual(headers['X-OT-Upstream-Path'], '/')
+        self.assertEqual(headers['X-OT-Owner-Username'], 'user0')
         status, headers = self.call(b, uri='/b/api/bot?x=1')
         self.assertEqual((status, headers['X-OT-Upstream']), (204, '172.30.0.12:8080'))
         self.assertEqual(headers['X-OT-Upstream-Path'], '/api/bot?x=1')
+        self.assertEqual(headers['X-OT-Owner-Username'], 'user1')
 
     def test_request_fields_cannot_select_another_instance(self):
         a = self.tokens['a' * 32]
@@ -151,6 +153,8 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.target_for('/settings/connectors', gw.load_routes()), '/api/openteamily/page?path=%2Fsettings%2Fconnectors')
         self.assertEqual(gw.target_for('/onboarding', gw.load_routes()), '/api/openteamily/page?path=%2Fonboarding')
         self.assertEqual(gw.target_for('/artifacts/', gw.load_routes()), '/api/openteamily/page?path=%2Fartifacts%2F')
+        self.assertEqual(gw.target_for('/space?view=meetings', gw.load_routes()), '/api/openteamily/page?path=%2Fartifacts')
+        self.assertIsNone(gw.target_for('/space/app.mjs', gw.load_routes()))
         self.assertEqual(gw.target_for('/artifacts/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fartifacts%2Fapp.mjs')
         self.assertIsNone(gw.target_for('/share/' + 'A' * 43, gw.load_routes()))
         self.assertEqual(gw.target_for('/members/', gw.load_routes()), '/api/openteamily/page?path=%2Fmembers%2F')
@@ -289,6 +293,7 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(headers['X-OT-Instance'], '1' * 32)
         self.assertTrue(headers['X-OT-Upstream-Path'].startswith('/api/openteamily/gateway?path='))
         self.assertEqual(headers['X-OT-Upstream-Token'], token)
+        self.assertNotIn('X-OT-Owner-Username', headers)
         # A key for B must never reach A.
         other = 'ota_' + '2' * 32 + '_' + 'K' * 43
         status, headers = self.call(
@@ -313,6 +318,27 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('proxy_set_header Authorization $http_authorization;', conf)
         # The caller's Authorization still never reaches a runtime.
         self.assertIn('proxy_set_header Authorization "";', conf)
+
+    def test_nginx_sets_runtime_owner_from_the_authorization_response(self):
+        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
+        browser, external = conf.split('location @ot_dsbot {', 1)[1].split('location ^~ /v1/gateway/ {', 1)
+        self.assertIn('auth_request_set $ot_owner_username $upstream_http_x_ot_owner_username;', browser)
+        self.assertIn('proxy_set_header X-OT-Owner-Username $ot_owner_username;', browser)
+        self.assertIn('proxy_set_header X-OT-Owner-Username "";', external)
+
+    def test_bot_social_socket_routes_only_shared_runtime_api(self):
+        routes = gw.load_routes()
+        conf = gw.nginx_config(routes, '127.0.0.1:8080', 8081, key=KEY, bot_social='bot-social:8787',
+                               bot_social_socket=True)
+        public, private = conf.split('listen unix:' + gw.SOCIAL_SOCKET_PATH + ';')
+        self.assertIn('location ^~ /social/', public)
+        self.assertIn('location ^~ /v1/ot/ops/ { return 404; }', private)
+        self.assertIn('location ^~ /v1/ot/', private)
+        self.assertIn('proxy_pass http://bot-social:8787;', private)
+        self.assertIn('location / { return 404; }', private)
+        self.assertNotIn('auth_request', private)
+        with self.assertRaises(ValueError):
+            gw.nginx_config(routes, '127.0.0.1:8080', 8081, key=KEY, bot_social_socket=True)
 
 
 
@@ -340,10 +366,16 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(self.call(None, uri='/v1/settings')[0], 401)
         status, headers = self.call(a, uri='/v1/automation-templates')
         self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
+        automation = f"/v1/workspaces/{'3' * 32}/automations/{'4' * 32}"
+        status, headers = self.call(a, uri=automation, method='POST', Origin='https://openteamily.example')
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Instance'], '1' * 32)
+        self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
 
     def test_nginx_forwards_moved_v1_apis_except_platform_exceptions(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
         self.assertIn('location = /v1/settings { return 418; }', conf)
+        self.assertIn('location = /space { return 418; }', conf)
         self.assertEqual(conf.count('location = /v1/onboarding/automations'), 1)
         self.assertIn('location = /v1/onboarding/automations { return 418; }', conf)
         self.assertIn('location = /v1/composio/callback', conf)

@@ -18,7 +18,8 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/team-templates\/[a-z0-9-]{3,40}$/, 'team-templates'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/notifications(?:\/read)?$/, 'social'],
   [/^\/v1\/(?:automation-templates|onboarding\/automations)$/, 'automations'],
-  [/^\/v1\/workspaces\/[0-9a-f]{32}\/automations(?:\/(?:tick|[0-9a-f]{32}(?:\/(?:run|remove|runs(?:\/[0-9a-f]{32}(?:\/(?:cancel|retry|artifact))?)?)?))?)?$/, 'automations'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/automations(?:\/(?:tick|[0-9a-f]{32}))?$/, 'automations'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/automations\/[0-9a-f]{32}\/(?:run|remove|runs(?:\/[0-9a-f]{32}(?:\/(?:cancel|retry|artifact))?)?)$/, 'automations'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/api-keys(?:\/[0-9a-f]{32}\/revoke)?$/, 'agent-api'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents(?:\/[0-9a-f]{32}(?:\/(?:archive|conversations(?:\/[0-9a-f]{32}(?:\/messages(?:\/[0-9a-f]{32}\/artifact)?)?)?))?)?$/, 'agents'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/meetings(?:\/(?:draft|speech|transcribe)|\/[0-9a-f]{32}(?:\/(?:remove|export))?)?$/, 'meetings'],
@@ -70,6 +71,21 @@ export function movedTarget(input, origin, table = MOVED) {
   if (url.origin !== origin || !url.pathname.startsWith('/v1/')) return null;
   const row = table.find(([pattern]) => pattern.test(url.pathname));
   return row ? { feature: row[1], path: url.pathname + url.search } : null;
+}
+
+export async function readWorkspaceChoices(request, sharedPath) {
+  const unavailable = {status: 0, body: {}};
+  const shared = request('GET', sharedPath).catch(() => unavailable);
+  const initial = await request('GET', '/v1/workspaces?scope=personal').catch(() => unavailable);
+  const local = initial.status === 200 ? (initial.body.items || []) : [];
+  if (!local.length) return {initial: await shared, supplemental: null};
+  const supplemental = shared.then(result => {
+    if (result.status !== 200) return result;
+    const items = result.body.items || [];
+    const missing = local.filter(item => !items.some(other => other.id === item.id));
+    return {...result, body: {...result.body, items: [...missing, ...items]}};
+  });
+  return {initial, supplemental};
 }
 
 async function encodeBody(body) {

@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS dsbot_upstreams (
 
 SAFE_METHODS = ('GET', 'HEAD', 'OPTIONS')
 TOKEN = re.compile(r'[A-Za-z0-9_-]{43}')
+OWNER_USERNAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{2,63}')
 ADDRESS = re.compile(r'(\d{1,3}(?:\.\d{1,3}){3}):(\d{2,5})')
 COOKIE_NAME = re.compile(r'dsh-auth-[A-Za-z0-9._:%-]{1,200}')
 PAGE_SEGMENT = re.compile(r'[a-z0-9][a-z0-9-]{0,40}')
@@ -79,7 +80,8 @@ MOVED_APIS = (
     (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/engagement$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
     (re.compile(r'^/v1/(?:automation-templates|onboarding/automations)$'), 'automations'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:tick|[0-9a-f]{32}(?:/(?:run|remove|runs(?:/[0-9a-f]{32}(?:/(?:cancel|retry|artifact))?)?)?))?)?$'), 'automations'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:tick|[0-9a-f]{32}))?$'), 'automations'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations/[0-9a-f]{32}/(?:run|remove|runs(?:/[0-9a-f]{32}(?:/(?:cancel|retry|artifact))?)?)$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/api-keys(?:/[0-9a-f]{32}/revoke)?$'), 'agent-api'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents(?:/[0-9a-f]{32}(?:/(?:archive|conversations(?:/[0-9a-f]{32}(?:/messages(?:/[0-9a-f]{32}/artifact)?)?)?))?)?$'), 'agents'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:draft|speech|transcribe)|/[0-9a-f]{32}(?:/(?:remove|export))?)?$'), 'meetings'),
@@ -200,6 +202,8 @@ def target_for(uri, routes):
     if feature is not None:
         # Plugin legacy surface; authorize() keeps the session cookie swap.
         return '/api/openteamily/legacy?feature=' + quote(feature, safe='') + '&path=' + quote(path, safe='') + (('&query=' + quote(query, safe='')) if query else '')
+    if path == '/space' and 'artifacts' in routes['moved_pages']:
+        path = '/artifacts'
     first = path.split('/')[1] if path != '/' else 'home'
     if first in routes['moved_pages']:
         return PAGE_ROUTE + '?path=' + quote(path, safe='')
@@ -300,8 +304,10 @@ def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_s
     token = _cookies(cookie_header).get(session_cookie, '')
     if not TOKEN.fullmatch(token):
         raise GatewayError(401, 'unauthorized')
-    session = db.execute('SELECT user_id FROM sessions WHERE token_hash=? AND expires>?',
-                         (digest(token), now)).fetchone()
+    session = db.execute(
+        'SELECT sessions.user_id, users.username FROM sessions JOIN users ON users.id=sessions.user_id '
+        'WHERE sessions.token_hash=? AND sessions.expires>?', (digest(token), now),
+    ).fetchone()
     if session is None:
         raise GatewayError(401, 'unauthorized')
     try:
@@ -310,12 +316,14 @@ def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_s
         raise GatewayError(503, 'dsbot_not_ready') from error
     row = _upstream_row(db, instance_id)
     address = validate_address(row[1])
+    username = session[1]
     return [
         ('X-OT-Upstream', address),
         ('X-OT-Upstream-Path', upstream_path),
         ('X-OT-Upstream-Origin', 'http://' + address),
         ('X-OT-Upstream-Cookie', row[2]),
         ('X-OT-Instance', row[0]),
+        ('X-OT-Owner-Username', username if OWNER_USERNAME.fullmatch(username) else ''),
     ]
 
 
@@ -616,6 +624,7 @@ __DSBOT_LOCATIONS__
     auth_request_set $ot_path $upstream_http_x_ot_upstream_path;
     auth_request_set $ot_origin $upstream_http_x_ot_upstream_origin;
     auth_request_set $ot_cookie $upstream_http_x_ot_upstream_cookie;
+    auth_request_set $ot_owner_username $upstream_http_x_ot_owner_username;
     proxy_pass http://$ot_upstream$ot_path;
     proxy_http_version 1.1;
     proxy_set_header Host $ot_upstream;
@@ -625,6 +634,7 @@ __DSBOT_LOCATIONS__
     proxy_set_header Sec-Fetch-Site "";
     proxy_set_header X-OT-Upstream "";
     proxy_set_header X-OT-Upstream-Cookie "";
+    proxy_set_header X-OT-Owner-Username $ot_owner_username;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $ot_connection_upgrade;
     proxy_buffering off;
@@ -650,6 +660,7 @@ __DSBOT_LOCATIONS__
     proxy_set_header X-OT-Upstream "";
     proxy_set_header X-OT-Upstream-Cookie "";
     proxy_set_header X-OT-Upstream-Token "";
+    proxy_set_header X-OT-Owner-Username "";
     proxy_hide_header Set-Cookie;
     proxy_buffering off;
     proxy_read_timeout 120s;
@@ -669,6 +680,7 @@ __DSBOT_LOCATIONS__
 
 
 SOCIAL_UPSTREAM = re.compile(r'^[0-9A-Za-z.\-]+:\d{2,5}$')
+SOCIAL_SOCKET_PATH = '/run/openteamily-social/bot-social.sock'
 
 # Isolated OpenTeamily Bot Social is reached at /social/ on the existing public
 # origin. The prefix is stripped; the container sees /v1/... and /healthz.
@@ -707,7 +719,7 @@ def social_location(upstream):
     )
 
 
-def nginx_config(routes, platform, listen, key_include=None, key=None, bot_social=None):
+def nginx_config(routes, platform, listen, key_include=None, key=None, bot_social=None, bot_social_socket=False):
     """Render the edge config.
 
     Production passes ``key_include``: the absolute path of an operator-owned nginx
@@ -734,15 +746,42 @@ def nginx_config(routes, platform, listen, key_include=None, key=None, bot_socia
         locations.append(f'  location ^~ {prefix} {{ return 418; }}')
     for line in MOVED_API_LOCATIONS:
         locations.append('  ' + line.replace('__PLATFORM__', platform))
+    if 'artifacts' in routes['moved_pages']:
+        locations.append('  location = /space { return 418; }')
     for page in sorted(routes['moved_pages']):
         if page == 'home':
             locations.append('  location = / { return 418; }')
         locations.append(f'  location = /{page} {{ return 418; }}')
         locations.append(f'  location ^~ /{page}/ {{ return 418; }}')
     social = social_location(bot_social) if bot_social else ''
-    return (NGINX_TEMPLATE.replace('__LISTEN__', str(listen)).replace('__PLATFORM__', platform)
+    configuration = (NGINX_TEMPLATE.replace('__LISTEN__', str(listen)).replace('__PLATFORM__', platform)
             .replace('__KEY_SETTING__', setting).replace('__DSBOT_LOCATIONS__', '\n'.join(locations))
             .replace('__SOCIAL_LOCATION__', social))
+    if not bot_social_socket:
+        return configuration
+    if not bot_social:
+        raise ValueError('The Bot Social socket requires a Bot Social upstream')
+    return configuration + f'''server {{
+  listen unix:{SOCIAL_SOCKET_PATH};
+  server_name _;
+  client_max_body_size 64m;
+  location = /v1/ot/ops {{ return 404; }}
+  location ^~ /v1/ot/ops/ {{ return 404; }}
+  location ^~ /v1/ot/ {{
+    proxy_pass http://{bot_social};
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For "";
+    proxy_set_header Forwarded "";
+    proxy_set_header Cookie "";
+    proxy_set_header X-OT-Gateway-Key "";
+    proxy_redirect off;
+    proxy_connect_timeout 2s;
+  }}
+  location / {{ return 404; }}
+}}
+'''
 
 
 def main(argv=None):
@@ -757,9 +796,12 @@ def main(argv=None):
     render.add_argument('--routes', default=str(ROUTES_FILE))
     render.add_argument('--bot-social', default=None,
                         help='host:port of the isolated OpenTeamily Bot Social (compose service, e.g. bot-social:8787). Adds /social/ on this origin.')
+    render.add_argument('--bot-social-socket', action='store_true',
+                        help='Also serve the account runtime collaboration API over the fixed Unix socket')
     args = parser.parse_args(argv)
     print(nginx_config(load_routes(args.routes), args.platform, args.listen,
-                       key_include=args.key_include, bot_social=args.bot_social), end='')
+                       key_include=args.key_include, bot_social=args.bot_social,
+                       bot_social_socket=args.bot_social_socket), end='')
 
 
 if __name__ == '__main__':

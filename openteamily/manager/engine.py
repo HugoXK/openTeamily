@@ -25,6 +25,10 @@ RUNTIME_KEY_TARGET = '/run/secrets/openteamily-runtime-key.json'
 RUNTIME_KEY_BIND_SUFFIX = ':' + RUNTIME_KEY_TARGET + ':ro'
 SEAL_KEY_TARGET = '/run/secrets/openteamily-seal.key'
 SEAL_KEY_BIND_SUFFIX = ':' + SEAL_KEY_TARGET + ':ro'
+SOCIAL_SOCKET_SOURCE = 'bot-social-transport'
+SOCIAL_SOCKET_TARGET = '/run/openteamily-social'
+SOCIAL_SOCKET_BIND_SUFFIX = ':' + SOCIAL_SOCKET_TARGET + ':ro'
+SOCIAL_SOCKET_BIND = {'type': 'bind', 'source': SOCIAL_SOCKET_SOURCE, 'target': SOCIAL_SOCKET_TARGET, 'read_only': True}
 ALLOWED_BIND_SUFFIXES = (SECRET_BIND_SUFFIX, BOT_SOCIAL_BIND_SUFFIX, RUNTIME_KEY_BIND_SUFFIX, SEAL_KEY_BIND_SUFFIX)
 ALLOWED_BIND_TARGETS = (SECRET_TARGET, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET, SEAL_KEY_TARGET)
 RUNTIME_MEMORY_MIB = 1536
@@ -36,7 +40,7 @@ def compose_bytes(document):
 
 
 def compatible_manifest_upgrade(stored, expected):
-    """Describe a manifest upgrade limited to known secret binds and the new memory cap.
+    """Describe a manifest upgrade limited to known binds and the memory cap.
 
     Anything else (removed mounts, changed image, unexpected keys) returns None so the
     exact-content check still fails closed. Named volume identity must stay the same.
@@ -76,7 +80,7 @@ def compatible_manifest_upgrade(stored, expected):
     for item in added:
         if not isinstance(item, dict) or item.get('type') != 'bind' or item.get('read_only') is not True:
             return None
-        if item.get('target') not in ALLOWED_BIND_TARGETS or '..' in str(item.get('source') or ''):
+        if item != SOCIAL_SOCKET_BIND and (item.get('target') not in ALLOWED_BIND_TARGETS or '..' in str(item.get('source') or '')):
             return None
         change['added'].append(item['target'])
     return change
@@ -102,7 +106,7 @@ def seal_key_relpath(iid):
     return 'secrets/seal-' + iid + '.key'
 
 
-def manifest(iid, entry):
+def manifest(iid, entry, *, bot_social_socket=False):
     check_id(iid)
     require(isinstance(entry, dict) and set(entry) == {'image', 'healthcheck', 'publish_port'}, 'registry_fields')
     image = entry['image']
@@ -125,6 +129,8 @@ def manifest(iid, entry):
                ],
                'tmpfs': ['/tmp:rw,noexec,nosuid,size=67108864'],
                'logging': {'driver': 'local', 'options': {'max-size': '10m', 'max-file': '3'}}}
+    if bot_social_socket:
+        service['volumes'].append(dict(SOCIAL_SOCKET_BIND))
     if port is not None:
         service['ports'] = [{'target': 8080, 'published': str(port), 'host_ip': '127.0.0.1', 'protocol': 'tcp'}]
     if health is not None:
@@ -174,8 +180,16 @@ class Registry:
         self.adopted = {}
         cfg = self.config
         base = {'version', 'execution_enabled', 'base_url', 'server_host', 'manager_id', 'token', 'docker', 'socket', 'instances'}
-        require(isinstance(cfg, dict) and set(cfg) - {'auto_instances', 'dsbot_gateway'} == base, 'config_fields')
+        require(isinstance(cfg, dict) and set(cfg) - {'auto_instances', 'dsbot_gateway', 'bot_social_socket'} == base, 'config_fields')
         require(type(cfg['version']) is int and cfg['version'] == 1 and type(cfg['execution_enabled']) is bool, 'config_version')
+        self.bot_social_socket = cfg.get('bot_social_socket', False)
+        require(type(self.bot_social_socket) is bool, 'bot_social_socket')
+        if self.bot_social_socket:
+            path = self.root / SOCIAL_SOCKET_SOURCE
+            require(path.exists(), 'bot_social_socket_directory')
+            info = path.lstat()
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid in (0, os.getuid(), 10001)
+                    and not (info.st_mode & 0o022), 'bot_social_socket_directory')
         auto = cfg.get('auto_instances')
         if auto is not None:
             require(isinstance(auto, dict) and set(auto) == {'image', 'healthcheck'}, 'auto_instances_fields')
@@ -220,7 +234,7 @@ class Registry:
         # Freeze registry for this invocation; detect replacement or a permission change.
         require(read_private(self.config_path) == self.config, 'registry_changed')
         entry = self.lookup(iid)
-        expected = manifest(iid, entry)
+        expected = manifest(iid, entry, bot_social_socket=self.bot_social_socket)
         path = self.root / ('compose-' + iid + '.json')
         if not path.exists() and not path.is_symlink():
             write_new(path, expected)
@@ -242,7 +256,7 @@ class Registry:
         """Describe a compose-file upgrade without writing. Never touches the volume."""
         check_id(iid)
         require(iid in self.config['instances'], 'instance_not_registered')
-        expected = manifest(iid, self.config['instances'][iid])
+        expected = manifest(iid, self.config['instances'][iid], bot_social_socket=self.bot_social_socket)
         path = self.root / ('compose-' + iid + '.json')
         volume = 'ot-' + iid
         note = 'The named volume and existing secret files stay in place. A container created from the old file needs a recreate to apply the manifest changes.'
@@ -484,9 +498,14 @@ class ComposeEngine:
                 host.get('IpcMode') in ('private', 'shareable') and host.get('NetworkMode') == 'ot-' + iid + '_default' and
                 isinstance(host.get('SecurityOpt'), list) and any(x in host['SecurityOpt'] for x in ('no-new-privileges', 'no-new-privileges:true')), 'unsafe_container')
         binds = host.get('Binds') or []
+        allowed_suffixes = ALLOWED_BIND_SUFFIXES
+        allowed_targets = ALLOWED_BIND_TARGETS
+        if self.registry.bot_social_socket:
+            allowed_suffixes += (SOCIAL_SOCKET_BIND_SUFFIX,)
+            allowed_targets += (SOCIAL_SOCKET_TARGET,)
         def bind_suffix(bind):
             require(isinstance(bind, str) and '..' not in bind, 'unsafe_container')
-            matched = [suffix for suffix in ALLOWED_BIND_SUFFIXES if bind.endswith(suffix)]
+            matched = [suffix for suffix in allowed_suffixes if bind.endswith(suffix)]
             require(len(matched) == 1, 'unsafe_container')
             return matched[0]
         require(isinstance(binds, list), 'unsafe_container')
@@ -496,11 +515,11 @@ class ComposeEngine:
         require(binds.count(volume_bind) <= 1, 'unsafe_container')
         secret_binds = [bind for bind in binds if bind != volume_bind]
         present_suffixes = sorted(bind_suffix(bind) for bind in secret_binds)
-        allowed = sorted(ALLOWED_BIND_SUFFIXES)
+        allowed = sorted(allowed_suffixes)
         require(all(suffix in allowed for suffix in present_suffixes), 'unsafe_container')
         needs_recreate = present_suffixes != allowed
         if not needs_recreate:
-            require(len(secret_binds) == len(ALLOWED_BIND_SUFFIXES), 'unsafe_container')
+            require(len(secret_binds) == len(allowed_suffixes), 'unsafe_container')
         expected_ports = {'8080/tcp': [{'HostIp': '127.0.0.1', 'HostPort': str(entry['publish_port'])}]} if entry['publish_port'] is not None else {}
         require((host.get('PortBindings') or {}) == expected_ports, 'unsafe_ports')
         labels = config.get('Labels')
@@ -517,11 +536,14 @@ class ComposeEngine:
             require(len(found) == 1 and found[0].get('Type') == 'bind' and found[0].get('RW') is False
                     and '..' not in str(found[0].get('Source') or ''), 'secret_mount')
             return found[0]
-        present_secrets = [target for target in ALLOWED_BIND_TARGETS if secret_bind(target) is not None]
-        if set(present_secrets) != set(ALLOWED_BIND_TARGETS) or host.get('Memory') != RUNTIME_MEMORY_MIB * 1024 ** 2:
+        present_targets = {target for target in allowed_targets if secret_bind(target) is not None}
+        if SOCIAL_SOCKET_TARGET in present_targets:
+            source = secret_bind(SOCIAL_SOCKET_TARGET).get('Source')
+            require(source == str(self.registry.root / SOCIAL_SOCKET_SOURCE), 'bot_social_socket_mount')
+        if present_targets != set(allowed_targets) or host.get('Memory') != RUNTIME_MEMORY_MIB * 1024 ** 2:
             needs_recreate = True
         require(all(isinstance(m, dict) and (m.get('Destination') == '/data' or
-                    m.get('Destination') in ALLOWED_BIND_TARGETS or
+                    m.get('Destination') in allowed_targets or
                     (m.get('Type') == 'tmpfs' and m.get('Destination') == '/tmp')) for m in mounts), 'unexpected_mount')
         running = state.get('Running') is True and state.get('Status') == 'running' and not state.get('Paused') and not state.get('Restarting')
         started = state.get('StartedAt')

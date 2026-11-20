@@ -1,4 +1,5 @@
 import {mountMeetingAudio} from './audio.mjs';
+import {readWorkspaceChoices} from '../shell/dsbot-api.mjs';
 
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -96,6 +97,9 @@ function mount() {
   const mainPanel = document.getElementById('main-panel');
   const form = document.getElementById('meeting-form');
   const workspaceSelect = document.getElementById('workspace');
+  const newButton = document.getElementById('new-meeting');
+  const back = document.getElementById('meeting-library');
+  let workspaceLoad = 0;
   if (!status || !loginPanel || !mainPanel || !form) return;
   let current = null;
   let meetings = [];
@@ -381,6 +385,7 @@ function mount() {
 
   function fill(meeting) {
     selection += 1;
+    syncLibraryLink();
     audio.reset();
     hideAttendees();
     current = meeting;
@@ -411,9 +416,9 @@ function mount() {
     }
   }
 
-  async function loadList(selectId, createNew = false) {
+  async function loadList({keepEditor = false} = {}) {
     const workspace = workspaceId(), pendingSelection = selection;
-    const result = await request('GET', `${base()}?limit=100`);
+    const result = await request('GET', `${base()}?limit=100`).catch(() => ({status: 0, body: {}}));
     if (workspaceId() !== workspace || pendingSelection !== selection) return;
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法加载会议。'));
@@ -421,13 +426,9 @@ function mount() {
     }
     meetings = result.body.items || [];
     renderList();
-    if (selectId) {
-      await openMeeting(selectId);
-    } else if (!createNew && meetings.length && !current) {
-      await openMeeting(meetings[0].id);
-    } else {
-      fill(null);
-    }
+    if (keepEditor) return;
+    if (meetings.length && !current) await openMeeting(meetings[0].id);
+    else fill(null);
   }
 
   async function openMeeting(id) {
@@ -443,8 +444,27 @@ function mount() {
     fill(result.body.meeting);
   }
 
+  function syncLibraryLink() {
+    if (back) back.href = '/space?view=meetings' + (workspaceId() ? '#workspace=' + encodeURIComponent(workspaceId()) : '');
+    newButton.disabled = !workspaceId();
+  }
+
+  function fillWorkspaces(items, selected) {
+    workspaceSelect.replaceChildren();
+    for (const space of items) {
+      const option = document.createElement('option');
+      option.value = space.id;
+      option.textContent = space.name;
+      workspaceSelect.append(option);
+    }
+    if (items.some(item => item.id === selected)) workspaceSelect.value = selected;
+  }
+
   async function load() {
+    const seq = ++workspaceLoad;
+    newButton.disabled = true;
     const session = await request('GET', '/v1/auth/session');
+    if (seq !== workspaceLoad) return;
     if (session.status !== 200) {
       audio.reset();
       loginPanel.hidden = false;
@@ -455,30 +475,44 @@ function mount() {
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = session.body.user.username;
-    const listed = await request('GET', '/v1/workspaces?limit=100');
-    const workspaces = listed.status === 200 ? (listed.body.items || []) : [];
     const linked = new URLSearchParams((globalThis.location?.hash || '').slice(1));
     const linkedWorkspace = linked.get('workspace');
-    const previous = workspaces.some(space => space.id === linkedWorkspace) ? linkedWorkspace : workspaceSelect.value;
-    workspaceSelect.replaceChildren();
-    for (const space of workspaces) {
-      const option = document.createElement('option');
-      option.value = space.id;
-      option.textContent = space.name;
-      workspaceSelect.append(option);
+    let {initial: listed, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100');
+    if (linkedWorkspace && !listed.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
+      const shared = await supplemental;
+      if (shared.status === 200) listed = shared;
+      supplemental = null;
     }
-    if (previous && [...workspaceSelect.options].some(option => option.value === previous)) {
-      workspaceSelect.value = previous;
+    if (seq !== workspaceLoad) return;
+    const workspaces = listed.status === 200 ? (listed.body.items || []) : [];
+    fillWorkspaces(workspaces, linkedWorkspace || workspaceId());
+    void supplemental?.then(shared => {
+      if (seq === workspaceLoad && shared.status === 200) fillWorkspaces(shared.body.items, workspaceId());
+    });
+    if (linkedWorkspace && !workspaces.some(item => item.id === linkedWorkspace)) {
+      workspaceSelect.value = '';
+      syncLibraryLink();
+      form.hidden = true;
+      show('error', '无法打开此工作区的会议。请选择其他工作区。');
+      return;
     }
+    syncLibraryLink();
     if (!workspaces.length) {
       form.hidden = true;
       document.getElementById('meeting-empty').hidden = false;
       document.getElementById('meetings-empty').hidden = false;
-      show('error', '还没有工作区。请先到聊天页创建。');
+      show('error', listed.status === 200 ? '还没有工作区。请先到聊天页创建。' : '无法读取工作区，请刷新重试。');
       return;
     }
     const meetingId = linked.get('meeting') || '';
-    await loadList(workspaceId() === linkedWorkspace && /^[0-9a-f]{32}$/.test(meetingId) ? meetingId : '', linked.get('new') === '1');
+    if (workspaceId() === linkedWorkspace && /^[0-9a-f]{32}$/.test(meetingId)) {
+      await Promise.all([openMeeting(meetingId), loadList({keepEditor: true})]);
+    } else if (linked.get('new') === '1') {
+      fill(null);
+      await loadList({keepEditor: true});
+    } else {
+      await loadList();
+    }
   }
 
   form.addEventListener('submit', async event => {
@@ -496,14 +530,25 @@ function mount() {
       transcript: document.getElementById('meeting-transcript').value,
       action_items: actions.filter(action => (action.text || '').trim()),
     };
+    const save = document.getElementById('save-meeting');
+    if (!workspaceId() || save.disabled) return;
+    const target = current, workspace = workspaceId(), seq = selection;
+    save.disabled = true;
+    show('', '正在保存…');
     let result;
-    if (current && current.id) {
-      result = await request('POST', `${base()}/${current.id}`,
-                             {revision: current.revision, changes});
-    } else {
-      const key = 'meeting-' + (globalThis.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Date.now()));
-      result = await request('POST', base(), changes, {'Idempotency-Key': key});
+    try {
+      if (target?.id) {
+        result = await request('POST', `${base()}/${target.id}`, {revision: target.revision, changes});
+      } else {
+        const key = 'meeting-' + (globalThis.crypto?.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Date.now()));
+        result = await request('POST', base(), changes, {'Idempotency-Key': key});
+      }
+    } catch {
+      result = {status: 0, body: {}};
+    } finally {
+      save.disabled = false;
     }
+    if (workspaceId() !== workspace || seq !== selection) return;
     if (result.status === 409) {
       show('error', '会议已在别处更新，或标题已被占用。');
       return;
@@ -512,8 +557,12 @@ function mount() {
       show('error', messageFor(result.body.error, '保存失败。'));
       return;
     }
-    await loadList(result.body.meeting.id);
+    const meeting = result.body.meeting;
+    selection += 1;
+    meetings = [meeting, ...meetings.filter(item => item.id !== meeting.id)];
+    fill(meeting);
     show('ok', '会议已保存。');
+    void loadList({keepEditor: true});
   });
 
   attendeeInput.addEventListener('input', () => { refreshAttendees(); });
@@ -536,9 +585,11 @@ function mount() {
     }
   });
 
-  document.getElementById('new-meeting').addEventListener('click', () => {
-    if (!workspaceId()) { show('error', '请先选择工作区。'); return; }
+  newButton.addEventListener('click', () => {
+    if (!workspaceId()) return;
+    selection += 1;
     fill(null);
+    document.getElementById('meeting-title').focus?.();
   });
 
   document.getElementById('add-action').addEventListener('click', () => {
@@ -570,6 +621,7 @@ function mount() {
 
   workspaceSelect.addEventListener('change', () => {
     selection += 1;
+    syncLibraryLink();
     audio.reset();
     clearDraft();
     hideAttendees();
@@ -577,7 +629,7 @@ function mount() {
     current = null;
     actions = [];
     form.hidden = true;
-    loadList();
+    if (workspaceId()) void loadList();
   });
 
   const login = document.getElementById('login-form');
