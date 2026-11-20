@@ -78,3 +78,23 @@ Deployment and real-model/native-history proof are still pending for this correc
 Private chat rename/remove via the old plugin API are explicitly rejected rather than
 silently altering retained legacy rows; full native part deletion parity is not implemented.
 Previously documented unrelated migration gaps and Teamily interaction verification remain open.
+
+
+### Native persistence format defect found during restart acceptance
+
+The first history importer produced incomplete native v4 envelopes (missing identified
+user/assistant messages, nested model source, turn/step boundaries, and ignorable
+status-record grammar). Earlier runtime-only stream normalization was insufficient.
+The import writer now emits the complete native schema. Historical provider/model were
+not retained: metadata explicitly says `openteamily-history` / `historical-unknown`,
+with `imported:true`, no API invocation and no invented token usage.
+
+A one-shot offline repair uses the published native strict format codec and JSONL
+persistence provider, not ad-hoc binary edits. It rejects any affected suffix containing
+unrecognized/unmarked events, surface replacements or sequence references. Original
+compressed files and all source data are retained. A fsynced manifest records the exact
+old/new event-sequence mapping before any replacement; the canonical message ledger is
+remapped transactionally by message ID. Bot, Session, platform message IDs, content and
+original timestamps are preserved. Native envelope events are inserted, explicitly marked
+as imported transcript boundaries rather than newly executed model turns. Completion still
+requires deployment, repair proof, restart, and test-account native/history acceptance.
