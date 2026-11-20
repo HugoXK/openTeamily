@@ -105,6 +105,21 @@ test('template links the web-slot host and loads the social client without bundl
   assert.equal(socialWeb.exports['./client'], '../../../flybot/plugins/social/client.js')
 })
 
+test('template bundles the OpenTeamily DS-Bot plugin and its pages stage', () => {
+  const prepare = read('prepare-template.mjs')
+  assert.match(prepare, /'@openteamily\/web': `\$\{ROOT\}\/openteamily-web`/)
+  assert.match(prepare, /filtered.push\('@openteamily\/web'\)/)
+  const docker = read('Dockerfile')
+  assert.match(docker, /FROM scratch AS openteamily-static/)
+  assert.match(docker, /COPY openteamily-web \/opt\/openteamily\/runtime\/openteamily-web/)
+  assert.match(docker, /COPY --from=openteamily-static \/ \/opt\/openteamily\/runtime\/openteamily-web\/pages\//)
+  assert.ok(docker.indexOf('COPY openteamily-web') < docker.indexOf('dsh plugin --profile web'), 'plugin is copied before the profile is prepared and chowned')
+  const plugin = JSON.parse(readFileSync(join(root, '..', 'openteamily-web', 'package.json'), 'utf8'))
+  assert.equal(plugin.name, '@openteamily/web')
+  assert.equal(plugin.dsh.bundle.patch, './cordis.patch.yml')
+  assert.ok(!JSON.stringify(plugin).includes('@flybot/project'), 'never @flybot/project')
+})
+
 test('notice installer runs again after the web profile is installed', () => {
   const docker = read('Dockerfile')
   const profile = docker.indexOf('dsh plugin --profile web')

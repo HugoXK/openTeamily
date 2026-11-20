@@ -104,6 +104,8 @@ Social (cross-user). "Batch" is the implementation PR that moves it (see §6).
 | `discover.py` (agent_discover, artifact_discover, likes, collections, follows) | central | **S** | C |
 | `gateway.py` (agent_api_keys/rate/invocations, external Agent API) | central queue | **P** authenticates the API key and routes to the owning user's DS-Bot `POST /api/openteamily` endpoint `gateway/invoke` (execution in **D**) | B2 |
 | `events.py` (SSE invalidations) | central | **D** (DS-Bot feed); **P** none | B1 |
+| `team_runs.py` (#378: team_runs, team_run_steps — DAG of 2–8 steps, each step queued as a runtime `infer` task via `runtime_connect`) | central orchestration + state | **D**: the DAG state, dependency resolution, cancel/retry and reconcile run in the plugin; each step is a native DS-Bot session turn of the named bot (or a DS-Bot task/goal), so no `runtime_tasks` row exists. Team-shared visibility of a run is published via **S** | B2 |
+| `agent_memory.py` (#378: agent_memory_scopes, agent_message_memory — BM25 recall over memory pages injected into the infer prompt with cited page id/revision) | central retrieval + prompt composition | **D**: ranking runs in the plugin over the user's own memory pages (pure function, ports as-is to JS or runs over ds-bot memory search), recall notes enter the DS-Bot turn as context, citations stored with the plugin's message rows | B1 (with chat) |
 | `local_demo.py`, `ci_ui_fixtures.py`, `server.py` | dev/CI | stay for the legacy path until D; plugin gets its own fixtures | — |
 
 ## 4. Routing and authentication design
@@ -134,22 +136,28 @@ public). The platform:
    running, healthy, current revision, manager heartbeat fresh — the FlyBot account-state gate rules);
    no request parameter can name an instance;
 4. answers `204` with internal headers `X-OT-Upstream` (the instance's private address recorded by the
-   manager) and `X-OT-Upstream-Auth` (see 4.3), or `401` (no session → redirect to login) / `403` /
+   manager), `X-OT-Upstream-Path`, `X-OT-Upstream-Origin` and `X-OT-Upstream-Cookie` (see 4.3), or `401` (no session → redirect to login) / `403` /
    `503` (not provisioned or not healthy → `/runtimes/` status page).
 
-The edge strips every client-supplied `X-OT-*` header, all `dsh-auth-*` cookies and `Authorization` before
-proxying, sets `Host` to the instance's internal authority (`rt-<instance>.openteamily.internal`) and
-rewrites `Origin` to it after the platform has checked the real one, passes `Upgrade/Connection` for
-WebSockets and disables buffering for SSE.
+The edge replaces the whole `Cookie` header with that runtime's DSH cookie (so neither the platform
+session nor any smuggled `dsh-auth-*` cookie reaches a runtime), clears `Authorization`, `Sec-Fetch-Site`
+and every client `X-OT-*` header, sets `Host` to the instance's private authority (`<runtime-ip>:8080`,
+which DSH's Host fence accepts as its concrete bind address) and rewrites `Origin` to it after the
+platform has checked the real one, passes `Upgrade/Connection` for WebSockets, disables buffering for
+SSE, and hides any `Set-Cookie` from the runtime. The authorizer endpoint is reachable only through the
+edge's `internal` location and additionally requires an operator gateway key header; the public
+`/v1/platform/route` location returns 404. Implementation: `openteamily/dsbot_gateway.py`
+(`GatewayApp`, `mount`, `nginx_config`), route table `openteamily/dsbot_routes.json`.
 
 ### 4.3 DSH authentication behind the gateway
 DSH keeps its own authentication (process launch token → signed `dsh-auth-<authority>` cookie bound to
 the request authority). The browser never sees a DSH token or cookie:
 * the manager captures each runtime's tokenized launch URL at start (as the FlyBot worker does) into the
   platform's private DB, never in logs, lists, URLs or Docker args;
-* the platform exchanges it server-side for the DSH session cookie for authority
-  `rt-<instance>.openteamily.internal`, keeps it encrypted at rest, and returns it to the edge only in
-  `X-OT-Upstream-Auth` for that owner's requests;
+* the platform exchanges it server-side (`exchange_launch_url`) for the DSH session cookie for the
+  runtime's private authority, stores it in `dsbot_upstreams` (credential-grade, never listed by any
+  API; protect DB backups as credentials, as on the FlyBot platform), and returns it to the edge only in
+  `X-OT-Upstream-Cookie` for that owner's requests;
 * because the cookie is signed by that runtime's own secret and bound to its own authority, it is useless
   against any other runtime even if leaked.
 
@@ -188,9 +196,10 @@ sequenced by the deploy owner).
 
 | Phase | PR | Content | Size (honest) |
 |---|---|---|---|
-| 0 | this PR | Architecture, feature map, migration, routing, rollback | done |
+| 0 | with A | Architecture, feature map, migration, routing, rollback (this document) | done |
 | prerequisite | #379 | chat on DS-Bot, native skills, Composio→MCP, custom MCP, loopback model proxy, auto-provision, reconnect | in progress (other workstream) |
-| A | gateway + shell | `@openteamily/web` plugin package (page route, `/api/openteamily` dispatch, instance identity), platform route authorizer + nginx template + `dsbot_routes.json`, two-runtime isolation e2e in CI | ~1–2 days |
+| A | gateway + shell (first implementation PR) | `runtime/openteamily-web` (`@openteamily/web`: page route, `/api/openteamily` dispatch, instance identity) bundled in the runtime image with the real `openteamily/static` pages; platform authorizer `openteamily/dsbot_gateway.py` + rendered nginx edge + `dsbot_routes.json`; CI: plugin unit tests, gateway unit tests, and `container-gateway-isolation.py` (two real DS-Bots + real nginx: each user's page is served by their own DS-Bot, cross-user and forged access denied) | this PR |
+| A2 | manager wiring | manager records each runtime's private address and exchanges its launch URL into `dsbot_upstreams`; sets `OPENTEAMILY_INSTANCE_ID`; deploy overlay uses `nginx_config`; first pages flipped in `moved_pages` | ~0.5–1 day |
 | B1 | chat/personal agent, skills, events | move conversations, personal agent, message assists, skills catalog/installs/secrets into plugin; per-user migration | ~2–3 days |
 | B2 | automations, agents, external API | automations on DSH `schedule`, agents as ds-bot bots, gateway invoke routed to DS-Bot | ~2–3 days |
 | B3 | artifacts/exports, memory, meetings, search | biggest data model (artifacts 11 tables, memory 8) | ~3–5 days |
