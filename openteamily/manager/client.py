@@ -97,6 +97,25 @@ class ManagerClient:
             cursor = nxt
         raise ManagerError('list_limit')
 
+    def assigned(self, max_items=1000):
+        """All instances the server currently authorizes for this manager (static + auto-assigned)."""
+        cursor, items = '', []
+        for _ in range(max_items // 100 + 1):
+            data = self.call('GET', '/v1/internal/instances?' + urlencode({'limit': 100, 'cursor': cursor}))
+            page = data.get('items')
+            require(isinstance(page, list) and len(page) <= 100, 'response_shape')
+            for item in page:
+                require(isinstance(item, dict), 'response_shape')
+                check_id(item.get('id'))
+                items.append(item)
+            nxt = data.get('cursor')
+            if nxt is None:
+                return items[:max_items]
+            check_id(nxt)
+            require(nxt > cursor, 'cursor_not_advancing')
+            cursor = nxt
+        raise ManagerError('list_limit')
+
     def claim(self, iid):
         check_id(iid)
         data = self.call('POST', '/v1/internal/jobs/claim', {'instance_id': iid})

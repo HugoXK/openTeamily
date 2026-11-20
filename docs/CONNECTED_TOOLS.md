@@ -165,3 +165,26 @@ These scopes can use the same discovery/approval/execute broker only when an
 There is still no administrator Composio fallback. Every call still needs the
 principal user's one-shot approval. Synthetic tests are not real-vendor
 acceptance.
+
+## Native DS-Bot and custom MCP
+
+The image's in-plugin bridge now sends infer tasks to DS-Bot, rather than doing
+its own model/tool rounds. Both Composio and user-configured MCP tools are
+attached as the native `ot-tools` MCP capability. Settings → App connectors
+supports up to four custom remote Streamable HTTP servers per user via
+`GET/POST /v1/mcp/servers` and `DELETE /v1/mcp/servers/{id}`. Optional bearer
+credentials and full URLs are wrapped at rest with `custom-mcp.wrap`; no
+credentials or upstream URLs enter DS-Bot configuration. Public HTTPS:443 only,
+no query/userinfo, no local commands, no redirects, no proxies. DNS results are
+checked for non-public/special addresses and the request pins an approved IP
+while verifying TLS against the original hostname. Model HTTP grants do not
+apply to MCP. Responses, tool counts and call counts are bounded.
+
+Tools use immutable task discovery grants; every call, including reads, uses
+the existing one-shot owner approval UI. Changing/removing a server invalidates
+outstanding grants. Credentials/ownership/task/runtime access are rechecked
+before execution. An executing/ambiguous call is never automatically retried.
+Only that user's authorized personal/tool-granted tasks can use these servers.
+
+CI uses an explicitly labeled in-process MCP fixture to demonstrate native
+DS-Bot tool visibility. This is NOT real Composio or real MCP-vendor acceptance.

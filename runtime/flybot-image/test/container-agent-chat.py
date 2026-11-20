@@ -55,11 +55,17 @@ def redact(text, secrets):
     return out
 
 
+RECEIVED = []
+
+
 def start_fake_provider(secret, body_text):
+    """Labeled fake OpenAI-compatible model. Supports SSE streaming because
+    DS-Bot's provider SDK streams; records request shapes (not secrets) so the
+    proof can show DS-Bot, not a direct agent-loop call, built the request."""
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             length = int(self.headers.get('Content-Length', '0'))
-            self.rfile.read(length)
+            raw = self.rfile.read(length)
             if self.path.rstrip('/') != '/v1/chat/completions':
                 self.send_response(404)
                 self.end_headers()
@@ -69,8 +75,41 @@ def start_fake_provider(secret, body_text):
                 self.end_headers()
                 self.wfile.write(b'{"error":"unauthorized"}')
                 return
+            try:
+                body = json.loads(raw or b'{}')
+            except ValueError:
+                body = {}
+            messages = body.get('messages') or []
+            RECEIVED.append({
+                'model': body.get('model'),
+                'stream': bool(body.get('stream')),
+                'tools': len(body.get('tools') or []),
+                'tool_names': [t.get('function', {}).get('name', '') for t in body.get('tools') or []],
+                'tool_descriptions': ' '.join(str(t.get('function', {}).get('description', '')) for t in body.get('tools') or []),
+                'roles': [m.get('role') for m in messages if isinstance(m, dict)],
+                'system_chars': sum(len(json.dumps(m.get('content'))) for m in messages
+                                    if isinstance(m, dict) and m.get('role') in ('system', 'developer')),
+            })
+            if body.get('stream'):
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.send_header('Cache-Control', 'no-cache')
+                self.end_headers()
+                base = {'id': 'chatcmpl-fake', 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': 'fake-model'}
+                chunks = [
+                    dict(base, choices=[{'index': 0, 'delta': {'role': 'assistant', 'content': body_text}, 'finish_reason': None}]),
+                    dict(base, choices=[{'index': 0, 'delta': {}, 'finish_reason': 'stop'}],
+                         usage={'prompt_tokens': 10, 'completion_tokens': 5, 'total_tokens': 15}),
+                ]
+                for chunk in chunks:
+                    self.wfile.write(b'data: ' + json.dumps(chunk).encode() + b'\n\n')
+                self.wfile.write(b'data: [DONE]\n\n')
+                self.wfile.flush()
+                self.close_connection = True
+                return
             payload = json.dumps({
-                'choices': [{'message': {'role': 'assistant', 'content': body_text}}],
+                'id': 'chatcmpl-fake', 'object': 'chat.completion', 'created': int(time.time()),
+                'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': body_text}, 'finish_reason': 'stop'}],
                 'model': 'fake-model',
             }).encode()
             self.send_response(200)
@@ -187,6 +226,28 @@ def main(argv):
         user = ApiClient(app)
         registered = user.register('alice')
         require(registered['status'] == 201, 'register failed: %r' % registered)
+        # Explicit in-process MCP fixture. No vendor account, secret or action.
+        def fixture_transport(url, headers, raw):
+            message = json.loads(raw)
+            if 'id' not in message:
+                return 202, {}, b''
+            result = {}
+            if message['method'] == 'initialize':
+                result = {'protocolVersion': '2025-03-26', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'explicit-ci-fixture', 'version': '1'}}
+            if message['method'] == 'tools/list':
+                result = {'tools': [{'name': 'fixture_status', 'description': 'EXPLICIT_CI_MCP_FIXTURE no external action', 'inputSchema': {'type': 'object', 'properties': {}}}]}
+            return 200, {'content-type': 'application/json'}, json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': result}).encode()
+        app.mcp_transport = fixture_transport
+        fixture = user.call('POST', '/v1/mcp/servers', {'name': 'EXPLICIT_CI_MCP_FIXTURE', 'url': 'https://mcp.example.test/mcp'})
+        require(fixture['status'] == 200, 'MCP fixture save failed: %r' % fixture)
+        catalogue = user.call('GET', '/v1/skills/catalog')['body']['items']
+        installed_skill = catalogue[0]
+        install = user.call('POST', '/v1/skills/bindings', {
+            'skill_id': installed_skill['id'], 'version': installed_skill['version'], 'digest': installed_skill['digest'],
+            'scope': 'account', 'enabled': True, 'permissions': ['model_context'],
+        })
+        require(install['status'] == 200, 'skill install failed: %r' % install)
+
         saved = user.call('POST', '/v1/model-api', {
             'revision': 0,
             'changes': {
@@ -274,6 +335,7 @@ def main(argv):
             '-e', 'DSH_LISTEN_PORT=%s' % dsh_port,
             '-e', 'DSH_HOST=127.0.0.1',
             '-e', 'OPENTEAMILY_AGENT_POLL=1',
+            '-e', 'OPENTEAMILY_BRIDGE_PORT=%s' % unused_loopback_port(),
             image,
         ], secrets=secrets)
         started = True
@@ -334,13 +396,44 @@ def main(argv):
             raise
 
         require(done.get('dispatch', {}).get('source') == 'instance', 'history dispatch was not instance: %r' % done)
+        # DS-Bot evidence 1: the management task result names the DS-Bot turn.
+        with app.store.connect() as db:
+            row = db.execute('SELECT result FROM runtime_tasks WHERE id=?', (reply['task_id'],)).fetchone()
+        result = json.loads(row['result'])
+        ds_bot = result.get('ds_bot') or {}
+        require(result.get('engine') == 'ds-bot', 'reply was not produced by DS-Bot: %r' % result, secrets)
+        require(ds_bot.get('request_id') == 'ot:' + reply['task_id'] and ds_bot.get('session_id') and ds_bot.get('bot_id'),
+                'missing DS-Bot session evidence: %r' % result, secrets)
+        require(ds_bot.get('model_calls', 0) >= 1, 'DS-Bot turn made no model call: %r' % result, secrets)
+        require(ds_bot.get('skills'), 'DS-Bot did not attach installed skill capabilities', secrets)
+        require(ds_bot.get('tools', 0) >= 1, 'DS-Bot did not discover the explicit MCP fixture', secrets)
+        bindings = user.call('GET', '/v1/skills/bindings')['body']['items']
+        require(any(b.get('last_loaded_task') == reply['task_id'] for b in bindings), 'native skill receipt missing', secrets)
+
+        require(ds_bot.get('history_verified') is True, 'DS-Bot native persisted history did not verify the request', secrets)
+        # DS-Bot evidence 3: the model saw a DS-Bot-built request (system prompt + DS-Bot tools),
+        # streamed through the loopback proxy, which rewrote the model name.
+        dsbot_requests = [r for r in RECEIVED if r['stream'] and r['tools'] > 0 and r['system_chars'] > 200]
+        require(dsbot_requests, 'model never received a DS-Bot request: %r' % RECEIVED, secrets)
+        require(any('OTMCP_' in ' '.join(r['tool_names']) or 'EXPLICIT_CI_MCP_FIXTURE' in r['tool_descriptions'] for r in dsbot_requests),
+                'explicit MCP fixture not visible in native DS-Bot model tools: %r' % RECEIVED, secrets)
+
+        require(all(r['model'] == 'fake-model' for r in RECEIVED), 'proxy did not enforce the model: %r' % RECEIVED, secrets)
+        print('DS-Bot evidence: bot=%s session=%s request=%s model_calls=%s tools_in_request=%s history_verified=%s' % (
+            ds_bot.get('bot_id'), ds_bot.get('session_id'), ds_bot.get('request_id'), ds_bot.get('model_calls'),
+            dsbot_requests[0]['tools'], ds_bot.get('history_verified')))
         logs = docker(['logs', name], allow_failure=True, secrets=secrets)
         combined = (logs.stdout or '') + '\n' + (logs.stderr or '')
         require(runtime_key['token'] not in combined, 'runtime token appeared in container logs')
         require(FAKE_SECRET not in combined, 'model key appeared in container logs')
+        inspect_env = docker(['inspect', '--format', '{{json .Config.Env}}', name], secrets=secrets)
+        require(FAKE_SECRET not in inspect_env.stdout, 'model key appeared in container env', secrets)
+        settings = docker(['exec', name, 'grep', '-rl', FAKE_SECRET, '/data'], allow_failure=True, secrets=secrets)
+        require(settings.returncode != 0, 'model key was written into DS-Bot data/config', secrets)
         print(
             'PASS: real FlyBot container connected to loopback management, '
             'used a lease-issued runtime key, dispatched an agent conversation, '
+            'ran it as a DS-Bot turn (model via the loopback proxy) '
             'and wrote the labeled fake-provider reply back to history. '
             'This is not a real vendor inference acceptance.'
         )
