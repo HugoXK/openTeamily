@@ -14,12 +14,38 @@ import time
 
 FORMAT = 'openteamily-dsbot-import'
 
-# feature -> ordered [(table, SQL selecting that user's rows; one ? = user id)].
+# feature -> ordered [(table, SQL selecting that user's rows; every ? = user id)].
+_OWNED = 'SELECT id FROM workspaces WHERE owner_id = ?'
+_MEMORY_USERS = (
+    "SELECT u.id, u.username, CASE WHEN u.id = ? THEN 1 ELSE 0 END AS is_owner FROM users u WHERE u.id = ? "
+    "OR u.id IN (SELECT created_by FROM memory_pages WHERE workspace_id IN (" + _OWNED + ")) "
+    "OR u.id IN (SELECT updated_by FROM memory_pages WHERE workspace_id IN (" + _OWNED + ")) "
+    "OR u.id IN (SELECT created_by FROM memory_page_versions WHERE workspace_id IN (" + _OWNED + ")) "
+    "OR u.id IN (SELECT created_by FROM memory_actions WHERE workspace_id IN (" + _OWNED + ")) "
+    "OR u.id IN (SELECT updated_by FROM memory_actions WHERE workspace_id IN (" + _OWNED + ")) "
+    "OR u.id IN (SELECT created_by FROM memory_links WHERE workspace_id IN (" + _OWNED + ")) ORDER BY u.id")
+
+
+def _scoped(table, order='id'):
+    return 'SELECT * FROM ' + table + ' WHERE workspace_id IN (' + _OWNED + ') ORDER BY ' + order
+
 # Parents come before children; the plugin imports in its own declared order.
 FEATURE_TABLES = {
     'meetings': [
         ('meetings', 'SELECT m.* FROM meetings m JOIN workspaces w ON w.id = m.workspace_id '
                      'WHERE w.owner_id = ? ORDER BY m.id'),
+    ],
+    'memory': [
+        ('ot_users', _MEMORY_USERS),
+        ('memory_pages', _scoped('memory_pages')),
+        ('memory_page_versions', _scoped('memory_page_versions', 'page_id, revision')),
+        ('memory_page_topics', _scoped('memory_page_topics', 'page_id, name_hash')),
+        ('memory_links', _scoped('memory_links')),
+        ('memory_actions', _scoped('memory_actions')),
+        ('memory_suggestions', _scoped('memory_suggestions')),
+        # Profile and preferences are personal: only this account's own rows.
+        ('memory_profiles', 'SELECT * FROM memory_profiles WHERE user_id = ? ORDER BY workspace_id'),
+        ('memory_preferences', 'SELECT * FROM memory_preferences WHERE user_id = ? ORDER BY workspace_id, position, id'),
     ],
 }
 
@@ -36,7 +62,7 @@ def build(db, user_id, feature, now=None):
         raise ValueError('user id required')
     tables, manifest = {}, {}
     for table, sql in FEATURE_TABLES[feature]:
-        cursor = db.execute(sql, (user_id,))
+        cursor = db.execute(sql, (user_id,) * sql.count('?'))
         names = [column[0] for column in cursor.description]
         rows = [dict(zip(names, tuple(row))) for row in cursor.fetchall()]
         text = canonical(rows)

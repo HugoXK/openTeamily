@@ -13,6 +13,7 @@ export const API_ROUTE = `${MOUNT}/api/openteamily`;
 // features move; a feature the DS-Bot does not have yet falls back to /v1.
 export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/meetings(?:\/[0-9a-f]{32}(?:\/(?:remove|export))?)?$/, 'meetings'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory(?:\/[0-9a-f]{32}(?:\/(?:remove|export|dream(?:\/[0-9a-f]{32})?|versions(?:\/\d{1,8}(?:\/restore)?)?))?)?$/, 'memory'],
 ];
 
 export function servedByDsBot(doc = globalThis.document) {
