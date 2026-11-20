@@ -46,6 +46,34 @@ export function actionToggleBody(actions, index, done, revision) {
   return {revision, changes: {action_items: items}};
 }
 
+
+export const MEMBER_ROLE_LABELS = {owner: '所有者', admin: '管理员', member: '成员'};
+export const ATTENDEE_EMPTY = '无匹配成员';
+export const ATTENDEE_UNAVAILABLE = '读不到成员列表';
+export const ATTENDEE_MIN = 2;
+export const ATTENDEE_LIMIT = 6;
+
+export function attendeeQuery(text) {
+  const parts = String(text || '').split(/[,，]/);
+  return parts[parts.length - 1].trim();
+}
+
+export function matchMembers(members, query, used) {
+  const needle = String(query || '').trim().toLowerCase();
+  if (needle.length < ATTENDEE_MIN) return [];
+  const taken = new Set(parseAttendees(used).map(name => name.toLowerCase()));
+  return (members || [])
+    .filter(item => item && item.username && !taken.has(String(item.username).toLowerCase()))
+    .filter(item => String(item.username).toLowerCase().includes(needle))
+    .slice(0, ATTENDEE_LIMIT);
+}
+
+export function attendeeInsert(text, username) {
+  const parts = String(text || '').split(/[,，]/);
+  parts[parts.length - 1] = ' ' + username;
+  return parts.join(',').replace(/^\s+/, '').replace(/[\s,]+$/, '') + ', ';
+}
+
 async function request(method, path, body, extra) {
   const headers = { Accept: 'application/json', ...(extra || {}) };
   const options = { method, headers, credentials: 'same-origin' };
@@ -70,6 +98,10 @@ function mount() {
   let current = null;
   let meetings = [];
   let actions = [];
+  const attendeeInput = document.getElementById('meeting-attendees');
+  const attendeeList = document.getElementById('attendee-matches');
+  let memberCache = {workspace: '', items: [], failed: false};
+  let attendeeActive = -1;
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -82,6 +114,82 @@ function mount() {
 
   function base() {
     return `/v1/workspaces/${workspaceId()}/meetings`;
+  }
+
+  function hideAttendees() {
+    attendeeActive = -1;
+    attendeeList.hidden = true;
+    attendeeList.replaceChildren();
+  }
+
+  async function workspaceMembers() {
+    const id = workspaceId();
+    if (!id) return [];
+    if (memberCache.workspace === id) return memberCache.items;
+    const result = await request('GET', `/v1/workspaces/${id}/members`);
+    memberCache = result.status === 200
+      ? {workspace: id, items: result.body.items || [], failed: false}
+      : {workspace: id, items: [], failed: true};
+    return memberCache.items;
+  }
+
+  function attendeeOptions() {
+    return [...attendeeList.querySelectorAll('button[data-username]')];
+  }
+
+  function highlightAttendee(index) {
+    const options = attendeeOptions();
+    if (!options.length) {
+      attendeeActive = -1;
+      return;
+    }
+    attendeeActive = (index + options.length) % options.length;
+    options.forEach((option, at) => {
+      option.setAttribute('aria-selected', at === attendeeActive ? 'true' : 'false');
+    });
+  }
+
+  function chooseAttendee(username) {
+    attendeeInput.value = attendeeInsert(attendeeInput.value, username);
+    hideAttendees();
+    attendeeInput.focus();
+  }
+
+  function attendeeNote(text) {
+    const li = document.createElement('li');
+    li.className = 'note';
+    li.textContent = text;
+    attendeeList.append(li);
+  }
+
+  async function refreshAttendees() {
+    const query = attendeeQuery(attendeeInput.value);
+    if (query.length < ATTENDEE_MIN) {
+      hideAttendees();
+      return;
+    }
+    const members = await workspaceMembers();
+    if (attendeeQuery(attendeeInput.value) !== query) return;
+    attendeeList.replaceChildren();
+    if (memberCache.failed) {
+      attendeeNote(ATTENDEE_UNAVAILABLE);
+    } else {
+      const matches = matchMembers(members, query, attendeeInput.value);
+      if (!matches.length) attendeeNote(ATTENDEE_EMPTY);
+      for (const member of matches) {
+        const li = document.createElement('li');
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.username = member.username;
+        button.textContent = `${member.username} · ${MEMBER_ROLE_LABELS[member.role] || member.role}` +
+          (member.suspended ? ' · 已停用' : '');
+        button.addEventListener('click', () => chooseAttendee(member.username));
+        li.append(button);
+        attendeeList.append(li);
+      }
+    }
+    attendeeActive = -1;
+    attendeeList.hidden = false;
   }
 
   function renderActions() {
@@ -123,6 +231,7 @@ function mount() {
       holder.append(row);
     });
   }
+
 
   async function persistActionToggle(index, done, box) {
     if (!current || !current.id) {
@@ -182,6 +291,7 @@ function mount() {
   }
 
   function fill(meeting) {
+    hideAttendees();
     current = meeting;
     form.hidden = false;
     document.getElementById('meeting-empty').hidden = true;
@@ -193,6 +303,11 @@ function mount() {
     actions = meeting ? (meeting.action_items || []).map(item => ({...item})) : [];
     renderActions();
     document.getElementById('remove-meeting').hidden = !meeting || !meeting.id;
+    const exportLink = document.getElementById('export-meeting');
+    if (exportLink) {
+      exportLink.hidden = !meeting || !meeting.id;
+      exportLink.href = meeting && meeting.id ? `${base()}/${meeting.id}/export` : '#';
+    }
     document.getElementById('meeting-meta').textContent = meeting && meeting.id
       ? '修订 ' + meeting.revision + ' · 创建者 ' + meeting.created_by : '新会议';
     renderList();
@@ -293,6 +408,26 @@ function mount() {
     show('ok', '会议已保存。');
   });
 
+  attendeeInput.addEventListener('input', () => { refreshAttendees(); });
+
+  attendeeInput.addEventListener('keydown', event => {
+    if (attendeeList.hidden && event.key !== 'Escape') return;
+    const options = attendeeOptions();
+    if (event.key === 'ArrowDown' && options.length) {
+      event.preventDefault();
+      highlightAttendee(attendeeActive + 1);
+    } else if (event.key === 'ArrowUp' && options.length) {
+      event.preventDefault();
+      highlightAttendee(attendeeActive - 1);
+    } else if (event.key === 'Enter' && options.length) {
+      event.preventDefault();
+      chooseAttendee(options[attendeeActive >= 0 ? attendeeActive : 0].dataset.username);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      hideAttendees();
+    }
+  });
+
   document.getElementById('new-meeting').addEventListener('click', () => {
     if (!workspaceId()) { show('error', '请先选择工作区。'); return; }
     fill(null);
@@ -326,6 +461,8 @@ function mount() {
   });
 
   workspaceSelect.addEventListener('change', () => {
+    hideAttendees();
+    memberCache = {workspace: '', items: [], failed: false};
     current = null;
     actions = [];
     form.hidden = true;
