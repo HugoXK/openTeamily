@@ -59,6 +59,13 @@ All of these already exist in the pinned tree and are used by today's runtime im
   user's volume, e.g. for a `node:sqlite` file), `runtime()` → `Promise<{ rt, ctx }>` of the user's
   DS-Bot (the upstream `createRuntime` result and the DSH context with `sessions`, `llm`, `tools`,
   `schedule`, `skills`, …), `currentRuntime()`, `log()`.
+* Additive (B1): `runtime()` also carries runtime services from the image wrapper —
+  `chatTurn(conversationKey, text, requestId) → {text, sessionId, turnId}` (one native DS-Bot turn on a
+  per-conversation native session, serialized) and `mainBot() → botId`. Absent services mean the feature
+  must fail closed (e.g. `chat/runtime-unavailable`).
+* Additive (B1): `host.call(endpoint, payload)` calls another feature in-process; rejects with
+  `openteamily/not-found` if that feature is missing. Contracts used today: chat reads
+  `memory/pages → [{id, revision, title, body}]` (B3 owns it) and `personal/get`.
 * Features are discovered at start; a feature that throws while loading is skipped and logged, never
   breaking the core or other features. Core files (`index.js`, `src/*`) are owned by the skeleton stream;
   interface changes are noted here.
