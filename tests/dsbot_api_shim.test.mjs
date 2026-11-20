@@ -17,6 +17,8 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
     assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${rest}`, ORIGIN).feature, 'memory', rest);
   }
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/bogus`, ORIGIN), null);
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/search/messages?q=x`, ORIGIN).feature, 'search');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/search/resources?kind=links`, ORIGIN).feature, 'search');
   assert.equal(movedTarget('/v1/auth/session', ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations`, ORIGIN), null);
   assert.equal(movedTarget(`https://evil.example/v1/workspaces/${WS}/meetings`, ORIGIN), null);
