@@ -120,6 +120,7 @@ export function mountChatCalls(document, {request, context} = {}) {
     startVideo.disabled = false;
     close.textContent = '关闭';
     note(available ? `正在进行${typeLabel(available.kind)}，可以加入。` : '');
+    startAudio.focus();
   }
 
   function peerStatus(own) {
@@ -161,6 +162,20 @@ export function mountChatCalls(document, {request, context} = {}) {
     peer.earlyLocal.length = 0;
   }
 
+  function syncPlayback(own) {
+    if (active === own) play.hidden = ![...own.peers.values()].some(peer => peer.playbackBlocked);
+  }
+
+  async function playRemote(own, peer) {
+    try {
+      await peer.video.play();
+      peer.playbackBlocked = false;
+    } catch (error) {
+      if (error?.name === 'NotAllowedError') peer.playbackBlocked = true;
+    }
+    syncPlayback(own);
+  }
+
   function createPeer(own, item) {
     const connection = new view.RTCPeerConnection({iceServers: own.ice});
     const tile = document.createElement('div');
@@ -172,16 +187,21 @@ export function mountChatCalls(document, {request, context} = {}) {
     name.textContent = item.name;
     tile.append(video, name);
     peersNode.append(tile);
-    const peer = {id: item.id, tile, video, connection, outgoing: Promise.resolve(), localReady: false, earlyLocal: [], earlyRemote: []};
+    const peer = {id: item.id, tile, video, connection, outgoing: Promise.resolve(), localReady: false,
+      earlyLocal: [], earlyRemote: [], playbackBlocked: false};
     own.peers.set(item.id, peer);
+    video.addEventListener('playing', () => {
+      peer.playbackBlocked = false;
+      syncPlayback(own);
+    });
     connection.onconnectionstatechange = () => peerStatus(own);
     connection.ontrack = event => {
       if (active !== own) return;
       const stream = event.streams[0];
       if (!stream) return;
-      video.srcObject = stream;
+      if (video.srcObject !== stream) video.srcObject = stream;
       video.hidden = !stream.getVideoTracks().length;
-      video.play().catch(() => { if (active === own) play.hidden = false; });
+      void playRemote(own, peer);
     };
     connection.onicecandidate = event => {
       if (!event.candidate?.candidate || active !== own) return;
@@ -204,6 +224,7 @@ export function mountChatCalls(document, {request, context} = {}) {
       peer.tile.remove();
     }
     for (const item of call.peers) if (item.id !== own.id && !own.peers.has(item.id)) createPeer(own, item);
+    syncPlayback(own);
     peerStatus(own);
   }
 
@@ -345,9 +366,9 @@ export function mountChatCalls(document, {request, context} = {}) {
     camera.textContent = enabled ? '关闭摄像头' : '开启摄像头';
   });
   play.addEventListener('click', async () => {
-    if (!active) return;
-    await Promise.allSettled([...active.peers.values()].map(peer => peer.video.play()));
-    play.hidden = true;
+    const own = active;
+    if (!own) return;
+    await Promise.all([...own.peers.values()].filter(peer => peer.playbackBlocked).map(peer => playRemote(own, peer)));
   });
   view.addEventListener?.('pagehide', () => {
     const own = active;
@@ -361,6 +382,11 @@ export function mountChatCalls(document, {request, context} = {}) {
     }
     joining = null;
   });
-  view.addEventListener?.('pageshow', () => { watching = true; void refresh(); watch(); });
+  view.addEventListener?.('pageshow', () => {
+    watching = true;
+    if (dialog.open && !active && !joining) dialog.close();
+    void refresh();
+    watch();
+  });
   return {sync, refresh};
 }

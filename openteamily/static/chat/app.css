@@ -1737,7 +1737,14 @@ html[data-theme-resolved="dark"] position: absolute; right: .5rem; bottom: -.625
 #chat-call-dialog .actions { margin-top: .75rem; gap: .5rem; }
 #chat-call-dialog .actions button { min-height: 2.75rem; }
 #chat-call-choices button:last-child, #chat-call-join { background: var(--ot-accent); color: var(--ot-on-accent, white); border: 0; }
-#chat-call-controls:not([hidden]) ~ .actions button { color: var(--ot-danger); }
+#chat-call-footer { justify-content: flex-end; }
+#chat-call-controls:not([hidden]) + #chat-call-footer button {
+  background: var(--ot-danger);
+  color: white;
+  border: 0;
+  border-radius: 999px;
+  padding-inline: 1rem;
+}
 #chat-call-media { display: grid; gap: .5rem; margin-top: .75rem; }
 #chat-call-peers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr)); gap: .5rem; }
 #chat-call-local, #chat-call-peers > div {
