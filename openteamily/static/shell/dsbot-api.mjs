@@ -10,7 +10,8 @@ export const MOUNT = '/b';
 export const API_ROUTE = `${MOUNT}/api/openteamily`;
 
 // Legacy route -> feature that serves it inside DS-Bot. Streams add rows as
-// features move; a feature the DS-Bot does not have yet falls back to /v1.
+// features move; a moved feature the DS-Bot does not have fails closed instead
+// of executing the same request on the platform.
 export const MOVED = [
   [/^\/v1\/skills\/(?:catalog|bindings|installed|packages(?:\/import-[a-z0-9][a-z0-9-]{1,39}(?:\/(?:revoke|versions(?:\/[0-9.]+)?))?)?)$/, 'skills'],
   [/^\/v1\/skill-secrets$/, 'skill-secrets'],
@@ -123,7 +124,10 @@ export function install(win = globalThis.window) {
     });
     const result = await response.json();
     if (result && result.ok) return toResponse(result.value);
-    if (result && result.error && result.error.code === 'openteamily/not-found') return null;
+    if (result && result.error && result.error.code === 'openteamily/not-found') {
+      return new Response(JSON.stringify({ error: { code: 'moved_to_dsbot', message: 'This feature is not available in your DS-Bot' } }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } });
+    }
     return new Response(JSON.stringify({ error: { code: 'unavailable', message: (result && result.error && result.error.message) || 'DS-Bot request failed' } }),
       { status: 502, headers: { 'Content-Type': 'application/json' } });
   }
@@ -134,7 +138,7 @@ export function install(win = globalThis.window) {
     const method = init.method || (isRequest ? input.method : 'GET');
     const headers = init.headers || (isRequest ? input.headers : undefined);
     const body = init.body !== undefined ? init.body : (isRequest && method !== 'GET' ? await input.clone().text() : undefined);
-    return (await viaDsBot(target, method, headers, body)) || original(input, init);
+    return viaDsBot(target, method, headers, body);
   };
   win.document.addEventListener('click', async (event) => {
     const anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
@@ -142,7 +146,6 @@ export function install(win = globalThis.window) {
     if (!target) return;
     event.preventDefault();
     const response = await viaDsBot(target, 'GET');
-    if (!response) { win.location.assign(anchor.href); return; }
     const blob = await response.blob();
     const name = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '');
     const link = win.document.createElement('a');

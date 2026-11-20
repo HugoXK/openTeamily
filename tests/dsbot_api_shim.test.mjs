@@ -42,7 +42,7 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/composio/connections/${ID}/disconnect`, ORIGIN).feature, 'connectors');
   assert.equal(movedTarget(`/v1/mcp/servers/${ID}`, ORIGIN).feature, 'connectors');
   assert.equal(movedTarget('/v1/composio/callback', ORIGIN), null);
-  assert.equal(movedTarget('/v1/skill-secrets', ORIGIN), null);
+  assert.equal(movedTarget('/v1/skill-secrets', ORIGIN).feature, 'skill-secrets');
   assert.equal(movedTarget('/v1/onboarding/automations', ORIGIN), null);
   assert.equal(movedTarget(`https://evil.example/v1/workspaces/${WS}/meetings`, ORIGIN), null);
 });
@@ -65,11 +65,11 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget('/v1/discover/agents?q=x', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/me/works?tab=following', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/works/my-essay/engagement', ORIGIN).feature, 'discover');
-  // Workspace list/create and the platform team-create stay on the site.
+  // Workspace list/create and team creation go to the user's DS-Bot via Bot Social.
   assert.equal(movedTarget('/v1/auth/session', ORIGIN), null);
-  assert.equal(movedTarget('/v1/workspaces?limit=100', ORIGIN), null);
+  assert.equal(movedTarget('/v1/workspaces?limit=100', ORIGIN).feature, 'teams');
   assert.equal(movedTarget(`/v1/workspaces/${WS}`, ORIGIN), null);
-  assert.equal(movedTarget('/v1/teams', ORIGIN), null);
+  assert.equal(movedTarget('/v1/teams', ORIGIN).feature, 'teams');
 });
 
 test('the envelope carries method, path, body and idempotency key only', () => {
@@ -101,4 +101,41 @@ test('moved artifact routes go to the artifacts feature of the user\'s own DS-Bo
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/shares/${ID}/revoke`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/favorite`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/bogus`, ORIGIN), null);
+});
+
+test('a missing moved feature fails closed instead of falling back to /v1', async () => {
+  const calls = [];
+  const doc = { querySelector: () => ({}), addEventListener() {} };
+  const win = {
+    document: doc,
+    location: { origin: ORIGIN },
+    fetch: async (input) => {
+      calls.push(String(input));
+      return new Response(JSON.stringify({ ok: false, error: { code: 'openteamily/not-found', message: 'missing' } }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  };
+  install(win);
+  const response = await win.fetch('/v1/settings', { method: 'GET' });
+  assert.ok([502, 503].includes(response.status), `expected 502/503, got ${response.status}`);
+  assert.equal((await response.json()).error.code, 'moved_to_dsbot');
+  assert.deepEqual(calls, ['/b/api/openteamily']);
+});
+
+test('non-moved URLs still fall back to the platform request', async () => {
+  const calls = [];
+  const doc = { querySelector: () => ({}), addEventListener() {} };
+  const win = {
+    document: doc,
+    location: { origin: ORIGIN },
+    fetch: async (input) => {
+      calls.push(String(input));
+      return new Response('platform', { status: 200 });
+    },
+  };
+  install(win);
+  const response = await win.fetch('/v1/auth/session', { method: 'GET' });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), 'platform');
+  assert.deepEqual(calls, ['/v1/auth/session']);
 });
