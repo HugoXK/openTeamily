@@ -94,6 +94,36 @@ MOVED_API_LOCATIONS = (
 )
 
 
+
+def owner_dsbot_ready(db, owner_id):
+    """True when this account has a healthy published DS-Bot the edge can route to."""
+    if not owner_id:
+        return False
+    try:
+        row = db.execute(
+            "SELECT 1 FROM instances i JOIN dsbot_upstreams u ON u.instance_id=i.id "
+            "WHERE i.owner_id=? AND i.desired='running' AND i.observed='running' AND i.health='healthy' "
+            "AND i.blocked=0 AND i.observed_revision=i.revision LIMIT 1",
+            (owner_id,)).fetchone()
+    except Exception:
+        return False
+    return row is not None
+
+
+def workspace_moved_to_dsbot(db, workspace_id, page, routes=None):
+    """True when `page` is in moved_pages and the workspace owner has a live DS-Bot.
+
+    Used by the legacy server scheduler so it does not fire the same automation
+    the owner's DS-Bot clock will run. Workspaces whose owner has no runtime
+    keep the server scheduler until one is published.
+    """
+    routes = routes or load_routes()
+    if page not in routes['moved_pages']:
+        return False
+    row = db.execute('SELECT owner_id FROM workspaces WHERE id=?', (workspace_id,)).fetchone()
+    return bool(row) and owner_dsbot_ready(db, row[0])
+
+
 def moved_api(path):
     """Return the plugin feature that serves this /v1 path, or None."""
     if not isinstance(path, str) or not path.startswith('/v1/') or len(path) > 512:

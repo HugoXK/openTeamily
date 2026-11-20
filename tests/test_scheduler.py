@@ -136,5 +136,38 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(fired[0]['due_at'], DUE)
 
 
+
+    def test_server_scheduler_stops_for_owners_with_a_live_dsbot(self):
+        """Phase D: once /automations/ is served by the owner's DS-Bot, the
+        server clock must not fire that workspace (both clocks would run)."""
+        from openteamily import dsbot_gateway as gw
+        from openteamily import lifecycle
+        self.create()
+        # Alice's workspace is due; without a published DS-Bot the server still fires.
+        fired = Scheduler(self.store, self.backend, clock=lambda: NOW).tick_all(NOW)
+        self.assertEqual(len(fired), 1)
+        # Publish a healthy DS-Bot for Alice. The next tick must skip her workspace.
+        with self.store.transaction() as db:
+            gw.ensure_schema(db)
+            db.executescript(lifecycle.SCHEMA)
+            owner = db.execute("SELECT id FROM users WHERE username='alice'").fetchone()[0]
+            inst = 'd' * 32
+            # Reuse Alice's workspace; one running instance is enough.
+            try:
+                db.execute(
+                    "INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,desired,revision,"
+                    "operation_id,operation_type,observed,observed_revision,health,process_ref,error_code,blocked,create_key,created) "
+                    "VALUES(?,?,?,'p','compose','img','vol','running',1,'op','create','running',1,'healthy',NULL,NULL,0,'k',?)",
+                    (inst, self.wid, owner, NOW))
+            except Exception:
+                db.execute("UPDATE instances SET owner_id=?, desired='running', observed='running', health='healthy', "
+                           "blocked=0, observed_revision=revision WHERE workspace_id=?", (owner, self.wid))
+                inst = db.execute("SELECT id FROM instances WHERE workspace_id=?", (self.wid,)).fetchone()[0]
+            gw.record_upstream(db, inst, '172.30.0.11:8080', 'dsh-auth-172.30.0.11:8080=' + 'S' * 20, NOW)
+        again = Scheduler(self.store, self.backend, clock=lambda: NOW).tick_all(NOW)
+        self.assertEqual(again, [], 'server scheduler must not fire after the owner\'s DS-Bot is live')
+        # Reconcile is also skipped (no queued-run completion on the server).
+        self.assertEqual(Scheduler(self.store, self.backend, clock=lambda: NOW).reconcile_all(NOW), [])
+
 if __name__ == '__main__':
     unittest.main()
