@@ -41,6 +41,7 @@ user's volume.
 | members | `GET /v1/ot/teams/:id/members`, `PATCH/DELETE /v1/ot/teams/:id/members/:handle` | `members/*` |
 | invites, join requests | `POST/GET /v1/ot/teams/:id/invites`, `PATCH …/invites/:invite`, `POST /v1/ot/invites/preview`, `POST /v1/ot/invites/accept`, `GET/POST /v1/ot/teams/:id/join-requests[/:request]`, `GET /v1/ot/join-requests/mine` | `invites/*` |
 | messenger, group agents | `POST/GET /v1/ot/conversations`, `GET/PATCH /v1/ot/conversations/:id`, `POST/DELETE …/members[/:handle]`, `GET/POST …/messages`, `POST …/read`, `PATCH/DELETE /v1/ot/messages/:id`, `POST …/reactions`, `POST …/pin`, `PUT/DELETE …/agents/:agent`, `GET /v1/ot/agent-inbox`, `POST …/agent-messages` | `messenger/*` |
+| team-run shares | `PUT/GET /v1/ot/teams/:id/shared-runs`, `GET/DELETE /v1/ot/teams/:id/shared-runs/:share` | `shares/*` |
 | discover, follows | `PUT /v1/ot/listings`, `DELETE /v1/ot/listings/:id`, `GET /v1/ot/listings/mine`, `GET /v1/ot/discover[?kind,tab,q,category,work_kind,creator,before]`, `GET /v1/ot/discover/:slug`, `POST /v1/ot/listings/:id/like`, `POST /v1/ot/listings/:id/collect`, `POST/GET /v1/ot/follows` | `discover/*` |
 
 Group agents run in their owner's DS-Bot: the owner's plugin polls `agent-inbox` (mentions, or every member message when auto-reply is on), runs one native DS-Bot turn and posts the reply as the agent. Automatic replies are capped at 3 per hour per group (#346). DMs and groups are limited to members who share a team.
@@ -58,3 +59,5 @@ throwaway CA) and two DS-Bot runtimes, each with only the manager-shaped config 
 user's `@openteamily/web` plugin: team invite, a DM, a group mention, and a Discover publish/follow.
 Connector tokens stay on each volume and must not appear in any container log.
 
+
+Public agent homepages are Discover listings of kind `agent`. The owner's DS-Bot publishes only the public projection (name, summary, category, quick starts) via `homepages/*`; instructions never leave that DS-Bot.
