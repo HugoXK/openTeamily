@@ -11,8 +11,11 @@ OFFICE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/'
 TYPES = 'http://schemas.openxmlformats.org/package/2006/content-types'
 WORD = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 SHEET = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+DRAW = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+PML = 'http://schemas.openxmlformats.org/presentationml/2006/main'
 MIME = {'docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','pdf':'application/pdf'}
+        'xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'pptx':'application/vnd.openxmlformats-officedocument.presentationml.presentation','pdf':'application/pdf'}
 
 
 def clean(text):
@@ -109,6 +112,73 @@ def pdf(title,text):
     return bytes(output)
 
 
+
+
+def pptx(title, slides):
+    """Actual PresentationML package: one slide per deck entry, title plus bullets.
+
+    No macros, charts, media, animations, or external relationships. This is a
+    structured text deck, not a rendered thumbnail or a full Office editor.
+    """
+    deck = list(slides or [])
+    if not deck:
+        deck = [{'title': title or '幻灯片', 'bullets': []}]
+    if len(deck) > 30:
+        raise ValueError('Presentation exceeds 30 slides')
+    def tx(text, size, bold=False):
+        run = '<a:r><a:rPr lang="zh-CN" sz="'+str(size)+'"'+(' b="1"' if bold else '')+' dirty="0"/><a:t>'+escape(clean(text))+'</a:t></a:r>'
+        return '<a:p><a:pPr algn="l"/>'+run+'<a:endParaRPr lang="zh-CN" sz="'+str(size)+'"/></a:p>'
+    def shape(ident, name, x, y, cx, cy, paragraphs):
+        return ('<p:sp><p:nvSpPr><p:cNvPr id="'+str(ident)+'" name="'+name+'"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
+                '<p:spPr><a:xfrm><a:off x="'+str(x)+'" y="'+str(y)+'"/><a:ext cx="'+str(cx)+'" cy="'+str(cy)+'"/></a:xfrm>'
+                '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>'
+                '<p:txBody><a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0"/><a:lstStyle/>'+paragraphs+'</p:txBody></p:sp>')
+    def slide_xml(entry):
+        heading = entry.get('title') or title or ''
+        bullets = [item for item in (entry.get('bullets') or []) if str(item).strip()]
+        body = ''.join(tx(('• '+item) if item else '', 2000) for item in bullets) or tx('', 2000)
+        tree = ('<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>'
+                '<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>'
+                + shape(2, 'Title', 457200, 274638, 8229600, 1143000, tx(heading, 3200, True))
+                + shape(3, 'Content', 457200, 1600200, 8229600, 3143250, body))
+        return XML+f'<p:sld xmlns:a="{DRAW}" xmlns:r="{OFFICE[:-1]}" xmlns:p="{PML}"><p:cSld><p:spTree>'+tree+f'</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>'
+    theme = XML+f'<a:theme xmlns:a="{DRAW}" name="OpenTeamily"><a:themeElements><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="1F4E79"/></a:dk2><a:lt2><a:srgbClr val="EEECE1"/></a:lt2><a:accent1><a:srgbClr val="5B9BD5"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2><a:accent3><a:srgbClr val="A5A5A5"/></a:accent3><a:accent4><a:srgbClr val="FFC000"/></a:accent4><a:accent5><a:srgbClr val="4472C4"/></a:accent5><a:accent6><a:srgbClr val="70AD47"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Office"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="6350" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln><a:ln w="12700" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln><a:ln w="19050" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>'
+    layout = XML+f'<p:sldLayout xmlns:a="{DRAW}" xmlns:r="{OFFICE[:-1]}" xmlns:p="{PML}" type="blank" preserve="1"><p:cSld name="Blank"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>'
+    master = XML+f'<p:sldMaster xmlns:a="{DRAW}" xmlns:r="{OFFICE[:-1]}" xmlns:p="{PML}"><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="lt1"/></p:bgRef></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst></p:sldMaster>'
+    parts = {
+        'ppt/theme/theme1.xml': theme,
+        'ppt/slideLayouts/slideLayout1.xml': layout,
+        'ppt/slideLayouts/_rels/slideLayout1.xml.rels': XML+f'<Relationships xmlns="{REL}"><Relationship Id="rId1" Type="{OFFICE}slideMaster" Target="../slideMasters/slideMaster1.xml"/></Relationships>',
+        'ppt/slideMasters/slideMaster1.xml': master,
+        'ppt/slideMasters/_rels/slideMaster1.xml.rels': XML+f'<Relationships xmlns="{REL}"><Relationship Id="rId1" Type="{OFFICE}slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="{OFFICE}theme" Target="../theme/theme1.xml"/></Relationships>',
+        'ppt/presProps.xml': XML+f'<p:presentationPr xmlns:p="{PML}"/>',
+        'ppt/viewProps.xml': XML+f'<p:viewPr xmlns:p="{PML}"><p:normalViewPr><p:restoredLeft sz="15620"/><p:restoredTop sz="94660"/></p:normalViewPr></p:viewPr>',
+        'ppt/tableStyles.xml': XML+f'<a:tblStyleLst xmlns:a="{DRAW}" def="{{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}}"/>',
+    }
+    slide_rels = []
+    types = {
+        'ppt/presentation.xml': 'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml',
+        'ppt/slideMasters/slideMaster1.xml': 'application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml',
+        'ppt/slideLayouts/slideLayout1.xml': 'application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml',
+        'ppt/theme/theme1.xml': 'application/vnd.openxmlformats-officedocument.theme+xml',
+        'ppt/presProps.xml': 'application/vnd.openxmlformats-officedocument.presentationml.presProps+xml',
+        'ppt/viewProps.xml': 'application/vnd.openxmlformats-officedocument.presentationml.viewProps+xml',
+        'ppt/tableStyles.xml': 'application/vnd.openxmlformats-officedocument.presentationml.tableStyles+xml',
+    }
+    for index, entry in enumerate(deck, 1):
+        name = f'ppt/slides/slide{index}.xml'
+        parts[name] = slide_xml(entry)
+        parts[f'ppt/slides/_rels/slide{index}.xml.rels'] = XML+f'<Relationships xmlns="{REL}"><Relationship Id="rId1" Type="{OFFICE}slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>'
+        types[name] = 'application/vnd.openxmlformats-officedocument.presentationml.slide+xml'
+        slide_rels.append(f'<Relationship Id="rId{index}" Type="{OFFICE}slide" Target="slides/slide{index}.xml"/>')
+    # rId after slides: master, presProps, viewProps, tableStyles
+    base = len(deck)
+    presentation = XML+f'<p:presentation xmlns:a="{DRAW}" xmlns:r="{OFFICE[:-1]}" xmlns:p="{PML}"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId{base+1}"/></p:sldMasterIdLst><p:sldIdLst>'+''.join(f'<p:sldId id="{255+i}" r:id="rId{i}"/>' for i in range(1, len(deck)+1))+'</p:sldIdLst><p:sldSz cx="9144000" cy="5143500" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>'
+    parts['ppt/presentation.xml'] = presentation
+    parts['ppt/_rels/presentation.xml.rels'] = XML+f'<Relationships xmlns="{REL}">'+''.join(slide_rels)+f'<Relationship Id="rId{base+1}" Type="{OFFICE}slideMaster" Target="slideMasters/slideMaster1.xml"/><Relationship Id="rId{base+2}" Type="{OFFICE}presProps" Target="presProps.xml"/><Relationship Id="rId{base+3}" Type="{OFFICE}viewProps" Target="viewProps.xml"/><Relationship Id="rId{base+4}" Type="{OFFICE}tableStyles" Target="tableStyles.xml"/></Relationships>'
+    return zip_parts(parts, 'ppt/presentation.xml', types)
+
+
 def structured_rows(title,dashboard):
     rows=[[title]]
     for widget in (dashboard or {}).get('widgets',[]):
@@ -131,6 +201,7 @@ def export(row,format,from_version=False):
         if structured is not None:kind=detected
     if format=='docx' and kind=='document':payload=docx(row['title'],row['body'])
     elif format=='xlsx' and kind=='dashboard':payload=xlsx(structured_rows(row['title'],structured))
+    elif format=='pptx' and kind=='slides':payload=pptx(row['title'], (structured or {}).get('slides',[]))
     elif format=='pdf' and kind in ('document','slides','dashboard'):
         text=row['body']
         if kind=='slides':text='\n\n'.join(s.get('title','')+'\n'+'\n'.join(s.get('bullets',[])) for s in (structured or {}).get('slides',[]))

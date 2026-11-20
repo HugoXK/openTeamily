@@ -6,6 +6,7 @@ action items. It does not record audio/video, transcribe, diarize, or dispatch
 action items to agents. The existing /space meeting chrome is reused, not
 reimplemented.
 """
+from datetime import datetime, timezone
 import json
 import re
 
@@ -121,6 +122,37 @@ def view(row, include_body=True):
         data['transcript'] = row['transcript']
         data['action_items'] = actions
     return data
+
+
+def markdown(row):
+    """A portable Markdown export of one stored meeting; no hidden fields."""
+    data = view(row)
+    started = datetime.fromtimestamp(data['started_at'], tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+    lines = [
+        '# ' + data['title'],
+        '',
+        '- 开始时间：' + started,
+        '- 参会人：' + ('、'.join(data['attendees']) if data['attendees'] else '未填写'),
+        '- 行动项：' + str(data['done_count']) + '/' + str(data['action_count']) + ' 已完成',
+        '',
+        '## 摘要',
+        '',
+        data['summary'] or '（未填写）',
+        '',
+        '## 转写 / 正文',
+        '',
+        data['transcript'] or '（未填写）',
+        '',
+        '## 行动项',
+        '',
+    ]
+    if data['action_items']:
+        for item in data['action_items']:
+            owner = '（' + item['owner'] + '）' if item.get('owner') else ''
+            lines.append('- [' + ('x' if item.get('done') else ' ') + '] ' + item['text'] + owner)
+    else:
+        lines.append('（没有行动项）')
+    return '\n'.join(lines) + '\n'
 
 
 def load(db, workspace_id, meeting_id):

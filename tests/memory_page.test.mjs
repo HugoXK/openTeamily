@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {mount} from '../openteamily/static/memory/app.mjs';
 import test from 'node:test';
-import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, fillGraphHoverCard, formatTopics, applyMarkdown, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, listQuery, matchingMemoryPages, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
+import {actionQuery, applyDirectoryCollapsed, bindGraphNodeGestures, csrfCookie, directoryGroups, dueAtFromDate, dueDateValue, exportDownloadName, fillGraphHoverCard, formatTopics, applyMarkdown, graphHoverAllowed, graphLayout, graphPreviewModel, hideGraphHoverCard, listQuery, matchingMemoryPages, MEMORY_EMPTY_NO_MATCH, MEMORY_EMPTY_WORKSPACE, memoryPageFromSearch, memoryPageMeta, memoryPagePreview, memoryUpdatedLabel, parseTopics, queryForMemoryPage, showGraphHoverCard, topicTag} from '../openteamily/static/memory/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -387,14 +387,31 @@ const prefSettle = async (times = 8) => {
 };
 const prefJson = (status, body) => ({status, json: async () => body});
 
-function prefFetcher(calls) {
+function prefFetcher(calls, store = {items: []}) {
   return async (path, options = {}) => {
-    calls.push({path, method: options.method || 'GET'});
+    const method = options.method || 'GET';
+    calls.push({path, method});
     if (path === '/v1/auth/session') return prefJson(200, {user: {id: 'user-1', username: 'alice'}});
     if (path === '/v1/settings') return prefJson(404, {});
     if (path === '/v1/workspaces') return prefJson(200, {items: [{id: 'ws-1', name: 'Desk', owner_id: 'user-1'}]});
     if (path === '/v1/workspaces/ws-1/memory') return prefJson(200, {items: []});
     if (path === '/v1/workspaces/ws-1/memory/actions') return prefJson(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/memory/preferences') {
+      if (method === 'GET') return prefJson(200, {items: store.items});
+      const text = JSON.parse(options.body).text;
+      const known = store.items.find((item) => item.text === text);
+      if (known) return prefJson(200, {preference: known});
+      const preference = {id: 'pref-' + (store.items.length + 1), text, created: 1800000000};
+      store.items.push(preference);
+      return prefJson(201, {preference});
+    }
+    const removal = path.match(/^\/v1\/workspaces\/ws-1\/memory\/preferences\/([^/]+)\/remove$/);
+    if (removal) {
+      const index = store.items.findIndex((item) => item.id === removal[1]);
+      if (index < 0) return prefJson(404, {error: {code: 'not_found'}});
+      const [removed] = store.items.splice(index, 1);
+      return prefJson(200, {removed});
+    }
     if (path === '/v1/workspaces/ws-1/memory/graph') {
       return prefJson(200, {nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}});
     }
@@ -408,9 +425,10 @@ function prefFetcher(calls) {
 async function mountPreferences() {
   const {doc, el} = prefDocument();
   const calls = [];
-  await mount(doc, {fetcher: prefFetcher(calls)});
+  const store = {items: []};
+  await mount(doc, {fetcher: prefFetcher(calls, store)});
   await prefSettle();
-  return {doc, el, calls};
+  return {doc, el, calls, store};
 }
 
 test('the 偏好 block starts empty and says how to fill it', async () => {
@@ -419,6 +437,8 @@ test('the 偏好 block starts empty and says how to fill it', async () => {
   assert.equal(el('preferences-empty').hidden, false);
   assert.equal(el('preferences-empty').textContent, '还没有偏好，加一条试试');
   assert.equal(el('preference-list').children.length, 0);
+  // The list is read from the workspace store, not from page state.
+  assert.ok(calls.some((call) => call.method === 'GET' && call.path === '/v1/workspaces/ws-1/memory/preferences'));
   assert.deepEqual(calls.filter((call) => call.method !== 'GET'), []);
 });
 
@@ -426,6 +446,7 @@ test('adding a preference appends one row, clears the field and hides the empty 
   const {el, calls} = await mountPreferences();
   el('preference-input').value = '回复用中文';
   el('add-preference').click();
+  await prefSettle();
   assert.equal(el('preference-list').children.length, 1);
   const row = el('preference-list').children[0];
   assert.equal(row.children[0].textContent, '回复用中文');
@@ -433,13 +454,15 @@ test('adding a preference appends one row, clears the field and hides the empty 
   assert.equal(el('preferences-empty').hidden, true);
   assert.equal(el('preference-input').value, '');
   assert.equal(el('preference-status').textContent, '已添加偏好。');
-  assert.deepEqual(calls.filter((call) => call.method !== 'GET'), []);
+  assert.ok(calls.some((call) => call.method === 'POST' &&
+    call.path === '/v1/workspaces/ws-1/memory/preferences'));
 });
 
 test('an empty preference is not added and the status line says why', async () => {
   const {el} = await mountPreferences();
   el('preference-input').value = '   ';
   el('add-preference').click();
+  await prefSettle();
   assert.equal(el('preference-list').children.length, 0);
   assert.equal(el('preferences-empty').hidden, false);
   assert.equal(el('preference-status').textContent, '请先写一条偏好。');
@@ -450,17 +473,21 @@ test('deleting removes only that preference and brings the empty state back', as
   for (const text of ['回复用中文', '会议纪要控制在 200 字']) {
     el('preference-input').value = text;
     el('add-preference').click();
+    await prefSettle();
   }
   assert.equal(el('preference-list').children.length, 2);
   el('preference-list').children[0].children[1].click();
+  await prefSettle();
   assert.equal(el('preference-list').children.length, 1);
   assert.equal(el('preference-list').children[0].children[0].textContent, '会议纪要控制在 200 字');
   assert.equal(el('preferences-empty').hidden, true);
   el('preference-list').children[0].children[1].click();
+  await prefSettle();
   assert.equal(el('preference-list').children.length, 0);
   assert.equal(el('preferences-empty').hidden, false);
   assert.equal(el('preference-status').textContent, '已删除偏好。');
-  assert.deepEqual(calls.filter((call) => call.method !== 'GET'), []);
+  assert.equal(calls.filter((call) => call.method === 'POST' &&
+    call.path.endsWith('/remove')).length, 2);
 });
 
 test('applyMarkdown wraps or prefixes the selected textarea text', () => {
@@ -592,6 +619,12 @@ class MemoryNode {
   removeAttribute(name) { delete this.attributes[name]; }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
   focus() { this.focused = true; }
+  click() { return this.dispatch('click'); }
+  remove() {
+    if (!this.parent) return;
+    this.parent.children = this.parent.children.filter((child) => child !== this);
+    this.parent = null;
+  }
   reset() { this.resetCount = (this.resetCount || 0) + 1; }
   querySelector() { return null; }
   querySelectorAll() { return []; }
@@ -663,6 +696,8 @@ function memoryPage(id, title) {
   };
 }
 
+const exportBody = '---\ntitle: "项目简报"\nrevision: 1\n---\n\n正文';
+
 function memoryFetcher() {
   const requests = [];
   const pages = {m1: memoryPage('m1', '项目简报'), m2: memoryPage('m2', '运维手册')};
@@ -690,6 +725,8 @@ function memoryFetcher() {
     if (graphPath) return jsonResponse(200, graph);
     const oneAction = /^\/v1\/workspaces\/(ws[12])\/memory\/actions\/([^/]+)$/.exec(path);
     if (oneAction) return jsonResponse(200, {action});
+    const exportPage = /^\/v1\/workspaces\/(ws[12])\/memory\/([^/]+)\/export$/.exec(path);
+    if (exportPage) return {status: 200, json: async () => ({}), text: async () => exportBody};
     const removePage = /^\/v1\/workspaces\/(ws[12])\/memory\/([^/]+)\/remove$/.exec(path);
     if (removePage && method === 'POST') return jsonResponse(200, {});
     const removeAction = /^\/v1\/workspaces\/(ws[12])\/memory\/actions\/([^/]+)\/remove$/.exec(path);
@@ -820,4 +857,103 @@ test('deleting a next action asks first and only confirms the captured action', 
   assert.deepEqual(posted(), ['POST /v1/workspaces/ws1/memory/actions/a1/remove']);
   assert.equal(el('status').textContent, '已删除。');
   assert.equal(el('action-delete-confirm').hidden, true);
+});
+
+// --- The memory page exports the saved page as a Markdown file instead of
+// only showing the text on screen. ---
+
+test('exportDownloadName keeps a readable file name and never returns a path', () => {
+  assert.equal(exportDownloadName('项目简报'), '项目简报.md');
+  assert.equal(exportDownloadName('  a/b:c*?"<>|  '), 'a-b-c.md');
+  assert.equal(exportDownloadName(''), '记忆页.md');
+  assert.equal(exportDownloadName('x'.repeat(80)), `${'x'.repeat(60)}.md`);
+});
+
+test('the memory editor ships a disabled Markdown export control until a page is open', () => {
+  assert.match(memoryHtml, /<button type="button" id="page-export" disabled title="打开一页记忆后才能导出为 Markdown。">导出<\/button>/);
+  assert.match(memoryHtml, /<p id="page-export-status" class="note editor-export-status" hidden><\/p>/);
+});
+
+test('exporting downloads the saved page from its export route and names the file after the title', async () => {
+  const savedUrl = globalThis.URL;
+  const savedBlob = globalThis.Blob;
+  const savedDocument = globalThis.document;
+  const blobs = [];
+  const revoked = [];
+  const downloads = [];
+  globalThis.URL = {
+    createObjectURL(blob) { blobs.push(blob); return 'blob:export'; },
+    revokeObjectURL(url) { revoked.push(url); },
+  };
+  globalThis.Blob = class {
+    constructor(parts, options) { this.parts = parts; this.type = options && options.type; }
+  };
+  const {doc, el} = fakeMemoryDocument(memoryHtml);
+  const {fetcher, requests} = memoryFetcher();
+  const append = doc.body.appendChild.bind(doc.body);
+  doc.body.appendChild = (node) => {
+    if (node.tagName === 'A') downloads.push(node);
+    return append(node);
+  };
+  globalThis.document = doc;
+  try {
+    mount(doc, {fetcher});
+    for (let round = 0; round < 12; round += 1) await memoryTick();
+    assert.equal(el('page-export').disabled, true, 'nothing to export before a page is open');
+    await el('memory-list').children[0].children[0].dispatch('click');
+    for (let round = 0; round < 6; round += 1) await memoryTick();
+    assert.equal(el('page-export').disabled, false, 'opening a page enables the export');
+
+    await el('page-export').dispatch('click');
+    for (let round = 0; round < 8; round += 1) await memoryTick();
+
+    assert.deepEqual(
+      requests.filter((line) => line.endsWith('/export')),
+      ['GET /v1/workspaces/ws1/memory/m1/export'],
+      'the export reads the saved page from its own route',
+    );
+    assert.equal(blobs.length, 1);
+    assert.equal(blobs[0].type, 'text/markdown;charset=utf-8');
+    assert.deepEqual(blobs[0].parts, ['---\ntitle: "项目简报"\nrevision: 1\n---\n\n正文']);
+    assert.equal(downloads.length, 1);
+    assert.equal(downloads[0].href, 'blob:export');
+    assert.equal(downloads[0].download, '项目简报.md');
+    assert.deepEqual(revoked, ['blob:export']);
+    assert.match(el('page-export-status').textContent, /已导出 项目简报\.md · 修订 1/);
+    assert.equal(el('page-export').disabled, false, 'the control returns after the download');
+  } finally {
+    globalThis.URL = savedUrl;
+    globalThis.Blob = savedBlob;
+    if (savedDocument === undefined) delete globalThis.document; else globalThis.document = savedDocument;
+  }
+});
+
+test('a failed export reports the server message and downloads nothing', async () => {
+  const savedUrl = globalThis.URL;
+  const savedDocument = globalThis.document;
+  const downloads = [];
+  globalThis.URL = {createObjectURL() { throw new Error('no download expected'); }, revokeObjectURL() {}};
+  const {doc, el} = fakeMemoryDocument(memoryHtml);
+  const {fetcher} = memoryFetcher();
+  const failing = async (path, options) => (path.endsWith('/export')
+    ? {status: 404, json: async () => ({error: {message: 'Memory page not found'}})}
+    : fetcher(path, options));
+  const append = doc.body.appendChild.bind(doc.body);
+  doc.body.appendChild = (node) => { downloads.push(node); return append(node); };
+  globalThis.document = doc;
+  try {
+    mount(doc, {fetcher: failing});
+    for (let round = 0; round < 12; round += 1) await memoryTick();
+    await el('memory-list').children[0].children[0].dispatch('click');
+    for (let round = 0; round < 6; round += 1) await memoryTick();
+    await el('page-export').dispatch('click');
+    for (let round = 0; round < 8; round += 1) await memoryTick();
+    assert.equal(el('status').textContent, 'Memory page not found');
+    assert.equal(el('status').dataset.kind, 'error');
+    assert.deepEqual(downloads, [], 'a refused export must not produce a file');
+    assert.equal(el('page-export').disabled, false, 'the control is usable again after a failure');
+  } finally {
+    globalThis.URL = savedUrl;
+    if (savedDocument === undefined) delete globalThis.document; else globalThis.document = savedDocument;
+  }
 });
