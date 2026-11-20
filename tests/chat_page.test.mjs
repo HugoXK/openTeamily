@@ -1002,6 +1002,56 @@ test('session filter selects only real unread social rows', async () => {
   } finally { restore(); }
 });
 
+test('the inbox filters personal agents and persists bulk-read and mute', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  const unread = new Set(['conv-1', 'conv-2']);
+  const writes = [];
+  let muted = false;
+  try {
+    await mount(doc, {fetcher: async (path, init) => {
+      if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}, agent: {id: 'personal'}}});
+      if (path.endsWith('/agents?limit=100')) return json(200, {items: [{id: 'personal', name: 'Personal'}]});
+      if (path.endsWith('/agents/personal/conversations?limit=100')) return json(200, {items: [{id: 'personal-chat'}]});
+      if (path.endsWith('/read')) {
+        const id = path.split('/').at(-2);
+        writes.push([id, JSON.parse(init.body)]);
+        unread.delete(id);
+        return json(200, {unread_count: 0});
+      }
+      if (path.endsWith('/conv-1/preferences')) {
+        muted = JSON.parse(init.body).muted;
+        return json(200, {muted});
+      }
+      const response = await original(path);
+      const data = await response.json();
+      if (path.endsWith('/social/conversations?limit=100')) return json(200, {
+        items: data.items.map(row => ({...row, unread_count: Number(unread.has(row.id)), muted: row.id === 'conv-1' && muted})),
+      });
+      if (path.endsWith('/conv-1')) return json(200, {...data, conversation: {...data.conversation, muted}});
+      return json(response.status, data);
+    }});
+    const filter = el('session-filter-value');
+    filter.value = 'personal';
+    await fire(filter, 'change');
+    assert.deepEqual(sessionRows(el).map(row => row.dataset.conversation), ['personal-chat']);
+    assert.equal(el('conversation-heading').textContent, '对话 · 1');
+    filter.value = 'all';
+    await fire(filter, 'change');
+    assert.equal(el('conversations-read-all').hidden, false);
+    await fire(el('conversations-read-all'), 'click');
+    assert.deepEqual(writes, [['conv-1', {}], ['conv-2', {}]]);
+    assert.equal(el('conversations-read-all').hidden, true);
+    const row = sessionRows(el).find(item => item.dataset.conversation === 'conv-1');
+    await fire(el('conversation-list'), 'click', {target: row});
+    await fire(el('mute-conversation'), 'click');
+    assert.equal(muted, true);
+    assert.equal(el('mute-conversation').getAttribute('aria-pressed'), 'true');
+    assert.match(sessionRows(el).find(item => item.dataset.conversation === 'conv-1').getAttribute('aria-label'), /免打扰/);
+  } finally { restore(); }
+});
+
 test('independent conversation search uses current id and pages without opening sidebar search', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
@@ -1170,7 +1220,9 @@ test('mention notifications show a badge, open the conversation and mark read', 
   const inbox = () => ({unread_count: unread, limit: 100, items: [{
     id: 'n'.repeat(32), kind: 'mention', conversation_id: 'conv-1', conversation_kind: 'group',
     conversation_title: '项目群', message_id: 'm-1', actor_username: 'bob', excerpt: '@alice 看一下',
-    created: 30, read: unread === 0}]});
+    created: 30, read: unread === 0}, {
+    id: 'o'.repeat(32), kind: 'automation_reminder', title: '提醒', created: 20, read: true,
+  }]});
   try {
     await mount(doc, {fetcher: async (path, init = {}) => {
       if (path === '/v1/workspaces/ws-1/notifications') return json(200, inbox());
@@ -1186,6 +1238,12 @@ test('mention notifications show a badge, open the conversation and mark read', 
     await fire(el('notifications-toggle'), 'click');
     await settle();
     assert.equal(el('notifications-panel').hidden, false);
+    assert.equal(el('notification-list').children.length, 2);
+    el('notifications-kind').value = 'mention';
+    await fire(el('notifications-kind'), 'change');
+    el('notifications-unread').checked = true;
+    await fire(el('notifications-unread'), 'change');
+    assert.equal(el('notification-list').children.length, 1);
     const item = el('notification-list').children[0] && el('notification-list').children[0].children[0];
     assert.ok(item, 'the mention is listed');
     assert.equal(item.children[0].textContent, 'bob 在「项目群」提及了你');
@@ -1195,6 +1253,7 @@ test('mention notifications show a badge, open the conversation and mark read', 
     assert.deepEqual(posts, [{notification_id: 'n'.repeat(32)}]);
     assert.equal(el('notifications-panel').hidden, true);
     assert.equal(el('notification-count').hidden, true);
+    assert.equal(el('notifications-empty').textContent, '暂无未读提及。');
   } finally { restore(); }
 });
 

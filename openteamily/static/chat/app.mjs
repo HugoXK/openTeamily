@@ -45,6 +45,7 @@ export function mergeSessions(agentRows, socialRows, currentUserId) {
       id: row.id,
       unread_count: Number(row.unread_count) || 0,
       pinned: Boolean(row.pinned),
+      muted: Boolean(row.muted),
       kind: row.kind,
       members: row.members,
       title: conversationLabel(row, currentUserId),
@@ -524,6 +525,10 @@ export function notificationSummary(item) {
     const author = item.actor_username || '你关注的作者';
     return item.title ? `${author} 发布了新作品「${item.title}」` : '你关注的作者发布了新作品';
   }
+  if (item.kind === 'messenger.mention') {
+    const author = item.by?.display_name || item.by?.handle || '成员';
+    return `${author} 提及了你`;
+  }
   const where = item.conversation_kind === 'dm' ? '单聊' : (item.conversation_title || '群聊');
   if (item.kind === 'automation_reminder') {
     return `提醒到点：${item.title || '回看一条消息'}`;
@@ -850,18 +855,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (text) document.getElementById('conversations-empty').hidden = true;
   }
 
+  let markingConversationsRead = false;
+
   function renderSessions() {
     const list = document.getElementById('conversation-list');
     list.replaceChildren();
-    document.getElementById('conversation-heading').textContent = '对话 · ' + sessions.length;
     const filterNode = document.getElementById('session-filter-value');
     const filter = (filterNode && filterNode.value) || 'all';
     const visible = sessions.filter(item => filter === 'all'
+      || (filter === 'agent' && item.source === 'agent')
+      || (filter === 'personal' && item.source === 'agent' && item.agent_id === personalAgentId)
       || (filter === 'pinned' && item.pinned)
       || (filter === 'unread' && item.unread_count > 0)
       || (filter === 'read' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
-    document.getElementById('conversations-empty').hidden = Boolean(sessionsStatus) || visible.length > 0;
+    document.getElementById('conversation-heading').textContent = '对话 · ' + visible.length;
+    const empty = document.getElementById('conversations-empty');
+    empty.hidden = Boolean(sessionsStatus) || visible.length > 0;
+    if (!empty.hidden) empty.textContent = filter === 'all'
+      ? '还没有对话。用右上角的 + 新建群组或前往智能体目录。' : '当前筛选下没有对话。';
+    const readAll = document.getElementById('conversations-read-all');
+    if (readAll) {
+      readAll.hidden = !sessions.some(item => item.source === 'social' && item.unread_count > 0);
+      readAll.disabled = markingConversationsRead;
+    }
     let lastGroup = '';
     for (const session of groupSessionsForDisplay(visible)) {
       const li = document.createElement('li');
@@ -896,6 +913,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.textContent = formatSessionTime(session.updated);
       time.title = formatTime(session.updated);
       button.append(avatar, copy, time);
+      if (session.muted) button.classList.add('is-muted');
       if (session.unread_count > 0) {
         const unread = document.createElement('span');
         unread.className = 'unread-badge';
@@ -908,7 +926,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (group !== lastGroup) {
         li.className = 'session-divider'; li.dataset.section = group; lastGroup = group;
       }
-      button.setAttribute('aria-label', group + '：' + session.title);
+      button.setAttribute('aria-label', group + '：' + session.title + (session.muted ? '，免打扰' : ''));
       li.append(button);
       list.append(li);
     }
@@ -1403,15 +1421,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   let notificationSeq = 0;
+  let notificationSnapshot = null;
+  const notificationKind = document.getElementById('notifications-kind');
+  const notificationUnread = document.getElementById('notifications-unread');
+
   function renderNotifications(body) {
     const badge = document.getElementById('notification-count');
     const toggle = document.getElementById('notifications-toggle');
     const text = notificationBadgeText(body.unread_count);
     if (badge) { badge.textContent = text; badge.hidden = !text; }
-    if (toggle) toggle.setAttribute('aria-label', text ? `通知，${body.unread_count} 条未读提及` : '通知');
+    if (toggle) toggle.setAttribute('aria-label', text ? `通知，${body.unread_count} 条未读` : '通知');
     const list = document.getElementById('notification-list');
     if (!list) return;
-    const items = body.items || [];
+    const mentionsOnly = notificationKind?.value === 'mention';
+    const items = (body.items || []).filter(item => (!mentionsOnly || item.kind === 'mention' || item.kind === 'messenger.mention')
+      && (!notificationUnread?.checked || !item.read));
     list.replaceChildren(...items.map(item => {
       const li = document.createElement('li');
       const link = item.kind === 'follow_work' && item.path;
@@ -1436,13 +1460,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         setNotificationsOpen(false);
         const target = notificationTarget(item);
         if (target) { globalThis.location.assign(target); return; }
-        await openSocialConversation(item.conversation_id);
+        if (item.conversation_id) {
+          await openSocialConversation(item.conversation_id);
+          if (item.message_id && currentSource === 'social' && currentConversation?.id === item.conversation_id) {
+            jumpToMessage(item.message_id, status);
+          }
+        }
         await loadNotifications();
       });
       li.append(button);
       return li;
     }));
-    const empty = document.getElementById('notifications-empty'); if (empty) empty.hidden = items.length > 0;
+    const empty = document.getElementById('notifications-empty');
+    if (empty) {
+      empty.hidden = items.length > 0;
+      empty.textContent = mentionsOnly
+        ? (notificationUnread?.checked ? '暂无未读提及。' : '暂无提及。')
+        : (notificationUnread?.checked ? '暂无未读通知。' : '暂无通知。');
+    }
     const all = document.getElementById('notifications-read-all'); if (all) all.disabled = !(body.unread_count > 0);
   }
 
@@ -1454,7 +1489,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     // Notifications are auxiliary: a failed fetch must never break the session list.
     try { result = await request('GET', `/v1/workspaces/${wid}/notifications`); } catch { return; }
     if (token !== notificationSeq || workspaceId() !== wid || result.status !== 200) return;
-    renderNotifications(result.body);
+    notificationSnapshot = result.body;
+    renderNotifications(notificationSnapshot);
   }
 
   // Live-ish delivery: poll the inbox while the tab is visible. No server push.
@@ -1665,6 +1701,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setGroupInfo(null);
     const pin = document.getElementById('pin-conversation');
     if (pin) pin.hidden = true;
+    syncMuteButton();
     const agent = agents.find(item => item.id === agentId);
     if (!agent) {
       show('error', '找不到这个智能体。');
@@ -1719,6 +1756,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentConversation = result.body.conversation;
     setSessionsOpen(false);
     const pin = document.getElementById('pin-conversation');
+    syncMuteButton(currentConversation);
     if (pin) { pin.hidden = false; pin.textContent = sessions.find(item => item.id === conversationId && item.pinned) ? '取消置顶' : '置顶会话'; }
     const agentNote = document.getElementById('social-agent-members');
     agentNote.textContent = groupAgentSummary(currentConversation);
@@ -1743,7 +1781,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const shown = result.body.items || [];
     if (currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
       const acknowledged = await request('POST', `${socialBase()}/${conversationId}/read`,
-        {message_id: shown[shown.length - 1].id});
+        Number.isSafeInteger(shown[shown.length - 1].seq)
+          ? {seq: shown[shown.length - 1].seq}
+          : {message_id: shown[shown.length - 1].id});
       if (acknowledged.status === 200) {
         const session = sessions.find(item => item.source === 'social' && item.id === conversationId);
         if (session) session.unread_count = acknowledged.body.unread_count;
@@ -2326,6 +2366,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     out.textContent = `邀请令牌只显示一次：${result.body.token}`;
   });
+  for (const control of [notificationKind, notificationUnread]) {
+    control?.addEventListener('change', () => {
+      if (notificationSnapshot) renderNotifications(notificationSnapshot);
+    });
+  }
   const notificationsToggle = document.getElementById('notifications-toggle');
   if (notificationsToggle) notificationsToggle.addEventListener('click', async () => {
     const panel = document.getElementById('notifications-panel');
@@ -2342,6 +2387,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadNotifications();
   });
   workspaceSelect.addEventListener('change', async () => {
+    notificationSnapshot = null;
+    renderNotifications({items: [], unread_count: 0});
     currentAgent = null;
     currentConversation = null;
     currentSource = 'agent';
@@ -2385,11 +2432,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   // One jump-and-highlight action for both message hits and attachment hits: a
   // search result never opens a second view, it scrolls the real message back in.
-  function jumpToMessage(messageId) {
+  function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status')) {
     const list = document.getElementById('message-list');
     const target = Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
     if (!target) {
-      document.getElementById('conversation-search-status').textContent = '这条消息不在当前已加载的消息窗口里，请加载更多消息后重试。';
+      if (notice) notice.textContent = '这条消息不在当前已加载的消息窗口里。';
       return;
     }
     target.scrollIntoView?.({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
@@ -2634,11 +2681,97 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     finally { attachmentInput.disabled = false; attachmentInput.value = ''; }
   });
   const filterButton = document.getElementById('session-filter');
-  if (filterButton) filterButton.addEventListener('click', () => {
-    const label = document.getElementById('session-filter-label'); if (label) label.hidden = !label.hidden;
-  });
+  const filterLabel = document.getElementById('session-filter-label');
   const filterValue = document.getElementById('session-filter-value');
-  if (filterValue) filterValue.addEventListener('change', renderSessions);
+  function setFilterOpen(open) {
+    if (!filterLabel || !filterButton) return;
+    filterLabel.hidden = !open;
+    filterButton.setAttribute('aria-expanded', String(open));
+    if (open) filterValue?.focus();
+    else filterButton.focus();
+  }
+  filterButton?.addEventListener('click', () => setFilterOpen(Boolean(filterLabel?.hidden)));
+  filterValue?.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setFilterOpen(false);
+    }
+  });
+  filterValue?.addEventListener('change', () => {
+    const name = filterValue.selectedOptions?.[0]?.textContent;
+    if (name) filterButton?.setAttribute('aria-label', '会话筛选：' + name);
+    setFilterOpen(false);
+    renderSessions();
+  });
+  document.getElementById('conversations-read-all')?.addEventListener('click', async () => {
+    if (markingConversationsRead) return;
+    const wid = workspaceId();
+    const unread = sessions.filter(item => item.source === 'social' && item.unread_count > 0);
+    if (!wid || !unread.length) return;
+    markingConversationsRead = true;
+    renderSessions();
+    try {
+      let updated = 0;
+      // Use the same per-conversation acknowledgement as opening a conversation.
+      // Small batches avoid flooding the user's runtime with simultaneous writes.
+      for (let index = 0; index < unread.length && workspaceId() === wid; index += 6) {
+        const batch = unread.slice(index, index + 6);
+        const results = await Promise.allSettled(batch.map(item =>
+          request('POST', `/v1/workspaces/${wid}/social/conversations/${item.id}/read`, {})));
+        updated += results.filter(result => result.status === 'fulfilled' && result.value.status === 200).length;
+      }
+      if (workspaceId() === wid) {
+        try { await loadSessions(); }
+        catch { show('error', '已提交已读状态，但无法刷新列表。'); return; }
+        if (workspaceId() === wid) show(updated === unread.length ? 'ok' : 'error',
+          updated === unread.length ? '已标记单聊和群聊为已读。' : '部分会话未能标记为已读，请重试。');
+      }
+    } finally {
+      markingConversationsRead = false;
+      renderSessions();
+    }
+  });
+  const muteButton = document.getElementById('mute-conversation');
+  const groupMute = document.getElementById('group-info-mute');
+  let savingMute = false;
+  function syncMuteButton(conversation) {
+    const muted = Boolean(conversation?.muted);
+    if (muteButton) {
+      muteButton.hidden = !conversation || conversation.kind === 'group';
+      muteButton.setAttribute('aria-pressed', String(muted));
+      muteButton.textContent = muted ? '取消免打扰' : '免打扰';
+    }
+    groupMute?.setAttribute('aria-checked', String(muted));
+  }
+  async function toggleMute() {
+    if (currentSource !== 'social' || !currentConversation || savingMute) return;
+    const conversation = currentConversation;
+    const wid = workspaceId();
+    savingMute = true;
+    if (muteButton) muteButton.disabled = true;
+    if (groupMute) groupMute.disabled = true;
+    try {
+      const result = await request('POST', `${socialBase()}/${conversation.id}/preferences`, {muted: !conversation.muted});
+      if (result.status !== 200) throw new Error('Mute preference unavailable');
+      if (workspaceId() !== wid) return;
+      const muted = Boolean(result.body.muted);
+      const row = sessions.find(item => item.source === 'social' && item.id === conversation.id);
+      if (row) row.muted = muted;
+      if (currentSource === 'social' && currentConversation?.id === conversation.id) {
+        currentConversation.muted = muted;
+        syncMuteButton(currentConversation);
+      }
+      renderSessions();
+    } catch {
+      if (workspaceId() === wid) show('error', '免打扰设置保存失败，请重试。');
+    } finally {
+      savingMute = false;
+      if (muteButton) muteButton.disabled = false;
+      if (groupMute) groupMute.disabled = false;
+    }
+  }
+  muteButton?.addEventListener('click', toggleMute);
+  groupMute?.addEventListener('click', toggleMute);
   const pinButton = document.getElementById('pin-conversation');
   if (pinButton) pinButton.addEventListener('click', async () => {
     if (currentSource !== 'social' || !currentConversation) return;

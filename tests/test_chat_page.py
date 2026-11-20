@@ -41,7 +41,7 @@ class ChatPageTests(unittest.TestCase):
         self.assertIn('id="session-filter"', html)
         self.assertLess(html.find('id="session-filter"'), html.find('id="session-search"'))
         self.assertLess(html.find('id="session-search"'), html.find('id="new-conversation"'))
-        self.assertIn('aria-label="筛选"', html)
+        self.assertIn('aria-label="会话筛选：全部"', html)
         self.assertIn('visually-hidden', html)
         self.assertIn('id="pinned-group" hidden', html)
         self.assertIn('未实现：邀请', html)

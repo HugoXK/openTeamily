@@ -258,7 +258,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const seq = body(req).seq === undefined ? conv.last_seq : Number(body(req).seq);
     assert(Number.isSafeInteger(seq) && seq >= 0, 400, "invalid_request", "seq must be a sequence number");
     ot.run("UPDATE ot_conversation_members SET read_seq = MAX(read_seq, ?) WHERE conversation_id = ? AND owner_id = ?", Math.min(seq, conv.last_seq), conv.id, me.ownerId);
-    return { read_seq: ot.get<any>("SELECT read_seq FROM ot_conversation_members WHERE conversation_id = ? AND owner_id = ?", conv.id, me.ownerId).read_seq };
+    const readSeq = ot.get<any>("SELECT read_seq FROM ot_conversation_members WHERE conversation_id = ? AND owner_id = ?", conv.id, me.ownerId).read_seq;
+    return { read_seq: readSeq, unread: Math.max(0, conv.last_seq - readSeq) };
   });
   const ownMessage = (id: string, ownerId: string) => {
     const m = ot.get<any>("SELECT * FROM ot_messages WHERE id = ?", id);

@@ -35,7 +35,11 @@ test("DMs only between teammates; one DM per pair; unread and read cursors", asy
   assert.equal((await A.ok("GET", "/v1/ot/conversations")).unread, 0);
   const page = await B.ok("GET", `/v1/ot/conversations/${dm.id}/messages`);
   assert.deepEqual(page.messages.map((m: any) => m.body), ["hello B"]);
-  await B.ok("POST", `/v1/ot/conversations/${dm.id}/read`, {});
+  await A.ok("POST", `/v1/ot/conversations/${dm.id}/messages`, { body: "arrived after the page loaded" });
+  const partial = await B.ok("POST", `/v1/ot/conversations/${dm.id}/read`, { seq: page.messages[0].seq });
+  assert.equal(partial.unread, 1);
+  const allRead = await B.ok("POST", `/v1/ot/conversations/${dm.id}/read`, {});
+  assert.equal(allRead.unread, 0);
   assert.equal((await B.ok("GET", "/v1/ot/conversations")).unread, 0);
   assert.equal((await X.call("GET", `/v1/ot/conversations/${dm.id}/messages`)).status, 404, "outsiders see nothing");
 
@@ -43,11 +47,11 @@ test("DMs only between teammates; one DM per pair; unread and read cursors", asy
   assert.equal((await B.call("POST", `/v1/ot/messages/${m1.id}/reactions`, { emoji: "💩" })).status, 400);
   assert.equal((await B.call("PATCH", `/v1/ot/messages/${m1.id}`, { body: "hijack" })).status, 403);
   await A.ok("PATCH", `/v1/ot/messages/${m1.id}`, { body: "hello again" });
-  const after1 = (await A.ok("GET", `/v1/ot/conversations/${dm.id}/messages`)).messages[0];
+  const after1 = (await A.ok("GET", `/v1/ot/conversations/${dm.id}/messages`)).messages.find((message: any) => message.id === m1.id);
   assert.equal(after1.body, "hello again");
   assert.equal(after1.reactions[0].count, 1);
   await A.ok("DELETE", `/v1/ot/messages/${m1.id}`);
-  assert.equal((await B.ok("GET", `/v1/ot/conversations/${dm.id}/messages`)).messages[0].retracted, true);
+  assert.equal((await B.ok("GET", `/v1/ot/conversations/${dm.id}/messages`)).messages.find((message: any) => message.id === m1.id).retracted, true);
 });
 
 test("groups: members, mentions notify, creator removes, members leave", async () => {

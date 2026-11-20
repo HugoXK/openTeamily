@@ -1785,3 +1785,31 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
 #due-reminders-list a { display: grid; gap: .1rem; color: var(--ot-ink); text-decoration: none; }
 #due-reminders-list a:hover, #due-reminders-list a:focus-visible { text-decoration: underline; }
 .due-reminders .note { display: block; font-size: .75rem; margin: .25rem 0 0; color: var(--ot-ink-soft, inherit); }
+
+.inbox-conversations-head, .inbox-notification-filters {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: .375rem;
+}
+.inbox-conversations-head > button {
+  margin-inline-end: .375rem;
+  padding: .25rem .5rem;
+  font-size: .75rem;
+}
+.inbox-notification-filters {
+  justify-content: flex-start;
+  padding-block: .375rem;
+  font-size: .75rem;
+}
+.inbox-notification-filters label {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+}
+.inbox-notification-filters select { font-size: inherit; }
+#conversation-list .is-muted .unread-badge {
+  background: var(--ot-surface-2);
+  color: var(--ot-muted);
+}

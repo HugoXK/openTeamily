@@ -107,6 +107,7 @@ function messageItem(row, me, env, workspaceId) {
   const agent = row.author_kind === 'agent' || author.kind === 'agent'
   return {
     id: row.id,
+    seq: row.seq,
     conversation_id: row.conversation_id,
     workspace_id: workspaceId,
     user_id: agent ? null : userIdOf(author, me, env),

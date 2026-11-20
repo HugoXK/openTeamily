@@ -1057,10 +1057,12 @@ class App:
             if method == 'POST':
                 self.body(env, [])
                 created, result = runtime.create(owner, match[1], env.get('HTTP_IDEMPOTENCY_KEY', ''),
-                                                 per_user=self.auto_provision.enabled)
-                return 201 if created else 200, self.with_model_api(match[1], result), []
+                                                 per_user=True)
+                return 201 if created else 200, self.with_model_api(result['instance']['workspace_id'], result), []
             limit, cursor, _ = self.pagination(query)
-            return 200, self.with_model_api(match[1], runtime.listing(owner, match[1], limit, cursor)), []
+            listed = runtime.listing(owner, match[1], limit, cursor)
+            runtime_workspace = listed['items'][0]['workspace_id'] if listed['items'] else match[1]
+            return 200, self.with_model_api(runtime_workspace, listed), []
         match = re.fullmatch(r'/v1/jobs/([0-9a-f]{32})', path)
         if match and method == 'GET' and not query:
             return 200, {'job': runtime.get_job(owner, match[1])}, []
