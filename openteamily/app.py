@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
+from . import skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams, skill_installs
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -476,6 +476,8 @@ class App:
             refuse(405, 'method', 'Only GET, POST and DELETE are supported')
         if method == 'POST' and query:
             refuse(400, 'invalid', 'Query parameters are not accepted for writes')
+        if method == 'DELETE' and query:
+            refuse(400, 'invalid', 'Query parameters are not accepted for writes')
         now = int(self.clock())
         share_path = re.fullmatch(r'/share/([A-Za-z0-9_-]{43})', path)
         if share_path:
@@ -742,6 +744,22 @@ class App:
                 except ValueError:
                     refuse(429, 'quota', 'Skill secret limit reached')
                 return 200, skill_secrets.list_secrets(db, session['user_id']), []
+            if path == '/v1/skills/installed':
+                if method == 'GET' and not query:
+                    return 200, skill_installs.listing(db, session['user_id']), []
+                if method in ('POST', 'DELETE') and not query:
+                    if method == 'DELETE':
+                        self.csrf_check(env, session)
+                    body = self.body(env, ['skill'])
+                    skill_id = body.get('skill')
+                    if not skill_installs.valid_skill(skill_id):
+                        refuse(400, 'invalid', 'Provide a skill id from the skills catalogue')
+                    if method == 'POST':
+                        skill_installs.install(db, session['user_id'], skill_id, now)
+                    else:
+                        skill_installs.uninstall(db, session['user_id'], skill_id)
+                    return 200, skill_installs.listing(db, session['user_id']), []
+                refuse(400, 'invalid', 'Invalid installed-skills request')
             if path == '/v1/runtime-keys' and method == 'GET' and not query:
                 return 200, {
                     'items': runtime_keys.listing(db, session['user_id']),
