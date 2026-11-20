@@ -1157,7 +1157,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           const input = document.createElement('textarea'); input.value = item.body || '';
           input.setAttribute('aria-label', '编辑消息'); input.maxLength = 4000;
           const save = document.createElement('button'); save.type = 'button'; save.textContent = '保存修改';
-          save.addEventListener('click', () => change('edit', input.value));
+          save.addEventListener('click', () => {
+            // Editing replaces text that is already on the other side, so this
+            // button only opens the confirm step; the explicit confirm sends it.
+            const draft = input.value;
+            const note = document.createElement('span');
+            note.className = 'message-edit-note';
+            note.textContent = '保存后，这条已发出的消息会被新内容替换，其他人看到的是修改后的版本。';
+            const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = '确认修改';
+            confirm.addEventListener('click', () => change('edit', draft));
+            const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
+            cancel.addEventListener('click', () => controls.replaceChildren());
+            controls.replaceChildren(note, confirm, cancel);
+          });
           const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
           cancel.addEventListener('click', () => controls.replaceChildren());
           controls.append(input, save, cancel);
