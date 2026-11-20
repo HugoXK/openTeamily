@@ -59,10 +59,11 @@
   <section id="login-panel" hidden>
     <h2>登录</h2>
     <form id="login-form" method="post" action="/v1/auth/login">
-      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>用户名 <input type="text" id="username" name="username" required autocomplete="username" maxlength="64"></label>
       <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
       <button type="submit">登录</button>
     </form>
+    <p><a class="login-register-button" href="/register">注册新账户</a> · 需要管理员开放本实例注册；普通账号不会成为平台管理员。</p>
     <div id="oidc-providers"></div>
   </section>
   <section id="settings-panel" hidden>
@@ -181,21 +182,21 @@
           <span class="settings-row-label">关于</span>
           <span class="settings-row-chevron" aria-hidden="true">›</span>
         </a>
-        <button type="button" class="settings-row" disabled title="未接通：还没有 OpenTeamily 帮助中心页">
+        <a class="settings-row" href="/help">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v12H4z M8 6V5a4 4 0 0 1 8 0v1"/></svg></span>
           <span class="settings-row-label">帮助中心</span>
-          <span class="settings-row-meta">未接通</span>
-        </button>
-        <button type="button" class="settings-row" disabled title="未接通：还没有 OpenTeamily 服务条款页">
+          <span class="settings-row-chevron" aria-hidden="true">›</span>
+        </a>
+        <a class="settings-row" href="/terms">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h8l4 4v12H7z M15 4v4h4 M9 12h6 M9 16h6"/></svg></span>
           <span class="settings-row-label">服务条款</span>
-          <span class="settings-row-meta">未接通</span>
-        </button>
-        <button type="button" class="settings-row" disabled title="未接通：还没有 OpenTeamily 隐私政策页">
+          <span class="settings-row-chevron" aria-hidden="true">›</span>
+        </a>
+        <a class="settings-row" href="/privacy">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 19 6v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/></svg></span>
           <span class="settings-row-label">隐私政策</span>
-          <span class="settings-row-meta">未接通</span>
-        </button>
+          <span class="settings-row-chevron" aria-hidden="true">›</span>
+        </a>
         <a class="settings-row" href="https://github.com/openTeamily/openTeamily/issues" rel="noreferrer" target="_blank" title="指向本仓库的 issue 列表，不是 Teamily 的联系邮箱">
           <span class="settings-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 8v5 M12 16h.01"/></svg></span>
           <span class="settings-row-label">报告问题</span>

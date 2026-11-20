@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import account_deletion, skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
+from . import account_deletion, skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -45,6 +45,7 @@ class Config:
     max_memory_pages_per_workspace: int = 100
     max_memory_actions_per_workspace: int = 200
     max_memory_links_per_workspace: int = 500
+    max_memory_preferences_per_user: int = 50
     max_agents_per_workspace: int = 50
     max_meetings_per_workspace: int = 100
     max_conversations_per_user: int = 50
@@ -96,16 +97,23 @@ def object_only(pairs):
 
 
 class App:
-    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None):
+    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None, model_http_policy=None):
+        from .model_http_policy import ModelHttpPolicy
+        if model_http_policy is not None and not isinstance(model_http_policy, ModelHttpPolicy):
+            raise ValueError("Invalid operator model HTTP policy")
+        self.model_http_policy = model_http_policy or ModelHttpPolicy()
         self.store, self.config, self.clock = store, config, clock
         # Tests inject a fake Composio HTTP transport; production uses urllib.
         self.composio_transport = composio_transport
         self.lifecycle, self.manager_auth = lifecycle, manager_auth
-        self.automation_backend = automation_backend or AgentAutomationBackend(
+        inner_backend = automation_backend or AgentAutomationBackend(
             stale=config.runtime_heartbeat_seconds, timeout=config.runtime_task_timeout_seconds)
+        self.automation_backend = composio_principals.ScheduledToolBackend(inner_backend)
         self.operator_admin = operator_admin
         self.oidc_registry = oidc_registry
         self._automation_worker = None
+        from .events import Limits
+        self.event_limits = Limits()
 
     def __call__(self, env, start_response):
         headers = [('Cache-Control', 'no-store'),
@@ -125,6 +133,15 @@ class App:
             status, body = 500, {'error': {'code': 'internal', 'message': 'Internal service error'}}
         if not any(key.lower() == 'content-security-policy' for key, _value in headers):
             headers.append(('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'"))
+        from .events import EventStream
+        if isinstance(body,EventStream):
+            headers.insert(0,('Content-Type','text/event-stream; charset=utf-8'))
+            headers.append(('X-Accel-Buffering','no'))
+            try:
+                start_response('200 OK',headers)
+            except BaseException:
+                body.close();raise
+            return body
         if status == 204:
             data = b''
             body = None
@@ -509,6 +526,13 @@ class App:
             if work_path[2] == '/preview':
                 return self.public_work_preview(work_path[1])
             return self.render_public_work(work_path[1], bool(work_path[2]))
+        if path == '/v1/auth/policy':
+            if method!='GET' or query:
+                refuse(400,'invalid','Authentication policy requires GET without query parameters')
+            return 200,{'registration_open':self.config.allow_registration,
+                        'password_min_length':12,'password_max_length':256,
+                        'username_min_length':3,'username_max_length':64,
+                        'session_requires_https':not self.config.insecure_local},[]
         if path in ('/v1/auth/register', '/v1/auth/login') and method == 'POST':
             self.origin_check(env)  # Login/registration CSRF protection before a session exists.
             body = self.body(env, ['username', 'password'])
@@ -636,10 +660,25 @@ class App:
             memory_profile = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/memory/profile', path)
             if memory_profile:
                 return self.memory_profile_dispatch(db, session, method, query, now, env, memory_profile[1])
+            memory_preference_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/memory/preferences(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
+            if memory_preference_path:
+                return self.memory_preference_dispatch(
+                    db, session, method, query, now, env, *memory_preference_path.groups())
+            if path == '/v1/profile/avatar':
+                if method == 'GET':
+                    return self.profile_avatar(db, session, query)
+                if method == 'POST' and not query:
+                    return self.save_avatar(db, session, now, env)
+                refuse(400, 'invalid', 'Invalid avatar request')
+            if path == '/v1/profile/follow-work':
+                if method in ('GET', 'POST') and not query:
+                    return self.profile_follow_work(db, session, method, now, env)
             if path == '/v1/profile':
                 if method == 'GET' and not query:
                     row = profiles.load(db, session['user_id'])
-                    return 200, {'profile': profiles.view(row) if row is not None else None}, []
+                    return 200, {'profile': profiles.view(row) if row is not None else None,
+                                 'avatar': profiles.avatar_view(profiles.load_avatar(db, session['user_id']))}, []
                 if method == 'POST' and not query:
                     return self.save_profile(db, session, now, env)
                 refuse(400, 'invalid', 'Invalid profile request')
@@ -748,8 +787,8 @@ class App:
                     items.append(runtime_connect.view_with_meta(db, row))
                 return 200, {'items': items}, []
             if path == '/v1/runtime/tasks' and method == 'POST' and not query:
-                return self.dispatch_runtime_task(db, session['user_id'], now, self.body(env, ['kind', 'prompt', 'connection_id', 'workspace_id']))
-            task_path = re.fullmatch(r'/v1/runtime/tasks/([0-9a-f]{32})(/(cancel|artifact))?', path)
+                return self.dispatch_runtime_task(db, session['user_id'], now, self.body(env, ['kind', 'prompt', 'connection_id', 'workspace_id', 'connected_tools']))
+            task_path = re.fullmatch(r'/v1/runtime/tasks/([0-9a-f]{32})(/(cancel|artifact|connected-tools))?', path)
             if task_path:
                 row = runtime_connect.load_task(db, task_path[1], user_id=session['user_id'])
                 if row is None:
@@ -762,6 +801,8 @@ class App:
                     return 200, {'task': runtime_connect.view_with_meta(db, cancelled)}, []
                 if task_path[3] == 'artifact' and method == 'POST' and not query:
                     return self.save_task_artifact(db, session, row, now, self.body(env, ['title', 'workspace_id']))
+                if task_path[3] == 'connected-tools':
+                    return self.runtime_connected_tools(db, session, method, query, now, env, row)
                 if not task_path[3] and method == 'GET' and not query:
                     row = runtime_connect.expire_task(db, row, now)
                     return 200, {'task': runtime_connect.view_with_meta(db, row)}, []
@@ -852,8 +893,12 @@ class App:
                 return self.workspace_overview(db, session, method, query, overview_path.group(1))
             if path == '/v1/automation-templates' and method == 'GET' and not query:
                 return 200, {'items': automations.templates()}, []
+            auto_tools_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/automations/([0-9a-f]{32})/connected-tools', path)
+            if auto_tools_path:
+                return self.automation_connected_tools(db, session, method, query, now, env, *auto_tools_path.groups())
             auto_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel|artifact))?)?)?))?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel|artifact|retry))?)?)?))?', path)
             if auto_path:
                 return self.automation_dispatch(db, session, method, query, now, env, *auto_path.groups())
             artifact_discover_path = re.fullmatch(
@@ -875,6 +920,16 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/memory/links(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if memory_link_path:
                 return self.memory_link_dispatch(db, session, method, query, now, env, *memory_link_path.groups())
+            memory_export_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/memory/([0-9a-f]{32})/export', path)
+            if memory_export_path:
+                return self.memory_export(db, session, method, query, *memory_export_path.groups())
+            memory_page_version_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/memory/([0-9a-f]{32})/versions(?:/(\d{1,8})(?:/(restore))?)?',
+                path)
+            if memory_page_version_path:
+                return self.memory_page_version_dispatch(
+                    db, session, method, query, now, env, *memory_page_version_path.groups())
             memory_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/memory(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if memory_path:
@@ -934,6 +989,27 @@ class App:
             if path in ('/v1/skills/scopes','/v1/skills/readiness','/v1/skills/runs'):
                 from . import skill_execution
                 return skill_execution.dispatch(self,db,session,method,path,query,now,env,refuse)
+            stream_match=re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/events',path)
+            if stream_match:
+                if method!='GET' or query:
+                    refuse(400,'invalid','Events require GET without query parameters')
+                from .events import EventStream, StreamLimit, snapshot
+                last_id=env.get('HTTP_LAST_EVENT_ID','')
+                if last_id and not re.fullmatch(r'[0-9a-f]{64}',last_id):
+                    refuse(400,'invalid','Invalid Last-Event-ID')
+                wid=stream_match[1]
+                if members.load(db,wid,session['user_id']) is None:
+                    refuse(404,'not_found','Workspace not found')
+                # The initial snapshot is authenticated before headers are committed.
+                reader=lambda: snapshot(self,env,wid)
+                initial=reader()
+                try:
+                    stream=EventStream(self.event_limits,session['user_id'],reader,initial,last_id)
+                except StreamLimit as exc:
+                    refuse(429,'stream_limit',str(exc))
+                return 200,stream,[]
+            if path == '/v1/skills/packages' or path.startswith('/v1/skills/packages/'):
+                return self.imported_skill_dispatch(db,session,method,path,query,now,env)
             if path in ('/v1/skills/catalog', '/v1/skills/bindings'):
                 return self.skill_package_dispatch(db, session, method, query, now, env, path)
             utility_path = re.fullmatch(
@@ -959,6 +1035,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/agents(?:/([0-9a-f]{32})(?:/(archive))?)?', path)
             if agent_path:
                 return self.workspace_agent_dispatch(db, session, method, query, now, env, *agent_path.groups())
+            meeting_export = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/meetings/([0-9a-f]{32})/export', path)
+            if meeting_export:
+                return self.meeting_export(db, session, method, query, *meeting_export.groups())
             meeting_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/meetings(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if meeting_path:
@@ -1106,7 +1186,7 @@ class App:
             if path == '/v1/agent/connect' and method == 'POST' and not query:
                 body = self.body(env, ['hostname','skill_formats'])
                 formats = body.get('skill_formats',[])
-                if not isinstance(formats,list) or any(f != skill_packages.FORMAT for f in formats) or len(formats)>1:
+                if not isinstance(formats,list) or any(f not in (skill_packages.FORMAT,skill_packages.imported_skills.FORMAT) for f in formats) or len(formats)>2 or len(set(formats))!=len(formats):
                     refuse(400,'invalid','Unsupported skill capability advertisement')
                 hostname = body.get('hostname', 'flybot')
                 if not runtime_connect.valid_hostname(hostname):
@@ -1145,7 +1225,7 @@ class App:
             access = re.fullmatch(r'/v1/agent/tasks/([0-9a-f]{32})/model-access', path)
             if access and method == 'POST' and not query:
                 body = self.body(env, ['skill_format'])
-                return self.issue_model_access(db, connection, access[1], now, body.get('skill_format'))
+                return self.issue_model_access(db, connection, access[1], now, body.get('skill_format'), env.get('HTTP_X_OPENTEAMILY_MODEL_HTTP'))
             skill_ack = re.fullmatch(r'/v1/agent/tasks/([0-9a-f]{32})/skills/ack',path)
             if skill_ack and method == 'POST' and not query:
                 body = self.body(env,['digests'])
@@ -1218,12 +1298,23 @@ class App:
                 self.config.runtime_task_timeout_seconds, workspace_id)
         except ValueError:
             refuse(429, 'quota', 'Runtime task capacity reached')
+        want_tools = body.get('connected_tools')
+        if want_tools not in (None, True, False):
+            refuse(400, 'invalid', 'connected_tools must be a boolean')
         if kind == 'infer' and workspace_id is None:
             db.execute('INSERT OR REPLACE INTO skill_task_owners VALUES(?,?,?)', (row['id'], user_id, 'account'))
             connected_tools.grant(db, row['id'], user_id)
+        elif kind == 'infer' and want_tools is True and workspace_id is not None:
+            # Explicit standalone/workspace DSH principal: same-user runtime only.
+            try:
+                composio_principals.attach(db, row['id'], user_id, 'dsh', row['id'], now, target['user_id'])
+            except composio_principals.Fault as error:
+                refuse(error.status, error.code, error.message)
+        elif want_tools is True:
+            refuse(400, 'invalid', 'Connected tools can only be requested for infer tasks')
         return 201, {'task': runtime_connect.view_with_meta(db, row)}, []
 
-    def issue_model_access(self, db, connection, task_id, now, skill_format=None):
+    def issue_model_access(self, db, connection, task_id, now, skill_format=None, http_capability=None):
         task = runtime_connect.load_task(db, task_id, connection_id=connection['id'])
         if task is None:
             refuse(404, 'not_found', 'Runtime task not found')
@@ -1247,16 +1338,21 @@ class App:
             refuse(409, 'conflict', 'Model API is not configured')
         if public['provider'] not in ('openai', 'custom'):
             refuse(409, 'conflict', 'This agent only supports OpenAI-compatible model APIs')
+        try:
+            grant = model_api.endpoint_grant(public['base_url'], self.model_http_policy, http_capability)
+        except model_api.ModelEndpointError as error:
+            refuse(409, error.code, 'Model endpoint not authorized or runtime upgrade required')
         skill_material = skill_packages.material(db, task['id'])
         expected = skill_packages.selection(db,task['id'])
         if expected and skill_material != expected:
             refuse(409,'skill_revoked','Selected skill is no longer available; no model access issued')
-        if skill_material and skill_format != 'openteamily.prompt-skill.v1':
+        if skill_material and (skill_format not in (skill_packages.FORMAT,skill_packages.imported_skills.FORMAT) or (any(i['format']==skill_packages.imported_skills.FORMAT for i in skill_material) and skill_format!=skill_packages.imported_skills.FORMAT)):
             refuse(409, 'runtime_upgrade_required', 'Installed skills require an upgraded runtime with verified skill loading')
         db.execute('INSERT OR REPLACE INTO skill_task_material VALUES(?,?,0)', (task['id'], json.dumps(skill_material, sort_keys=True)))
         runtime_connect.mark_access_issued(db, task['id'])
         runtime_connect.heartbeat(db, connection, now)
         return 200, {'skills': skill_material, 'connected_tools': connected_tools.available(db, task['id']), 'model_api': {
+            **({'http_endpoint_grant': grant} if grant else {}),
             'provider': public['provider'],
             'base_url': public['base_url'],
             'model': public['model'],
@@ -1461,6 +1557,64 @@ class App:
         if worker is not None:
             worker.stop()
 
+
+    def automation_connected_tools(self, db, session, method, query, now, env, workspace_id, automation_id):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        row = db.execute('SELECT * FROM automations WHERE id=? AND workspace_id=?',
+                         (automation_id, workspace['id'])).fetchone()
+        if row is None:
+            refuse(404, 'not_found', 'Automation not found')
+        if query:
+            refuse(400, 'invalid', 'Invalid automation request')
+        if method == 'GET':
+            return 200, {'grant': composio_principals.scheduled_view(
+                composio_principals.scheduled_grant(db, row['id'], session['user_id']), session['user_id'])}, []
+        if method != 'POST':
+            refuse(400, 'invalid', 'Invalid automation request')
+        body = self.body(env, ['enabled', 'revision'])
+        try:
+            view = composio_principals.save_scheduled(
+                db, row['id'], session['user_id'], body.get('enabled'), body.get('revision'), now)
+        except composio_principals.Fault as error:
+            refuse(error.status, error.code, error.message)
+        return 200, {'grant': view}, []
+
+    def runtime_connected_tools(self, db, session, method, query, now, env, row):
+        if query:
+            refuse(400, 'invalid', 'Invalid runtime request')
+        principal = composio_principals.load(db, row['id'])
+        if method == 'GET':
+            attached = principal is not None and principal['user_id'] == session['user_id']
+            live = attached and composio_principals.live(db, principal) and not principal['revoked']
+            return 200, {'principal': (
+                {'scope': principal['scope'], 'source_type': principal['source_type'],
+                 'attached': True, 'revoked': bool(principal['revoked']), 'live': live}
+                if attached else {'attached': False, 'live': False})}, []
+        if method != 'POST':
+            refuse(400, 'invalid', 'Invalid runtime request')
+        body = self.body(env, ['action', 'scope'])
+        action = body.get('action')
+        if action == 'revoke':
+            try:
+                composio_principals.revoke(db, row['id'], session['user_id'], now)
+            except composio_principals.Fault as error:
+                refuse(error.status, error.code, error.message)
+            return 200, {'principal': {'attached': False, 'live': False, 'revoked': True}}, []
+        if action != 'attach':
+            refuse(400, 'invalid', 'Choose attach or revoke')
+        if body.get('scope', 'dsh') != 'dsh':
+            refuse(400, 'invalid', 'Only an explicit dsh principal can be attached to a submitted task')
+        meta = runtime_connect.load_meta(db, row['id'])
+        if row['kind'] != 'infer' or row['status'] not in ('queued', 'claimed') or meta is None:
+            refuse(409, 'conflict', 'Task is not eligible for a tool principal')
+        try:
+            composio_principals.attach(db, row['id'], session['user_id'], 'dsh', row['id'], now, row['user_id'])
+        except composio_principals.Fault as error:
+            refuse(error.status, error.code, error.message)
+        return 200, {'principal': {'scope': 'dsh', 'source_type': 'runtime_task', 'attached': True, 'revoked': False, 'live': True}}, []
+
     def automation_dispatch(self, db, session, method, query, now, env, workspace_id, ticking, target_id, removing, runs, run_id, cancelling):
         workspace = members.load(db, workspace_id, session['user_id'])
         if workspace is None:
@@ -1533,6 +1687,44 @@ class App:
                 if cancelled is None:
                     refuse(409, 'conflict', 'Automation run cannot be cancelled')
                 return 200, {'run': cancelled}, []
+            if run_id and cancelling == 'retry':
+                if method != 'POST' or query:
+                    refuse(400, 'invalid', 'Invalid automation request')
+                if actor not in ('owner', 'admin'):
+                    refuse(403, 'forbidden', 'Not allowed to change automations')
+                self.body(env, [])
+                key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+                if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+                    refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+                item = db.execute(
+                    'SELECT * FROM automation_runs WHERE id=? AND automation_id=? AND workspace_id=?',
+                    (run_id, row['id'], workspace['id']),
+                ).fetchone()
+                if item is None:
+                    refuse(404, 'not_found', 'Automation run not found')
+                # A double click on the same run must not queue the automation
+                # twice: the idempotency key names one retry of one run.
+                key_hash = digest('automation-retry:' + key)
+                prior = db.execute(
+                    'SELECT * FROM automation_run_retries WHERE run_id=? AND key_hash=?',
+                    (run_id, key_hash),
+                ).fetchone()
+                if prior is not None:
+                    again = db.execute('SELECT * FROM automation_runs WHERE id=?',
+                                       (prior['new_run_id'],)).fetchone()
+                    if again is not None:
+                        return 200, {'run': automations.run_view(again)}, []
+                if item['status'] != 'failed':
+                    refuse(409, 'conflict', 'Only a failed run can be retried')
+                retried = scheduler.retry_run(db, row, item, now)
+                if retried is None:
+                    refuse(429, 'quota', 'Automation run capacity reached')
+                run = retried[0]
+                db.execute(
+                    'INSERT INTO automation_run_retries VALUES(?,?,?,?)',
+                    (run_id, key_hash, run['id'], now),
+                )
+                return 201, {'run': run, 'retried': automations.run_view(item)}, []
             if run_id and cancelling == 'artifact':
                 if method != 'POST' or query:
                     refuse(400, 'invalid', 'Invalid automation request')
@@ -1747,7 +1939,7 @@ class App:
             refuse(400, 'invalid', 'Provide valid slide content')
         if dashboard is not None and not artifacts.attach_dashboard(db, aid, dashboard):
             refuse(400, 'invalid', 'Provide valid dashboard content')
-        return self.artifact_saved(db, workspace['id'], aid, 201)
+        return self.artifact_saved(db, workspace['id'], aid, 201, session, now)
 
     def update_artifact(self, db, workspace, session, actor, row, now, body):
         if not artifacts.can_edit(actor, session['user_id'], row):
@@ -1825,12 +2017,16 @@ class App:
             refuse(400, 'invalid', 'Provide valid slide content')
         if kind == 'dashboard' and not artifacts.attach_dashboard(db, row['id'], dashboard):
             refuse(400, 'invalid', 'Provide valid dashboard content')
-        return self.artifact_saved(db, workspace['id'], row['id'], 200)
+        return self.artifact_saved(db, workspace['id'], row['id'], 200, session, now)
 
 
-    def artifact_saved(self, db, workspace_id, artifact_id, status):
+    def artifact_saved(self, db, workspace_id, artifact_id, status, session=None, now=0):
         row = artifacts.load(db, workspace_id, artifact_id)
         artifacts.record_version(db, row)
+        if session is not None:
+            notifications.record_artifact(db, workspace_id, session['user_id'], artifact_id,
+                                          'created' if status == 201 else 'updated',
+                                          now or row['updated'])
         return status, {'artifact': artifacts.view(row)}, []
 
     def guard_artifact_versions(self, db, artifact_id):
@@ -1839,15 +2035,25 @@ class App:
 
     def artifact_history_dispatch(self, db, session, method, query, now, env, actor, row, action, version, version_export):
         artifacts.record_version(db, row)
+        format = None
+        if action=='export' or version_export=='export':
+            try:
+                args=parse_qs(query,strict_parsing=True,keep_blank_values=True,max_num_fields=1) if query else {}
+            except ValueError:
+                refuse(400,'invalid','Provide only one export format')
+            if set(args)-{'format'} or len(args.get('format',['original']))!=1 or args.get('format',['original'])[0] not in ('original','docx','pdf','xlsx','pptx'):
+                refuse(400,'invalid','Unsupported export format')
+            format=args.get('format',[None])[0]
+            if format=='original':format=None
         if action == 'export':
-            if method != 'GET' or query:
+            if method != 'GET':
                 refuse(400, 'invalid', 'Invalid artifact request')
-            return self.export_artifact(row, from_version=False)
+            return self.export_artifact(row, from_version=False, format=format)
         if action == 'restore':
             if method != 'POST' or query or version or version_export:
                 refuse(400, 'invalid', 'Invalid artifact request')
             return self.restore_artifact(db, session, actor, row, now, self.body(env, ['revision', 'to']))
-        if method != 'GET' or query:
+        if method != 'GET' or (query and version_export!='export'):
             refuse(400, 'invalid', 'Invalid artifact request')
         if version is None:
             items = [artifacts.version_view(item, include_body=False) for item in artifacts.list_versions(db, row['id'])]
@@ -1860,13 +2066,20 @@ class App:
         if snapshot is None:
             refuse(404, 'not_found', 'Version not found')
         if version_export == 'export':
-            return self.export_artifact(snapshot, from_version=True, workspace_id=row['workspace_id'])
+            return self.export_artifact(snapshot, from_version=True, workspace_id=row['workspace_id'], format=format)
         if version_export:
             refuse(400, 'invalid', 'Invalid artifact request')
         return 200, {'version': artifacts.version_view(snapshot)}, []
 
-    def export_artifact(self, row, from_version=False, workspace_id=None):
+    def export_artifact(self, row, from_version=False, workspace_id=None, format=None):
         workspace_id = workspace_id or row['workspace_id']
+        if format:
+            from . import office_exports
+            try:
+                payload,content_type,filename=office_exports.export(row,format,from_version)
+            except ValueError as exc:
+                refuse(400,'unsupported_export',str(exc))
+            return 200,payload,artifacts.export_headers(content_type,filename)
         try:
             payload, content_type, filename = artifacts.export_bytes(
                 row, self.store.data_dir, workspace_id, from_version=from_version
@@ -1939,7 +2152,7 @@ class App:
             db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (row['id'],))
             db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
             db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
-        return self.artifact_saved(db, row['workspace_id'], row['id'], 200)
+        return self.artifact_saved(db, row['workspace_id'], row['id'], 200, session, now)
 
     def artifact_share_dispatch(self, db, session, method, query, now, env, actor, row, share_id, share_revoking):
         if share_id is None and method == 'GET' and not query:
@@ -2001,7 +2214,7 @@ class App:
             return 200, payload, artifacts.media_headers(row)
         return 200, artifacts.render_page(row).encode('utf-8'), artifacts.share_headers()
 
-    def _media_upload(self, env, limit=None):
+    def _media_upload(self, env, limit=None, mimes=None, unsupported=400):
         limit = artifacts.MAX_MEDIA_BYTES + 8192 if limit is None else limit
         if env.get('HTTP_TRANSFER_ENCODING'):
             refuse(400, 'invalid', 'Transfer encoding is not supported')
@@ -2023,8 +2236,9 @@ class App:
             refuse(413 if data and len(data) > artifacts.MAX_MEDIA_BYTES else 400, 'invalid',
                    'Media file is missing or too large' if not data else 'Request body is too large')
         mime = artifacts.sniff_mime(data)
-        if mime is None or mime not in artifacts.MEDIA_MIMES:
-            refuse(400, 'invalid', 'Unsupported or unrecognizable media type')
+        allowed = artifacts.MEDIA_MIMES if mimes is None else mimes
+        if mime is None or mime not in allowed:
+            refuse(unsupported, 'invalid', 'Unsupported or unrecognizable media type')
         filename = artifacts.clean_filename(upload['filename'])
         title = parsed['fields'].get('title')
         return parsed['fields'], data, mime, filename, title
@@ -2072,7 +2286,7 @@ class App:
              session['user_id'], session['user_id'], key_hash, request_hash),
         )
         artifacts.attach_media(db, aid, mime, len(data), digest_hex, filename)
-        return self.artifact_saved(db, workspace['id'], aid, 201)
+        return self.artifact_saved(db, workspace['id'], aid, 201, session, now)
 
     def replace_media_artifact(self, db, workspace, session, row, now, env):
         fields, data, mime, filename, title = self._media_upload(env)
@@ -2109,7 +2323,7 @@ class App:
         artifacts.attach_media(db, row['id'], mime, len(data), digest_hex, filename)
         if previous and previous != digest_hex:
             artifacts.unlink_media(self.store.data_dir, workspace['id'], previous, db)
-        return self.artifact_saved(db, workspace['id'], row['id'], 200)
+        return self.artifact_saved(db, workspace['id'], row['id'], 200, session, now)
 
     def save_run_artifact(self, db, workspace, session, automation, run, now, body):
         title = body.get('title')
@@ -2151,7 +2365,7 @@ class App:
             db, aid, workspace['id'], now, 'automation_run', run['id'],
             automation_id=automation['id'], automation_title=auto_title,
         )
-        return self.artifact_saved(db, workspace['id'], aid, 201)
+        return self.artifact_saved(db, workspace['id'], aid, 201, session, now)
 
     def save_task_artifact(self, db, session, task, now, body):
         title = body.get('title')
@@ -2199,9 +2413,27 @@ class App:
         artifacts.attach_source(
             db, aid, workspace['id'], now, 'agent_task', row['id'], task_kind=row['kind'],
         )
-        return self.artifact_saved(db, workspace['id'], aid, 201)
+        return self.artifact_saved(db, workspace['id'], aid, 201, session, now)
 
 
+
+    def memory_export(self, db, session, method, query, workspace_id, page_id):
+        """One saved page as a Markdown download; reading it writes nothing."""
+        if method != 'GET':
+            refuse(405, 'method', 'Only GET is supported')
+        if query:
+            refuse(400, 'invalid', 'Invalid memory request')
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        row = memory.load(db, workspace['id'], page_id)
+        if row is None:
+            refuse(404, 'not_found', 'Memory page not found')
+        topics = memory.topics_for(db, [row['id']]).get(row['id'], [])
+        disposition = memory.export_disposition(row['title'])
+        headers = [(key, disposition if key.lower() == 'content-disposition' else value)
+                   for key, value in artifacts.export_headers('text/markdown; charset=utf-8', 'memory.md')]
+        return 200, memory.export_document(row, topics).encode('utf-8'), headers
 
     def memory_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
         workspace = members.load(db, workspace_id, session['user_id'])
@@ -2280,6 +2512,7 @@ class App:
              session['user_id'], session['user_id'], key_hash, request_hash),
         )
         memory.replace_topics(db, workspace['id'], page_id, topics)
+        memory.record_version(db, workspace['id'], page_id, 1, title, content, now, session['user_id'])
         return 201, {'page': memory.decorate(db, memory.load(db, workspace['id'], page_id))}, []
 
     def update_memory_page(self, db, workspace, session, actor, row, now, body):
@@ -2317,15 +2550,71 @@ class App:
             (workspace['id'], title_digest, row['id']),
         ).fetchone():
             refuse(409, 'conflict', 'A memory page with this title already exists')
+        # Pages created before this slice have no snapshot yet; record what is
+        # about to be replaced so the first edit already has a version to show.
+        if not db.execute('SELECT 1 FROM memory_page_versions WHERE page_id=? LIMIT 1',
+                          (row['id'],)).fetchone():
+            memory.record_version(db, workspace['id'], row['id'], row['revision'],
+                                  row['title'], row['body'], row['updated'], row['updated_by'])
         db.execute(
             'UPDATE memory_pages SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
             (title, title_digest, content, row['revision'] + 1, now, session['user_id'], row['id']),
         )
+        memory.record_version(db, workspace['id'], row['id'], row['revision'] + 1,
+                              title, content, now, session['user_id'])
         if 'topics' in changes:
             memory.replace_topics(db, workspace['id'], row['id'], topics)
         return 200, {'page': memory.decorate(db, memory.load(db, workspace['id'], row['id']))}, []
 
-
+    def memory_page_version_dispatch(self, db, session, method, query, now, env,
+                                     workspace_id, page_id, revision, restoring):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        row = memory.load(db, workspace['id'], page_id)
+        if row is None:
+            refuse(404, 'not_found', 'Memory page not found')
+        number = int(revision) if revision else None
+        if method == 'GET' and not restoring and not query:
+            if number is None:
+                rows = memory.version_rows(db, workspace['id'], page_id, row['revision'], 20)
+                return 200, {'current': row['revision'],
+                             'items': [memory.version_view(item) for item in rows]}, []
+            seen = memory.load_version(db, workspace['id'], page_id, number)
+            if seen is None:
+                refuse(404, 'not_found', 'Version not found')
+            return 200, {'version': memory.version_body_view(seen)}, []
+        if query:
+            refuse(400, 'invalid', 'Invalid version request')
+        if method != 'POST' or number is None or restoring != 'restore':
+            refuse(400, 'invalid', 'Invalid version request')
+        actor = members.role_of(db, workspace, session['user_id'])
+        if not memory.can_edit(actor, session['user_id'], row):
+            refuse(403, 'forbidden', 'Not allowed to change this memory page')
+        body = self.body(env, ['revision'])
+        current = body.get('revision')
+        if type(current) is not int or current != row['revision']:
+            raise RuntimeFault(409, 'conflict', 'Memory page changed elsewhere; reload and retry',
+                               memory.decorate(db, row))
+        seen = memory.load_version(db, workspace['id'], page_id, number)
+        if seen is None:
+            refuse(404, 'not_found', 'Version not found')
+        title, content = seen['title'], seen['body']
+        title_digest = memory.title_hash(title)
+        if title != row['title'] and db.execute(
+            'SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=? AND id!=?',
+            (workspace['id'], title_digest, row['id']),
+        ).fetchone():
+            refuse(409, 'conflict', 'A memory page with this title already exists')
+        # A restore is a normal forward edit: the old revision stays, and the
+        # restored content is written as a new revision with its own snapshot.
+        db.execute(
+            'UPDATE memory_pages SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
+            (title, title_digest, content, row['revision'] + 1, now, session['user_id'], row['id']),
+        )
+        memory.record_version(db, workspace['id'], row['id'], row['revision'] + 1,
+                              title, content, now, session['user_id'])
+        return 200, {'page': memory.decorate(db, memory.load(db, workspace['id'], row['id']))}, []
 
     def memory_graph(self, db, session, method, query, workspace_id):
         workspace = members.load(db, workspace_id, session['user_id'])
@@ -3123,7 +3412,7 @@ class App:
             'reply': self.public_message(db, conversations.load_message(db, row['id'], assistant_id)),
         }, []
 
-    def queue_infer_task(self, db, user_id, now, prompt, workspace_id, agent_id=None, personal_tools=False):
+    def queue_infer_task(self, db, user_id, now, prompt, workspace_id, agent_id=None, personal_tools=False, tool_principal=None):
         initiating_user = user_id
         stale = self.config.runtime_heartbeat_seconds
         target = None
@@ -3153,6 +3442,13 @@ class App:
             db.execute('INSERT OR REPLACE INTO skill_task_owners VALUES(?,?,?)', (row['id'], initiating_user, (workspace_id + ':' + agent_id) if agent_id and workspace_id else 'account'))
         if personal_tools and target['user_id'] == initiating_user:
             connected_tools.grant(db, row['id'], initiating_user)
+        if tool_principal and target['user_id'] == initiating_user:
+            scope, source_id = tool_principal
+            try:
+                composio_principals.attach(db, row['id'], initiating_user, scope, source_id, now, target['user_id'])
+            except composio_principals.Fault:
+                # The infer task still runs; tools stay unavailable rather than failing the reply.
+                pass
         return row['id'], None, dispatch
 
     def reconcile_conversation(self, db, row, now):
@@ -3273,7 +3569,21 @@ class App:
         )
         artifacts.attach_chat_source(
             db, artifact_id, workspace['id'], now, row['id'], message['id'], row['agent_id'])
-        return self.artifact_saved(db, workspace['id'], artifact_id, 201)
+        return self.artifact_saved(db, workspace['id'], artifact_id, 201, session, now)
+
+    def profile_follow_work(self, db, session, method, now, env):
+        if method == 'GET':
+            return 200, {'items': [notifications.follow_work_switch_view(row) for row in
+                                   notifications.follow_work_switches(db, session['user_id'])]}, []
+        body = self.body(env, ['creator_id', 'enabled'])
+        creator_id, enabled = body.get('creator_id'), body.get('enabled')
+        if (not isinstance(creator_id, str) or not notifications.HEX32.fullmatch(creator_id)
+                or type(enabled) is not bool):
+            refuse(400, 'invalid', 'Provide creator_id and a boolean enabled')
+        item = notifications.set_follow_work(db, session['user_id'], creator_id, enabled, now)
+        if item is None:
+            refuse(400, 'invalid', 'Follow the creator first')
+        return 200, {'item': item}, []
 
     def save_profile(self, db, session, now, env):
         body = self.body(env, ['revision', 'changes'])
@@ -3331,6 +3641,47 @@ class App:
         except sqlite3.IntegrityError:
             refuse(409, 'conflict', 'Teamily ID is unavailable')
         return 200, {'profile': profiles.view(profiles.load(db, session['user_id']))}, []
+
+    def save_avatar(self, db, session, now, env):
+        _fields, data, mime, filename, _title = self._media_upload(
+            env, mimes=profiles.AVATAR_MIMES, unsupported=415)
+        namespace = profiles.avatar_namespace(session['user_id'])
+        try:
+            digest_hex = artifacts.write_media(self.store.data_dir, namespace, data)
+        except OSError:
+            refuse(503, 'unavailable', 'Storage is temporarily unavailable')
+        previous = profiles.load_avatar(db, session['user_id'])
+        db.execute(
+            'INSERT INTO user_avatars VALUES(?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET '
+            'mime=excluded.mime, byte_count=excluded.byte_count, sha256=excluded.sha256, '
+            'filename=excluded.filename, updated=excluded.updated',
+            (session['user_id'], mime, len(data), digest_hex, filename, now))
+        if previous is not None and previous['sha256'] != digest_hex:
+            still_used = db.execute(
+                'SELECT COUNT(*) FROM user_avatars WHERE sha256=?', (previous['sha256'],)).fetchone()[0]
+            if not still_used:
+                artifacts.unlink_media(self.store.data_dir, namespace, previous['sha256'], db)
+        return 200, {'avatar': profiles.avatar_view(profiles.load_avatar(db, session['user_id']))}, []
+
+    def profile_avatar(self, db, session, query):
+        if query and not re.fullmatch(r'v=[0-9a-f]{6,64}', query):
+            refuse(400, 'invalid', 'Invalid avatar request')
+        row = profiles.load_avatar(db, session['user_id'])
+        if row is None:
+            refuse(404, 'not_found', 'Avatar not set')
+        namespace = profiles.avatar_namespace(session['user_id'])
+        try:
+            payload = artifacts.read_media_bytes(
+                self.store.data_dir, namespace, row['sha256'], row['byte_count'])
+        except (OSError, ValueError):
+            refuse(404, 'not_found', 'Avatar not set')
+        return 200, payload, [
+            ('Content-Type', row['mime']),
+            ('Content-Security-Policy', "default-src 'none'; sandbox; frame-ancestors 'self'; object-src 'none'"),
+            ('Cross-Origin-Resource-Policy', 'same-origin'),
+            ('X-Content-Type-Options', 'nosniff'),
+            ('Cache-Control', 'private, max-age=31536000, immutable'),
+        ]
 
     def save_onboarding_step(self, db, session, now, env, step):
         row = onboarding.load_steps(db, session['user_id'])
@@ -3409,6 +3760,23 @@ class App:
                 for item in personal.builtins(db, row['workspace_id'])
             ],
         }
+
+    def meeting_export(self, db, session, method, query, workspace_id, meeting_id):
+        if method != 'GET':
+            refuse(405, 'method', 'Only GET is supported')
+        if query:
+            refuse(400, 'invalid', 'Queries are not supported')
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        row = meetings.load(db, workspace['id'], meeting_id)
+        if row is None:
+            refuse(404, 'not_found', 'Meeting not found')
+        data = meetings.markdown(row).encode('utf-8')
+        return 200, data, [
+            ('Content-Type', 'text/markdown; charset=utf-8'),
+            ('Content-Disposition', 'attachment; filename="meeting-' + meeting_id + '.md"'),
+        ]
 
     def meeting_dispatch(self, db, session, method, query, now, env, workspace_id, meeting_id, removing):
         workspace = members.load(db, workspace_id, session['user_id'])
@@ -3677,6 +4045,7 @@ class App:
                     created = False
             except sqlite3.IntegrityError:
                 refuse(409, 'conflict', 'That discover slug is already in use')
+            notifications.deliver_follow_work(db, row['id'], slug, row['title'] or '', row['created_by'], now)
             return (201 if created else 200), {'discover': discover.work_metadata_view(discover.load_work(db, row['id']))}, []
         refuse(400, 'invalid', 'Invalid discover request')
 
@@ -3721,12 +4090,46 @@ class App:
             return (201 if created else 200), {'discover': discover.metadata_view(discover.load(db, agent['id']))}, []
         refuse(400, 'invalid', 'Invalid discover request')
 
+    def imported_skill_dispatch(self,db,session,method,path,query,now,env):
+        packages = skill_packages.imported_skills
+        uid = session['user_id']
+        if query:
+            refuse(400,'invalid','Unexpected package query')
+        match = re.fullmatch(r'/v1/skills/packages(?:/(import-[a-z0-9][a-z0-9-]{1,39})(?:/(revoke|versions)(?:/([0-9]+\.[0-9]+\.[0-9]+))?)?)?',path)
+        if not match:
+            refuse(404,'not_found','Package not found')
+        ident,action,version = match.groups()
+        try:
+            if method=='GET' and not ident:
+                rows = db.execute('SELECT skill_id FROM imported_skill_heads WHERE user_id=? ORDER BY skill_id',(uid,)).fetchall()
+                return 200,{'items':[packages.metadata(db,uid,r['skill_id']) for r in rows]},[]
+            if method=='POST' and not ident:
+                body = self.body(env,['package','revision','consent'])
+                item,state = packages.save(db,uid,body.get('package'),body.get('revision'),body.get('consent'),now)
+                return 200,{'package':item,**state,'installed':False},[]
+            if method=='GET' and action=='versions' and version:
+                row = db.execute('SELECT manifest FROM imported_skill_versions WHERE user_id=? AND skill_id=? AND version=?',(uid,ident,version)).fetchone()
+                if not row:
+                    refuse(404,'not_found','Package version not found')
+                return 200,row['manifest'].encode(),artifacts.export_headers('application/json',ident+'-'+version+'.json')
+            state = packages.metadata(db,uid,ident)
+            if not state:
+                refuse(404,'not_found','Package not found')
+            if method=='GET' and action in (None,'versions'):
+                return 200,state,[]
+            if method=='POST' and action=='revoke':
+                body = self.body(env,['revision'])
+                return 200,packages.revoke(db,uid,ident,body.get('revision'),now),[]
+            refuse(400,'invalid','Invalid package operation')
+        except packages.PackageError as exc:
+            refuse(exc.status,'package_rejected',str(exc))
+
     def skill_package_dispatch(self, db, session, method, query, now, env, path):
         if query:
             refuse(400,'invalid','Unexpected query')
         uid = session['user_id']
         if path.endswith('/catalog') and method == 'GET':
-            return 200, {'items':skill_packages.catalogue()}, []
+            return 200, {'items':skill_packages.catalogue(db,uid)}, []
         if path.endswith('/catalog'):
             refuse(400,'invalid','Catalogue is read-only')
         if method == 'GET':
@@ -3740,7 +4143,7 @@ class App:
         if method != 'POST':
             refuse(400,'invalid','Invalid skill binding request')
         body = self.body(env,['skill_id','version','digest','scope','enabled','permissions'])
-        item, scope = skill_packages.resolve(body.get('skill_id')), body.get('scope')
+        item, scope = skill_packages.resolve(body.get('skill_id'),db,uid), body.get('scope')
         if item is None or type(body.get('enabled')) is not bool or not isinstance(scope,str):
             refuse(400,'invalid','Select a known package and binding scope')
         if body.get('version') != item['version'] or body.get('digest') != item['digest']:
@@ -3755,6 +4158,10 @@ class App:
             if scope.startswith('automation:') and db.execute('SELECT 1 FROM skill_bindings WHERE scope=? AND user_id<>?',(scope,uid)).fetchone():
                 refuse(409,'conflict','This automation already has another skill owner; revoke that binding before transferring')
         if body['enabled']:
+            current = {i['id']:i for i in skill_packages.catalogue(db,uid)}
+            installed = {r['skill_id'] for r in db.execute('SELECT * FROM skill_bindings WHERE user_id=?',(uid,)) if r['skill_id'] in current and r['version']==current[r['skill_id']]['version'] and r['digest']==current[r['skill_id']]['digest']}
+            if len(installed | {item['id']}) > 10:
+                refuse(429,'quota','At most ten distinct active skills per account; revoke another binding first')
             if db.execute('SELECT COUNT(*) FROM skill_bindings WHERE user_id=?',(uid,)).fetchone()[0] >= 200 and db.execute('SELECT 1 FROM skill_bindings WHERE user_id=? AND scope=? AND skill_id=?',(uid,scope,item['id'])).fetchone() is None:
                 refuse(429,'quota','Skill binding capacity reached')
             db.execute('INSERT INTO skill_bindings VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,scope,skill_id) DO UPDATE SET version=excluded.version,digest=excluded.digest', (uid,scope,item['id'],item['version'],item['digest'],now))
@@ -3985,7 +4392,7 @@ class App:
                     message['body'][:artifacts.BODY_MAX], now, now, session['user_id'], session['user_id'],
                     digest('artifact-source:social_message:' + message_id), digest('social-message:' + message_id)))
         artifacts.attach_chat_source(db, artifact_id, workspace['id'], now, conversation['id'], message_id)
-        return self.artifact_saved(db, workspace['id'], artifact_id, 201)
+        return self.artifact_saved(db, workspace['id'], artifact_id, 201, session, now)
 
     def pin_social_message(self, db, session, row, message_id, now, env):
         pinned = self.body(env, ['pinned']).get('pinned')
@@ -4200,7 +4607,8 @@ class App:
             agent = plan['agent']
             prompt = conversations.compose_prompt(agent, [], text)
             task_id, error, _dispatch = self.queue_infer_task(
-                db, session['user_id'], now, prompt, workspace['id'], plan['agent_id'])
+                db, session['user_id'], now, prompt, workspace['id'], plan['agent_id'],
+                tool_principal=('group', row['id']))
             rid = uuid4().hex
             db.execute(
                 'INSERT INTO social_agent_replies '
@@ -4440,7 +4848,7 @@ class App:
                 'automations': db.execute('SELECT COUNT(*) FROM automations WHERE workspace_id=?',
                                           (workspace_id,)).fetchone()[0],
             },
-            'unread_notifications': notifications.unread_count(db, workspace_id, uid),
+            'unread_notifications': notifications.unread_count(db, workspace_id, uid, int(self.clock())),
             'limit': limit,
         }, []
 
@@ -4457,20 +4865,20 @@ class App:
                     "WHERE r.workspace_id=? AND r.requested_by=? AND r.status IN ('queued','running') LIMIT 20",
                     (workspace['id'], uid)).fetchall():
                 self.reconcile_group_replies(db, conv, now)
-            return 200, {'items': notifications.listing(db, workspace['id'], uid, query == 'filter=unread'),
-                         'unread_count': notifications.unread_count(db, workspace['id'], uid),
+            return 200, {'items': notifications.listing(db, workspace['id'], uid, query == 'filter=unread', now),
+                         'unread_count': notifications.unread_count(db, workspace['id'], uid, now),
                          'limit': notifications.LIMIT}, []
         if reading and method == 'POST' and not query:
             body = self.body(env, ['notification_id', 'all'])
             nid, every = body.get('notification_id'), body.get('all')
             if every is True and nid is None:
-                notifications.mark_read(db, workspace['id'], uid)
+                notifications.mark_read(db, workspace['id'], uid, now=now)
             elif every is None and isinstance(nid, str) and notifications.HEX32.fullmatch(nid):
-                if not notifications.mark_read(db, workspace['id'], uid, nid):
+                if not notifications.mark_read(db, workspace['id'], uid, nid, now):
                     refuse(404, 'not_found', 'Notification not found')
             else:
                 refuse(400, 'invalid', 'Provide notification_id or all=true')
-            return 200, {'unread_count': notifications.unread_count(db, workspace['id'], uid)}, []
+            return 200, {'unread_count': notifications.unread_count(db, workspace['id'], uid, now)}, []
         refuse(400, 'invalid', 'Invalid notification request')
 
     def send_social_message(self, db, workspace, session, row, now, env):
@@ -4852,7 +5260,12 @@ class App:
             'SELECT * FROM automations WHERE workspace_id=? AND key_hash=?', (workspace['id'], key_hash)
         ).fetchone()
         if existing:
-            if existing['request_hash'] != request_hash:
+            # A reminder is identified by the message it was set on, so picking another
+            # time for the same message answers "already set" instead of a 409 and never
+            # stores a second automation.
+            reminder_replay = (existing['template_id'] == automations.REMINDER
+                               and template_id == automations.REMINDER)
+            if existing['request_hash'] != request_hash and not reminder_replay:
                 refuse(409, 'conflict', 'Idempotency key was used for a different request')
             return 200, {'automation': self.automation_view(db, existing)}, []
         titled = db.execute(
@@ -4864,12 +5277,13 @@ class App:
                 >= self.config.max_automations_per_workspace):
             refuse(429, 'quota', 'Automation capacity reached')
         aid = uuid4().hex
+        enabled = 1 if template_id == automations.REMINDER else 0
         db.execute(
-            'INSERT INTO automations VALUES(?,?,?,?,?,?,?,?,0,1,?,?,?,?)',
+            'INSERT INTO automations VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?)',
             (aid, workspace['id'], title, title_hash, prompt, template_id,
              json.dumps(schedule, sort_keys=True, separators=(',', ':')),
              json.dumps(participants, sort_keys=True, separators=(',', ':')),
-             now, now, key_hash, request_hash),
+             enabled, now, now, key_hash, request_hash),
         )
         self.write_editor(db, aid, intent, scope, [name.strip() for name in agents], compiled)
         row = db.execute('SELECT * FROM automations WHERE id=?', (aid,)).fetchone()
@@ -5179,9 +5593,13 @@ class App:
         replacing = 'api_key' in changes and changes['api_key'] is not None
         if replacing and not model_api.valid_api_key(changes['api_key']):
             refuse(400, 'invalid', 'API key must be 8–4096 characters')
-        if not clearing or row is not None:
-            if not model_api.valid_provider(provider) or not model_api.valid_base_url(base_url) or not model_api.valid_model(model_name):
-                refuse(400, 'invalid', 'Provide a supported provider, https base URL and model name')
+        # An operator policy removal must not prevent revoking a stored key.
+        # Mixed metadata updates still receive normal validation.
+        if not (clearing and set(changes) == {'api_key'}):
+            if not model_api.valid_provider(provider) or not model_api.valid_base_url(base_url, self.model_http_policy) or not model_api.valid_model(model_name):
+                refuse(400, 'invalid', 'Provide a supported provider, authorized model base URL and model name')
+        if not clearing and self.model_http_policy.allows(base_url) and provider not in ('openai', 'custom'):
+            refuse(400, 'invalid', 'HTTP model exceptions require an OpenAI-compatible task provider')
         if not replacing and not clearing:
             if (provider, base_url, model_name) == (current['provider'], current['base_url'], current['model']) and row is not None:
                 return 200, {'model_api': current}, []
@@ -5373,7 +5791,7 @@ class App:
             body = self.body(env, ['job_id', 'observed_revision', 'lease'])
             if set(body) != {'job_id', 'observed_revision', 'lease'} or not isinstance(body['job_id'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['job_id']):
                 refuse(400, 'invalid', 'Incomplete or invalid manager observation')
-            return 200, runtime.runtime_secret(manager, secret[1], body['job_id'], body['observed_revision'], body['lease']), []
+            return 200, runtime.runtime_secret(manager, secret[1], body['job_id'], body['observed_revision'], body['lease'], http_policy=self.model_http_policy, capability=env.get('HTTP_X_OPENTEAMILY_MODEL_HTTP')), []
         collaboration = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/runtime-bot-social', path)
         if collaboration and method == 'POST' and not query:
             body = self.body(env, ['job_id', 'observed_revision', 'lease'])
@@ -5451,6 +5869,64 @@ class App:
                    'communication=excluded.communication,revision=excluded.revision,updated=excluded.updated',
                    (workspace_id, session['user_id'], *values, current['revision']+1, now))
         return 200, {'profile': dict(zip(fields, values), revision=current['revision']+1, updated=now)}, []
+
+    def memory_preference_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
+        if members.load(db, workspace_id, session['user_id']) is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        if query:
+            refuse(400, 'invalid', 'Invalid preference request')
+        if method == 'GET' and target_id is None and not removing:
+            rows = memory.preference_listing(db, workspace_id, session['user_id'])
+            return 200, {'items': [memory.preference_view(row) for row in rows]}, []
+        if method == 'POST' and target_id is None and not removing:
+            body = self.body(env, ['text'])
+            text = body.get('text')
+            if not memory.valid_preference(text):
+                refuse(400, 'invalid', 'Provide a preference up to 120 characters')
+            text = text.strip()
+            key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+            if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+                refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+            # The row is keyed on (workspace, user), so the same written
+            # preference is never duplicated for one account.
+            key_hash = digest('memory-preference:' + key)
+            request_hash = digest(json.dumps({'text': text}, sort_keys=True, separators=(',', ':'),
+                                             ensure_ascii=False))
+            prior = db.execute(
+                'SELECT * FROM memory_preferences WHERE workspace_id=? AND user_id=? AND key_hash=?',
+                (workspace_id, session['user_id'], key_hash)).fetchone()
+            if prior:
+                if prior['request_hash'] != request_hash:
+                    refuse(409, 'conflict', 'Idempotency key was used for a different request')
+                return 200, {'preference': memory.preference_view(prior)}, []
+            text_hash = memory.preference_hash(text)
+            existing = db.execute(
+                'SELECT * FROM memory_preferences WHERE workspace_id=? AND user_id=? AND text_hash=?',
+                (workspace_id, session['user_id'], text_hash)).fetchone()
+            if existing:
+                return 200, {'preference': memory.preference_view(existing)}, []
+            if (db.execute('SELECT COUNT(*) FROM memory_preferences WHERE workspace_id=? AND user_id=?',
+                           (workspace_id, session['user_id'])).fetchone()[0]
+                    >= self.config.max_memory_preferences_per_user):
+                refuse(429, 'quota', 'Preference capacity reached')
+            position = db.execute(
+                'SELECT COALESCE(MAX(position), 0) + 1 FROM memory_preferences WHERE workspace_id=? AND user_id=?',
+                (workspace_id, session['user_id'])).fetchone()[0]
+            preference_id = uuid4().hex
+            db.execute(
+                'INSERT INTO memory_preferences VALUES(?,?,?,?,?,?,?,?,?)',
+                (preference_id, workspace_id, session['user_id'], text, text_hash, position, now,
+                 key_hash, request_hash))
+            row = memory.load_preference(db, workspace_id, session['user_id'], preference_id)
+            return 201, {'preference': memory.preference_view(row)}, []
+        if target_id and removing == 'remove' and method == 'POST':
+            row = memory.load_preference(db, workspace_id, session['user_id'], target_id)
+            if row is None:
+                refuse(404, 'not_found', 'Preference not found')
+            self.body(env, [])
+            db.execute('DELETE FROM memory_preferences WHERE id=?', (row['id'],))
+            return 200, {'removed': memory.preference_view(row)}, []
+        refuse(400, 'invalid', 'Invalid preference request')
 
 
     def search_resources(self, db, session, method, query, workspace_id):

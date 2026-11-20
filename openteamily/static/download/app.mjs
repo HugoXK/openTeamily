@@ -1,3 +1,26 @@
+// Read from the browser only: the download page never asks the server to guess
+// the visitor's platform, and an unrecognised agent is reported as unknown
+// rather than as a plausible-looking default.
+export function platformLabel(navigatorLike) {
+  const ua = (navigatorLike && navigatorLike.userAgent) || '';
+  const platform = (navigatorLike && navigatorLike.platform) || '';
+  const source = ua + ' ' + platform;
+  let os = '';
+  if (/iPhone|iPad|iPod/i.test(source)) os = 'iOS';
+  else if (/Android/i.test(source)) os = 'Android';
+  else if (/Macintosh|Mac OS X|MacIntel/i.test(source)) os = 'macOS';
+  else if (/Windows/i.test(source)) os = 'Windows';
+  else if (/Linux|X11/i.test(source)) os = 'Linux';
+  let browser = '';
+  if (/Edg\//i.test(source)) browser = 'Edge';
+  else if (/OPR\//i.test(source)) browser = 'Opera';
+  else if (/Chrome\//i.test(source)) browser = 'Chrome';
+  else if (/Firefox\//i.test(source)) browser = 'Firefox';
+  else if (/Safari\//i.test(source)) browser = 'Safari';
+  if (!os && !browser) return '未知平台';
+  return [os, browser].filter(Boolean).join(' · ');
+}
+
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -51,6 +74,8 @@ function mount() {
     mainPanel.hidden = false;
     whoami.dataset.username = username;
     whoami.textContent = username;
+    const platform = document.getElementById('download-platform-value');
+    if (platform) platform.textContent = platformLabel(globalThis.navigator || {});
     const command = document.getElementById('daemon-command');
     if (command) command.textContent = command.textContent.replaceAll('__ORIGIN__', location.origin);
   }
