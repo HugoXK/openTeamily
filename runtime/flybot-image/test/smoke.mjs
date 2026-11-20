@@ -105,7 +105,6 @@ try {
   const tokenUrl = loginUrl.replace(/http:\/\/127\.0\.0\.1:8080/, `http://${address}:8080`)
   const api = docker(['exec', server, 'node', '--input-type=module', '-e', `
     import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
     const login = await fetch(process.argv[1], { redirect: 'manual' })
     const cookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
     assert.ok(cookie, 'login must return a cookie')
@@ -156,7 +155,6 @@ import { readFileSync } from 'node:fs'
 
   const onboard = docker(['exec', server, 'node', '--input-type=module', '-e', `
     import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
     import { createHash } from 'node:crypto'
     import { lstatSync, readdirSync, readFileSync } from 'node:fs'
     const login = await fetch(process.argv[1], { redirect: 'manual' })
