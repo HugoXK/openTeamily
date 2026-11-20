@@ -47,7 +47,21 @@ def seed_memory(alice, bob, wid, bob_wid):
             'foreign_title': 'bob 的记忆'}
 
 
-SEEDS = {'meetings': seed_meetings, 'memory': seed_memory}
+
+def seed_artifacts(alice, bob, wid, bob_wid):
+    created = alice.call('POST', f'/v1/workspaces/{wid}/artifacts',
+                         {'title': '周报', 'body': '本周完成迁移。', 'kind': 'document'},
+                         {'HTTP_IDEMPOTENCY_KEY': 'fixture-artifact-0001'})
+    assert created['status'] == 201, created
+    other = bob.call('POST', f'/v1/workspaces/{bob_wid}/artifacts',
+                     {'title': 'bob 的文档', 'body': 'x', 'kind': 'document'},
+                     {'HTTP_IDEMPOTENCY_KEY': 'fixture-artifact-0002'})
+    assert other['status'] == 201, other
+    return {'artifact_id': created['body']['artifact']['id'], 'title': '周报', 'body': '本周完成迁移。',
+            'foreign_title': 'bob 的文档'}
+
+
+SEEDS = {'meetings': seed_meetings, 'memory': seed_memory, 'artifacts': seed_artifacts}
 
 
 def main(features):
@@ -64,7 +78,7 @@ def main(features):
             expect[feature] = SEEDS[feature](alice, bob, wid, bob_wid)
         with store.connect() as db:
             user_id = db.execute("SELECT id FROM users WHERE username='alice'").fetchone()[0]
-            bundles = {feature: dsbot_bundle.dumps(dsbot_bundle.build(db, user_id, feature, now=1800000000))
+            bundles = {feature: dsbot_bundle.dumps(dsbot_bundle.build(db, user_id, feature, now=1800000000, data_dir=store.data_dir))
                        for feature in features}
         print(json.dumps({'bundles': bundles, 'expect': expect}, ensure_ascii=False))
 

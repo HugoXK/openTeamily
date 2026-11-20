@@ -1,4 +1,5 @@
 """Per-user DS-Bot import bundles (docs/DSBOT_PLUGIN_ARCHITECTURE.md §5)."""
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -75,6 +76,39 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(agents['feature'], 'agents')
         self.assertEqual(before_auto, 2, 'legacy rows are left untouched')
         self.assertEqual(before_agents, 2, 'legacy rows are left untouched')
+
+    def test_artifacts_bundle_is_scoped_to_one_account_and_includes_media(self):
+        png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==')
+        for client, wid, title, key in ((self.alice, self.wid, '周报', 'bundle-artifact-0001'),
+                                         (self.bob, self.bob_wid, 'bob 的文档', 'bundle-artifact-0002')):
+            self.assertEqual(client.call('POST', f'/v1/workspaces/{wid}/artifacts',
+                                         {'title': title, 'body': '正文', 'kind': 'document'},
+                                         {'HTTP_IDEMPOTENCY_KEY': key})['status'], 201)
+        boundary = '----ot-test-boundary'
+        raw = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="title"\r\n\r\ncover\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="kind"\r\n\r\nmedia\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="dot.png"\r\n'
+            f'Content-Type: image/png\r\n\r\n'
+        ).encode() + png + f'\r\n--{boundary}--\r\n'.encode()
+        uploaded = self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/artifacts', raw=raw, headers={
+                'CONTENT_TYPE': f'multipart/form-data; boundary={boundary}',
+                'HTTP_IDEMPOTENCY_KEY': 'bundle-artifact-media01',
+            })
+        self.assertEqual(uploaded['status'], 201, uploaded)
+        with self.store.connect() as db:
+            bundle = dsbot_bundle.build(db, self.user(db, 'alice'), 'artifacts', now=1, data_dir=self.store.data_dir)
+        rows = json.loads(bundle['tables']['artifacts'])
+        self.assertEqual(sorted(row['title'] for row in rows), ['cover', '周报'])
+        self.assertTrue(all(row['workspace_id'] == self.wid for row in rows))
+        media = json.loads(bundle['media'])
+        self.assertEqual(len(media), 1)
+        self.assertEqual(bundle['manifest']['media']['rows'], 1)
+        self.assertEqual(bundle['manifest']['media']['sha256'],
+                         hashlib.sha256(bundle['media'].encode('utf-8')).hexdigest())
+        self.assertEqual(base64.b64decode(media[0]['data']), png)
+
 
 
 if __name__ == '__main__':

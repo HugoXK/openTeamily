@@ -40,7 +40,7 @@ export function defineFeature(spec) {
       imported,
       async migrate(bundle) {
         const digest = createHash('sha256').update(JSON.stringify(bundle), 'utf8').digest('hex')
-        return importBundle(store, spec, bundle, digest)
+        return importBundle(store, spec, bundle, digest, { dataDir: host.dataDir, featureDir: host.featureDir() })
       },
     }
   }

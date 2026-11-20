@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { boot, key, volume, WS } from './helpers.js'
+import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
 
 const base = (rest = '', ws = WS) => `/v1/workspaces/${ws}/artifacts${rest}`
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
@@ -128,4 +128,20 @@ test('chat and automation sources attach on create and are idempotent by source'
   assert.equal(first.value.artifact.source.conversation_title, '周报助手')
   const again = await bot.endpoint('artifacts/create', { ...payload, title: '另一标题', workspace_id: WS, idempotency_key: key() })
   assert.equal(again.value.artifact.id, first.value.artifact.id)
+})
+
+test('one test account\'s legacy artifacts import into its DS-Bot only', async () => {
+  const { bundles, expect } = legacyBundles(['artifacts'])
+  const vol = volume()
+  deliverBundle(vol, 'artifacts-1.bundle', bundles.artifacts)
+  const bot = await boot(vol)
+  assert.deepEqual((await bot.endpoint('artifacts/routes')).value.imported.map((item) => item.status), ['imported'])
+  const wid = expect.workspace_id
+  const item = await bot.call('artifacts', 'GET', `/v1/workspaces/${wid}/artifacts/${expect.artifacts.artifact_id}`)
+  assert.equal(item.status, 200)
+  assert.equal(item.body.artifact.body, expect.artifacts.body)
+  const listed = await bot.call('artifacts', 'GET', `/v1/workspaces/${wid}/artifacts?q=bob`)
+  assert.equal(listed.body.items.length, 0)
+  const other = await boot()
+  assert.equal((await other.call('artifacts', 'GET', `/v1/workspaces/${wid}/artifacts/${expect.artifacts.artifact_id}`)).status, 404)
 })

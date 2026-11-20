@@ -98,3 +98,20 @@ export function decodeUpload(multipart) {
   if (!data.length || data.length > MAX_MEDIA_BYTES) refuse(data.length > MAX_MEDIA_BYTES ? 413 : 400, 'invalid', data.length > MAX_MEDIA_BYTES ? 'Request body is too large' : 'Upload a media file')
   return { fields: multipart.fields ?? {}, data, filename: upload.filename }
 }
+
+export function importMedia(bundle, { featureDir }) {
+  const text = bundle?.media
+  if (!text) return
+  const declared = bundle.manifest?.media
+  const digest = createHash('sha256').update(text, 'utf8').digest('hex')
+  if (!declared || declared.sha256 !== digest) throw new Error('media digest mismatch')
+  const items = JSON.parse(text)
+  if (!Array.isArray(items) || items.length !== declared.rows) throw new Error('media row count mismatch')
+  for (const item of items) {
+    if (!HEX32.test(item.workspace_id) || !SHA256.test(item.sha256) || typeof item.data !== 'string') throw new Error('invalid media object')
+    const data = Buffer.from(item.data, 'base64')
+    if (item.byte_count != null && data.length !== item.byte_count) throw new Error('media size mismatch')
+    const stored = writeMedia(featureDir, item.workspace_id, data)
+    if (stored !== item.sha256) throw new Error('media object hash mismatch')
+  }
+}
