@@ -105,6 +105,6 @@ export const IMPORT_TABLES = {
   artifact_boards: ['artifact_id', 'board'],
   artifact_slides: ['artifact_id', 'deck'],
   artifact_dashboards: ['artifact_id', 'dashboard'],
-  artifact_chat_sources: ['artifact_id', 'workspace_id', 'conversation_id', 'message_id', 'agent_id', 'created', 'conversation_title'],
+  artifact_chat_sources: ['artifact_id', 'workspace_id', 'conversation_id', 'message_id', 'agent_id', 'created'],
   artifact_versions: ['artifact_id', 'revision', 'title', 'kind', 'body', 'board', 'mime', 'byte_count', 'sha256', 'filename', 'created', 'created_by'],
 }

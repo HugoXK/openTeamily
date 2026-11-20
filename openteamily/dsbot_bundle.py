@@ -29,6 +29,23 @@ _MEMORY_USERS = (
 def _scoped(table, order='id'):
     return 'SELECT * FROM ' + table + ' WHERE workspace_id IN (' + _OWNED + ') ORDER BY ' + order
 
+_ARTIFACT_USERS = (
+    "SELECT u.id, u.username, CASE WHEN u.id = ? THEN 1 ELSE 0 END AS is_owner FROM users u WHERE u.id = ? "
+    "OR u.id IN (SELECT created_by FROM artifacts WHERE workspace_id IN (" + _OWNED + ")) "
+    "OR u.id IN (SELECT updated_by FROM artifacts WHERE workspace_id IN (" + _OWNED + ")) "
+    "OR u.id IN (SELECT v.created_by FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id "
+    "WHERE a.workspace_id IN (" + _OWNED + ")) "
+    "OR u.id IN (SELECT created_by FROM artifact_shares WHERE workspace_id IN (" + _OWNED + ")) "
+    "OR u.id IN (SELECT user_id FROM artifact_favorites f JOIN artifacts a ON a.id=f.artifact_id "
+    "WHERE a.workspace_id IN (" + _OWNED + ")) ORDER BY u.id")
+
+
+def _via_artifact(table, order):
+    return ('SELECT x.* FROM ' + table + ' x JOIN artifacts a ON a.id=x.artifact_id '
+            'WHERE a.workspace_id IN (' + _OWNED + ') ORDER BY ' + order)
+
+
+
 # Parents come before children; the plugin imports in its own declared order.
 FEATURE_TABLES = {
     'meetings': [
@@ -47,7 +64,22 @@ FEATURE_TABLES = {
         ('memory_profiles', 'SELECT * FROM memory_profiles WHERE user_id = ? ORDER BY workspace_id'),
         ('memory_preferences', 'SELECT * FROM memory_preferences WHERE user_id = ? ORDER BY workspace_id, position, id'),
     ],
+    'artifacts': [
+        ('ot_users', _ARTIFACT_USERS),
+        ('artifacts', _scoped('artifacts')),
+        ('artifact_favorites', _via_artifact('artifact_favorites', 'x.artifact_id, x.user_id')),
+        ('artifact_meta', _via_artifact('artifact_meta', 'x.artifact_id')),
+        ('artifact_sources', _scoped('artifact_sources', 'artifact_id')),
+        ('artifact_shares', _scoped('artifact_shares')),
+        ('artifact_media', _via_artifact('artifact_media', 'x.artifact_id')),
+        ('artifact_boards', _via_artifact('artifact_boards', 'x.artifact_id')),
+        ('artifact_slides', _via_artifact('artifact_slides', 'x.artifact_id')),
+        ('artifact_dashboards', _via_artifact('artifact_dashboards', 'x.artifact_id')),
+        ('artifact_chat_sources', _scoped('artifact_chat_sources', 'artifact_id')),
+        ('artifact_versions', _via_artifact('artifact_versions', 'x.artifact_id, x.revision')),
+    ],
 }
+
 
 
 # Stream B2 (automations, agents). Queued automation runs are exported so the
@@ -106,7 +138,31 @@ def canonical(rows):
     return json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
-def build(db, user_id, feature, now=None):
+def _artifact_media(db, user_id, data_dir):
+    """Content-addressed media objects this account owns, as canonical JSON rows."""
+    import base64
+    from pathlib import Path
+    cursor = db.execute(
+        'SELECT a.workspace_id, md.sha256, md.byte_count FROM artifact_media md '
+        'JOIN artifacts a ON a.id=md.artifact_id WHERE a.workspace_id IN (' + _OWNED + ') '
+        'UNION SELECT a.workspace_id, v.sha256, v.byte_count FROM artifact_versions v '
+        'JOIN artifacts a ON a.id=v.artifact_id WHERE a.workspace_id IN (' + _OWNED + ') '
+        'AND v.sha256 IS NOT NULL ORDER BY 1, 2',
+        (user_id, user_id),
+    )
+    items = []
+    root = Path(data_dir) / 'artifact-objects'
+    for workspace_id, digest, byte_count in cursor.fetchall():
+        path = root / workspace_id / digest
+        payload = path.read_bytes()
+        if len(payload) != byte_count:
+            raise ValueError('media size mismatch')
+        items.append({'workspace_id': workspace_id, 'sha256': digest, 'byte_count': byte_count,
+                      'data': base64.b64encode(payload).decode('ascii')})
+    return items
+
+
+def build(db, user_id, feature, now=None, data_dir=None):
     """Return the bundle dict for one user and one feature."""
     if feature not in FEATURE_TABLES:
         raise ValueError('unknown feature')
@@ -120,8 +176,14 @@ def build(db, user_id, feature, now=None):
         text = canonical(rows)
         tables[table] = text
         manifest[table] = {'rows': len(rows), 'sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()}
-    return {'format': FORMAT, 'version': 1, 'feature': feature,
-            'created': int(time.time() if now is None else now), 'tables': tables, 'manifest': manifest}
+    bundle = {'format': FORMAT, 'version': 1, 'feature': feature,
+              'created': int(time.time() if now is None else now), 'tables': tables, 'manifest': manifest}
+    if feature == 'artifacts' and data_dir is not None:
+        media = _artifact_media(db, user_id, data_dir)
+        text = canonical(media)
+        bundle['media'] = text
+        bundle['manifest']['media'] = {'rows': len(media), 'sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()}
+    return bundle
 
 
 def dumps(bundle):

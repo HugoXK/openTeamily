@@ -8,6 +8,7 @@ import { HEX32, refuse } from '../../featurekit/http.js'
 import { createArtifact, listFiles, PER_WORKSPACE, search } from './library.js'
 import { IMPORT_TABLES, MIGRATIONS } from './schema.js'
 import { routes } from './routes.js'
+import { importMedia } from './media.js'
 
 export { PER_WORKSPACE }
 
@@ -16,6 +17,7 @@ export default defineFeature({
   pages: ['artifacts'],
   migrations: MIGRATIONS,
   importTables: IMPORT_TABLES,
+  afterImport: importMedia,
   routes,
   search,
   endpoints: (context) => {

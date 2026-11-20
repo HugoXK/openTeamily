@@ -32,8 +32,11 @@ export function verifyBundle(bundle, feature) {
   return out
 }
 
-export function importBundle(store, feature, bundle, digest) {
+export function importBundle(store, feature, bundle, digest, paths = {}) {
   const tables = verifyBundle(bundle, feature)
+  // Media objects (and any other side files) are written first: they are
+  // content-addressed, and a failed row import must not already be marked done.
+  if (typeof feature.afterImport === 'function') feature.afterImport(bundle, { store, ...paths })
   // Upsert by original id without letting a replaced parent cascade-delete
   // children that the same bundle is about to write again.
   store.exec('PRAGMA foreign_keys=OFF')
@@ -82,7 +85,7 @@ export function importBundles({ store, dataDir, feature }) {
       const text = readFileSync(file, 'utf8')
       const bundle = JSON.parse(text)
       if (bundle?.feature !== feature.name) continue
-      const result = importBundle(store, feature, bundle, sha256(text))
+      const result = importBundle(store, feature, bundle, sha256(text), { dataDir, featureDir: join(dataDir, 'openteamily', 'features', feature.name) })
       unlinkSync(file)
       results.push({ name, status: result.skipped ? 'already-imported' : 'imported', rows: result.rows })
     } catch (error) {
