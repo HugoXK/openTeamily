@@ -618,25 +618,6 @@ class App:
                 if method == 'POST' and not query:
                     return self.personal_agent_ensure(db, session, now)
                 refuse(400, 'invalid', 'Invalid personal agent request')
-            if path == '/v1/skill-secrets' and method == 'GET' and not query:
-                return 200, skill_secrets.list_secrets(db, session['user_id']), []
-            if path == '/v1/skill-secrets' and method == 'POST' and not query:
-                body = self.body(env, ['name', 'action', 'value'])
-                name, action = body.get('name'), body.get('action')
-                if not skill_secrets.valid_name(name) or action not in ('set', 'delete'):
-                    refuse(400, 'invalid', 'Provide a valid skill secret name and action')
-                if action == 'delete':
-                    if skill_secrets.delete_secret(db, session['user_id'], name) == 0:
-                        refuse(404, 'not_found', 'Skill secret not found')
-                    return 200, skill_secrets.list_secrets(db, session['user_id']), []
-                value = body.get('value')
-                if not skill_secrets.valid_value(value):
-                    refuse(400, 'invalid', 'Provide a skill secret value')
-                try:
-                    skill_secrets.put_secret(db, self.store, session['user_id'], name, value, now)
-                except ValueError:
-                    refuse(429, 'quota', 'Skill secret limit reached')
-                return 200, skill_secrets.list_secrets(db, session['user_id']), []
             if path == '/v1/skills/installed':
                 if method == 'GET' and not query:
                     return 200, skill_installs.listing(db, session['user_id']), []
