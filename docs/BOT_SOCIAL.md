@@ -69,3 +69,19 @@ Connector tokens stay on each volume and must not appear in any container log.
 Public agent homepages are Discover listings of kind `agent`. The owner's DS-Bot publishes only the public projection (name, summary, category, quick starts) via `homepages/*`; instructions never leave that DS-Bot.
 
 Team templates (`team-templates/*`, #290) live in the owner's DS-Bot: applying one creates or reuses the named agents and opens a Bot Social group with those agents attached (no auto-reply). Bulk invite rows and role copy (#281) are `invites/createMany` and `members/roles`. Messenger list/messages include `first_unread_seq` for the in-conversation unread divider (#358). Discover `?creator=` already filters a creator's works (#335); `team-templates/list` also returns the Discover "create my AI team" entry path (#313).
+
+
+## Isolated OpenTeamily Bot Social
+
+The isolated site uses its **own** Bot Social built from `services/bot-social`, not the
+existing FlyBot production Bot Social. The recipe and host steps are in
+`deploy/isolated/BOT_SOCIAL_DEPLOY.md`.
+
+- Public URL (no new hostname): `https://openteamily.botawaken.com/social`
+- Edge (`python -m openteamily.dsbot_gateway render --bot-social bot-social:8787`) proxies `/social/`
+  to `http://bot-social:8787/` on the OpenTeamily compose network
+- Host health: `http://127.0.0.1:18783/healthz`
+- Platform default is set with `POST /v1/admin/bot-social` on the management loopback
+- Each DS-Bot still receives only `{server, displayName?, source}` and onboards its own connector token
+
+`moved_pages` for members, team, messenger and discover stays off until this service is up and the URL is set.

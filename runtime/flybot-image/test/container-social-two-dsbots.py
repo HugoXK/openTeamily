@@ -3,7 +3,7 @@
 
 One test-scoped Docker bridge runs:
 * a real Bot Social built from ``services/bot-social`` behind a TLS terminator (nginx, a throwaway
-  CA made on the runner, so the runtimes use the same https-only rule as production);
+  CA made on the runner, path prefix /social, the same public-URL shape as the isolated site);
 * two OpenTeamily runtime containers (two users' DS-Bots). Each gets the Bot Social URL the way the
   compose manager delivers it: a read-only ``/run/secrets/openteamily-bot-social.json`` holding only
   ``{server, displayName}``. Each DS-Bot onboards itself (``@flybot/social``) and keeps its own
@@ -160,15 +160,17 @@ def main():
         social_image = f'openteamily-bot-social:ci-{run_id}'
         docker('build', '-q', '-t', social_image, str(ROOT / 'services' / 'bot-social'), timeout=1200)
         docker('run', '--detach', '--name', social_app, '--network', network, '--tmpfs', '/data',
-               '-e', 'HOST=0.0.0.0', '-e', 'PORT=8787', '-e', f'PUBLIC_BASE_URL=https://{social_host}',
+               '-e', 'HOST=0.0.0.0', '-e', 'PORT=8787', '-e', f'PUBLIC_BASE_URL=https://{social_host}/social',
                '-e', 'TRUST_PROXY=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16', social_image)
         started.append(social_app)
         ca, key, crt = make_tls(tmp, social_host)
         conf = tmp / 'tls.conf'
         conf.write_text(
             'server {\n  listen 443 ssl;\n  server_name %s;\n  ssl_certificate /tls/tls.crt;\n  ssl_certificate_key /tls/tls.key;\n'
-            '  client_max_body_size 2m;\n  location / {\n    proxy_pass http://%s:8787;\n    proxy_set_header Host $host;\n'
-            '    proxy_set_header X-Forwarded-For $remote_addr;\n    proxy_set_header X-Forwarded-Proto https;\n  }\n}\n' % (social_host, social_app))
+            '  client_max_body_size 2m;\n  location = /social { return 308 /social/; }\n'
+            '  location ^~ /social/ {\n    proxy_pass http://%s:8787/;\n    proxy_set_header Host $host;\n'
+            '    proxy_set_header X-Forwarded-For $remote_addr;\n    proxy_set_header X-Forwarded-Proto https;\n'
+            '    proxy_set_header X-Forwarded-Prefix /social;\n  }\n}\n' % (social_host, social_app))
         os.chmod(conf, 0o644)
         docker('run', '--detach', '--name', social_host, '--network', network, '--network-alias', social_host,
                '--read-only', '--tmpfs', '/var/cache/nginx', '--tmpfs', '/var/run', '--tmpfs', '/tmp',
@@ -180,7 +182,7 @@ def main():
             name = f'ot-soc-{run_id}-{label}'
             config = tmp / f'bot-social-{label}.json'
             # Exactly what the compose manager writes: server URL + display name, never a token.
-            config.write_text(json.dumps({'server': f'https://{social_host}', 'displayName': f'ci{label}{run_id}', 'source': 'platform'}))
+            config.write_text(json.dumps({'server': f'https://{social_host}/social', 'displayName': f'ci{label}{run_id}', 'source': 'platform'}))
             os.chmod(config, 0o644)
             rt = Runtime(name, network)
             rt.start(config, ca)
