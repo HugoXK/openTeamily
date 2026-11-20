@@ -497,6 +497,43 @@ html[data-theme-resolved="dark"] .feed-card .kind { background: var(--ot-surface
 /* Polish 5: signed-in cards already show the like count on the 点赞 action,
    so drop the duplicate heart; the action row reads as a quiet footer. */
 .feed-grid > article .feed-likes { display: none; }
-.feed-grid > article > div { gap: .125rem; padding: .25rem .375rem .375rem; border-top: 1px solid var(--ot-line); }
-.feed-grid > article > div > button { min-height: 1.75rem; border-radius: .5rem; color: var(--ot-muted); }
-.feed-grid > article > div > button:hover { background: var(--ot-bg-accent); color: var(--ot-ink); }
+html[data-theme-resolved="dark"] .feed-grid > article > div{ gap: .125rem; padding: .25rem .375rem .375rem; border-top: 1px solid var(--ot-line); }html[data-theme-resolved="dark"] .feed-grid > article > div > button{ min-height: 1.75rem; border-radius: .5rem; color: var(--ot-muted); }html[data-theme-resolved="dark"] .feed-grid > article > div > button:hover{ background: var(--ot-bg-accent); color: var(--ot-ink); }html[data-theme-resolved="dark"] /* Aurora Glass: discover */
+.catalog article{
+  position: relative;
+  overflow: hidden;
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+  transition: transform .18s var(--ot-ease), box-shadow .18s var(--ot-ease), border-color .18s var(--ot-ease);
+}html[data-theme-resolved="dark"] .catalog article::before{
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--ot-grad);
+  opacity: 0;
+  transition: opacity .18s var(--ot-ease);
+}html[data-theme-resolved="dark"] .catalog article:hover{
+  transform: translateY(-3px);
+  border-color: transparent;
+  box-shadow: var(--ot-shadow), var(--ot-glow);
+}html[data-theme-resolved="dark"] .catalog article:hover::before{ opacity: 1; }html[data-theme-resolved="dark"] .catalog-avatar{
+  background: var(--ot-grad);
+  color: #ffffff;
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--ot-accent) 30%, transparent);
+}html[data-theme-resolved="dark"] .catalog-create{
+  background: var(--ot-grad);
+  color: #ffffff;
+  border: 0;
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--ot-accent) 32%, transparent);
+}html[data-theme-resolved="dark"] .catalog-create:hover{ color: #ffffff; }html[data-theme-resolved="dark"] #catalog-query{ background: var(--ot-surface-solid); border-radius: 999px; }html[data-theme-resolved="dark"] .catalog-filters [aria-current="true"]{ background: var(--ot-grad-soft); color: var(--ot-accent); }html[data-theme-resolved="dark"] .feed-toolbar, html[data-theme-resolved="dark"] .feed-filters{
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+}
