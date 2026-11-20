@@ -28,8 +28,9 @@ class SkillsPageTests(unittest.TestCase):
         for ident in ('main-panel', 'skills-search', 'skills-list', 'skills-empty'):
             self.assertIn('id="%s"' % ident, html)
         self.assertIn('技能库', html)
-        self.assertIn('不会连接后端、创建技能或执行任何操作', html)
-        self.assertIn('刷新页面后恢复为未安装', html)
+        self.assertIn('校验并加载后才显示加载回执', html)
+        self.assertIn('技能包含真实内容和版本摘要', html)
+        self.assertIn('id="skills-permission"', html)
         self.assertIn('没有匹配的技能', html)
         self.assertIn('aria-label="搜索技能"', html)
         self.assertIn('default-src \'none\'', page['headers']['Content-Security-Policy'])
@@ -41,10 +42,12 @@ class SkillsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('POST', '/skills')['status'], 405)
         self.assertEqual(self.raw.call('GET', '/skills/missing')['status'], 404)
         script = self.raw.call('GET', '/skills/app.mjs')['body'].decode()
-        self.assertIn('export const SKILLS', script)
+        self.assertIn('/v1/skills/catalog', script)
+        self.assertIn('/v1/skills/bindings', script)
         self.assertIn('export function filterSkills', script)
-        self.assertIn('export function toggleSkill', script)
-        self.assertNotIn('fetch(', script)
+        self.assertNotIn('export function toggleSkill', script)
+        self.assertIn('!permission.checked', script)
+        self.assertIn('csrfCookie(document.cookie)', script)
         self.assertNotIn('innerHTML', script)
 
     def test_every_shell_page_links_the_skills_entry(self):

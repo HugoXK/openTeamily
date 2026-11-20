@@ -134,7 +134,7 @@ function fakeDocument() {
 
 function jsonResponse(status, body) { return {status, json: async () => body}; }
 
-function makeApi({members, invites = []}) {
+function makeApi({members, invites = [], forbiddenPaths = [], notFoundPaths = []}) {
   const calls = [];
   async function api(path, options = {}) {
     const method = options.method || 'GET';
@@ -163,6 +163,15 @@ function makeApi({members, invites = []}) {
     if (revoke && method === 'POST') {
       const invite = invites.find(item => item.id === revoke[1]);
       if (invite) invite.revoked = 1;
+      return jsonResponse(200, {});
+    }
+    const thaw = path.match(/^\/v1\/workspaces\/w1\/invites\/([^/]+)\/(freeze|unfreeze)$/);
+    if (thaw && method === 'POST') {
+      const invite = invites.find(item => item.id === thaw[1]);
+      if (invite && notFoundPaths.includes(thaw[1])) return jsonResponse(404, {error: {code: 'not_found', message: 'Invite not found'}});
+      if (invite && forbiddenPaths.includes(thaw[1])) return jsonResponse(403, {error: {code: 'forbidden', message: 'Admins can only manage member invites'}});
+      if (invite && invite.revoked) return jsonResponse(409, {error: {code: 'conflict', message: 'Revoked invites cannot be frozen or resumed'}});
+      if (invite) invite.frozen = thaw[2] === 'freeze' ? 1 : 0;
       return jsonResponse(200, {});
     }
     throw new Error('unexpected request ' + method + ' ' + path);
@@ -351,4 +360,73 @@ test('team directory membership labels', async () => {
   assert.equal(directoryMembershipLabel({membership: 'member'}), '已加入');
   assert.equal(directoryMembershipLabel({membership: 'pending'}), '等待审批');
   assert.equal(directoryMembershipLabel({membership: null}), '');
+});
+
+function inviteFixture(overrides = {}) {
+  return {id: 'inv-1', workspace_id: 'w1', role: 'member', created: 1, expires: 2,
+    created_by: 'u-me', max_uses: 1, use_count: 0, revoked: 0, frozen: 0, ...overrides};
+}
+
+test('freezing an invite asks inline before calling the API and reports 已冻结', async () => {
+  const {doc, calls, status} = await mountMembers({members: [{...ALICE}], invites: [inviteFixture()]});
+  const inviteRow = doc.getElementById('invite-list').children[0];
+  const freeze = rowButton(inviteRow, '冻结');
+  assert.ok(freeze, 'a live invite offers 冻结, not 恢复');
+  const before = calls.length;
+
+  doc.fire('click', {target: freeze});
+
+  assert.equal(calls.slice(before).filter(call => call.method === 'POST').length, 0,
+    'the first click must not freeze the invite yet');
+  const box = confirmBox(inviteRow);
+  assert.ok(box, 'an inline confirmation appears in the invite row');
+  assert.equal(box.children[0].textContent, '冻结这条邀请？');
+  assert.equal(box.children[1].textContent, '取消');
+  assert.equal(box.children[2].textContent, '确认冻结');
+  assert.equal(doc.activeElement, box.children[1], 'focus starts on cancel, not on the state change');
+
+  doc.fire('click', {target: box.children[2]});
+  await settle();
+
+  const freezes = calls.filter(call => call.method === 'POST' && call.path === '/v1/workspaces/w1/invites/inv-1/freeze');
+  assert.equal(freezes.length, 1, 'confirm issues exactly one freeze call');
+  assert.equal(status.textContent, '已冻结。');
+  const detail = doc.getElementById('invite-list').children[0].children[0].textContent;
+  assert.match(detail, /已冻结/, 'the invite row now reads 已冻结');
+});
+
+test('unfreezing a frozen invite asks inline and reports 已解冻', async () => {
+  const {doc, calls, status} = await mountMembers({members: [{...ALICE}], invites: [inviteFixture({frozen: 1})]});
+  const inviteRow = doc.getElementById('invite-list').children[0];
+  const thaw = rowButton(inviteRow, '解冻');
+  assert.ok(thaw, 'a frozen invite offers 解冻');
+
+  doc.fire('click', {target: thaw});
+  const box = confirmBox(inviteRow);
+  assert.equal(box.children[0].textContent, '解冻这条邀请？');
+  assert.equal(box.children[2].textContent, '确认解冻');
+
+  doc.fire('click', {target: box.children[2]});
+  await settle();
+
+  const thaws = calls.filter(call => call.method === 'POST' && call.path === '/v1/workspaces/w1/invites/inv-1/unfreeze');
+  assert.equal(thaws.length, 1, 'confirm issues exactly one unfreeze call');
+  assert.equal(status.textContent, '已解冻。');
+  const detail = doc.getElementById('invite-list').children[0].children[0].textContent;
+  assert.doesNotMatch(detail, /已冻结/, 'the invite row is no longer frozen');
+});
+
+test('a refused freeze shows the Chinese reason instead of the server sentence', async () => {
+  const {doc, status} = await mountMembers({
+    members: [{...ALICE}],
+    invites: [inviteFixture()],
+    forbiddenPaths: ['inv-1'],
+  });
+  const inviteRow = doc.getElementById('invite-list').children[0];
+  doc.fire('click', {target: rowButton(inviteRow, '冻结')});
+  doc.fire('click', {target: confirmBox(inviteRow).children[2]});
+  await settle();
+
+  assert.equal(status.textContent, '只有工作区所有者或管理员可以冻结邀请。');
+  assert.doesNotMatch(status.textContent, /Admins can only manage/);
 });
