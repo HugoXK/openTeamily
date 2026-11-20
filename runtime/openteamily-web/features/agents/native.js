@@ -73,7 +73,7 @@ export function nativeAgents({ host, db }) {
   async function session(row, key, title) {
     const mapped = await ensure(row)
     if (mapped.native_deleted) throw Object.assign(new Error('Native Bot was deleted'), { status: 409, code: 'agents/native-deleted' })
-    const { rt } = await services()
+    const s = await services(), { rt } = s
     const bot = rt.botOf(mapped.native_bot_id)
     const reconcile = async () => {
       let m = one('SELECT * FROM native_agent_sessions WHERE conversation_key=?', key)
