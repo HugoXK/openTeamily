@@ -40,6 +40,15 @@ body.app-workspace #main-panel {
   align-items: center;
 }
 
+#workspace-status {
+  color: var(--ot-muted);
+  font-size: 0.75rem;
+}
+
+#workspace-status:empty {
+  display: none;
+}
+
 .workspace-field,
 .pill-search {
   display: flex;

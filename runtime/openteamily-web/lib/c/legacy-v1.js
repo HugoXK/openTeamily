@@ -380,6 +380,16 @@ function workspaceItem(team, me, env) {
 
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
 
+function personalWorkspace(binding, env) {
+  if (!HEX.test(binding?.workspace_id) || !HEX.test(binding?.agent_id)) return null
+  const owner = ownerId(env)
+  return {
+    id: binding.workspace_id, owner_id: HEX.test(owner) ? owner : null,
+    name: '个人工作区', created: 0, kind: 'personal', slug: null,
+    team_name: null, converted: false, role: 'owner', member_count: 1,
+  }
+}
+
 function teamsRoutes(host) {
   const env = process.env
   return [
@@ -387,27 +397,23 @@ function teamsRoutes(host) {
       method: 'GET', path: /^\/v1\/workspaces$/,
       async handle({ query }) {
         return wrap(async () => {
-          const bs = client(host)
           const q = parseQuery(query)
+          const binding = host.call('agents/personal-binding', {})
+          if (q.get('scope') === 'personal') {
+            const personal = personalWorkspace(await binding, env)
+            return [200, { items: personal ? [personal] : [], cursor: null }]
+          }
+          const bs = client(host)
           const limit = Math.min(Math.max(Number(q.get('limit') || 20) || 20, 1), 100)
           const cursor = q.get('cursor') || ''
-          const [me, data, binding] = await Promise.all([
-            meOf(bs, env),
-            bs.get('/v1/ot/workspaces'),
-            host.call('agents/personal-binding', {}),
+          const [me, data, localBinding] = await Promise.all([
+            meOf(bs, env), bs.get('/v1/ot/workspaces'), binding,
           ])
           let rows = (data.workspaces || [])
             .filter((t) => HEX.test(String(t.workspace_id || '')))
             .map((t) => workspaceItem(t, me, env))
-          if (HEX.test(binding?.workspace_id) && HEX.test(binding?.agent_id)
-              && !rows.some((row) => row.id === binding.workspace_id)) {
-            const owner = ownerId(env)
-            rows.unshift({
-              id: binding.workspace_id, owner_id: HEX.test(owner) ? owner : null,
-              name: '个人工作区', created: 0, kind: 'personal', slug: null,
-              team_name: null, converted: false, role: 'owner', member_count: 1,
-            })
-          }
+          const personal = personalWorkspace(localBinding, env)
+          if (personal && !rows.some(row => row.id === personal.id)) rows.unshift(personal)
           if (cursor) {
             const at = rows.findIndex((row) => row.id === cursor)
             rows = at >= 0 ? rows.slice(at + 1) : []

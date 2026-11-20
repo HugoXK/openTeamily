@@ -168,6 +168,7 @@ async function mountList(items) {
   const fetcher = async (path, options = {}) => {
     calls.push(`${options.method || 'GET'} ${path}`);
     if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path === '/v1/workspaces?scope=personal') return {status: 200, json: async () => ({items: []})};
     if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: [{id: 'ws1', name: '团队'}]})};
     if (path === '/v1/automation-templates') return {status: 200, json: async () => ({items: []})};
     if (path === '/v1/workspaces/ws1/automations?category=mine') return {status: 200, json: async () => ({items})};
@@ -183,13 +184,15 @@ async function mountList(items) {
   return {list: elements.get('automation-list'), calls};
 }
 
-test('my automations are available while the template library is loading', async () => {
+test('personal automations are available while the team workspaces and templates load', async () => {
   const {doc, elements} = fakeDocument();
   const {promise: catalog, resolve: resolveCatalog} = Promise.withResolvers();
+  const {promise: teams, resolve: resolveTeams} = Promise.withResolvers();
   const respond = body => ({status: 200, json: async () => body});
   const fetcher = async path => {
     if (path === '/v1/auth/session') return respond({user: {username: 'alice'}});
-    if (path === '/v1/workspaces?limit=100') return respond({items: [{id: 'ws1', name: '个人工作区'}]});
+    if (path === '/v1/workspaces?scope=personal') return respond({items: [{id: 'ws1', name: '个人工作区'}]});
+    if (path === '/v1/workspaces?limit=100') return teams;
     if (path === '/v1/automation-templates') return catalog;
     if (path === '/v1/workspaces/ws1/automations?category=mine') {
       return respond({items: [{id: 'a1', title: '每日简报', schedule: {kind: 'now'}}]});
@@ -203,7 +206,13 @@ test('my automations are available while the template library is loading', async
     await flush();
     assert.equal(elements.get('new-automation').disabled, false);
     assert.match(elements.get('automation-list').textContent, /每日简报/);
+    resolveTeams(respond({items: [{id: 'team', name: '团队'}]}));
+    await flush();
+    const picker = elements.get('workspace');
+    assert.equal(picker.value, 'ws1');
+    assert.deepEqual(picker.options.map(option => option.value), ['ws1', 'team']);
   } finally {
+    resolveTeams(respond({items: []}));
     resolveCatalog(respond({items: []}));
     await mounted;
     if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
@@ -288,6 +297,7 @@ async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 
     const method = options.method || 'GET';
     calls.push(`${method} ${path}`);
     if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path === '/v1/workspaces?scope=personal') return {status: 200, json: async () => ({items: []})};
     if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: workspaces})};
     if (path === '/v1/automation-templates') return {status: 200, json: async () => ({items: []})};
     const listed = path.match(/^\/v1\/workspaces\/([^/]+)\/automations\?category=mine$/);
@@ -716,6 +726,7 @@ async function mountRuns({runs = RETRY_RUNS, retry = 'ok'} = {}) {
     const method = options.method || 'GET';
     calls.push(`${method} ${path}`);
     if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path === '/v1/workspaces?scope=personal') return {status: 200, json: async () => ({items: []})};
     if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: [{id: 'ws1', name: '团队'}]})};
     if (path === '/v1/automation-templates') return {status: 200, json: async () => ({items: []})};
     if (path === '/v1/workspaces/ws1/automations?category=mine') {

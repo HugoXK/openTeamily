@@ -149,6 +149,16 @@ test('workspace list includes the local personal binding alongside Social worksp
   assert.ok(social.calls.every(call => call.method === 'GET'))
 })
 
+test('personal workspace scope reads only this DS-Bot binding', async () => {
+  const wid = 'c'.repeat(32)
+  const { social, host } = setup({ workspace_id: wid, agent_id: 'd'.repeat(32) })
+  const result = await teams(host).endpoints.v1({ method: 'GET', path: '/v1/workspaces?scope=personal' })
+  assert.equal(result.status, 200)
+  assert.equal(result.body.cursor, null)
+  assert.deepEqual(result.body.items.map(row => [row.id, row.kind]), [[wid, 'personal']])
+  assert.deepEqual(social.calls, [])
+})
+
 test('workspace list keeps the Social row when it already maps the personal workspace', async () => {
   const { host } = setup({ workspace_id: WS, agent_id: 'd'.repeat(32) })
   const result = await teams(host).endpoints.v1({ method: 'GET', path: '/v1/workspaces' })

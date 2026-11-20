@@ -367,8 +367,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const search = document.getElementById('search');
   const runButton = document.getElementById('tick-automation');
   const newButton = document.getElementById('new-automation');
+  const workspaceStatus = document.getElementById('workspace-status');
   let currentUser = null;
-  let workspaces = [];
+  let loadRequest = 0;
   let templates = [];
   let templateState = 'loading';
   let current = null;
@@ -700,9 +701,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (available.some(item => item.id === selected)) select.value = selected;
   }
 
-  async function loadTemplates() {
+  async function loadTemplates(seq) {
     templateState = 'loading';
     const catalog = await request('GET', '/v1/automation-templates').catch(() => ({status: 0}));
+    if (seq !== loadRequest) return;
     templateState = catalog.status === 200 ? 'ready' : 'failed';
     templates = catalog.status === 200 ? (catalog.body.items || []) : [];
     fillTemplates();
@@ -767,9 +769,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderList(listed.body.items || [], list, empty, item => openEditor(item));
   }
 
+  function fillWorkspaces(items) {
+    const previous = workspaceId();
+    workspaceSelect.textContent = '';
+    for (const item of items) {
+      const option = document.createElement('option');
+      option.value = item.id;
+      option.textContent = item.name;
+      workspaceSelect.appendChild(option);
+    }
+    if (items.some(item => item.id === previous)) workspaceSelect.value = previous;
+  }
+
   async function load() {
+    const seq = ++loadRequest;
     newButton.disabled = true;
+    workspaceStatus.textContent = '';
     const session = await request('GET', '/v1/auth/session');
+    if (seq !== loadRequest) return;
     if (session.status === 401) {
       loginPanel.hidden = false;
       mainPanel.hidden = true;
@@ -785,25 +802,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
-    const catalog = loadTemplates();
-    const space = await request('GET', '/v1/workspaces?limit=100');
+    const catalog = loadTemplates(seq);
+    const emptyResult = {status: 0, body: {}};
+    const shared = request('GET', '/v1/workspaces?limit=100').catch(() => emptyResult);
+    const personal = await request('GET', '/v1/workspaces?scope=personal').catch(() => emptyResult);
+    const localItems = personal.status === 200 ? (personal.body.items || []) : [];
+    const space = localItems.length ? personal : await shared;
+    if (seq !== loadRequest) return;
     if (space.status !== 200) {
       show('error', messageFor(space.body.error, '无法读取工作区。'));
       return catalog;
     }
-    workspaces = space.body.items || [];
-    const previous = workspaceSelect.value;
-    workspaceSelect.textContent = '';
-    for (const item of workspaces) {
-      const option = document.createElement('option');
-      option.value = item.id;
-      option.textContent = item.name;
-      workspaceSelect.appendChild(option);
-    }
-    if (previous && [...workspaceSelect.options].some(option => option.value === previous)) {
-      workspaceSelect.value = previous;
-    }
-    if (!workspaces.length) {
+    const items = space.body.items || [];
+    fillWorkspaces(items);
+    if (!items.length) {
       document.getElementById('automation-list').textContent = '';
       document.getElementById('list-empty').hidden = false;
       document.getElementById('list-empty').textContent = '还没有工作区。';
@@ -814,6 +826,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     form.hidden = true;
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
+    const updateShared = async () => {
+      const result = await shared;
+      if (!localItems.length || seq !== loadRequest) return;
+      if (result.status !== 200) {
+        workspaceStatus.textContent = '团队工作区暂时无法加载。';
+        return;
+      }
+      const listed = result.body.items || [];
+      const localMissing = localItems.filter(item => !listed.some(other => other.id === item.id));
+      fillWorkspaces([...localMissing, ...listed]);
+    };
+    void updateShared();
     await Promise.all([loadList(), catalog]);
   }
 

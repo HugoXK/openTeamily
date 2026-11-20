@@ -75,8 +75,9 @@
     <p id="whoami" class="visually-hidden"></p>
     <div class="page-toolbar">
       <label class="workspace-field">工作区
-        <select id="workspace"></select>
+        <select id="workspace" aria-describedby="workspace-status"></select>
       </label>
+      <span id="workspace-status" role="status"></span>
     </div>
     <section id="list-panel">
       <div class="tabs" role="tablist">
