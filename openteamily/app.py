@@ -883,7 +883,7 @@ class App:
             if auto_tools_path:
                 return self.automation_connected_tools(db, session, method, query, now, env, *auto_tools_path.groups())
             auto_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel|artifact))?)?)?))?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel|artifact|retry))?)?)?))?', path)
             if auto_path:
                 return self.automation_dispatch(db, session, method, query, now, env, *auto_path.groups())
             artifact_discover_path = re.fullmatch(
@@ -1672,6 +1672,44 @@ class App:
                 if cancelled is None:
                     refuse(409, 'conflict', 'Automation run cannot be cancelled')
                 return 200, {'run': cancelled}, []
+            if run_id and cancelling == 'retry':
+                if method != 'POST' or query:
+                    refuse(400, 'invalid', 'Invalid automation request')
+                if actor not in ('owner', 'admin'):
+                    refuse(403, 'forbidden', 'Not allowed to change automations')
+                self.body(env, [])
+                key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+                if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+                    refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+                item = db.execute(
+                    'SELECT * FROM automation_runs WHERE id=? AND automation_id=? AND workspace_id=?',
+                    (run_id, row['id'], workspace['id']),
+                ).fetchone()
+                if item is None:
+                    refuse(404, 'not_found', 'Automation run not found')
+                # A double click on the same run must not queue the automation
+                # twice: the idempotency key names one retry of one run.
+                key_hash = digest('automation-retry:' + key)
+                prior = db.execute(
+                    'SELECT * FROM automation_run_retries WHERE run_id=? AND key_hash=?',
+                    (run_id, key_hash),
+                ).fetchone()
+                if prior is not None:
+                    again = db.execute('SELECT * FROM automation_runs WHERE id=?',
+                                       (prior['new_run_id'],)).fetchone()
+                    if again is not None:
+                        return 200, {'run': automations.run_view(again)}, []
+                if item['status'] != 'failed':
+                    refuse(409, 'conflict', 'Only a failed run can be retried')
+                retried = scheduler.retry_run(db, row, item, now)
+                if retried is None:
+                    refuse(429, 'quota', 'Automation run capacity reached')
+                run = retried[0]
+                db.execute(
+                    'INSERT INTO automation_run_retries VALUES(?,?,?,?)',
+                    (run_id, key_hash, run['id'], now),
+                )
+                return 201, {'run': run, 'retried': automations.run_view(item)}, []
             if run_id and cancelling == 'artifact':
                 if method != 'POST' or query:
                     refuse(400, 'invalid', 'Invalid automation request')
@@ -1886,7 +1924,7 @@ class App:
             refuse(400, 'invalid', 'Provide valid slide content')
         if dashboard is not None and not artifacts.attach_dashboard(db, aid, dashboard):
             refuse(400, 'invalid', 'Provide valid dashboard content')
-        return self.artifact_saved(db, workspace['id'], aid, 201)
+        return self.artifact_saved(db, workspace['id'], aid, 201, session, now)
 
     def update_artifact(self, db, workspace, session, actor, row, now, body):
         if not artifacts.can_edit(actor, session['user_id'], row):
@@ -1964,12 +2002,16 @@ class App:
             refuse(400, 'invalid', 'Provide valid slide content')
         if kind == 'dashboard' and not artifacts.attach_dashboard(db, row['id'], dashboard):
             refuse(400, 'invalid', 'Provide valid dashboard content')
-        return self.artifact_saved(db, workspace['id'], row['id'], 200)
+        return self.artifact_saved(db, workspace['id'], row['id'], 200, session, now)
 
 
-    def artifact_saved(self, db, workspace_id, artifact_id, status):
+    def artifact_saved(self, db, workspace_id, artifact_id, status, session=None, now=0):
         row = artifacts.load(db, workspace_id, artifact_id)
         artifacts.record_version(db, row)
+        if session is not None:
+            notifications.record_artifact(db, workspace_id, session['user_id'], artifact_id,
+                                          'created' if status == 201 else 'updated',
+                                          now or row['updated'])
         return status, {'artifact': artifacts.view(row)}, []
 
     def guard_artifact_versions(self, db, artifact_id):
@@ -2095,7 +2137,7 @@ class App:
             db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (row['id'],))
             db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
             db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
-        return self.artifact_saved(db, row['workspace_id'], row['id'], 200)
+        return self.artifact_saved(db, row['workspace_id'], row['id'], 200, session, now)
 
     def artifact_share_dispatch(self, db, session, method, query, now, env, actor, row, share_id, share_revoking):
         if share_id is None and method == 'GET' and not query:
@@ -2229,7 +2271,7 @@ class App:
              session['user_id'], session['user_id'], key_hash, request_hash),
         )
         artifacts.attach_media(db, aid, mime, len(data), digest_hex, filename)
-        return self.artifact_saved(db, workspace['id'], aid, 201)
+        return self.artifact_saved(db, workspace['id'], aid, 201, session, now)
 
     def replace_media_artifact(self, db, workspace, session, row, now, env):
         fields, data, mime, filename, title = self._media_upload(env)
@@ -2266,7 +2308,7 @@ class App:
         artifacts.attach_media(db, row['id'], mime, len(data), digest_hex, filename)
         if previous and previous != digest_hex:
             artifacts.unlink_media(self.store.data_dir, workspace['id'], previous, db)
-        return self.artifact_saved(db, workspace['id'], row['id'], 200)
+        return self.artifact_saved(db, workspace['id'], row['id'], 200, session, now)
 
     def save_run_artifact(self, db, workspace, session, automation, run, now, body):
         title = body.get('title')
@@ -2308,7 +2350,7 @@ class App:
             db, aid, workspace['id'], now, 'automation_run', run['id'],
             automation_id=automation['id'], automation_title=auto_title,
         )
-        return self.artifact_saved(db, workspace['id'], aid, 201)
+        return self.artifact_saved(db, workspace['id'], aid, 201, session, now)
 
     def save_task_artifact(self, db, session, task, now, body):
         title = body.get('title')
@@ -2356,7 +2398,7 @@ class App:
         artifacts.attach_source(
             db, aid, workspace['id'], now, 'agent_task', row['id'], task_kind=row['kind'],
         )
-        return self.artifact_saved(db, workspace['id'], aid, 201)
+        return self.artifact_saved(db, workspace['id'], aid, 201, session, now)
 
 
 
@@ -3512,7 +3554,7 @@ class App:
         )
         artifacts.attach_chat_source(
             db, artifact_id, workspace['id'], now, row['id'], message['id'], row['agent_id'])
-        return self.artifact_saved(db, workspace['id'], artifact_id, 201)
+        return self.artifact_saved(db, workspace['id'], artifact_id, 201, session, now)
 
     def profile_follow_work(self, db, session, method, now, env):
         if method == 'GET':
@@ -4354,7 +4396,7 @@ class App:
                     message['body'][:artifacts.BODY_MAX], now, now, session['user_id'], session['user_id'],
                     digest('artifact-source:social_message:' + message_id), digest('social-message:' + message_id)))
         artifacts.attach_chat_source(db, artifact_id, workspace['id'], now, conversation['id'], message_id)
-        return self.artifact_saved(db, workspace['id'], artifact_id, 201)
+        return self.artifact_saved(db, workspace['id'], artifact_id, 201, session, now)
 
     def pin_social_message(self, db, session, row, message_id, now, env):
         pinned = self.body(env, ['pinned']).get('pinned')
