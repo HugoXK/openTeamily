@@ -248,26 +248,30 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
   }
   const ensureSetup = () => (ready ??= setup().catch(error => { ready = null; throw error }))
 
+  const attachedNow = () => new Set(rt.botOf(botId)?.capabilities ?? [])
   async function syncSkills(material) {
     const wanted = new Map(material.map(item => [skillCapabilityName(item.id), item]))
+    // Survives restarts: what is attached lives in DS-Bot's own team state.
+    skillNames = new Set([...attachedNow()].filter(name => name.startsWith('ot-skill-')))
     for (const [name, item] of wanted) {
       await rt.capabilitySave({ name, kind: 'skill', description: `${item.name} (OpenTeamily skill ${item.id} v${item.version}, instruction-only)`.slice(0, 200), content: item.content }, { ui: true })
-      if (!skillNames.has(name)) await rt.changeCapabilityAttachment('attach', { name, bot: botId })
+      if (!skillNames.has(name)) await rt.changeCapabilityAttachment('attach', { name }, botId)
     }
     for (const name of skillNames) {
-      if (!wanted.has(name)) await rt.changeCapabilityAttachment('detach', { name, bot: botId }).catch(() => {})
+      if (!wanted.has(name)) await rt.changeCapabilityAttachment('detach', { name }, botId).catch(() => {})
     }
     skillNames = new Set(wanted.keys())
     return [...wanted.keys()]
   }
 
   async function syncTools(connected) {
+    toolsAttached = attachedNow().has(TOOLS_CAPABILITY)
     if (connected && !toolsAttached) {
       await rt.capabilitySave({ name: TOOLS_CAPABILITY, kind: 'mcp', description: 'OpenTeamily connected app tools (owner approves every call)', transport: 'streamable-http', url: `http://127.0.0.1:${listenPort}/mcp` }, { ui: true })
-      await rt.changeCapabilityAttachment('attach', { name: TOOLS_CAPABILITY, bot: botId })
+      await rt.changeCapabilityAttachment('attach', { name: TOOLS_CAPABILITY }, botId)
       toolsAttached = true
     } else if (!connected && toolsAttached) {
-      await rt.changeCapabilityAttachment('detach', { name: TOOLS_CAPABILITY, bot: botId }).catch(() => {})
+      await rt.changeCapabilityAttachment('detach', { name: TOOLS_CAPABILITY }, botId).catch(() => {})
       toolsAttached = false
     }
   }

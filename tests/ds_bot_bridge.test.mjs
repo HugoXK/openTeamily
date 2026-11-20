@@ -124,7 +124,7 @@ function fakeRuntime({ useModel = true } = {}) {
     bootstrap: async () => { log.push(['bootstrap']) },
     updateBot: async (id, patch) => { log.push(['updateBot', patch.model]); bot.model = 'openteamily/' + patch.model },
     capabilitySave: async (item, opts) => { log.push(['save', item.kind, item.name, opts.ui]) },
-    changeCapabilityAttachment: async (action, item) => { log.push([action, item.name, item.bot]) },
+    changeCapabilityAttachment: async (action, item, caller) => { log.push([action, item.name, caller]) },
     displayItems: (_sid, [event]) => (event.type === 'assistant/message' ? [{ kind: 'bot', text: event.data.text }] : []),
     sendUser: async ({ sessionId, content, requestId }) => {
       log.push(['sendUser', sessionId, content[0].text, requestId])
@@ -177,7 +177,7 @@ test('infer task runs as a DS-Bot turn with native skills and the tools MCP atta
   assert.deepEqual(fake.log.find(e => e[0] === 'addProvider'), ['addProvider', 'openteamily', 'http://127.0.0.1:1/v1', true])
   assert.deepEqual(fake.log.find(e => e[0] === 'updateBot'), ['updateBot', MODEL_ID])
   assert.ok(fake.log.some(e => e[0] === 'save' && e[1] === 'skill' && e[3] === true))
-  assert.ok(fake.log.some(e => e[0] === 'attach' && e[1] === TOOLS_CAPABILITY))
+  assert.ok(fake.log.some(e => e[0] === 'attach' && e[1] === TOOLS_CAPABILITY && e[2] === 'bot1'))
   assert.deepEqual(fake.log.find(e => e[0] === 'sendUser'), ['sendUser', 'chat1', 'hello', 'ot:task1'])
   assert.equal(bridge.state.active, null)
   assert.equal(access.model_api.api_key, undefined, 'task key is dropped after the turn')
