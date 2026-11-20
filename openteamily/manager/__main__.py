@@ -62,11 +62,12 @@ def poll_once(args):
                     results.append(dsbot_route.publish(engine, client, iid))
                 except ManagerError as error:
                     results.append({'status': 'route_refused', 'instance_id': iid, 'reason': error.code})
-                try:
-                    with instance_lock(registry.root, iid):
-                        results.append(dsbot_import.deliver(engine, client, iid))
-                except ManagerError as error:
-                    results.append({'status': 'import_refused', 'instance_id': iid, 'reason': error.code})
+                if args.import_legacy:
+                    try:
+                        with instance_lock(registry.root, iid):
+                            results.append(dsbot_import.deliver(engine, client, iid))
+                    except ManagerError as error:
+                        results.append({'status': 'import_refused', 'instance_id': iid, 'reason': error.code})
         except ManagerError as error:
             results.append({'status': 'refused', 'instance_id': iid, 'reason': error.code})
     uncertain = any(r.get('status') == 'uncertain' for r in results)
@@ -101,7 +102,8 @@ def main(argv=None):
             cmd.add_argument('--operation-id', help='Fresh 16..64 character operator key; reuse this key on uncertain HTTP retry')
         if name == 'migrate-manifest':
             cmd.add_argument('--apply', action='store_true', help='Rewrite a compatible frozen compose file; never deletes the named volume or secret files')
-    sub.add_parser('poll-once', help='Discover every instance the server assigns to this manager (explicit grants and server auto-provisioned) and run one fenced job each')
+    poll = sub.add_parser('poll-once', help='Discover every instance the server assigns to this manager and run one fenced job each')
+    poll.add_argument('--import-legacy', action='store_true', help='Deliver a retained platform bundle when explicitly migrating accounts')
     args = parser.parse_args(argv)
     try:
         if args.command == 'init':
