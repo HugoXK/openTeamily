@@ -84,6 +84,11 @@ class SettingsPage:
         '/profile/app.css': ('profile', 'app.css', 'text/css; charset=utf-8'),
         '/download': ('download', 'index.html', 'text/html; charset=utf-8'),
         '/download/app.mjs': ('download', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/manifest.webmanifest': ('', 'manifest.webmanifest', 'application/manifest+json'),
+        '/sw.js': ('', 'sw.js', 'text/javascript; charset=utf-8'),
+        '/icon.svg': ('', 'icon.svg', 'image/svg+xml'),
+        '/icon-192.png': ('', 'icon-192.png', 'image/png'),
+        '/icon-512.png': ('', 'icon-512.png', 'image/png'),
         '/guide': ('guide', 'index.html', 'text/html; charset=utf-8'),
         '/guide/app.mjs': ('guide', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/guide/app.css': ('guide', 'app.css', 'text/css; charset=utf-8'),
@@ -108,8 +113,8 @@ class SettingsPage:
     }
     PREFIXES = ('/register', '/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
-           "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
-           "frame-ancestors 'none'; object-src 'none'")
+           "img-src 'self'; frame-src 'self'; manifest-src 'self'; worker-src 'self'; "
+           "base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'")
 
     def __init__(self, api):
         self.api = api

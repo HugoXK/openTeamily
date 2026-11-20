@@ -55,6 +55,7 @@ jobs:
       - run: node --test tests/profile_page.test.mjs
       - run: node --test tests/download_page.test.mjs
       - run: node --test tests/profile_avatar.test.mjs
+      - run: node --test tests/pwa_install.test.mjs
       - run: node --test tests/meetings_page.test.mjs
       - run: node --test tests/meetings_action_toggle.test.mjs
       - run: node --test tests/meetings_attendee_complete.test.mjs

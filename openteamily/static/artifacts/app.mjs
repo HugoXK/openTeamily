@@ -2281,3 +2281,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 if (globalThis.document && globalThis.document.getElementById('editor-form')) {
   mount(globalThis.document);
 }
+
+// /space is the install target of manifest.webmanifest: the worker only has to
+// exist and claim the page so the browser offers "install" and reopens the app
+// in its own window. A failed registration must keep the page usable.
+if (globalThis.navigator && globalThis.navigator.serviceWorker) {
+  globalThis.navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
