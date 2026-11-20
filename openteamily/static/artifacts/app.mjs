@@ -1076,7 +1076,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const meta = document.createElement('span');
       meta.className = 'note';
       const source = item.source && item.source.kind === 'agent_message' ? ' · 消息' : '';
-      meta.textContent = `${kindLabel(item.kind)} · ${item.created_by || ''}${source}`;
+      meta.textContent = `${kindLabel(item.kind)} · ${item.created_by || ''}${source}`
+        + (item.search_preview ? ' · 正文：' + item.search_preview : '');
+      if (item.search_preview) meta.title = item.search_preview;
       row.appendChild(open);
       row.appendChild(meta);
       const cover = document.createElement('span');

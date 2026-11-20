@@ -1790,7 +1790,14 @@ class App:
             favorites = {entry['artifact_id'] for entry in db.execute(
                 'SELECT f.artifact_id FROM artifact_favorites f JOIN artifacts a ON a.id=f.artifact_id '
                 'WHERE a.workspace_id=? AND f.user_id=?', (workspace['id'], session['user_id']))}
-            items = [dict(artifacts.view(row, include_body=False), favorited=row['id'] in favorites) for row in rows[:limit]]
+            items = []
+            for row in rows[:limit]:
+                item = dict(artifacts.view(row, include_body=False), favorited=row['id'] in favorites)
+                if (needle and needle not in row['title'].casefold()
+                        and artifacts.public_kind(row) in ('document', 'website')
+                        and needle in (row['body'] or '').casefold()):
+                    item['search_preview'] = search.snippet(row['body'])
+                items.append(item)
             return 200, {'items': items,
                          'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
         if target_id is None and method == 'POST' and not query:

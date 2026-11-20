@@ -34,6 +34,16 @@ The workspace id is also part of every query, so a caller cannot search another 
 
 The unified `/chat` sidebar message tab calls this endpoint and can open authorized agent or social conversations from results. The file/link tabs use the authorized resource endpoint below; other tabs use existing workspace data. This is workspace-authorized search, not an instance-wide index. Results remain bounded to the requested page.
 
+
+## Works-library text search
+
+The `/space` works library now searches `document` and `website` titles and
+saved body text through the existing `GET /v1/workspaces/{id}/artifacts?q=`
+route. This is a bounded workspace scan with the same membership checks as the
+library; it returns a 160-character `search_preview` only when the match came
+from the body. It is not the message search index and not a cross-workspace or
+semantic index.
+
 ## Explicitly not in this slice
 
 - Full-text/`FTS5` index, ranking, highlights beyond a plain snippet, semantic/vector search.
