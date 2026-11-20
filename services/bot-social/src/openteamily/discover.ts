@@ -39,12 +39,71 @@ function engagement(ot: OtContext, l: any, viewer: string) {
   };
 }
 
-const listingView = (ot: OtContext, l: any, viewer: string, withSnapshot = false) => ({
+/** Path prefix of PUBLIC_BASE_URL (e.g. `/social`) so cards on the site origin hit this Bot Social. */
+export function publicPrefix(base: string) {
+  try {
+    const path = new URL(base).pathname.replace(/\/+$/, "");
+    return path && path !== "/" ? path : "";
+  } catch {
+    return "";
+  }
+}
+
+function listingPath(ot: OtContext, l: { kind: string; slug: string }) {
+  const prefix = publicPrefix(ot.platform.publicBaseUrl);
+  return `${prefix}${l.kind === "agent" ? "/a/" : "/w/"}${l.slug}`;
+}
+
+const listingView = (ot: OtContext, l: any, viewer: string | null, withSnapshot = false) => ({
   id: l.id, slug: l.slug, kind: l.kind, title: l.title, summary: l.summary, category: l.category, work_kind: l.work_kind,
   creator: ot.profileView(l.owner_id), listed: !!l.listed, updated_at: l.updated_at, created_at: l.created_at,
-  path: (l.kind === "agent" ? "/a/" : "/w/") + l.slug, ...engagement(ot, l, viewer),
+  path: listingPath(ot, l), ...(viewer ? engagement(ot, l, viewer) : { likes: ot.get<any>("SELECT COUNT(*) AS n FROM ot_likes WHERE listing_id = ?", l.id).n, collections: ot.get<any>("SELECT COUNT(*) AS n FROM ot_collections WHERE listing_id = ?", l.id).n, liked: false, collected: false, following: false, own: false }),
   ...(withSnapshot ? { snapshot: l.snapshot ?? null } : {}),
 });
+
+function escapeHtml(value: string) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+}
+
+function publicPage(l: any, view: any) {
+  const creator = view.creator?.display_name || view.creator?.handle || "";
+  const starts = (() => {
+    if (l.kind !== "agent" || !l.snapshot) return [];
+    try {
+      const parsed = JSON.parse(l.snapshot);
+      return Array.isArray(parsed?.quick_starts) ? parsed.quick_starts.map((t: unknown) => String(t).slice(0, 80)) : [];
+    } catch { return []; }
+  })();
+  const body = l.kind === "work" && l.snapshot && !String(l.snapshot).startsWith("{")
+    ? `<pre>${escapeHtml(String(l.snapshot).slice(0, 20_000))}</pre>`
+    : (view.summary ? `<p>${escapeHtml(view.summary)}</p>` : "");
+  const startList = starts.length ? `<ul>${starts.map((s: string) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>` : "";
+  return `<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';">
+<title>${escapeHtml(view.title || view.slug)} · OpenTeamily</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1a1a1a}
+.meta{color:#555;font-size:.9rem}
+pre{white-space:pre-wrap;background:#f6f6f6;padding:1rem;border-radius:8px}
+</style>
+</head><body>
+<p class="meta">${l.kind === "agent" ? "代理人" : "作品"}${creator ? " · " + escapeHtml(creator) : ""}</p>
+<h1>${escapeHtml(view.title || view.slug)}</h1>
+${body}
+${startList}
+</body></html>
+`;
+}
+
+function listedBySlug(ot: OtContext, slug: string) {
+  assert(SLUG.test(slug), 404, "listing_not_found", "no such listing");
+  const l = ot.get<any>("SELECT * FROM ot_listings WHERE slug = ? AND listed = 1", slug);
+  assert(l, 404, "listing_not_found", "no such listing");
+  return l;
+}
 
 export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   app.put("/v1/ot/listings", async (req) => {
@@ -152,5 +211,30 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       following: ot.all<any>("SELECT creator_id FROM ot_follows WHERE follower_id = ? ORDER BY created_at DESC LIMIT 500", who).map((r) => ot.profileView(r.creator_id)),
       followers: ot.all<any>("SELECT follower_id FROM ot_follows WHERE creator_id = ? ORDER BY created_at DESC LIMIT 500", who).map((r) => ot.profileView(r.follower_id)),
     };
+  });
+
+  // Public catalog pages: no connector token. The isolated site exposes them at
+  // https://<origin>/social/a/<slug> and /social/w/<slug> through the existing edge prefix.
+  app.get("/v1/ot/public/listings/:slug", async (req) => {
+    const l = listedBySlug(ot, params(req).slug);
+    return listingView(ot, l, null, true);
+  });
+  const sendPublic = async (req: any, reply: any, kind: "agent" | "work") => {
+    const l = listedBySlug(ot, params(req).slug);
+    assert(l.kind === kind, 404, "listing_not_found", "no such listing");
+    const view = listingView(ot, l, null, true);
+    const accept = String(req.headers.accept || "");
+    if (accept.includes("application/json") && !accept.includes("text/html")) return view;
+    reply.header("Content-Type", "text/html; charset=utf-8");
+    reply.header("Cache-Control", "public, max-age=60");
+    return reply.send(publicPage(l, view));
+  };
+  app.get("/a/:slug", async (req, reply) => sendPublic(req, reply, "agent"));
+  app.get("/w/:slug", async (req, reply) => sendPublic(req, reply, "work"));
+  app.get("/w/:slug/preview", async (req) => {
+    const l = listedBySlug(ot, params(req).slug);
+    assert(l.kind === "work", 404, "listing_not_found", "no such listing");
+    const snapshot = l.snapshot ? String(l.snapshot).slice(0, 2000) : "";
+    return { preview: snapshot.startsWith("{") ? (listingView(ot, l, null).summary || "") : snapshot };
   });
 }
