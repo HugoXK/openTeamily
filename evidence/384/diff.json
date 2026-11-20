@@ -1,0 +1,433 @@
+{
+  "slug": "ev384",
+  "sides": [
+    "http://127.0.0.1:8101",
+    "http://127.0.0.1:8102"
+  ],
+  "diffs": [
+    {
+      "route": "/settings/connectors",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev384/before/ev384__before__zh-CN__light__1440x900__settings-connectors.png",
+      "after": "ev384/after/ev384__after__zh-CN__light__1440x900__settings-connectors.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2839
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2986
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 65315,
+      "ratio": 0.050397376543209874,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 65315,
+        "ratio": 0.05375720164609053
+      },
+      "bbox": {
+        "x": 511,
+        "y": 498,
+        "width": 474,
+        "height": 395
+      },
+      "text": {
+        "changedLines": 12,
+        "sample": [
+          "+应用连接",
+          "+共 39 个应用 · 8 个分类 · 0 个已接入",
+          "+还没填 Composio API key：下面每一项的「连接」会先把你带到 key 输入框，填好保存后才会真的连接。 去填 key",
+          "+全部 39",
+          "+开发 6"
+        ]
+      }
+    },
+    {
+      "route": "/settings/connectors",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev384/before/ev384__before__zh-CN__dark__1440x900__settings-connectors.png",
+      "after": "ev384/after/ev384__after__zh-CN__dark__1440x900__settings-connectors.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2839
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2986
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 79690,
+      "ratio": 0.061489197530864195,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 79690,
+        "ratio": 0.06558847736625514
+      },
+      "bbox": {
+        "x": 512,
+        "y": 520,
+        "width": 474,
+        "height": 380
+      },
+      "text": {
+        "changedLines": 12,
+        "sample": [
+          "+应用连接",
+          "+共 39 个应用 · 8 个分类 · 0 个已接入",
+          "+还没填 Composio API key：下面每一项的「连接」会先把你带到 key 输入框，填好保存后才会真的连接。 去填 key",
+          "+全部 39",
+          "+开发 6"
+        ]
+      }
+    },
+    {
+      "route": "/settings/connectors",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev384/before/ev384__before__en__light__1440x900__settings-connectors.png",
+      "after": "ev384/after/ev384__after__en__light__1440x900__settings-connectors.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2839
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2986
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 65315,
+      "ratio": 0.050397376543209874,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 65315,
+        "ratio": 0.05375720164609053
+      },
+      "bbox": {
+        "x": 511,
+        "y": 498,
+        "width": 474,
+        "height": 395
+      },
+      "text": {
+        "changedLines": 12,
+        "sample": [
+          "+应用连接",
+          "+共 39 个应用 · 8 个分类 · 0 个已接入",
+          "+还没填 Composio API key：下面每一项的「连接」会先把你带到 key 输入框，填好保存后才会真的连接。 去填 key",
+          "+全部 39",
+          "+开发 6"
+        ]
+      }
+    },
+    {
+      "route": "/settings/connectors",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev384/before/ev384__before__en__dark__1440x900__settings-connectors.png",
+      "after": "ev384/after/ev384__after__en__dark__1440x900__settings-connectors.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2839
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2986
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 79690,
+      "ratio": 0.061489197530864195,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 79690,
+        "ratio": 0.06558847736625514
+      },
+      "bbox": {
+        "x": 512,
+        "y": 520,
+        "width": 474,
+        "height": 380
+      },
+      "text": {
+        "changedLines": 12,
+        "sample": [
+          "+应用连接",
+          "+共 39 个应用 · 8 个分类 · 0 个已接入",
+          "+还没填 Composio API key：下面每一项的「连接」会先把你带到 key 输入框，填好保存后才会真的连接。 去填 key",
+          "+全部 39",
+          "+开发 6"
+        ]
+      }
+    },
+    {
+      "route": "/settings/connectors",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev384/before/ev384__before__zh-CN__light__390x844__settings-connectors.png",
+      "after": "ev384/after/ev384__after__zh-CN__light__390x844__settings-connectors.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2839
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2986
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 18947,
+      "ratio": 0.05756167213513185,
+      "rail": {
+        "changed": 650,
+        "ratio": 0.008557135334386519
+      },
+      "content": {
+        "changed": 18297,
+        "ratio": 0.07226303317535546
+      },
+      "bbox": {
+        "x": 75,
+        "y": 703,
+        "width": 296,
+        "height": 141
+      },
+      "text": {
+        "changedLines": 12,
+        "sample": [
+          "+应用连接",
+          "+共 39 个应用 · 8 个分类 · 0 个已接入",
+          "+还没填 Composio API key：下面每一项的「连接」会先把你带到 key 输入框，填好保存后才会真的连接。 去填 key",
+          "+全部 39",
+          "+开发 6"
+        ]
+      }
+    },
+    {
+      "route": "/settings/connectors",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev384/before/ev384__before__zh-CN__dark__390x844__settings-connectors.png",
+      "after": "ev384/after/ev384__after__zh-CN__dark__390x844__settings-connectors.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2839
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2986
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 16090,
+      "ratio": 0.04888200267347187,
+      "rail": {
+        "changed": 640,
+        "ratio": 0.00842548709847288
+      },
+      "content": {
+        "changed": 15450,
+        "ratio": 0.06101895734597156
+      },
+      "bbox": {
+        "x": 10,
+        "y": 23,
+        "width": 360,
+        "height": 821
+      },
+      "text": {
+        "changedLines": 12,
+        "sample": [
+          "+应用连接",
+          "+共 39 个应用 · 8 个分类 · 0 个已接入",
+          "+还没填 Composio API key：下面每一项的「连接」会先把你带到 key 输入框，填好保存后才会真的连接。 去填 key",
+          "+全部 39",
+          "+开发 6"
+        ]
+      }
+    },
+    {
+      "route": "/settings/connectors",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev384/before/ev384__before__en__light__390x844__settings-connectors.png",
+      "after": "ev384/after/ev384__after__en__light__390x844__settings-connectors.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2839
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2986
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 18947,
+      "ratio": 0.05756167213513185,
+      "rail": {
+        "changed": 650,
+        "ratio": 0.008557135334386519
+      },
+      "content": {
+        "changed": 18297,
+        "ratio": 0.07226303317535546
+      },
+      "bbox": {
+        "x": 75,
+        "y": 703,
+        "width": 296,
+        "height": 141
+      },
+      "text": {
+        "changedLines": 12,
+        "sample": [
+          "+应用连接",
+          "+共 39 个应用 · 8 个分类 · 0 个已接入",
+          "+还没填 Composio API key：下面每一项的「连接」会先把你带到 key 输入框，填好保存后才会真的连接。 去填 key",
+          "+全部 39",
+          "+开发 6"
+        ]
+      }
+    },
+    {
+      "route": "/settings/connectors",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev384/before/ev384__before__en__dark__390x844__settings-connectors.png",
+      "after": "ev384/after/ev384__after__en__dark__390x844__settings-connectors.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2839
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2986
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 16089,
+      "ratio": 0.04887896463725848,
+      "rail": {
+        "changed": 639,
+        "ratio": 0.008412322274881517
+      },
+      "content": {
+        "changed": 15450,
+        "ratio": 0.06101895734597156
+      },
+      "bbox": {
+        "x": 74,
+        "y": 735,
+        "width": 296,
+        "height": 109
+      },
+      "text": {
+        "changedLines": 12,
+        "sample": [
+          "+应用连接",
+          "+共 39 个应用 · 8 个分类 · 0 个已接入",
+          "+还没填 Composio API key：下面每一项的「连接」会先把你带到 key 输入框，填好保存后才会真的连接。 去填 key",
+          "+全部 39",
+          "+开发 6"
+        ]
+      }
+    }
+  ]
+}
