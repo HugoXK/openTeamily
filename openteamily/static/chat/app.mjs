@@ -2685,6 +2685,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const menu = document.getElementById('compose-menu');
     const button = document.getElementById('new-conversation');
     const open = menu.hidden;
+    const meetingNotes = document.getElementById('compose-meeting-notes');
+    if (open && meetingNotes) meetingNotes.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), new: '1'});
     menu.hidden = !open;
     button.setAttribute('aria-expanded', open ? 'true' : 'false');
   });

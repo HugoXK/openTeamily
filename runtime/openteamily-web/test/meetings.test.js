@@ -3,6 +3,7 @@ import test from 'node:test'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
+import { attachRuntime, detachRuntime } from '../src/host.js'
 
 const base = (id = '', ws = WS) => `/v1/workspaces/${ws}/meetings${id ? '/' + id : ''}`
 const body = { title: '周会', attendees: ['alice', 'bob'], summary: '同步进度。', transcript: '讨论排期。', action_items: [{ text: '订会议室', owner: 'bob' }] }
@@ -55,6 +56,35 @@ test('meetings run inside this DS-Bot: create, idempotent replay, list, read, up
 
   assert.equal((await call('POST', base(meeting.id) + '/remove', {})).status, 200)
   assert.equal((await call('GET', base(meeting.id))).status, 404)
+})
+
+test('meeting draft uses only the native text inference service and never saves without a separate request', async (t) => {
+  const bot = await boot()
+  const call = (method, id, body) => bot.call('meetings', method, base(id), body)
+  const input = { title: '发布周会', attendees: ['小林'], transcript: '已决定周四上线。小林负责核对清单。' }
+  const prompts = []
+  let answer = '```json\n{"summary":"周四上线。","action_items":[{"text":"核对清单","owner":"小林","done":true}]}\n```'
+  assert.equal((await call('POST', 'draft', input)).status, 503)
+  attachRuntime({rt: {}, ctx: {}, textOnly: async prompt => { prompts.push(prompt); return answer }})
+  t.after(detachRuntime)
+  assert.equal((await call('POST', 'draft', {...input, transcript: ' '})).status, 400)
+  assert.equal((await call('GET', 'draft')).status, 400)
+  assert.equal(prompts.length, 0)
+  const generated = await call('POST', 'draft', input)
+  assert.equal(generated.status, 200)
+  assert.deepEqual(generated.body.draft, { summary: '周四上线。', action_items: [
+    {text: '核对清单', owner: '小林', done: false},
+  ]})
+  assert.deepEqual(JSON.parse(prompts[0].split('\n').at(-1)), input)
+  assert.deepEqual((await call('GET', '')).body.items, [])
+  answer = 'not JSON'
+  assert.equal((await call('POST', 'draft', input)).status, 502)
+  const transcript = '会议记录'.repeat(10000)
+  const saved = await bot.call('meetings', 'POST', base(), {...input, ...generated.body.draft, transcript}, key())
+  assert.equal(saved.status, 201)
+  assert.equal(saved.body.meeting.transcript, transcript)
+  assert.equal(((await bot.endpoint('meetings/search', {q: input.title})).value.items[0]).href,
+    `/meetings#workspace=${WS}&meeting=${saved.body.meeting.id}`)
 })
 
 test('meeting data persists in this volume only; another DS-Bot never sees it', async () => {

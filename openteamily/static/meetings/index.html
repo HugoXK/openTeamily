@@ -66,7 +66,6 @@
   <section id="main-panel" hidden>
     <header class="page-top">
       <h1>会议</h1>
-      <p class="note">手工记录会议纪要、参会人和行动项。音频/视频录制与自动转写尚未实现。</p>
       <p id="whoami"></p>
       <label class="workspace-pick">工作区
         <select id="workspace"></select>
@@ -88,8 +87,21 @@
           <label>开始时间 <input id="meeting-started-at" type="datetime-local" required></label>
           <label>参会人 <input id="meeting-attendees" maxlength="2000" placeholder="用逗号分隔"></label>
           <ul id="attendee-matches" class="attendee-matches" role="listbox" aria-label="成员候选" hidden></ul>
-          <label>摘要 <textarea id="meeting-summary" maxlength="8000" rows="3"></textarea></label>
           <label>转写/正文 <textarea id="meeting-transcript" maxlength="40000" rows="6"></textarea></label>
+          <div class="meeting-actions">
+            <button type="button" id="generate-meeting-draft" class="secondary" disabled>生成纪要草稿</button>
+            <p id="meeting-draft-status" class="note" role="status"></p>
+          </div>
+          <section id="meeting-draft" class="meeting-draft" aria-labelledby="meeting-draft-heading" hidden>
+            <h3 id="meeting-draft-heading">纪要草稿</h3>
+            <p id="meeting-draft-summary"></p>
+            <ul id="meeting-draft-items" hidden></ul>
+            <div class="meeting-actions">
+              <button type="button" id="apply-meeting-draft">采用草稿</button>
+              <button type="button" id="discard-meeting-draft" class="secondary">丢弃草稿</button>
+            </div>
+          </section>
+          <label>摘要 <textarea id="meeting-summary" maxlength="8000" rows="3"></textarea></label>
           <fieldset>
             <legend>行动项</legend>
             <div id="action-list" class="action-list"></div>

@@ -102,6 +102,15 @@ function mount() {
   const attendeeList = document.getElementById('attendee-matches');
   let memberCache = {workspace: '', items: [], failed: false};
   let attendeeActive = -1;
+  let selection = 0;
+  const titleInput = document.getElementById('meeting-title');
+  const transcript = document.getElementById('meeting-transcript');
+  const summary = document.getElementById('meeting-summary');
+  const draftPanel = document.getElementById('meeting-draft');
+  const draftButton = document.getElementById('generate-meeting-draft');
+  const draftStatus = document.getElementById('meeting-draft-status');
+  let draft = null;
+  let draftRequest = null;
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -115,6 +124,82 @@ function mount() {
   function base() {
     return `/v1/workspaces/${workspaceId()}/meetings`;
   }
+
+  function updateDraftButton() {
+    draftButton.disabled = Boolean(draftRequest) || !transcript.value.trim();
+  }
+
+  function clearDraft() {
+    draft = null;
+    if (draftRequest) draftRequest.stale = true;
+    draftPanel.hidden = true;
+    draftStatus.textContent = draftRequest ? '上一条生成请求仍在处理。' : '';
+    updateDraftButton();
+  }
+
+  for (const field of [titleInput, attendeeInput, transcript]) {
+    field.addEventListener('input', clearDraft);
+  }
+  draftButton.addEventListener('click', async () => {
+    if (draftButton.disabled || !workspaceId()) return;
+    clearDraft();
+    const target = {workspace: workspaceId(), transcript: transcript.value};
+    draftRequest = target;
+    updateDraftButton();
+    draftStatus.textContent = 'DS-Bot 正在整理纪要…';
+    try {
+      const result = await request('POST', `${base()}/draft`, {
+        title: titleInput.value.trim(), attendees: parseAttendees(attendeeInput.value), transcript: target.transcript,
+      });
+      if (target.stale || workspaceId() !== target.workspace) return;
+      if (result.status !== 200 || !result.body.draft) {
+        draftStatus.textContent = messageFor(result.body.error, '生成失败，请重试。');
+        return;
+      }
+      draft = result.body.draft;
+      document.getElementById('meeting-draft-summary').textContent = draft.summary;
+      const items = document.getElementById('meeting-draft-items');
+      items.replaceChildren(...draft.action_items.map(item => {
+        const row = document.createElement('li');
+        row.textContent = item.owner ? `${item.text}（${item.owner}）` : item.text;
+        return row;
+      }));
+      items.hidden = !draft.action_items.length;
+      draftPanel.hidden = false;
+      draftStatus.textContent = '草稿已生成，请核对后采用。';
+    } catch {
+      if (!target.stale && workspaceId() === target.workspace) draftStatus.textContent = '连接失败，请重试。';
+    } finally {
+      if (draftRequest === target) {
+        draftRequest = null;
+        if (target.stale) draftStatus.textContent = '';
+        updateDraftButton();
+      }
+    }
+  });
+  document.getElementById('discard-meeting-draft').addEventListener('click', clearDraft);
+  document.getElementById('apply-meeting-draft').addEventListener('click', () => {
+    if (!draft) return;
+    const note = summary.value.trim();
+    const next = note && !note.includes(draft.summary) ? note + '\n\n' + draft.summary : note || draft.summary;
+    const keyOf = item => JSON.stringify([item.text.trim().toLowerCase(), (item.owner || '').trim().toLowerCase()]);
+    const seen = new Set(actions.map(keyOf));
+    const additions = [];
+    for (const item of draft.action_items) {
+      const key = keyOf(item);
+      if (!seen.has(key)) additions.push({...item, done: false});
+      seen.add(key);
+    }
+    if (next.length > summary.maxLength || actions.length + additions.length > 50) {
+      draftStatus.textContent = '摘要或行动项已达上限。可先精简现有内容，再采用草稿。';
+      return;
+    }
+    summary.value = next;
+    actions.push(...additions);
+    renderActions();
+    clearDraft();
+    draftStatus.textContent = '已填入摘要和行动项。确认后保存会议。';
+  });
 
   function hideAttendees() {
     attendeeActive = -1;
@@ -151,6 +236,7 @@ function mount() {
 
   function chooseAttendee(username) {
     attendeeInput.value = attendeeInsert(attendeeInput.value, username);
+    clearDraft();
     hideAttendees();
     attendeeInput.focus();
   }
@@ -291,6 +377,7 @@ function mount() {
   }
 
   function fill(meeting) {
+    selection += 1;
     hideAttendees();
     current = meeting;
     form.hidden = false;
@@ -300,6 +387,7 @@ function mount() {
     document.getElementById('meeting-attendees').value = meeting ? (meeting.attendees || []).join(', ') : '';
     document.getElementById('meeting-summary').value = meeting ? (meeting.summary || '') : '';
     document.getElementById('meeting-transcript').value = meeting ? (meeting.transcript || '') : '';
+    clearDraft();
     actions = meeting ? (meeting.action_items || []).map(item => ({...item})) : [];
     renderActions();
     document.getElementById('remove-meeting').hidden = !meeting || !meeting.id;
@@ -311,10 +399,18 @@ function mount() {
     document.getElementById('meeting-meta').textContent = meeting && meeting.id
       ? '修订 ' + meeting.revision + ' · 创建者 ' + meeting.created_by : '新会议';
     renderList();
+    if (globalThis.history?.replaceState && globalThis.location) {
+      const fragment = new URLSearchParams({workspace: workspaceId()});
+      if (meeting?.id) fragment.set('meeting', meeting.id);
+      else fragment.set('new', '1');
+      globalThis.history.replaceState(null, '', '#' + fragment);
+    }
   }
 
-  async function loadList(selectId) {
+  async function loadList(selectId, createNew = false) {
+    const workspace = workspaceId(), pendingSelection = selection;
     const result = await request('GET', `${base()}?limit=100`);
+    if (workspaceId() !== workspace || pendingSelection !== selection) return;
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法加载会议。'));
       return;
@@ -323,7 +419,7 @@ function mount() {
     renderList();
     if (selectId) {
       await openMeeting(selectId);
-    } else if (meetings.length && !current) {
+    } else if (!createNew && meetings.length && !current) {
       await openMeeting(meetings[0].id);
     } else {
       fill(null);
@@ -331,7 +427,10 @@ function mount() {
   }
 
   async function openMeeting(id) {
+    const workspace = workspaceId(), pendingSelection = ++selection;
+    clearDraft();
     const result = await request('GET', `${base()}/${id}`);
+    if (workspaceId() !== workspace || pendingSelection !== selection) return;
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法打开会议。'));
       return;
@@ -352,7 +451,9 @@ function mount() {
     document.getElementById('whoami').textContent = session.body.user.username;
     const listed = await request('GET', '/v1/workspaces?limit=100');
     const workspaces = listed.status === 200 ? (listed.body.items || []) : [];
-    const previous = workspaceSelect.value;
+    const linked = new URLSearchParams((globalThis.location?.hash || '').slice(1));
+    const linkedWorkspace = linked.get('workspace');
+    const previous = workspaces.some(space => space.id === linkedWorkspace) ? linkedWorkspace : workspaceSelect.value;
     workspaceSelect.replaceChildren();
     for (const space of workspaces) {
       const option = document.createElement('option');
@@ -370,7 +471,8 @@ function mount() {
       show('error', '还没有工作区。请先到聊天页创建。');
       return;
     }
-    await loadList();
+    const meetingId = linked.get('meeting') || '';
+    await loadList(workspaceId() === linkedWorkspace && /^[0-9a-f]{32}$/.test(meetingId) ? meetingId : '', linked.get('new') === '1');
   }
 
   form.addEventListener('submit', async event => {
@@ -461,6 +563,8 @@ function mount() {
   });
 
   workspaceSelect.addEventListener('change', () => {
+    selection += 1;
+    clearDraft();
     hideAttendees();
     memberCache = {workspace: '', items: [], failed: false};
     current = null;

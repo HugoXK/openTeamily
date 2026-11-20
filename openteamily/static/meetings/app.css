@@ -48,6 +48,12 @@
 .action-done { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--ot-muted); }
 .meeting-actions { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; }
 .meeting-actions a.secondary { display: inline-flex; align-items: center; text-decoration: none; }
+#meeting-draft-status { margin: 0; }
+#meeting-draft-status:empty { display: none; }
+.meeting-draft { border: 1px solid var(--ot-line); border-radius: var(--ot-radius); padding: .85rem; }
+.meeting-draft h3 { margin: 0; }
+#meeting-draft-summary { white-space: pre-wrap; overflow-wrap: anywhere; }
+#meeting-draft-items { overflow-wrap: anywhere; }
 @media (max-width: 900px) {
   .meeting-layout { grid-template-columns: 1fr; }
   .action-row { grid-template-columns: 1fr; }
