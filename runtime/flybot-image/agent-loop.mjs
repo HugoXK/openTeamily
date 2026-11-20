@@ -22,7 +22,7 @@ export function loadRuntimeKey(env = process.env, reader = readFileSync) {
   const token = String(doc.token || '')
   const hostname = String(doc.hostname || '')
   if (!origin.startsWith('http') || !token || !hostname) throw new Error('runtime key file is incomplete')
-  return { origin, token, hostname }
+  return { origin, token, hostname, ...(doc.agent_bootstrap ? {agentBootstrap: doc.agent_bootstrap} : {}) }
 }
 
 function redact(value) {

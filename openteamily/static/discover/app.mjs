@@ -49,10 +49,7 @@ export function catalogQuery(text = '', cursor = '', category = 'all', creator =
   return '/v1/discover/agents?' + params.toString();
 }
 
-export const FEED_CATEGORIES = [
-  '热门', '网页', '小游戏', '图片', '音乐', '幻灯片', '视频', '3D 作品',
-  '短剧', '文章', '教程', '看板', '行情', '小程序', '故事', '娱乐', 'AI 与科技', '美容',
-];
+export const FEED_CATEGORIES = ['网页', '图片', '音乐', '幻灯片', '视频'];
 
 export const CATALOG_CATEGORIES = AGENT_CATEGORIES.map(({label}) => label);
 
@@ -61,13 +58,13 @@ const TEAM_DIRECTORY_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const TEAM_MEMBERSHIP = {member: '已加入', pending: '等待审批', suspended: '已暂停'};
 const TEAM_SEARCH_LIMIT = 60;
 
-export const FEED_ACTIVITY_EMPTY_NOTE = '还没有公开作品，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。支持点赞、收录和关注作者；其他分类尚未接通。';
-export const FEED_ACTIVITY_LISTED_NOTE = '以下是工作区自愿公开的作品，不是推荐或奖励内容。支持点赞、收录和关注作者；其他分类尚未接通。';
+export const FEED_ACTIVITY_EMPTY_NOTE = '暂时没有公开作品。';
+export const FEED_ACTIVITY_LISTED_NOTE = '';
 export const FEED_ACTIVITY_NOTE = FEED_ACTIVITY_EMPTY_NOTE;
 export const FEED_FOLLOWING_EMPTY_TITLE = '关注列表暂无动态';
 export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显示在这里。';
-export const FEED_FOLLOWING_NOTE = '这里只展示你关注的作者已公开的作品，不是推荐或奖励活动。';
-export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。支持点赞、收录和关注作者；其他分类尚未接通。';
+export const FEED_FOLLOWING_NOTE = '你关注的作者已公开的作品会显示在这里。';
+export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。';
 
 export const FEED_KINDS = ['', 'website', 'image', 'audio', 'slides', 'video'];
 
@@ -331,6 +328,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function applyCatalogChrome() {
+    setCurrent('catalog-tab-feed', !catalogView);
     setCurrent('catalog-tab-agents', agentsView);
     setCurrent('catalog-tab-teams', teamsView);
     const agentFilters = document.getElementById('catalog-filters');

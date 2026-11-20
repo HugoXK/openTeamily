@@ -3,9 +3,30 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   display: block; width: 100%; max-width: 76rem; margin: 0 auto; padding: 1.5rem 2rem;
 }
 .catalog-toolbar { background: transparent; border: 0; box-shadow: none; padding: 0; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
-.catalog-tabs { display: flex; gap: .7rem; align-items: center; margin-right: auto; }
-.catalog-tabs a { background: transparent; color: var(--ot-muted); text-decoration: none; padding: .45rem 0; }
-.catalog-toolbar .catalog-tabs a[aria-current="page"] { background: transparent; border-radius: 0; color: var(--ot-ink); font-weight: 650; text-decoration: none; border-bottom: 2px solid var(--ot-accent); padding: .45rem 0; }
+.discover-title { margin: 0 0 .625rem; }
+.catalog-tabs {
+  display: flex;
+  gap: 1.25rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--ot-line);
+}
+.catalog-tabs a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: .125rem .375rem;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--ot-muted);
+  text-decoration: none;
+}
+.catalog-tabs a:hover,
+.catalog-tabs a[aria-current="page"],
+.catalog-tabs a[aria-current="page"]:hover { background: transparent; color: var(--ot-ink); }
+.catalog-tabs a[aria-current="page"] {
+  border-bottom-color: var(--ot-accent);
+  font-weight: 650;
+}
 a.catalog-create[hidden] { display: none; }
 #catalog-search { display: flex; align-items: center; gap: .4rem; padding: 0; border: 0; margin: 0; background: transparent; }
 #catalog-query { min-width: 0; width: 15rem; border: 1px solid var(--ot-line); background: var(--ot-surface); color: var(--ot-ink); padding: .45rem .7rem; font: inherit; border-radius: 999px; }
@@ -386,6 +407,7 @@ body.app-workspace:not(.chat-open) > main > #main-panel { padding: 1.25rem clamp
 .feed-grid > article > div > button[aria-pressed="true"] { color: var(--ot-accent-hover); background: var(--ot-accent-soft); }
 .feed-following-empty { background: transparent; padding: 6rem 1rem; border-radius: 0; }
 #feed-note { color: var(--ot-muted); font-size: .8rem; }
+#feed-note:empty { display: none; }
 @media (max-width: 65rem) { .feed-grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width: 45rem) {
   .catalog, .feed-grid { grid-template-columns: minmax(0,1fr); }
@@ -426,9 +448,8 @@ a.catalog-create:hover { background: var(--ot-accent-hover); color: var(--ot-on-
 }
 #catalog-search:has(#catalog-query:placeholder-shown) #catalog-clear { display: none; }
 .feed-tabs { gap: 1.25rem; }
-.feed-tabs button, .catalog-tabs a { font-size: .8125rem; padding: .375rem 0; min-height: 0; border-radius: 0; box-shadow: none; }
-.feed-tabs button[aria-selected="true"], .catalog-toolbar .catalog-tabs a[aria-current="page"] { font-weight: 650; color: var(--ot-ink); border-bottom: 2px solid var(--ot-ink); padding-bottom: .25rem; }
-.catalog-tabs { gap: 1rem; }
+.feed-tabs button { font-size: .8125rem; padding: .375rem 0; min-height: 0; border-radius: 0; box-shadow: none; }
+.feed-tabs button[aria-selected="true"] { font-weight: 650; color: var(--ot-ink); border-bottom: 2px solid var(--ot-ink); padding-bottom: .25rem; }
 .catalog-toolbar { gap: .75rem; margin-top: .25rem; flex-wrap: nowrap; }
 .catalog-create { display: inline-flex; align-items: center; gap: .25rem; height: 2.125rem; padding: 0 1rem; font-size: .8125rem; font-weight: 600; border-radius: 999px; white-space: nowrap; }
 
@@ -504,7 +525,9 @@ html[data-theme-resolved="dark"] .feed-card .kind { background: var(--ot-surface
 #feed-panel .note { font-size: .75rem; color: var(--ot-muted); margin: .25rem 0; }
 @media (max-width: 45rem) {
   .feed-toolbar, .catalog-toolbar { flex-wrap: wrap; }
-  #feed-search, #catalog-search { flex: 1 1 100%; max-width: none; }
+  #feed-search, #catalog-search { flex: 1 1 100%; max-width: none; height: 2.75rem; }
+  #feed-query, #catalog-query { font-size: 1rem; }
+  .feed-tabs button, .catalog-create { min-height: 2.75rem; }
 }
 #feed-activity-empty, .feed-activity-empty { background: transparent; border: 0; box-shadow: none; padding: 0; border-radius: 0; }
 .catalog-filters { margin-top: 1rem; }

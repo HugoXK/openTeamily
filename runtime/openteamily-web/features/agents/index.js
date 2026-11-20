@@ -1,3 +1,4 @@
+import { loadRuntimeKey } from '../../../flybot-image/agent-loop.mjs'
 import { nativeAgents } from './native.js'
 import { importPending } from '../../src/pending-import.js'
 // Workspace agents inside the user's own DS-Bot (batch B2; moved from
@@ -478,6 +479,18 @@ export default async function agents(host) {
   const db = await openDatabase(host, 'agents.sqlite3')
   const { endpoints, migrate } = createAgents({ db, host })
   await importPending({ host, db, migrate })
+  if (!await endpoints['personal-binding']()) {
+    let bootstrap
+    try { bootstrap = loadRuntimeKey()?.agentBootstrap } catch {
+      throw new Error('Personal agent bootstrap configuration is unreadable')
+    }
+    if (bootstrap) {
+      if (bootstrap.instance_id !== (host.identity?.routingInstanceId || host.identity?.instanceId)) {
+        throw new Error('Personal agent bootstrap target mismatch')
+      }
+      await migrate(bootstrap)
+    }
+  }
   const timer = setTimeout(() => endpoints.reconcile().catch(() => host.log('native agent history reconciliation pending; retry agents/reconcile')), 10000)
   timer.unref?.()
   const wrapped = {}

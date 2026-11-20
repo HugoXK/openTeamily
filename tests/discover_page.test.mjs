@@ -41,11 +41,8 @@ test('isTeamsCatalog only matches the recorded tab=agents&section=groups query',
   assert.equal(isTeamsCatalog(undefined), false);
 });
 
-test('recorded feed categories stay in the captured order', () => {
-  assert.deepEqual(FEED_CATEGORIES, [
-    '热门', '网页', '小游戏', '图片', '音乐', '幻灯片', '视频', '3D 作品',
-    '短剧', '文章', '教程', '看板', '行情', '小程序', '故事', '娱乐', 'AI 与科技', '美容',
-  ]);
+test('available feed categories have a consistent order', () => {
+  assert.deepEqual(FEED_CATEGORIES, ['网页', '图片', '音乐', '幻灯片', '视频']);
 });
 
 test('feed all-filter shows the recorded 全部 label and keeps an empty canvas', () => {
@@ -400,13 +397,13 @@ test('work type selection uses the real API and resets pagination, all restores 
   assert.equal(calls.every(([, method]) => method === 'GET'), true);
 });
 
-test('supported work categories are enabled, unsupported classifications stay disabled', () => {
+test('the feed only presents available filters', () => {
   const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
   for (const kind of ['website', 'image', 'audio', 'slides', 'video']) {
     const tag = html.match(new RegExp('<button[^>]*id="feed-kind-' + kind + '"[^>]*>'))[0];
     assert.equal(tag.includes('disabled'), false);
   }
-  assert.match(html, /disabled[^>]*>小游戏</);
+  assert.doesNotMatch(html, />小游戏</);
   assert.equal(feedQuery('中文', '1.site-one', 'website'), 'limit=12&q=%E4%B8%AD%E6%96%87&cursor=1.site-one&kind=website');
 });
 
@@ -614,7 +611,7 @@ test('following nobody from a shared URL shows the following empty note, not a b
   const empty = doc.getElementById('feed-following-empty');
   assert.equal(empty.hidden, false);
   assert.equal(doc.getElementById('feed-tab-following').attributes['aria-selected'], 'true');
-  assert.match(doc.getElementById('feed-note').textContent, /只展示你关注的作者/);
+  assert.match(doc.getElementById('feed-note').textContent, /你关注的作者已公开/);
   assert.match(calls.at(-1), /tab=following/);
 });
 
