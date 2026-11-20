@@ -63,6 +63,40 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(head['status'], 200)
         self.assertEqual(head['body'], b'')
 
+    def test_composer_deep_links_pass_only_known_queries(self):
+        for kind in ('document', 'website', 'slides', 'dashboard', 'whiteboard'):
+            self.assertEqual(self.raw.call('GET', '/space', query='new=' + kind)['status'], 200, kind)
+        self.assertEqual(self.raw.call('GET', '/space', query='new=image')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/automations', query='template=daily_brief')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/automations', query='template=custom')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/automations', query='template=nope')['status'], 400)
+        self.assertEqual(self.raw.call('GET', '/shell/thumb.mjs')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/memory/rich.mjs')['status'], 200)
+        self.assertEqual(self.raw.call('GET', '/shell/thumb.mjs', query='x=1')['status'], 400)
+
+    def test_saved_document_deep_link_is_strict_html_only_not_authorization(self):
+        workspace, artifact = 'a' * 32, 'b' * 32
+        query = f'workspace={workspace}&artifact={artifact}'
+        for route in ('/space', '/artifacts'):
+            for pair in (query, f'artifact={artifact}&workspace={workspace}'):
+                for method in ('GET', 'HEAD'):
+                    response = self.raw.call(method, route, query=pair)
+                    self.assertEqual(response['status'], 200, (route, pair, method))
+                    self.assertIn("default-src 'none'", response['headers']['Content-Security-Policy'])
+            for invalid in (f'workspace={workspace}', f'artifact={artifact}',
+                            query + '&artifact=' + artifact, query + '&new=document',
+                            query + '&x=1', query + '&', 'x=1&' + query,
+                            query.replace('workspace=', '%77orkspace='),
+                            query.replace(workspace, '../' + workspace),
+                            query.replace(artifact, '%62' * 32),
+                            query.replace(artifact, 'B' * 32),
+                            query.replace(artifact, artifact[:-1])):
+                self.assertEqual(self.raw.call('GET', route, query=invalid)['status'], 400, invalid)
+        for asset in ('/artifacts/app.mjs', '/artifacts/app.css', '/skills/app.mjs', '/settings'):
+            self.assertEqual(self.raw.call('GET', asset, query=query)['status'], 400, asset)
+        self.assertEqual(self.raw.call('GET', '/space', query=query, origin='https://evil.test')['status'], 403)
+        self.assertEqual(self.raw.call('POST', '/space', query=query)['status'], 405)
+
     def test_page_rejects_cross_origin_queries_and_writes(self):
         self.assertEqual(self.raw.call('GET', '/settings', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/settings', host='evil.test')['status'], 403)
@@ -120,20 +154,25 @@ class SettingsPageTests(unittest.TestCase):
         account = html.find('id="group-account"')
         ai = html.find('id="group-ai"')
         prefs = html.find('id="group-prefs"')
-        self.assertTrue(-1 < account < ai < prefs)
+        support = html.find('id="group-support"')
+        self.assertTrue(-1 < account < ai < prefs < support)
+        self.assertIn('支持与法律', html)
+        support_html = html[support:]
+        self.assertIn('href="/about"', support_html)
+        self.assertIn('href="/guide"', support_html)
         self.assertIn('href="/profile"', html)
         self.assertIn('href="/settings/language"', html)
         self.assertIn('href="/settings/channels"', html)
         self.assertIn('href="/settings/agent-access"', html)
         self.assertIn('href="#model-api"', html)
-        self.assertIn('href="#skill-secrets"', html)
+        self.assertIn('href="/settings/skill-configuration"', html)
         self.assertIn('href="/settings/connectors"', html)
         self.assertIn('href="/runtimes"', html)
         language = html.find('href="/settings/language"')
         channels = html.find('href="/settings/channels"')
         agent_api = html.find('href="/settings/agent-access"')
         model_api = html.find('href="#model-api"')
-        skills = html.find('href="#skill-secrets"')
+        skills = html.find('href="/settings/skill-configuration"')
         connectors = html.find('href="/settings/connectors"')
         runtimes = html.find('href="/runtimes"')
         self.assertTrue(-1 < language < channels < agent_api < model_api < skills < connectors < runtimes)
@@ -170,7 +209,8 @@ class SettingsPageTests(unittest.TestCase):
         for path in ('/settings/appearance', '/settings/language',
                      '/settings/message-folding', '/settings/privacy',
                      '/settings/shortcuts', '/settings/channels',
-                     '/settings/agent-access', '/settings/connectors'):
+                     '/settings/agent-access', '/settings/connectors',
+                     '/settings/skill-configuration'):
             page = self.raw.call('GET', path)
             self.assertEqual(page['status'], 200, path)
             html = page['body'].decode()
@@ -179,6 +219,19 @@ class SettingsPageTests(unittest.TestCase):
             self.assertEqual(page['headers']['Cache-Control'], 'no-store')
         self.assertEqual(self.raw.call('GET', '/settings/missing')['status'], 404)
         self.assertEqual(self.raw.call('GET', '/settings/appearance', query='q=1')['status'], 400)
+
+    def test_support_rows_link_the_pages_the_server_serves(self):
+        html = self.raw.call('GET', '/settings')['body'].decode()
+        for label, href in (('帮助中心', '/help'), ('服务条款', '/terms'), ('隐私政策', '/privacy')):
+            self.assertNotIn(f'disabled title="未接通：还没有 OpenTeamily {label}页"', html)
+            self.assertNotIn(f'disabled title="未实现：还没有 OpenTeamily {label}页"', html)
+            self.assertIn(f'<a class="settings-row" href="{href}">', html)
+            page = self.raw.call('GET', href)
+            self.assertEqual(page['status'], 200, href)
+            self.assertEqual(page['headers']['Content-Type'], 'text/html; charset=utf-8', href)
+            body = page['body'].decode()
+            self.assertIn(f'<title>{label} · OpenTeamily</title>', body)
+            self.assertIn(f'<h1>{label}</h1>', body)
 
     def test_channel_agent_api_and_connectors_pages_use_recorded_empty_states(self):
         html = self.raw.call('GET', '/settings/channels')['body'].decode()
@@ -213,9 +266,12 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('不会添加或连接服务器', connectors)
         self.assertIn('class="connector-search-icon"', connectors)
         self.assertEqual(connectors.count('class="connector-row"'), 39)
-        self.assertEqual(connectors.count('>未连接<'), 39)
-        self.assertEqual(connectors.count('不会真连。">+ 连接'), 39)
-        self.assertEqual(connectors.count('disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。"'), 39)
+        # Rows start disabled until the user's own Composio key is loaded.
+        self.assertEqual(connectors.count('>未配置 Composio<'), 32)  # 31 rows + key card badge
+        self.assertEqual(connectors.count('data-state="unavailable">未接通<'), 8)
+        self.assertEqual(connectors.count('disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接'), 31)
+        self.assertEqual(connectors.count('disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接'), 8)
+        self.assertIn('id="composio-key-form"', connectors)
         self.assertIn('id="connectors-catalog"', connectors)
         self.assertIn('没有匹配的应用。', connectors)
         self.assertIn('id="connectors-empty"', connectors)

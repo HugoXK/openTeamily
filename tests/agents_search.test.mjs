@@ -101,7 +101,7 @@ function json(status, body) {
   return {status, json: async () => body};
 }
 
-function directoryFetcher(requests, {agents, conversations} = {}) {
+function directoryFetcher(requests, {agents, conversations, personal = null} = {}) {
   const space = {id: 'ws-1', name: 'Desk', owner_id: 'user-1'};
   const user = {id: 'user-1', username: 'alice'};
   const items = agents || [
@@ -115,6 +115,7 @@ function directoryFetcher(requests, {agents, conversations} = {}) {
   return async (path, options) => {
     requests.push({path, method: (options && options.method) || 'GET'});
     if (path === '/v1/auth/session') return json(200, {user});
+    if (path === '/v1/personal-agent') return json(200, {personal_agent: personal});
     if (path === '/v1/workspaces?limit=100') return json(200, {items: [space]});
     if (path === '/v1/workspaces/ws-1') return json(200, {workspace: space});
     if (path === '/v1/workspaces/ws-1/members') return json(200, {items: [{user_id: 'user-1', role: 'owner'}]});
@@ -215,4 +216,49 @@ test('an empty workspace keeps the genuine empty copy, not the no-match copy', a
   assert.equal(el('agents-empty').hidden, false);
   assert.equal(el('agents-empty').textContent, '这个工作区还没有智能体。');
   assert.equal(el('agents-count').textContent, '显示 0 个智能体');
+});
+
+
+test('the saved Personal Agent look replaces the monogram in the directory', async () => {
+  const requests = [];
+  const {doc, el} = fakeDocument();
+  const look = {color: '葡萄紫', expression: '好奇', headwear: '贝雷帽', glasses: '圆框眼镜', hand: '魔法棒'};
+  const personalAgent = {id: 'ag-look', name: "alice's Personal Agent", summary: 'Personal'};
+  await mount(doc, {fetcher: directoryFetcher(requests, {
+    agents: [personalAgent, {id: 'ag-other', name: 'Other', summary: ''}],
+    personal: {agent: personalAgent, look},
+  })});
+  await tick();
+  assert.equal(el('agent-list').children.length, 2);
+  const avatar = el('agent-list').children[0].children[0];
+  assert.equal(avatar.className, 'look-avatar');
+  assert.equal(avatar.dataset.color, '葡萄紫');
+  assert.equal(avatar.dataset.headwear, '贝雷帽');
+  const other = el('agent-list').children[1].children[0];
+  assert.equal(other.className, 'avatar');
+  assert.equal(other.textContent, 'O');
+});
+
+
+test('create form retains its element after DOM dispatch clears currentTarget during await', async () => {
+  const {doc,el}=fakeDocument();const requests=[],agents=[];let release,reset=0;
+  const ordinary=directoryFetcher(requests,{agents,conversations:[]});
+  const fetcher=async(path,options={})=>{
+    if(path==='/v1/workspaces/ws-1/agents'&&options.method==='POST'){
+      const agent={id:'new-agent',...JSON.parse(options.body),revision:1};
+      agents.push(agent);return await new Promise(resolve=>{release=()=>resolve(json(201,{agent}));});
+    }
+    return ordinary(path,options);
+  };
+  mount(doc,{fetcher});await tick();
+  const form=el('create-form');form.elements.name.value='Actually persisted';form.reset=()=>{reset++;};
+  const saved=globalThis.FormData;
+  globalThis.FormData=class{constructor(form){this.form=form}get(name){return this.form.elements[name]?.value||''}};
+  try{
+    const event={currentTarget:form,preventDefault(){}};
+    const pending=form.handlers.submit(event);assert.equal(typeof release,'function');
+    event.currentTarget=null;release();await pending;await tick();
+    assert.equal(reset,1);assert.equal(el('agent-list').children.length,1);
+    assert.equal(el('agents-count').textContent,'显示 1 个智能体');
+  }finally{globalThis.FormData=saved;}
 });

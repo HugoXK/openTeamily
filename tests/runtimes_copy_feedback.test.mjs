@@ -70,6 +70,7 @@ async function mountRuntimes(tag) {
     if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
     if (path === '/v1/runtime-keys') return {status: 200, json: async () => ({device_id: 'desk', items: []})};
     if (path === '/v1/runtime/connections') return {status: 200, json: async () => ({items: []})};
+    if (path === '/v1/runtime/tasks') return {status: 200, json: async () => ({items: []})};
     throw new Error('unexpected ' + path);
   };
   // Mirror the served markup: an idle 「复制」 button and an empty, hidden receipt slot.

@@ -1,5 +1,9 @@
+import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
+import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
+export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
+import { createLookAvatar } from '../look/app.mjs';
 
 export const SEARCH_TABS = [
   ['all', '全部'],
@@ -30,6 +34,7 @@ export function mergeSessions(agentRows, socialRows, currentUserId) {
       kind: 'agent',
       title: (row.agent && row.agent.name) || row.title || '对话',
       preview: sessionPreview(row, row.title || ''),
+      unread_count: Number(row.unread_count) || 0,
       updated: row.updated || 0,
     });
   }
@@ -210,6 +215,90 @@ export function groupPickerChoices(members, currentUserId, agents = []) {
   ];
 }
 
+export function leadGlyph(text, fallback = '?') {
+  const cleaned = String(text || '').replace(/^\s*\[[^\]]*\]\s*/, '');
+  const match = cleaned.match(/[\p{L}\p{N}]/u) || String(text || '').match(/[\p{L}\p{N}]/u);
+  return match ? match[0].toUpperCase() : fallback;
+}
+
+export function inlineBold(text) {
+  const value = typeof text === 'string' ? text : '';
+  const parts = [];
+  const pattern = /\*\*([^*]+)\*\*/g;
+  let last = 0;
+  let match;
+  while ((match = pattern.exec(value))) {
+    if (match.index > last) parts.push({text: value.slice(last, match.index), bold: false});
+    parts.push({text: match[1], bold: true});
+    last = match.index + match[0].length;
+  }
+  if (last < value.length) parts.push({text: value.slice(last), bold: false});
+  return parts;
+}
+
+export function wrapBold(text, start, end) {
+  const value = typeof text === 'string' ? text : '';
+  const from = Number.isFinite(start) ? Math.max(0, Math.min(value.length, start)) : value.length;
+  const to = Number.isFinite(end) ? Math.max(from, Math.min(value.length, end)) : from;
+  return {
+    text: value.slice(0, from) + '**' + value.slice(from, to) + '**' + value.slice(to),
+    start: from + 2,
+    end: to + 2,
+  };
+}
+
+function fillBold(doc, node, text) {
+  const parts = inlineBold(text);
+  node.textContent = '';
+  if (!parts.some(part => part.bold)) {
+    node.textContent = parts.map(part => part.text).join('');
+    return;
+  }
+  for (const part of parts) {
+    if (part.bold && typeof doc.createElement === 'function') {
+      const strong = doc.createElement('strong');
+      strong.textContent = part.text;
+      node.append(strong);
+    } else if (typeof doc.createTextNode === 'function') {
+      node.append(doc.createTextNode(part.text));
+    } else {
+      node.textContent += part.text;
+    }
+  }
+}
+
+function renderMessageBody(doc, node, text, prefs) {
+  const source = String(text || '');
+  // Bold markers are ours; everything else keeps the shared folding and link preview path.
+  if (inlineBold(source).some(part => part.bold)) {
+    fillBold(doc, node, source);
+    return;
+  }
+  renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews);
+}
+
+export function highlightParts(text, query) {
+  const source = String(text || '');
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return [{text: source, match: false}];
+  const parts = [];
+  const lower = source.toLowerCase();
+  let at = 0;
+  for (let index = lower.indexOf(needle); index !== -1; index = lower.indexOf(needle, at)) {
+    if (index > at) parts.push({text: source.slice(at, index), match: false});
+    parts.push({text: source.slice(index, index + needle.length), match: true});
+    at = index + needle.length;
+  }
+  if (at < source.length) parts.push({text: source.slice(at), match: false});
+  return parts.length ? parts : [{text: source, match: false}];
+}
+
+export function groupInfoCounts(conversation) {
+  const people = (conversation && conversation.members || []).length;
+  const agents = (conversation && conversation.agent_members || []).length;
+  return {people, agents, text: `${people + agents} 位成员 · ${people} 位真人 · ${agents} 位智能体`};
+}
+
 export function groupAgentSummary(conversation) {
   const list = conversation && conversation.agent_members || [];
   return list.length ? '群内智能体：' + list.map(agent => agent.name).join('、')
@@ -228,6 +317,7 @@ export function composeCreateEnabled(options) {
   const groupMode = (options && options.groupMode) || 'custom';
   const selectedCount = Number((options && options.selectedCount) || 0);
   if (mode === 'contact') return selectedCount === 1;
+  if (mode === 'group' && groupMode === 'team') return options.templateSelected === true;
   if (mode === 'group') return groupMode === 'custom'
     && selectedCount <= 49 && Number(options.selectedHumanCount ?? selectedCount) >= 1;
   return false;
@@ -299,6 +389,13 @@ export function formatSessionTime(value, now = Date.now()) {
   return new Intl.DateTimeFormat('zh-CN', {timeZone: 'Asia/Hong_Kong', year: 'numeric', month: 'numeric', day: 'numeric'}).format(date);
 }
 
+// Six original pastel tones so neighbouring avatars are distinguishable; stable per name.
+export function avatarTone(name) {
+  let hash = 0;
+  for (const ch of String(name || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  return String((hash % 6) + 1);
+}
+
 export function initial(name) {
   const text = (name || '').trim();
   const match = text.match(/\p{L}|\p{N}/u);
@@ -311,15 +408,57 @@ export function chatIdentity(name) {
   return {title, initial: placeholder ? '' : initial(title), showAvatar: !placeholder};
 }
 
-export function applyChatIdentity(document, name) {
+export function applyChatAvatarStack(document, conversation) {
+  const stack = document.getElementById('chat-avatar-stack');
+  const avatar = document.getElementById('chat-avatar');
+  if (!stack) return false;
+  stack.replaceChildren();
+  const faces = [];
+  for (const member of (conversation && conversation.members) || []) {
+    faces.push(member.username || member.name || '');
+  }
+  for (const agent of (conversation && conversation.agent_members) || []) {
+    faces.push(agent.name || '');
+  }
+  const names = faces.filter(Boolean).slice(0, 4);
+  const grouped = Boolean(conversation && conversation.kind === 'group' && names.length);
+  stack.hidden = !grouped;
+  if (grouped) {
+    if (avatar) avatar.hidden = true;
+    for (const name of names) {
+      const face = document.createElement('span');
+      face.className = 'avatar stack-face';
+      face.textContent = initial(name);
+      if (face.dataset) face.dataset.tone = avatarTone(name);
+      stack.appendChild(face);
+    }
+  }
+  return grouped;
+}
+
+export function applyChatIdentity(document, name, conversation, look) {
   const identity = chatIdentity(name);
   const title = document.getElementById('chat-title');
   const avatar = document.getElementById('chat-avatar');
   if (title) title.textContent = identity.title;
+  const subtitle = document.getElementById('chat-subtitle');
+  if (subtitle) { subtitle.textContent = ''; subtitle.hidden = true; }
+  const lookAvatar = createLookAvatar(look, document);
+  const canRenderLook = Boolean(lookAvatar && avatar && avatar.replaceChildren && avatar.append);
   if (avatar) {
-    avatar.textContent = identity.initial;
-    avatar.hidden = !identity.showAvatar;
+    if (avatar.replaceChildren) avatar.replaceChildren();
+    if (canRenderLook) {
+      avatar.append(lookAvatar);
+      avatar.hidden = false;
+    } else {
+      avatar.textContent = identity.initial;
+      avatar.hidden = !identity.showAvatar;
+      if (avatar.dataset) avatar.dataset.tone = avatarTone(identity.title);
+    }
   }
+  const stacked = applyChatAvatarStack(document, conversation);
+  if (stacked && avatar) avatar.hidden = true;
+  if (!stacked && avatar && (identity.showAvatar || canRenderLook)) avatar.hidden = false;
   return identity;
 }
 
@@ -327,6 +466,118 @@ function matchesQuery(item, query) {
   if (!query) return true;
   const hay = ((item.title || '') + ' ' + (item.preview || '') + ' ' + (item.snippet || '')).toLowerCase();
   return hay.includes(query.toLowerCase());
+}
+
+// Must match social.REACTIONS on the server.
+export const MESSAGE_REACTIONS = ['👍', '❤️', '😄', '🎉', '👀', '✅'];
+
+export function reactionToggle(reactions, emoji) {
+  const current = (reactions || []).find(item => item.emoji === emoji);
+  return {emoji, active: !(current && current.mine)};
+}
+
+export function forwardTargets(conversations, currentId) {
+  return (conversations || []).filter(item => item.id !== currentId)
+    .map(item => ({id: item.id, label: (item.kind === 'dm' ? '单聊 · ' : '群聊 · ') + (item.title || '会话')}));
+}
+
+export function forwardCountLabel(count) {
+  return `已选 ${Number(count) || 0} 条`;
+}
+
+export function notificationBadgeText(count) {
+  const value = Number(count) || 0;
+  if (value <= 0) return '';
+  return value > 99 ? '99+' : String(value);
+}
+
+export function notificationSummary(item) {
+  if (item.kind === 'follow_work') {
+    const author = item.actor_username || '你关注的作者';
+    return item.title ? `${author} 发布了新作品「${item.title}」` : '你关注的作者发布了新作品';
+  }
+  const where = item.conversation_kind === 'dm' ? '单聊' : (item.conversation_title || '群聊');
+  if (item.kind === 'automation_reminder') {
+    return `提醒到点：${item.title || '回看一条消息'}`;
+  }
+  if (item.kind === 'agent_reply') {
+    const outcome = {succeeded: '已完成', failed: '未能完成', cancelled: '已取消'}[item.status] || '已结束';
+    return `${item.actor_username || '智能体'} 在「${where}」${outcome}你的请求`;
+  }
+  return `${item.actor_username || '成员'} 在「${where}」提及了你`;
+}
+
+// A reminder is not a separate store: it is a one-shot automation created from the
+// message, and its due time is listed as a derived notification.
+export const REMINDER_CHOICES = [['remind-1h', 'later'], ['remind-tomorrow', 'tomorrow']];
+
+function zonedParts(moment, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(moment);
+  const pick = (type) => {
+    const found = parts.find((part) => part.type === type);
+    return found ? found.value : '';
+  };
+  return {date: `${pick('year')}-${pick('month')}-${pick('day')}`, time: `${pick('hour')}:${pick('minute')}`};
+}
+
+export function readableTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
+export function reminderSchedule(choice, now = new Date(), timeZone = readableTimeZone()) {
+  if (choice === 'tomorrow') {
+    const today = zonedParts(now, timeZone).date.split('-').map(Number);
+    const next = new Date(Date.UTC(today[0], today[1] - 1, today[2] + 1));
+    return {kind: 'once', date: next.toISOString().slice(0, 10), time: '09:00', time_zone: timeZone};
+  }
+  const later = zonedParts(new Date(now.getTime() + 3600000), timeZone);
+  return {kind: 'once', date: later.date, time: later.time, time_zone: timeZone};
+}
+
+export function reminderTitle(text) {
+  const collapsed = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!collapsed) return '提醒：回看一条消息';
+  return '提醒：' + (collapsed.length > 40 ? `${collapsed.slice(0, 39)}…` : collapsed);
+}
+
+export function reminderPayload(item, choice, now, timeZone, username) {
+  const excerpt = String((item && item.body) || '').replace(/\s+/g, ' ').trim();
+  return {
+    title: reminderTitle(item && item.body),
+    prompt: excerpt ? `提醒我回看这条消息：${excerpt.slice(0, 600)}` : '提醒我回看一条消息。',
+    template_id: 'reminder',
+    schedule: reminderSchedule(choice, now, timeZone),
+    participants: [username],
+    scope: 'once',
+    intent: '',
+    agents: [],
+  };
+}
+
+export function reminderKey(messageId) {
+  return 'remind-' + String(messageId || '');
+}
+
+export function reminderNotice(status, body = {}) {
+  const schedule = body && body.automation && body.automation.schedule;
+  const when = schedule && schedule.date && schedule.time ? `${schedule.date} ${schedule.time}` : '';
+  if (status === 201) return when ? `已设提醒：${when}。` : '已设提醒。';
+  if (status === 200) return when ? `这条消息已经设过提醒：${when}。` : '这条消息已经设过提醒。';
+  if (status === 403) return '只有工作区所有者或管理员可以设提醒。';
+  if (status === 429) return '这个工作区的自动化数量已达上限，先删掉一条再设提醒。';
+  if (status === 409) return '这个工作区已经有同名提醒，请到自动化页调整。';
+  return '没能设成提醒，请稍后再试。';
+}
+
+export function notificationTarget(item) {
+  return item && item.kind === 'automation_reminder' ? '/automations' : null;
 }
 
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
@@ -342,7 +593,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let socialConversations = [];
   let sessions = [];
   let currentAgent = null;
+  let personalAgentId = '';
+  let personalLook = null;
   let currentConversation = null;
+  const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
   let pollTimer = 0;
   let searchTab = 'all';
@@ -356,6 +610,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let resourceCursor = '';
   let resourceItems = [];
   let sendShortcut = 'enter';
+  let chatPreferences = {message_folding:'standard', document_cards:false, link_previews:true};
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -484,8 +739,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const filter = (filterNode && filterNode.value) || 'all';
     const visible = sessions.filter(item => filter === 'all'
       || (filter === 'pinned' && item.pinned)
-      || (filter === 'unread' && item.source === 'social' && item.unread_count > 0)
-      || (filter === 'read' && item.source === 'social' && !item.unread_count)
+      || (filter === 'unread' && item.unread_count > 0)
+      || (filter === 'read' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
     document.getElementById('conversations-empty').hidden = visible.length > 0;
     let lastGroup = '';
@@ -500,9 +755,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentConversation && currentConversation.id === session.id && currentSource === session.source) {
         button.setAttribute('aria-current', 'true');
       }
-      const avatar = document.createElement('span');
-      avatar.className = 'avatar';
-      avatar.textContent = initial(session.title);
+      const lookAvatar = session.agent_id === personalAgentId ? createLookAvatar(personalLook, document) : null;
+      const avatar = lookAvatar || document.createElement('span');
+      if (!lookAvatar) {
+        avatar.className = 'avatar';
+        avatar.textContent = initial(session.title);
+        avatar.dataset.tone = avatarTone(session.title);
+        avatar.dataset.kind = session.kind || session.source || '';
+      }
       const copy = document.createElement('span');
       copy.className = 'copy';
       const title = document.createElement('span');
@@ -510,7 +770,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       title.textContent = (session.pinned ? '置顶 · ' : '') + session.title;
       const preview = document.createElement('span');
       preview.className = 'preview';
-      preview.textContent = session.preview || '';
+      fillBold(document, preview, session.preview || '');
       copy.append(title, preview);
       const time = document.createElement('span');
       time.className = 'time';
@@ -535,6 +795,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  function setChatSubtitle(text, busy = false) {
+    const line = document.getElementById('chat-subtitle');
+    if (!line) return;
+    line.textContent = text || '';
+    line.hidden = !text;
+    if (busy) line.dataset.busy = '1'; else delete line.dataset.busy;
+  }
+
   function renderAgentMessages(items) {
     const list = document.getElementById('message-list');
     list.replaceChildren();
@@ -542,16 +810,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     let pending = false;
     for (const item of items || []) {
       const li = document.createElement('li');
+      li.dataset.messageId = item.id;
       li.className = item.role === 'user' ? 'user' : 'assistant';
       const role = document.createElement('p');
       role.className = 'role';
-      role.textContent = item.role === 'user' ? '你' : '智能体';
-      const body = document.createElement('p');
+      role.textContent = item.role === 'user' ? '你' : ((currentAgent && currentAgent.name) || '智能体');
+      const body = document.createElement('div');
       const waiting = item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
       const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
-      body.className = waiting ? 'pending' : (failed ? 'failed' : '');
-      body.textContent = item.role === 'user' ? (item.body || '') : statusLabel(item);
-      li.append(role, body);
+      body.className = 'body ' + (waiting ? 'pending' : (failed ? 'failed' : ''));
+      renderMessageBody(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences);
+      if (waiting || failed) li.dataset.state = waiting ? item.status : 'failed';
+      if (waiting) {
+        const heading = document.createElement('p');
+        heading.className = 'reply-state';
+        heading.textContent = item.status === 'running' ? '正在生成回复' : '正在准备回复';
+        li.append(role, heading, body);
+      } else {
+        li.append(role, body);
+      }
       if (item.role === 'assistant' && item.status === 'succeeded' && item.body) {
         const save = document.createElement('button');
         save.type = 'button';
@@ -562,18 +839,306 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       list.append(li);
       if (waiting) pending = true;
     }
+    setChatSubtitle(pending ? '正在回复…' : 'AI 智能体 · 经运行时回复', pending);
     const scroller = document.getElementById('message-scroller');
     scroller.scrollTop = scroller.scrollHeight;
     return pending;
   }
 
+  let selecting = false;
+  const selectedMessages = new Set();
+  let pinnedIds = new Set();
+
+  function syncForwardBar() {
+    const bar = document.getElementById('forward-bar');
+    if (!bar) return;
+    bar.hidden = !selecting;
+    document.getElementById('forward-count').textContent = forwardCountLabel(selectedMessages.size);
+    const target = document.getElementById('forward-target');
+    document.getElementById('forward-submit').disabled = !(selectedMessages.size && target.value);
+    const toggle = document.getElementById('multi-select-toggle');
+    if (toggle) { toggle.setAttribute('aria-pressed', selecting ? 'true' : 'false'); toggle.textContent = selecting ? '退出多选' : '多选'; }
+  }
+
+  function fillForwardTargets() {
+    const target = document.getElementById('forward-target');
+    if (!target) return;
+    const options = forwardTargets(socialConversations, currentConversation && currentConversation.id);
+    target.replaceChildren(...options.map(item => {
+      const option = document.createElement('option'); option.value = item.id; option.textContent = item.label; return option;
+    }));
+  }
+
+  function setSelecting(on) {
+    selecting = on;
+    selectedMessages.clear();
+    if (on) fillForwardTargets();
+    syncForwardBar();
+    if (currentConversation && currentSource === 'social') renderSocialMessages(lastSocialItems);
+  }
+
+  function renderPinned(list) {
+    pinnedIds = new Set((list || []).map(item => item.message_id));
+    const section = document.getElementById('pinned-messages');
+    const holder = document.getElementById('pinned-message-list');
+    if (!section || !holder) return;
+    section.hidden = !(list && list.length);
+    holder.replaceChildren(...(list || []).map(item => {
+      const li = document.createElement('li');
+      li.textContent = item.excerpt;
+      li.title = '由 ' + item.pinned_by_username + ' 置顶';
+      return li;
+    }));
+  }
+
+  function messageTools(item) {
+    const tools = document.createElement('span');
+    tools.className = 'message-tools';
+    if (selecting) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = selectedMessages.has(item.id);
+      box.setAttribute('aria-label', '选择这条消息');
+      box.addEventListener('change', () => {
+        if (box.checked) selectedMessages.add(item.id); else selectedMessages.delete(item.id);
+        syncForwardBar();
+      });
+      label.append(box, document.createTextNode('选择'));
+      tools.append(label);
+      return tools;
+    }
+    const pin = document.createElement('button');
+    pin.type = 'button';
+    const isPinned = pinnedIds.has(item.id);
+    pin.textContent = isPinned ? '取消置顶' : '置顶';
+    pin.setAttribute('aria-label', isPinned ? '取消置顶这条消息' : '置顶这条消息');
+    pin.addEventListener('click', async () => {
+      const wid = workspaceId(), cid = currentConversation && currentConversation.id;
+      const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/pin`, {pinned: !isPinned});
+      if (workspaceId() !== wid || !currentConversation || currentConversation.id !== cid) return;
+      if (result.status !== 200) { show('error', messageFor(result.body.error, '无法置顶消息。')); return; }
+      renderPinned(result.body.pinned_messages);
+      renderSocialMessages(lastSocialItems);
+    });
+    pin.hidden = true;
+    tools.append(pin);
+    return tools;
+  }
+
+  function reactionBar(item) {
+    const bar = document.createElement('div');
+    bar.className = 'message-reactions';
+    fillReactionBar(bar, item);
+    return bar;
+  }
+
+  function fillReactionBar(bar, item) {
+    bar.replaceChildren();
+    const react = async (emoji) => {
+      const wid = workspaceId(), cid = currentConversation && currentConversation.id;
+      if (!cid) return;
+      const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/reactions`,
+        reactionToggle(item.reactions, emoji));
+      if (workspaceId() !== wid || !currentConversation || currentConversation.id !== cid) return;
+      if (result.status !== 200) { show('error', messageFor(result.body.error, '表情回应未保存。')); return; }
+      item.reactions = result.body.reactions;
+      fillReactionBar(bar, item);
+    };
+    for (const reaction of item.reactions || []) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'reaction-chip' + (reaction.mine ? ' is-mine' : '');
+      chip.setAttribute('aria-pressed', reaction.mine ? 'true' : 'false');
+      chip.setAttribute('aria-label', `${reaction.emoji} ${reaction.count} 人回应${reaction.mine ? '，含我' : ''}`);
+      chip.textContent = `${reaction.emoji} ${reaction.count}`;
+      chip.addEventListener('click', () => react(reaction.emoji));
+      bar.append(chip);
+    }
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'reaction-add';
+    add.textContent = '+😊';
+    add.setAttribute('aria-label', '添加表情回应');
+    add.setAttribute('aria-expanded', 'false');
+    const picker = document.createElement('span');
+    picker.className = 'reaction-picker';
+    picker.hidden = true;
+    for (const emoji of MESSAGE_REACTIONS) {
+      const choice = document.createElement('button');
+      choice.type = 'button';
+      choice.textContent = emoji;
+      choice.setAttribute('aria-label', '回应 ' + emoji);
+      choice.addEventListener('click', () => react(emoji));
+      picker.append(choice);
+    }
+    add.addEventListener('click', () => {
+      picker.hidden = !picker.hidden;
+      add.setAttribute('aria-expanded', picker.hidden ? 'false' : 'true');
+    });
+    bar.append(add, picker);
+  }
+
+  let messageMenuTarget = null;
+  function closeMessageMenu() {
+    const menu = document.getElementById('message-context-menu');
+    if (menu) menu.hidden = true;
+    messageMenuTarget = null;
+  }
+
+  function openMessageMenu(item, li, mine, x, y) {
+    const menu = document.getElementById('message-context-menu');
+    if (!menu) return;
+    messageMenuTarget = {item, li, mine};
+    const reactions = document.getElementById('message-menu-reactions');
+    reactions.replaceChildren(...MESSAGE_REACTIONS.map(emoji => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.setAttribute('role', 'menuitem');
+      button.textContent = emoji;
+      button.setAttribute('aria-label', '回应 ' + emoji);
+      button.dataset.emoji = emoji;
+      return button;
+    }));
+    const pin = menu.querySelector('[data-menu="pin"]');
+    pin.textContent = pinnedIds.has(item.id) ? '取消置顶' : '置顶';
+    menu.querySelector('[data-menu="retract"]').hidden = !mine;
+    menu.querySelector('[data-menu="delete"]').hidden = !mine;
+    const edit = menu.querySelector('[data-menu="edit"]');
+    if (edit) edit.hidden = !mine;
+    menu.querySelector('[data-menu="forward"]').disabled = forwardTargets(socialConversations, currentConversation && currentConversation.id).length === 0;
+    menu.hidden = false;
+    const width = menu.offsetWidth || 200, height = menu.offsetHeight || 360;
+    const left = Math.max(8, Math.min(x, globalThis.innerWidth - width - 8));
+    const top = Math.max(8, Math.min(y, globalThis.innerHeight - height - 8));
+    menu.style.setProperty('left', left + 'px');
+    menu.style.setProperty('top', top + 'px');
+    const first = menu.querySelector('button:not(:disabled)');
+    if (first) first.focus();
+  }
+
+  const messageMenu = document.getElementById('message-context-menu');
+  if (messageMenu) {
+    messageMenu.addEventListener('click', async event => {
+      const button = event.target.closest('button');
+      if (!button || button.disabled || !messageMenuTarget) return;
+      const {item, li} = messageMenuTarget;
+      const action = button.dataset.menu;
+      closeMessageMenu();
+      if (button.dataset.emoji) {
+        const choice = li.querySelector(`.reaction-picker button[aria-label="回应 ${button.dataset.emoji}"]`);
+        if (choice) choice.click();
+      } else if (action === 'reply') {
+        const input = document.getElementById('chat-body');
+        const author = (li.querySelector('.role') || {}).textContent || '';
+        const excerpt = String(item.body || '').replace(/\s+/g, ' ').slice(0, 80);
+        input.value = `> ${author}：${excerpt}\n` + input.value;
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+        input.focus();
+      } else if (action === 'translate' || action === 'ask') {
+        messageUtilities.open(item, action);
+      } else if (action === 'save') {
+        openSaveMessage(item);
+      } else if (action === 'edit') {
+        const edit = Array.from(li.querySelectorAll(':scope > button')).find(node => node.textContent === '编辑');
+        if (edit) edit.click();
+      } else if (action === 'copy') {
+        try { await navigator.clipboard.writeText(item.body || ''); show('ok', '已复制。'); }
+        catch { show('error', '浏览器不允许复制，请手动选择文本。'); }
+      } else if (action === 'forward' || action === 'select') {
+        setSelecting(true);
+        if (action === 'forward') { selectedMessages.add(item.id); syncForwardBar(); renderSocialMessages(lastSocialItems); }
+      } else if (action === 'pin') {
+        const pinButton = li.querySelector('.message-tools button');
+        if (pinButton) pinButton.click();
+      } else if (action === 'remind-1h' || action === 'remind-tomorrow') {
+        await setMessageReminder(item, action === 'remind-1h' ? 'later' : 'tomorrow');
+      } else if (action === 'retract') {
+        const retract = Array.from(li.querySelectorAll(':scope > button')).find(node => node.textContent === '撤回');
+        if (retract) retract.click();
+      } else if (action === 'delete') {
+        const cid = currentConversation.id;
+        const result = await request('DELETE', `${socialBase()}/${cid}/messages/${item.id}`);
+        if (result.status !== 204) {
+          show('error', messageFor(result.body.error, '消息未删除，请重试。'));
+          return;
+        }
+        if (!currentConversation || currentConversation.id !== cid) return;
+        renderSocialMessages(lastSocialItems.filter(row => row.id !== item.id));
+        await loadSessions();
+      }
+    });
+    document.addEventListener('click', event => {
+      if (!messageMenu.hidden && !messageMenu.contains(event.target)) closeMessageMenu();
+    });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape' && !messageMenu.hidden) closeMessageMenu(); });
+    globalThis.addEventListener('resize', closeMessageMenu);
+    const scroller = document.getElementById('message-scroller');
+    if (scroller) scroller.addEventListener('scroll', closeMessageMenu, {passive: true});
+  }
+
+  let saveMessageTarget = null;
+  const saveMessageDialog = document.getElementById('save-message-dialog');
+
+  // One click on a message becomes a real one-shot automation in this workspace; the
+  // idempotency key is the message id, so setting it twice answers "already set".
+  async function setMessageReminder(item, choice) {
+    const wid = workspaceId();
+    if (!wid || !currentUser) return;
+    const payload = reminderPayload(item, choice, new Date(), readableTimeZone(), currentUser.username);
+    let result;
+    try {
+      result = await request('POST', `/v1/workspaces/${wid}/automations`, payload,
+        {'Idempotency-Key': reminderKey(item.id)});
+    } catch {
+      show('error', '网络失败，没能设成提醒。');
+      return;
+    }
+    if (workspaceId() !== wid) return;
+    show(result.status === 201 || result.status === 200 ? 'ok' : 'error',
+      reminderNotice(result.status, result.body));
+  }
+
+  function openSaveMessage(item) {
+    saveMessageTarget = {item, workspace: workspaceId(), conversation: currentConversation.id};
+    document.getElementById('save-message-title').value = String(item.body || '').replace(/\s+/g, ' ').trim().slice(0, 60) || '消息记录';
+    document.getElementById('save-message-error').hidden = true;
+    saveMessageDialog.showModal();
+    document.getElementById('save-message-title').focus();
+  }
+  const saveMessageCancel = document.getElementById('save-message-cancel');
+  if (saveMessageCancel) saveMessageCancel.addEventListener('click', () => { saveMessageDialog.close(); saveMessageTarget = null; });
+  const saveMessageForm = document.getElementById('save-message-form');
+  if (saveMessageForm) saveMessageForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!saveMessageTarget) return;
+    const {item, workspace, conversation} = saveMessageTarget;
+    const button = document.getElementById('save-message-submit');
+    const error = document.getElementById('save-message-error');
+    if (button.disabled) return;
+    button.disabled = true; error.hidden = true;
+    try {
+      const result = await request('POST', `/v1/workspaces/${workspace}/social/conversations/${conversation}/messages/${item.id}/save`,
+        {title: document.getElementById('save-message-title').value, revision: item.revision || 1});
+      if (result.status !== 200 && result.status !== 201) {
+        error.textContent = messageFor(result.body.error, '消息未保存，请重新打开消息后重试。'); error.hidden = false; return;
+      }
+      saveMessageDialog.close(); saveMessageTarget = null;
+      show('ok', result.status === 201 ? `已保存到工作区资料空间：${result.body.artifact.title}` : `已存在工作区资料空间中（未同步后续编辑）：${result.body.artifact.title}`);
+    } catch { error.textContent = '网络错误，无法确认保存结果。可以重试，不会产生重复副本。'; error.hidden = false; }
+    finally { button.disabled = false; }
+  });
+
+  let lastSocialItems = [];
   function renderSocialMessages(items) {
+    lastSocialItems = items || [];
     const list = document.getElementById('message-list');
     list.replaceChildren();
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
     const people = currentConversation && currentConversation.members || members;
     for (const item of items || []) {
       const li = document.createElement('li');
+      li.dataset.messageId = item.id;
       const mine = item.user_id === (currentUser && currentUser.id);
       li.className = mine ? 'mine' : 'other';
       const role = document.createElement('p');
@@ -581,23 +1146,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const member = people.find(entry => entry.user_id === item.user_id);
       role.textContent = item.role === 'agent' ? (item.agent_name + ' · AI 智能体 · 运行时回复')
         : (mine ? '我' : ((member && member.username) || '成员'));
-      const body = document.createElement('p');
+      const body = document.createElement('div');
       body.className = 'body';
-      body.textContent = item.retracted ? '此消息已撤回' : (item.body || '');
+      renderMessageBody(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences);
+      if (item.forwarded_from && !item.retracted) {
+        body.dataset.forwarded = '1';
+        body.title = '转发自 ' + item.forwarded_from.author;
+        role.textContent += ' · 转发自 ' + item.forwarded_from.author;
+      }
       const time = document.createElement('p');
       time.className = 'time';
       time.textContent = formatTime(item.created);
       li.append(role, body, time);
       if (item.attachment && !item.retracted) {
-        const file = document.createElement('a'); file.href = item.attachment.path;
-        file.textContent = '下载附件：' + item.attachment.title; li.append(file);
+        const card = document.createElement('article');
+        card.className = 'stream-artifact';
+        const copy = document.createElement('span');
+        copy.className = 'stream-artifact-copy';
+        const heading = document.createElement('strong');
+        heading.textContent = item.attachment.title || '附件';
+        const file = document.createElement('a');
+        file.href = item.attachment.path;
+        // An attachment is a workspace media artifact, so a picture can be
+        // shown as a picture. Before this, every attachment was a document
+        // card: the sender saw a DOC cover instead of the photo they shared.
+        if (String(item.attachment.mime || '').startsWith('image/')) {
+          card.classList.add('stream-artifact-picture');
+          const image = document.createElement('img');
+          image.className = 'stream-artifact-image';
+          image.src = item.attachment.path;
+          image.alt = item.attachment.title || '聊天图片';
+          image.setAttribute('loading', 'lazy');
+          file.textContent = '查看原图：' + (item.attachment.title || '图片');
+          copy.append(heading, file);
+          card.append(image, copy);
+        } else {
+          const cover = document.createElement('span');
+          cover.className = 'stream-artifact-cover';
+          cover.textContent = 'DOC';
+          if (chatPreferences.document_cards) { file.className = 'chat-document-card'; file.setAttribute('aria-label', '作品卡片：' + item.attachment.title); }
+          file.textContent = '下载作品：' + item.attachment.title + (item.attachment.revision ? ' · 修订 ' + item.attachment.revision : '');
+          copy.append(heading, file);
+          card.append(cover, copy);
+        }
+        li.append(card);
       }
       if (mine && !item.retracted) {
         const edit = document.createElement('button');
-        edit.type = 'button'; edit.textContent = '编辑';
+        edit.type = 'button'; edit.textContent = '编辑'; edit.hidden = true;
         const retract = document.createElement('button');
-        retract.type = 'button'; retract.textContent = '撤回';
+        retract.type = 'button'; retract.textContent = '撤回'; retract.hidden = true;
         const controls = document.createElement('span');
+        controls.className = 'message-edit-controls';
         const change = async (operation, text) => {
           const payload = {revision: item.revision || 1};
           if (operation === 'edit') payload.body = text;
@@ -613,7 +1213,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           const input = document.createElement('textarea'); input.value = item.body || '';
           input.setAttribute('aria-label', '编辑消息'); input.maxLength = 4000;
           const save = document.createElement('button'); save.type = 'button'; save.textContent = '保存修改';
-          save.addEventListener('click', () => change('edit', input.value));
+          save.addEventListener('click', () => {
+            // Editing replaces text that is already on the other side, so this
+            // button only opens the confirm step; the explicit confirm sends it.
+            const draft = input.value;
+            const note = document.createElement('span');
+            note.className = 'message-edit-note';
+            note.textContent = '保存后，这条已发出的消息会被新内容替换，其他人看到的是修改后的版本。';
+            const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = '确认修改';
+            confirm.addEventListener('click', () => change('edit', draft));
+            const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
+            cancel.addEventListener('click', () => controls.replaceChildren());
+            controls.replaceChildren(note, confirm, cancel);
+          });
           const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
           cancel.addEventListener('click', () => controls.replaceChildren());
           controls.append(input, save, cancel);
@@ -627,6 +1239,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           controls.append(confirm, cancel);
         });
         li.append(edit, retract, controls);
+      }
+      if (item.role !== 'agent' && !item.retracted) li.append(messageTools(item));
+      if (item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
+      if (item.role !== 'agent' && !item.retracted) {
+        const more = document.createElement('button');
+        more.type = 'button'; more.className = 'message-more'; more.textContent = '⋯';
+        more.setAttribute('aria-label', '消息操作'); more.setAttribute('aria-haspopup', 'menu');
+        const openAtMessage = () => {
+          const rect = more.getBoundingClientRect();
+          openMessageMenu(item, li, mine, rect.left, rect.bottom);
+        };
+        more.addEventListener('click', event => { event.stopPropagation(); openAtMessage(); });
+        li.addEventListener('keydown', event => {
+          if ((event.shiftKey && event.key === 'F10') || event.key === 'ContextMenu') { event.preventDefault(); openAtMessage(); }
+        });
+        li.append(more);
+        li.addEventListener('contextmenu', event => {
+          if (selecting) return;
+          event.preventDefault();
+          openMessageMenu(item, li, mine, event.clientX, event.clientY);
+        });
       }
       list.append(li);
     }
@@ -650,31 +1283,123 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  let notificationSeq = 0;
+  function renderNotifications(body) {
+    const badge = document.getElementById('notification-count');
+    const toggle = document.getElementById('notifications-toggle');
+    const text = notificationBadgeText(body.unread_count);
+    if (badge) { badge.textContent = text; badge.hidden = !text; }
+    if (toggle) toggle.setAttribute('aria-label', text ? `通知，${body.unread_count} 条未读提及` : '通知');
+    const list = document.getElementById('notification-list');
+    if (!list) return;
+    const items = body.items || [];
+    list.replaceChildren(...items.map(item => {
+      const li = document.createElement('li');
+      const link = item.kind === 'follow_work' && item.path;
+      const button = document.createElement(link ? 'a' : 'button');
+      if (link) button.href = item.path;
+      else button.type = 'button';
+      button.className = 'notification-item' + (item.read ? '' : ' is-unread');
+      button.dataset.notification = item.id;
+      const summary = document.createElement('strong'); summary.textContent = notificationSummary(item);
+      const excerpt = document.createElement('span'); excerpt.className = 'notification-excerpt'; excerpt.textContent = item.excerpt;
+      const time = document.createElement('time'); time.textContent = formatSessionTime(item.created);
+      button.append(summary, excerpt, time);
+      button.addEventListener('click', async () => {
+        const wid = workspaceId();
+        if (link) {
+          if (!item.read) request('POST', `/v1/workspaces/${wid}/notifications/read`, {notification_id: item.id});
+          setNotificationsOpen(false);
+          return;
+        }
+        if (!item.read) await request('POST', `/v1/workspaces/${wid}/notifications/read`, {notification_id: item.id});
+        if (workspaceId() !== wid) return;
+        setNotificationsOpen(false);
+        const target = notificationTarget(item);
+        if (target) { globalThis.location.assign(target); return; }
+        await openSocialConversation(item.conversation_id);
+        await loadNotifications();
+      });
+      li.append(button);
+      return li;
+    }));
+    const empty = document.getElementById('notifications-empty'); if (empty) empty.hidden = items.length > 0;
+    const all = document.getElementById('notifications-read-all'); if (all) all.disabled = !(body.unread_count > 0);
+  }
+
+  async function loadNotifications() {
+    const wid = workspaceId();
+    if (!wid) return;
+    const token = ++notificationSeq;
+    let result;
+    // Notifications are auxiliary: a failed fetch must never break the session list.
+    try { result = await request('GET', `/v1/workspaces/${wid}/notifications`); } catch { return; }
+    if (token !== notificationSeq || workspaceId() !== wid || result.status !== 200) return;
+    renderNotifications(result.body);
+  }
+
+  // Live-ish delivery: poll the inbox while the tab is visible. No server push.
+  const NOTIFICATION_POLL_MS = 30000;
+  if (typeof globalThis.setInterval === 'function') {
+    const handle = globalThis.setInterval(() => {
+      if (document.visibilityState === 'hidden' || !currentUser) return;
+      loadNotifications();
+    }, NOTIFICATION_POLL_MS);
+    if (handle && typeof handle.unref === 'function') handle.unref();
+  }
+
+  function setNotificationsOpen(open) {
+    const panel = document.getElementById('notifications-panel');
+    const toggle = document.getElementById('notifications-toggle');
+    if (panel) panel.hidden = !open;
+    if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  const workspaceEvents=mountWorkspaceEvents(document,{onInvalidate:async(event)=>{
+    if(event.workspace!==workspaceId()||document.visibilityState==='hidden')return;
+    await loadSessions();
+    if(event.workspace!==workspaceId())return;
+    if(!event.initial&&event.changed.includes('social')&&currentSource==='social'&&currentConversation){
+      const banner=document.getElementById('conversation-live-update');if(banner)banner.hidden=false;
+    }
+  }});
+  document.getElementById('conversation-live-load')?.addEventListener('click',async()=>{
+    if(currentSource==='social'&&currentConversation)await openSocialConversation(currentConversation.id);
+    const banner=document.getElementById('conversation-live-update');if(banner)banner.hidden=true;
+  });
+  let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
   async function loadSessions() {
+    const sequence = ++sessionsRequest;
+    const user = currentUser;
+    loadNotifications();
     const id = workspaceId();
-    sessions = [];
-    agents = [];
-    members = [];
-    artifacts = [];
-    socialConversations = [];
+    if (id !== sessionsWorkspace || user !== sessionsUser || !id) {
+      sessionsWorkspace = id; sessionsUser = user;
+      sessions = []; agents = []; members = []; artifacts = []; socialConversations = [];
+      renderSessions();
+    }
     if (!id) return;
+    const current = () => sequence === sessionsRequest && id === workspaceId() && user === currentUser;
     const [listed, social, people, works] = await Promise.all([
       request('GET', `/v1/workspaces/${id}/agents?limit=100`),
       request('GET', `/v1/workspaces/${id}/social/conversations?limit=100`),
       request('GET', `/v1/workspaces/${id}/members`),
       request('GET', `/v1/workspaces/${id}/artifacts?limit=100`),
     ]);
+    if (!current()) return;
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
       return;
     }
-    agents = listed.body.items || [];
-    if (people.status === 200) members = people.body.items || [];
-    if (works.status === 200) artifacts = works.body.items || [];
-    if (social.status === 200) socialConversations = social.body.items || [];
-    const results = await Promise.all(agents.map(agent =>
+    const nextAgents = listed.body.items || [];
+    const results = await Promise.all(nextAgents.map(agent =>
       request('GET', `/v1/workspaces/${id}/agents/${agent.id}/conversations?limit=100`)
         .then(result => ({agent, result}))));
+    if (!current()) return;
+    agents = nextAgents;
+    members = people.status === 200 ? people.body.items || [] : [];
+    artifacts = works.status === 200 ? works.body.items || [] : [];
+    socialConversations = social.status === 200 ? social.body.items || [] : [];
     const agentRows = [];
     for (const {agent, result} of results) {
       if (result.status !== 200) continue;
@@ -684,9 +1409,92 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     sessions = mergeSessions(agentRows, socialConversations, currentUser && currentUser.id);
     renderSessions();
+    // The first SSE snapshot may immediately refresh; do not invalidate the
+    // initial directory before deep-link resolution has a committed snapshot.
+    workspaceEvents.start(id);
+  }
+
+  function memberRow(name, note, kind) {
+    const row = document.createElement('li');
+    row.className = 'group-info-member';
+    row.dataset.kind = kind;
+    const avatar = document.createElement('span');
+    avatar.className = 'group-info-member-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    avatar.textContent = kind === 'empty' ? '+' : leadGlyph(name);
+    const text = document.createElement('span');
+    const strong = document.createElement('strong');
+    strong.textContent = name;
+    const small = document.createElement('small');
+    small.textContent = note;
+    text.append(strong, small);
+    row.append(avatar, text);
+    return row;
+  }
+
+  function setGroupInfoTab(which) {
+    const agentsTab = document.getElementById('group-info-tab-agents');
+    const peopleTab = document.getElementById('group-info-tab-people');
+    agentsTab.setAttribute('aria-selected', String(which === 'agents'));
+    peopleTab.setAttribute('aria-selected', String(which === 'people'));
+    document.getElementById('group-info-agents').hidden = which !== 'agents';
+    document.getElementById('group-info-people').hidden = which !== 'people';
+  }
+
+  function setGroupInfo(conversation) {
+    const toggle = document.getElementById('group-info-toggle');
+    const panel = document.getElementById('group-info-panel');
+    if (!toggle || !panel) return;
+    const group = Boolean(conversation && conversation.kind === 'group');
+    toggle.hidden = !group;
+    if (!group) {
+      panel.hidden = true;
+      toggle.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    const title = conversationLabel(conversation, currentUser && currentUser.id);
+    const counts = groupInfoCounts(conversation);
+    document.getElementById('group-info-title').textContent = title;
+    document.getElementById('group-info-avatar').textContent = leadGlyph(title, '群');
+    document.getElementById('group-info-count').textContent = counts.text;
+    document.getElementById('group-info-tab-agents').textContent = `智能体 (${counts.agents})`;
+    document.getElementById('group-info-tab-people').textContent = `成员 (${counts.people})`;
+    const agentList = document.getElementById('group-info-agents');
+    agentList.replaceChildren(...(conversation.agent_members || []).map(agent =>
+      memberRow(agent.name, agent.archived ? '已归档' : '可明确请求一次回复', 'agent')));
+    if (!agentList.children.length) agentList.append(memberRow('还没有智能体', '创建群聊时可以加入工作区智能体', 'empty'));
+    const peopleList = document.getElementById('group-info-people');
+    peopleList.replaceChildren(...(conversation.members || []).map(member =>
+      memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你' : '工作区成员', 'person')));
+    const pinned = sessions.some(item => item.source === 'social' && item.id === conversation.id && item.pinned);
+    document.getElementById('group-info-pin').setAttribute('aria-checked', String(pinned));
+  }
+
+  function setGroupInfoOpen(open) {
+    const toggle = document.getElementById('group-info-toggle');
+    const panel = document.getElementById('group-info-panel');
+    if (!toggle || !panel) return;
+    panel.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+  }
+
+  function setSocialHeaderTools(social) {
+    const invite = document.getElementById('chat-invite');
+    const unavailable = document.getElementById('chat-invite-unavailable');
+    const multi = document.getElementById('multi-select-toggle');
+    if (invite) invite.hidden = !social;
+    if (unavailable) unavailable.hidden = social;
+    if (multi) multi.hidden = !social;
+    if (!social) {
+      selecting = false; selectedMessages.clear(); syncForwardBar();
+      renderPinned([]);
+      const panel = document.getElementById('chat-invite-panel'); if (panel) panel.hidden = true;
+    }
   }
 
   async function openAgentConversation(agentId, conversationId) {
+    setSocialHeaderTools(false);
+    setGroupInfo(null);
     const pin = document.getElementById('pin-conversation');
     if (pin) pin.hidden = true;
     const agent = agents.find(item => item.id === agentId);
@@ -712,6 +1520,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     writeHash({workspace: workspaceId(), agent: agentId, conversation: conversationId});
     setSessionsOpen(false);
     const pending = renderAgentMessages(result.body.items);
+    const finished = (result.body.items || []).filter(item => item.role === 'assistant' && item.status === 'succeeded');
+    if (currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
+      const wid = workspaceId(), cid = conversationId;
+      const acknowledged = await request('POST', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${cid}/read`,
+        {message_id: finished[finished.length - 1].id});
+      if (acknowledged.status === 200 && workspaceId() === wid) {
+        const session = sessions.find(item => item.source === 'agent' && item.id === cid);
+        if (session) session.unread_count = acknowledged.body.unread_count;
+      }
+    }
     renderSessions();
     if (pending) schedulePoll();
     else stopPolling();
@@ -738,9 +1556,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentNote.textContent = groupAgentSummary(currentConversation);
     agentNote.hidden = !agentNote.textContent;
     applyChatIdentity(document, conversationLabel(
-      currentConversation, currentUser && currentUser.id));
+      currentConversation, currentUser && currentUser.id), currentConversation);
     setDirectoryLink({source: 'social'});
     writeHash({workspace: workspaceId(), social: conversationId});
+    if (selecting && (!lastSocialItems.length || lastSocialItems[0].conversation_id !== conversationId)) {
+      selecting = false; selectedMessages.clear(); syncForwardBar();
+    }
+    renderPinned(result.body.pinned_messages || []);
+    setSocialHeaderTools(true);
+    setGroupInfo(currentConversation);
+    messageUtilities.refreshAnnouncement();
+    setChatSubtitle(currentConversation.kind === 'group' ? groupInfoCounts(currentConversation).text
+      : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
     renderSocialMessages(result.body.items);
     renderGroupReplyAction(result.body.agent_replies || []);
     // Acknowledge only the last message actually rendered, not messages that
@@ -787,6 +1614,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       groupMode,
       selectedCount: selectedMemberCount(),
       selectedHumanCount: document.querySelectorAll('#member-choices input[name="member"]:checked').length,
+      templateSelected: document.querySelectorAll('#team-template-choices input:checked').length === 1,
     });
   }
 
@@ -824,10 +1652,39 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     const team = composeMode === 'group' && groupMode === 'team';
     document.getElementById('compose-team-note').hidden = !team;
+    const templates = document.getElementById('compose-team-templates');
+    if (templates) templates.hidden = !team;
+    if (team) loadTeamTemplates();
     document.getElementById('compose-member-picker').hidden = team;
     if (composeMode === 'group') {
       document.getElementById('compose-title-label').hidden = team;
     }
+    syncComposeCreate();
+  }
+
+  let teamTemplates = null;
+  async function loadTeamTemplates() {
+    const holder = document.getElementById('team-template-choices');
+    if (!holder) return;
+    if (teamTemplates === null) {
+      let result;
+      try { result = await request('GET', '/v1/team-templates'); } catch { result = {status: 0, body: {}}; }
+      if (result.status !== 200) {
+        document.getElementById('team-templates-empty').hidden = false;
+        return;
+      }
+      teamTemplates = result.body.items || [];
+    }
+    if (holder.children.length) return;
+    for (const template of teamTemplates) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'radio'; box.name = 'team-template'; box.value = template.slug;
+      const text = `${template.name} · ${template.agents.map(agent => agent.name).join('、')}`;
+      label.append(box, document.createTextNode(text));
+      holder.append(label);
+    }
+    document.getElementById('team-templates-empty').hidden = teamTemplates.length > 0;
     syncComposeCreate();
   }
 
@@ -849,7 +1706,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       box.type = single ? 'radio' : 'checkbox';
       box.name = member.kind === 'agent' ? 'agent-member' : 'member';
       box.value = member.id;
-      label.append(box, document.createTextNode(member.label));
+      const text = document.createElement('span');
+      text.className = 'choice-label';
+      text.textContent = member.label;
+      label.append(box, text);
       holder.append(label);
     }
     applyMemberFilter();
@@ -893,6 +1753,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('pinned-group').hidden = true;
     document.getElementById('compose-dialog').hidden = true;
     closeComposeMenu();
+    // The panel is a child of the session pane, which the narrow stylesheet
+    // paints only in the sessions-open state. Opening search has to reveal it
+    // there, or the panel is laid out inside a display:none parent.
+    if (narrowScreen()) setSessionsOpen(true);
     if (tab) setSearchTab(tab);
     renderSearch();
   }
@@ -905,6 +1769,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-group').hidden = false;
     document.getElementById('session-search').value = '';
     setSearchTab('all');
+    // Narrow screens show the conversation when one is open and the list
+    // otherwise; dropping the state unconditionally would blank both.
+    if (narrowScreen()) setSessionsOpen(!currentConversation);
   }
 
   function addSearchSection(root, title, items, onPick) {
@@ -1063,7 +1930,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             currentAgent = agents.find(entry => entry.id === item.id) || null;
             currentConversation = null;
             currentSource = 'agent';
-            if (currentAgent) applyChatIdentity(document, currentAgent.name);
+            if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
+              currentAgent.id === personalAgentId ? personalLook : null);
             document.getElementById('chat-empty').hidden = false;
             document.getElementById('message-list').replaceChildren();
             writeHash({workspace: workspaceId(), agent: item.id});
@@ -1149,10 +2017,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const personal = await request('POST', '/v1/personal-agent');
     const personalWorkspace = personal.status === 200 && personal.body.personal_agent
       ? personal.body.personal_agent.workspace.id : '';
+    const personalEntity = personal.status === 200 ? personal.body.personal_agent : null;
+    personalAgentId = personalEntity && personalEntity.agent ? personalEntity.agent.id : '';
+    personalLook = personalEntity ? personalEntity.look || null : null;
     const [listed, settings] = await Promise.all([
       request('GET', '/v1/workspaces?limit=100'),
       request('GET', '/v1/settings'),
     ]);
+    if (settings.status === 200 && settings.body?.settings?.values) chatPreferences = settings.body.settings.values;
     const stored = settings.status === 200 && settings.body && settings.body.settings
       && settings.body.settings.values && settings.body.settings.values.send_shortcut;
     sendShortcut = stored === 'mod_enter' ? 'mod_enter' : 'enter';
@@ -1197,7 +2069,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       else {
         currentAgent = agents.find(item => item.id === start.agent) || null;
         currentSource = 'agent';
-        if (currentAgent) applyChatIdentity(document, currentAgent.name);
+        if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
+          currentAgent.id === personalAgentId ? personalLook : null);
         document.getElementById('chat-empty').hidden = false;
         writeHash({workspace: workspaceId(), agent: start.agent});
       }
@@ -1222,6 +2095,71 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
+  const multiToggle = document.getElementById('multi-select-toggle');
+  if (multiToggle) multiToggle.addEventListener('click', () => setSelecting(!selecting));
+  const forwardCancel = document.getElementById('forward-cancel');
+  if (forwardCancel) forwardCancel.addEventListener('click', () => setSelecting(false));
+  const forwardTarget = document.getElementById('forward-target');
+  if (forwardTarget) forwardTarget.addEventListener('change', syncForwardBar);
+  const forwardSubmit = document.getElementById('forward-submit');
+  if (forwardSubmit) forwardSubmit.addEventListener('click', async () => {
+    const cid = currentConversation && currentConversation.id, target = forwardTarget.value;
+    const ids = lastSocialItems.filter(item => selectedMessages.has(item.id)).map(item => item.id);
+    if (!cid || !target || !ids.length) return;
+    forwardSubmit.disabled = true;
+    const result = await request('POST', `${socialBase()}/${cid}/forward`,
+      {message_ids: ids, target_conversation_id: target}, {'Idempotency-Key': idempotencyKey('forward-')});
+    if (result.status !== 201 && result.status !== 200) {
+      show('error', messageFor(result.body.error, '转发失败。'));
+      syncForwardBar();
+      return;
+    }
+    setSelecting(false);
+    show('ok', `已转发 ${ids.length} 条消息。`);
+    await loadSessions();
+  });
+  const chatInvite = document.getElementById('chat-invite');
+  if (chatInvite) chatInvite.addEventListener('click', () => {
+    const panel = document.getElementById('chat-invite-panel');
+    panel.hidden = !panel.hidden;
+    chatInvite.setAttribute('aria-expanded', panel.hidden ? 'false' : 'true');
+    document.getElementById('chat-invite-result').textContent = '';
+  });
+  const inviteClose = document.getElementById('chat-invite-close');
+  if (inviteClose) inviteClose.addEventListener('click', () => {
+    document.getElementById('chat-invite-panel').hidden = true;
+    if (chatInvite) chatInvite.setAttribute('aria-expanded', 'false');
+  });
+  const chatInviteForm = document.getElementById('chat-invite-form');
+  if (chatInviteForm) chatInviteForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const out = document.getElementById('chat-invite-result');
+    const result = await request('POST', `/v1/workspaces/${workspaceId()}/invites`, {
+      role: 'member', expires_in: 7 * 86400, max_uses: 1,
+      requires_approval: document.getElementById('chat-invite-approval').checked,
+    });
+    if (result.status !== 201) {
+      out.textContent = result.status === 404 || result.status === 403
+        ? '只有工作区所有者或管理员可以生成邀请。' : messageFor(result.body.error, '无法生成邀请。');
+      return;
+    }
+    out.textContent = `邀请令牌只显示一次：${result.body.token}`;
+  });
+  const notificationsToggle = document.getElementById('notifications-toggle');
+  if (notificationsToggle) notificationsToggle.addEventListener('click', async () => {
+    const panel = document.getElementById('notifications-panel');
+    const open = Boolean(panel && panel.hidden);
+    setNotificationsOpen(open);
+    if (open) await loadNotifications();
+  });
+  const readAll = document.getElementById('notifications-read-all');
+  if (readAll) readAll.addEventListener('click', async () => {
+    const wid = workspaceId();
+    readAll.disabled = true;
+    const result = await request('POST', `/v1/workspaces/${wid}/notifications/read`, {all: true});
+    if (result.status !== 200) { show('error', '无法标记通知为已读。'); readAll.disabled = false; return; }
+    await loadNotifications();
+  });
   workspaceSelect.addEventListener('change', async () => {
     currentAgent = null;
     currentConversation = null;
@@ -1259,18 +2197,109 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (workspaceId() !== wid || !currentConversation || currentConversation.id !== conversation.id) return;
     const list = document.getElementById('conversation-search-results'); list.replaceChildren();
     for (const hit of state.hits) {
-      const li = document.createElement('li'); li.textContent = hit.snippet || hit.preview || ''; list.append(li);
+      list.append(searchHitRow(hit, (document.getElementById('conversation-search-query').value || '').trim()));
     }
-    document.getElementById('conversation-search-status').textContent = state.error || ('已显示 ' + state.hits.length + ' 条消息');
+    document.getElementById('conversation-search-status').textContent = state.error || (state.hits.length ? '已显示 ' + state.hits.length + ' 条消息' : '没有找到匹配的消息。试试其他关键词。');
     document.getElementById('conversation-search-more').hidden = !state.cursor;
   }
+  function searchHitRow(hit, query) {
+    const li = document.createElement('li');
+    li.className = 'search-hit';
+    li.tabIndex = 0;
+    li.setAttribute('role', 'button');
+    li.setAttribute('aria-label', '跳到这条消息');
+    const jump = () => {
+      const list = document.getElementById('message-list');
+      const target = Array.from(list.children || []).find(node => node.dataset.messageId === hit.messageId);
+      if (!target) {
+        document.getElementById('conversation-search-status').textContent = '这条消息不在当前已加载的消息窗口里，请加载更多消息后重试。';
+        return;
+      }
+      target.scrollIntoView({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+      target.tabIndex = -1; target.focus({preventScroll: true});
+      for (const node of Array.from(list.children || [])) delete node.dataset.searchJump;
+      target.dataset.searchJump = 'true';
+      setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
+    };
+    li.addEventListener('click', jump);
+    li.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
+    });
+    const avatar = document.createElement('span');
+    avatar.className = 'search-hit-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    const who = hit.role === 'agent' ? (hit.agent_name || '智能体') : (hit.title || '消息');
+    avatar.textContent = leadGlyph(who);
+    const head = document.createElement('span');
+    head.className = 'search-hit-head';
+    const name = document.createElement('strong');
+    name.textContent = who;
+    const when = document.createElement('time');
+    when.textContent = hit.created ? formatSessionTime(hit.created) : '';
+    head.append(name, when);
+    const text = document.createElement('span');
+    text.className = 'search-hit-text';
+    text.append(...highlightParts(hit.snippet || hit.preview || '', query).map(part => {
+      if (!part.match) return document.createTextNode(part.text);
+      const mark = document.createElement('mark'); mark.textContent = part.text; return mark;
+    }));
+    li.append(avatar, head, text);
+    return li;
+  }
+  const groupInfoToggle = document.getElementById('group-info-toggle');
+  if (groupInfoToggle) {
+    groupInfoToggle.addEventListener('click', () => {
+      const open = groupInfoToggle.getAttribute('aria-expanded') !== 'true';
+      if (open) document.getElementById('conversation-search-panel').hidden = true;
+      setGroupInfoOpen(open);
+    });
+    document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
+    document.getElementById('group-info-search').addEventListener('click', () => {
+      setGroupInfoOpen(false);
+      document.getElementById('conversation-search-open').click();
+    });
+    document.getElementById('group-info-tab-agents').addEventListener('click', () => setGroupInfoTab('agents'));
+    document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
+    document.getElementById('group-info-pin').addEventListener('click', async () => {
+      const pin = document.getElementById('pin-conversation');
+      if (!pin || pin.hidden) return;
+      pin.click();
+      const switchButton = document.getElementById('group-info-pin');
+      const wanted = switchButton.getAttribute('aria-checked') !== 'true';
+      for (let tries = 0; tries < 20; tries += 1) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        const now = pin.textContent === '取消置顶';
+        if (now === wanted) { switchButton.setAttribute('aria-checked', String(now)); break; }
+      }
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !document.getElementById('group-info-panel').hidden) setGroupInfoOpen(false);
+    });
+  }
+  let searchScrollSnapshot = null;
   const inChatOpen = document.getElementById('conversation-search-open');
   if (inChatOpen) inChatOpen.addEventListener('click', () => {
     if (!currentConversation) { show('error', '请先打开一个会话。'); return; }
+    setGroupInfoOpen(false);
+    if (document.getElementById('conversation-search-panel').hidden) {
+      searchScrollSnapshot = {conversation: currentConversation.id, top: document.getElementById('message-scroller').scrollTop};
+    }
     document.getElementById('conversation-search-panel').hidden = false;
+    const field = document.getElementById('conversation-search-query'); if (field) field.focus();
   });
   const inChatClose = document.getElementById('conversation-search-close');
-  if (inChatClose) inChatClose.addEventListener('click', () => { document.getElementById('conversation-search-panel').hidden = true; });
+  function closeInChatSearch() {
+    document.getElementById('conversation-search-panel').hidden = true;
+    if (searchScrollSnapshot && currentConversation && currentConversation.id === searchScrollSnapshot.conversation) {
+      document.getElementById('message-scroller').scrollTop = searchScrollSnapshot.top;
+    }
+    searchScrollSnapshot = null;
+    if (inChatOpen) inChatOpen.focus();
+  }
+  if (inChatClose) inChatClose.addEventListener('click', closeInChatSearch);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !document.getElementById('conversation-search-panel').hidden) closeInChatSearch();
+  });
   const inChatForm = document.getElementById('conversation-search-form');
   if (inChatForm) inChatForm.addEventListener('submit', async event => { event.preventDefault(); await searchCurrentConversation(); });
   const inChatMore = document.getElementById('conversation-search-more');
@@ -1394,18 +2423,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
 
-  document.getElementById('group-agent-chips').addEventListener('click', async event => {
+  document.getElementById('group-agent-chips').addEventListener('click', event => {
     const button = event.target.closest('button[data-remove-agent]');
-    if (!button || currentSource !== 'social' || !currentConversation) return;
-    const cid = currentConversation.id;
-    const result = await request('POST',
-      `${socialBase()}/${cid}/agents/${button.dataset.removeAgent}/remove`, {});
-    if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法移除智能体。'));
-      return;
-    }
-    await openSocialConversation(cid);
-    show('ok', '已移除智能体。');
+    if (!button || currentSource !== 'social' || !currentConversation || button.disabled) return;
+    const cid = currentConversation.id, wid = workspaceId(), agentId = button.dataset.removeAgent;
+    const holder = document.getElementById('group-agent-chips');
+    if (holder.querySelector('.agent-remove-confirm')) return;
+    const question = document.createElement('span');
+    question.className = 'agent-remove-confirm'; question.setAttribute('role', 'alertdialog');
+    question.setAttribute('aria-label', '移除群内智能体确认');
+    const text = document.createElement('span'); text.textContent = '从当前群聊移除此智能体？已有消息会保留。';
+    const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = '确认移除';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
+    cancel.addEventListener('click', () => { question.remove(); button.focus(); });
+    question.addEventListener('keydown', event => { if (event.key === 'Escape') { question.remove(); button.focus(); } });
+    confirm.addEventListener('click', async () => {
+      if (workspaceId() !== wid || !currentConversation || currentConversation.id !== cid) { question.remove(); return; }
+      confirm.disabled = true; cancel.disabled = true;
+      try {
+        const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${cid}/agents/${agentId}/remove`, {});
+        if (workspaceId() !== wid || !currentConversation || currentConversation.id !== cid) return;
+        if (result.status !== 200) { show('error', messageFor(result.body.error, '无法移除智能体。')); return; }
+        await openSocialConversation(cid); show('ok', '已移除智能体。');
+      } catch { show('error', '网络错误，智能体未移除。'); }
+      finally { confirm.disabled = false; cancel.disabled = false; }
+    });
+    question.append(text, cancel, confirm); holder.append(question); cancel.focus();
   });
 
   document.getElementById('group-agent-add-submit').addEventListener('click', async () => {
@@ -1432,11 +2475,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   document.getElementById('compose-member-search').addEventListener('input', applyMemberFilter);
   document.getElementById('member-choices').addEventListener('change', syncSelectedCount);
+  const templateChoices = document.getElementById('team-template-choices');
+  if (templateChoices) templateChoices.addEventListener('change', syncComposeCreate);
 
   document.getElementById('compose-social-form').addEventListener('submit', async event => {
     event.preventDefault();
-    if (composeMode === 'group' && groupMode !== 'custom') {
-      show('error', '未接通：还不能从这里创建 AI 智能体团队。');
+    if (composeMode === 'group' && groupMode === 'team') {
+      const picked = document.querySelectorAll('#team-template-choices input:checked')[0];
+      if (!picked) { show('error', '请选择一个团队模板。'); return; }
+      const wid = workspaceId();
+      const created = await request('POST', `/v1/workspaces/${wid}/team-templates/${picked.value}`, {},
+        {'Idempotency-Key': idempotencyKey('team-')});
+      if (created.status !== 201 && created.status !== 200) {
+        show('error', messageFor(created.body.error, '无法创建智能体团队。'));
+        return;
+      }
+      closeComposeDialog();
+      await loadSessions();
+      await openSocialConversation(created.body.conversation.id);
+      show('ok', '智能体团队已创建。智能体只在你明确请求时回复。');
       return;
     }
     const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')]
@@ -1526,6 +2583,38 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await openAgentConversation(currentAgent.id, currentConversation.id);
   }
 
+  const formatButton = document.getElementById('chat-format');
+  const formatMenu = document.getElementById('chat-format-menu');
+  const formatBold = document.getElementById('chat-format-bold');
+  if (formatButton && formatMenu && formatBold) {
+    const closeFormat = () => {
+      formatMenu.hidden = true;
+      formatButton.setAttribute('aria-expanded', 'false');
+    };
+    formatButton.addEventListener('click', () => {
+      const open = formatMenu.hidden;
+      formatMenu.hidden = !open;
+      formatButton.setAttribute('aria-expanded', String(open));
+    });
+    if (typeof document.addEventListener === 'function') {
+      document.addEventListener('click', event => {
+        if (formatMenu.hidden) return;
+        if (event.target && event.target.closest && event.target.closest('.format-wrap')) return;
+        closeFormat();
+      });
+    }
+    formatBold.addEventListener('click', () => {
+      const field = document.getElementById('chat-body');
+      const selection = wrapBold(field.value || '', field.selectionStart, field.selectionEnd);
+      field.value = selection.text;
+      field.focus();
+      if (typeof field.setSelectionRange === 'function') {
+        field.setSelectionRange(selection.start, selection.end);
+      }
+      closeFormat();
+    });
+  }
+
   document.getElementById('chat-body').addEventListener('keydown', event => {
     if (!shouldSendOnShortcut(event, sendShortcut)) return;
     event.preventDefault();
@@ -1576,12 +2665,45 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeComposeDialog();
   });
 
+  // Composer "+": 上传 / 照片 / 视频 reuse the existing media-attachment upload
+  // (single and group chats only); agent chats show them disabled with a note.
+  const plus = document.querySelector('details.composer-plus');
+  const attachInput = document.getElementById('chat-attachment');
+  const defaultAccept = attachInput ? attachInput.getAttribute('accept') || '' : '';
+  function syncPlusState() {
+    const social = currentSource === 'social' && Boolean(currentConversation);
+    for (const button of document.querySelectorAll('[data-plus-attach]')) {
+      button.disabled = !social;
+      if (!button.dataset.title) button.dataset.title = button.title;
+      button.title = social ? button.dataset.title : '未接通：智能体私聊还不能发附件';
+    }
+    const hint = document.getElementById('plus-attach-hint');
+    if (hint) hint.hidden = social;
+  }
+  if (plus) plus.addEventListener('toggle', () => { if (plus.open) syncPlusState(); });
+  for (const button of document.querySelectorAll('[data-plus-attach]')) {
+    button.addEventListener('click', () => {
+      if (!attachInput || button.disabled) return;
+      attachInput.setAttribute('accept', plusAttachAccept(button.dataset.plusAttach, defaultAccept));
+      attachInput.click();
+      if (plus) plus.open = false;
+    });
+  }
+  if (attachInput) attachInput.addEventListener('change', () => attachInput.setAttribute('accept', defaultAccept));
+
   globalThis.addEventListener('hashchange', () => load());
   return load();
 }
 
 if (globalThis.document && globalThis.document.getElementById('session-pane')) {
   mount(globalThis.document);
+}
+
+export function plusAttachAccept(kind, fallback) {
+  const all = String(fallback || '').split(',').map(item => item.trim()).filter(Boolean);
+  if (kind === 'image') return all.filter(item => item.startsWith('image/')).join(',');
+  if (kind === 'video') return all.filter(item => item.startsWith('video/')).join(',');
+  return all.join(',');
 }
 
 export { canManage, conversationLabel };

@@ -1,11 +1,11 @@
 """Onboarding automation recommendations and creation (issue #148)."""
-from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
 
 from openteamily.app import App, Config
 from openteamily.store import Store
+from openteamily.onboarding import LOOK_OPTIONS
 from tests.test_management import Client, ORIGIN
 
 
@@ -68,6 +68,9 @@ class OnboardingAutomationTests(unittest.TestCase):
             {'template_ids': ['daily_brief', 'daily_brief']},
             {'template_ids': ['daily_brief'] * 7},
             {'template_ids': ['unknown']},
+            {'template_ids': [['daily_brief']]},
+            {'template_ids': [123]},
+            {'template_ids': [None]},
         ):
             self.assertEqual(self.alice.call('POST', '/v1/onboarding/automations', body)['status'], 400, body)
         self.assertEqual(self.alice.call('POST', '/v1/onboarding/automations',
@@ -78,6 +81,43 @@ class OnboardingAutomationTests(unittest.TestCase):
         client.register('alice')
         self.assertEqual(client.call('POST', '/v1/onboarding/automations',
                                      {'template_ids': ['daily_brief', 'task_breakdown']})['status'], 429)
+
+    def test_ordinary_onboarding_never_creates_automations(self):
+        self.onboard()
+        self.assertEqual(self.alice.call('POST', '/v1/onboarding/picks',
+                                        {'picks': ['daily-brief']})['status'], 200)
+        look = {key: values[0] for key, values in LOOK_OPTIONS.items()}
+        self.assertEqual(self.alice.call('POST', '/v1/onboarding/look', {'look': look})['status'], 200)
+        # Skipping work context and completing the flow only save onboarding state.
+        self.alice.call('POST', '/v1/onboarding', {'industry': '', 'role': '', 'completed': True})
+        self.alice.call('GET', '/v1/onboarding')
+        with self.app.store.connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM automations').fetchone()[0], 0)
+
+    def test_creation_cannot_target_someone_elses_workspace(self):
+        bobs = self.bob.workspace('Bob only', 'bob_workspace_0001')['body']['workspace']['id']
+        created = self.alice.call('POST', '/v1/onboarding/automations',
+                                  {'template_ids': ['daily_brief']})
+        self.assertEqual(created['status'], 201, created)
+        self.assertNotEqual(created['body']['workspace']['id'], bobs)
+        self.assertEqual(self.bob.call('GET', f'/v1/workspaces/{bobs}/automations')['body']['items'], [])
+        self.assertEqual(Client(self.app).call('POST', '/v1/onboarding/automations',
+                                             {'template_ids': ['daily_brief']})['status'], 401)
+
+    def test_retry_at_capacity_does_not_duplicate_or_fail(self):
+        limited = App(Store(Path(self.temp.name) / 'one'), Config(
+            ORIGIN, allow_registration=True, max_automations_per_workspace=1), clock=lambda: 1800000000)
+        client = Client(limited)
+        client.register('alice')
+        body = {'template_ids': ['daily_brief']}
+        first = client.call('POST', '/v1/onboarding/automations', body)
+        self.assertEqual(first['status'], 201, first)
+        replay = client.call('POST', '/v1/onboarding/automations', body)
+        self.assertEqual(replay['status'], 200, replay)
+        self.assertEqual(replay['body']['created'], [])
+        self.assertEqual(len(replay['body']['skipped']), 1)
+        self.assertEqual(client.call('POST', '/v1/onboarding/automations',
+                                   {'template_ids': ['task_breakdown']})['status'], 429)
 
 
 if __name__ == '__main__':

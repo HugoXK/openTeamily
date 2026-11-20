@@ -21,7 +21,7 @@ test('parseTags splits, dedupes and bounds tags', () => {
 
 class FakeElement {
   constructor(tag = 'div') {
-    this.tagName = tag;
+    this.tagName = tag.toUpperCase();
     this.dataset = {};
     this.attributes = {};
     this.handlers = {};
@@ -30,10 +30,15 @@ class FakeElement {
     this.value = '';
     this.textContent = '';
     this.href = '';
+    this.submits = 0;
   }
   addEventListener(type, handler) { (this.handlers[type] ||= []).push(handler); }
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name]; }
+  requestSubmit() { this.submits += 1; }
+  replaceChildren(...nodes) { this.children = nodes; }
+  append(...nodes) { (this.children ||= []).push(...nodes); }
+  appendChild(node) { (this.children ||= []).push(node); return node; }
 }
 
 const PROFILE_FIELDS = ['name', 'handle', 'bio', 'tags', 'gender', 'location', 'website'];
@@ -57,6 +62,51 @@ function fakeDocument() {
   };
 }
 
+function homeDocument() {
+  const doc = fakeDocument();
+  const bySelector = new Map();
+  doc.querySelector = selector => {
+    if (String(selector).startsWith('#')) return doc.getElementById(String(selector).slice(1));
+    if (!bySelector.has(selector)) bySelector.set(selector, new FakeElement('div'));
+    return bySelector.get(selector);
+  };
+  doc.querySelectorAll = () => [];
+  doc.addEventListener = () => {};
+  doc.createElement = tag => new FakeElement(tag);
+  return doc;
+}
+
+function installShareGlobals({pathname = '/profile', clipboard = 'stub'} = {}) {
+  const savedNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const savedLocation = globalThis.location;
+  const savedHistory = globalThis.history;
+  const copied = [];
+  const pushes = [];
+  const loc = {pathname, origin: 'https://teamily.ai', search: '', href: 'https://teamily.ai' + pathname};
+  globalThis.location = loc;
+  globalThis.history = {
+    pushState(state, title, url) {
+      pushes.push(url);
+      const [path, query] = String(url).split('?');
+      loc.pathname = path;
+      loc.search = query ? '?' + query : '';
+    },
+  };
+  const nav = {};
+  if (clipboard === 'stub') nav.clipboard = {writeText: async text => { copied.push(text); }};
+  if (clipboard === 'reject') nav.clipboard = {writeText: async () => { throw new Error('clipboard denied'); }};
+  Object.defineProperty(globalThis, 'navigator', {value: nav, configurable: true, writable: true});
+  return {
+    copied, pushes, loc,
+    restore() {
+      if (savedNavigator) Object.defineProperty(globalThis, 'navigator', savedNavigator);
+      else delete globalThis.navigator;
+      if (savedLocation === undefined) delete globalThis.location; else globalThis.location = savedLocation;
+      if (savedHistory === undefined) delete globalThis.history; else globalThis.history = savedHistory;
+    },
+  };
+}
+
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function installGlobals(doc, fetcher) {
@@ -70,7 +120,7 @@ function installGlobals(doc, fetcher) {
 }
 
 async function mountProfile(options = {}) {
-  const doc = fakeDocument();
+  const doc = options.home ? homeDocument() : fakeDocument();
   const calls = [];
   let release = () => {};
   let releasePost = () => {};
@@ -81,6 +131,7 @@ async function mountProfile(options = {}) {
   const fetcher = async (path, init) => {
     calls.push([path, init && init.method]);
     if (path === '/v1/auth/session') {
+      if (options.session401) return {status: 401, json: async () => ({error: {message: 'not signed in'}})};
       return {status: 200, json: async () => ({user: {username: 'alice'}})};
     }
     if (path !== '/v1/profile') throw new Error('unexpected ' + path);
@@ -92,6 +143,9 @@ async function mountProfile(options = {}) {
           current: {name: 'Alicia', handle: 'alice', revision: 4},
         }})};
       }
+      if (options.failPost) {
+        return {status: 500, json: async () => ({error: {message: options.failPost}})};
+      }
       return {status: 200, json: async () => ({profile: {name: 'Alice', handle: 'alice', revision: 4}})};
     }
     if (profileCalls() > 1) {
@@ -99,8 +153,11 @@ async function mountProfile(options = {}) {
       if (options.failRepeat) return {status: 500, json: async () => ({error: {message: options.failRepeat}})};
     }
     const name = profileCalls() > 1 && options.repeatName ? options.repeatName : 'Alice';
-    return {status: 200, json: async () => ({profile: {name, handle: 'alice', revision: 3}})};
+    const profile = options.profile ? {...options.profile} : {name, handle: 'alice', revision: 3};
+    if (profileCalls() > 1 && options.repeatName) profile.name = options.repeatName;
+    return {status: 200, json: async () => ({profile})};
   };
+  if (options.setup) options.setup(doc);
   const restore = installGlobals(doc, fetcher);
   await import('../openteamily/static/profile/app.mjs?dom=' + (options.tag || 'profile'));
   await flush();
@@ -192,4 +249,182 @@ test('a 409 save shows a Chinese status line instead of the server English text'
     assert.equal(doc.getElementById('profile-form').elements.name.value, 'Alicia',
       'the 409 payload should still refill the form with the current profile');
   } finally { restore(); }
+});
+
+test('昵称为空时保存被本地拦下，不发 POST 也不禁用保存按钮', async () => {
+  const {doc, postCalls, restore} = await mountProfile({tag: 'blank-name'});
+  try {
+    const form = doc.getElementById('profile-form');
+    form.elements.name.value = '   ';
+    const save = doc.getElementById('profile-save');
+    await submitHandler(doc)({preventDefault() {}});
+    const status = doc.getElementById('status');
+    assert.equal(postCalls(), 0, 'a blank name must be rejected before any POST /v1/profile is sent');
+    assert.equal(status.dataset.kind, 'error');
+    assert.equal(status.textContent, '请填写昵称。');
+    assert.equal(save.disabled, false, 'a locally rejected save must leave the save button usable');
+  } finally { restore(); }
+});
+
+test('保存返回 500 时状态行显示服务端错误，按钮恢复可用且输入不被清掉', async () => {
+  const {doc, postCalls, restore} = await mountProfile({tag: 'save-500', failPost: '存储不可用'});
+  try {
+    const form = doc.getElementById('profile-form');
+    form.elements.name.value = 'Alice 新';
+    const save = doc.getElementById('profile-save');
+    await submitHandler(doc)({preventDefault() {}});
+    const status = doc.getElementById('status');
+    assert.equal(postCalls(), 1);
+    assert.equal(status.dataset.kind, 'error', 'a failed save must set the status line to an error');
+    assert.equal(status.textContent, '存储不可用', 'a failed save must show the server message, not a success line');
+    assert.equal(save.disabled, false, 'the save button must be usable again after a failed save');
+    assert.equal(form.elements.name.value, 'Alice 新', 'a failed save must not wipe what the user typed');
+  } finally { restore(); }
+});
+
+test('未登录的 401 会话只显示登录面板，不读资料并清掉旧状态行', async () => {
+  const {doc, profileCalls, restore} = await mountProfile({
+    tag: 'session-401',
+    session401: true,
+    setup(doc) {
+      doc.getElementById('main-panel').hidden = false;
+      doc.getElementById('status').dataset.kind = 'error';
+      doc.getElementById('status').textContent = '旧错误';
+    },
+  });
+  try {
+    assert.equal(doc.getElementById('login-panel').hidden, false,
+      'a 401 session must show the login panel');
+    assert.equal(doc.getElementById('main-panel').hidden, true,
+      'a 401 session must hide the profile form panel');
+    const status = doc.getElementById('status');
+    assert.equal(status.textContent, '',
+      'a signed-out visit must clear the stale status line instead of reporting a session error');
+    assert.equal(status.dataset.kind, '');
+    assert.equal(profileCalls(), 0, 'a 401 session must not request GET /v1/profile');
+  } finally { restore(); }
+});
+
+test('输入框里的 Enter 提交表单，textarea 里的 Enter 只换行', async () => {
+  const {doc, restore} = await mountProfile({tag: 'enter-key'});
+  try {
+    const form = doc.getElementById('profile-form');
+    assert.ok(Array.isArray(form.handlers.keydown) && form.handlers.keydown.length === 1,
+      'the profile form has no keydown handler, so Enter does nothing');
+    const keydown = form.handlers.keydown[0];
+    let prevented = 0;
+    keydown({key: 'Enter', target: {tagName: 'INPUT'}, preventDefault() { prevented += 1; }});
+    assert.equal(form.submits, 1, 'Enter in a text input must submit the profile form');
+    assert.equal(prevented, 1, 'the Enter key must be consumed so the form is submitted once');
+    keydown({key: 'Enter', target: {tagName: 'TEXTAREA'}, preventDefault() { prevented += 1; }});
+    assert.equal(form.submits, 1, 'Enter in the bio textarea must insert a newline, not submit');
+    assert.equal(prevented, 1, 'the textarea Enter must not be consumed by the form');
+  } finally { restore(); }
+});
+
+test('资料首次加载用用户名兜底显示名和 handle，并给出对应的公开地址', async () => {
+  const blank = await mountProfile({
+    tag: 'defaults-blank',
+    profile: {name: '', handle: '', revision: 0},
+  });
+  try {
+    const doc = blank.doc;
+    const form = doc.getElementById('profile-form');
+    assert.equal(form.elements.name.value, 'alice',
+      'an unsaved profile must show the account username as the display name');
+    assert.equal(form.elements.handle.value, 'alice',
+      'an empty handle must fall back to the sanitized username');
+    assert.equal(doc.getElementById('profile-meta').textContent,
+      '还没有保存过资料。保存后会生成 Teamily ID。',
+      'an unsaved profile must say that no profile has been saved yet');
+    assert.equal(doc.getElementById('profile-public').href, '/v1/profile',
+      'before the first save the public link must point back at the API, not at /p/');
+    assert.equal(doc.getElementById('whoami').textContent, 'alice');
+    assert.equal(doc.getElementById('whoami').dataset.username, 'alice');
+    assert.equal(doc.getElementById('profile-username').textContent, 'alice');
+  } finally { blank.restore(); }
+
+  const saved = await mountProfile({
+    tag: 'defaults-saved',
+    profile: {name: 'Alice', handle: 'alice.smith', revision: 7},
+  });
+  try {
+    const doc = saved.doc;
+    assert.equal(doc.getElementById('profile-meta').textContent,
+      '修订 7 · Teamily ID 可用于公开资料地址');
+    assert.equal(doc.getElementById('profile-public').href, '/p/alice.smith',
+      'a saved handle must link to the public profile page');
+  } finally { saved.restore(); }
+});
+
+function shareHandler(doc) {
+  const share = doc.getElementById('profile-share');
+  assert.ok(Array.isArray(share.handlers.click) && share.handlers.click.length === 1,
+    'the 分享 button has no click handler, so clicking it does nothing');
+  return share.handlers.click[0];
+}
+
+test('有 Teamily ID 时分享按钮把公开主页链接复制到剪贴板', async () => {
+  const env = installShareGlobals({pathname: '/profile'});
+  try {
+    const {doc, restore} = await mountProfile({
+      tag: 'share-handle',
+      home: true,
+      profile: {name: 'Alice', handle: 'alice.smith', revision: 3},
+    });
+    try {
+      await shareHandler(doc)({preventDefault() {}});
+      assert.deepEqual(env.copied, ['https://teamily.ai/p/alice.smith'],
+        'clicking 分享 must copy the public profile URL built from the saved handle');
+      const status = doc.getElementById('status');
+      assert.equal(status.dataset.kind, 'ok');
+      assert.equal(status.textContent, '公开主页链接已复制。');
+      assert.equal(doc.querySelector('#profile-share-fallback').hidden, true,
+        'a successful copy must not open the manual-copy fallback');
+    } finally { restore(); }
+  } finally { env.restore(); }
+});
+
+test('没有 Teamily ID 时分享按钮不写剪贴板，先提示再切到编辑页', async () => {
+  const env = installShareGlobals({pathname: '/profile'});
+  try {
+    const {doc, restore} = await mountProfile({
+      tag: 'share-no-handle',
+      home: true,
+      profile: {name: 'Alice', handle: '', revision: 0},
+    });
+    try {
+      await shareHandler(doc)({preventDefault() {}});
+      assert.equal(env.copied.length, 0,
+        'a profile without a handle has no public URL, so nothing must be copied');
+      assert.equal(doc.getElementById('status').textContent, '先设置 Teamily ID 才能分享。');
+      assert.deepEqual(env.pushes, ['/profile/edit'],
+        'without a handle the share button must take the person to the edit page');
+      assert.equal(env.loc.pathname, '/profile/edit');
+      assert.equal(doc.querySelector('#profile-home').hidden, true,
+        'the in-page edit view must replace the profile home after switching to /profile/edit');
+      assert.equal(doc.querySelector('#profile-edit').hidden, false);
+    } finally { restore(); }
+  } finally { env.restore(); }
+});
+
+test('剪贴板不可用时把链接显示出来让人手动复制', async () => {
+  const env = installShareGlobals({pathname: '/profile', clipboard: 'reject'});
+  try {
+    const {doc, restore} = await mountProfile({
+      tag: 'share-clipboard-denied',
+      home: true,
+      profile: {name: 'Alice', handle: 'alice.smith', revision: 3},
+    });
+    try {
+      await shareHandler(doc)({preventDefault() {}});
+      assert.equal(doc.getElementById('status').dataset.kind, 'error');
+      assert.match(doc.getElementById('status').textContent, /手动复制/);
+      const fallback = doc.querySelector('#profile-share-fallback');
+      assert.equal(fallback.hidden, false,
+        'when the clipboard refuses the copy the URL must be shown for manual copying');
+      assert.equal(doc.querySelector('#profile-share-link').textContent,
+        'https://teamily.ai/p/alice.smith');
+    } finally { restore(); }
+  } finally { env.restore(); }
 });

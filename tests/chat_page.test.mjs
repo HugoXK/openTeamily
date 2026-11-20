@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery } from '../openteamily/static/chat/app.mjs';
+import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery, wrapBold, inlineBold } from '../openteamily/static/chat/app.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
@@ -263,6 +263,7 @@ class FakeElement {
   removeEventListener(type, handler) {
     this.handlers[type] = (this.handlers[type] || []).filter((item) => item !== handler);
   }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter(node => node !== this); this.parent = null; }
   focus() { this.focused = true; }
   reset() { this.resetCount = (this.resetCount || 0) + 1; }
   closest(selector) {
@@ -551,7 +552,9 @@ function sessionFetcher() {
     id: 'conv-2', kind: 'dm', title: 'carol', updated: 20,
     members: [aliceRow, {user_id: 'c'.repeat(32), username: 'carol'}],
   };
+  const requests = [];
   const fetcher = async (path) => {
+    requests.push(path);
     if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
     if (path === '/v1/onboarding') return json(200, {onboarding: {completed: true}});
     if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
@@ -574,7 +577,7 @@ function sessionFetcher() {
     }
     throw new Error('unexpected ' + path);
   };
-  return {fetcher};
+  return {fetcher, requests};
 }
 
 function sessionRows(el) {
@@ -672,6 +675,133 @@ test('a wide chat still opens the first conversation instead of stopping on the 
       'above 900px the list is shown beside the conversation, so no list state is applied',
     );
     assert.equal(el('message-list').children.length, 1, 'the first conversation still opens by default');
+  } finally {
+    restore();
+  }
+});
+
+// The search panel is a child of the session pane, and the 900px stylesheet
+// paints that pane only in the `sessions-open` state. With a conversation open
+// the pane is display:none, so opening search without that state leaves the
+// panel in the DOM and visible to script but zero by zero on screen.
+
+function searchRequests(requests) {
+  return requests.filter((path) => path.includes('/search/'));
+}
+
+function viewedConversationRequests(requests, id) {
+  return requests.filter((path) => path === `/v1/workspaces/ws-1/social/conversations/${id}`);
+}
+
+test('a narrow chat shows the search panel over an open conversation by revealing the session pane', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher, requests} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await settle();
+    assert.equal(doc.body.classList.contains('sessions-open'), false, 'the conversation is the visible pane');
+
+    await fire(el('message-search'), 'click');
+    await settle();
+
+    assert.equal(el('search-panel').hidden, false, 'the search panel is assigned the open state');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      true,
+      'the search panel lives inside the session pane, which the narrow stylesheet hides while a conversation is open; without the list state the panel is 0x0 on screen',
+    );
+    assert.equal(viewedConversationRequests(requests, 'conv-1').length, 1, 'opening search must not refetch the conversation');
+    assert.equal(el('chat-title').textContent, 'bob', 'the open conversation is still the one named in the header');
+  } finally {
+    restore();
+  }
+});
+
+test('closing search on a narrow screen returns to the conversation that was open', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher, requests} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await settle();
+    await fire(el('message-search'), 'click');
+    await settle();
+
+    await fire(el('search-close'), 'click');
+    await settle();
+
+    assert.equal(el('search-panel').hidden, true, 'closing search hides the panel again');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      false,
+      'the conversation, not the list, must be the visible pane after search closes',
+    );
+    assert.equal(el('message-list').children.length, 1, 'the opened conversation and its messages are still there');
+    assert.equal(viewedConversationRequests(requests, 'conv-1').length, 1, 'the user does not have to open the conversation again');
+  } finally {
+    restore();
+  }
+});
+
+test('closing search from the narrow session list keeps the list visible', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    assert.equal(doc.body.classList.contains('sessions-open'), true, 'the list is the visible pane before search');
+
+    await fire(el('session-search'), 'focus');
+    await settle();
+    assert.equal(el('search-panel').hidden, false, 'typing in the list search opens the panel');
+
+    await fire(doc, 'keydown', {key: 'Escape'});
+    await settle();
+
+    assert.equal(el('search-panel').hidden, true, 'Escape closes the panel');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      true,
+      'no conversation is open, so dropping the list state would leave the narrow screen blank',
+    );
+    assert.equal(sessionRows(el).length, 2, 'the conversation list is still rendered underneath');
+  } finally {
+    restore();
+  }
+});
+
+test('a wide chat leaves the grid classes alone when search opens and closes', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher} = sessionFetcher();
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher});
+    await settle();
+    assert.equal(el('message-list').children.length, 1, 'the wide page opens the first conversation');
+
+    await fire(el('message-search'), 'click');
+    await settle();
+    assert.equal(el('search-panel').hidden, false, 'search opens');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      false,
+      'above 900px the pane is never hidden, so no list state may be added',
+    );
+
+    await fire(el('search-close'), 'click');
+    await settle();
+    assert.equal(el('search-panel').hidden, true, 'search closes');
+    assert.equal(
+      doc.body.classList.contains('sessions-open'),
+      false,
+      'closing search must not add a class the wide layout never uses',
+    );
   } finally {
     restore();
   }
@@ -892,7 +1022,9 @@ test('independent conversation search uses current id and pages without opening 
     assert.equal(el('conversation-search-panel').hidden, false);
     el('conversation-search-query').value = 'needle';
     await fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
-    assert.equal(el('conversation-search-results').children[0].textContent, 'Scoped result');
+    const firstHit = el('conversation-search-results').children[0];
+    assert.equal(firstHit.className, 'search-hit');
+    assert.ok(descendants(firstHit).some(node => node.textContent === 'Scoped result'), 'snippet is rendered in the hit row');
     assert.equal(el('conversation-search-more').hidden, false);
     await fire(el('conversation-search-more'), 'click');
     assert.equal(calls.length, 2);
@@ -925,7 +1057,9 @@ test('own message editing and confirmed retraction call versioned endpoints', as
     let li = el('message-list').children[0];
     await fire(li.children[3], 'click'); // edit opens inline controls
     li.children[5].children[0].value = 'Edited';
-    await fire(li.children[5].children[1], 'click');
+    await fire(li.children[5].children[1], 'click'); // only opens the confirm step
+    assert.equal(posts.length, 0);
+    await fire(li.children[5].children[1], 'click'); // 确认修改
     assert.equal(text, 'Edited');
     li = el('message-list').children[0];
     await fire(li.children[4], 'click'); // only opens confirmation
@@ -933,6 +1067,56 @@ test('own message editing and confirmed retraction call versioned endpoints', as
     await fire(li.children[5].children[0], 'click');
     assert.equal(posts.length, 2);
     assert.equal(el('message-list').children[0].children[1].textContent, '此消息已撤回');
+  } finally { restore(); }
+});
+
+test('editing a sent message adds a confirm step before the text is replaced', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  let text = 'Original', revision = 1;
+  const posts = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.includes('/messages/mine-1/')) {
+        const payload = JSON.parse(options.body); posts.push([path, payload]);
+        revision += 1; text = payload.body;
+        return json(200, {message: {}});
+      }
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations/conv-1')) {
+        body.items = [{id: 'mine-1', user_id: alice, body: text, revision, retracted: false}];
+      }
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    const controls = () => el('message-list').children[0].children[5];
+    const buttons = () => descendants(controls()).filter(node => node.tagName === 'BUTTON');
+    await fire(el('message-list').children[0].children[3], 'click'); // 编辑
+    controls().children[0].value = 'Edited';
+    await fire(controls().children[1], 'click'); // 保存修改
+    assert.equal(posts.length, 0, '保存修改 must not send the edit on its own');
+    assert.equal(el('message-list').children[0].children[1].textContent, 'Original',
+      'the sent text is unchanged until the confirm step');
+    const confirm = buttons().find(node => node.textContent === '确认修改');
+    assert.ok(confirm, 'a 确认修改 button is shown before the edit is sent');
+    assert.equal(buttons().some(node => node.textContent === '保存修改'), false,
+      '保存修改 is replaced by the confirm step');
+    assert.ok(descendants(controls()).some(node => node.tagName !== 'BUTTON' && /替换/.test(node.textContent || '')),
+      'the confirm step says the sent message is replaced, not appended');
+    const cancel = buttons().find(node => node.textContent === '取消');
+    assert.ok(cancel, '取消 is offered in the confirm step');
+    await fire(cancel, 'click');
+    assert.equal(posts.length, 0, '取消 sends nothing');
+    assert.equal(controls().children.length, 0, '取消 closes the confirm step');
+    await fire(el('message-list').children[0].children[3], 'click');
+    controls().children[0].value = 'Edited again';
+    await fire(controls().children[1], 'click');
+    await fire(buttons().find(node => node.textContent === '确认修改'), 'click');
+    assert.equal(posts.length, 1);
+    assert.match(posts[0][0], /messages\/mine-1\/edit$/);
+    assert.equal(text, 'Edited again');
+    assert.equal(el('message-list').children[0].children[1].textContent, 'Edited again');
   } finally { restore(); }
 });
 
@@ -963,4 +1147,503 @@ test('icon chat controls preserve accessible names, disabled truth and attachmen
   assert.match(html, /class="attachment-menu"[\s\S]*?id="chat-attachment"/);
   assert.match(html, /工作区成员可在作品库查看/);
   assert.match(html, /disabled title="未实现：语音消息"[\s\S]*?sr-only">语音/);
+});
+
+import {notificationBadgeText, notificationSummary} from '../openteamily/static/chat/app.mjs';
+
+test('notification badge and summary text', () => {
+  assert.equal(notificationBadgeText(0), '');
+  assert.equal(notificationBadgeText(3), '3');
+  assert.equal(notificationBadgeText(120), '99+');
+  assert.equal(notificationSummary({actor_username: 'bob', conversation_kind: 'group', conversation_title: '项目群'}),
+    'bob 在「项目群」提及了你');
+  assert.equal(notificationSummary({actor_username: 'bob', conversation_kind: 'dm', conversation_title: 'bob'}),
+    'bob 在「单聊」提及了你');
+});
+
+test('mention notifications show a badge, open the conversation and mark read', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals();
+  const posts = [];
+  let unread = 1;
+  const inbox = () => ({unread_count: unread, limit: 100, items: [{
+    id: 'n'.repeat(32), kind: 'mention', conversation_id: 'conv-1', conversation_kind: 'group',
+    conversation_title: '项目群', message_id: 'm-1', actor_username: 'bob', excerpt: '@alice 看一下',
+    created: 30, read: unread === 0}]});
+  try {
+    await mount(doc, {fetcher: async (path, init = {}) => {
+      if (path === '/v1/workspaces/ws-1/notifications') return json(200, inbox());
+      if (path === '/v1/workspaces/ws-1/notifications/read') {
+        posts.push(JSON.parse(init.body)); unread = 0; return json(200, {unread_count: 0});
+      }
+      if (path.endsWith('/conv-1/read')) return json(200, {unread_count: 0});
+      return original(path);
+    }});
+    await settle();
+    assert.equal(el('notification-count').hidden, false);
+    assert.equal(el('notification-count').textContent, '1');
+    await fire(el('notifications-toggle'), 'click');
+    await settle();
+    assert.equal(el('notifications-panel').hidden, false);
+    const item = el('notification-list').children[0] && el('notification-list').children[0].children[0];
+    assert.ok(item, 'the mention is listed');
+    assert.equal(item.children[0].textContent, 'bob 在「项目群」提及了你');
+    assert.equal(el('notifications-read-all').disabled, false);
+    await fire(item, 'click');
+    await settle();
+    assert.deepEqual(posts, [{notification_id: 'n'.repeat(32)}]);
+    assert.equal(el('notifications-panel').hidden, true);
+    assert.equal(el('notification-count').hidden, true);
+  } finally { restore(); }
+});
+
+import {MESSAGE_REACTIONS, reactionToggle} from '../openteamily/static/chat/app.mjs';
+
+test('reaction toggle turns my reaction off and others on', () => {
+  assert.equal(MESSAGE_REACTIONS.length, 6);
+  assert.deepEqual(reactionToggle([{emoji: '👍', count: 2, mine: true}], '👍'), {emoji: '👍', active: false});
+  assert.deepEqual(reactionToggle([{emoji: '👍', count: 1, mine: false}], '👍'), {emoji: '👍', active: true});
+  assert.deepEqual(reactionToggle([], '🎉'), {emoji: '🎉', active: true});
+});
+
+test('reaction chips post the toggle and re-render server counts', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const posts = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.endsWith('/messages/m-1/reactions')) {
+        const payload = JSON.parse(options.body); posts.push(payload);
+        return json(200, {message_id: 'm-1', reactions: payload.active ? [{emoji: payload.emoji, count: 2, mine: true}] : []});
+      }
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations/conv-1')) body.items[0].reactions = [{emoji: '👍', count: 1, mine: false}];
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    const li = el('message-list').children[0];
+    const bar = li.children.find(node => node.className === 'message-reactions');
+    assert.equal(bar.className, 'message-reactions');
+    assert.equal(bar.children[0].textContent, '👍 1');
+    await fire(bar.children[0], 'click');
+    await settle();
+    assert.deepEqual(posts, [{emoji: '👍', active: true}]);
+    const next = li.children.find(node => node.className === 'message-reactions');
+    assert.equal(next.children[0].textContent, '👍 2');
+    assert.equal(next.children[0].getAttribute('aria-pressed'), 'true');
+  } finally { restore(); }
+});
+
+test('team mode needs a selected template', () => {
+  assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', selectedCount: 3}), false);
+  assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', templateSelected: true}), true);
+});
+
+import {forwardTargets, forwardCountLabel} from '../openteamily/static/chat/app.mjs';
+
+test('forward target list excludes the current conversation', () => {
+  assert.deepEqual(forwardTargets([{id: 'a', kind: 'dm', title: 'bob'}, {id: 'b', kind: 'group', title: '群'}], 'a'),
+    [{id: 'b', label: '群聊 · 群'}]);
+  assert.equal(forwardCountLabel(3), '已选 3 条');
+});
+
+test('pin a message and multi-select forward call the real endpoints', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const posts = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.endsWith('/messages/m-1/pin')) {
+        posts.push([path, JSON.parse(options.body)]);
+        return json(200, {pinned_messages: [{message_id: 'm-1', excerpt: '你好', pinned_by_username: 'alice'}]});
+      }
+      if (path.endsWith('/conv-1/forward')) {
+        posts.push([path, JSON.parse(options.body)]);
+        return json(201, {items: [{id: 'f-1'}]});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    assert.equal(el('chat-invite').hidden, false);
+    assert.equal(el('multi-select-toggle').hidden, false);
+    let li = el('message-list').children[0];
+    const tools = li.children.find(node => node.className === 'message-tools');
+    assert.equal(tools.className, 'message-tools');
+    await fire(tools.children[0], 'click');
+    await settle();
+    assert.deepEqual(posts[0][1], {pinned: true});
+    assert.equal(el('pinned-messages').hidden, false);
+    li = el('message-list').children[0];
+    assert.equal(li.children.find(node => node.className === 'message-tools').children[0].textContent, '取消置顶');
+    await fire(el('multi-select-toggle'), 'click');
+    assert.equal(el('forward-bar').hidden, false);
+    li = el('message-list').children[0];
+    const box = li.children.find(node => node.className === 'message-tools').children[0].children[0];
+    box.checked = true;
+    await fire(box, 'change');
+    assert.equal(el('forward-count').textContent, '已选 1 条');
+    el('forward-target').value = 'conv-2';
+    await fire(el('forward-target'), 'change');
+    assert.equal(el('forward-submit').disabled, false);
+    await fire(el('forward-submit'), 'click');
+    await settle();
+    assert.deepEqual(posts[1][1], {message_ids: ['m-1'], target_conversation_id: 'conv-2'});
+    assert.equal(el('forward-bar').hidden, true);
+  } finally { restore(); }
+});
+
+test('agent task completion notifications have their own summary', () => {
+  assert.equal(notificationSummary({kind: 'agent_reply', status: 'succeeded', actor_username: '助理',
+    conversation_kind: 'group', conversation_title: '项目群'}), '助理 在「项目群」已完成你的请求');
+  assert.equal(notificationSummary({kind: 'agent_reply', status: 'failed', actor_username: '助理',
+    conversation_kind: 'group', conversation_title: '项目群'}), '助理 在「项目群」未能完成你的请求');
+});
+
+test('group info panel counts members and agents honestly and picks a readable glyph', async () => {
+  const { groupInfoCounts, leadGlyph } = await import('../openteamily/static/chat/app.mjs');
+  assert.equal(groupInfoCounts({ members: [{}, {}], agent_members: [{}] }).text, '3 位成员 · 2 位真人 · 1 位智能体');
+  assert.equal(groupInfoCounts({}).text, '0 位成员 · 0 位真人 · 0 位智能体');
+  assert.equal(leadGlyph('[CI FIXTURE] Group chat'), 'G');
+  assert.equal(leadGlyph('产品群'), '产');
+  assert.equal(leadGlyph('---', '群'), '群');
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  for (const label of ['视频通话', '语音通话', 'Agent 主动性', '自动翻译', '消息免打扰']) assert.ok(html.includes(label));
+  assert.match(html, /aria-label="自动翻译（未接通）"/);
+});
+
+test('in-chat search highlights every case-insensitive match without HTML', async () => {
+  const { highlightParts } = await import('../openteamily/static/chat/app.mjs');
+  assert.deepEqual(highlightParts('Test a test', 'test'), [
+    { text: 'Test', match: true }, { text: ' a ', match: false }, { text: 'test', match: true }]);
+  assert.deepEqual(highlightParts('<b>x</b>', ''), [{ text: '<b>x</b>', match: false }]);
+});
+
+import { plusAttachAccept } from '../openteamily/static/chat/app.mjs';
+
+test('composer + attach shortcuts narrow the file picker without widening it', () => {
+  const all = 'image/png, image/jpeg,video/mp4,application/pdf';
+  assert.equal(plusAttachAccept('image', all), 'image/png,image/jpeg');
+  assert.equal(plusAttachAccept('video', all), 'video/mp4');
+  assert.equal(plusAttachAccept('any', all), 'image/png,image/jpeg,video/mp4,application/pdf');
+  assert.equal(plusAttachAccept('image', ''), '');
+});
+
+test('composer + creation grid deep-links real editors and labels the rest 未接通', () => {
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  for (const kind of ['website', 'document', 'slides', 'dashboard']) assert.ok(html.includes(`/space?new=${kind}`), kind);
+  for (const id of ['meeting_prep', 'daily_brief', 'expert_research', 'advance_goals']) assert.ok(html.includes(`/automations?template=${id}`), id);
+  assert.ok((html.match(/未接通/g) || []).length >= 5);
+});
+
+// Media shared in a chat is uploaded to the workspace library before the
+// message is sent, so the message carries an attachment with a mime type. The
+// message list has to show an image as an image: the document card with a DOC
+// cover and a download link is what an attachment used to look like for every
+// file type, and it hides the picture a user just sent.
+
+function attachmentFetcher(item) {
+  const aliceRow = {user_id: alice, username: 'alice'};
+  const conversation = {
+    id: 'conv-1', kind: 'dm', title: 'bob', updated: 30,
+    members: [aliceRow, {user_id: bob, username: 'bob'}],
+  };
+  const fetcher = async (path) => {
+    if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
+    if (path === '/v1/onboarding') return json(200, {onboarding: {completed: true}});
+    if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
+    if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
+    if (path === '/v1/settings') return json(200, {settings: {values: {}}});
+    if (path === '/v1/workspaces/ws-1/agents?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/members') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/artifacts?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/social/conversations?limit=100') return json(200, {items: [conversation]});
+    if (path === '/v1/workspaces/ws-1/social/conversations/conv-1') {
+      return json(200, {conversation, items: [item]});
+    }
+    throw new Error('unexpected ' + path);
+  };
+  return {fetcher};
+}
+
+const imageAttachment = {
+  id: 'a'.repeat(32), title: '日落.png', mime: 'image/png',
+  path: '/v1/workspaces/ws-1/artifacts/' + 'a'.repeat(32) + '/file',
+};
+
+function attachmentMessage(attachment) {
+  return {
+    id: 'm-1', conversation_id: 'conv-1', workspace_id: 'ws-1', user_id: bob,
+    body: '附件：' + attachment.title, created: '2026-01-01T00:00:00Z', attachment,
+  };
+}
+
+test('a picture shared in a chat renders as an image, not a document card', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher: attachmentFetcher(attachmentMessage(imageAttachment)).fetcher});
+    await settle();
+    const row = el('message-list').children[0];
+    assert.ok(row, 'the fixture conversation renders its message');
+    const image = descendants(row).find((node) => node.tagName === 'IMG');
+    assert.ok(image, 'an image attachment must render as an <img>, otherwise the picture is invisible in chat');
+    assert.equal(image.src, imageAttachment.path, 'the image reads the attachment the message points at');
+    assert.equal(image.alt, '日落.png', 'the image alt text is the attachment title');
+    assert.equal(image.getAttribute('loading'), 'lazy', 'a shared picture is not loaded before it is seen');
+    assert.ok(
+      !descendants(row).some((node) => String(node.textContent).trim() === 'DOC'),
+      'the document cover must not label an image attachment',
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('an audio attachment keeps the document card instead of becoming an image', async () => {
+  const attachment = {id: 'b'.repeat(32), title: '备忘.m4a', mime: 'audio/mp4', path: '/v1/workspaces/ws-1/artifacts/' + 'b'.repeat(32) + '/file'};
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher: attachmentFetcher(attachmentMessage(attachment)).fetcher});
+    await settle();
+    const row = el('message-list').children[0];
+    assert.ok(
+      !descendants(row).some((node) => node.tagName === 'IMG'),
+      'a non-image attachment must not be forced into an image element',
+    );
+    assert.ok(
+      descendants(row).some((node) => String(node.textContent).trim() === 'DOC'),
+      'a non-image attachment keeps the document card',
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('in-chat search jumps to loaded messages, explains unloaded hits, and restores scroll on close', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow:true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.includes('/search/messages?')) return json(200, {items:[{message_id:'jump-loaded',snippet:'Find me'}, {message_id:'not-loaded',snippet:'Earlier message'}],cursor:null});
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
+    const target = el('message-list').children[0];
+    target.dataset.messageId = 'jump-loaded';
+    let scrolled = false;
+    target.scrollIntoView = () => {scrolled=true;};
+    el('message-scroller').scrollTop = 41;
+    await fire(el('conversation-search-open'), 'click');
+    el('conversation-search-query').value = 'Find';
+    await fire(el('conversation-search-form'), 'submit', {preventDefault(){}});
+    const hits = el('conversation-search-results').children;
+    assert.equal(hits[0].getAttribute('role'), 'button');
+    await fire(hits[0], 'keydown', {key:'Enter',preventDefault(){}});
+    assert.equal(scrolled, true);
+    assert.equal(target.dataset.searchJump, 'true');
+    await fire(hits[1], 'click');
+    assert.match(el('conversation-search-status').textContent, /不在当前已加载/);
+    el('message-scroller').scrollTop = 99;
+    await fire(el('conversation-search-close'), 'click');
+    assert.equal(el('message-scroller').scrollTop, 41);
+    assert.equal(el('conversation-search-panel').hidden, true);
+  } finally {restore();}
+});
+
+test('removing a group agent sends nothing until the explicit confirmation', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const posts = [];
+  const restore = installChatGlobals({narrow:true});
+  try {
+    await mount(doc, {fetcher: async (path, options={}) => {
+      if (path.endsWith('/agents/a-1/remove')) {posts.push(path);return json(200, {});}
+      return original(path, options);
+    }});
+    await fire(el('conversation-list'), 'click', {target:sessionRows(el)[0]});
+    const remove = new FakeElement('button'); remove.dataset.removeAgent = 'a-1';
+    await fire(el('group-agent-chips'), 'click', {target:remove});
+    assert.equal(posts.length,0);
+    let question = el('group-agent-chips').children.at(-1);
+    assert.equal(question.getAttribute('role'),'alertdialog');
+    await fire(question.children[1], 'click');
+    assert.equal(posts.length,0);
+    await fire(el('group-agent-chips'), 'click', {target:remove});
+    question = el('group-agent-chips').children.at(-1);
+    await fire(question.children[2], 'click');
+    assert.equal(posts.length,1);
+  } finally {restore();}
+});
+
+test('the composer exposes a real bold tool instead of the disabled placeholder', () => {
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  const start = html.indexOf('id="chat-format"');
+  assert.ok(start > -1, 'the composer has a format control');
+  const open = html.lastIndexOf('<button', start);
+  const block = html.slice(open, html.indexOf('>', start) + 1);
+  assert.doesNotMatch(block, /disabled/, 'the format control must not be disabled');
+  assert.match(html, /id="chat-format-bold"/, 'the format menu offers bold');
+});
+
+test('wrapBold puts double asterisks around the selected text', () => {
+  assert.deepEqual(wrapBold('你好世界', 2, 4), {text: '你好**世界**', start: 4, end: 6});
+  assert.deepEqual(wrapBold('abc', 1, 1), {text: 'a****bc', start: 3, end: 3});
+  assert.deepEqual(wrapBold('', 0, 0), {text: '****', start: 2, end: 2});
+});
+
+test('inlineBold splits text into plain and bold runs', () => {
+  assert.deepEqual(inlineBold('发 **重要** 通知'), [
+    {text: '发 ', bold: false}, {text: '重要', bold: true}, {text: ' 通知', bold: false},
+  ]);
+  assert.deepEqual(inlineBold('**未闭合'), [{text: '**未闭合', bold: false}]);
+  assert.deepEqual(inlineBold(''), []);
+});
+
+test('the message menu offers delete that hides the message only for this account', () => {
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../openteamily/static/chat/app.mjs', import.meta.url), 'utf8');
+  assert.match(html, /data-menu="delete"/);
+  assert.doesNotMatch(html, /data-menu="delete"[^>]*disabled/);
+  assert.doesNotMatch(html, /还没有删除消息接口/);
+  assert.match(app, /request\('DELETE', `\$\{socialBase\(\)\}\/\$\{cid\}\/messages\/\$\{item\.id\}`\)/);
+});
+
+test('folding preserves complete message and link preview preference never fetches or executes markup', async () => {
+  const {renderMessageText}=await import('../openteamily/static/chat/utilities.mjs');
+  const document={createElement:tag=>new FakeElement(tag)}, root=new FakeElement('div');
+  const full='A'.repeat(900)+' <script>untrusted</script>';
+  renderMessageText(document,root,full,'compact');
+  assert.equal(root.children[0].tagName,'DETAILS');
+  assert.equal(root.children[0].children[1].textContent,full);
+  renderMessageText(document,root,full,'none');
+  assert.equal(root.children.length,0);
+  assert.equal(root.textContent,full);
+  const links='https://example.invalid/path?x=1 https://user:password@example.invalid/ javascript:alert(1)';
+  renderMessageText(document,root,links,'none',false);
+  assert.equal(root.children.length,0);
+  renderMessageText(document,root,links,'none',true);
+  assert.equal(root.children.length,1);
+  assert.equal(root.children[0].href,'https://example.invalid/path?x=1');
+  assert.equal(root.children[0].rel,'noopener noreferrer');
+  assert.match(root.children[0].title,/未抓取/);
+});
+
+function utilityDocument() {
+  const nodes=new Map();
+  const doc={createElement(tag){const e=new FakeElement(tag);e.style={};return e},getElementById(id){
+    if(!nodes.has(id)){
+      const e=doc.createElement('div');e.open=false;e.showModal=()=>{e.open=true};e.close=()=>{e.open=false;for(const h of e.handlers.close||[])h()};e.dispatchEvent=()=>{};nodes.set(id,e);
+    }
+    return nodes.get(id);
+  }};
+  return {doc,el:id=>doc.getElementById(id)};
+}
+
+test('resource picker cancels pending reads, inserts actual quoted content once, and never sends', async()=>{
+  const {mountMessageUtilities}=await import('../openteamily/static/chat/utilities.mjs');
+  const {doc,el}=utilityDocument();const posts=[];let finish,mode='defer';
+  const c={wid:'workspace',cid:'conversation',source:'social',kind:'group'};
+  mountMessageUtilities(doc,{context:()=>c,composerContext:()=>c,notify:()=>{},request:async(method,path,body)=>{
+    if(method==='POST'){posts.push(body);throw Error('no send expected')}
+    if(path.endsWith('/memory/note'))return mode==='defer'?await new Promise(resolve=>{finish=resolve}):{status:200,body:{page:{title:'Original note',revision:2,body:'<script>quoted, never executable</script>'}}};
+    return {status:200,body:{items:[{id:'note',title:'Original note'}]}};
+  }});
+  el('chat-body').value='Keep this draft';
+  await fire(el('composer-memory-open'),'click');await settle(2);
+  const pending=fire(el('resource-picker-list').children[0].children[0],'click');await settle(1);
+  el('resource-picker').close();finish({status:200,body:{page:{title:'stale',revision:1,body:'must not insert'}}});await pending;
+  assert.equal(el('chat-body').value,'Keep this draft');
+  mode='success';await fire(el('composer-memory-open'),'click');await settle(2);
+  await fire(el('resource-picker-list').children[0].children[0],'click');
+  assert.match(el('chat-body').value,/Original note（修订 2）/u);
+  assert.ok(el('chat-body').value.endsWith(JSON.stringify('<script>quoted, never executable</script>')));
+  assert.equal(el('resource-picker').open,false);assert.equal(posts.length,0);
+});
+
+test('model utility errors remain visible and retries retain identity without fake completion', async()=>{
+  const {mountMessageUtilities}=await import('../openteamily/static/chat/utilities.mjs');
+  const {doc,el}=utilityDocument();const writes=[];const c={wid:'w',cid:'c',kind:'group'};
+  const utility=mountMessageUtilities(doc,{context:()=>c,composerContext:()=>c,notify:()=>{},request:async(method,_path,body,headers)=>{
+    if(method==='GET')return {status:200,body:{items:[]}};
+    writes.push({body,headers});return {status:409,body:{error:{message:'Own runtime is offline'}}};
+  }});
+  utility.open({id:'message',revision:3},'translate');await settle(2);
+  el('message-assist-instruction').value='English';
+  await fire(el('message-assist-form'),'submit',{preventDefault(){}});
+  assert.equal(el('message-assist-status').textContent,'Own runtime is offline');
+  assert.equal(el('message-assist-submit').disabled,false);
+  await fire(el('message-assist-form'),'submit',{preventDefault(){}});
+  assert.equal(writes[0].headers['Idempotency-Key'],writes[1].headers['Idempotency-Key']);
+  assert.equal(writes[0].body.revision,3);assert.equal(el('message-assist-history').children.length,0);
+  el('message-assist-dialog').close();
+});
+
+
+test('new dialog and document-card surfaces use actual theme tokens, not undefined white fallbacks', () => {
+  const css = readFileSync(new URL('../openteamily/static/chat/app.css', import.meta.url), 'utf8');
+  assert.match(css, /#message-assist-dialog, #announcement-dialog \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
+  assert.match(css, /#resource-picker \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
+  assert.match(css, /\.chat-document-card \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
+});
+
+
+for (const phase of ['directory', 'fanout']) for (const target of ['ws-1','ws-2']) {
+  test(`deferred ${phase} from an older load cannot overwrite the latest ${target} session list`, async () => {
+    const {doc, el} = fakeChatDocument(chatHtml()); const restore = installChatGlobals();
+    let release, first=true; const requests=[];
+    const row=id=>({id,kind:'group',title:id,updated:30,members:[]});
+    const fetcher=async path=>{
+      requests.push(path);
+      if(path==='/v1/auth/session')return json(200,{user:{id:'user-1',username:'alice'}});
+      if(path==='/v1/onboarding')return json(200,{onboarding:{completed:true}});
+      if(path==='/v1/personal-agent')return json(200,{personal_agent:{workspace:{id:'ws-1'}}});
+      if(path==='/v1/workspaces?limit=100')return json(200,{items:[{id:'ws-1',name:'First'},{id:'ws-2',name:'Second'}]});
+      if(path==='/v1/settings')return json(200,{settings:{values:{}}});
+      if(path.endsWith('/agents?limit=100')){
+        if(first){first=false;
+          if(phase==='directory')return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'old-agent',name:'old'}]}));});
+          return json(200,{items:[{id:'old-agent',name:'old'}]});
+        }
+        return json(200,{items:[]});
+      }
+      if(path.includes('/agents/old-agent/conversations?'))return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'stale-agent-conversation',title:'stale',updated:40}]}));});
+      if(path.endsWith('/social/conversations?limit=100'))return json(200,{items:[row(release?'new-current':'old-stale')]});
+      if(path.endsWith('/members')||path.endsWith('/artifacts?limit=100'))return json(200,{items:[]});
+      return json(404,{error:{message:'not in synthetic fixture'}});
+    };
+    try{
+      mount(doc,{fetcher}); await settle(); assert.equal(typeof release,'function','first real request is pending');
+      el('workspace').value=target; await fire(el('workspace'),'change'); await settle();
+      const ids=()=>el('conversation-list').children.map(li=>li.children[0]?.dataset.conversation).filter(Boolean);
+      assert.deepEqual(ids(),['new-current']);
+      release(); await settle(); assert.deepEqual(ids(),['new-current'],'late old data must not overwrite a newer successful load');
+      if(phase==='directory')assert.equal(requests.some(path=>path.includes('/agents/old-agent/')),false,'stale directory must not trigger new fanout');
+    }finally{restore();}
+  });
+}
+
+
+test('initial SSE cannot supersede an uncommitted session directory and lose a conversation deep link',async()=>{
+ const {doc,el}=fakeChatDocument(chatHtml()),restore=installChatGlobals();const saved=globalThis.EventSource;
+ const sources=[];let release,first=true;
+ class Source{constructor(){this.handlers={};sources.push(this)}addEventListener(n,fn){this.handlers[n]=fn}close(){}}
+ globalThis.EventSource=Source;globalThis.location.hash='#workspace=ws-1&agent=agent-1&conversation=conv-1';
+ const fallback=chatFetcher().fetcher;
+ const fetcher=async(path,options)=>{
+  if(path.endsWith('/agents?limit=100')){if(first){first=false;return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'agent-1',name:'Deep link agent'}]}));});}return json(200,{items:[{id:'agent-1',name:'Deep link agent'}]});}
+  if(path.endsWith('/agents/agent-1/conversations?limit=100'))return json(200,{items:[{id:'conv-1',title:'Stored conversation'}]});
+  if(path.endsWith('/agents/agent-1/conversations/conv-1'))return json(200,{conversation:{id:'conv-1',title:'Stored conversation'},items:[{id:'m-1',role:'assistant',body:'Stored actual response',status:'succeeded'}]});
+  return fallback(path,options);
+ };
+ try{
+  mount(doc,{fetcher});await settle();assert.equal(typeof release,'function');assert.equal(sources.length,0,'subscribe only after the initial directory commits');
+  release();await settle();assert.equal(sources.length,1);
+  sources[0].handlers.invalidate({data:JSON.stringify({version:'f'.repeat(64),domains:{social:'a'.repeat(64),artifacts:'b'.repeat(64),notifications:'c'.repeat(64)}})});
+  await settle();assert.match(el('chat-title').textContent,/Deep link agent/);assert.ok(el('message-list').children.length>0,'initial snapshot refresh retains the deep-linked history');
+ }finally{if(saved===undefined)delete globalThis.EventSource;else globalThis.EventSource=saved;restore();}
 });
