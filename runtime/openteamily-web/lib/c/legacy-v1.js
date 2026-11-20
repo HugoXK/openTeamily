@@ -656,6 +656,22 @@ function messengerExtraRoutes(host) {
   }
   const guard = async (bs, wid) => teamFor(bs, wid, 'Workspace', env)
   return [
+    {
+      method: 'GET', path: re('\\/call'),
+      handle: async ({ match }) => wrap(async () => {
+        const bs = client(host)
+        const team = await guard(bs, match[1])
+        return [200, await bs.get(conv(match[2]) + '/call' + qs({team_id: team.id}))]
+      }),
+    },
+    {
+      method: 'POST', path: re('\\/call\\/(join|poll|signal|leave)'),
+      handle: async ({ match, body }) => wrap(async () => {
+        const bs = client(host)
+        const team = await guard(bs, match[1])
+        return [200, await bs.post(conv(match[2]) + '/call/' + match[3], {...body, team_id: team.id})]
+      }),
+    },
     ...['GET','POST'].map(method=>({method,path:/^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/assists$/,
       async handle(p){ const out=await host.call('message-assists/v1',{method,path:p.match[0],body:p.body,idempotency_key:p.idempotency_key});return [out.status,out.body] } })),
     ...['GET', 'POST'].map(method => ({ method, path: /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/announcement$/,

@@ -1256,10 +1256,10 @@ test('session timestamps use Hong Kong calendar boundaries and never invent unre
   assert.equal(formatSessionTime('invalid', now), '');
 });
 
-test('icon chat controls preserve accessible names, disabled truth and attachment privacy', () => {
+test('icon chat controls preserve accessible names and attachment privacy', () => {
   const html = chatHtml();
   assert.match(html, /id="conversation-search-open"[^>]*aria-label="搜索当前会话"[\s\S]*?<svg/);
-  assert.match(html, /disabled title="未实现：语音或视频通话"/);
+  assert.match(html, /id="chat-call" hidden aria-label="通话" aria-haspopup="dialog"/);
   assert.match(html, /class="attachment-menu"[\s\S]*?id="chat-attachment"/);
   assert.match(html, /工作区成员可在作品库查看/);
   assert.match(html, /id="voice-record"[^>]*aria-label="录制语音"/);
@@ -1278,6 +1278,8 @@ test('notification badge and summary text', () => {
     'bob 在「单聊」提及了你');
   assert.equal(notificationSummary({kind: 'messenger.added', by: {display_name: '小林'}, title: '项目群'}),
     '小林 将你加入「项目群」');
+  assert.equal(notificationSummary({kind: 'messenger.call', by: {display_name: '小林'}, title: '项目群', call_kind: 'video'}),
+    '小林 在「项目群」发起了视频通话');
 });
 
 test('mention notifications show a badge, open the conversation and mark read', async () => {

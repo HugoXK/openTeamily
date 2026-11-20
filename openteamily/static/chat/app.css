@@ -1718,6 +1718,38 @@ html[data-theme-resolved="dark"] position: absolute; right: .5rem; bottom: -.625
 #group-invite-choices input { flex: 0 0 auto; }
 #group-invite-status:empty { display: none; }
 #group-info-invite { min-height: 2.5rem; text-align: left; color: var(--ot-accent); }
+
+#chat-call-incoming { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+#chat-call-incoming[hidden], #chat-call-dialog [hidden] { display: none; }
+#chat-call-dialog {
+  box-sizing: border-box;
+  width: min(42rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  padding: 1.25rem;
+  border: 1px solid var(--ot-line);
+  border-radius: 1rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+#chat-call-dialog::backdrop { background: rgb(0 0 0 / 40%); }
+#chat-call-dialog h2 { margin: 0; font-size: 1.125rem; }
+#chat-call-dialog p { margin: .45rem 0; overflow-wrap: anywhere; }
+#chat-call-dialog .actions { margin-top: .75rem; gap: .5rem; }
+#chat-call-dialog .actions button { min-height: 2.75rem; }
+#chat-call-choices button:last-child, #chat-call-join { background: var(--ot-accent); color: var(--ot-on-accent, white); border: 0; }
+#chat-call-controls:not([hidden]) ~ .actions button { color: var(--ot-danger); }
+#chat-call-media { display: grid; gap: .5rem; margin-top: .75rem; }
+#chat-call-peers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr)); gap: .5rem; }
+#chat-call-local, #chat-call-peers > div {
+  display: grid;
+  gap: .25rem;
+  padding: .5rem;
+  background: var(--ot-surface-2);
+  border-radius: .65rem;
+  overflow-wrap: anywhere;
+}
+#chat-call-media video { width: 100%; max-height: 32dvh; aspect-ratio: 16 / 9; object-fit: contain; border-radius: .45rem; background: #16201a; }
+#chat-call-local { justify-self: start; width: min(10rem, 100%); }
 .search-hit[role="button"] { cursor: pointer; }
 .search-hit[role="button"]:hover, .search-hit[role="button"]:focus-visible { background: var(--ot-bg-accent); }
 #message-list li[data-search-jump="true"] { outline: 2px solid var(--ot-accent); outline-offset: 3px; }

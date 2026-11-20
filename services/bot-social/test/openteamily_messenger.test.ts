@@ -96,6 +96,43 @@ test("groups add multiple teammates atomically and notify each new member once",
   }
 });
 
+test("live calls notify members and relay signals only to their target peer", async () => {
+  const owner = await home(S.base, "call-owner");
+  const member = await home(S.base, "call-member");
+  const outsider = await home(S.base, "call-outside");
+  const team = await teamOf(owner, member, outsider);
+  const group = await owner.ok("POST", "/v1/ot/conversations", {kind: "group", title: "Standup", team_id: team.id, members: [member.handle]});
+  const root = `/v1/ot/conversations/${group.id}/call`;
+  const first = "tab-owner-123456789";
+  const second = "tab-member-12345678";
+  assert.equal((await outsider.call("GET", root)).status, 404);
+  assert.deepEqual(await member.ok("GET", root), {call: null});
+  const started = await owner.ok("POST", root + "/join", {kind: "video", start: true, peer_id: first});
+  const callId = started.call.id;
+  assert.equal(started.call.kind, "video");
+  assert.equal((await owner.ok("POST", root + "/join", {kind: "video", start: true, peer_id: first})).call.id, callId);
+  assert.equal((await owner.call("POST", root + "/join", {kind: "video", start: true, peer_id: "tab-duplicate-12345678"})).status, 409);
+  const notes = await member.ok("GET", "/v1/ot/notifications");
+  assert.equal(notes.notifications.filter((note: any) => note.kind === "messenger.call" && note.data.conversation_id === group.id).length, 1);
+  const joined = await member.ok("POST", root + "/join", {kind: "video", peer_id: second});
+  assert.equal(joined.call.id, callId);
+  assert.equal(joined.call.peers.length, 2);
+  const signal = {call_id: callId, peer_id: first, to: second, client_key: "signal-once-123456",
+    description: {type: "offer", sdp: "v=0\r\n"}};
+  await owner.ok("POST", root + "/signal", signal);
+  await owner.ok("POST", root + "/signal", signal);
+  assert.equal((await outsider.call("POST", root + "/poll", {call_id: callId, peer_id: second})).status, 404);
+  assert.equal((await member.call("POST", root + "/poll", {call_id: callId, peer_id: first})).status, 404);
+  assert.deepEqual((await owner.ok("POST", root + "/poll", {call_id: callId, peer_id: first})).signals, []);
+  const received = await member.ok("POST", root + "/poll", {call_id: callId, peer_id: second});
+  assert.equal(received.signals.length, 1);
+  assert.deepEqual(received.signals[0].description, signal.description);
+  await owner.ok("POST", root + "/leave", {call_id: callId, peer_id: first});
+  assert.equal((await member.ok("GET", root)).call.peers.length, 1);
+  await member.ok("POST", root + "/leave", {call_id: callId, peer_id: second});
+  assert.deepEqual(await member.ok("GET", root), {call: null});
+});
+
 test("group agents: the owner's DS-Bot gets mentions and auto-reply turns; auto replies capped at 3/hour", async () => {
   const A = await home(S.base, "agowner");
   const B = await home(S.base, "agpeer");

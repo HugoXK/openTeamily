@@ -1,5 +1,6 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { mountAgentMentions } from './mentions.mjs';
+import { mountChatCalls } from './calls.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
@@ -540,6 +541,11 @@ export function notificationSummary(item) {
     const author = item.by?.display_name || item.by?.handle || '成员';
     return `${author} 将你加入「${item.title || '群聊'}」`;
   }
+  if (item.kind === 'messenger.call') {
+    const author = item.by?.display_name || item.by?.handle || '成员';
+    const kind = item.call_kind === 'video' ? '视频通话' : '语音通话';
+    return item.title ? `${author} 在「${item.title}」发起了${kind}` : `${author} 发起了${kind}`;
+  }
   const where = item.conversation_kind === 'dm' ? '单聊' : (item.conversation_title || '群聊');
   if (item.kind === 'automation_reminder') {
     return `提醒到点：${item.title || '回看一条消息'}`;
@@ -719,6 +725,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentConversation = null;
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
+  const chatCalls = mountChatCalls(document, {request, context: () => {
+    if (!servedByDsbot || currentSource !== 'social' || !currentConversation) return null;
+    return {wid: workspaceId(), cid: currentConversation.id, title: conversationLabel(currentConversation, currentUser?.id)};
+  }});
   const agentMentions = mountAgentMentions(document, () => {
     if (currentSource !== 'social' || currentConversation?.kind !== 'group') return null;
     return {scope: `${workspaceId()}/${currentConversation.id}`, agents: currentConversation.agent_members || []};
@@ -1756,6 +1766,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const workspaceEvents=mountWorkspaceEvents(document,{onInvalidate:async(event)=>{
     if(event.workspace!==workspaceId()||document.visibilityState==='hidden')return;
+    if (event.changed.includes('notifications')) void chatCalls.refresh();
     await loadSessions();
     if(event.workspace!==workspaceId())return;
     if(!event.initial&&event.changed.includes('social')&&currentSource==='social'&&currentConversation){
@@ -2105,6 +2116,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncMuteButton();
     currentSource = 'agent';
     currentAgent = agent;
+    chatCalls.sync();
     voiceRecorder.refresh();
     document.getElementById('social-agent-members').hidden = true;
     setDirectoryLink({source: 'agent'});
@@ -2157,6 +2169,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     currentConversation = result.body.conversation;
     setSocialHistory({wid, cid: conversationId, cursor: result.body.cursor ?? null});
+    chatCalls.sync();
     agentMentions.refresh();
     voiceRecorder.refresh();
     setSessionsOpen(false);
@@ -2559,6 +2572,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             currentAgent = agents.find(entry => entry.id === item.id) || null;
             currentConversation = null;
             currentSource = 'agent';
+            chatCalls.sync();
             socialOpen += 1;
             setSocialHistory(null);
             if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
@@ -2637,6 +2651,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (session.status !== 200) {
       currentUser = null;
       currentConversation = null;
+      chatCalls.sync();
       socialOpen += 1;
       setSocialHistory(null);
       voiceRecorder.refresh();
@@ -2837,6 +2852,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentAgent = null;
     currentConversation = null;
     currentSource = 'agent';
+    chatCalls.sync();
     voiceRecorder.refresh();
     clearVoicePlayers();
     stopPolling();

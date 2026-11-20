@@ -205,7 +205,7 @@
         <button type="button" id="chat-invite" hidden aria-expanded="false" aria-controls="chat-invite-panel" title="为当前工作区生成邀请链接（所有者或管理员）">邀请</button>
         <button type="button" id="chat-group-invite" hidden aria-haspopup="dialog">邀请成员</button>
         <button type="button" id="multi-select-toggle" hidden aria-pressed="false" title="选择多条消息后转发">多选</button>
-        <button type="button" disabled title="未实现：语音或视频通话" aria-label="通话（尚未实现）"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h3l2 5-3 2a14 14 0 0 0 6 6l2-3 5 2v3a3 3 0 0 1-3 3C9 20 4 15 3 6a3 3 0 0 1 3-3Z"/></svg><span class="sr-only">通话</span></button>
+        <button type="button" id="chat-call" hidden aria-label="通话" aria-haspopup="dialog" title="语音或视频通话"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h3l2 5-3 2a14 14 0 0 0 6 6l2-3 5 2v3a3 3 0 0 1-3 3C9 20 4 15 3 6a3 3 0 0 1 3-3Z"/></svg><span class="sr-only">通话</span></button>
         <button type="button" id="pin-conversation" hidden>置顶会话</button>
         <button type="button" id="mute-conversation" aria-pressed="false" hidden>免打扰</button>
         <button type="button" id="conversation-search-open" class="icon-action" title="搜索当前会话" aria-label="搜索当前会话"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 0-12 0 6 6 0 0 0 12 0Z m-1 5 6 6"/></svg><span class="sr-only">会话内搜索</span></button>
@@ -227,8 +227,8 @@
         <p class="group-info-sub" id="group-announcement-preview" style="white-space:pre-wrap">正在读取公告…</p>
       </section>
       <section class="group-info-card group-info-list" aria-label="通话">
-        <button type="button" class="group-info-row" disabled title="未接通：还没有视频通话">视频通话<span class="group-info-tag">未接通</span></button>
-        <button type="button" class="group-info-row" disabled title="未接通：还没有语音通话">语音通话<span class="group-info-tag">未接通</span></button>
+        <button type="button" class="group-info-row" id="group-call-video">视频通话</button>
+        <button type="button" class="group-info-row" id="group-call-audio">语音通话</button>
       </section>
       <section class="group-info-card group-info-list" aria-label="群设置">
         <div class="group-info-toggle-row"><span><strong>自动翻译</strong><small>未接通：没有翻译服务。</small></span><button type="button" role="switch" aria-checked="false" disabled class="group-info-switch" aria-label="自动翻译（未接通）"></button></div>
@@ -247,6 +247,29 @@
         <ul id="group-info-people" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-people" hidden></ul>
       </section>
     </aside>
+    <aside id="chat-call-incoming" class="chat-strip" hidden>
+      <span id="chat-call-incoming-label"></span>
+      <button type="button" id="chat-call-join">加入通话</button>
+    </aside>
+    <dialog id="chat-call-dialog" aria-labelledby="chat-call-title">
+      <h2 id="chat-call-title">通话</h2>
+      <p id="chat-call-conversation"></p>
+      <p id="chat-call-status" role="status"></p>
+      <div id="chat-call-media" hidden>
+        <div id="chat-call-local"><video muted autoplay playsinline></video><span>你</span></div>
+        <div id="chat-call-peers"></div>
+      </div>
+      <div class="actions" id="chat-call-choices">
+        <button type="button" id="chat-call-start-audio">语音通话</button>
+        <button type="button" id="chat-call-start-video">视频通话</button>
+      </div>
+      <div class="actions" id="chat-call-controls" hidden>
+        <button type="button" id="chat-call-mute" aria-pressed="false">静音</button>
+        <button type="button" id="chat-call-camera" aria-pressed="true">关闭摄像头</button>
+        <button type="button" id="chat-call-play" hidden>播放声音</button>
+      </div>
+      <div class="actions"><button type="button" id="chat-call-close">关闭</button></div>
+    </dialog>
     <dialog id="group-invite-dialog" aria-labelledby="group-invite-heading">
       <form id="group-invite-form">
         <h2 id="group-invite-heading">添加群成员</h2>
@@ -438,7 +461,7 @@
     </form>
     <details class="gap-note">
       <summary>对照说明</summary>
-      <p class="note">聊天页同时列出当前工作区的智能体会话和人↔人单聊、群聊。单聊和群聊支持个人置顶、未读和筛选；智能体私聊未读仍未接通。技能与应用连接器可从输入工具进入管理页；会议录制、第三方智能体、邀请和通话尚未接通，对应按钮保留禁用。非空消息气泡和移动端布局是原创补充，未经 Teamily 对照。还不能写成已经功能对等。</p>
+      <p class="note">单聊和群聊支持语音与视频通话。通话需要设备权限，离开时会关闭麦克风和摄像头。群聊最多同时 6 人通话。</p>
     </details>
     <p id="role-note" class="note" hidden></p>
     <section id="chat-panel">
