@@ -190,6 +190,9 @@ class Scheduler:
         self.stale, self.timeout = stale, timeout
 
     def tick_workspace(self, db, workspace_id, now):
+        from .dsbot_gateway import workspace_moved_to_dsbot
+        if workspace_moved_to_dsbot(db, workspace_id, 'automations'):
+            return []
         fired = []
         rows = db.execute(
             'SELECT * FROM automations WHERE workspace_id=? AND enabled=1 ORDER BY id',
@@ -202,6 +205,9 @@ class Scheduler:
         return fired
 
     def reconcile_workspace(self, db, workspace_id, now):
+        from .dsbot_gateway import workspace_moved_to_dsbot
+        if workspace_moved_to_dsbot(db, workspace_id, 'automations'):
+            return []
         updated = []
         rows = db.execute(
             "SELECT * FROM automation_runs WHERE workspace_id=? AND status='queued' ORDER BY id",

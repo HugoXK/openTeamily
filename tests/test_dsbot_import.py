@@ -34,7 +34,11 @@ class FakeRunner:
         if args[0] == 'exec' and 'chown' in args:
             return '', ''
         if args[0] == 'exec' and 'sh' in args:
-            self.files.add('/data/openteamily/import/.delivered-v1')
+            cmd = args[-1]
+            # `touch /data/openteamily/import/.delivered-<feature>-v1`
+            for part in cmd.split():
+                if part.startswith('/data/openteamily/import/.delivered-'):
+                    self.files.add(part)
             return '', ''
         raise ManagerError('unexpected')
 
@@ -63,8 +67,10 @@ class FakeClient:
 
     def dsbot_import(self, iid, seal_key_hex):
         self.seen = (iid, seal_key_hex)
+        from openteamily.manager.dsbot_import import FEATURES
         return {'owner_imported': True, 'features': [
-            {'name': 'settings', 'bundle': {'format': 'openteamily-dsbot-import', 'feature': 'settings', 'tables': {}, 'manifest': {}}},
+            {'name': name, 'bundle': {'format': 'openteamily-dsbot-import', 'feature': name, 'tables': {}, 'manifest': {}}}
+            for name in FEATURES
         ]}
 
 
@@ -80,6 +86,8 @@ class ImportJobTests(unittest.TestCase):
         self.assertEqual(first['status'], 'imported')
         self.assertEqual(client.seen[1], '11' * 32)
         self.assertTrue(any(c[0] == 'cp' for c in engine.runner.calls))
+        self.assertIn('automations-v1.bundle', first['features'])
+        self.assertIn('agents-v1.bundle', first['features'])
         engine.runner.calls.clear()
         again = dsbot_import.deliver(engine, client, iid)
         self.assertEqual(again['status'], 'already-imported')

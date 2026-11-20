@@ -289,7 +289,7 @@ and a container test proving the capability executes inside the user's DS-Bot.
   `dsbot_bundle.build_with_secrets` so imported secrets can be re-sealed. Without it, bundles carrying
   secrets are rejected and kept for retry. The manager job `dsbot_import.deliver` (hooked from
   `poll_once`) creates that key, requests the sealed bundles over loopback, and copies them into
-  `/data/openteamily/import/<feature>-v1.bundle` once per instance. Moved `/v1` routes listed in this
+  `/data/openteamily/import/<feature>-v1.bundle` once per instance. Phase D: the server scheduler skips a workspace once `/automations/` is in `moved_pages` and that owner has a healthy published DS-Bot, so both clocks cannot fire. Workspaces whose owner has no runtime keep the server clock until one is published. Automations and agents are included in the import job (per-feature delivery markers). Moved `/v1` routes listed in this
   section (except `/v1/onboarding/automations`) are forwarded by the platform gateway to
   `/api/openteamily/legacy` on the owner's DS-Bot.
 * Stays platform: account security, runtime keys UI (#282), delete account (#362), public profile.

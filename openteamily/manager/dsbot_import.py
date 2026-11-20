@@ -14,7 +14,7 @@ from pathlib import Path
 from .engine import publish_container_secret
 from .safety import ManagerError, require
 
-FEATURES = ('settings', 'model-api', 'connectors', 'meetings', 'memory')
+FEATURES = ('settings', 'model-api', 'connectors', 'meetings', 'memory', 'automations', 'agents')
 BUNDLE_NAME = re.compile(r'^[a-z0-9-]{1,40}-v[0-9]{1,4}\.bundle$')
 VERSION = 1
 
@@ -37,12 +37,16 @@ def deliver(engine, client, iid, heartbeat=lambda: None):
     container = _container(engine, iid)
     inspect, _ = engine.runner.run(['inspect', '-f', '{{.State.Running}}', container], heartbeat=heartbeat, timeout=10)
     require(inspect.strip() == 'true', 'instance_not_running')
-    marker = f'/data/openteamily/import/.delivered-v{VERSION}'
-    try:
-        engine.runner.run(['exec', '-u', '1000:1000', container, 'test', '-f', marker], heartbeat=heartbeat, timeout=10)
-        return {'status': 'already-imported', 'instance_id': iid, 'version': VERSION}
-    except ManagerError:
-        pass
+    def delivered(name):
+        marker = f'/data/openteamily/import/.delivered-{name}-v{VERSION}'
+        try:
+            engine.runner.run(['exec', '-u', '1000:1000', container, 'test', '-f', marker], heartbeat=heartbeat, timeout=10)
+            return True
+        except ManagerError:
+            return False
+
+    if all(delivered(name) for name in FEATURES):
+        return {'status': 'already-imported', 'instance_id': iid, 'version': VERSION, 'features': list(FEATURES)}
     data = client.dsbot_import(iid, key.hex())
     require(isinstance(data, dict) and data.get('owner_imported') is True, 'import_shape')
     features = data.get('features')
@@ -55,6 +59,8 @@ def deliver(engine, client, iid, heartbeat=lambda: None):
             require(isinstance(item, dict) and set(item) >= {'name', 'bundle'}, 'import_shape')
             name = item['name']
             require(name in FEATURES or re.fullmatch(r'[a-z][a-z0-9-]{0,39}', name or ''), 'import_feature')
+            if delivered(name):
+                continue
             filename = f'{name}-v{VERSION}.bundle'
             require(BUNDLE_NAME.fullmatch(filename), 'import_feature')
             target = staging / filename
@@ -82,9 +88,12 @@ def deliver(engine, client, iid, heartbeat=lambda: None):
                     heartbeat=heartbeat, timeout=10)
             except ManagerError:
                 pass
-        engine.runner.run(
-            ['exec', '-u', '1000:1000', container, 'sh', '-c', f'touch {marker}'],
-            heartbeat=heartbeat, timeout=10)
+        for filename in written:
+            feature = filename.rsplit('-v', 1)[0]
+            engine.runner.run(
+                ['exec', '-u', '1000:1000', container, 'sh', '-c',
+                 f'touch /data/openteamily/import/.delivered-{feature}-v{VERSION}'],
+                heartbeat=heartbeat, timeout=10)
     finally:
         for child in staging.glob('*.bundle'):
             try:
