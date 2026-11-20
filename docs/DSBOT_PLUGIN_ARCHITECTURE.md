@@ -74,7 +74,9 @@ All of these already exist in the pinned tree and are used by today's runtime im
 * The browser keeps calling legacy `/v1/...` until the page is flipped in `dsbot_routes.json`
   (`moved_pages`); a moved page calls `/b/api/openteamily` instead. Flip a page only once its moved
   calls are covered: a row in `static/shell/dsbot-api.mjs` `MOVED` (generic `<feature>/v1` shim) or a
-  page adapter (chat: `static/chat/dsbot.mjs`). Moved so far: `chat`, `meetings`.
+  page adapter (chat: `static/chat/dsbot.mjs`). Moved so far: `chat`, `meetings`, `skills`. Skills: the catalogue stays the
+  platform registry (P); the effective set (account bindings + library) is materialized in DS-Bot via
+  `skills/sync` (digest-checked) from `static/shell/dsbot-skills.mjs`, on chat send and on skills changes.
 
 Plugin storage lives on the user's volume under `/data/openteamily/` (SQLite via `node:sqlite` on Node 24,
 plus files), owned by uid 1000 like the rest of `/data`. Nothing about one user is stored in another user's

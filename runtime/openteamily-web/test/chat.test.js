@@ -100,3 +100,19 @@ test('legacy history import is idempotent and keeps ids', async () => {
   assert.deepEqual(history.items.map((m) => [m.role, m.text, m.created]), [['user', 'hi', 1700000000000], ['assistant', 'hello', 1700000001000]])
   await assert.rejects(table['chat/import']({ conversations: [{ id: 'nope' }] }), { code: 'chat/invalid' })
 })
+
+test('skills/sync materializes digest-checked bound skills and detaches stale ones', async () => {
+  const { createHash } = await import('node:crypto')
+  const table = await load()
+  const bot = { capabilities: ['ot-bound-old', 'ot-skill-x'] }
+  const rt = { botOf: () => bot, capabilitySave: async () => {},
+    changeCapabilityAttachment: async (op, { name }) => { bot.capabilities = op === 'attach' ? [...bot.capabilities, name] : bot.capabilities.filter((n) => n !== name) } }
+  attachRuntime({ rt, ctx: {}, mainBot: async () => 'bot1' })
+  try {
+    const content = '# Weekly review'
+    const digest = createHash('sha256').update(content).digest('hex')
+    assert.deepEqual(await table['skills/sync']({ items: [{ id: 'weekly-review', version: '1.0.0', name: 'Weekly', digest, content }] }), { attached: ['ot-bound-weekly-review'] })
+    assert.deepEqual(bot.capabilities.sort(), ['ot-bound-weekly-review', 'ot-skill-x'])
+    await assert.rejects(table['skills/sync']({ items: [{ id: 'weekly-review', digest, content: 'tampered' }] }), { code: 'skills/digest-mismatch' })
+  } finally { detachRuntime() }
+})

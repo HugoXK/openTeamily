@@ -1,3 +1,4 @@
+import { syncSkillsToDsBot } from '../shell/dsbot-skills.mjs';
 // When this page is served by the user's own DS-Bot (@openteamily/web injects
 // <meta name="openteamily-instance">), private chat with the personal agent runs in
 // that DS-Bot: the legacy /v1 agent-conversation calls are translated to
@@ -83,6 +84,7 @@ export async function importLegacyHistory(fetcher, base, headers, call) {
 }
 
 let importing = null;
+let skillsSyncedAt = 0;
 
 export async function dsbotRequest(fetcher, route, agentId, headers) {
   if (route.shape === 'read') return {status: 200, body: {acknowledged: true}};
@@ -101,6 +103,11 @@ export async function dsbotRequest(fetcher, route, agentId, headers) {
     // Best effort: a failed import leaves the list usable and retries on the next load.
     importing ??= importLegacyHistory(fetcher, route.base, headers, call).catch(() => null).finally(() => { importing = null; });
     await importing;
+  }
+  if (route.shape === 'sent' && Date.now() - skillsSyncedAt > 60000) {
+    // Private chat loads the user's bound skills natively; best effort, never blocks a send on failure.
+    skillsSyncedAt = Date.now();
+    await syncSkillsToDsBot(fetcher, headers, PLUGIN_API).catch(() => { skillsSyncedAt = 0; });
   }
   const out = await call(route.endpoint, route.payload);
   if (out.error) return out.error;
