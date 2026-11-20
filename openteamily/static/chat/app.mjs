@@ -249,10 +249,26 @@ export function groupAgentSummary(conversation) {
     + '。可明确请求一次回复。未接通：群内自动回复、@Agent 和任务委派。' : '';
 }
 
+// Personal-runtime states from server-side auto-provisioning (operator opt-in).
+export const RUNTIME_WAIT_ERRORS = {
+  runtime_starting: '你的专属运行时正在创建或启动，就绪后会自动回复',
+  runtime_capacity: '平台专属运行时名额已满，请联系管理员扩容，或连接你自己的运行时',
+  runtime_unavailable: '你的专属运行时创建或启动失败，请联系管理员处理',
+};
+
+export function sendNotice(reply) {
+  const code = reply && reply.error_code;
+  if (code === 'no_agent') return {kind: 'error', text: '消息已保存，正在等待已连接的运行时。'};
+  if (code === 'runtime_starting') return {kind: 'ok', text: '消息已保存。' + RUNTIME_WAIT_ERRORS[code] + '。'};
+  if (RUNTIME_WAIT_ERRORS[code]) return {kind: 'error', text: '消息已保存。' + RUNTIME_WAIT_ERRORS[code] + '。'};
+  return {kind: 'ok', text: '已发送。'};
+}
+
 export function groupReplyStatus(reply) {
   const labels = {queued: '等待执行', running: '执行中', succeeded: '已完成', failed: '失败', cancelled: '已取消'};
   const errors = {no_agent: '没有可用运行时连接', quota: '运行时任务容量已满', timeout: '执行超时',
-    runtime_failed: '运行时执行失败', empty_reply: '运行时未返回正文', task_missing: '运行时任务丢失', cancelled: '已取消'};
+    runtime_failed: '运行时执行失败', empty_reply: '运行时未返回正文', task_missing: '运行时任务丢失', cancelled: '已取消',
+    ...RUNTIME_WAIT_ERRORS};
   return (labels[reply.status] || '未知状态') + (reply.error_code ? '：' + (errors[reply.error_code] || '请求失败') : '');
 }
 
@@ -2519,10 +2535,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     document.getElementById('chat-body').value = '';
-    show(result.body.reply && result.body.reply.error_code === 'no_agent' ? 'error' : 'ok',
-         result.body.reply && result.body.reply.error_code === 'no_agent'
-           ? '消息已保存，正在等待已连接的运行时。'
-           : '已发送。');
+    const notice = sendNotice(result.body.reply);
+    show(notice.kind, notice.text);
     await loadSessions();
     await openAgentConversation(currentAgent.id, currentConversation.id);
   }

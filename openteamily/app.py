@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
+from . import skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -97,7 +97,7 @@ def object_only(pairs):
 
 
 class App:
-    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None, model_http_policy=None):
+    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None, model_http_policy=None, auto_provision=None):
         from .model_http_policy import ModelHttpPolicy
         if model_http_policy is not None and not isinstance(model_http_policy, ModelHttpPolicy):
             raise ValueError("Invalid operator model HTTP policy")
@@ -106,6 +106,11 @@ class App:
         # Tests inject a fake Composio HTTP transport; production uses urllib.
         self.composio_transport = composio_transport
         self.lifecycle, self.manager_auth = lifecycle, manager_auth
+        from . import runtime_autoprovision
+        if auto_provision is not None and not isinstance(auto_provision, runtime_autoprovision.AutoProvisionPolicy):
+            raise ValueError('Invalid auto-provision policy')
+        runtime_autoprovision.validate(auto_provision, lifecycle, manager_auth)
+        self.auto_provision = auto_provision or runtime_autoprovision.AutoProvisionPolicy()
         inner_backend = automation_backend or AgentAutomationBackend(
             stale=config.runtime_heartbeat_seconds, timeout=config.runtime_task_timeout_seconds)
         self.automation_backend = composio_principals.ScheduledToolBackend(inner_backend)
@@ -2897,7 +2902,7 @@ class App:
              1),
         )
         task_id, error_code, dispatch = self.queue_infer_task(
-            db, session['user_id'], now, prompt, workspace['id'], agent['id'], personal_tools=True)
+            db, session['user_id'], now, prompt, workspace['id'], agent['id'], personal_tools=True, explain=True)
         db.execute(
             'INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (assistant_id, row['id'], workspace['id'], agent['id'], session['user_id'], 'assistant',
@@ -3375,7 +3380,7 @@ class App:
              next_seq + 1),
         )
         task_id, error_code, dispatch = self.queue_infer_task(
-            db, session['user_id'], now, prompt, workspace['id'], agent['id'], personal_tools=True)
+            db, session['user_id'], now, prompt, workspace['id'], agent['id'], personal_tools=True, explain=True)
         db.execute(
             'INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (assistant_id, row['id'], workspace['id'], agent['id'], session['user_id'], 'assistant',
@@ -3397,7 +3402,7 @@ class App:
             'reply': self.public_message(db, conversations.load_message(db, row['id'], assistant_id)),
         }, []
 
-    def queue_infer_task(self, db, user_id, now, prompt, workspace_id, agent_id=None, personal_tools=False, tool_principal=None):
+    def queue_infer_task(self, db, user_id, now, prompt, workspace_id, agent_id=None, personal_tools=False, tool_principal=None, explain=False):
         initiating_user = user_id
         stale = self.config.runtime_heartbeat_seconds
         target = None
@@ -3415,7 +3420,8 @@ class App:
         if target is None:
             target = runtime_connect.online_connection(db, user_id, now, stale, None, personal=True)
             if target is False or target is None:
-                return None, 'no_agent', None
+                reason = self.personal_runtime_error(db, initiating_user, workspace_id, agent_id, now) if explain else None
+                return None, reason or 'no_agent', None
             dispatch = {'source': 'connection', 'instance_id': None, 'connection_id': target['id']}
         try:
             row = runtime_connect.create_task(
@@ -3488,7 +3494,7 @@ class App:
                 else:
                     conversations.apply_task(db, message, task, now)
                     continue
-            if retry or message['error_code'] in (None, 'no_agent'):
+            if retry or message['error_code'] in (None, 'no_agent') + runtime_autoprovision.CODES:
                 agent = agents.load(db, row['workspace_id'], row['agent_id'])
                 if agent is None or agent['archived'] == 1:
                     continue
@@ -3503,7 +3509,8 @@ class App:
                 if not runtime_connect.valid_prompt(prompt):
                     continue
                 task_id, error_code, dispatch = self.queue_infer_task(
-                    db, row['user_id'], now, prompt, row['workspace_id'], row['agent_id'], personal_tools=True)
+                    db, row['user_id'], now, prompt, row['workspace_id'], row['agent_id'], personal_tools=True,
+                    explain=True)
                 if task_id and task_id == message['task_id']:
                     continue
                 db.execute(
@@ -3729,7 +3736,34 @@ class App:
                 self.config.max_agents_per_workspace, now)
         except ValueError:
             refuse(429, 'quota', 'Workspace capacity reached')
-        return (201 if created else 200), self.personal_payload(db, session, row), []
+        payload = self.personal_payload(db, session, row)
+        if self.auto_provision.enabled:
+            provision = self.ensure_personal_runtime(db, session['user_id'], row, now)
+            payload['personal_agent']['runtime_provisioning'] = {
+                'state': provision['state'], 'instance_id': provision['instance_id'],
+                'error_code': runtime_autoprovision.chat_error(
+                    db, lambda iid: self.workspace_instance(db, row['workspace_id'], iid), provision)}
+        return (201 if created else 200), payload, []
+
+    def ensure_personal_runtime(self, db, user_id, row, now):
+        """Server-derived: the caller's own personal workspace and agent only."""
+        return runtime_autoprovision.ensure(db, self.lifecycle, self.auto_provision, user_id,
+                                            row['workspace_id'], row['agent_id'], now)
+
+    def personal_runtime_error(self, db, user_id, workspace_id, agent_id, now):
+        """Actionable reason a personal-agent reply cannot dispatch yet (None = plain no_agent)."""
+        if not self.auto_provision.enabled or not agent_id:
+            return None
+        row = personal.load(db, user_id)
+        if row is None or row['workspace_id'] != workspace_id or row['agent_id'] != agent_id:
+            return None
+        result = self.ensure_personal_runtime(db, user_id, row, now)
+        if result['state'] == 'existing':
+            binding = agent_runtime.load_binding(db, workspace_id, agent_id)
+            if binding is None or binding['instance_id'] != result['instance_id']:
+                return None
+        return runtime_autoprovision.chat_error(
+            db, lambda iid: self.workspace_instance(db, workspace_id, iid), result)
 
     def personal_payload(self, db, session, row):
         workspace = db.execute('SELECT * FROM workspaces WHERE id=?', (row['workspace_id'],)).fetchone()
