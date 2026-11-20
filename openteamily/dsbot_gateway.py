@@ -201,7 +201,7 @@ def target_for(uri, routes):
         # Plugin legacy surface; authorize() keeps the session cookie swap.
         return '/api/openteamily/legacy?feature=' + quote(feature, safe='') + '&path=' + quote(path, safe='') + (('&query=' + quote(query, safe='')) if query else '')
     first = path.split('/')[1] if path != '/' else 'home'
-    if first in routes['moved_pages'] and not query:
+    if first in routes['moved_pages']:
         return PAGE_ROUTE + '?path=' + quote(path, safe='')
     return None
 

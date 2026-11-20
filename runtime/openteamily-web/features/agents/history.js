@@ -25,7 +25,10 @@ export async function adoptThread({ rt, source, target, sessionId }) {
 
 export async function importHistory({ db, rt, ctx, bot, conversationId, sessionId, secondarySessionIds = [] }) {
   db.exec('CREATE TABLE IF NOT EXISTS native_agent_events(message_id TEXT PRIMARY KEY,session_id TEXT NOT NULL,event_seq INTEGER,source TEXT NOT NULL)')
-  const rows = db.prepare('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created,id').all(conversationId)
+  const rows = db.prepare(`SELECT m.* FROM agent_messages m WHERE m.conversation_id=?
+    AND NOT EXISTS (SELECT 1 FROM native_agent_events e WHERE e.message_id=m.id)
+    ORDER BY m.created,m.id`).all(conversationId)
+    .filter(row => !JSON.parse(row.meta || '{}').nativePending)
   if (!rows.length) return { imported:0, matched:0 }
   const scan = new Set()
   for (const sid of [sessionId, ...secondarySessionIds].filter(Boolean)) {
@@ -67,8 +70,6 @@ export async function importHistory({ db, rt, ctx, bot, conversationId, sessionI
     await ctx.sessions.flush(agent.session)
   }
   for(const row of rows){
-    if(db.prepare('SELECT 1 FROM native_agent_events WHERE message_id=?').get(row.id)) continue
-    if(JSON.parse(row.meta || '{}').nativePending) continue
     const known=events.find((e,i)=>!used.has(i) && (e.tag===row.id || e.rpc==='ot-agent:'+row.id || e.rpc==='otp:'+row.id || (e.role===row.role && e.text===row.text && row.text)))
     if(known){ used.add(events.indexOf(known));put.run(row.id,known.id,known.seq,'adopted');matched++;continue }
     await initializeHead()

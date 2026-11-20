@@ -138,6 +138,8 @@ class GatewayTest(unittest.TestCase):
     def test_moved_pages_map_to_plugin_route(self):
         routes = dict(gw.load_routes(), moved_pages=frozenset({'chat', 'home'}))
         self.assertEqual(gw.target_for('/chat/', routes), '/api/openteamily/page?path=%2Fchat%2F')
+        self.assertEqual(gw.target_for('/chat?start=0', routes), '/api/openteamily/page?path=%2Fchat')
+        self.assertEqual(gw.target_for('/chat/app.mjs?v=1', routes), '/api/openteamily/page?path=%2Fchat%2Fapp.mjs')
         self.assertEqual(gw.target_for('/', routes), '/api/openteamily/page?path=%2F')
         self.assertIsNone(gw.target_for('/privacy/', routes))
 
