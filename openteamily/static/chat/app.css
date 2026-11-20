@@ -1204,6 +1204,19 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
 
 /* New-group dialog: centered modal card over a soft scrim (original). */
 .session-pane .workspace-pick { white-space: nowrap; }
+#chat-connection-notice:not([hidden]) {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin: .25rem;
+  padding: .35rem .5rem;
+  border-radius: .5rem;
+  background: var(--ot-bg-accent);
+  color: var(--ot-muted);
+  font-size: .75rem;
+  line-height: 1.4;
+}
+#chat-connection-notice button { flex: 0 0 auto; font: inherit; }
 #compose-dialog:not([hidden]) {
   position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; margin: 0; padding: 1rem;
   border: 0; border-radius: 0; background: rgb(16 28 22 / 28%); box-shadow: none; max-height: none;
@@ -1459,7 +1472,6 @@ html[data-theme-resolved="dark"] #message-list li[data-state="failed"] > p.faile
 }
 .stream-artifact-copy strong { font-size: 0.8125rem; font-weight: 650; }
 .stream-artifact-copy a { font-size: 0.75rem; }
-#social-agent-members.group-agent-note,
 #group-agent-action.group-agent-panel {
   margin: 0.65rem 1rem 0;
   padding: 0.8rem 0.95rem;
@@ -1469,11 +1481,10 @@ html[data-theme-resolved="dark"] #message-list li[data-state="failed"] > p.faile
   background: var(--ot-surface);
   box-shadow: 0 0 0 1px var(--ot-line);
 }
-#social-agent-members.group-agent-note { font-size: 0.8125rem; color: var(--ot-muted); line-height: 1.5; }
+#social-agent-members.group-agent-note { margin: .35rem 0; font-size: .8125rem; color: var(--ot-muted); line-height: 1.5; }
 #group-agent-action.group-agent-panel h2 { font-size: 0.875rem; font-weight: 650; }
 
-#group-agent-form fieldset,
-#social-agent-members fieldset {
+#group-agent-form fieldset {
   padding: 0.15rem 0.65rem;
   box-sizing: border-box;
 }
@@ -1576,11 +1587,9 @@ html[data-theme-resolved="dark"] .plus-create [data-tone="doc"] .plus-ico { colo
 /* Polish 5: fieldsets inside the new-group dialog and the group-agent panel are
    plain groups (legend + rows), not boxed cards inside the card. */
 #compose-dialog fieldset,
-#group-agent-form fieldset,
-#social-agent-members fieldset { margin: 0; padding: 0 .5rem; border: 0; border-radius: 0; background: transparent; box-shadow: none; min-width: 0; }
+#group-agent-form fieldset { margin: 0; padding: 0 .5rem; border: 0; border-radius: 0; background: transparent; box-shadow: none; min-width: 0; }
 #compose-dialog fieldset > legend,
-#group-agent-form fieldset > legend,
-#social-agent-members fieldset > legend { padding: 0; margin: 0 0 .35rem; font-size: .75rem; font-weight: 600; color: var(--ot-muted); }
+#group-agent-form fieldset > legend { padding: 0; margin: 0 0 .35rem; font-size: .75rem; font-weight: 600; color: var(--ot-muted); }
 .plus-tag { font-size: .6875rem; }
 @media (min-width: 701px) {
   /* New-group dialog: the picker and name column are split by a hairline, not

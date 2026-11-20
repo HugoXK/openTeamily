@@ -94,8 +94,11 @@
     </div>
     <label class="workspace-pick">工作区
       <select id="workspace"></select>
-      <span id="workspace-events-status" class="note" role="status" aria-live="polite">实时更新未连接</span><button type="button" id="workspace-events-retry">重连更新</button>
     </label>
+    <div id="chat-connection-notice" hidden>
+      <span id="workspace-events-status" role="status"></span>
+      <button type="button" id="workspace-events-retry">重连</button>
+    </div>
     <p id="whoami"></p>
     <p id="onboarding-banner" class="note" hidden>完善<strong>工作背景</strong>，让自动化推荐更贴合你。<a href="/onboarding">去设置</a></p>
     <section id="notifications-panel" class="notifications-panel" hidden aria-labelledby="notifications-heading">
@@ -314,7 +317,6 @@
       <p class="conversation-search-scope">消息 <span id="conversation-search-scope-note" class="conversation-search-scope-note">· 搜索当前会话里你有权查看的消息。</span></p>
       <p id="conversation-search-status" role="status"></p><ul id="conversation-search-results"></ul><button type="button" id="conversation-search-more" hidden>加载更多</button>
     </section>
-    <p id="social-agent-members" class="gap-note group-agent-note" hidden></p>
     <p id="conversation-live-update" class="note" hidden>此会话可能有新内容。<button type="button" id="conversation-live-load">加载会话更新（保留输入草稿）</button></p>
     <section id="pinned-messages" class="chat-strip" hidden aria-labelledby="pinned-messages-heading">
       <h2 id="pinned-messages-heading">置顶消息</h2>
@@ -349,6 +351,7 @@
       <details class="group-agent-sheet">
       <summary>群内智能体</summary>
       <h2 class="visually-hidden">群内智能体</h2>
+      <p id="social-agent-members" class="group-agent-note" hidden></p>
       <p class="note">将本次请求发给选中的智能体。回复会出现在群聊里。</p>
       <div id="group-agent-roster">
         <ul id="group-agent-chips" class="agent-chips"></ul>
