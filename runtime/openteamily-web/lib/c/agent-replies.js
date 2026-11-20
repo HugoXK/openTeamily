@@ -52,7 +52,7 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
         const id = item.message?.id
         let text
         try {
-          const turn = await services.chatTurn(`social:${item.conversation_id}:${item.agent_ref}`, replyPrompt(item), `ots:${id}:${item.agent_ref}`)
+          const turn = await host.call('agents/turn', { agent_id: item.agent_ref, key: `social:${item.conversation_id}`, text: replyPrompt(item), request_id: `ots:${id}:${item.agent_ref}` })
           text = String(turn?.text ?? '').trim()
         } catch (error) { log(`agent turn failed: ${String(error?.message ?? error).slice(0, 120)}`); continue }
         if (!text) continue

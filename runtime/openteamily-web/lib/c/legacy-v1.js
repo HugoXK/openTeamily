@@ -738,7 +738,7 @@ function messengerExtraRoutes(host) {
           for (const id of ids) {
             const agent = (conversation.agents || []).find((a) => a.agent_ref === id && a.mine)
             if (!agent) throw new Fault(404, 'not_found', 'That agent of yours is not in this group')
-            const turn = await services.chatTurn(`social:${match[2]}:${id}`, replyPrompt({ agent_name: agent.name, conversation_title: conversation.title, mode: 'mention', context: [...context, { author: { display_name: me.display_name || 'member' }, body: prompt }] }), `otr:${tag}:${id}`)
+            const turn = await host.call('agents/turn', { agent_id: id, key: `social:${match[2]}`, text: replyPrompt({ agent_name: agent.name, conversation_title: conversation.title, mode: 'mention', context: [...context, { author: { display_name: me.display_name || 'member' }, body: prompt }] }), request_id: `otr:${tag}:${id}` })
             const text = String(turn?.text ?? '').trim()
             if (!text) continue
             const posted = await bs.post(`${conv(match[2])}/agent-messages`, { agent_ref: id, body: text.slice(0, 4000), mode: 'mention', client_key: `m:${tag}:${id}`.slice(0, 80) })
