@@ -362,6 +362,13 @@ class Lifecycle:
                 fail(409, 'bot_social_not_applicable', 'Bot Social config is only issued for create, start or restart')
             public, source = bot_social.resolve(db, workspace_id=row['workspace_id'])
             payload = bot_social.container_payload(public, source)
+            if payload is not None and 'displayName' not in payload:
+                # Phase C: the user's DS-Bot onboards as @<username>.home, so teammates find each
+                # other by the OpenTeamily username. Public name only, never a credential.
+                owner = db.execute('SELECT username FROM users WHERE id=?', (row['owner_id'],)).fetchone()
+                name = bot_social.flatten_name(owner['username']) if owner else None
+                if name:
+                    payload['displayName'] = name
             return {'bot_social_present': payload is not None, 'bot_social': payload}
 
     def runtime_agent_key(self, manager, iid, jid, revision, lease, origin):

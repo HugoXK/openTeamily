@@ -48,3 +48,13 @@ Group agents run in their owner's DS-Bot: the owner's plugin polls `agent-inbox`
 The member handle is the owner's FlyBot home handle (`@<name>.home`). Non-members get `404` for a team.
 Invite codes are returned once, stored as SHA-256 only. The plugin client (`runtime/openteamily-web/lib/c/bot-social.js`)
 uses the manager-delivered server URL and the saved connector token; it never returns or logs the token.
+
+The compose manager also fills `displayName` with the instance owner's OpenTeamily username when the
+platform/workspace config did not set one, so the DS-Bot onboards as `@<username>.home` and teammates
+can find each other. The file still never carries a connector token.
+
+CI proof: `runtime/flybot-image/test/container-social-two-dsbots.py` starts a real Bot Social (https,
+throwaway CA) and two DS-Bot runtimes, each with only the manager-shaped config file. It drives each
+user's `@openteamily/web` plugin: team invite, a DM, a group mention, and a Discover publish/follow.
+Connector tokens stay on each volume and must not appear in any container log.
+
