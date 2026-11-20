@@ -65,28 +65,21 @@ export function renderChatFile(document, attachment, {pending = false} = {}) {
   return card;
 }
 
-function encodeFile(view, file) {
-  return new Promise((resolve, reject) => {
-    const reader = new view.FileReader();
-    reader.onload = () => resolve(String(reader.result).split(',')[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-function uploadFile(view, url, headers, data, onProgress) {
+function uploadFile(view, url, headers, file, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new view.XMLHttpRequest();
     xhr.open('POST', url);
     xhr.responseType = 'json';
-    xhr.timeout = 90_000;
+    xhr.timeout = 180_000;
     for (const [key, value] of Object.entries(headers)) xhr.setRequestHeader(key, value);
     xhr.upload.onprogress = event => {
       if (event.lengthComputable) onProgress(Math.min(99, Math.round(event.loaded * 100 / event.total)));
     };
     xhr.onload = () => resolve({status: xhr.status, body: xhr.response || {}});
     xhr.onerror = xhr.ontimeout = () => reject(new Error('Upload interrupted'));
-    xhr.send(JSON.stringify(data));
+    const body = new view.FormData();
+    body.append('file', file);
+    xhr.send(body);
   });
 }
 
@@ -140,16 +133,14 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     job.progress.value = 0;
     job.actions.hidden = true;
     try {
-      const file = {title: job.file.name, mime: fileType(job.file), data: await encodeFile(view, job.file)};
-      if (!jobs.has(job)) return;
       if (ownerId() !== job.destination.owner) {
         remove(job);
         return;
       }
       const result = await uploadFile(view, job.destination.path, {
-        'Content-Type': 'application/json', Accept: 'application/json',
+        Accept: 'application/json',
         'X-CSRF-Token': csrfToken(), 'Idempotency-Key': job.key,
-      }, {attachment:file}, percentage => { job.progress.value = percentage; });
+      }, job.file, percentage => { job.progress.value = percentage; });
       if (!jobs.has(job)) return;
       if (![200, 201].includes(result.status) || !result.body?.message?.attachment) {
         throw new Error(errorText(result));

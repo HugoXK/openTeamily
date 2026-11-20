@@ -92,6 +92,16 @@ export const LEGACY_PATH = '/api/openteamily/legacy'
 
 const FEATURE = /^[a-z][a-z0-9-]{0,39}$/
 const V1_PATH = /^\/v1\/[A-Za-z0-9/_.-]{1,240}$/
+const CHAT_FILE_POST = /^\/v1\/workspaces\/[0-9a-f]{32}\/social\/conversations\/[A-Za-z0-9._-]{1,80}\/messages$/
+const CHAT_FILE_MAX = 8 * 1024 * 1024
+
+async function chatAttachment(request) {
+  const parts = (await request.formData()).getAll('file')
+  const [file] = parts
+  if (parts.length !== 1 || typeof file === 'string' || !file.size) throw new Error('Select one file')
+  if (file.size > CHAT_FILE_MAX) throw Object.assign(new Error('Files can contain up to 8 MiB'), {status:413})
+  return {attachment:{title:file.name, mime:file.type, data:Buffer.from(await file.arrayBuffer()).toString('base64')}}
+}
 
 function fileResponse(request, {data, content_type, filename, inline}) {
   const safeName = filename.replace(/[^ -~]|["\\]/g, '_')
@@ -146,7 +156,14 @@ export function createLegacyDispatch({ endpoints }) {
       })
     }
     let body
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
+    const encodeChatFile = feature === 'messenger' && request.method === 'POST' && CHAT_FILE_POST.test(path)
+      && request.headers.get('content-type')?.toLowerCase().startsWith('multipart/form-data;')
+    if (encodeChatFile) {
+      try { body = await chatAttachment(request) } catch (error) {
+        const large = error?.status === 413
+        return gatewayError(large ? 413 : 400, large ? 'attachment_too_large' : 'invalid', 'Provide one nonempty file up to 8 MiB')
+      }
+    } else if (request.method !== 'GET' && request.method !== 'HEAD') {
       const text = await request.text()
       if (text) {
         try { body = JSON.parse(text) } catch {
