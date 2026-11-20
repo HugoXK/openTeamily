@@ -47,6 +47,10 @@ function fakeSocial() {
     if (path === '/v1/ot/teams/ott_1/invites' && init.method === 'POST') {
       return ok(201, { code: 'invite-code-once', invite: { id: 'oti_1', team_id: 'ott_1', role: 'member', expires_at: 1_700_086_400_000, max_uses: 10, use_count: 0, revoked: false, frozen: false, requires_approval: false, created_at: 1_700_000_000_000 } })
     }
+    if (path === '/v1/ot/meeting-calls/join') {
+      const code = body.code === 'full' ? 'call_full' : 'call_already_joined'
+      return ok(409, { error: { code, message: code } })
+    }
     if (path === '/v1/ot/invites/accept') return ok(200, { status: 'pending', team_id: 'ott_1', request_id: 'otjr_1' })
     if (path === '/v1/ot/directory' || path.startsWith('/v1/ot/directory?')) return ok(200, { teams: [{ id: 'ott_1', workspace_id: WS, name: 'Studio', summary: 's', member_count: 2, membership: null }] })
     if (path === '/v1/ot/conversations' && init.method === 'GET') {
@@ -203,4 +207,15 @@ test('browser-style embedded query reaches discover and writes reject query stri
   const blocked = await invites(host).endpoints.v1({ method: 'POST', path: `/v1/workspaces/${WS}/invites?x=1`, body: {} })
   assert.equal(blocked.status, 400)
   assert.equal((await teams(host).endpoints.v1({ method: 'GET', path: '/v1/team-directory?q=x', query: 'q=y' })).status, 400)
+})
+
+test('video meeting conflicts retain the reason shown in the browser', async () => {
+  const { social, host } = setup()
+  const join = (code) => messenger(host).endpoints.v1({method: 'POST', path: '/v1/meeting-calls/join', body: {code}})
+  for (const [input, reason] of [['full', 'call_full'], ['already', 'call_already_joined']]) {
+    const response = await join(input)
+    assert.equal(response.status, 409)
+    assert.equal(response.body.error.code, reason)
+  }
+  assert.deepEqual(social.calls.map(call => call.path), Array(2).fill('/v1/ot/meeting-calls/join'))
 })

@@ -171,6 +171,10 @@ function rethrow(error) {
     not_reachable: 'invalid',
     not_in_team: 'invalid',
     too_many_teams: 'quota',
+    call_full: 'call_full',
+    call_already_joined: 'call_already_joined',
+    call_ended: 'call_ended',
+    meeting_ended: 'meeting_ended',
   })[code] || (status === 404 ? 'not_found' : status === 403 ? 'forbidden' : status === 409 ? 'conflict' : status === 410 ? 'not_found' : status === 429 ? 'quota' : code || 'internal')
   throw new Fault(status === 410 ? 404 : status, mapped, error?.message || 'Bot Social request failed')
 }
