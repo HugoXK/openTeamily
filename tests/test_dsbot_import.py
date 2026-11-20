@@ -14,6 +14,7 @@ class FakeRunner:
     def __init__(self):
         self.calls = []
         self.running = True
+        self.consume = True
         self.files = set()
         self.unreadable = set()
         self.received = {}
@@ -22,9 +23,9 @@ class FakeRunner:
         self.calls.append(args)
         if args[:3] == ['inspect', '-f', '{{.State.Running}}']:
             return ('true\n' if self.running else 'false\n'), ''
-        if 'check-delivery' in args:
-            marker, bundle = args[-2:]
-            if marker in self.files and bundle not in self.unreadable:
+        if 'check-copy' in args:
+            bundle, marker, legacy = args[-3:]
+            if bundle not in self.files and (marker in self.files or legacy in self.files):
                 return '', ''
             raise ManagerError('exec_failed')
         if args[:4] == ['exec', '-i', '-u', '1000:1000'] and args[-4] == 'receive-bundle':
@@ -37,6 +38,9 @@ class FakeRunner:
             self.unreadable.discard(dest)
             self.received[filename] = json.loads(raw)
             self.files.add(f'/data/openteamily/import/{marker}')
+            if self.consume:
+                # A verified plugin import deletes the bundle and leaves the marker.
+                self.files.discard(dest)
             return '', ''
         raise ManagerError('unexpected')
 
@@ -81,7 +85,7 @@ class ImportJobTests(unittest.TestCase):
         engine, client = FakeEngine(self.tmp.name), FakeClient()
         iid = '1' * 32
         first = dsbot_import.deliver(engine, client, iid)
-        self.assertEqual(first['status'], 'imported')
+        self.assertEqual(first['status'], 'delivered')
         self.assertEqual(client.seen[1], '11' * 32)
         self.assertEqual(engine.runner.received['settings-v1.bundle']['feature'], 'settings')
         self.assertFalse(any(c[0] == 'cp' for c in engine.runner.calls))
@@ -97,14 +101,39 @@ class ImportJobTests(unittest.TestCase):
         engine, client = FakeEngine(self.tmp.name), FakeClient()
         iid = '1' * 32
         dsbot_import.deliver(engine, client, iid)
+        # Simulate an older manager's .delivered markers and an unreadable bundle.
+        engine.runner.files = {f.replace('.copied-', '.delivered-') for f in engine.runner.files}
         bundle = '/data/openteamily/import/agents-v1.bundle'
+        engine.runner.files.add(bundle)
         engine.runner.unreadable.add(bundle)
-        engine.runner.files.remove('/data/openteamily/import/automations-v1.bundle')
         engine.runner.calls.clear()
         retry = dsbot_import.deliver(engine, client, iid)
         self.assertEqual(retry['features'], ['agents-v1.bundle'])
         self.assertNotIn(bundle, engine.runner.unreadable)
         self.assertEqual(dsbot_import.deliver(engine, client, iid)['status'], 'already-imported')
+
+    def test_rejected_import_is_retried_instead_of_suppressed_by_the_copy_marker(self):
+        engine, client = FakeEngine(self.tmp.name), FakeClient()
+        engine.runner.consume = False
+        iid = '1' * 32
+        first = dsbot_import.deliver(engine, client, iid)
+        self.assertEqual(first['status'], 'delivered')
+        self.assertTrue(any('.copied-settings-v1' in f for f in engine.runner.files))
+
+        # The plugin rejected the bundle, so it remains present. A copy marker
+        # alone must not turn the next poll into already-imported.
+        engine.runner.calls.clear()
+        again = dsbot_import.deliver(engine, client, iid)
+        self.assertEqual(again['status'], 'delivered')
+        self.assertTrue(any(args[-4] == 'receive-bundle' for args in engine.runner.calls),
+                        'rejected bundle is delivered again')
+
+        # Once the plugin consumes the bundles (verified import), retry stops.
+        engine.runner.files = {f for f in engine.runner.files if not f.endswith('.bundle')}
+        engine.runner.calls.clear()
+        settled = dsbot_import.deliver(engine, client, iid)
+        self.assertEqual(settled['status'], 'already-imported')
+        self.assertFalse(any(args[-4] == 'receive-bundle' for args in engine.runner.calls))
 
     def test_skips_a_historical_runtime_without_writing_a_bundle(self):
         engine, client = FakeEngine(self.tmp.name), FakeClient()
