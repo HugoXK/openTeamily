@@ -23,7 +23,12 @@ import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen, build_opener, ProxyHandler, HTTPRedirectHandler
+
+try:
+    from .model_http_policy import FORMAT as MODEL_HTTP_FORMAT, HEADER as MODEL_HTTP_HEADER, valid_grant, completion_url
+except ImportError:  # downloaded standalone zipapp
+    from model_http_policy import FORMAT as MODEL_HTTP_FORMAT, HEADER as MODEL_HTTP_HEADER, valid_grant, completion_url
 
 USER_AGENT = 'FlyBot-OpenTeamily-agent/1'
 
@@ -50,16 +55,35 @@ def valid_origin(value):
         return parsed.hostname in ('localhost',)
 
 
-def valid_provider_url(value):
-    parsed = urlsplit(value)
-    if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
+def valid_provider_url(value, http_grant=None):
+    if http_grant is not None:
+        return valid_grant(value, http_grant)
+    if not isinstance(value, str):
         return False
-    if parsed.scheme == 'https':
-        return True
     try:
-        return ipaddress.ip_address(parsed.hostname).is_loopback
+        parsed = urlsplit(value)
+        if (parsed.scheme not in ('http', 'https') or not parsed.hostname
+                or parsed.username or parsed.password or parsed.query or parsed.fragment):
+            return False
+        if parsed.scheme == 'https':
+            return True
+        try:
+            return ipaddress.ip_address(parsed.hostname).is_loopback
+        except ValueError:
+            return parsed.hostname == 'localhost'
     except ValueError:
-        return parsed.hostname in ('localhost',)
+        return False
+
+
+class _NoModelRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # urllib raises HTTPError, including same-origin redirects
+
+
+def open_http_model(req, timeout=30, context=None):
+    # Only the explicitly granted public-HTTP task lane uses this transport.
+    # Direct IP: no DNS alias, inherited proxy, redirect, cookie jar or TLS bypass.
+    return build_opener(ProxyHandler({}), _NoModelRedirect()).open(req, timeout=timeout)
 
 
 def read_key_file(path):
@@ -81,6 +105,8 @@ def read_key_file(path):
 def request(origin, method, path, token, body=None, timeout=10):
     payload = None if body is None and method == 'GET' else json.dumps(body if body is not None else {}).encode()
     headers = {'Accept': 'application/json', 'Authorization': 'Bearer ' + token, 'User-Agent': USER_AGENT}
+    if path.endswith('/model-access'):
+        headers[MODEL_HTTP_HEADER] = MODEL_HTTP_FORMAT
     if payload is not None:
         headers['Content-Type'] = 'application/json'
     req = Request(origin + path, data=payload, headers=headers, method=method)
@@ -110,15 +136,18 @@ def completions_url(base):
     return base + '/chat/completions'
 
 
-def infer_chat(model_api, prompt, timeout=30, opener=urlopen, tools=None, execute_tool=None):
+def infer_chat(model_api, prompt, timeout=30, opener=None, tools=None, execute_tool=None):
     if not isinstance(model_api, dict):
         raise AgentError(0, {'error': {'message': 'Model access was empty'}})
     provider = model_api.get('provider')
     base = model_api.get('base_url')
     model = model_api.get('model')
     key = model_api.get('api_key')
-    if provider not in ('openai', 'custom') or not valid_provider_url(base) or not model or not key:
+    grant = model_api.get('http_endpoint_grant')
+    if provider not in ('openai', 'custom') or not valid_provider_url(base, grant) or not model or not key:
         raise AgentError(0, {'error': {'message': 'Model access is incomplete or not allowed'}})
+    target = completion_url(base, grant) if grant is not None else completions_url(base)
+    opener = opener or (open_http_model if grant is not None else urlopen)
     messages = [{'role': 'user', 'content': prompt}]
     for _round in range(5):
         request_body = {'model': model, 'messages': messages, 'max_tokens': 512}
@@ -127,7 +156,7 @@ def infer_chat(model_api, prompt, timeout=30, opener=urlopen, tools=None, execut
         payload = json.dumps(request_body).encode()
         headers = {'Accept': 'application/json', 'Content-Type': 'application/json',
                    'Authorization': 'Bearer ' + key, 'User-Agent': USER_AGENT}
-        req = Request(completions_url(base), data=payload, headers=headers, method='POST')
+        req = Request(target, data=payload, headers=headers, method='POST')
         context = ssl.create_default_context() if urlsplit(base).scheme == 'https' else None
         try:
             try:
@@ -135,6 +164,9 @@ def infer_chat(model_api, prompt, timeout=30, opener=urlopen, tools=None, execut
             except TypeError:
                 response = opener(req, timeout=timeout)
             with response:
+                if grant is not None and (300 <= getattr(response, 'status', 200) < 400
+                        or (hasattr(response, 'geturl') and response.geturl() != target)):
+                    raise AgentError(0, {'error': {'message': 'Model redirect rejected'}})
                 raw = response.read(65537)
             if len(raw) > 65536:
                 raise ValueError()
