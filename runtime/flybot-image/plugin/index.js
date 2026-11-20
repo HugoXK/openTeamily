@@ -17,13 +17,10 @@ export const name = 'openteamily-flybot'
 export const inject = ['llm', 'tools', 'systemPrompt', 'sessionController', 'sessions', 'sessionTitle', 'workspaceRegistry', 'connection']
 
 export function apply(ctx, config = {}) {
+  // Prepare is detached/read-only: no Session is entered, persisted or announced.
+  // Install before core agent restoration, whose projections read old imports.
+  normalizeImportedSession(ctx.sessions.prepare('openteamily-import-schema-' + globalThis.crypto.randomUUID()))
   const rt = createRuntime(ctx, config)
-  const resolveAgent = rt.resolveAgent.bind(rt)
-  rt.resolveAgent = async (...args) => {
-    const agent = await resolveAgent(...args)
-    normalizeImportedSession(agent?.session)
-    return agent
-  }
   // OpenTeamily features (@openteamily/web) execute on this same DS-Bot runtime.
   attachRuntime({ rt, ctx })
   const collaboration = loadBotSocialConfig()
