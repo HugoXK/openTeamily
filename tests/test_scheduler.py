@@ -136,5 +136,89 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(fired[0]['due_at'], DUE)
 
 
+
+    def test_server_scheduler_stops_for_owners_with_a_live_dsbot(self):
+        """Phase D: once /automations/ is served by the owner's DS-Bot, the
+        server clock must not fire that workspace (both clocks would run)."""
+        from openteamily import dsbot_gateway as gw
+        from openteamily import lifecycle
+        self.create()
+        # Alice's workspace is due; without a published DS-Bot the server still fires.
+        fired = Scheduler(self.store, self.backend, clock=lambda: NOW).tick_all(NOW)
+        self.assertEqual(len(fired), 1)
+        # Publish a healthy DS-Bot for Alice. The next tick must skip her workspace.
+        with self.store.transaction() as db:
+            gw.ensure_schema(db)
+            db.executescript(lifecycle.SCHEMA)
+            owner = db.execute("SELECT id FROM users WHERE username='alice'").fetchone()[0]
+            inst = 'd' * 32
+            # Reuse Alice's workspace; one running instance is enough.
+            try:
+                db.execute(
+                    "INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,desired,revision,"
+                    "operation_id,operation_type,observed,observed_revision,health,process_ref,error_code,blocked,create_key,created) "
+                    "VALUES(?,?,?,'p','compose','img','vol','running',1,'op','create','running',1,'healthy',NULL,NULL,0,'k',?)",
+                    (inst, self.wid, owner, NOW))
+            except Exception:
+                db.execute("UPDATE instances SET owner_id=?, desired='running', observed='running', health='healthy', "
+                           "blocked=0, observed_revision=revision WHERE workspace_id=?", (owner, self.wid))
+                inst = db.execute("SELECT id FROM instances WHERE workspace_id=?", (self.wid,)).fetchone()[0]
+            gw.record_upstream(db, inst, '172.30.0.11:8080', 'dsh-auth-172.30.0.11:8080=' + 'S' * 20, NOW)
+        again = Scheduler(self.store, self.backend, clock=lambda: NOW).tick_all(NOW)
+        self.assertEqual(again, [], 'server scheduler must not fire after the owner\'s DS-Bot is live')
+        # Reconcile is also skipped (no queued-run completion on the server).
+        self.assertEqual(Scheduler(self.store, self.backend, clock=lambda: NOW).reconcile_all(NOW), [])
+
+    def _publish_dsbot(self):
+        from openteamily import dsbot_gateway as gw
+        from openteamily import lifecycle
+        with self.store.transaction() as db:
+            gw.ensure_schema(db)
+            db.executescript(lifecycle.SCHEMA)
+            owner = db.execute("SELECT id FROM users WHERE username='alice'").fetchone()[0]
+            inst = 'd' * 32
+            try:
+                db.execute(
+                    "INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,desired,revision,"
+                    "operation_id,operation_type,observed,observed_revision,health,process_ref,error_code,blocked,create_key,created) "
+                    "VALUES(?,?,?,'p','compose','img','vol','running',1,'op','create','running',1,'healthy',NULL,NULL,0,'k',?)",
+                    (inst, self.wid, owner, NOW))
+            except Exception:
+                db.execute("UPDATE instances SET owner_id=?, desired='running', observed='running', health='healthy', "
+                           "blocked=0, observed_revision=revision WHERE workspace_id=?", (owner, self.wid))
+                inst = db.execute("SELECT id FROM instances WHERE workspace_id=?", (self.wid,)).fetchone()[0]
+            gw.record_upstream(db, inst, '172.30.0.11:8080', 'dsh-auth-172.30.0.11:8080=' + 'S' * 20, NOW)
+
+    def test_server_retry_stops_for_owners_with_a_live_dsbot(self):
+        """Phase D: a leftover Flask retry must not start a second infer."""
+        from openteamily.scheduler import Scheduler
+        aid = self.create()
+        self.backend.fail_next = True
+        run = self.tick()['body']['items'][0]
+        self.assertEqual(run['status'], 'failed')
+        # Without a published DS-Bot the server retry still queues a new run.
+        ok = self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/automations/{aid}/runs/{run["id"]}/retry', {},
+            {'HTTP_IDEMPOTENCY_KEY': 'automation-retry-dsbot-01'})
+        self.assertEqual(ok['status'], 201, ok)
+        first_new = ok['body']['run']['id']
+        with self.store.transaction() as db:
+            before = db.execute('SELECT COUNT(*) FROM automation_runs WHERE automation_id=?', (aid,)).fetchone()[0]
+        self._publish_dsbot()
+        blocked = self.alice.call(
+            'POST', f'/v1/workspaces/{self.wid}/automations/{aid}/runs/{run["id"]}/retry', {},
+            {'HTTP_IDEMPOTENCY_KEY': 'automation-retry-dsbot-02'})
+        self.assertEqual(blocked['status'], 409, blocked)
+        self.assertEqual(blocked['body']['error']['code'], 'moved_to_dsbot')
+        with self.store.transaction() as db:
+            after = db.execute('SELECT COUNT(*) FROM automation_runs WHERE automation_id=?', (aid,)).fetchone()[0]
+            self.assertEqual(after, before)
+        # Direct scheduler retry is also a no-op.
+        with self.store.transaction() as db:
+            row = db.execute('SELECT * FROM automations WHERE id=?', (aid,)).fetchone()
+            source = db.execute('SELECT * FROM automation_runs WHERE id=?', (run['id'],)).fetchone()
+            self.assertEqual(Scheduler(self.store, self.backend, clock=lambda: NOW).retry_run(db, row, source, NOW),
+                             'moved_to_dsbot')
+
 if __name__ == '__main__':
     unittest.main()

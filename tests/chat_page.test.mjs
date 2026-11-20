@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery, wrapBold, inlineBold } from '../openteamily/static/chat/app.mjs';
+import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery, wrapBold, inlineBold, dueReminders, reminderDueLabel } from '../openteamily/static/chat/app.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
@@ -1592,6 +1592,64 @@ test('new dialog and document-card surfaces use actual theme tokens, not undefin
 });
 
 
+test('conversation search lists this conversation photos and files from real attachment fields', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  const attachment = (id, title, kind, mime) => ({id: id.repeat(32), title, kind, mime, revision: 1,
+    path: '/v1/workspaces/ws-1/artifacts/' + id.repeat(32) + '/file'});
+  const rows = [
+    // Real uploads all land as kind 'media'; the mime is what separates photos.
+    {id: 'm-1', user_id: bob, body: '', created: '2026-01-01T00:00:00Z', attachment: attachment('a', 'pixel.png', 'media', 'image/png')},
+    {id: 'm-2', user_id: bob, body: '', created: '2026-01-01T00:01:00Z', attachment: attachment('b', 'plan.pdf', 'media', 'application/pdf')},
+  ];
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.startsWith('/v1/workspaces/ws-1/social/conversations/conv-1/messages?')) {
+        return json(200, {items: rows, cursor: null});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('conversation-search-open'), 'click');
+    await fire(el('conversation-search-tab-photos'), 'click');
+    assert.equal(el('conversation-search-tab-photos').getAttribute('aria-selected'), 'true');
+    const photos = el('conversation-search-results').children;
+    assert.equal(photos.length, 1, 'only the image attachment is a photo');
+    assert.ok(descendants(photos[0]).some(node => node.textContent === 'pixel.png'));
+    assert.match(el('conversation-search-status').textContent, /已显示 1 张照片/);
+    await fire(photos[0], 'click');
+    const jumped = el('message-list').children.find(node => node.dataset.messageId === 'm-1');
+    assert.equal(jumped.dataset.searchJump, 'true', 'a photo hit jumps back to its message and highlights it');
+    await fire(el('conversation-search-tab-files'), 'click');
+    const files = el('conversation-search-results').children;
+    assert.equal(files.length, 1, 'the document attachment is a file, not a photo');
+    assert.ok(descendants(files[0]).some(node => node.textContent === 'plan.pdf'));
+    assert.match(el('conversation-search-status').textContent, /已显示 1 个文件/);
+    await fire(files[0], 'click');
+    assert.match(el('conversation-search-status').textContent, /不在当前已加载/, 'a hit outside the loaded window says so instead of pretending');
+  } finally { restore(); }
+});
+
+test('the photos and files tabs say what is missing instead of inventing an empty conversation', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.startsWith('/v1/workspaces/ws-1/social/conversations/conv-1/messages?')) {
+        return json(500, {error: {code: 'internal', message: 'nope'}});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('conversation-search-open'), 'click');
+    await fire(el('conversation-search-tab-photos'), 'click');
+    assert.match(el('conversation-search-status').textContent, /读不到当前会话的附件/);
+    assert.equal(el('conversation-search-results').children.length, 0);
+  } finally { restore(); }
+});
+
 for (const phase of ['directory', 'fanout']) for (const target of ['ws-1','ws-2']) {
   test(`deferred ${phase} from an older load cannot overwrite the latest ${target} session list`, async () => {
     const {doc, el} = fakeChatDocument(chatHtml()); const restore = installChatGlobals();
@@ -1646,4 +1704,81 @@ test('initial SSE cannot supersede an uncommitted session directory and lose a c
   sources[0].handlers.invalidate({data:JSON.stringify({version:'f'.repeat(64),domains:{social:'a'.repeat(64),artifacts:'b'.repeat(64),notifications:'c'.repeat(64)}})});
   await settle();assert.match(el('chat-title').textContent,/Deep link agent/);assert.ok(el('message-list').children.length>0,'initial snapshot refresh retains the deep-linked history');
  }finally{if(saved===undefined)delete globalThis.EventSource;else globalThis.EventSource=saved;restore();}
+});
+
+const reminderRow = (id, overrides = {}) => ({
+  id, title: '提醒：看这条消息', template_id: 'custom', scope: 'once', enabled: true,
+  participants: [{user_id: alice, username: 'alice'}],
+  schedule: {kind: 'once', date: '2026-11-19', time: '14:30', time_zone: 'UTC'},
+  ...overrides,
+});
+
+test('due reminders are only my enabled one-off automations that are already due, split by their own zone', () => {
+  const now = Date.parse('2026-11-19T16:05:00Z');
+  const rows = [
+    reminderRow('a'.repeat(32)),
+    reminderRow('b'.repeat(32), {schedule: {kind: 'once', date: '2026-11-19', time: '23:00', time_zone: 'UTC'}}),
+    reminderRow('c'.repeat(32), {schedule: {kind: 'daily', time: '09:00', time_zone: 'UTC'}}),
+    reminderRow('d'.repeat(32), {participants: [{user_id: bob, username: 'bob'}]}),
+    reminderRow('e'.repeat(32), {enabled: false}),
+    reminderRow('f'.repeat(32), {schedule: {kind: 'once', date: '2026-11-18', time: '09:00', time_zone: 'UTC'}}),
+    reminderRow('0'.repeat(32), {schedule: {kind: 'once', date: '2026-11-19', time: '10:30', time_zone: 'Asia/Shanghai'}}),
+    reminderRow('1'.repeat(32), {participants: [{username: 'alice'}], schedule: {kind: 'once', date: '2026-11-19', time: '13:00', time_zone: 'UTC'}}),
+  ];
+  const {today, older} = dueReminders(rows, {id: alice, username: 'alice'}, now);
+  assert.deepEqual(today.map((item) => item.id), ['a'.repeat(32), '1'.repeat(32)]);
+  assert.deepEqual(older.map((item) => item.id), ['0'.repeat(32), 'f'.repeat(32)]);
+  assert.equal(reminderDueLabel(today[0], now), '今天 14:30 到点');
+  assert.equal(reminderDueLabel(older[0], now), '11-19 10:30 到点');
+  assert.equal(reminderDueLabel(older[1], now), '11-18 09:00 到点');
+  assert.deepEqual(dueReminders([], alice, now), {today: [], older: []});
+  assert.deepEqual(dueReminders(null, alice, now), {today: [], older: []});
+});
+
+test('the sidebar lists 今天到点的提醒 from the automations the server returns and says 读不到 instead of 0', async () => {
+  const at = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  const date = `${at.getUTCFullYear()}-${pad(at.getUTCMonth() + 1)}-${pad(at.getUTCDate())}`;
+  const due = {
+    id: 'r'.repeat(32), title: '提醒：看这条消息', template_id: 'custom', scope: 'once', enabled: true,
+    participants: [{user_id: alice, username: 'alice'}],
+    schedule: {kind: 'once', date, time: '00:00', time_zone: 'UTC'},
+  };
+  const future = {
+    ...due, id: 'q'.repeat(32), title: '提醒：明天',
+    schedule: {kind: 'once', date: '2999-01-01', time: '09:00', time_zone: 'UTC'},
+  };
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher: async (path, init = {}) => {
+      if (path === '/v1/workspaces/ws-1/automations') return json(200, {items: [due, future]});
+      return original(path);
+    }});
+    await settle();
+    assert.equal(el('due-reminders').hidden, false, 'the panel appears when something is due today');
+    assert.equal(el('due-reminders-heading').textContent, '今天到点的提醒 1 条');
+    const rows = el('due-reminders-list').children;
+    assert.equal(rows.length, 1, 'only the due one is listed');
+    const link = rows[0].children[0];
+    assert.equal(link.tagName, 'A');
+    assert.match(String(link.getAttribute('href') || link.href), /\/automations$/);
+    assert.match(link.textContent, /提醒：看这条消息/);
+    assert.equal(link.children[0].textContent, '今天 00:00 到点');
+  } finally { restore(); }
+
+  const failing = fakeChatDocument(chatHtml());
+  const restore2 = installChatGlobals();
+  try {
+    await mount(failing.doc, {fetcher: async (path, init = {}) => {
+      if (path === '/v1/workspaces/ws-1/automations') return json(500, {error: {code: 'internal', message: 'boom'}});
+      return original(path);
+    }});
+    await settle();
+    assert.equal(failing.el('due-reminders').hidden, false, 'a failed read is shown, not hidden as 0');
+    assert.equal(failing.el('due-reminders-note').hidden, false);
+    assert.equal(failing.el('due-reminders-note').textContent, '读不到到点的提醒。');
+    assert.equal(failing.el('due-reminders-list').children.length, 0);
+  } finally { restore2(); }
 });
