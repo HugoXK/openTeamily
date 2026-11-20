@@ -92,6 +92,9 @@ try {
   assert.equal(manifest.dependencies['@openteamily/flybot-runtime']?.startsWith('link:'), true, 'wrapper must be linked from the image path')
   assert.ok(manifest.dsh?.profile?.bundles?.includes('@openteamily/flybot-runtime'), 'wrapper must be a profile bundle')
   assert.ok(manifest.dsh?.profile?.bundles?.includes('@openteamily/flybot-social-web'), 'social web client must be a profile bundle')
+  const socialCompanion = JSON.parse(readFileSync(new URL('../../flybot-web-slots/social-web/package.json', import.meta.url), 'utf8'))
+  assert.equal(socialCompanion.dsh.bundle.patch, './cordis.patch.yml')
+  assert.equal(socialCompanion.exports['./client'], './client.js')
   assert.ok(!manifest.dsh?.profile?.bundles?.includes('ds-bot'), 'upstream ds-bot must not also be a bundle')
   assert.ok(manifest.dsh?.profile?.bundles?.includes('@openteamily/web'), 'OpenTeamily DS-Bot plugin must be a profile bundle')
 
