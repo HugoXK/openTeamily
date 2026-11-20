@@ -1,0 +1,327 @@
+{
+  "slug": "ev419",
+  "sides": [
+    "http://127.0.0.1:8101",
+    "http://127.0.0.1:8102"
+  ],
+  "diffs": [
+    {
+      "route": "/settings/connectors",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "composio-409",
+      "before": "ev419/before/ev419__before__zh-CN__light__1440x900__settings-connectors__composio-409.png",
+      "after": "ev419/after/ev419__after__zh-CN__light__1440x900__settings-connectors__composio-409.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2633
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2688
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 134981,
+      "ratio": 0.10415200617283951,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 134981,
+        "ratio": 0.11109547325102881
+      },
+      "bbox": {
+        "x": 511,
+        "y": 80,
+        "width": 474,
+        "height": 820
+      },
+      "text": {
+        "changedLines": 11,
+        "sample": [
+          "无法开始连接。",
+          "自定义 MCP 服务器 · 仅当前账号",
+          "公开 HTTPS:443 Streamable HTTP；不支持本地命令、私网、重定向或 URL 查询参数。凭据仅加密保存在管理服务，不会交给 DS-Bot。每次工具调用（包括读取）都需要在上方逐次确认。",
+          "尚未添加自定义 MCP 服务器。",
+          "名称"
+        ]
+      }
+    },
+    {
+      "route": "/settings/connectors",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "composio-429",
+      "before": "ev419/before/ev419__before__zh-CN__light__1440x900__settings-connectors__composio-429.png",
+      "after": "ev419/after/ev419__after__zh-CN__light__1440x900__settings-connectors__composio-429.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2647
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2684
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 2628,
+      "ratio": 0.0020277777777777777,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 2628,
+        "ratio": 0.002162962962962963
+      },
+      "bbox": {
+        "x": 597,
+        "y": 80,
+        "width": 388,
+        "height": 189
+      },
+      "text": {
+        "changedLines": 11,
+        "sample": [
+          "Composio 请求太频繁，请稍后再试。",
+          "自定义 MCP 服务器 · 仅当前账号",
+          "公开 HTTPS:443 Streamable HTTP；不支持本地命令、私网、重定向或 URL 查询参数。凭据仅加密保存在管理服务，不会交给 DS-Bot。每次工具调用（包括读取）都需要在上方逐次确认。",
+          "尚未添加自定义 MCP 服务器。",
+          "名称"
+        ]
+      }
+    },
+    {
+      "route": "/settings/connectors",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "composio-502",
+      "before": "ev419/before/ev419__before__zh-CN__light__1440x900__settings-connectors__composio-502.png",
+      "after": "ev419/after/ev419__after__zh-CN__light__1440x900__settings-connectors__composio-502.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2633
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2689
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 134558,
+      "ratio": 0.10382561728395062,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 134558,
+        "ratio": 0.11074732510288066
+      },
+      "bbox": {
+        "x": 511,
+        "y": 255,
+        "width": 474,
+        "height": 645
+      },
+      "text": {
+        "changedLines": 11,
+        "sample": [
+          "无法开始连接。",
+          "自定义 MCP 服务器 · 仅当前账号",
+          "公开 HTTPS:443 Streamable HTTP；不支持本地命令、私网、重定向或 URL 查询参数。凭据仅加密保存在管理服务，不会交给 DS-Bot。每次工具调用（包括读取）都需要在上方逐次确认。",
+          "尚未添加自定义 MCP 服务器。",
+          "名称"
+        ]
+      }
+    },
+    {
+      "route": "/settings/connectors",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "composio-409",
+      "before": "ev419/before/ev419__before__zh-CN__light__390x844__settings-connectors__composio-409.png",
+      "after": "ev419/after/ev419__after__zh-CN__light__390x844__settings-connectors__composio-409.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2633
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2688
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 61281,
+      "ratio": 0.18617389719285454,
+      "rail": {
+        "changed": 1997,
+        "ratio": 0.02629015271195366
+      },
+      "content": {
+        "changed": 59284,
+        "ratio": 0.2341390205371248
+      },
+      "bbox": {
+        "x": 75,
+        "y": 80,
+        "width": 295,
+        "height": 764
+      },
+      "text": {
+        "changedLines": 11,
+        "sample": [
+          "无法开始连接。",
+          "自定义 MCP 服务器 · 仅当前账号",
+          "公开 HTTPS:443 Streamable HTTP；不支持本地命令、私网、重定向或 URL 查询参数。凭据仅加密保存在管理服务，不会交给 DS-Bot。每次工具调用（包括读取）都需要在上方逐次确认。",
+          "尚未添加自定义 MCP 服务器。",
+          "名称"
+        ]
+      }
+    },
+    {
+      "route": "/settings/connectors",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "composio-429",
+      "before": "ev419/before/ev419__before__zh-CN__light__390x844__settings-connectors__composio-429.png",
+      "after": "ev419/after/ev419__after__zh-CN__light__390x844__settings-connectors__composio-429.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2647
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2684
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 60495,
+      "ratio": 0.18378600072912868,
+      "rail": {
+        "changed": 1997,
+        "ratio": 0.02629015271195366
+      },
+      "content": {
+        "changed": 58498,
+        "ratio": 0.2310347551342812
+      },
+      "bbox": {
+        "x": 75,
+        "y": 80,
+        "width": 295,
+        "height": 764
+      },
+      "text": {
+        "changedLines": 11,
+        "sample": [
+          "Composio 请求太频繁，请稍后再试。",
+          "自定义 MCP 服务器 · 仅当前账号",
+          "公开 HTTPS:443 Streamable HTTP；不支持本地命令、私网、重定向或 URL 查询参数。凭据仅加密保存在管理服务，不会交给 DS-Bot。每次工具调用（包括读取）都需要在上方逐次确认。",
+          "尚未添加自定义 MCP 服务器。",
+          "名称"
+        ]
+      }
+    },
+    {
+      "route": "/settings/connectors",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "composio-502",
+      "before": "ev419/before/ev419__before__zh-CN__light__390x844__settings-connectors__composio-502.png",
+      "after": "ev419/after/ev419__after__zh-CN__light__390x844__settings-connectors__composio-502.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2633
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 2689
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 60866,
+      "ratio": 0.184913112164297,
+      "rail": {
+        "changed": 1998,
+        "ratio": 0.026303317535545025
+      },
+      "content": {
+        "changed": 58868,
+        "ratio": 0.23249605055292258
+      },
+      "bbox": {
+        "x": 75,
+        "y": 80,
+        "width": 295,
+        "height": 764
+      },
+      "text": {
+        "changedLines": 11,
+        "sample": [
+          "无法开始连接。",
+          "自定义 MCP 服务器 · 仅当前账号",
+          "公开 HTTPS:443 Streamable HTTP；不支持本地命令、私网、重定向或 URL 查询参数。凭据仅加密保存在管理服务，不会交给 DS-Bot。每次工具调用（包括读取）都需要在上方逐次确认。",
+          "尚未添加自定义 MCP 服务器。",
+          "名称"
+        ]
+      }
+    }
+  ]
+}
