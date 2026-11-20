@@ -100,7 +100,7 @@ export function createAgents({ db, host }) {
 
   const endpoints = {
     async 'personal-binding'() { return one('SELECT workspace_id,agent_id FROM native_personal_binding WHERE singleton=1') || null },
-    async 'adopt-personal-chat'(p) {
+    async 'adopt-personal-chat'(p, materialize = true) {
       const agent = load(ws(p), p.id)
       const binding = one('SELECT * FROM native_personal_binding WHERE singleton=1')
       if (binding && (binding.agent_id !== agent.id || binding.workspace_id !== agent.workspace_id)) fail('personal-binding-conflict', 'Personal agent is already explicitly bound', 409)
@@ -125,6 +125,8 @@ export function createAgents({ db, host }) {
         }
         db.exec('COMMIT')
       } catch (e) { db.exec('ROLLBACK'); throw e }
+      // Boot import persists history before the runtime is attached. Reconciliation materializes it.
+      if (!materialize) return { workspace_id: agent.workspace_id, agent_id: agent.id }
       for (const c of list) await native.session(agent, `agent:${agent.id}:${c.id}`, c.title)
       return { workspace_id: agent.workspace_id, agent_id:agent.id, native_bot_id:(await native.ensure(agent)).native_bot_id }
     },

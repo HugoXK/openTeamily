@@ -19,6 +19,7 @@ function fixture(turn, at = 1_800_000_000) {
   const clock = { now: at }
   const calls = []
   const feature = createAutomations({
+    personalBinding: async () => ({workspace_id: W}),
     db: new DatabaseSync(join(mkdtempSync(join(tmpdir(), 'ot-auto-')), 'a.sqlite3')), clock: () => clock.now, log: () => {},
     turn: turn ?? (async (args) => { calls.push(args); return { text: 'DS-Bot did it', model: 'm', session_id: 's1', turn_id: 't1', bot_id: 'bot1', model_calls: 1 } }),
   })
@@ -193,4 +194,20 @@ test('official import bundle marks the current slot skipped and does not re-impo
   assert.ok(runs.items.some((row) => row.status === 'skipped' && row.error_code === 'migrated'))
   assert.equal(feature.tick().length, 0)
   assert.equal((await feature.migrate(bundle)).imported, 0)
+})
+
+test('onboarding creates a paused automation in DS-Bot and skips retries', async () => {
+  const { e } = fixture()
+  const request = {method: 'POST', path: '/v1/onboarding/automations',
+    body: {workspace_id: W, template_ids: ['daily_brief'], username: 'alice'}}
+  const denied = await e['automations/v1']({...request, body: {...request.body, workspace_id: 'b'.repeat(32)}})
+  assert.equal(denied.status, 403)
+  const result = await e['automations/v1'](request)
+  assert.equal(result.status, 201)
+  const id = result.body.created[0].id
+  assert.equal(e['automations/get']({workspace_id: W, id}).automation.enabled, false)
+  const retry = await e['automations/v1'](request)
+  assert.equal(retry.status, 200)
+  assert.deepEqual(retry.body.created, [])
+  assert.equal(retry.body.skipped[0].template_id, 'daily_brief')
 })

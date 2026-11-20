@@ -158,7 +158,7 @@ class GatewayTest(unittest.TestCase):
         ws, aid = 'a' * 32, 'b' * 32
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/export'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/revoke'), 'artifacts')
-        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'))
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'), 'discover')
 
     def test_c_api_routing_matches_plugin_features_without_platform_execution(self):
         ws, ident = 'a' * 32, 'b' * 32
@@ -175,8 +175,8 @@ class GatewayTest(unittest.TestCase):
             (f'/v1/workspaces/{ws}/agents/{ident}/discover', 'discover'),
         ):
             self.assertEqual(gw.moved_api(path), feature, path)
-        self.assertIsNone(gw.moved_api('/v1/teams'))
-        self.assertIsNone(gw.moved_api('/v1/workspaces'))
+        self.assertEqual(gw.moved_api('/v1/teams'), 'teams')
+        self.assertEqual(gw.moved_api('/v1/workspaces'), 'teams')
 
     def test_record_upstream_validation(self):
         with self.store.transaction() as db:
@@ -320,8 +320,10 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('feature=settings', headers['X-OT-Upstream-Path'])
         status, headers = self.call(a, uri='/v1/model-api')
         self.assertIn('feature=model-api', headers['X-OT-Upstream-Path'])
-        # Still on the platform: automations onboarding, composio callback, auth.
-        self.assertEqual(self.call(a, uri='/v1/onboarding/automations')[0], 404)
+        status, headers = self.call(a, uri='/v1/onboarding/automations', method='POST', Origin='https://openteamily.example')
+        self.assertEqual(status, 204)
+        self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
+        # The Composio callback and authentication still reach the platform.
         self.assertEqual(self.call(a, uri='/v1/composio/callback')[0], 404)
         self.assertEqual(self.call(a, uri='/v1/auth/session')[0], 404)
         # User B cannot be steered onto A's settings by a forged instance id.
@@ -331,16 +333,14 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(self.call(None, uri='/v1/settings')[0], 401)
         status, headers = self.call(a, uri='/v1/automation-templates')
         self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
-        # onboarding automations still stay on the platform (B2 page is /automations/, not this path)
-        self.assertEqual(self.call(a, uri='/v1/onboarding/automations')[0], 404)
 
     def test_nginx_forwards_moved_v1_apis_except_platform_exceptions(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
         self.assertIn('location = /v1/settings { return 418; }', conf)
-        self.assertIn('location = /v1/onboarding/automations', conf)
+        self.assertEqual(conf.count('location = /v1/onboarding/automations'), 1)
+        self.assertIn('location = /v1/onboarding/automations { return 418; }', conf)
         self.assertIn('location = /v1/composio/callback', conf)
         # Exceptions must appear before the prefix locations that would catch them.
-        self.assertLess(conf.index('location = /v1/onboarding/automations'), conf.index('location ^~ /v1/onboarding/'))
         self.assertLess(conf.index('location = /v1/composio/callback'), conf.index('location ^~ /v1/composio/'))
 
 

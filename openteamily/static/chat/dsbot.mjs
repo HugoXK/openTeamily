@@ -40,50 +40,6 @@ function message(row) {
 
 const STATUS = {'chat/not-found': 404, 'chat/invalid': 400, 'openteamily/invalid': 400, 'openteamily/not-found': 404};
 
-async function legacyJSON(fetcher, path, headers) {
-  const response = await fetcher(path, {method: 'GET', credentials: 'same-origin', headers: {...headers}});
-  if (response.status !== 200) throw new Error('legacy history unavailable');
-  return response.json();
-}
-
-// Copy this user's own platform history (personal agent) into their DS-Bot once.
-// Reads only through the user's own session; writes only to the user's own DS-Bot.
-export async function importLegacyHistory(fetcher, base, headers, call) {
-  const status = await call('chat/importStatus', {});
-  if (status.error || (status.value && status.value.done)) return status.value || null;
-  const conversations = [];
-  let cursor = '';
-  for (let page = 0; page < 20; page += 1) {
-    const listed = await legacyJSON(fetcher, `${base}/conversations?limit=100${cursor ? '&cursor=' + cursor : ''}`, headers);
-    conversations.push(...(listed.items || []));
-    if (!listed.cursor) break;
-    cursor = listed.cursor;
-  }
-  let imported = {conversations: 0, messages: 0};
-  for (let i = 0; i < conversations.length; i += 20) {
-    const batch = [];
-    for (const row of conversations.slice(i, i + 20)) {
-      const messages = [];
-      let after = '';
-      for (let page = 0; page < 10; page += 1) {
-        const listed = await legacyJSON(fetcher, `${base}/conversations/${row.id}/messages?limit=200${after ? '&cursor=' + after : ''}`, headers);
-        for (const m of listed.items || []) {
-          if (m.role === 'user' || m.status === 'succeeded') messages.push({id: m.id, role: m.role, body: m.body || '', created: m.created});
-        }
-        if (!listed.cursor) break;
-        after = listed.cursor;
-      }
-      batch.push({id: row.id, title: row.title, created: row.created, updated: row.updated, messages});
-    }
-    const out = await call('chat/import', {conversations: batch});
-    if (out.error) return null;
-    imported = {conversations: imported.conversations + out.value.conversations, messages: imported.messages + out.value.messages};
-  }
-  const done = await call('chat/import', {conversations: [], finish: true});
-  return done.error ? null : {...imported, done: true};
-}
-
-let importing = null;
 let skillsSyncedAt = 0;
 
 export async function dsbotRequest(fetcher, route, agentId, headers) {
@@ -99,11 +55,6 @@ export async function dsbotRequest(fetcher, route, agentId, headers) {
     }
     return {value: parsed.value};
   };
-  if (route.shape === 'list' && route.base) {
-    // Best effort: a failed import leaves the list usable and retries on the next load.
-    importing ??= importLegacyHistory(fetcher, route.base, headers, call).catch(() => null).finally(() => { importing = null; });
-    await importing;
-  }
   if (route.shape === 'sent' && Date.now() - skillsSyncedAt > 60000) {
     // Private chat loads the user's bound skills natively; best effort, never blocks a send on failure.
     skillsSyncedAt = Date.now();

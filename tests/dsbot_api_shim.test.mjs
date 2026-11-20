@@ -42,8 +42,8 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/composio/connections/${ID}/disconnect`, ORIGIN).feature, 'connectors');
   assert.equal(movedTarget(`/v1/mcp/servers/${ID}`, ORIGIN).feature, 'connectors');
   assert.equal(movedTarget('/v1/composio/callback', ORIGIN), null);
-  assert.equal(movedTarget('/v1/skill-secrets', ORIGIN), null);
-  assert.equal(movedTarget('/v1/onboarding/automations', ORIGIN), null);
+  assert.equal(movedTarget('/v1/skill-secrets', ORIGIN).feature, 'skill-secrets');
+  assert.equal(movedTarget('/v1/onboarding/automations', ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`https://evil.example/v1/workspaces/${WS}/meetings`, ORIGIN), null);
 });
 
@@ -65,11 +65,11 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget('/v1/discover/agents?q=x', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/me/works?tab=following', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/works/my-essay/engagement', ORIGIN).feature, 'discover');
-  // Workspace list/create and the platform team-create stay on the site.
+  // Workspace lists and team creation use the DS-Bot teams feature.
   assert.equal(movedTarget('/v1/auth/session', ORIGIN), null);
-  assert.equal(movedTarget('/v1/workspaces?limit=100', ORIGIN), null);
+  assert.equal(movedTarget('/v1/workspaces?limit=100', ORIGIN).feature, 'teams');
   assert.equal(movedTarget(`/v1/workspaces/${WS}`, ORIGIN), null);
-  assert.equal(movedTarget('/v1/teams', ORIGIN), null);
+  assert.equal(movedTarget('/v1/teams', ORIGIN).feature, 'teams');
 });
 
 test('the envelope carries method, path, body and idempotency key only', () => {
@@ -101,4 +101,20 @@ test('moved artifact routes go to the artifacts feature of the user\'s own DS-Bo
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/shares/${ID}/revoke`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/favorite`, ORIGIN).feature, 'artifacts');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/bogus`, ORIGIN), null);
+});
+
+test('a missing moved feature never falls back to platform execution', async () => {
+  const calls = [];
+  const win = {
+    document: {querySelector: () => ({}), addEventListener() {}},
+    location: {origin: ORIGIN},
+    async fetch(url) {
+      calls.push(url);
+      return Response.json({ok: false, error: {code: 'openteamily/not-found'}});
+    },
+  };
+  install(win);
+  const response = await win.fetch('/v1/settings');
+  assert.equal(response.status, 502);
+  assert.deepEqual(calls, ['/b/api/openteamily']);
 });

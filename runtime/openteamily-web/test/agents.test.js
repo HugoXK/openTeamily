@@ -141,3 +141,29 @@ test('official agents bundle imports once including history', async () => {
   assert.equal((await e.messages({ workspace_id: W, id: aid, conversation_id: cid })).items[0].text, '你好')
   assert.equal((await migrate(bundle)).imported, 0)
 })
+
+test('official personal history is durable before the native runtime attaches', async () => {
+  const { createHash } = await import('node:crypto')
+  const aid = 'c'.repeat(32), cid = 'd'.repeat(32)
+  const tables = Object.fromEntries(Object.entries({
+    workspace_agents: [{id: aid, workspace_id: W, name: 'Personal Agent'}],
+    personal_agents: [{agent_id: aid, workspace_id: W}],
+  }).map(([name, rows]) => [name, JSON.stringify(rows)]))
+  const manifest = Object.fromEntries(Object.entries(tables).map(([name, text]) => [
+    name, {rows: 1, sha256: createHash('sha256').update(text).digest('hex')},
+  ]))
+  const db = new DatabaseSync(':memory:')
+  const host = {
+    call: async (endpoint) => {
+      assert.equal(endpoint, 'chat/exportLegacy')
+      return {conversations: [{id: cid, title: 'Retained history'}]}
+    },
+    runtime: async () => { throw new Error('runtime has not attached') },
+  }
+  const {endpoints, migrate} = createAgents({db, host})
+  const bundle = {format: 'openteamily-dsbot-import', version: 1, feature: 'agents', tables, manifest}
+  await migrate(bundle)
+  await migrate(bundle)
+  assert.deepEqual({...await endpoints['personal-binding']()}, {agent_id: aid, workspace_id: W})
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM agent_conversations WHERE id=?').get(cid).count, 1)
+})

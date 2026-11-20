@@ -9,8 +9,7 @@
 export const MOUNT = '/b';
 export const API_ROUTE = `${MOUNT}/api/openteamily`;
 
-// Legacy route -> feature that serves it inside DS-Bot. Streams add rows as
-// features move; a feature the DS-Bot does not have yet falls back to /v1.
+// Page-facing route -> feature that serves it inside DS-Bot.
 export const MOVED = [
   [/^\/v1\/skills\/(?:catalog|bindings|installed|packages(?:\/import-[a-z0-9][a-z0-9-]{1,39}(?:\/(?:revoke|versions(?:\/[0-9.]+)?))?)?)$/, 'skills'],
   [/^\/v1\/skill-secrets$/, 'skill-secrets'],
@@ -18,7 +17,7 @@ export const MOVED = [
   [/^\/v1\/team-templates$/, 'team-templates'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/team-templates\/[a-z0-9-]{3,40}$/, 'team-templates'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/notifications(?:\/read)?$/, 'social'],
-  [/^\/v1\/automation-templates$/, 'automations'],
+  [/^\/v1\/(?:automation-templates|onboarding\/automations)$/, 'automations'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/automations(?:\/(?:tick|[0-9a-f]{32}(?:\/(?:remove|runs(?:\/[0-9a-f]{32}(?:\/(?:cancel|retry|artifact))?)?)?))?)?$/, 'automations'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/api-keys(?:\/[0-9a-f]{32}\/revoke)?$/, 'agent-api'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents(?:\/[0-9a-f]{32}(?:\/(?:archive|conversations(?:\/[0-9a-f]{32}(?:\/messages(?:\/[0-9a-f]{32}\/artifact)?)?)?))?)?$/, 'agents'],
@@ -28,8 +27,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/search\/(?:messages|resources)$/, 'search'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts(?:\/[0-9a-f]{32}(?:\/(?:remove|favorite|preview|file|export|restore|versions(?:\/\d{1,8}(?:\/export)?)?|shares(?:\/[0-9a-f]{32}(?:\/revoke)?)?))?)?$/, 'artifacts'],
   // B4: account settings, onboarding and look live in the user's DS-Bot.
-  // Auth, skill-secrets, runtime connections, workspace lists and the Composio
-  // callback bounce page stay on the platform.
+  // Auth and the Composio callback bounce page stay on the platform.
   [/^\/v1\/settings$/, 'settings'],
   [/^\/v1\/notification-prefs$/, 'settings'],
   [/^\/v1\/onboarding(?:\/(?:recommendations|picks|look))?$/, 'settings'],
@@ -121,11 +119,10 @@ export function install(win = globalThis.window) {
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(envelope(target, method, headers, encoded)),
     });
-    const result = await response.json();
+    const result = await response.json().catch(() => null);
     if (result && result.ok) return toResponse(result.value);
-    if (result && result.error && result.error.code === 'openteamily/not-found') return null;
     return new Response(JSON.stringify({ error: { code: 'unavailable', message: (result && result.error && result.error.message) || 'DS-Bot request failed' } }),
-      { status: 502, headers: { 'Content-Type': 'application/json' } });
+      { status: response.ok ? 502 : response.status, headers: { 'Content-Type': 'application/json' } });
   }
   win.fetch = async (input, init = {}) => {
     const isRequest = typeof input !== 'string' && !(input instanceof URL);
@@ -134,7 +131,7 @@ export function install(win = globalThis.window) {
     const method = init.method || (isRequest ? input.method : 'GET');
     const headers = init.headers || (isRequest ? input.headers : undefined);
     const body = init.body !== undefined ? init.body : (isRequest && method !== 'GET' ? await input.clone().text() : undefined);
-    return (await viaDsBot(target, method, headers, body)) || original(input, init);
+    return viaDsBot(target, method, headers, body);
   };
   win.document.addEventListener('click', async (event) => {
     const anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
@@ -142,7 +139,14 @@ export function install(win = globalThis.window) {
     if (!target) return;
     event.preventDefault();
     const response = await viaDsBot(target, 'GET');
-    if (!response) { win.location.assign(anchor.href); return; }
+    if (!response.ok) {
+      const status = win.document.getElementById('status');
+      if (status) {
+        status.dataset.kind = 'error';
+        status.textContent = '无法下载文件，请重试。';
+      }
+      return;
+    }
     const blob = await response.blob();
     const name = /filename="([^"]+)"/.exec(response.headers.get('Content-Disposition') || '');
     const link = win.document.createElement('a');

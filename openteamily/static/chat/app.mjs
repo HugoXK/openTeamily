@@ -838,11 +838,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && globalThis.matchMedia('(max-width: 900px)').matches;
   }
 
+  let sessionsStatus = '';
+
+  function setSessionsStatus(text) {
+    sessionsStatus = text;
+    const notice = document.getElementById('conversations-status');
+    if (notice) {
+      notice.textContent = text;
+      notice.hidden = !text;
+    }
+    if (text) document.getElementById('conversations-empty').hidden = true;
+  }
+
   function renderSessions() {
     const list = document.getElementById('conversation-list');
     list.replaceChildren();
     document.getElementById('conversation-heading').textContent = '对话 · ' + sessions.length;
-    document.getElementById('conversations-empty').hidden = sessions.length > 0;
     const filterNode = document.getElementById('session-filter-value');
     const filter = (filterNode && filterNode.value) || 'all';
     const visible = sessions.filter(item => filter === 'all'
@@ -850,7 +861,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       || (filter === 'unread' && item.unread_count > 0)
       || (filter === 'read' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
-    document.getElementById('conversations-empty').hidden = visible.length > 0;
+    document.getElementById('conversations-empty').hidden = Boolean(sessionsStatus) || visible.length > 0;
     let lastGroup = '';
     for (const session of groupSessionsForDisplay(visible)) {
       const li = document.createElement('li');
@@ -1528,6 +1539,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     loadDueReminders();
     const id = workspaceId();
     if (id !== sessionsWorkspace || user !== sessionsUser || !id) {
+      setSessionsStatus('正在加载对话…');
       sessionsWorkspace = id; sessionsUser = user;
       sessions = []; agents = []; members = []; artifacts = []; socialConversations = [];
       renderSessions();
@@ -1542,7 +1554,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     ]);
     if (!current()) return;
     if (listed.status !== 200) {
-      show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
+      setSessionsStatus('无法加载智能体对话，请重试。');
       return;
     }
     const nextAgents = listed.body.items || [];
@@ -1562,6 +1574,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     sessions = mergeSessions(agentRows, socialConversations, currentUser && currentUser.id);
+    const incomplete = social.status !== 200 || results.some(({result}) => result.status !== 200);
+    setSessionsStatus(incomplete ? '部分对话加载失败，请重试。' : '');
     renderSessions();
     // The first SSE snapshot may immediately refresh; do not invalidate the
     // initial directory before deep-link resolution has a committed snapshot.
@@ -2162,22 +2176,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.body.classList.add('chat-open');
     setSessionsOpen(true);
     document.getElementById('whoami').textContent = currentUser.username;
-    const onboarding = await request('GET', '/v1/onboarding');
+    if (!sessions.length) setSessionsStatus('正在加载对话…');
+    // Personal-agent initialization may create the workspace returned by the list.
+    const personalAndWorkspaces = request('POST', '/v1/personal-agent').then(async personal => {
+      const listed = await request('GET', '/v1/workspaces?limit=100');
+      return {personal, listed};
+    });
+    const [{personal, listed}, onboarding, settings] = await Promise.all([
+      personalAndWorkspaces,
+      request('GET', '/v1/onboarding'),
+      request('GET', '/v1/settings'),
+    ]);
     const banner = document.getElementById('onboarding-banner');
     if (banner && onboarding.status === 200) {
       banner.hidden = Boolean(onboarding.body.onboarding && onboarding.body.onboarding.completed);
     }
 
-    const personal = await request('POST', '/v1/personal-agent');
     const personalWorkspace = personal.status === 200 && personal.body.personal_agent
       ? personal.body.personal_agent.workspace.id : '';
     const personalEntity = personal.status === 200 ? personal.body.personal_agent : null;
     personalAgentId = personalEntity && personalEntity.agent ? personalEntity.agent.id : '';
     personalLook = personalEntity ? personalEntity.look || null : null;
-    const [listed, settings] = await Promise.all([
-      request('GET', '/v1/workspaces?limit=100'),
-      request('GET', '/v1/settings'),
-    ]);
     if (settings.status === 200 && settings.body?.settings?.values) chatPreferences = settings.body.settings.values;
     const stored = settings.status === 200 && settings.body && settings.body.settings
       && settings.body.settings.values && settings.body.settings.values.send_shortcut;
@@ -2186,7 +2205,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && settings.body.settings.values && settings.body.settings.values.chat_language;
     chatLanguage = typeof storedLanguage === 'string' ? storedLanguage : 'auto';
     document.getElementById('chat-body').dataset.sendShortcut = sendShortcut;
-    workspaces = listed.status === 200 ? (listed.body.items || []) : [];
+    if (listed.status !== 200) {
+      setSessionsStatus('无法加载工作区，请重试。');
+      return;
+    }
+    workspaces = listed.body.items || [];
     const wanted = hashParams().workspace || personalWorkspace || workspaceSelect.value;
     workspaceSelect.replaceChildren();
     for (const space of workspaces) {
@@ -2199,6 +2222,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       workspaceSelect.value = wanted;
     }
     if (!workspaces.length) {
+      setSessionsStatus('');
       document.getElementById('conversations-empty').hidden = false;
       document.getElementById('chat-empty').hidden = false;
       show('', '');

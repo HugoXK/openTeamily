@@ -60,7 +60,7 @@ export async function importOfficialBundle(endpoints, bundle) {
   }
   for (const binding of tables.personal_agents || []) {
     if (agentsById.get(binding.agent_id)?.workspace_id !== binding.workspace_id) throw new Error('personal agent ownership mismatch')
-    await endpoints['adopt-personal-chat']({workspace_id:binding.workspace_id,id:binding.agent_id})
+    await endpoints['adopt-personal-chat']({workspace_id:binding.workspace_id,id:binding.agent_id}, false)
   }
   return result
 }
