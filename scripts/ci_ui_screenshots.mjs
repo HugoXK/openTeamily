@@ -1162,34 +1162,34 @@ async function main() {
       await page.locator('#empty-meetings').waitFor({ state: 'visible', timeout: 8000 });
       const meetings = await visibleText(page.locator('#empty-meetings'));
       record(
-        'artifacts_meetings_unimplemented',
-        meetings.includes('未实现') && meetings.includes('还没有录过音的会议'),
+        'artifacts_meetings_empty',
+        meetings.includes('还没有会议纪要') && !meetings.includes('未实现'),
         meetings || 'meetings empty missing',
       );
       screenshots.push(path.basename(await shot(page, outDir, '31-artifacts-meetings-empty.png')));
       const joined = await visibleText(page.locator('#meetings-chrome'));
       record(
-        'artifacts_meetings_joined',
-        joined.includes('我参加的') && joined.includes('你参加或组织过的录音会议，最新的在前。') && !(await page.locator('#filter-button').isVisible()) && !(await page.locator('#layout-toggle').isVisible()),
+        'artifacts_meetings_chrome',
+        joined.includes('我的会议') && joined.includes('这个工作区的会议纪要，最新的在前。') && !(await page.locator('#filter-button').isVisible()) && !(await page.locator('#layout-toggle').isVisible()),
         joined || 'meetings chrome missing',
       );
-      await page.locator('.meeting-scopes [data-meeting-scope="all"]').click();
-      await waitForLocatorText(page, '#meetings-caption', '你所在群里的录音会议');
-      const meetingsAll = await visibleText(page.locator('#meetings-chrome'));
+      await page.locator('.artifact-kinds [data-kind="all"]').click();
+      await page.waitForTimeout(300);
+      const chromeRetired = await page.locator('#meetings-chrome').evaluate((node) => node.hidden);
       record(
-        'artifacts_meetings_all',
-        meetingsAll.includes('全部') && meetingsAll.includes('你所在群里的录音会议'),
-        meetingsAll || 'meetings all caption missing',
+        'artifacts_meetings_leaves',
+        chromeRetired && await page.locator('#filter-button').isVisible(),
+        chromeRetired ? 'meetings chrome retired, filters back' : 'meetings chrome still shown',
       );
-      screenshots.push(path.basename(await shot(page, outDir, '37-space-meetings-all.png')));
-      await page.locator('.meeting-scopes [data-meeting-scope="joined"]').click();
-      await waitForLocatorText(page, '#meetings-caption', '你参加或组织过的录音会议，最新的在前。');
+      screenshots.push(path.basename(await shot(page, outDir, '37-artifacts-back-from-meetings.png')));
+      await page.locator('.artifact-kinds [data-kind="meetings"]').click();
+      await page.locator('#empty-meetings').waitFor({ state: 'visible', timeout: 8000 });
       const meetingsChromeView = await visibleText(page.locator('#main-panel'));
       record(
         'space_meetings_chrome',
         meetingsChromeView.includes('我的会议')
-          && meetingsChromeView.includes('还没有录过音的会议')
-          && meetingsChromeView.includes('在会议中开启录音后，回放和纪要会出现在这里。')
+          && meetingsChromeView.includes('还没有会议纪要')
+          && meetingsChromeView.includes('在「会议」页记下纪要后，这里会按时间倒序列出。')
           && await page.locator('#empty-meetings .empty-hero svg').count() === 1
           && await page.locator('#meetings-title').isVisible()
           && await page.locator('#artifact-notify').getAttribute('aria-label') === '通知'
@@ -1255,10 +1255,20 @@ async function main() {
       await selectWorkspace(page, ready.workspace_name);
       await page.locator('#empty-starred').waitFor({ state: 'visible', timeout: 8000 });
       const starred = await visibleText(page.locator('#empty-starred'));
+      // The picture entry is a real link into /chat; the old disabled button
+      // claimed there was no way to save a chat picture, which was false.
+      const picture = await page.evaluate(() => {
+        const node = document.getElementById('empty-save-image');
+        if (!node) return null;
+        return {tag: node.tagName, href: node.getAttribute('href'),
+                disabled: node.hasAttribute('disabled'),
+                text: (node.textContent || '').replace(/\s+/g, ' ')};
+      });
       record(
         'artifacts_starred_empty',
-        starred.includes('暂无收藏') && starred.includes('保存聊天中的消息') && starred.includes('保存聊天中的图片') && starred.includes('保存智能体成果') && starred.includes('未实现'),
-        starred || 'starred empty missing',
+        starred.includes('暂无收藏') && starred.includes('保存聊天中的消息') && starred.includes('保存聊天中的图片') && starred.includes('保存智能体成果')
+          && picture !== null && picture.tag === 'A' && picture.href === '/chat' && !picture.disabled && !picture.text.includes('未实现'),
+        JSON.stringify({starred, picture}),
       );
       screenshots.push(path.basename(await shot(page, outDir, '34-space-starred-empty.png')));
     } catch (error) {
@@ -2429,6 +2439,21 @@ async function main() {
       }
       screenshots.push(path.basename(await shot(page,outDir,'115-real-typed-export-controls.png')));
     }catch(error){record('document_live_export_path',false,String(error));}
+
+    try {
+      const created=await page.evaluate(async wid=>{
+        const csrf=document.cookie.split(/;\s*/).find(v=>v.startsWith('ot_dev_csrf=')).split('=')[1];
+        const response=await fetch(`/v1/workspaces/${wid}/artifacts`,{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf,'Idempotency-Key':'functional-pptx-export001'},body:JSON.stringify({title:'PPTX evidence 中文',kind:'slides',slides:{schema:'openteamily.slides.v1',slides:[{title:'目标',bullets:['统一入口','中文 123']},{title:'下一步',bullets:['接入运行时']}]}})});
+        const data=await response.json();if(!response.ok)throw Error('Synthetic slides artifact creation failed: '+JSON.stringify(data));return data.artifact;
+      },ready.workspace_id);
+      await page.goto(origin+'/space?workspace='+ready.workspace_id+'&artifact='+created.id,{waitUntil:'load'});
+      await page.locator('#export-format').selectOption('pptx');
+      const downloadPromise=page.waitForEvent('download');await page.locator('#export-artifact').click();const download=await downloadPromise;
+      const file=path.join(outDir,'export-evidence.pptx');await download.saveAs(file);
+      const bytes=fs.readFileSync(file);
+      record('real_pptx_download',bytes.subarray(0,2).toString()==='PK','Actual browser PPTX attachment for a slides artifact; Python asserts title/bullet XML, history, and the absence of macros or external relationships.');
+      screenshots.push(path.basename(await shot(page,outDir,'116-real-pptx-export-controls.png')));
+    }catch(error){record('slides_pptx_export_path',false,String(error));}
 
     try {
       await page.goto(`${origin}/chat#workspace=${ready.workspace_id}&social=${ready.social_group_id}`,{waitUntil:'load'});

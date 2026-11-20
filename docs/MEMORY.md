@@ -13,6 +13,10 @@ This slice stores workspace-scoped **memory pages**, **next actions**, optional 
 | GET | `/v1/workspaces/{id}/memory/{id}` | One page, including body and topics |
 | POST | `/v1/workspaces/{id}/memory/{id}` | Revisioned `{revision, changes: {title?, body?, topics?}}` |
 | POST | `/v1/workspaces/{id}/memory/{id}/remove` | Delete the page |
+| GET | `/v1/workspaces/{id}/memory/preferences` | Lists the caller's saved preferences in this workspace (`id`, `text`, `created`) |
+| POST | `/v1/workspaces/{id}/memory/preferences` | Save `{text}` (1–120 characters). Requires an Idempotency-Key; the same text is never duplicated for one account, and the cap is 50 rows per user per workspace |
+| POST | `/v1/workspaces/{id}/memory/preferences/{id}/remove` | Delete one of the caller's preferences |
+| GET | `/v1/workspaces/{id}/memory/{id}/export` | The saved page as a `text/markdown` attachment: YAML front matter (title, topics, revision, updated) then the body verbatim. Read-only; any workspace member may download |
 | GET | `/v1/workspaces/{id}/memory/{id}/versions` | The page's previous versions (newest first: `revision`, `title`, bounded `summary`, `created`, `created_by`) and the `current` revision. The live revision is not listed |
 | GET | `/v1/workspaces/{id}/memory/{id}/versions/{revision}` | One earlier version with its full `body`, for preview |
 | POST | `/v1/workspaces/{id}/memory/{id}/versions/{revision}/restore` | Revision-guarded `{revision}`: writes that version's title and body as a new revision; older versions stay |
@@ -39,9 +43,13 @@ Workspace members may list, read and create pages and actions, read the graph, a
 
 ## Not in this slice
 
-The profile page now uses the revisioned save API below. 「做梦」 was not opened in the recapture and is not implemented. Page history is the slice below; share or export links, and generating profile text from the pages, remain later slices on issue 8 and issue 9. "我的作品" already links to `/space`. "我的会议" now follows the same pattern and opens the existing `/space?view=meetings` empty chrome; there is still no meeting-artifact API, and this is not a Teamily/Impeccable comparison. Timeline and Project are not used as a memory implementation.
+The profile page now uses the revisioned save API below. 「做梦」 was not opened in the recapture and is not implemented. Page history is the slice below. Share links, generating profile text from the pages, and a whole-workspace archive remain later slices on issue 8 and issue 9; the export control downloads one page as Markdown and is not a workspace archive. "我的作品" already links to `/space`. "我的会议" now follows the same pattern and opens the existing `/space?view=meetings` empty chrome; there is still no meeting-artifact API, and this is not a Teamily/Impeccable comparison. Timeline and Project are not used as a memory implementation.
 
 No Teamily comparison and no browser E2E are claimed. Issue 8 stays open.
+
+## Page export
+
+The editor's「导出」control downloads the page that is saved on the server, so an unsaved draft is never what leaves the page. It reads `GET /v1/workspaces/{id}/memory/{id}/export`, which answers `text/markdown; charset=utf-8` with `Content-Disposition: attachment`, an ASCII fallback file name and an RFC 5987 `filename*` carrying the title. The document is YAML front matter — `title`, `topics` (or `[]`), `revision`, `updated` in UTC — followed by a blank line and the stored body byte-for-byte, with one trailing newline added only when the body does not end in one. Front-matter values are whitespace-folded and quote/backslash escaped, so a title or topic cannot add a key. Nothing is versioned by exporting, and the route writes nothing. This is one page, not a workspace archive, and it is not Teamily export parity.
 
 ## Private editable memory profile
 
@@ -53,6 +61,17 @@ another tab. The additive `(workspace_id,user_id)` primary key separates both us
 The page saves real content and restores it after reload; CI exercises that with labeled fixtures.
 **Not automatically injected into model prompts; no dreaming, generated profile or inference claim.**
 See [FUNCTIONAL_COMPLETION.md](FUNCTIONAL_COMPLETION.md) for the remaining full-scope checklist.
+
+## Saved preferences
+
+The 我的资料 view's 偏好 list is no longer page state. `POST /v1/workspaces/{id}/memory/preferences`
+writes one short line per account to `memory_preferences`, keyed on
+`(workspace_id, user_id, text_hash)` so the same line is not duplicated; the same
+`Idempotency-Key` with a different body returns 409. `GET` reads the rows back after a reload, a
+new login or a new conversation, and the remove route deletes one. Rows are private to that user in
+that workspace: another member sees none, and the same account in another workspace sees none.
+Up to 50 rows are kept per user per workspace (429 past the cap). Saving a preference does not
+change model prompts or behaviour; that injection remains a later slice.
 
 ## Page history
 

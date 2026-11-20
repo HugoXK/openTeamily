@@ -101,6 +101,48 @@ export function visibleArtifacts(items, options = {}) {
   return rows;
 }
 
+export function meetingActionLabel(count, done) {
+  const total = Number(count) || 0;
+  const finished = Number(done) || 0;
+  if (total <= 0) return '尚无行动项';
+  if (finished >= total) return `${total} 项行动项，全部完成`;
+  if (finished > 0) return `${total} 项行动项，${finished} 项已完成`;
+  return `${total} 项行动项`;
+}
+
+export function meetingTimeLabel(epochSeconds) {
+  const ms = Number(epochSeconds) * 1000;
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  const date = new Date(ms);
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} `
+    + `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** Meetings come from GET /v1/workspaces/<wid>/meetings; the page only lists them, newest first. */
+export function meetingRows(items) {
+  const rows = (items || []).filter((item) => item && typeof item.title === 'string');
+  rows.sort((left, right) => (Number(right.started_at) || 0) - (Number(left.started_at) || 0));
+  return rows.map((item) => ({
+    id: item.id,
+    title: item.title,
+    started_at: Number(item.started_at) || 0,
+    actionLabel: meetingActionLabel(item.action_count, item.done_count),
+  }));
+}
+
+export function meetingsForScope(items, {scope = 'all', username = '', userId = ''} = {}) {
+  const rows = Array.isArray(items) ? items : [];
+  if (scope !== 'joined') return rows;
+  const name = (username || '').trim().toLowerCase();
+  return rows.filter((row) => {
+    if (userId && row.created_by === userId) return true;
+    const attendees = Array.isArray(row.attendees) ? row.attendees : [];
+    return Boolean(name) && attendees.some((item) => String(item).trim().toLowerCase() === name);
+  });
+}
+
+
 export function sessionFilterChoices(items) {
   const sessions = [];
   const seen = new Set();
@@ -246,12 +288,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let catalogKind = 'all';
   let catalogScope = 'all';
   let catalogLayout = 'grid';
-  let meetingScope = 'joined';
+  let meetingScope = 'all';
   let filterTypes = [];
   let filterModified = 'any';
   let filterCreators = [];
   let filterSessions = [];
   let allItems = [];
+  let meetingItems = [];
+  let meetingError = '';
+  let meetingLoadedFor = '';
+  let meetingLoading = false;
   // A delete question is bound to the workspace and artifact it was asked about;
   // leaving that workspace retires it instead of letting the answer land elsewhere.
   let pendingDeleteCancel = null;
@@ -700,13 +746,88 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (sessionEmpty) sessionEmpty.hidden = sessions.length > 0;
   }
 
+  async function loadMeetings() {
+    const id = workspaceId();
+    meetingItems = [];
+    meetingError = '';
+    meetingLoadedFor = id;
+    if (!id) return;
+    meetingLoading = true;
+    const listed = await request('GET', `/v1/workspaces/${id}/meetings?limit=50`);
+    meetingLoading = false;
+    if (listed.status !== 200) {
+      meetingItems = [];
+      meetingError = messageFor(listed.body.error, '无法读取会议纪要。');
+      show('error', meetingError);
+      return;
+    }
+    meetingItems = listed.body.items || [];
+    meetingError = '';
+  }
+
+  function renderMeetings() {
+    const list = document.getElementById('artifact-list');
+    const empty = document.getElementById('list-empty');
+    const emptyMeetings = document.getElementById('empty-meetings');
+    const errorBox = document.getElementById('meetings-error');
+    const rows = meetingRows(meetingsForScope(meetingItems, {
+      scope: meetingScope,
+      username: currentUser && currentUser.username,
+      userId: currentUser && currentUser.id,
+    }));
+    const caption = document.getElementById('meetings-caption');
+    if (caption) {
+      caption.textContent = meetingScope === 'joined'
+        ? '你出席或创建的会议纪要，最新的在前。'
+        : '这个工作区的会议纪要，最新的在前。';
+    }
+    list.textContent = '';
+    if (errorBox) {
+      errorBox.hidden = !meetingError;
+      errorBox.textContent = meetingError;
+    }
+    const emptyKind = document.getElementById('empty-kind');
+    if (emptyKind) emptyKind.hidden = true;
+    if (emptyMeetings) emptyMeetings.hidden = Boolean(meetingError) || rows.length > 0 || meetingLoading;
+    if (empty) empty.hidden = Boolean(meetingError) || rows.length > 0;
+    for (const row of rows) {
+      const item = document.createElement('li');
+      item.className = 'artifact-item';
+      item.dataset.kind = 'meetings';
+      const title = document.createElement('span');
+      title.className = 'meeting-title';
+      title.textContent = row.title;
+      const when = document.createElement('span');
+      when.className = 'note';
+      when.textContent = meetingTimeLabel(row.started_at);
+      const actions = document.createElement('span');
+      actions.className = 'note meeting-actions';
+      actions.textContent = row.actionLabel;
+      item.append(title, when, actions);
+      list.appendChild(item);
+    }
+    return rows;
+  }
+
   function renderCatalog() {
     const username = currentUser && currentUser.username;
     const items = visibleArtifacts(allItems, {
       kind: catalogKind, scope: catalogScope, username,
       types: filterTypes, modified: filterModified, creators: filterCreators, sessions: filterSessions,
     });
-    renderList(items, (item) => openEditor(item));
+    if (catalogKind === 'meetings') renderMeetings();
+    else {
+      renderList(items, (item) => openEditor(item));
+      const meetingsErrorBox = document.getElementById('meetings-error');
+      if (meetingsErrorBox) meetingsErrorBox.hidden = true;
+    }
+    // The meetings list owns its own empty and error rows; the artifact empty states stay out of it.
+    if (catalogKind === 'meetings') {
+      if (mainPanel) mainPanel.classList.toggle('is-meetings', true);
+      const chrome = document.getElementById('meetings-chrome');
+      if (chrome) chrome.hidden = false;
+      return;
+    }
     const empty = document.getElementById('list-empty');
     const emptyAll = document.getElementById('empty-all');
     const emptyStarred = document.getElementById('empty-starred');
@@ -718,12 +839,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const meetingsChrome = document.getElementById('meetings-chrome');
     if (mainPanel) mainPanel.classList.toggle('is-meetings', catalogKind === 'meetings');
     if (meetingsChrome) meetingsChrome.hidden = catalogKind !== 'meetings';
-    const caption = document.getElementById('meetings-caption');
-    if (caption) {
-      caption.textContent = meetingScope === 'all'
-        ? '你参加或组织过的录音会议，以及你所在群里的录音会议，最新的在前。'
-        : '你参加或组织过的录音会议，最新的在前。';
-    }
     const layoutNote = document.getElementById('layout-note');
     if (layoutNote) layoutNote.hidden = !(items.length && catalogLayout === 'grid');
     if (!empty) return;
@@ -1284,7 +1399,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   workspaceSelect.addEventListener('change', () => {
     if (pendingDeleteCancel) pendingDeleteCancel();
-    loadList();
+    meetingLoadedFor = '';
+    meetingItems = [];
+    meetingError = '';
+    loadList().then(() => {
+      if (catalogKind === 'meetings') loadMeetings().then(() => renderCatalog());
+    });
   });
   search.addEventListener('input', () => loadList());
 
@@ -1372,10 +1492,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   for (const button of document.querySelectorAll('.artifact-kinds [data-kind]')) {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', async () => {
       const kind = button.getAttribute('data-kind') || 'all';
       const scope = kind === 'meetings' ? 'all' : (catalogScope === 'favorites' || catalogScope === 'memory' || catalogScope === 'mine' ? catalogScope : 'all');
       applyView(kind, scope);
+      if (kind === 'meetings' && meetingLoadedFor !== workspaceId()) {
+        meetingLoading = true;
+        renderCatalog();
+        await loadMeetings();
+        renderCatalog();
+      }
     });
   }
   for (const button of document.querySelectorAll('.artifact-scopes [data-scope]')) {
@@ -1385,7 +1511,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   for (const button of document.querySelectorAll('.meeting-scopes [data-meeting-scope]')) {
     button.addEventListener('click', () => {
-      meetingScope = button.getAttribute('data-meeting-scope') || 'joined';
+      meetingScope = button.getAttribute('data-meeting-scope') || 'all';
       for (const item of document.querySelectorAll('.meeting-scopes [data-meeting-scope]')) {
         if (item.getAttribute('data-meeting-scope') === meetingScope) item.setAttribute('aria-current', 'page');
         else item.removeAttribute('aria-current');

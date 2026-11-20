@@ -109,3 +109,22 @@ generated inventory. Those landed changes are ordinarily merged, not rebased,
 force-pushed, duplicated or edited on their branches. The census is regenerated
 from the combined source. The newly synchronized head requires the original
 full gate again; a previously green parent is not sufficient.
+
+
+## Follow-on aggregate after merged #369 / #373 / #277
+Base: b8eacb1f (latest green main at branch open). This is not a claim of Teamily
+parity or of all remaining matrix rows. Contributor heads were refreshed before
+coding; moving files owned by #320, #284, #271, #352, #354, #326, #273, #299,
+#356, #361, #313, #290, #281 and #289 were not duplicated.
+
+| Gap/control | Implementation and state | Automated proof | Acceptance still required |
+|---|---|---|---|
+| PPTX slide export | Actual PresentationML package from persisted slide title/bullets; no macros, media, animations or external relationships; current and historical version checks reuse the existing export auth/format allowlist | test_office_exports reads ZIP/XML/content types, Unicode titles/bullets, formula-like text, history isolation and rejects PPTX on documents / DOCX-XLSX on slides; CI browser scene downloads a real PPTX | Not a full Office editor or rendered thumbnail; viewer font coverage unverified |
+| Group/scheduled/DSH Composio principals | Explicit same-user principals with provenance; group attach only when the requester's own runtime runs the #124 reply; scheduled tools require a per-user opt-in; standalone/workspace DSH requires `connected_tools: true` or a session attach; skill material cannot grant tools; no admin/member fallback | test_composio_principals plus existing personal connected-tools regressions | Real toolkit authorization, operator DSH deployment and any external write still need separate approval |
+| Public HTTP model policy | Still not integrated or enabled. The independent draft accepted multicast grants; this aggregate does not import it, relax `insecure_http_allowed`, or read provider keys | n/a (held) | A complete default-disabled operator policy with unicast/path checks, no-symlink private loading, both issuance paths, runtime grants, and denied HTTP redirects remains future work |
+
+Automatic translation, older-message search auto-load, SSE social auto-apply,
+likes/favorites visibility consumers, semantic memory, team DAG and audio/video
+rooms remain unstarted here because of in-flight ownership or missing safe
+infrastructure. #197 preference-honesty notes were not spent as a separate
+repair; unwired consumers are still documented rather than given fake results.
