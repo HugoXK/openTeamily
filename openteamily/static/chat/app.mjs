@@ -221,6 +221,62 @@ export function leadGlyph(text, fallback = '?') {
   return match ? match[0].toUpperCase() : fallback;
 }
 
+export function inlineBold(text) {
+  const value = typeof text === 'string' ? text : '';
+  const parts = [];
+  const pattern = /\*\*([^*]+)\*\*/g;
+  let last = 0;
+  let match;
+  while ((match = pattern.exec(value))) {
+    if (match.index > last) parts.push({text: value.slice(last, match.index), bold: false});
+    parts.push({text: match[1], bold: true});
+    last = match.index + match[0].length;
+  }
+  if (last < value.length) parts.push({text: value.slice(last), bold: false});
+  return parts;
+}
+
+export function wrapBold(text, start, end) {
+  const value = typeof text === 'string' ? text : '';
+  const from = Number.isFinite(start) ? Math.max(0, Math.min(value.length, start)) : value.length;
+  const to = Number.isFinite(end) ? Math.max(from, Math.min(value.length, end)) : from;
+  return {
+    text: value.slice(0, from) + '**' + value.slice(from, to) + '**' + value.slice(to),
+    start: from + 2,
+    end: to + 2,
+  };
+}
+
+function fillBold(doc, node, text) {
+  const parts = inlineBold(text);
+  node.textContent = '';
+  if (!parts.some(part => part.bold)) {
+    node.textContent = parts.map(part => part.text).join('');
+    return;
+  }
+  for (const part of parts) {
+    if (part.bold && typeof doc.createElement === 'function') {
+      const strong = doc.createElement('strong');
+      strong.textContent = part.text;
+      node.append(strong);
+    } else if (typeof doc.createTextNode === 'function') {
+      node.append(doc.createTextNode(part.text));
+    } else {
+      node.textContent += part.text;
+    }
+  }
+}
+
+function renderMessageBody(doc, node, text, prefs) {
+  const source = String(text || '');
+  // Bold markers are ours; everything else keeps the shared folding and link preview path.
+  if (inlineBold(source).some(part => part.bold)) {
+    fillBold(doc, node, source);
+    return;
+  }
+  renderMessageText(doc, node, source, prefs.message_folding, prefs.link_previews);
+}
+
 export function highlightParts(text, query) {
   const source = String(text || '');
   const needle = String(query || '').trim().toLowerCase();
@@ -714,7 +770,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       title.textContent = (session.pinned ? '置顶 · ' : '') + session.title;
       const preview = document.createElement('span');
       preview.className = 'preview';
-      preview.textContent = session.preview || '';
+      fillBold(document, preview, session.preview || '');
       copy.append(title, preview);
       const time = document.createElement('span');
       time.className = 'time';
@@ -763,7 +819,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const waiting = item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
       const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
       body.className = 'body ' + (waiting ? 'pending' : (failed ? 'failed' : ''));
-      renderMessageText(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences.message_folding, chatPreferences.link_previews);
+      renderMessageBody(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences);
       if (waiting || failed) li.dataset.state = waiting ? item.status : 'failed';
       if (waiting) {
         const heading = document.createElement('p');
@@ -1092,7 +1148,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         : (mine ? '我' : ((member && member.username) || '成员'));
       const body = document.createElement('div');
       body.className = 'body';
-      renderMessageText(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences.message_folding, chatPreferences.link_previews);
+      renderMessageBody(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences);
       if (item.forwarded_from && !item.retracted) {
         body.dataset.forwarded = '1';
         body.title = '转发自 ' + item.forwarded_from.author;
@@ -1157,7 +1213,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           const input = document.createElement('textarea'); input.value = item.body || '';
           input.setAttribute('aria-label', '编辑消息'); input.maxLength = 4000;
           const save = document.createElement('button'); save.type = 'button'; save.textContent = '保存修改';
-          save.addEventListener('click', () => change('edit', input.value));
+          save.addEventListener('click', () => {
+            // Editing replaces text that is already on the other side, so this
+            // button only opens the confirm step; the explicit confirm sends it.
+            const draft = input.value;
+            const note = document.createElement('span');
+            note.className = 'message-edit-note';
+            note.textContent = '保存后，这条已发出的消息会被新内容替换，其他人看到的是修改后的版本。';
+            const confirm = document.createElement('button'); confirm.type = 'button'; confirm.textContent = '确认修改';
+            confirm.addEventListener('click', () => change('edit', draft));
+            const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
+            cancel.addEventListener('click', () => controls.replaceChildren());
+            controls.replaceChildren(note, confirm, cancel);
+          });
           const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
           cancel.addEventListener('click', () => controls.replaceChildren());
           controls.append(input, save, cancel);
@@ -2513,6 +2581,38 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
            : '已发送。');
     await loadSessions();
     await openAgentConversation(currentAgent.id, currentConversation.id);
+  }
+
+  const formatButton = document.getElementById('chat-format');
+  const formatMenu = document.getElementById('chat-format-menu');
+  const formatBold = document.getElementById('chat-format-bold');
+  if (formatButton && formatMenu && formatBold) {
+    const closeFormat = () => {
+      formatMenu.hidden = true;
+      formatButton.setAttribute('aria-expanded', 'false');
+    };
+    formatButton.addEventListener('click', () => {
+      const open = formatMenu.hidden;
+      formatMenu.hidden = !open;
+      formatButton.setAttribute('aria-expanded', String(open));
+    });
+    if (typeof document.addEventListener === 'function') {
+      document.addEventListener('click', event => {
+        if (formatMenu.hidden) return;
+        if (event.target && event.target.closest && event.target.closest('.format-wrap')) return;
+        closeFormat();
+      });
+    }
+    formatBold.addEventListener('click', () => {
+      const field = document.getElementById('chat-body');
+      const selection = wrapBold(field.value || '', field.selectionStart, field.selectionEnd);
+      field.value = selection.text;
+      field.focus();
+      if (typeof field.setSelectionRange === 'function') {
+        field.setSelectionRange(selection.start, selection.end);
+      }
+      closeFormat();
+    });
   }
 
   document.getElementById('chat-body').addEventListener('keydown', event => {
