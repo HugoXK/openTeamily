@@ -43,6 +43,7 @@ user's volume.
 | messenger, group agents | `POST/GET /v1/ot/conversations`, `GET/PATCH /v1/ot/conversations/:id`, `POST/DELETE …/members[/:handle]`, `GET/POST …/messages`, `POST …/read`, `PATCH/DELETE /v1/ot/messages/:id`, `POST …/reactions`, `POST …/pin`, `PUT/DELETE …/agents/:agent`, `GET /v1/ot/agent-inbox`, `POST …/agent-messages` | `messenger/*` |
 | team-run shares | `PUT/GET /v1/ot/teams/:id/shared-runs`, `GET/DELETE /v1/ot/teams/:id/shared-runs/:share` | `shares/*` |
 | discover, follows | `PUT /v1/ot/listings`, `DELETE /v1/ot/listings/:id`, `GET /v1/ot/listings/mine`, `GET /v1/ot/discover[?kind,tab,q,category,work_kind,creator,before]`, `GET /v1/ot/discover/:slug`, `POST /v1/ot/listings/:id/like`, `POST /v1/ot/listings/:id/collect`, `POST/GET /v1/ot/follows` | `discover/*` |
+| public listings | unauthenticated `GET /v1/ot/public/listings/:slug`, `GET /a/:slug`, `GET /w/:slug`, `GET /w/:slug/preview` (isolated site: `/social/a/…`, `/social/w/…`) | `discover/*`, `homepages/*` |
 
 Group agents run in their owner's DS-Bot: the owner's plugin polls `agent-inbox` (mentions, or every member message when auto-reply is on), runs one native DS-Bot turn and posts the reply as the agent. Automatic replies are capped at 3 per hour per group (#346). DMs and groups are limited to members who share a team.
 
@@ -85,3 +86,9 @@ existing FlyBot production Bot Social. The recipe and host steps are in
 - Each DS-Bot still receives only `{server, displayName?, source}` and onboards its own connector token
 
 `moved_pages` for members, team, messenger and discover stays off until this service is up and the URL is set.
+
+Public catalog pages do not require a connector token. Listed agent and work pages are served
+by this Bot Social at `/a/<slug>` and `/w/<slug>`. On the isolated site the edge prefix makes
+those `https://openteamily.botawaken.com/social/a/<slug>` and `/social/w/<slug>`. Listing
+`path` fields include that prefix when `PUBLIC_BASE_URL` has a path. Snapshots are escaped
+in HTML; unlisted items 404.

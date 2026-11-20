@@ -52,3 +52,46 @@ test("publish, discover, like, collect, follow and notify followers", async () =
   await B.ok("POST", "/v1/ot/follows", { handle: A.handle, on: false });
   assert.equal((await A.ok("GET", "/v1/ot/follows")).followers.length, 0);
 });
+
+test("public listing pages need no token and hide unlisted works", async () => {
+  const { publicPrefix } = await import("../src/openteamily/discover.ts");
+  assert.equal(publicPrefix("https://openteamily.botawaken.com/social"), "/social");
+  assert.equal(publicPrefix("https://openteamily.botawaken.com/social/"), "/social");
+  assert.equal(publicPrefix("https://openteamily.botawaken.com"), "");
+
+  const A = await home(S.base, "public-creator");
+  const tag = `${Date.now() % 100000}`;
+  const work = await A.ok("PUT", "/v1/ot/listings", { kind: "work", ref: "pub_1", slug: `essay-${tag}`, title: "Public essay", work_kind: "document", snapshot: "hello <script> world" });
+  const agent = await A.ok("PUT", "/v1/ot/listings", { kind: "agent", ref: "bot_pub", slug: `guide-${tag}`, title: "Guide bot", snapshot: JSON.stringify({ name: "Guide bot", quick_starts: ["介绍一下你"] }) });
+  assert.equal(work.path, `/w/essay-${tag}`);
+  assert.equal(agent.path, `/a/guide-${tag}`);
+
+  const anon = await fetch(`${S.base}/v1/ot/public/listings/essay-${tag}`);
+  assert.equal(anon.status, 200);
+  const body = await anon.json() as any;
+  assert.equal(body.title, "Public essay");
+  assert.equal(body.liked, false);
+  assert.equal(body.own, false);
+  assert.equal(body.snapshot, "hello <script> world");
+
+  const html = await fetch(`${S.base}/w/essay-${tag}`);
+  assert.equal(html.status, 200);
+  assert.match(html.headers.get("content-type") || "", /text\/html/);
+  const page = await html.text();
+  assert.match(page, /Public essay/);
+  assert.equal(page.includes("<script>"), false, "snapshot is escaped");
+  assert.match(page, /hello &lt;script&gt; world/);
+
+  const preview = await fetch(`${S.base}/w/essay-${tag}/preview`);
+  assert.equal((await preview.json() as any).preview, "hello <script> world");
+
+  const agentPage = await fetch(`${S.base}/a/guide-${tag}`);
+  assert.match(await agentPage.text(), /介绍一下你/);
+
+  const asJson = await fetch(`${S.base}/a/guide-${tag}`, { headers: { accept: "application/json" } });
+  assert.equal((await asJson.json() as any).kind, "agent");
+
+  await A.ok("DELETE", `/v1/ot/listings/${work.id}`);
+  assert.equal((await fetch(`${S.base}/w/essay-${tag}`)).status, 404);
+  assert.equal((await fetch(`${S.base}/v1/ot/public/listings/essay-${tag}`)).status, 404);
+});
