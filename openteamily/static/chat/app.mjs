@@ -1164,8 +1164,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     section.hidden = !(list && list.length);
     holder.replaceChildren(...(list || []).map(item => {
       const li = document.createElement('li');
-      li.textContent = item.excerpt;
-      li.title = '由 ' + item.pinned_by_username + ' 置顶';
+      li.dataset.pinnedMessage = item.message_id;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = item.excerpt || '查看置顶消息';
+      if (item.pinned_by_username) button.title = '由 ' + item.pinned_by_username + ' 置顶';
+      button.addEventListener('click', () => jumpToMessage(item.message_id));
+      li.append(button);
       return li;
     }));
   }
@@ -1283,7 +1288,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pin = menu.querySelector('[data-menu="pin"]');
     pin.textContent = pinnedIds.has(item.id) ? '取消置顶' : '置顶';
     menu.querySelector('[data-menu="retract"]').hidden = !mine;
-    menu.querySelector('[data-menu="delete"]').hidden = !mine;
     const edit = menu.querySelector('[data-menu="edit"]');
     if (edit) edit.hidden = !mine;
     menu.querySelector('[data-menu="forward"]').disabled = forwardTargets(socialConversations, currentConversation && currentConversation.id).length === 0;
@@ -1342,15 +1346,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const retract = Array.from(li.querySelectorAll(':scope > button')).find(node => node.textContent === '撤回');
         if (retract) retract.click();
       } else if (action === 'delete') {
-        const cid = currentConversation.id;
-        const result = await request('DELETE', `${socialBase()}/${cid}/messages/${item.id}`);
+        const wid = workspaceId(), cid = currentConversation.id;
+        const result = await request('DELETE', `${socialBase()}/${cid}/messages/${item.id}`)
+          .catch(() => ({status: 0, body: {}}));
+        if (wid !== workspaceId() || currentSource !== 'social' || currentConversation?.id !== cid) return;
         if (result.status !== 204) {
-          show('error', messageFor(result.body.error, '消息未删除，请重试。'));
+          show('error', messageFor(result.body.error, '消息未从你的会话删除，请重试。'));
           return;
         }
-        if (!currentConversation || currentConversation.id !== cid) return;
-        renderSocialMessages(lastSocialItems.filter(row => row.id !== item.id));
-        await loadSessions();
+        socialOpen++;
+        renderSocialMessages(lastSocialItems.filter(row => row.id !== item.id), {refresh:true});
+        const pin = document.querySelector?.(`#pinned-message-list [data-pinned-message="${item.id}"]`);
+        pin?.remove();
+        pinnedIds.delete(item.id);
+        if (!pinnedIds.size) document.getElementById('pinned-messages').hidden = true;
+        show('ok', '已从你的会话删除。', {announceOnly:true});
+        void loadSessions();
       }
     });
     document.addEventListener('click', event => {

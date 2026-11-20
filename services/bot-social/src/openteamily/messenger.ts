@@ -50,6 +50,14 @@ CREATE TABLE IF NOT EXISTS ot_messages (
   created_at INTEGER NOT NULL, edited_at INTEGER, retracted INTEGER NOT NULL DEFAULT 0, pinned_by TEXT,
   UNIQUE (conversation_id, seq), UNIQUE (conversation_id, author_id, client_key)
 );
+CREATE TABLE IF NOT EXISTS ot_hidden_messages (
+  owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL REFERENCES ot_messages(id) ON DELETE CASCADE, seq INTEGER NOT NULL,
+  PRIMARY KEY (owner_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS ot_hidden_messages_room ON ot_hidden_messages(owner_id, conversation_id, seq);
+CREATE INDEX IF NOT EXISTS ot_messages_pinned ON ot_messages(conversation_id,seq DESC)
+  WHERE pinned_by IS NOT NULL AND retracted=0;
 CREATE TABLE IF NOT EXISTS ot_agent_reply_jobs (
   id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES ot_messages(id) ON DELETE CASCADE,
   owner_id TEXT NOT NULL, agent_ref TEXT NOT NULL, agent_name TEXT NOT NULL,
@@ -208,8 +216,32 @@ const messageView = (ot: OtContext, m: any, viewer?: string) => ({
   reactions: ot.all<any>("SELECT emoji, COUNT(*) AS n, SUM(owner_id = ?) AS me FROM ot_reactions WHERE message_id = ? GROUP BY emoji", viewer ?? "", m.id).map((r) => ({ emoji: r.emoji, count: r.n, mine: !!r.me })),
 });
 
-function contentVersion(c: {last_seq: number; activity_revision: number}, open?: boolean) {
-  return `${c.last_seq}.${c.activity_revision}.${Number(Boolean(open))}`;
+const VISIBLE_MESSAGE = "NOT EXISTS (SELECT 1 FROM ot_hidden_messages hidden WHERE hidden.message_id=m.id AND hidden.owner_id=?)";
+
+function requireVisibleMessage(ot: OtContext, id: string, owner: string) {
+  assert(!ot.get("SELECT 1 FROM ot_hidden_messages WHERE owner_id=? AND message_id=?", owner, id),
+    404, "message_not_found", "本账号已删除该消息。");
+}
+
+function hiddenCount(ot: OtContext, conversation: string, viewer: string, after = 0) {
+  return ot.get<{n: number}>("SELECT COUNT(*) AS n FROM ot_hidden_messages WHERE owner_id=? AND conversation_id=? AND seq>?",
+    viewer, conversation, after)!.n;
+}
+
+function unreadMessages(ot: OtContext, conversation: {id: string; last_seq: number}, viewer: string, read: number) {
+  return Math.max(0, conversation.last_seq - read - hiddenCount(ot, conversation.id, viewer, read));
+}
+
+function pinnedMessages(ot: OtContext, conversation: string, viewer: string) {
+  return ot.all<any>(`SELECT m.id, m.body, m.pinned_by FROM ot_messages m
+    WHERE m.conversation_id=? AND m.pinned_by IS NOT NULL AND m.retracted=0 AND ${VISIBLE_MESSAGE}
+    ORDER BY m.seq DESC LIMIT 100`, conversation, viewer)
+    .map(m => ({message_id: m.id, excerpt: m.body.replace(/\s+/g, " ").slice(0, 100),
+      pinned_by_username: ot.profileView(m.pinned_by).display_name}));
+}
+
+function contentVersion(c: {last_seq: number; activity_revision: number}, open: boolean, hidden: number) {
+  return `${c.last_seq}.${c.activity_revision}.${Number(open)}.${hidden}`;
 }
 
 function registerActivityTriggers(ot: OtContext) {
@@ -236,7 +268,7 @@ function conversationView(ot: OtContext, c: any, viewer: string) {
   const published = publicListing(ot, c);
   const members = ot.all<any>("SELECT owner_id, read_seq, pinned, muted FROM ot_conversation_members WHERE conversation_id = ? ORDER BY created_at", c.id).filter(m => publicParticipant(ot, c, m.owner_id));
   const mine = members.find((m) => m.owner_id === viewer);
-  const last = ot.get<any>("SELECT * FROM ot_messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1", c.id);
+  const last = ot.get<any>(`SELECT m.* FROM ot_messages m WHERE m.conversation_id=? AND ${VISIBLE_MESSAGE} ORDER BY m.seq DESC LIMIT 1`, c.id, viewer);
   const peer = c.kind === "dm" ? members.find((m) => m.owner_id !== viewer) : undefined;
   const open = !!(published?.listed && published.chat_enabled);
   const directOpen = Boolean(peer && ordinaryDirect(c) && directReachable(ot, viewer, peer.owner_id));
@@ -253,8 +285,8 @@ function conversationView(ot: OtContext, c: any, viewer: string) {
     id: c.id, kind: c.kind, title: c.kind === "dm" ? (peer ? ot.profileView(peer.owner_id).display_name : c.title) : c.title,
     team_id: c.team_id, members: members.map((m) => ot.profileView(m.owner_id)),
     agents: ot.all<any>("SELECT agent_ref, owner_id, name, auto_reply FROM ot_conversation_agents WHERE conversation_id = ?", c.id).map((a) => ({ agent_ref: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, owner: ot.profileView(a.owner_id), mine: a.owner_id === viewer })),
-    activity_version: contentVersion(c, open || directOpen),
-    last_seq: c.last_seq, read_seq: mine?.read_seq ?? 0, unread: Math.max(0, c.last_seq - (mine?.read_seq ?? 0)),
+    activity_version: contentVersion(c, open || directOpen, hiddenCount(ot, c.id, viewer)),
+    last_seq: c.last_seq, read_seq: mine?.read_seq ?? 0, unread: unreadMessages(ot, c, viewer, mine?.read_seq ?? 0),
     pinned: !!mine?.pinned, muted: !!mine?.muted, last_message: last ? messageView(ot, last, viewer) : null, updated_at: c.updated_at,
   };
 }
@@ -427,8 +459,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         const peer = ordinaryDirect(c) && ot.get<{owner_id: string}>(
           "SELECT owner_id FROM ot_conversation_members WHERE conversation_id=? AND owner_id<>?", c.id, me.ownerId);
         const open = Boolean(published?.listed && published.chat_enabled || peer && directReachable(ot, me.ownerId, peer.owner_id));
-        return {id: c.id, activity_version: contentVersion(c, open), last_seq: c.last_seq,
-          unread_count: Math.max(0, c.last_seq - c.read_seq), pinned: c.pinned === 1, muted: c.muted === 1};
+        return {id: c.id, activity_version: contentVersion(c, open, hiddenCount(ot, c.id, me.ownerId)), last_seq: c.last_seq,
+          unread_count: unreadMessages(ot, c, me.ownerId, c.read_seq), pinned: c.pinned === 1, muted: c.muted === 1};
       });
       const version = createHash("sha256").update(JSON.stringify(items)).digest("hex");
       return since === version ? {version} : {version, items};
@@ -554,12 +586,12 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       FROM ot_messages m
       JOIN ot_conversations c ON c.id=m.conversation_id
       JOIN ot_conversation_members mine ON mine.conversation_id=c.id AND mine.owner_id=?
-      WHERE m.retracted=0 AND (? IS NULL OR c.id=?)
+      WHERE m.retracted=0 AND ${VISIBLE_MESSAGE} AND (? IS NULL OR c.id=?)
         AND ${scope}
         AND (?=0 OR m.created_at<? OR (m.created_at=? AND m.rowseq<?))
         AND instr(lower(m.body),lower(?))>0
       ORDER BY m.created_at DESC, m.rowseq DESC LIMIT ?`,
-    me.ownerId, me.ownerId, conversation, conversation, ...scopeArgs,
+    me.ownerId, me.ownerId, me.ownerId, conversation, conversation, ...scopeArgs,
     beforeRow, beforeTime, beforeTime, beforeRow, term, limit + 1);
     const items = rows.slice(0, limit).map(row => ({
       conversation_id: row.conversation_id, message_id: row.id, title: row.title || "会话",
@@ -585,10 +617,10 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       seen.add(item.id);
       const source = ot.get<{id: string; revision: number; body: string}>(`SELECT m.id, m.revision, m.body
         FROM ot_messages m WHERE m.conversation_id=? AND m.id=? AND m.revision=? AND m.retracted=0
-        AND (m.author_kind='agent' OR m.author_id<>?)
+        AND ${VISIBLE_MESSAGE} AND (m.author_kind='agent' OR m.author_id<>?)
         AND NOT EXISTS (SELECT 1 FROM ot_voice_messages v WHERE v.message_id=m.id)
         AND NOT EXISTS (SELECT 1 FROM ot_message_attachments a WHERE a.message_id=m.id)`,
-      conv.id, item.id, item.revision, me.ownerId);
+      conv.id, item.id, item.revision, me.ownerId, me.ownerId);
       if (source?.body.trim()) sources.push(source);
     }
     return {sources};
@@ -600,6 +632,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const {workspace, id, message} = params(req);
     const {conv, directPeer} = workspaceConversation(ot, workspace, id, me.ownerId);
     const title = directPeer ? ot.profileView(directPeer).display_name : conv.title;
+    requireVisibleMessage(ot, message, me.ownerId);
     const row = ot.get<{body: string; revision: number; retracted: number}>(`SELECT body, revision, retracted
       FROM ot_messages WHERE id=? AND conversation_id=?`, message, id);
     assert(row, 404, "message_not_found", "Message not found in this conversation");
@@ -620,37 +653,41 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     assert(!term || (around === undefined && !after), 400, "invalid_request", "Search supports only an older cursor");
     assert(Number(Boolean(before)) + Number(Boolean(after)) + Number(around !== undefined) <= 1,
       400, "invalid_request", "Choose one message cursor");
+    const visible = `FROM ot_messages m WHERE m.conversation_id=? AND ${VISIBLE_MESSAGE}`;
+    const scoped = [conv.id, me.ownerId];
     let rows;
     if (term) {
-      const matches = ot.all<any>(`SELECT * FROM ot_messages WHERE conversation_id=? AND retracted=0
-        AND (?=0 OR seq<?) AND instr(lower(body),lower(?))>0 ORDER BY seq DESC LIMIT ?`,
-      conv.id, before, before, term, limit + 1);
+      const matches = ot.all<any>(`SELECT m.* ${visible} AND m.retracted=0
+        AND (?=0 OR m.seq<?) AND instr(lower(m.body),lower(?))>0 ORDER BY m.seq DESC LIMIT ?`,
+      ...scoped, before, before, term, limit + 1);
       const cursor = matches.length > limit ? matches[limit - 1].seq : null;
       return { messages: matches.slice(0, limit).map(m => messageView(ot, m, me.ownerId)), next_before: cursor };
     }
     if (around !== undefined) {
       assert(typeof around === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(around), 400, "invalid_request", "Invalid message ID");
-      const anchor = ot.get<{seq: number}>("SELECT seq FROM ot_messages WHERE id=? AND conversation_id=?", around, conv.id);
+      const anchor = ot.get<{seq: number}>(`SELECT m.seq ${visible} AND m.id=?`, ...scoped, around);
       assert(anchor, 404, "message_not_found", "Message not found in this conversation");
-      const preceding = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND seq<? ORDER BY seq DESC LIMIT ?",
-        conv.id, anchor.seq, Math.floor((limit - 1) / 2));
-      const following = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND seq>=? ORDER BY seq LIMIT ?",
-        conv.id, anchor.seq, limit - preceding.length);
+      const preceding = ot.all<any>(`SELECT m.* ${visible} AND m.seq<? ORDER BY m.seq DESC LIMIT ?`,
+        ...scoped, anchor.seq, Math.floor((limit - 1) / 2));
+      const following = ot.all<any>(`SELECT m.* ${visible} AND m.seq>=? ORDER BY m.seq LIMIT ?`,
+        ...scoped, anchor.seq, limit - preceding.length);
       rows = [...preceding.reverse(), ...following];
     } else if (before) {
-      rows = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND seq<? ORDER BY seq DESC LIMIT ?", conv.id, before, limit).reverse();
+      rows = ot.all<any>(`SELECT m.* ${visible} AND m.seq<? ORDER BY m.seq DESC LIMIT ?`, ...scoped, before, limit).reverse();
     } else if (after) {
-      rows = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND seq>? ORDER BY seq LIMIT ?", conv.id, after, limit);
+      rows = ot.all<any>(`SELECT m.* ${visible} AND m.seq>? ORDER BY m.seq LIMIT ?`, ...scoped, after, limit);
     } else {
-      rows = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? ORDER BY seq DESC LIMIT ?", conv.id, limit).reverse();
+      rows = ot.all<any>(`SELECT m.* ${visible} ORDER BY m.seq DESC LIMIT ?`, ...scoped, limit).reverse();
     }
-    const mine = ot.get<any>("SELECT read_seq FROM ot_conversation_members WHERE conversation_id = ? AND owner_id = ?", conv.id, me.ownerId);
     const first = rows[0]?.seq;
-    const hasOlder = first > 1 && ot.get("SELECT 1 FROM ot_messages WHERE conversation_id=? AND seq<? LIMIT 1", conv.id, first);
+    const hasOlder = first > 1 && ot.get(`SELECT 1 ${visible} AND m.seq<? LIMIT 1`, ...scoped, first);
+    const newest = rows.at(-1)?.seq ?? after;
+    const hasNewer = newest < conv.last_seq && Boolean(ot.get(`SELECT 1 ${visible} AND m.seq>? LIMIT 1`, ...scoped, newest));
+    const mine = ot.get<{read_seq: number}>("SELECT read_seq FROM ot_conversation_members WHERE conversation_id=? AND owner_id=?", ...scoped)!;
     return {
       messages: rows.map(m => messageView(ot, m, me.ownerId)), read_seq: mine.read_seq, last_seq: conv.last_seq,
-      next_before: hasOlder ? first : null,
-      has_newer: (rows.at(-1)?.seq ?? conv.last_seq) < conv.last_seq,
+      next_before: hasOlder ? first : null, has_newer: hasNewer,
+      ...(q.pins === "1" ? {pinned_messages: pinnedMessages(ot, conv.id, me.ownerId)} : {}),
     };
   });
   app.post("/v1/ot/conversations/:id/messages", {bodyLimit: CHAT_FILE_BODY_LIMIT}, async (req, reply) => {
@@ -691,6 +728,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       if (sourceConversation && sourceMessage) {
         if (direct) accountConversation(ot, sourceConversation, me.ownerId);
         else workspaceConversation(ot, workspace, sourceConversation, me.ownerId);
+        requireVisibleMessage(ot, sourceMessage, me.ownerId);
         file = readAttachment(ot, sourceConversation, sourceMessage);
       }
       const bodyText = text(b.body || file?.title || (voice ? "语音消息" : b.body), "body", {min: 1, max: BODY_MAX, multiline: true});
@@ -718,6 +756,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     const {workspace, id, message} = params(req);
     const {conv} = workspaceConversation(ot, workspace, id, me.ownerId);
+    requireVisibleMessage(ot, message, me.ownerId);
     const file = readAttachment(ot, conv.id, message);
     return {title: file.title, mime: file.mime, data: file.data.toString("base64")};
   });
@@ -725,12 +764,14 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     const {id, message} = params(req);
     const conv = accountConversation(ot, id, me.ownerId);
+    requireVisibleMessage(ot, message, me.ownerId);
     const file = readAttachment(ot, conv.id, message);
     return {title: file.title, mime: file.mime, data: file.data.toString("base64")};
   });
   app.get("/v1/ot/conversations/:id/messages/:message/voice", async req => {
     const me = ot.me(req);
     const conv = memberOf(ot, params(req).id, me.ownerId);
+    requireVisibleMessage(ot, params(req).message, me.ownerId);
     const voice = ot.get<{mime: string; data: Buffer}>(`SELECT v.mime,v.data FROM ot_voice_messages v
       JOIN ot_messages m ON m.id=v.message_id WHERE m.id=? AND m.conversation_id=? AND m.retracted=0`,
     params(req).message, conv.id);
@@ -744,14 +785,23 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     assert(Number.isSafeInteger(seq) && seq >= 0, 400, "invalid_request", "seq must be a sequence number");
     ot.run("UPDATE ot_conversation_members SET read_seq = MAX(read_seq, ?) WHERE conversation_id = ? AND owner_id = ?", Math.min(seq, conv.last_seq), conv.id, me.ownerId);
     const readSeq = ot.get<any>("SELECT read_seq FROM ot_conversation_members WHERE conversation_id = ? AND owner_id = ?", conv.id, me.ownerId).read_seq;
-    return { read_seq: readSeq, unread: Math.max(0, conv.last_seq - readSeq) };
+    return { read_seq: readSeq, unread: unreadMessages(ot, conv, me.ownerId, readSeq) };
   });
-  const ownMessage = (id: string, ownerId: string) => {
+  const ownMessage = (id: string, ownerId: string, includeHidden = false) => {
     const m = ot.get<any>("SELECT * FROM ot_messages WHERE id = ?", id);
     assert(m, 404, "message_not_found", "no such message");
     memberOf(ot, m.conversation_id, ownerId);
+    if (!includeHidden) requireVisibleMessage(ot, id, ownerId);
     return m;
   };
+  app.post("/v1/ot/messages/:id/hide", async req => {
+    const me = ot.me(req);
+    const m = ownMessage(params(req).id, me.ownerId, true);
+    assert(body(req).conversation_id === m.conversation_id, 404, "message_not_found", "Message not in this conversation");
+    ot.run("INSERT OR IGNORE INTO ot_hidden_messages(owner_id,conversation_id,message_id,seq) VALUES (?,?,?,?)",
+      me.ownerId, m.conversation_id, m.id, m.seq);
+    return {hidden: true};
+  });
   app.get("/v1/ot/messages/:id", async req => {
     const me=ot.me(req), m=ownMessage(params(req).id,me.ownerId), cid=query(req).conversation_id;
     assert(cid === undefined || cid === m.conversation_id,404,"message_not_found","message not in conversation");
@@ -787,7 +837,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     const m = ownMessage(params(req).id, me.ownerId);
     ot.run("UPDATE ot_messages SET pinned_by = ? WHERE id = ?", body(req).on === false ? null : me.ownerId, m.id);
-    return messageView(ot, ot.get("SELECT * FROM ot_messages WHERE id = ?", m.id), me.ownerId);
+    const updated = ot.get("SELECT * FROM ot_messages WHERE id = ?", m.id);
+    return { ...messageView(ot, updated, me.ownerId), pinned_messages: pinnedMessages(ot, m.conversation_id, me.ownerId) };
   });
 
   // ---- group agents (executed in their owner's DS-Bot)

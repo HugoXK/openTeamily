@@ -142,3 +142,44 @@ test("activity snapshots are scoped and skip message content until the client ne
   await owner.ok("DELETE", root + "/" + group.id + "/members/" + encodeURIComponent(reader.handle));
   assert.deepEqual((await get()).items, []);
 });
+
+test("deleting for one reader preserves the shared message, pins and reactions", async () => {
+  const [sender, reader, outsider] = await Promise.all([
+    home(S.base, "hide-sender"), home(S.base, "hide-reader"), home(S.base, "hide-other"),
+  ]);
+  const request = await sender.ok("POST", "/v1/ot/contacts", {handle: reader.handle});
+  await reader.ok("POST", "/v1/ot/contacts/" + request.id, {action: "accept"});
+  const root = "/v1/ot/conversations";
+  const group = await sender.ok("POST", root, {kind:"group", account_group:true, title:"Private hiding", members:[reader.handle]});
+  const room = root + "/" + group.id;
+  const history = room + "/messages";
+  const first = await sender.ok("POST", history, {body:"previous item"});
+  const message = await sender.ok("POST", history, {body:"test specific hidden words"});
+  const path = "/v1/ot/messages/" + message.id;
+  const hide = path + "/hide";
+  await reader.ok("POST", path + "/reactions", {emoji:"👍"});
+  const pinned = await sender.ok("POST", path + "/pin", {});
+  assert.equal(pinned.pinned_messages[0].message_id, message.id);
+  assert.equal((await reader.ok("GET", history + "?limit=1&pins=1")).pinned_messages[0].pinned_by_username, pinned.pinned_messages[0].pinned_by_username);
+  const senderVersion = (await sender.ok("GET", room)).activity_version;
+  const readerVersion = (await reader.ok("GET", room)).activity_version;
+  assert.equal((await outsider.call("POST", hide, {conversation_id:group.id})).status,404);
+  assert.equal((await reader.call("POST", hide, {conversation_id:"different"})).status,404);
+  for (let attempt=0; attempt<2; attempt++) {
+    assert.deepEqual(await reader.ok("POST", hide, {conversation_id:group.id}), {hidden:true});
+  }
+  const detail = await reader.ok("GET", room);
+  assert.equal(detail.last_message.id, first.id);
+  assert.equal(detail.unread, 1);
+  assert.notEqual(detail.activity_version, readerVersion);
+  assert.equal((await sender.ok("GET", room)).activity_version, senderVersion);
+  assert.deepEqual((await reader.ok("GET", history + "?pins=1")).pinned_messages, []);
+  assert.equal((await reader.call("GET", history + "?around=" + message.id)).status,404);
+  assert.equal((await reader.call("GET", path)).status,404);
+  assert.deepEqual((await reader.ok("GET", "/v1/ot/messages/personal-search?q=hidden%20words")).items,[]);
+  assert.equal((await sender.ok("GET", history + "?pins=1")).pinned_messages[0].message_id,message.id);
+  const shared = await sender.ok("GET", path);
+  assert.equal(shared.body, message.body);
+  assert.equal(shared.retracted, false);
+  assert.deepEqual(shared.reactions,[{emoji:"👍",count:1,mine:false}]);
+});
