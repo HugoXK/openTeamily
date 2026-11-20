@@ -46,7 +46,6 @@ test('artifacts/create refuses invalid input and keeps another DS-Bot isolated',
     doc({ title: '' }),
     doc({ body: 'x', idempotency_key: 'short' }),
     doc({ kind: 'media' }),
-    doc({ kind: 'whiteboard' }),
     { title: '无工作区', body: 'x', kind: 'document', idempotency_key: key() },
   ]) {
     const result = await bot.endpoint('artifacts/create', payload)

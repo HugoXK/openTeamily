@@ -65,3 +65,14 @@ test('does nothing on pages served by the legacy platform', () => {
   assert.equal(servedByDsBot(doc), false);
   assert.equal(install({ document: doc, location: { origin: ORIGIN }, fetch() { throw new Error('no'); } }), null);
 });
+
+test('moved artifact routes go to the artifacts feature of the user\'s own DS-Bot', () => {
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts?limit=20`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/file`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/export`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/versions/3/export`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/shares/${ID}/revoke`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/${ID}/favorite`, ORIGIN).feature, 'artifacts');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/artifacts/bogus`, ORIGIN), null);
+});

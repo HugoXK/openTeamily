@@ -20,6 +20,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory(?:\/[0-9a-f]{32}(?:\/(?:remove|export|dream(?:\/[0-9a-f]{32})?|versions(?:\/\d{1,8}(?:\/restore)?)?))?)?$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/(?:profile|graph|(?:actions|links|preferences)(?:\/[0-9a-f]{32}(?:\/remove)?)?)$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/search\/(?:messages|resources)$/, 'search'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/artifacts(?:\/[0-9a-f]{32}(?:\/(?:remove|favorite|preview|file|export|restore|versions(?:\/\d{1,8}(?:\/export)?)?|shares(?:\/[0-9a-f]{32}(?:\/revoke)?)?))?)?$/, 'artifacts'],
   // B4: account settings, onboarding and look live in the user's DS-Bot.
   // Auth, skill-secrets, runtime connections, workspace lists and the Composio
   // callback bounce page stay on the platform.
@@ -48,11 +49,29 @@ export function movedTarget(input, origin, table = MOVED) {
   return row ? { feature: row[1], path: url.pathname + url.search } : null;
 }
 
+async function encodeBody(body) {
+  if (body == null || body === '') return undefined;
+  if (typeof body === 'string') return JSON.parse(body);
+  if (typeof FormData !== 'undefined' && body instanceof FormData) {
+    const fields = {}, files = {};
+    for (const [name, value] of body.entries()) {
+      if (typeof value === 'string') { fields[name] = value; continue; }
+      const bytes = new Uint8Array(await value.arrayBuffer());
+      let binary = '';
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      files[name] = { filename: value.name || 'file', content_type: value.type || 'application/octet-stream', data: btoa(binary) };
+    }
+    return { _multipart: true, fields, files };
+  }
+  return body && typeof body === 'object' ? body : undefined;
+}
+
 export function envelope(target, method, headers, body) {
   const payload = { method: String(method || 'GET').toUpperCase(), path: target.path };
   const key = headers && (typeof headers.get === 'function' ? headers.get('Idempotency-Key') : (headers['Idempotency-Key'] || headers['idempotency-key']));
   if (key) payload.idempotency_key = key;
   if (typeof body === 'string' && body) payload.body = JSON.parse(body);
+  else if (body && typeof body === 'object') payload.body = body;
   return { endpoint: `${target.feature}/v1`, payload };
 }
 
@@ -71,10 +90,11 @@ export function install(win = globalThis.window) {
   const origin = win.location.origin;
   const original = win.fetch.bind(win);
   async function viaDsBot(target, method, headers, body) {
+    const encoded = await encodeBody(body);
     const response = await original(API_ROUTE, {
       method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(envelope(target, method, headers, body)),
+      body: JSON.stringify(envelope(target, method, headers, encoded)),
     });
     const result = await response.json();
     if (result && result.ok) return toResponse(result.value);
