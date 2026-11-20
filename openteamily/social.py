@@ -216,7 +216,6 @@ MESSAGE_ROWS = """
  LEFT JOIN artifacts af ON af.id=at.artifact_id
  LEFT JOIN artifact_media am ON am.artifact_id=at.artifact_id
  LEFT JOIN social_artifact_versions av ON av.message_id=m.id
- LEFT JOIN artifact_media am ON am.artifact_id=af.id
  UNION ALL
  SELECT id, conversation_id, workspace_id, NULL, body, seq, updated,
         agent_id, agent_name, 1 AS revision, NULL AS edited, 0 AS retracted, NULL AS attachment_id, NULL AS attachment_title,
