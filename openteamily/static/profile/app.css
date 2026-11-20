@@ -64,6 +64,16 @@ body.app-workspace:has(#profile-home:not([hidden])) > main > #main-panel {
   color: var(--ot-accent);
 }
 
+.profile-avatar[hidden] { display: none; }
+
+.avatar-image {
+  object-fit: cover;
+  object-position: center;
+  box-sizing: border-box;
+  border: 1px solid var(--ot-line);
+  background: var(--ot-surface);
+}
+
 .profile-hero-copy { min-width: 0; padding-top: 0.35rem; }
 
 .profile-display-name {
@@ -279,6 +289,10 @@ body.app-workspace:has(#profile-edit:not([hidden])) > main > #main-panel {
 }
 
 #profile-edit-avatar { width: 5.5rem; height: 5.5rem; font-size: 1.6rem; }
+
+#profile-edit-avatar-image { width: 5.5rem; height: 5.5rem; }
+
+.profile-avatar-hint { margin: 0; font-size: 0.75rem; }
 
 .profile-change-avatar {
   border: 0;
@@ -540,6 +554,8 @@ html[data-theme-resolved="dark"] .profile-feed{ place-items: start center; paddi
   -webkit-backdrop-filter: var(--ot-blur);
   backdrop-filter: var(--ot-blur);
 }
+.profile-share-fallback { margin: .75rem 0 0; overflow-wrap: anywhere; }
+.profile-share-fallback code { font: inherit; color: var(--ot-text); }
 
 #follow-work-dialog-title {
   margin: 0;
