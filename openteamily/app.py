@@ -1131,6 +1131,9 @@ class App:
                     if prior['request_hash'] != request_hash:
                         refuse(409, 'conflict', 'Idempotency key was used for a different request')
                     return 200, {'invocation': gateway.invocation_view(prior)}, []
+                from .dsbot_gateway import workspace_conversation_moved_to_dsbot
+                if workspace_conversation_moved_to_dsbot(db, workspace['id']):
+                    refuse(409, 'moved_to_dsbot', 'This agent API now runs on your DS-Bot')
                 if not gateway.consume_rate(db, key, now):
                     refuse(429, 'rate_limited', 'Agent API key rate limit reached; retry next minute')
                 prompt = conversations.compose_prompt(agent, [], text)
@@ -1748,6 +1751,8 @@ class App:
                 if item['status'] != 'failed':
                     refuse(409, 'conflict', 'Only a failed run can be retried')
                 retried = scheduler.retry_run(db, row, item, now)
+                if retried == 'moved_to_dsbot':
+                    refuse(409, 'moved_to_dsbot', 'This automation now runs on your DS-Bot')
                 if retried is None:
                     refuse(429, 'quota', 'Automation run capacity reached')
                 run = retried[0]
@@ -3436,6 +3441,9 @@ class App:
                 assistant = conversations.load_message(db, row['id'], assistant['id'])
             return 200, {'message': self.public_message(db, user_row),
                          'reply': self.public_message(db, assistant) if assistant else None}, []
+        from .dsbot_gateway import workspace_conversation_moved_to_dsbot
+        if workspace_conversation_moved_to_dsbot(db, workspace['id']):
+            refuse(409, 'moved_to_dsbot', 'This conversation now runs on your DS-Bot')
         pending = db.execute(
             'SELECT COUNT(*) FROM agent_messages WHERE conversation_id=? AND role=? AND status IN (?,?)',
             (row['id'], 'assistant', 'queued', 'running'),
@@ -3527,6 +3535,9 @@ class App:
         return row['id'], None, dispatch
 
     def reconcile_conversation(self, db, row, now):
+        from .dsbot_gateway import workspace_conversation_moved_to_dsbot
+        if workspace_conversation_moved_to_dsbot(db, row['workspace_id']):
+            return
         pending = db.execute(
             'SELECT * FROM agent_messages WHERE conversation_id=? AND role=? AND status IN (?,?)',
             (row['id'], 'assistant', 'queued', 'running'),

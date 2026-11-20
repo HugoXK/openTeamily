@@ -26,6 +26,12 @@ import { call, loadSkillMaterial, main as agentMain, toolBridge } from './agent-
 import { STREAM_LIMIT, streamHttpTask, validateModelEndpoint } from './model-http-policy.mjs'
 import { loadModelApi, redact } from './model-api.js'
 
+export const MODEL_OVERRIDE = Symbol.for('openteamily.model-api.override')
+export function userModelOverride(scope = globalThis) {
+  const resolve = scope[MODEL_OVERRIDE]
+  if (typeof resolve !== 'function') return null
+  try { return resolve() || null } catch { return null }
+}
 export const PROVIDER = 'openteamily'
 export const MODEL_ID = 'openteamily-model'
 export const TOOLS_CAPABILITY = 'ot-tools'
@@ -227,7 +233,9 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     active: null,
     tools: [],
     modelCalls: 0,
-    startupModel: () => { try { return loadModelApi(env) || null } catch { return null } },
+    // The account's own model settings (B4 @openteamily/web model-api feature,
+    // in-process, sealed at rest) win over the manager-mounted startup file.
+    startupModel: () => { try { return userModelOverride() || loadModelApi(env) || null } catch { return null } },
   }
   const listenPort = port ?? (Number(env.OPENTEAMILY_BRIDGE_PORT) || DEFAULT_PORT)
   const baseURL = `http://127.0.0.1:${listenPort}/v1`
@@ -306,7 +314,17 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     }
   }
 
-  async function infer(origin, token, payload) {
+  // One DS-Bot turn at a time per runtime: management tasks and @openteamily/web
+  // plugin chat both switch the Main Bot's active part, so they share this lock.
+  let turnQueue = Promise.resolve()
+  function exclusive(fn) {
+    const run = turnQueue.then(() => fn())
+    turnQueue = run.catch(() => {})
+    return run
+  }
+  const infer = (origin, token, payload) => exclusive(() => inferUnlocked(origin, token, payload))
+
+  async function inferUnlocked(origin, token, payload) {
     const access = await requester(origin, token, 'POST', `/v1/agent/tasks/${payload.id}/model-access`, { skill_format: 'openteamily.prompt-skill.v2' })
     const active = { taskId: payload.id, modelApi: access.model_api, modelCalls: 0, toolCalls: 0, bridge: null, tools: [] }
     let stage = 'DS-Bot setup'
@@ -388,7 +406,7 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     return processed
   }
 
-  return { state, setup: ensureSetup, cycle, infer, syncSkills, syncTools, selectConversation, port: listenPort, baseURL, get botId() { return botId } }
+  return { state, setup: ensureSetup, cycle, infer, exclusive, syncSkills, syncTools, selectConversation, port: listenPort, baseURL, get botId() { return botId } }
 }
 
 // Plugin entry: start the loopback server and the management task loop.
