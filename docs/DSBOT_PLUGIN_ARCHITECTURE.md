@@ -180,6 +180,28 @@ the request authority). The browser never sees a DSH token or cookie:
 * because the cookie is signed by that runtime's own secret and bound to its own authority, it is useless
   against any other runtime even if leaked.
 
+### 4.3.1 Deployment wiring (phase A2)
+* **Platform (wsgi.py):** `application = dsbot_gateway.wrap(app, store, config, '/data/operator/dsbot-gateway.json', manager_auth)`.
+  The key file is operator-owned (`{"version":1,"key":"<32–128 url-safe chars>"}`, 0600). Without it the
+  gateway stays off.
+* **Edge (nginx):** `python -m openteamily.dsbot_gateway render --platform 127.0.0.1:8080 --listen <edge
+  listen> --key-include /etc/nginx/ot-gateway-key.conf > default.conf`; the include holds
+  `set $ot_gateway_key "<same key>";` (operator-owned, not in the rendered file).
+* **Manager:** add `"dsbot_gateway": {"web_container": "<exact web container name>"}` to `manager.json`.
+  Every `poll-once` pass then, per granted running healthy instance: connects the web container (whose
+  netns the edge and manager share) to that runtime's own `ot-<id>_default` network, reads the runtime's
+  address there, takes the DSH launch URL from the process's start logs (cached 0600 under `secrets/`,
+  keyed by process identity), exchanges it for the DSH cookie and reports
+  `POST /v1/internal/instances/<id>/dsbot-upstream {address, auth_cookie, process_ref}`. The platform
+  accepts it only from a loopback manager bearer that is granted the instance, and only for the
+  instance's current running `process_ref`. Re-reporting every pass keeps the cookie fresh.
+* The web/edge listeners must stay bound to loopback/the edge port; a runtime attached to the web
+  container's network can reach those addresses, and `/v1/internal/*` and `/v1/platform/route` already
+  refuse non-loopback or keyless callers.
+* `OPENTEAMILY_INSTANCE_ID` is not injected into existing compose files (that would change frozen
+  manifests); the plugin's per-volume id is the marker and the gateway routes by the platform's
+  instance id.
+
 ### 4.4 Network
 Runtimes keep no published ports by default. The edge reaches runtimes on a deployment-scoped internal
 Docker network per runtime (created and labelled by the manager, the edge container attached, no egress

@@ -163,7 +163,7 @@ class Registry:
         self.adopted = {}
         cfg = self.config
         base = {'version', 'execution_enabled', 'base_url', 'server_host', 'manager_id', 'token', 'docker', 'socket', 'instances'}
-        require(isinstance(cfg, dict) and set(cfg) in (base, base | {'auto_instances'}), 'config_fields')
+        require(isinstance(cfg, dict) and set(cfg) - {'auto_instances', 'dsbot_gateway'} == base, 'config_fields')
         require(type(cfg['version']) is int and cfg['version'] == 1 and type(cfg['execution_enabled']) is bool, 'config_version')
         auto = cfg.get('auto_instances')
         if auto is not None:

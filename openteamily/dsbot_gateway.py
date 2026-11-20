@@ -23,6 +23,7 @@ from .security import digest
 
 ROUTES_FILE = Path(__file__).with_name('dsbot_routes.json')
 ROUTE_PATH = '/v1/platform/route'
+UPSTREAM_PATH = re.compile(r'/v1/internal/instances/([0-9a-f]{32})/dsbot-upstream')
 KEY_HEADER = 'HTTP_X_OT_GATEWAY_KEY'
 PAGE_ROUTE = '/api/openteamily/page'
 
@@ -196,13 +197,19 @@ def exchange_launch_url(launch_url, address, timeout=10):
 
 
 class GatewayApp:
-    """WSGI endpoint for the edge's auth_request. Mount with :func:`mount`."""
+    """WSGI endpoint for the edge's auth_request. Mount with :func:`mount`.
 
-    def __init__(self, store, public_origin, session_cookie, key, routes=None, clock=None):
+    With ``manager_auth`` it also accepts the manager's upstream report
+    ``POST /v1/internal/instances/<id>/dsbot-upstream`` (loopback manager bearer only,
+    instance must be granted to that manager).
+    """
+
+    def __init__(self, store, public_origin, session_cookie, key, routes=None, clock=None, manager_auth=None):
         import time
         if not isinstance(key, str) or len(key) < 32:
             raise ValueError('Gateway key must be at least 32 characters')
         self.store, self.public_origin, self.session_cookie = store, public_origin, session_cookie
+        self.manager_auth = manager_auth
         self.key_hash = digest(key)
         self.routes = routes or load_routes()
         self.clock = clock or time.time
@@ -223,15 +230,64 @@ class GatewayApp:
                 fetch_mode=env.get('HTTP_SEC_FETCH_MODE', ''), upgrade=env.get('HTTP_X_ORIGINAL_UPGRADE', ''),
                 public_origin=self.public_origin, now=int(self.clock()), routes=self.routes)
 
+    def record(self, env, iid):
+        """Manager report: where instance ``iid`` listens and its DSH session cookie."""
+        from .lifecycle import Lifecycle, RuntimeFault
+        if self.manager_auth is None:
+            raise GatewayError(404, 'not_found')
+        if env.get('REQUEST_METHOD') != 'POST' or env.get('QUERY_STRING'):
+            raise GatewayError(405, 'method')
+        try:
+            manager = self.manager_auth.authenticate(env)
+        except RuntimeFault:
+            raise GatewayError(401, 'manager_auth')
+        try:
+            length = int(env.get('CONTENT_LENGTH') or 0)
+        except ValueError:
+            raise GatewayError(400, 'invalid')
+        if not 0 < length <= 8192:
+            raise GatewayError(400, 'invalid')
+        try:
+            body = json.loads(env['wsgi.input'].read(length))
+        except (ValueError, KeyError):
+            raise GatewayError(400, 'invalid')
+        if not isinstance(body, dict) or set(body) != {'address', 'auth_cookie', 'process_ref'}:
+            raise GatewayError(400, 'invalid')
+        if not isinstance(body['process_ref'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['process_ref']):
+            raise GatewayError(400, 'invalid')
+        with self.store.transaction() as db:
+            row = db.execute('SELECT process_ref, observed FROM instances WHERE id=?', (iid,)).fetchone()
+            if row is None or not Lifecycle.grants(db, manager, iid):
+                raise GatewayError(403, 'not_granted')
+            if row[1] != 'running' or row[0] != body['process_ref']:
+                raise GatewayError(409, 'stale_process')
+            try:
+                record_upstream(db, iid, body['address'], body['auth_cookie'], self.clock())
+            except ValueError:
+                raise GatewayError(400, 'invalid')
+        return [('Content-Type', 'application/json')], b'{"recorded":true}'
+
     def __call__(self, env, start_response):
         base = [('Cache-Control', 'no-store'), ('Content-Type', 'text/plain; charset=utf-8')]
+        reported = UPSTREAM_PATH.fullmatch(env.get('PATH_INFO', ''))
+        if reported:
+            try:
+                headers, body = self.record(env, reported[1])
+                start_response('200 OK', [('Cache-Control', 'no-store')] + headers)
+                return [body]
+            except GatewayError as error:
+                start_response(f'{error.status} Refused', [('Cache-Control', 'no-store'), ('Content-Type', 'application/json')])
+                return [json.dumps({'error': {'code': error.code}}).encode()]
+            except Exception:
+                start_response('503 Service Unavailable', [('Content-Type', 'application/json')])
+                return [b'{"error":{"code":"unavailable"}}']
         try:
             headers = self.decide(env)
             start_response('204 No Content', base + headers)
             return [b'']
         except GatewayError as error:
             reasons = {400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found',
-                       405: 'Method Not Allowed', 503: 'Service Unavailable'}
+                       405: 'Method Not Allowed', 409: 'Conflict', 503: 'Service Unavailable'}
             start_response(f'{error.status} {reasons.get(error.status, "Error")}',
                            base + [('X-OT-Gateway-Error', error.code)])
             return [error.code.encode()]
@@ -240,10 +296,44 @@ class GatewayApp:
             return [b'unavailable']
 
 
+def load_operator_key(path):
+    """Read the operator gateway key file ``{"version":1,"key":"..."}`` (0600, owner-only)."""
+    import os
+    import stat
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError('Gateway key file must be a private regular file')
+        data = json.loads(os.read(fd, 4096))
+    finally:
+        os.close(fd)
+    if not isinstance(data, dict) or set(data) != {'version', 'key'} or data['version'] != 1:
+        raise ValueError('Unsupported gateway key file')
+    key = data['key']
+    if not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,128}', key):
+        raise ValueError('Invalid gateway key')
+    return key
+
+
+def wrap(app, store, config, key_file, manager_auth=None):
+    """Deployment wiring for wsgi.py: ``application = dsbot_gateway.wrap(app, store, config, path, manager_auth)``.
+
+    ``config`` is the management ``Config`` (public origin and session cookie name come
+    from it). Without a key file the gateway stays off and ``app`` is returned as is.
+    """
+    if not key_file:
+        return app
+    gateway = GatewayApp(store, config.origin, config.cookie_names[0], load_operator_key(key_file),
+                         manager_auth=manager_auth)
+    return mount(app, gateway)
+
+
 def mount(app, gateway):
     """Compose the management app with the gateway endpoint; nothing else changes."""
     def composed(env, start_response):
-        if gateway is not None and env.get('PATH_INFO') == ROUTE_PATH:
+        if gateway is not None and (env.get('PATH_INFO') == ROUTE_PATH
+                                    or UPSTREAM_PATH.fullmatch(env.get('PATH_INFO', ''))):
             return gateway(env, start_response)
         return app(env, start_response)
     return composed
@@ -252,12 +342,13 @@ def mount(app, gateway):
 NGINX_TEMPLATE = r'''# Generated by openteamily.dsbot_gateway.nginx_config. Edge for one public origin:
 # platform paths go to the management app; DS-Bot paths go to the signed-in owner's
 # own runtime after auth_request. Client X-OT-* headers and dsh-auth-* cookies never
-# reach a runtime. Gateway key is read from an operator include, never this file.
+# reach a runtime. In production the gateway key comes from an operator include.
 map $http_upgrade $ot_connection_upgrade { default upgrade; '' close; }
 server {
   listen __LISTEN__;
   server_name _;
   client_max_body_size 64m;
+__KEY_SETTING__
   location = /v1/internal { return 404; }
   location ^~ /v1/internal/ { return 404; }
   location = /v1/admin { return 404; }
@@ -273,7 +364,7 @@ server {
     proxy_set_header X-Original-URI $request_uri;
     proxy_set_header X-Original-Method $request_method;
     proxy_set_header X-Original-Upgrade $http_upgrade;
-    proxy_set_header X-OT-Gateway-Key __KEY__;
+    proxy_set_header X-OT-Gateway-Key $ot_gateway_key;
   }
 __DSBOT_LOCATIONS__
   location @ot_dsbot {
@@ -311,8 +402,23 @@ __DSBOT_LOCATIONS__
 '''
 
 
-def nginx_config(routes, platform, listen, key_include):
-    """Render the edge config. ``key_include`` is the nginx literal/variable for the key."""
+def nginx_config(routes, platform, listen, key_include=None, key=None):
+    """Render the edge config.
+
+    Production passes ``key_include``: the absolute path of an operator-owned nginx
+    include containing ``set $ot_gateway_key "<key>";`` so the key never sits in the
+    rendered file. Tests may pass ``key`` directly.
+    """
+    if (key_include is None) == (key is None):
+        raise ValueError('Pass exactly one of key_include or key')
+    if key_include is not None:
+        if not re.fullmatch(r'/[A-Za-z0-9/_.-]{1,200}', key_include) or '..' in key_include:
+            raise ValueError('Invalid key include path')
+        setting = f'  include {key_include};'
+    else:
+        if not re.fullmatch(r'[A-Za-z0-9_-]{32,128}', key):
+            raise ValueError('Invalid gateway key')
+        setting = f'  set $ot_gateway_key "{key}";'
     if not re.fullmatch(r'[0-9A-Za-z.\-]+:\d{2,5}', platform) or not re.fullmatch(r'[0-9A-Za-z.:\[\]]+', str(listen)):
         raise ValueError('Invalid platform or listen address')
     locations = [f'  location = {routes["mount"]} {{ return 418; }}',
@@ -324,4 +430,22 @@ def nginx_config(routes, platform, listen, key_include):
             locations.append('  location = / { return 418; }')
         locations.append(f'  location ^~ /{page}/ {{ return 418; }}')
     return (NGINX_TEMPLATE.replace('__LISTEN__', str(listen)).replace('__PLATFORM__', platform)
-            .replace('__KEY__', key_include).replace('__DSBOT_LOCATIONS__', '\n'.join(locations)))
+            .replace('__KEY_SETTING__', setting).replace('__DSBOT_LOCATIONS__', '\n'.join(locations)))
+
+
+def main(argv=None):
+    """Render the edge config: ``python -m openteamily.dsbot_gateway render ...``."""
+    import argparse
+    parser = argparse.ArgumentParser(prog='python -m openteamily.dsbot_gateway')
+    sub = parser.add_subparsers(dest='command', required=True)
+    render = sub.add_parser('render', help='Print the nginx edge config for the current route table')
+    render.add_argument('--platform', required=True, help='host:port of the management app as seen by nginx')
+    render.add_argument('--listen', required=True, help='nginx listen address, e.g. 127.0.0.1:8081')
+    render.add_argument('--key-include', required=True, help='absolute path of the operator include setting $ot_gateway_key')
+    render.add_argument('--routes', default=str(ROUTES_FILE))
+    args = parser.parse_args(argv)
+    print(nginx_config(load_routes(args.routes), args.platform, args.listen, key_include=args.key_include), end='')
+
+
+if __name__ == '__main__':
+    main()
