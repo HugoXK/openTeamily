@@ -872,7 +872,27 @@
 #message-list li.mine, #message-list li.user { background: var(--ot-accent-soft); color: var(--ot-ink); }
 #message-list li.mine .role, #message-list li.user .role { color: var(--ot-ink); }
 #message-list li.mine .time, #message-list li.user .time { color: var(--ot-muted); }
-.composer-tools button[title*="模式"] { margin-left: auto; }
+.composer-mode { margin-left: auto; display: inline-flex; align-items: center; }
+.composer-mode select {
+  padding: .1rem .3rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .4rem;
+  background: transparent;
+  color: var(--ot-ink);
+  font: inherit;
+  font-size: .78rem;
+}
+.mode-chip {
+  display: inline-block;
+  padding: 0 .35rem;
+  border-radius: 999px;
+  background: var(--ot-accent-soft);
+  color: var(--ot-ink);
+  font-size: .7rem;
+  font-weight: 600;
+  vertical-align: baseline;
+}
+.mode-chip[data-mode="agentic"] { background: color-mix(in srgb, var(--ot-accent) 24%, transparent); }
 
 /* @mention notification center: compact list inside the session pane. */
 #notifications-toggle { position: relative; }

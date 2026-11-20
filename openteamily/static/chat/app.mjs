@@ -1,6 +1,22 @@
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
+// Send mode is a property of the message the person is writing: it is sent
+// with the body, stored with the row and shown on the bubble after a reload.
+export const MESSAGE_MODES = ['auto', 'instant', 'agentic'];
+export function normalizeMode(value) {
+  return MESSAGE_MODES.includes(value) ? value : 'auto';
+}
+export function modeLabel(mode) {
+  const value = normalizeMode(mode);
+  return value === 'instant' ? 'Instant' : (value === 'agentic' ? 'Agentic' : 'Auto');
+}
+export function modeStoreKey(conversationId) {
+  return 'ot.chat.mode.' + String(conversationId || '');
+}
+export function socialSendPayload(text, mode) {
+  return {body: text, mode: normalizeMode(mode)};
+}
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -1161,6 +1177,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const body = document.createElement('div');
       body.className = 'body';
       renderMessageBody(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences);
+      if (item.mode && normalizeMode(item.mode) !== 'auto' && !item.retracted) {
+        const chip = document.createElement('span');
+        chip.className = 'mode-chip';
+        chip.dataset.mode = normalizeMode(item.mode);
+        chip.textContent = modeLabel(item.mode);
+        chip.title = '发送时选择的模式：' + modeLabel(item.mode);
+        role.append(document.createTextNode(' · '), chip);
+      }
       if (item.forwarded_from && !item.retracted) {
         body.dataset.forwarded = '1';
         body.title = '转发自 ' + item.forwarded_from.author;
@@ -1561,6 +1585,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
     currentConversation = result.body.conversation;
+    restoreComposerMode(currentConversation.id);
     setSessionsOpen(false);
     const pin = document.getElementById('pin-conversation');
     if (pin) { pin.hidden = false; pin.textContent = sessions.find(item => item.id === conversationId && item.pinned) ? '取消置顶' : '置顶会话'; }
@@ -2160,6 +2185,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     out.textContent = `邀请令牌只显示一次：${result.body.token}`;
   });
+  const modeSelect = document.getElementById('composer-mode');
+  function modeStorage() {
+    try { return globalThis.localStorage || null; } catch { return null; }
+  }
+  function restoreComposerMode(conversationId) {
+    if (!modeSelect || !conversationId) return;
+    const storage = modeStorage();
+    let saved = '';
+    try { saved = storage ? storage.getItem(modeStoreKey(conversationId)) || '' : ''; } catch { saved = ''; }
+    modeSelect.value = normalizeMode(saved);
+  }
+  function rememberComposerMode(conversationId, mode) {
+    const storage = modeStorage();
+    if (!storage || !conversationId) return;
+    try { storage.setItem(modeStoreKey(conversationId), normalizeMode(mode)); } catch {}
+  }
+  if (modeSelect) modeSelect.addEventListener('change', () => {
+    if (currentConversation && currentSource === 'social') rememberComposerMode(currentConversation.id, modeSelect.value);
+  });
+
   const notificationsToggle = document.getElementById('notifications-toggle');
   if (notificationsToggle) notificationsToggle.addEventListener('click', async () => {
     const panel = document.getElementById('notifications-panel');
@@ -2679,9 +2724,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         show('error', '请先打开或创建一个会话。');
         return;
       }
-      const result = await request('POST', `${socialBase()}/${currentConversation.id}/messages`, {body: text}, {
-        'Idempotency-Key': idempotencyKey('socialmsg-'),
-      });
+      const result = await request('POST', `${socialBase()}/${currentConversation.id}/messages`,
+        socialSendPayload(text, modeSelect ? modeSelect.value : 'auto'), {
+          'Idempotency-Key': idempotencyKey('socialmsg-'),
+        });
       if (result.status !== 201 && result.status !== 200) {
         show('error', messageFor(result.body.error, '发送失败。'));
         return;
