@@ -125,7 +125,7 @@ class GatewayTest(unittest.TestCase):
         self.assertIsNone(gw.target_for('/privacy/', routes))
 
     def test_shipped_routes_move_private_chat(self):
-        self.assertTrue({'chat', 'meetings', 'skills'} <= gw.load_routes()['moved_pages'])
+        self.assertTrue({'chat', 'meetings', 'skills', 'memory'} <= gw.load_routes()['moved_pages'])
         self.assertEqual(gw.target_for('/chat/app.mjs', gw.load_routes()), '/api/openteamily/page?path=%2Fchat%2Fapp.mjs')
 
     def test_record_upstream_validation(self):
@@ -193,6 +193,41 @@ class GatewayTest(unittest.TestCase):
             gw.load_operator_key(path)
         os.chmod(path, 0o600)
         self.assertEqual(gw.load_operator_key(path), 'q' * 40)
+
+    def test_external_agent_api_is_routed_by_key_instance(self):
+        token = 'ota_' + '1' * 32 + '_' + 'K' * 43
+        status, headers = self.call(
+            None, uri='/v1/gateway/agents/' + 'a' * 32 + '/invocations', method='POST',
+            Authorization='Bearer ' + token)
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Upstream'], '172.30.0.11:8080')
+        self.assertEqual(headers['X-OT-Instance'], '1' * 32)
+        self.assertTrue(headers['X-OT-Upstream-Path'].startswith('/api/openteamily/gateway?path='))
+        self.assertEqual(headers['X-OT-Upstream-Token'], token)
+        # A key for B must never reach A.
+        other = 'ota_' + '2' * 32 + '_' + 'K' * 43
+        status, headers = self.call(
+            None, uri='/v1/gateway/invocations/' + 'c' * 32, method='GET',
+            Authorization='Bearer ' + other)
+        self.assertEqual((status, headers['X-OT-Instance'], headers['X-OT-Upstream']),
+                         (204, '2' * 32, '172.30.0.12:8080'))
+        # No token, bad shape, or unknown path.
+        self.assertEqual(self.call(None, uri='/v1/gateway/agents/' + 'a' * 32 + '/invocations', method='POST')[0], 401)
+        self.assertEqual(self.call(None, uri='/v1/gateway/agents/' + 'a' * 32 + '/invocations', method='POST',
+                                   Authorization='Bearer not-a-key')[0], 401)
+        self.assertEqual(self.call(None, uri='/v1/gateway/secret', method='GET',
+                                   Authorization='Bearer ' + token)[0], 404)
+        # A session cookie alone cannot open the external API, and a key cannot
+        # steer to a browser page.
+        self.assertEqual(self.call(self.tokens['a' * 32], uri='/v1/gateway/invocations/' + 'c' * 32)[0], 401)
+
+    def test_nginx_config_has_external_agent_location(self):
+        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
+        self.assertIn('location ^~ /v1/gateway/ {', conf)
+        self.assertIn('proxy_set_header X-OT-Gateway-Token $ot_token;', conf)
+        self.assertIn('proxy_set_header Authorization $http_authorization;', conf)
+        # The caller's Authorization still never reaches a runtime.
+        self.assertIn('proxy_set_header Authorization "";', conf)
 
 
 if __name__ == '__main__':

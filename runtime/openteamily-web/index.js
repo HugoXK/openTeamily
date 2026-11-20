@@ -8,7 +8,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createPageHandler, PAGE_PATH } from './src/pages.js'
-import { createDispatch, API_PATH } from './src/dispatch.js'
+import { createDispatch, API_PATH, createGatewayDispatch, GATEWAY_PATH } from './src/dispatch.js'
 import { loadIdentity } from './src/identity.js'
 import { loadFeatures } from './src/features.js'
 
@@ -39,6 +39,14 @@ export function apply(ctx, config = {}) {
     requestBody: 'buffered',
     fetch: dispatch,
   }), 'openteamily-web: api route')
+  // External Agent API: the platform forwards /v1/gateway/* here (cookie = this
+  // DS-Bot's launch session; token = X-OT-Gateway-Token, already bound to this instance).
+  ctx.effect(() => ctx.connection.fetch.register({
+    path: GATEWAY_PATH,
+    methods: ['GET', 'POST'],
+    requestBody: 'buffered',
+    fetch: createGatewayDispatch({ endpoints: async () => (await features).table }),
+  }), 'openteamily-web: external agent api')
   return { identity, features }
 }
 
