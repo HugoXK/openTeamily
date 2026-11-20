@@ -37,6 +37,16 @@ export function parseAttendees(text) {
   return out;
 }
 
+export function actionToggleBody(actions, index, done, revision) {
+  const items = (actions || []).map((item, position) => ({
+    text: item.text,
+    done: position === index ? Boolean(done) : Boolean(item.done),
+    owner: item.owner || '',
+  }));
+  return {revision, changes: {action_items: items}};
+}
+
+
 export const MEMBER_ROLE_LABELS = {owner: '所有者', admin: '管理员', member: '成员'};
 export const ATTENDEE_EMPTY = '无匹配成员';
 export const ATTENDEE_UNAVAILABLE = '读不到成员列表';
@@ -205,7 +215,10 @@ function mount() {
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.checked = Boolean(action.done);
-      box.addEventListener('change', () => { action.done = box.checked; });
+      box.addEventListener('change', () => {
+        action.done = box.checked;
+        persistActionToggle(index, box.checked, box);
+      });
       done.append(box, document.createTextNode('完成'));
       const remove = document.createElement('button');
       remove.type = 'button';
@@ -217,6 +230,40 @@ function mount() {
       row.append(text, owner, done, remove);
       holder.append(row);
     });
+  }
+
+
+  async function persistActionToggle(index, done, box) {
+    if (!current || !current.id) {
+      show('ok', '这条行动项的完成状态会在保存会议后生效。');
+      return;
+    }
+    const result = await request('POST', `${base()}/${current.id}`,
+      actionToggleBody(actions, index, done, current.revision));
+    if (result.status === 409) {
+      box.checked = !done;
+      actions[index].done = !done;
+      show('error', '会议已在别处更新，请重新打开后再勾选。');
+      return;
+    }
+    if (result.status !== 200) {
+      box.checked = !done;
+      actions[index].done = !done;
+      show('error', messageFor(result.body.error, '无法保存这条行动项的完成状态。'));
+      return;
+    }
+    const saved = result.body.meeting;
+    current = {...current, revision: saved.revision, done_count: saved.done_count,
+               action_count: saved.action_count};
+    document.getElementById('meeting-meta').textContent =
+      '修订 ' + current.revision + ' · 创建者 ' + current.created_by;
+    // Refresh the list counts without reloading the form: unsaved body edits stay put.
+    const listed = await request('GET', `${base()}?limit=100`);
+    if (listed.status === 200) {
+      meetings = listed.body.items || [];
+      renderList();
+    }
+    show('ok', done ? '已标记完成。' : '已取消完成。');
   }
 
   function renderList() {
@@ -451,7 +498,7 @@ function mount() {
   load();
 }
 
-if (typeof document !== 'undefined') {
+if (typeof document !== 'undefined' && document.getElementById('meeting-form')) {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
   else mount();
 }
