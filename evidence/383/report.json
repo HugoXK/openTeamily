@@ -1,0 +1,354 @@
+{
+  "slug": "ev383",
+  "generated_at": "2026-11-20T04:07:20.217Z",
+  "sides": [
+    {
+      "name": "before",
+      "ref": "f7fa182955a498344117d4f23b712b215a9c0a5f",
+      "url": "http://127.0.0.1:8101"
+    }
+  ],
+  "images": [
+    {
+      "arm": "before",
+      "file": "before/ev383__before__zh-CN__light__1440x900__settings-connectors.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "light",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 130475
+      },
+      "viewport_size_ok": true,
+      "sha256": "27ca127d6033e57a4cdcb083d557e2481b5d9747e63cce59e58afad447a1217a",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "textLength": 2857,
+        "visibleDialogs": 0
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><circle cx='8' cy='16' r='2'/><circle cx='16' cy='16' r='2'/><circle cx='12' cy='8' r='2'/><path d='M12 10v3 M10 16h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 5h10v14H7z M10 8h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><path d='M6 16 16 6 M8 18h10'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18 12 6l4 12 M9.5 14h5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='m12 5 7 13H5z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 9h10 M7 12h10 M7 15h7'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 11h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='7' y='7' width='10' height='10' rx='1.5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 15h11a3 3 0 0 0 0-6 4.5 4.5 0 0 0-8.3-1.5A3.5 3.5 0 0 0 7 15Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 12h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18V8l8 4-8 6Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='8' r='2.4'/><circle cx='12' cy='16' r='2.4'/><circle cx='8' cy='12' r='2.4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='5' y='7' width='14' height='10' rx='1.5'/><path d='m5 8 7 5 7-5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev383__before__zh-CN__dark__1440x900__settings-connectors.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 134163
+      },
+      "viewport_size_ok": true,
+      "sha256": "1b3e33617fb2fb95d18d2a121ae9a84c2b700341a32245f497c3b63330058a37",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "textLength": 2857,
+        "visibleDialogs": 0
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><circle cx='8' cy='16' r='2'/><circle cx='16' cy='16' r='2'/><circle cx='12' cy='8' r='2'/><path d='M12 10v3 M10 16h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 5h10v14H7z M10 8h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><path d='M6 16 16 6 M8 18h10'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18 12 6l4 12 M9.5 14h5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='m12 5 7 13H5z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 9h10 M7 12h10 M7 15h7'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 11h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='7' y='7' width='10' height='10' rx='1.5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 15h11a3 3 0 0 0 0-6 4.5 4.5 0 0 0-8.3-1.5A3.5 3.5 0 0 0 7 15Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 12h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18V8l8 4-8 6Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='8' r='2.4'/><circle cx='12' cy='16' r='2.4'/><circle cx='8' cy='12' r='2.4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='5' y='7' width='14' height='10' rx='1.5'/><path d='m5 8 7 5 7-5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev383__before__en__light__1440x900__settings-connectors.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "en",
+      "theme": "light",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 130475
+      },
+      "viewport_size_ok": true,
+      "sha256": "27ca127d6033e57a4cdcb083d557e2481b5d9747e63cce59e58afad447a1217a",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "light",
+        "textLength": 2857,
+        "visibleDialogs": 0
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><circle cx='8' cy='16' r='2'/><circle cx='16' cy='16' r='2'/><circle cx='12' cy='8' r='2'/><path d='M12 10v3 M10 16h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 5h10v14H7z M10 8h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><path d='M6 16 16 6 M8 18h10'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18 12 6l4 12 M9.5 14h5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='m12 5 7 13H5z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 9h10 M7 12h10 M7 15h7'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 11h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='7' y='7' width='10' height='10' rx='1.5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 15h11a3 3 0 0 0 0-6 4.5 4.5 0 0 0-8.3-1.5A3.5 3.5 0 0 0 7 15Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 12h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18V8l8 4-8 6Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='8' r='2.4'/><circle cx='12' cy='16' r='2.4'/><circle cx='8' cy='12' r='2.4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='5' y='7' width='14' height='10' rx='1.5'/><path d='m5 8 7 5 7-5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev383__before__en__dark__1440x900__settings-connectors.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "en",
+      "theme": "dark",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 134163
+      },
+      "viewport_size_ok": true,
+      "sha256": "1b3e33617fb2fb95d18d2a121ae9a84c2b700341a32245f497c3b63330058a37",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "dark",
+        "textLength": 2857,
+        "visibleDialogs": 0
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><circle cx='8' cy='16' r='2'/><circle cx='16' cy='16' r='2'/><circle cx='12' cy='8' r='2'/><path d='M12 10v3 M10 16h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 5h10v14H7z M10 8h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><path d='M6 16 16 6 M8 18h10'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18 12 6l4 12 M9.5 14h5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='m12 5 7 13H5z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 9h10 M7 12h10 M7 15h7'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 11h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='7' y='7' width='10' height='10' rx='1.5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 15h11a3 3 0 0 0 0-6 4.5 4.5 0 0 0-8.3-1.5A3.5 3.5 0 0 0 7 15Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 12h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18V8l8 4-8 6Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='8' r='2.4'/><circle cx='12' cy='16' r='2.4'/><circle cx='8' cy='12' r='2.4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='5' y='7' width='14' height='10' rx='1.5'/><path d='m5 8 7 5 7-5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev383__before__zh-CN__light__390x844__settings-connectors.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "zh-CN",
+      "theme": "light",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 83800
+      },
+      "viewport_size_ok": true,
+      "sha256": "a62df01006a1838ccba49e01f505302a970415778f612b9c5094bab70debc034",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "textLength": 2857,
+        "visibleDialogs": 0
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><circle cx='8' cy='16' r='2'/><circle cx='16' cy='16' r='2'/><circle cx='12' cy='8' r='2'/><path d='M12 10v3 M10 16h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 5h10v14H7z M10 8h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><path d='M6 16 16 6 M8 18h10'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18 12 6l4 12 M9.5 14h5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='m12 5 7 13H5z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 9h10 M7 12h10 M7 15h7'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 11h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='7' y='7' width='10' height='10' rx='1.5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 15h11a3 3 0 0 0 0-6 4.5 4.5 0 0 0-8.3-1.5A3.5 3.5 0 0 0 7 15Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 12h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18V8l8 4-8 6Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='8' r='2.4'/><circle cx='12' cy='16' r='2.4'/><circle cx='8' cy='12' r='2.4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='5' y='7' width='14' height='10' rx='1.5'/><path d='m5 8 7 5 7-5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev383__before__zh-CN__dark__390x844__settings-connectors.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 89998
+      },
+      "viewport_size_ok": true,
+      "sha256": "fea03c357bb7e1f420d35bd4d78b4425bbbc3794e245ad6821da69903a5a1d1c",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "textLength": 2857,
+        "visibleDialogs": 0
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><circle cx='8' cy='16' r='2'/><circle cx='16' cy='16' r='2'/><circle cx='12' cy='8' r='2'/><path d='M12 10v3 M10 16h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 5h10v14H7z M10 8h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><path d='M6 16 16 6 M8 18h10'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18 12 6l4 12 M9.5 14h5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='m12 5 7 13H5z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 9h10 M7 12h10 M7 15h7'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 11h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='7' y='7' width='10' height='10' rx='1.5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 15h11a3 3 0 0 0 0-6 4.5 4.5 0 0 0-8.3-1.5A3.5 3.5 0 0 0 7 15Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 12h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18V8l8 4-8 6Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='8' r='2.4'/><circle cx='12' cy='16' r='2.4'/><circle cx='8' cy='12' r='2.4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='5' y='7' width='14' height='10' rx='1.5'/><path d='m5 8 7 5 7-5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev383__before__en__light__390x844__settings-connectors.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "en",
+      "theme": "light",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 83800
+      },
+      "viewport_size_ok": true,
+      "sha256": "a62df01006a1838ccba49e01f505302a970415778f612b9c5094bab70debc034",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "light",
+        "textLength": 2857,
+        "visibleDialogs": 0
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><circle cx='8' cy='16' r='2'/><circle cx='16' cy='16' r='2'/><circle cx='12' cy='8' r='2'/><path d='M12 10v3 M10 16h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 5h10v14H7z M10 8h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><path d='M6 16 16 6 M8 18h10'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18 12 6l4 12 M9.5 14h5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='m12 5 7 13H5z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 9h10 M7 12h10 M7 15h7'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 11h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='7' y='7' width='10' height='10' rx='1.5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 15h11a3 3 0 0 0 0-6 4.5 4.5 0 0 0-8.3-1.5A3.5 3.5 0 0 0 7 15Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 12h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18V8l8 4-8 6Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='8' r='2.4'/><circle cx='12' cy='16' r='2.4'/><circle cx='8' cy='12' r='2.4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='5' y='7' width='14' height='10' rx='1.5'/><path d='m5 8 7 5 7-5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev383__before__en__dark__390x844__settings-connectors.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "en",
+      "theme": "dark",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 89998
+      },
+      "viewport_size_ok": true,
+      "sha256": "7d2a91138f82e1316d44291c1722331f8ab533d565c8d2f9f0b5be0d10e16308",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "dark",
+        "textLength": 2857,
+        "visibleDialogs": 0
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><circle cx='8' cy='16' r='2'/><circle cx='16' cy='16' r='2'/><circle cx='12' cy='8' r='2'/><path d='M12 10v3 M10 16h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 5h10v14H7z M10 8h4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round'><path d='M6 16 16 6 M8 18h10'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18 12 6l4 12 M9.5 14h5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='m12 5 7 13H5z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 9h10 M7 12h10 M7 15h7'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 11h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='7' y='7' width='10' height='10' rx='1.5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M7 15h11a3 3 0 0 0 0-6 4.5 4.5 0 0 0-8.3-1.5A3.5 3.5 0 0 0 7 15Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='6' y='7' width='12' height='10' rx='2'/><path d='M9 12h6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 18V8l8 4-8 6Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='6'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='8' r='2.4'/><circle cx='12' cy='16' r='2.4'/><circle cx='8' cy='12' r='2.4'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><rect x='5' y='7' width='14' height='10' rx='1.5'/><path d='m5 8 7 5 7-5'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    }
+  ],
+  "failures": [],
+  "arms": {
+    "before": {
+      "ref": "f7fa182955a498344117d4f23b712b215a9c0a5f",
+      "count": 8
+    }
+  },
+  "grid": {
+    "viewports": [
+      "1440x900",
+      "390x844"
+    ],
+    "locales": [
+      "zh-CN",
+      "en"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ]
+  }
+}
