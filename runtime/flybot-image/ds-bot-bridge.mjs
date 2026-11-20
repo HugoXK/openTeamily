@@ -406,7 +406,7 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     return processed
   }
 
-  return { state, setup: ensureSetup, cycle, infer, exclusive, syncSkills, syncTools, selectConversation, port: listenPort, baseURL, get botId() { return botId } }
+  return { state, setup: ensureSetup, cycle, infer, exclusive, syncSkills, syncTools, selectConversation, legacySession: key => loadChats()[key], port: listenPort, baseURL, get botId() { return botId } }
 }
 
 // Plugin entry: start the loopback server and the management task loop.

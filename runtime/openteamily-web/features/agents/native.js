@@ -1,6 +1,7 @@
 // Stable platform-agent -> actual native roster object. The SQLite record is
 // compatibility metadata, not an alternate executor. Native edits are pulled on
 // reads; writes use the roster API and all turns target this Bot, never Chief.
+import { adoptThread, importHistory } from './history.js'
 import { createHash } from 'node:crypto'
 import { startOpenPart } from '../../../ds-bot-upstream/ds-bot/src/host/threads.js'
 
@@ -73,15 +74,28 @@ export function nativeAgents({ host, db }) {
     const mapped = await ensure(row)
     if (mapped.native_deleted) throw Object.assign(new Error('Native Bot was deleted'), { status: 409, code: 'agents/native-deleted' })
     const { rt } = await services()
-    let m = one('SELECT * FROM native_agent_sessions WHERE conversation_key=?', key)
-    if (!m) {
-      const sessionId = await rt.createSession(title || row.name, { dir: rt.workDirOf({ botId: mapped.native_bot_id }) })
-      const bot = rt.botOf(mapped.native_bot_id)
-      startOpenPart(bot, sessionId); rt.chatOwners.set(sessionId, bot.id)
-      await rt.save()
-      run('INSERT INTO native_agent_sessions VALUES(?,?,?)', key, row.id, sessionId)
-      m = { session_id: sessionId }
+    const bot = rt.botOf(mapped.native_bot_id)
+    const reconcile = async () => {
+      let m = one('SELECT * FROM native_agent_sessions WHERE conversation_key=?', key)
+      const legacyId = s.legacySession?.(key)
+      let adopted
+      if (legacyId) adopted = await adoptThread({ rt, source: rt.botOf(await s.mainBot()), target: bot, sessionId: legacyId })
+      bot.openteamily.sessionKeys ??= {}
+      if (!m) {
+        const recovered = bot.openteamily.sessionKeys[key]
+        const sessionId = recovered || adopted || await rt.createSession(title || row.name, { dir: rt.workDirOf({ botId: bot.id }) })
+        if (!recovered && !adopted) { startOpenPart(bot, sessionId); rt.chatOwners.set(sessionId, bot.id) }
+        bot.openteamily.sessionKeys[key] = sessionId
+        await rt.save()
+        run('INSERT INTO native_agent_sessions VALUES(?,?,?)', key, row.id, sessionId)
+        m = { session_id: sessionId }
+      } else if (adopted) await rt.save()
+      const conversationId = key.slice(('agent:' + row.id + ':').length)
+      const counts = await importHistory({ db, rt, ctx: s.ctx, bot, conversationId, sessionId: m.session_id })
+      return { ...m, history: counts }
     }
+    const m = s.exclusive ? await s.exclusive(reconcile) : await reconcile()
+
     return { native_bot_id: mapped.native_bot_id, native_session_id: m.session_id }
   }
   return { ensure: row => serial(() => ensure(row)), update: (row,patch) => serial(() => update(row,patch)), session: (row,key,title) => serial(() => session(row,key,title)) }
