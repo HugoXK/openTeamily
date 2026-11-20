@@ -1,0 +1,224 @@
+// Workspace agents inside the user's own DS-Bot (batch B2; moved from
+// openteamily/agents.py + the agent conversation dispatch in app.py).
+// An agent is a named persona of this user's DS-Bot: its record lives in the
+// DS-Bot's own storage, and every message to it is a native DS-Bot turn on its own
+// session ('agent:<agent>:<conversation>'), so history, skills and tools are
+// DS-Bot's. Public homepages and the discover listing are cross-user and move with
+// Bot Social (phase C); this feature keeps only the owner's private data.
+import { createHash } from 'node:crypto'
+import { openDatabase, newId } from '../../src/store.js'
+
+export const CATEGORIES = ['content-creation', 'customer-support', 'data-analysis', 'design', 'education', 'engineering',
+  'finance', 'it-security', 'investment', 'legal', 'life', 'marketing', 'operations', 'product', 'recruiting', 'research', 'sales']
+export const LIMITS = { name: 80, summary: 500, instructions: 16000, quickStarts: 5, quickStart: 80, agents: 200, text: 20000 }
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/
+const ID = /^[0-9a-f]{32}$/
+const IDEM = /^[A-Za-z0-9_-]{16,64}$/
+const sha = (t) => createHash('sha256').update(String(t)).digest('hex')
+const now = () => Math.floor(Date.now() / 1000)
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, name_hash TEXT NOT NULL,
+  summary TEXT NOT NULL, instructions TEXT NOT NULL, category TEXT, quick_starts TEXT NOT NULL DEFAULT '[]',
+  revision INTEGER NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
+  key_hash TEXT NOT NULL, request_hash TEXT NOT NULL, imported_from TEXT,
+  UNIQUE(workspace_id, key_hash), UNIQUE(workspace_id, name_hash));
+CREATE TABLE IF NOT EXISTS agent_conversations (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  title TEXT NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS agent_messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK(role IN ('user','assistant')), text TEXT NOT NULL, status TEXT NOT NULL, created INTEGER NOT NULL, meta TEXT NOT NULL DEFAULT '{}');
+CREATE INDEX IF NOT EXISTS agent_messages_by_conversation ON agent_messages(conversation_id, created, id);
+`
+
+export function fail(code, message, status) { throw Object.assign(new Error(message), { code: `agents/${code}`, status }) }
+const validName = (v) => typeof v === 'string' && v.trim().length >= 1 && v.trim().length <= LIMITS.name && !CONTROL.test(v)
+const validSummary = (v) => typeof v === 'string' && v.length <= LIMITS.summary && !CONTROL.test(v)
+const validInstructions = (v) => typeof v === 'string' && v.length <= LIMITS.instructions && !CONTROL.test(v)
+const validCategory = (v) => v === null || v === '' || CATEGORIES.includes(v)
+const validQuickStarts = (v) => Array.isArray(v) && v.length <= LIMITS.quickStarts
+  && v.every((t) => typeof t === 'string' && t.trim().length >= 1 && t.trim().length <= LIMITS.quickStart && !CONTROL.test(t))
+
+// The persona header every turn carries (same order as conversations.compose_prompt).
+export function composePrompt(agent, text, replyLanguage) {
+  const parts = [`You are ${(agent.name || 'FlyBot').trim()}.`]
+  if (replyLanguage) parts.push(`Reply in ${replyLanguage}.`)
+  if (agent.summary?.trim()) parts.push(agent.summary.trim())
+  if (agent.instructions?.trim()) parts.push(agent.instructions.trim())
+  return `${parts.join('\n')}\n\nUser: ${text.trim()}`
+}
+
+export function view(row) {
+  return { id: row.id, workspace_id: row.workspace_id, name: row.name, summary: row.summary, instructions: row.instructions,
+    category: row.category || null, quick_starts: JSON.parse(row.quick_starts), revision: row.revision, created: row.created,
+    updated: row.updated, archived: row.archived, served_by: 'ds-bot' }
+}
+
+export function createAgents({ db, host }) {
+  db.exec(SCHEMA)
+  const one = (sql, ...a) => db.prepare(sql).get(...a)
+  const all = (sql, ...a) => db.prepare(sql).all(...a)
+  const run = (sql, ...a) => db.prepare(sql).run(...a)
+  const ws = (p) => { if (typeof p?.workspace_id !== 'string' || !ID.test(p.workspace_id)) fail('invalid', 'workspace_id required', 400); return p.workspace_id }
+  const load = (workspaceId, id) => {
+    const row = typeof id === 'string' && ID.test(id) ? one('SELECT * FROM agents WHERE id=? AND workspace_id=?', id, workspaceId) : undefined
+    if (!row) fail('not-found', 'Agent not found', 404)
+    return row
+  }
+  const loadAny = (id) => {
+    const row = typeof id === 'string' && ID.test(id) ? one('SELECT * FROM agents WHERE id=?', id) : undefined
+    if (!row) fail('not-found', 'Agent not found', 404)
+    return row
+  }
+  const conversation = (agent, id) => {
+    const row = typeof id === 'string' && ID.test(id) ? one('SELECT * FROM agent_conversations WHERE id=? AND agent_id=?', id, agent.id) : undefined
+    if (!row) fail('not-found', 'Conversation not found', 404)
+    return row
+  }
+
+  // One DS-Bot turn as this agent. Shared by the external API and team runs.
+  async function turn({ agent_id: agentId, key, text, request_id: requestId, reply_language: lang }) {
+    const agent = loadAny(agentId)
+    if (agent.archived) fail('archived', 'Agent is archived', 409)
+    if (typeof text !== 'string' || !text.trim() || text.length > LIMITS.text) fail('invalid', 'text must be 1–20000 characters', 400)
+    const services = await host.runtime()
+    if (typeof services?.chatTurn !== 'function') fail('runtime-unavailable', 'DS-Bot chat service unavailable', 503)
+    const sessionKey = `agent:${agent.id}:${typeof key === 'string' && /^[A-Za-z0-9:_-]{1,96}$/.test(key) ? key : 'default'}`
+    const reply = await services.chatTurn(sessionKey, composePrompt(agent, text, lang), requestId || `ot-agent:${newId()}`)
+    const out = String(reply?.text ?? '').trim()
+    if (!out) fail('empty-reply', 'DS-Bot turn ended without a reply', 502)
+    return { text: out, agent_id: agent.id, agent_name: agent.name, engine: 'ds-bot', session_key: sessionKey, session_id: reply.sessionId ?? null, turn_id: reply.turnId ?? null }
+  }
+
+  const endpoints = {
+    categories: async () => ({ items: CATEGORIES }),
+    async list(p) {
+      const workspaceId = ws(p)
+      const needle = String(p.q ?? '').trim().toLowerCase()
+      const archived = p.archived === true ? 1 : 0
+      let rows = all('SELECT * FROM agents WHERE workspace_id=? AND archived=? ORDER BY id', workspaceId, archived)
+      if (p.category) rows = rows.filter((r) => r.category === p.category)
+      if (needle) rows = rows.filter((r) => r.name.toLowerCase().includes(needle) || r.summary.toLowerCase().includes(needle))
+      return { items: rows.map(view) }
+    },
+    get: async (p) => ({ agent: view(load(ws(p), p.id)) }),
+    async create(p) {
+      const workspaceId = ws(p)
+      const { name } = p
+      const summary = p.summary ?? ''
+      const instructions = p.instructions ?? ''
+      const category = p.category ?? null
+      const starts = p.quick_starts ?? []
+      if (!validName(name) || !validSummary(summary) || !validInstructions(instructions) || !validCategory(category) || !validQuickStarts(starts)) {
+        fail('invalid', 'Provide a name (≤80), summary (≤500) and instructions (≤16000)', 400)
+      }
+      if (!IDEM.test(String(p.idempotency_key ?? ''))) fail('invalid', 'Supply a 16–64 character Idempotency-Key', 400)
+      const clean = name.trim()
+      const keyHash = sha(p.idempotency_key)
+      const requestHash = sha(JSON.stringify([clean, summary, instructions, category || null, starts.map((s) => s.trim())]))
+      const prior = one('SELECT * FROM agents WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
+      if (prior) {
+        if (prior.request_hash !== requestHash) fail('conflict', 'Idempotency key was used for a different request', 409)
+        return { status: 200, agent: view(prior) }
+      }
+      if (one('SELECT id FROM agents WHERE workspace_id=? AND name_hash=?', workspaceId, sha(clean.toLowerCase()))) fail('conflict', 'An agent with this name already exists', 409)
+      if (one('SELECT COUNT(*) AS n FROM agents WHERE workspace_id=?', workspaceId).n >= LIMITS.agents) fail('quota', 'Agent capacity reached', 429)
+      const id = newId()
+      const t = now()
+      run('INSERT INTO agents (id, workspace_id, name, name_hash, summary, instructions, category, quick_starts, revision, created, updated, archived, key_hash, request_hash) VALUES(?,?,?,?,?,?,?,?,1,?,?,0,?,?)',
+        id, workspaceId, clean, sha(clean.toLowerCase()), summary, instructions, category || null, JSON.stringify(starts.map((s) => s.trim())), t, t, keyHash, requestHash)
+      return { status: 201, agent: view(one('SELECT * FROM agents WHERE id=?', id)) }
+    },
+    async update(p) {
+      const row = load(ws(p), p.id)
+      const { revision, changes } = p
+      if (!Number.isInteger(revision) || !changes || typeof changes !== 'object' || Array.isArray(changes) || !Object.keys(changes).length) fail('invalid', 'Provide the current revision and a non-empty changes object', 400)
+      const allowed = new Set(['name', 'summary', 'instructions', 'category', 'quick_starts'])
+      if (Object.keys(changes).some((k) => !allowed.has(k))) fail('invalid', 'Unknown agent field', 400)
+      if (revision !== row.revision) fail('conflict', 'Agent changed elsewhere; reload and retry', 409)
+      const next = { name: row.name, summary: row.summary, instructions: row.instructions, category: row.category, quick_starts: JSON.parse(row.quick_starts) }
+      if ('name' in changes) { if (!validName(changes.name)) fail('invalid', 'Invalid name', 400); next.name = changes.name.trim() }
+      if ('summary' in changes) { if (!validSummary(changes.summary)) fail('invalid', 'Invalid summary', 400); next.summary = changes.summary }
+      if ('instructions' in changes) { if (!validInstructions(changes.instructions)) fail('invalid', 'Invalid instructions', 400); next.instructions = changes.instructions }
+      if ('category' in changes) { if (!validCategory(changes.category)) fail('invalid', 'Invalid category', 400); next.category = changes.category || null }
+      if ('quick_starts' in changes) { if (!validQuickStarts(changes.quick_starts)) fail('invalid', 'Invalid quick starts', 400); next.quick_starts = changes.quick_starts.map((s) => s.trim()) }
+      if (next.name !== row.name && one('SELECT id FROM agents WHERE workspace_id=? AND name_hash=? AND id<>?', row.workspace_id, sha(next.name.toLowerCase()), row.id)) fail('conflict', 'An agent with this name already exists', 409)
+      run('UPDATE agents SET name=?, name_hash=?, summary=?, instructions=?, category=?, quick_starts=?, revision=revision+1, updated=? WHERE id=?',
+        next.name, sha(next.name.toLowerCase()), next.summary, next.instructions, next.category, JSON.stringify(next.quick_starts), now(), row.id)
+      return { agent: view(one('SELECT * FROM agents WHERE id=?', row.id)) }
+    },
+    async archive(p) {
+      const row = load(ws(p), p.id)
+      const archived = p.archived === false ? 0 : 1
+      run('UPDATE agents SET archived=?, revision=revision+1, updated=? WHERE id=?', archived, now(), row.id)
+      return { agent: view(one('SELECT * FROM agents WHERE id=?', row.id)) }
+    },
+    async conversations(p) {
+      const agent = load(ws(p), p.id)
+      return { items: all('SELECT * FROM agent_conversations WHERE agent_id=? ORDER BY updated DESC, id LIMIT 200', agent.id) }
+    },
+    async 'conversation-create'(p) {
+      const agent = load(ws(p), p.id)
+      const title = typeof p.title === 'string' && p.title.trim() ? p.title.trim().slice(0, 120) : agent.name
+      const row = { id: newId(), agent_id: agent.id, title, created: now(), updated: now() }
+      run('INSERT INTO agent_conversations VALUES(?,?,?,?,?)', row.id, row.agent_id, row.title, row.created, row.updated)
+      return { status: 201, conversation: row }
+    },
+    async messages(p) {
+      const agent = load(ws(p), p.id)
+      const convo = conversation(agent, p.conversation_id)
+      return { items: all('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created, id', convo.id).map((m) => ({ ...m, meta: JSON.parse(m.meta) })) }
+    },
+    // Send one message to the agent: a native DS-Bot turn on this conversation's session.
+    async send(p) {
+      const agent = load(ws(p), p.id)
+      const convo = conversation(agent, p.conversation_id)
+      const text = typeof p.text === 'string' ? p.text.trim() : ''
+      if (!text || text.length > LIMITS.text) fail('invalid', 'text must be 1–20000 characters', 400)
+      const userId = newId()
+      run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', userId, convo.id, 'user', text, 'sent', now(), '{}')
+      const replyId = newId()
+      try {
+        const reply = await turn({ agent_id: agent.id, key: convo.id, text, request_id: `ot-agent:${userId}`, reply_language: p.reply_language })
+        run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', reply.text, 'succeeded', now(),
+          JSON.stringify({ engine: 'ds-bot', session_id: reply.session_id, turn_id: reply.turn_id }))
+      } catch (error) {
+        run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', '', 'failed', now(), JSON.stringify({ error: String(error?.code ?? 'agents/failed') }))
+        run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
+        throw error
+      }
+      run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
+      const rows = all('SELECT * FROM agent_messages WHERE id IN (?,?) ORDER BY created, id', userId, replyId)
+      return { message: rows.find((r) => r.id === userId), reply: { ...rows.find((r) => r.id === replyId), meta: JSON.parse(rows.find((r) => r.id === replyId).meta) } }
+    },
+    turn,
+    // Legacy rows from the management export bundle (idempotent by id).
+    async import(bundle) {
+      const rows = Array.isArray(bundle?.agents) ? bundle.agents : null
+      if (!rows || rows.length > LIMITS.agents) fail('invalid', 'agents list required', 400)
+      let imported = 0
+      for (const r of rows) {
+        if (!r || !ID.test(String(r.id)) || !ID.test(String(r.workspace_id)) || !validName(r.name)) fail('invalid', 'Invalid legacy agent row', 400)
+        if (one('SELECT id FROM agents WHERE id=?', r.id)) continue
+        const name = r.name.trim()
+        if (one('SELECT id FROM agents WHERE workspace_id=? AND name_hash=?', r.workspace_id, sha(name.toLowerCase()))) continue
+        const starts = validQuickStarts(r.quick_starts ?? []) ? r.quick_starts ?? [] : []
+        run('INSERT INTO agents (id, workspace_id, name, name_hash, summary, instructions, category, quick_starts, revision, created, updated, archived, key_hash, request_hash, imported_from) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+          r.id, r.workspace_id, name, sha(name.toLowerCase()), validSummary(r.summary ?? '') ? r.summary ?? '' : '',
+          validInstructions(r.instructions ?? '') ? r.instructions ?? '' : '', validCategory(r.category ?? null) ? r.category || null : null,
+          JSON.stringify(starts), Number.isInteger(r.revision) && r.revision > 0 ? r.revision : 1, Number(r.created) || now(), Number(r.updated) || now(),
+          r.archived ? 1 : 0, sha('import:' + r.id), sha('import:' + r.id), 'management')
+        imported += 1
+      }
+      return { imported }
+    },
+  }
+  return { endpoints }
+}
+
+export default async function agents(host) {
+  const db = await openDatabase(host, 'agents.sqlite3')
+  const { endpoints } = createAgents({ db, host })
+  const wrapped = {}
+  for (const [name, fn] of Object.entries(endpoints)) wrapped[name] = async (payload) => fn(payload ?? {})
+  return { pages: ['agents'], endpoints: wrapped, migrate: async (bundle) => endpoints.import(bundle) }
+}
