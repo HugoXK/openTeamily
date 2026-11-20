@@ -101,7 +101,7 @@ function conversationItem(row, me, env, workspaceId) {
 
 function messageItem(row, me, env, workspaceId) {
   const author = row.author || { handle: null, owner_id: row.author_id, display_name: row.agent_name }
-  const agent = row.author_kind === 'agent'
+  const agent = row.author_kind === 'agent' || author.kind === 'agent'
   return {
     id: row.id,
     conversation_id: row.conversation_id,
@@ -112,7 +112,7 @@ function messageItem(row, me, env, workspaceId) {
     revision: row.revision || 1,
     edited: unix(row.edited_at) || null,
     retracted: !!row.retracted,
-    ...(agent ? { role: 'agent', agent_id: row.agent_ref, agent_name: row.agent_name, source: 'runtime_infer' } : {}),
+    ...(agent ? { role: 'agent', agent_id: row.agent_ref || author.agent_ref, agent_name: row.agent_name || author.name, source: 'runtime_infer' } : {}),
   }
 }
 
@@ -312,7 +312,7 @@ function invitesRoutes(host) {
       async handle({ body }) {
         return wrap(async () => {
           const bs = client(host)
-                  const data = await bs.post('/v1/ot/invites/accept', { code: body?.token || body?.code })
+          const data = await bs.post('/v1/ot/invites/accept', { code: body?.token || body?.code })
           if (data.status === 'pending') {
             return [202, { join_request: { id: data.request_id, status: 'pending', team_id: data.team_id } }]
           }
@@ -350,7 +350,7 @@ function invitesRoutes(host) {
       async handle() {
         return wrap(async () => {
           const bs = client(host)
-                  const data = await bs.get('/v1/ot/join-requests/mine')
+          const data = await bs.get('/v1/ot/join-requests/mine')
           return [200, { items: (data.requests || []).map((row) => requestItem(row)) }]
         })
       },
@@ -366,7 +366,7 @@ function teamsRoutes(host) {
       async handle({ query }) {
         return wrap(async () => {
           const bs = client(host)
-                  const q = parseQuery(query)
+          const q = parseQuery(query)
           const data = await bs.get('/v1/ot/directory' + qs({ q: q.get('q'), limit: q.get('limit') }))
           return [200, {
             items: (data.teams || []).map((t) => ({
@@ -385,7 +385,7 @@ function teamsRoutes(host) {
       async handle({ match }) {
         return wrap(async () => {
           const bs = client(host)
-                  const id = match[1]
+          const id = match[1]
           const teamId = HEX.test(id)
             ? (await bs.get(`/v1/ot/teams/by-workspace/${seg(id, 'workspace_id')}`)).id
             : id
@@ -495,12 +495,12 @@ function messengerRoutes(host) {
     },
     {
       method: 'POST', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/messages$/,
-      async handle({ match, body }) {
+      async handle({ match, body, idempotency_key }) {
         return wrap(async () => {
           const bs = client(host)
           await teamFor(bs, match[1], 'Workspace', env)
           const me = await meOf(bs, env)
-          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body })
+          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, client_key: idempotency_key, mentions: body?.mentions, reply_to: body?.reply_to })
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
         })
       },
@@ -534,7 +534,7 @@ function discoverRoutes(host) {
   const env = process.env
   const feed = (kind) => async ({ query }) => wrap(async () => {
     const bs = client(host)
-      const q = parseQuery(query)
+    const q = parseQuery(query)
     const data = await bs.get('/v1/ot/discover' + qs({
       kind, tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'), creator: q.get('creator'),
       before: q.get('cursor'), limit: q.get('limit'),
@@ -551,7 +551,7 @@ function discoverRoutes(host) {
       async handle({ match, body }) {
         return wrap(async () => {
           const bs = client(host)
-                  const listing = await bs.get(`/v1/ot/discover/${seg(match[1], 'slug')}`)
+          const listing = await bs.get(`/v1/ot/discover/${seg(match[1], 'slug')}`)
           const action = body?.action
           const on = body?.enabled !== false
           if (action === 'like') await bs.post(`/v1/ot/listings/${seg(listing.id, 'listing_id')}/like`, { on })
@@ -568,7 +568,7 @@ function discoverRoutes(host) {
       async handle({ match }) {
         return wrap(async () => {
           const bs = client(host)
-                  const mine = await bs.get('/v1/ot/listings/mine')
+          const mine = await bs.get('/v1/ot/listings/mine')
           const row = (mine.listings || []).find((l) => l.kind === 'agent' && l.ref === match[2] && l.listed)
           return [200, { discover: row ? { listed: true, slug: row.slug, updated: unix(row.updated_at) } : { listed: false } }]
         })
@@ -579,7 +579,7 @@ function discoverRoutes(host) {
       async handle({ match, body }) {
         return wrap(async () => {
           const bs = client(host)
-                  const slug = body?.slug
+          const slug = body?.slug
           const data = await bs.put('/v1/ot/listings', {
             kind: 'agent', ref: match[2], slug, title: body?.title || slug, summary: body?.summary || '',
           })
@@ -592,7 +592,7 @@ function discoverRoutes(host) {
       async handle({ match }) {
         return wrap(async () => {
           const bs = client(host)
-                  const mine = await bs.get('/v1/ot/listings/mine')
+          const mine = await bs.get('/v1/ot/listings/mine')
           const row = (mine.listings || []).find((l) => l.kind === 'agent' && l.ref === match[2])
           if (row) await bs.del(`/v1/ot/listings/${seg(row.id, 'listing_id')}`)
           return [200, { discover: { listed: false } }]

@@ -12,9 +12,13 @@ const error = (status, code, message) => ({ status, body: { error: { code, messa
 export function compatHandler(routes) {
   return async (payload) => {
     const method = String(payload?.method ?? '').toUpperCase()
-    const path = payload?.path
-    const query = typeof payload?.query === 'string' ? payload.query.replace(/^\?/, '') : ''
-    if (!METHODS.has(method) || typeof path !== 'string' || !path.startsWith('/v1/') || path.length > 256 || query.length > 512) {
+    const rawPath = payload?.path
+    const embedded = typeof rawPath === 'string' ? rawPath.indexOf('?') : -1
+    const path = embedded >= 0 ? rawPath.slice(0, embedded) : rawPath
+    const explicitQuery = typeof payload?.query === 'string' ? payload.query.replace(/^\?/, '') : ''
+    if (embedded >= 0 && explicitQuery) return error(400, 'invalid', 'Ambiguous compat query')
+    const query = embedded >= 0 ? rawPath.slice(embedded + 1) : explicitQuery
+    if (!METHODS.has(method) || typeof path !== 'string' || !path.startsWith('/v1/') || path.includes('#') || query.includes('#') || path.length > 256 || query.length > 512) {
       return error(400, 'invalid', 'Invalid compat request')
     }
     if (method !== 'GET' && query) return error(400, 'invalid', 'Query parameters are not accepted for writes')
@@ -25,7 +29,7 @@ export function compatHandler(routes) {
       pathMatched = true
       if (route.method !== method) continue
       try {
-        const [status, body] = await route.handle({ match, query, body: payload.body, method })
+        const [status, body] = await route.handle({ match, query, body: payload.body, method, idempotency_key: payload.idempotency_key })
         return { status, body }
       } catch (caught) {
         if (caught instanceof Fault) {

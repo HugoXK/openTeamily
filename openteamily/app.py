@@ -1237,6 +1237,8 @@ class App:
             if path == '/v1/agent/tasks' and method == 'GET' and not query:
                 items = []
                 for row in runtime_connect.queued_for(db, connection['id']):
+                    if self.legacy_group_task_moved(db, row):
+                        continue
                     row = runtime_connect.expire_task(db, row, now)
                     if row['status'] == 'queued':
                         items.append(runtime_connect.view_with_meta(db, row))
@@ -1247,6 +1249,8 @@ class App:
                 task = runtime_connect.load_task(db, claim[1], connection_id=connection['id'])
                 if task is None:
                     refuse(404, 'not_found', 'Runtime task not found')
+                if self.legacy_group_task_moved(db, task):
+                    refuse(409, 'moved_to_dsbot', 'Group replies run on the owner DS-Bot')
                 task = runtime_connect.expire_task(db, task, now)
                 claimed = runtime_connect.claim_task(db, task, now)
                 if claimed is None:
@@ -1345,10 +1349,20 @@ class App:
             refuse(400, 'invalid', 'Connected tools can only be requested for infer tasks')
         return 201, {'task': runtime_connect.view_with_meta(db, row)}, []
 
+    def legacy_group_task_moved(self, db, task):
+        # Old rows remain for audit/rollback, but cannot execute alongside the
+        # per-user Bot Social inbox. Also reject direct claim/model-access URLs.
+        from .dsbot_gateway import workspace_moved_to_dsbot
+        row = db.execute('SELECT workspace_id FROM social_agent_replies WHERE task_id=?',
+                         (task['id'],)).fetchone()
+        return bool(row) and workspace_moved_to_dsbot(db, row['workspace_id'], 'messenger')
+
     def issue_model_access(self, db, connection, task_id, now, skill_format=None, http_capability=None):
         task = runtime_connect.load_task(db, task_id, connection_id=connection['id'])
         if task is None:
             refuse(404, 'not_found', 'Runtime task not found')
+        if self.legacy_group_task_moved(db, task):
+            refuse(409, 'moved_to_dsbot', 'Group replies run on the owner DS-Bot')
         task = runtime_connect.expire_task(db, task, now)
         if task['kind'] != 'infer':
             refuse(400, 'invalid', 'Model access is only issued for infer tasks')
@@ -4723,6 +4737,9 @@ class App:
         return 200, {'conversation': social.conversation_item(db, row)}, []
 
     def request_group_reply(self, db, workspace, session, row, now, env):
+        from .dsbot_gateway import workspace_moved_to_dsbot
+        if workspace_moved_to_dsbot(db, workspace['id'], 'messenger'):
+            refuse(409, 'moved_to_dsbot', 'Use the owner DS-Bot messenger; central group inference is disabled')
         body = self.body(env, ['agent_id', 'agent_ids', 'prompt'])
         text = body.get('prompt')
         agent_ids = body.get('agent_ids')
@@ -4793,6 +4810,9 @@ class App:
         return (201 if new_plans else 200), {'reply': payload[0], 'replies': payload}, []
 
     def reconcile_group_replies(self, db, row, now):
+        from .dsbot_gateway import workspace_moved_to_dsbot
+        if workspace_moved_to_dsbot(db, row['workspace_id'], 'messenger'):
+            return
         for reply in social.reply_requests(db, row['id']):
             if reply['status'] not in ('queued', 'running'):
                 continue
