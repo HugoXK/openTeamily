@@ -72,7 +72,7 @@ test('the AI 团队 tab reads the real public team directory instead of a placeh
   assert.equal(doc.getElementById('discover-empty').hidden, true);
 });
 
-test('an empty public directory says what is true and offers the real creation page', async () => {
+test('an empty public directory says what is true and names the two real steps', async () => {
   const { TEAMS_EMPTY_NOTE } = await import('../openteamily/static/discover/app.mjs');
   const { mount } = await import('../openteamily/static/discover/app.mjs');
   const doc = fakeDocument();
@@ -82,9 +82,8 @@ test('an empty public directory says what is true and offers the real creation p
   assert.equal(empty.hidden, false);
   assert.equal(empty.textContent, TEAMS_EMPTY_NOTE);
   assert.match(TEAMS_EMPTY_NOTE, /还没有公开的 AI 团队/);
-  assert.match(HTML, /<a class="catalog-create" id="catalog-create-team" href="\/team"[^>]*>\+ 创建我的 AI 团队<\/a>/,
-    'creation lands on the real /team page, which posts POST /v1/teams');
-  assert.equal(doc.getElementById('catalog-create-team').disabled, false);
+  assert.match(TEAMS_EMPTY_NOTE, /创建一个团队/);
+  assert.match(TEAMS_EMPTY_NOTE, /登记到公共目录/);
 });
 
 test('a team search passes q to the directory and reports no match honestly', async () => {
@@ -104,7 +103,7 @@ test('a team search passes q to the directory and reports no match honestly', as
   assert.match(TEAMS_NONE_MATCHED, /没有匹配的公开 AI 团队/);
 });
 
-test('teams markup has no 未接通 placeholder left for the directory or creation', () => {
+test('teams markup has no 未接通 placeholder left for the directory', () => {
   const start = HTML.indexOf('id="teams-filters"');
   const end = HTML.indexOf('id="catalog-panel"');
   const chipLines = HTML.slice(start, end).split('\n').filter(line =>
@@ -112,9 +111,8 @@ test('teams markup has no 未接通 placeholder left for the directory or creati
   assert.ok(chipLines.length >= 12, 'the recorded team chips are still all present');
   for (const line of chipLines) assert.equal(/未接通/.test(line), false, 'no 未接通 team chip: ' + line.trim().slice(0, 60));
   assert.equal(/没有公共 AI 团队目录接口/.test(HTML), false);
-  const create = HTML.match(/<a[^>]*id="catalog-create-team"[^>]*>/);
-  assert.ok(create, 'creation is a real link, not a disabled button');
-  assert.match(create[0], /href="\/team"/);
-  assert.equal(/disabled/.test(create[0]), false);
+  // The creation entry belongs to another slice (#313). It stays exactly as
+  // base ships it, so this slice keeps its own claim narrow.
+  assert.match(HTML, /<button type="button" class="catalog-create" id="catalog-create-team" hidden disabled/);
   assert.match(HTML, /id="teams-note"[^>]*>以下是本实例里公开登记的 AI 团队/);
 });
