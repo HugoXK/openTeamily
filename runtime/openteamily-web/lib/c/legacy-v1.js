@@ -2,8 +2,8 @@
 // When the core stream flips those pages onto the user's own DS-Bot, dsbot-api.mjs
 // posts {endpoint:'<feature>/v1', payload:{method,path,body}} here. The handlers
 // talk to Bot Social and return the Flask JSON shapes those pages already expect.
-// Auth and GET/POST /v1/workspaces (and POST /v1/teams, which creates a platform
-// workspace) stay on the site. Do not flip dsbot_routes.json from this stream.
+// GET/POST /v1/workspaces and POST /v1/teams are served here too: every workspace
+// is a Bot Social team with a 32-hex workspace_id; the platform keeps only auth.
 import { compatHandler } from '../b4/compat.js'
 import { Fault } from '../b4/http.js'
 import { ownerId } from '../../featurekit/v1.js'
@@ -358,9 +358,75 @@ function invitesRoutes(host) {
   ]
 }
 
+function workspaceItem(team, me, env) {
+  return {
+    id: team.workspace_id,
+    owner_id: userIdOf(team.owner || {}, me, env),
+    name: team.name,
+    created: unix(team.created_at),
+    kind: team.slug ? 'team' : 'workspace',
+    slug: team.slug || null,
+    team_name: team.slug ? team.name : null,
+    converted: false,
+    role: team.role || null,
+    member_count: team.member_count ?? 1,
+  }
+}
+
+const IDEM = /^[A-Za-z0-9_-]{16,64}$/
+
 function teamsRoutes(host) {
   const env = process.env
   return [
+    {
+      method: 'GET', path: /^\/v1\/workspaces$/,
+      async handle({ query }) {
+        return wrap(async () => {
+          const bs = client(host)
+          const q = parseQuery(query)
+          const limit = Math.min(Math.max(Number(q.get('limit') || 20) || 20, 1), 100)
+          const cursor = q.get('cursor') || ''
+          const [me, data] = await Promise.all([meOf(bs, env), bs.get('/v1/ot/workspaces')])
+          let rows = (data.workspaces || []).filter((t) => HEX.test(String(t.workspace_id || '')))
+          if (cursor) {
+            const at = rows.findIndex((t) => t.workspace_id === cursor)
+            rows = at >= 0 ? rows.slice(at + 1) : []
+          }
+          const page = rows.slice(0, limit)
+          return [200, { items: page.map((t) => workspaceItem(t, me, env)), cursor: rows.length > limit ? page[page.length - 1].workspace_id : null }]
+        })
+      },
+    },
+    {
+      method: 'POST', path: /^\/v1\/workspaces$/,
+      async handle({ body, idempotency_key: key }) {
+        return wrap(async () => {
+          const name = typeof body?.name === 'string' ? body.name.trim() : ''
+          if (!name || name.length > 80) throw new Fault(400, 'invalid', 'Workspace name must be 1–80 characters without controls')
+          if (!IDEM.test(String(key || ''))) throw new Fault(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+          const bs = client(host)
+          const [me, team] = await Promise.all([meOf(bs, env), bs.post('/v1/ot/workspaces', { name, idempotency_key: key })])
+          return [201, { workspace: workspaceItem(team, me, env) }]
+        })
+      },
+    },
+    {
+      method: 'POST', path: /^\/v1\/teams$/,
+      async handle({ body, idempotency_key: key }) {
+        return wrap(async () => {
+          const name = typeof body?.name === 'string' ? body.name.trim() : ''
+          const slug = body?.slug
+          if (!name || !['new', 'convert'].includes(body?.mode)) throw new Fault(400, 'invalid', 'Provide a team name, a valid Team ID, and new or convert')
+          if (!IDEM.test(String(key || ''))) throw new Fault(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+          const bs = client(host)
+          const me = await meOf(bs, env)
+          const team = body.mode === 'new'
+            ? await bs.post('/v1/ot/workspaces', { name, slug, idempotency_key: key })
+            : await bs.post(`/v1/ot/workspaces/${seg(body?.workspace_id, 'workspace_id')}/convert`, { name, slug })
+          return [body.mode === 'new' ? 201 : 200, { workspace: { ...workspaceItem(team, me, env), converted: body.mode === 'convert' } }]
+        })
+      },
+    },
     {
       method: 'GET', path: /^\/v1\/team-directory$/,
       async handle({ query }) {
