@@ -99,7 +99,7 @@ Social (cross-user). "Batch" is the implementation PR that moves it (see §6).
 | `/artifacts/` (studio, slides, boards, dashboards, versions) | D (+S for shares) | B3 | Exports via ds-bot office (#379 keeps `office_exports.py` only until B3). |
 | `/memory/` | D (+S for share links #299) | B3 | ds-bot memory scopes + plugin tables. |
 | `/meetings/` | D | B3 | |
-| `/settings/` (preferences, model API, skill secrets, Composio, custom MCP, notifications) | D (P keeps account security: password, linked identities, delete account #362) | B4 | Secrets move into DS-Bot `secrets.js` encrypted store. |
+| `/settings/` (preferences, model API, skill secrets, Composio, custom MCP, notifications) | D (P keeps account security: password, linked identities, delete account #362) | B4 | Secrets are sealed by the plugin on the user's volume (AES-256-GCM, purpose-bound, `lib/b4/seal.js`), not `secrets.js` (which exposes values to bot shells as `$DSH_SECRET_*`); see §8a. |
 | `/profile/`, `/look/` | P for public handle/avatar; D for private look/preferences | B4 | Public handle is cross-user → published to Bot Social. |
 | `/onboarding/` | D (first-run inside DS-Bot); P only for the post-register redirect | B4 | |
 | `/runtimes/` | P | A | Becomes "your DS-Bot" status/start/stop page; own-machine FlyBot (`runtime_keys`, `runtime_connect`) stays P during transition, retired in D. |
@@ -268,6 +268,25 @@ and a container test proving the capability executes inside the user's DS-Bot.
   legacy feature module.
 * High-overlap areas to sequence: chat (#346, #352, #358, #368, #271), settings (#284, #384, #197),
   automations (#310), memory (#299, #378), discover (#313, #335), team/members (#281), profile (#362).
+
+## 8a. B4 status (settings, model API, connectors)
+
+* Features: `features/settings` (#410), `features/model-api` (#416), `features/connectors` (#426),
+  import (#431). Each exposes `<feature>/v1` taking `{method, path, query, body}` and returning the exact
+  legacy Flask `{status, body}`, so the gateway can forward moved `/v1` routes unchanged:
+  settings → `/v1/settings`, `/v1/notification-prefs`, `/v1/onboarding{,/recommendations,/picks,/look}`;
+  model-api → `/v1/model-api`; connectors → `/v1/composio/*`, `/v1/connected-tools*`, `/v1/custom-mcp*`.
+  `/v1/onboarding/automations` stays with B2.
+* Model key reaches only the in-process loopback proxy (`ds-bot-bridge.mjs` `userModelOverride`);
+  DS-Bot keeps its placeholder token. Public HTTP bases only via the read-only #375 policy file.
+* Composio is per-user only (no admin fallback); tools reach DS-Bot through the loopback `ot-apps` MCP
+  capability with in-plugin approvals (300 s TTL, never retried).
+* Runtime requirements (deploy, not done by B4): `OPENTEAMILY_PUBLIC_ORIGIN` (Composio callback),
+  read-only `/run/secrets/openteamily-model-http.json` (#375), and a manager-provided
+  `/run/secrets/openteamily-seal.key`; the platform passes the same key to
+  `dsbot_bundle.build_with_secrets` so imported secrets can be re-sealed. Without it, bundles carrying
+  secrets are rejected and kept for retry.
+* Stays platform: account security, runtime keys UI (#282), delete account (#362), public profile.
 
 ## 8. Rollback
 
