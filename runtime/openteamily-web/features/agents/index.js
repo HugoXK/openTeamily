@@ -105,6 +105,12 @@ export function createAgents({ db, host }) {
       }
       return { items }
     },
+    async groupActivity(p) {
+      const { rt } = await host.runtime()
+      const mappings = all('SELECT * FROM native_agent_sessions WHERE conversation_key LIKE ?', 'agent:%:social:' + String(p.conversation_id || ''))
+      const active = mappings.filter(m => rt.live.get(m.session_id)?.turn !== undefined)
+      return { running: active.length > 0, speaking: active.length ? one('SELECT bot_id FROM native_agent_objects WHERE agent_id=?', active[0].agent_id)?.bot_id || null : null }
+    },
     byId: async p => ({ agent: view(await native.ensure(loadAny(p.id))) }),
     categories: async () => ({ items: CATEGORIES }),
     async list(p) {
