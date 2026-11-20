@@ -37,6 +37,7 @@ jobs:
       - run: node --test tests/team_page.test.mjs
       - run: node --test manager/compose-planner/compose-command-planner.test.js
       - run: node --test tests/settings_page.test.mjs
+      - run: node --test tests/settings_support_links.test.mjs
       - run: node --test tests/runtimes_copy_feedback.test.mjs
       - run: node --test tests/shell_page.test.mjs
       - run: node --test tests/agent_loop.test.mjs
@@ -46,8 +47,10 @@ jobs:
       - run: node --test tests/memory_graph_empty.test.mjs
       - run: node --test tests/discover_page.test.mjs
       - run: node --test tests/profile_page.test.mjs
+      - run: node --test tests/download_page.test.mjs
       - run: node --test tests/profile_avatar.test.mjs
       - run: node --test tests/meetings_page.test.mjs
+      - run: node --test tests/meetings_action_toggle.test.mjs
       - run: node --test tests/meetings_attendee_complete.test.mjs
       - run: node --test tests/agents_creator_filter.test.mjs
       - run: node --test tests/registration_page.test.mjs
@@ -57,6 +60,7 @@ jobs:
       - run: node --test tests/home_page.test.mjs
       - run: node --test tests/look_avatar.test.mjs
       - run: node --test tests/docs_pages.test.mjs
+      - run: node --test tests/onboarding_step2.test.mjs
       - run: node --test tests/follow_work_notify.test.mjs
       - name: Python tests with explicit trusted runner Node
         run: |

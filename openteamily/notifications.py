@@ -4,9 +4,11 @@ Self-written for OpenTeamily; no upstream or Teamily source. A notification is
 created only when a human message names another human member of the same
 conversation as ``@username``. Visibility is re-checked on every read: a
 recipient who left the conversation or a retracted message stops showing.
-Group agent request completion is also listed for the requester. A due message
-reminder is listed too, derived from the one-shot automation run it fires. A follower
-who turned on 作品通知 for a creator they follow is told once per newly listed
+Group agent request completion is also listed for the requester, and saving a work
+in the artifact library notifies the other workspace members who can see it. The
+artifact write side only; the /artifacts notification button is a later slice.
+A due message reminder is listed too, derived from the one-shot automation run it fires.
+A follower who turned on 作品通知 for a creator they follow is told once per newly listed
 public work; that source reuses ``discover_follows`` and hides an item again
 when the work stops being listed. User-agent conversation unread aggregation
 and server push are not implemented here; do not describe this as Teamily
@@ -60,6 +62,19 @@ CREATE TABLE IF NOT EXISTS social_reply_notification_reads (
  reply_id TEXT NOT NULL REFERENCES social_agent_replies(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  PRIMARY KEY(reply_id, user_id));
+CREATE TABLE IF NOT EXISTS artifact_notifications (
+ id TEXT PRIMARY KEY,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ actor_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+ action TEXT NOT NULL CHECK(action IN ('created','updated')),
+ seq INTEGER NOT NULL,
+ created INTEGER NOT NULL,
+ read INTEGER NOT NULL DEFAULT 0 CHECK(read IN (0,1)),
+ UNIQUE(artifact_id, user_id));
+CREATE INDEX IF NOT EXISTS artifact_notification_inbox
+ ON artifact_notifications(workspace_id, user_id, seq);
 CREATE TABLE IF NOT EXISTS automation_reminder_reads (
  run_id TEXT NOT NULL REFERENCES automation_runs(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -128,6 +143,73 @@ VISIBLE = '''
 '''
 
 
+# Workspace members who can see the artifact library: the owner plus every member
+# who is not suspended. Roles do not filter the library (artifacts.listing has no
+# role predicate), so suspension is the only exclusion here.
+ARTIFACT_RECIPIENTS = '''
+SELECT w.owner_id AS user_id FROM workspaces w WHERE w.id=?
+UNION
+SELECT m.user_id FROM workspace_members m WHERE m.workspace_id=?
+ AND NOT EXISTS (SELECT 1 FROM workspace_member_suspensions s
+                 WHERE s.workspace_id=m.workspace_id AND s.user_id=m.user_id)
+'''
+
+
+def wants_artifact(db, workspace_id, user_id):
+    """Per-user opt-out for workspace artifact saves.
+
+    #284 (notification_prefs) supplies the preference row, so this is the one place
+    that returns False for members who switched artifact notices off.
+    """
+    return notification_prefs.enabled(db, user_id, 'artifacts')
+
+
+def record_artifact(db, workspace_id, actor_id, artifact_id, action, now):
+    """Insert one unread notice per recipient; saving the same artifact again never duplicates.
+
+    The row is keyed (artifact_id, user_id), so a later edit of the same work does not
+    add a second line; the first save keeps the row a member already saw.
+    """
+    rows = db.execute(ARTIFACT_RECIPIENTS, (workspace_id, workspace_id)).fetchall()
+    seq = db.execute('SELECT COALESCE(MAX(seq),0) FROM artifact_notifications').fetchone()[0]
+    written = 0
+    for row in rows:
+        user_id = row['user_id']
+        if user_id == actor_id or not wants_artifact(db, workspace_id, user_id):
+            continue
+        seq += 1
+        cursor = db.execute(
+            'INSERT OR IGNORE INTO artifact_notifications '
+            '(id,workspace_id,user_id,actor_id,artifact_id,action,seq,created,read) '
+            'VALUES(?,?,?,?,?,?,?,?,0)',
+            (uuid4().hex, workspace_id, user_id, actor_id, artifact_id, action, seq, now))
+        written += 1 if cursor.rowcount > 0 else 0
+    return written
+
+
+# Visibility is re-checked on every read, like the mention source: a recipient who was
+# suspended or removed, or a work that was deleted, stops showing.
+VISIBLE_ARTIFACTS = '''
+ FROM artifact_notifications n
+ JOIN artifacts a ON a.id=n.artifact_id AND a.workspace_id=n.workspace_id
+ JOIN users ac ON ac.id=n.actor_id
+ JOIN workspaces w ON w.id=n.workspace_id
+ WHERE n.workspace_id=? AND n.user_id=?
+  AND (w.owner_id=n.user_id OR EXISTS (
+        SELECT 1 FROM workspace_members m
+        WHERE m.workspace_id=n.workspace_id AND m.user_id=n.user_id
+         AND NOT EXISTS (SELECT 1 FROM workspace_member_suspensions s
+                         WHERE s.workspace_id=m.workspace_id AND s.user_id=m.user_id)))
+'''
+
+
+def artifact_view(row):
+    return {'id': row['id'], 'kind': 'artifact', 'artifact_id': row['artifact_id'],
+            'artifact_title': row['artifact_title'], 'action': row['action'],
+            'actor_id': row['actor_id'], 'actor_username': row['actor_username'],
+            'created': row['created'], 'read': bool(row['read'])}
+
+
 def view(row):
     body = row['body']
     return {'id': row['id'], 'kind': row['kind'], 'conversation_id': row['conversation_id'],
@@ -158,7 +240,7 @@ def reply_view(row):
             'created': row['updated'], 'read': row['is_read'] == 1}
 
 
-ARTIFACT_VISIBLE = '''
+SAVED_ARTIFACT_VISIBLE = '''
  FROM artifact_chat_sources s
  JOIN artifacts a ON a.id=s.artifact_id
  JOIN social_conversations c ON c.id=s.conversation_id
@@ -169,17 +251,17 @@ ARTIFACT_VISIBLE = '''
 '''
 
 
-def _artifact_rows(db, workspace_id, user_id, extra='', args=(), limit=LIMIT):
+def _saved_artifact_rows(db, workspace_id, user_id, extra='', args=(), limit=LIMIT):
     return db.execute(
         'SELECT a.id AS id, a.title AS title, a.created AS created, a.created_by AS created_by, '
         's.conversation_id AS conversation_id, s.message_id AS message_id, '
         'c.kind AS conversation_kind, c.title AS conversation_title, u.username AS actor_username, '
-        '(rr.artifact_id IS NOT NULL) AS is_read' + ARTIFACT_VISIBLE + extra
+        '(rr.artifact_id IS NOT NULL) AS is_read' + SAVED_ARTIFACT_VISIBLE + extra
         + ' ORDER BY a.created DESC, a.id DESC LIMIT ?',
         (user_id, user_id, workspace_id, user_id, *args, limit)).fetchall()
 
 
-def artifact_view(row):
+def saved_artifact_view(row):
     return {'id': row['id'], 'kind': 'artifact', 'conversation_id': row['conversation_id'],
             'conversation_kind': row['conversation_kind'], 'conversation_title': row['conversation_title'],
             'message_id': row['message_id'], 'actor_id': row['created_by'],
@@ -188,9 +270,9 @@ def artifact_view(row):
             'created': row['created'], 'read': row['is_read'] == 1}
 
 
-def _mark_artifacts(db, workspace_id, user_id, extra='', args=()):
+def _mark_saved_artifacts(db, workspace_id, user_id, extra='', args=()):
     db.execute('INSERT OR IGNORE INTO social_artifact_notification_reads(artifact_id,user_id) SELECT a.id, ?'
-               + ARTIFACT_VISIBLE + ' AND rr.artifact_id IS NULL' + extra,
+               + SAVED_ARTIFACT_VISIBLE + ' AND rr.artifact_id IS NULL' + extra,
                (user_id, user_id, user_id, workspace_id, user_id, *args))
 
 # A due one-shot reminder is a derived notification as well: the automation run is the
@@ -344,8 +426,13 @@ def listing(db, workspace_id, user_id, unread_only=False, now=0):
             + ' ORDER BY r.updated DESC, r.id DESC LIMIT ?', (workspace_id, user_id, LIMIT)).fetchall()
         items += [reply_view(row) for row in replies]
     if prefs['artifacts']:
-        items += [artifact_view(row) for row in _artifact_rows(
+        items += [saved_artifact_view(row) for row in _saved_artifact_rows(
             db, workspace_id, user_id, ' AND rr.artifact_id IS NULL' if unread_only else '')]
+        artifacts_listed = db.execute(
+            'SELECT n.*, a.title AS artifact_title, ac.username AS actor_username' + VISIBLE_ARTIFACTS
+            + (' AND n.read=0' if unread_only else '') + ' ORDER BY n.seq DESC LIMIT ?',
+            (workspace_id, user_id, LIMIT)).fetchall()
+        items += [artifact_view(row) for row in artifacts_listed]
     items += [reminder_view(row) for row in _reminder_rows(
         db, workspace_id, user_id, now, ' AND rr.run_id IS NULL' if unread_only else '')]
     items += follow_work_listing(db, user_id, unread_only)
@@ -363,11 +450,14 @@ def unread_count(db, workspace_id, user_id, now=0):
         count += db.execute('SELECT COUNT(*)' + REPLIES + ' AND rr.reply_id IS NULL',
                             (workspace_id, user_id)).fetchone()[0]
     if prefs['artifacts']:
-        count += db.execute('SELECT COUNT(*)' + ARTIFACT_VISIBLE + ' AND rr.artifact_id IS NULL',
+        count += db.execute('SELECT COUNT(*)' + SAVED_ARTIFACT_VISIBLE + ' AND rr.artifact_id IS NULL',
                             (user_id, user_id, workspace_id, user_id)).fetchone()[0]
+        count += db.execute('SELECT COUNT(*)' + VISIBLE_ARTIFACTS + ' AND n.read=0',
+                            (workspace_id, user_id)).fetchone()[0]
     reminders = _reminder_rows(db, workspace_id, user_id, now, ' AND rr.run_id IS NULL')
     follows = db.execute('SELECT COUNT(*)' + FOLLOW_WORK + ' AND n.read=0', (user_id,)).fetchone()[0]
     return count + len(reminders) + follows
+
 
 
 def _mark_replies(db, workspace_id, user_id, extra='', args=()):
@@ -380,7 +470,9 @@ def mark_read(db, workspace_id, user_id, notification_id=None, now=0):
         db.execute('UPDATE social_notifications SET read=1 WHERE workspace_id=? AND user_id=? AND read=0',
                    (workspace_id, user_id))
         _mark_replies(db, workspace_id, user_id)
-        _mark_artifacts(db, workspace_id, user_id)
+        _mark_saved_artifacts(db, workspace_id, user_id)
+        db.execute('UPDATE artifact_notifications SET read=1 WHERE workspace_id=? AND user_id=? AND read=0',
+                   (workspace_id, user_id))
         _mark_reminders(db, workspace_id, user_id, now)
         db.execute('UPDATE social_follow_work_notifications SET read=1 WHERE user_id=? AND read=0', (user_id,))
         return True
@@ -394,9 +486,12 @@ def mark_read(db, workspace_id, user_id, notification_id=None, now=0):
     if db.execute('SELECT 1' + REPLIES + ' AND r.id=?', (workspace_id, user_id, notification_id)).fetchone():
         _mark_replies(db, workspace_id, user_id, ' AND r.id=?', (notification_id,))
         return True
-    if db.execute('SELECT 1' + ARTIFACT_VISIBLE + ' AND a.id=?',
+    if db.execute('UPDATE artifact_notifications SET read=1 WHERE id=? AND workspace_id=? AND user_id=?',
+                  (notification_id, workspace_id, user_id)).rowcount == 1:
+        return True
+    if db.execute('SELECT 1' + SAVED_ARTIFACT_VISIBLE + ' AND a.id=?',
                   (user_id, user_id, workspace_id, user_id, notification_id)).fetchone():
-        _mark_artifacts(db, workspace_id, user_id, ' AND a.id=?', (notification_id,))
+        _mark_saved_artifacts(db, workspace_id, user_id, ' AND a.id=?', (notification_id,))
         return True
     if any(row['id'] == notification_id for row in _reminder_rows(db, workspace_id, user_id, now)):
         _mark_reminders(db, workspace_id, user_id, now, notification_id)
@@ -411,7 +506,7 @@ def mark_conversation_read(db, workspace_id, user_id, conversation_id, up_to_seq
                (workspace_id, user_id, conversation_id, conversation_id, up_to_seq))
     _mark_replies(db, workspace_id, user_id, ' AND r.conversation_id=? AND (r.seq IS NULL OR r.seq<=?)',
                   (conversation_id, up_to_seq))
-    _mark_artifacts(db, workspace_id, user_id,
+    _mark_saved_artifacts(db, workspace_id, user_id,
                     ' AND s.conversation_id=? AND s.message_id IN '
                     '(SELECT id FROM social_messages WHERE conversation_id=? AND seq<=?)',
                     (conversation_id, conversation_id, up_to_seq))
