@@ -351,9 +351,9 @@ test('settings connectors markup lists the catalog as disconnected without leaki
   assert.match(html, /class="connector-search-icon"/);
   assert.match(html, /id="connectors-empty"[^>]*hidden[^>]*>没有匹配的应用。/);
   assert.doesNotMatch(html, /还没有可连接的应用目录/);
-  // The overview admits the true count (zero connected) instead of a bare claim.
-  assert.equal((html.match(/已连接/g) || []).length, 1);
-  assert.match(html, /已连接 0 个/);
+  // The overview admits the true count without claiming anything is connected.
+  assert.equal((html.match(/已连接/g) || []).length, 0);
+  assert.match(html, /0 个已接入/);
   for (const item of CONNECTOR_CATALOG) {
     assert.ok(html.includes(`>${item.name}<`), item.name);
     assert.ok(html.includes(item.about), item.id);
@@ -763,7 +763,7 @@ test('connectors overview groups the catalog by category with counts and a key a
   assert.match(html, /id="connectors-overview"/);
   assert.match(html, /共 39 个应用/);
   assert.match(html, /8 个分类/);
-  assert.match(html, /已连接 0 个/);
+  assert.match(html, /0 个已接入/);
   assert.match(html, /id="connectors-key-jump"[^>]*href="#composio-key-input"/);
   assert.match(html, /id="connectors-key-hint"/);
   const groups = [['dev', '开发', 6], ['docs', '文档', 7], ['work', '协作', 11], ['commerce', '支付', 3],
