@@ -58,10 +58,26 @@ export async function importHistory({ db, rt, ctx, bot, conversationId, sessionI
     let event
     if(!row.text || row.status==='failed') event=agent.session.append('openteamily/message-status',{source,role:row.role,text:row.text,status:row.status})
     else if(row.role==='user') event=agent.session.append('user/message',{source,content:[{type:'text',text:row.text}]},{surfaceOp:'append'})
-    else event=agent.session.append('assistant/message',{source,message:{role:'assistant',content:[{type:'text',text:row.text}]}},{surfaceOp:'append'})
+    else event=agent.session.append('assistant/message',{source,stream:[],message:{role:'assistant',content:[{type:'text',text:row.text}]}},{surfaceOp:'append'})
     // Flush BEFORE mapping: a crash between these is recovered by event source id.
     await ctx.sessions.flush(agent.session)
     put.run(row.id,sessionId,event.seq,'imported'); imported++
   }
   return { imported,matched }
+}
+
+// Compatibility for the first history-import release: those append-only events
+// predate the native required stream field. Normalize ONLY our marked imports
+// for native projection reads; preserve the durable log and source mapping.
+// Empty stream means no recorded transport/usage, never invented token usage.
+export function normalizeImportedSession(session) {
+  const mark = Symbol.for('openteamily.imported-event-normalizer')
+  if (!session || session[mark]) return
+  const read = session.eventAt.bind(session)
+  session.eventAt = seq => {
+    const e = read(seq)
+    return e?.type === 'assistant/message' && e.data?.source?.imported === true && /^[0-9a-f]{32}$/.test(e.data.source.openteamilyMessageId || '') && !Array.isArray(e.data.stream)
+      ? { ...e, data: { ...e.data, stream: [] } } : e
+  }
+  session[mark] = true
 }
