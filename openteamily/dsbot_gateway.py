@@ -117,58 +117,17 @@ MOVED_APIS = (
     (re.compile(r'^/v1/mcp/servers(?:/[0-9a-f]{32})?$'), 'connectors'),
 )
 
-# Nginx locations that send a moved /v1 API to the owner's DS-Bot. More-specific
-# platform exceptions (automations, composio callback) are emitted first.
+# Nginx locations that send a moved /v1 API to the owner's DS-Bot. Platform-
+# owned exceptions are emitted first; every other location is generated
+# one-to-one from MOVED_APIS, in table order, so the edge cannot drift from
+# moved_api(). Anything else, including an agent's runtime/homepage, falls
+# through to the platform location.
 MOVED_API_LOCATIONS = (
-    'location ^~ /v1/skills/ { return 418; }',
-    'location = /v1/skill-secrets { return 418; }',
-    'location ~ ^/v1/stickers(?:/[0-9a-f]{32}(?:/file)?)?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/overview$ { return 418; }',
-    'location = /v1/team-templates { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:team-templates|notifications)(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/team-runs(?:/[0-9a-f]{32}(?:/(?:cancel|remove|export|share|steps/[0-7]/(?:retry|artifact)))?)?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/shared-runs(?:/otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}(?:/revoke)?)?$ { return 418; }',
-    'location = /v1/invites/accept { return 418; }',
-    'location = /v1/invites/preview { return 418; }',
-    'location ~ ^/v1/invites/group/(?:accept|preview)$ { return 418; }',
-    'location = /v1/join-requests { return 418; }',
-    'location ~ ^/v1/skills/(?:scopes|readiness|runs)$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$ { return 418; }',
-    'location = /v1/workspaces { return 418; }',
     'location = /v1/agent-homepages/start { return 410; }',
-    'location = /v1/teams { return 418; }',
-    'location = /v1/team-directory { return 418; }',
-    'location ^~ /v1/team-directory/ { return 418; }',
-    'location ~ ^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end|recording)$ { return 418; }',
-    'location = /v1/profile/social { return 418; }',
-    'location = /v1/profile/follow-work { return 418; }',
-    'location ^~ /v1/discover/ { return 418; }',
-    'location ~ ^/v1/contacts(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:members|invites|join-requests|directory|social)(?:/|$) { return 418; }',
     'location = /v1/composio/callback { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
-    'location = /v1/settings { return 418; }',
-    'location = /v1/notification-prefs { return 418; }',
-    'location = /v1/onboarding { return 418; }',
-    'location ^~ /v1/onboarding/ { return 418; }',
-    'location ~ ^/v1/model-api(?:/(?:image|video|music|model3d))?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/images(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/videos(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/music(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/websites(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/models-3d(?:/[0-9a-f]{32})?$ { return 418; }',
-    'location = /v1/composio { return 418; }',
-    'location ^~ /v1/composio/ { return 418; }',
-    'location ^~ /v1/mcp/servers { return 418; }',
-    'location = /v1/automation-templates { return 418; }',
-    'location = /v1/onboarding/automations { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/automations(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/agents(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:from-call/otcav_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}|draft|speech|transcribe|share-recipients|shared(?:/[0-9a-f]{32}(?:/(?:revoke|action|discussion))?)?|[0-9a-f]{32}(?:/(?:remove|export|shares|action|artifact|memory))?))?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/memory(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/studio/documents(?:/[0-9a-f]{32}(?:/(?:remove|restore|live|versions(?:/[1-9][0-9]{0,15})?))?)?$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|shared-copy|studio-personal-copy|(?:spreadsheet|slides)/draft)$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|studio-copy|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/(?:revoke|link))?)?))?)?$ { return 418; }',
+) + tuple(
+    f'location ~ {pattern.pattern} {{ return 418; }}'
+    for pattern, _feature in MOVED_APIS
 )
 
 
