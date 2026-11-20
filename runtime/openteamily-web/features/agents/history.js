@@ -1,5 +1,7 @@
 // Adopt native Main-Bot agent threads, then import missing legacy messages as
 // actual Session events. No model call, no replay or outgoing message.
+import {createRequire} from 'node:module'
+import {pathToFileURL} from 'node:url'
 import { currentSession, threadOfPart, startOpenPart } from '../../../ds-bot-upstream/ds-bot/src/host/threads.js'
 
 export async function adoptThread({ rt, source, target, sessionId }) {
@@ -35,8 +37,8 @@ export async function importHistory({ db, rt, ctx, bot, conversationId, sessionI
   for (const id of scan) {
     const agent = await rt.resolveAgent(id); await ctx.sessions.flush(agent.session)
     for await (const event of rt.eventsBackwards(id, AbortSignal.timeout(15000), Infinity)) {
-      if (!['user/message','assistant/message','openteamily/message-status'].includes(event.type)) continue
-      const role = event.type === 'openteamily/message-status' ? event.data.role : event.type === 'user/message' ? 'user' : 'assistant'
+      if (!['user/message','assistant/message','openteamily/message-status','plugin:openteamily/message-status'].includes(event.type)) continue
+      const role = ['openteamily/message-status','plugin:openteamily/message-status'].includes(event.type) ? event.data.role : event.type === 'user/message' ? 'user' : 'assistant'
       const content = role === 'user' ? event.data.content : event.data.message?.content
       let text = (Array.isArray(content) ? content : []).filter(c=>c.type==='text').map(c=>c.text).join('\n')
       // Former persona-based Main Bot agent turns wrapped the user's text.
@@ -56,9 +58,24 @@ export async function importHistory({ db, rt, ctx, bot, conversationId, sessionI
     // Failed/empty messages remain visible diagnostic events, not fabricated replies.
     const source={kind:'user',openteamilyMessageId:row.id,originalTime:row.created*1000,imported:true,status:row.status}
     let event
-    if(!row.text || row.status==='failed') event=agent.session.append('openteamily/message-status',{source,role:row.role,text:row.text,status:row.status})
-    else if(row.role==='user') event=agent.session.append('user/message',{source,content:[{type:'text',text:row.text}]},{surfaceOp:'append'})
-    else event=agent.session.append('assistant/message',{source,stream:[],message:{role:'assistant',content:[{type:'text',text:row.text}]}},{surfaceOp:'append'})
+    if(!row.text || row.status==='failed') {
+      // Resolve the engine's public module, not a second private-class copy.
+      const native = await import(pathToFileURL(createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').resolve('@deepseek-ai/dsh-session')).href)
+      const seq = native.appendPluginRecord(agent.session,'plugin:openteamily/message-status',{source,role:row.role,text:row.text,status:row.status})
+      event=agent.session.eventAt(seq)
+    } else if(row.role==='user') event=agent.session.append('user/message',{id:row.id,role:'user',source,content:[{type:'text',text:row.text}]},{surfaceOp:'append'})
+    else {
+      // Imported transcript boundary, NOT a new model invocation. Provider/model
+      // were not retained by the legacy platform, so explicitly label them unknown.
+      let turn=1
+      for(let seq=0;seq<agent.session.seq;seq++){const e=agent.session.eventAt(seq);if(e.type==='turn/start')turn=Math.max(turn,e.data.turn+1)}
+      const history={...source,kind:'openteamily-history'}
+      agent.session.append('turn/start',{turn,source:history,imported:true})
+      agent.session.append('step/start',{turn,step:1,source:history,imported:true})
+      event=agent.session.append('assistant/message',{turn,step:1,source,stream:[],message:{id:row.id,role:'assistant',source:{...history,kind:'model',provider:'openteamily-history',model:'historical-unknown'},content:[{type:'text',text:row.text}]}},{surfaceOp:'append'})
+      agent.session.append('step/end',{turn,step:1,source:history,imported:true})
+      agent.session.append('turn/end',{turn,source:history,imported:true})
+    }
     // Flush BEFORE mapping: a crash between these is recovered by event source id.
     await ctx.sessions.flush(agent.session)
     put.run(row.id,sessionId,event.seq,'imported'); imported++
