@@ -3,29 +3,11 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { bulkAuth, startServer } from "./helpers.js";
+import { home } from "./openteamily_helpers.js";
 
 let S: Awaited<ReturnType<typeof startServer>>;
 before(async () => { S = await startServer(bulkAuth); });
 after(async () => { await S.stop(); });
-
-let n = 0;
-export async function home(base: string, name: string) {
-  const u = `${name}${++n}${Date.now() % 100000}`;
-  const r: any = await (await fetch(`${base}/v1/onboard/flybot`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ display_name: u }) })).json();
-  const token = r.connector.token as string;
-  const call = async (method: string, path: string, body?: unknown) => {
-    const res = await fetch(base + path, { method, headers: { authorization: `Bearer ${token}`, ...(body !== undefined ? { "content-type": "application/json" } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
-    const data: any = await res.json();
-    return { status: res.status, data };
-  };
-  const ok = async (method: string, path: string, body?: unknown) => {
-    const r = await call(method, path, body);
-    assert.ok(r.status < 300, `${method} ${path} -> ${r.status} ${JSON.stringify(r.data)}`);
-    return r.data;
-  };
-  const me = await ok("GET", "/v1/ot/me");
-  return { call, ok, handle: me.handle as string };
-}
 
 test("profile comes from the FlyBot home; no token is refused", async () => {
   const A = await home(S.base, "ann");
@@ -39,7 +21,7 @@ test("team lifecycle: create, invite, accept, roles, suspend, leave", async () =
   const A = await home(S.base, "owner");
   const B = await home(S.base, "bea");
   const C = await home(S.base, "cid");
-  const team = await A.ok("POST", "/v1/ot/teams", { name: "Content Studio", slug: `studio-${n}`, summary: "we write" });
+  const team = await A.ok("POST", "/v1/ot/teams", { name: "Content Studio", slug: `studio-${Date.now() % 100000}`, summary: "we write" });
   assert.equal(team.role, "owner");
   assert.equal((await B.call("GET", `/v1/ot/teams/${team.id}`)).status, 404, "non-member learns nothing");
   assert.equal((await B.call("POST", `/v1/ot/teams/${team.id}/invites`, {})).status, 404);
