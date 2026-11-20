@@ -18,6 +18,7 @@ Outsiders get `404`.
 | GET | `/{meeting_id}` | Full meeting incl. transcript and action items. |
 | POST | `/{meeting_id}` | `{revision, changes:{...}}`; stale revision `409` with `error.current`. |
 | POST | `/{meeting_id}/remove` | Delete (author, owner or admin). |
+| GET | `/{meeting_id}/export` | Download the stored meeting as Markdown (`text/markdown`, attachment). Members may read; outsiders `404`. |
 
 `started_at` is Unix seconds (default: now). `attendees` is a list of 0–50 unique names (≤80
 chars). `transcript` ≤40,000; `summary` ≤8,000; `action_items` ≤50 items of
@@ -36,12 +37,14 @@ schema `user_version` stays 1. No existing tables or chrome change.
 ## Page
 
 `/meetings` lists workspace meetings and provides an editor for title, start time, attendees,
-summary, transcript and action-item rows (text, owner, done). It is linked from the app rail.
+summary, transcript and action-item rows (text, owner, done). The editor has a `导出 Markdown`
+download for the selected meeting. It is linked from the app rail.
 `docs/screenshots/meetings/` holds synthetic review captures.
 
 ## Explicitly not in this slice
 
 - Audio/video recording, live transcription, speaker separation, or call integration.
 - Automatically creating tasks/automations from action items.
+- PDF/DOCX export, attachments, audio/video, or server-side HTML rendering.
 - Birfy/Bot Social or control-plane behavior.
 - Browser E2E or Teamily page-by-page comparison.
