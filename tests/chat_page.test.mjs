@@ -1053,29 +1053,26 @@ test('clicking a conversation-search hit jumps to that message and flashes it br
     await fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
     const hit = el('conversation-search-results').children[0];
     assert.equal(hit.dataset.messageId, 'm-1', 'the hit row knows which message it points at');
+    assert.match(hit.getAttribute('aria-label'), /^跳到这条消息：/, 'the hit names what it jumps to');
     const timers = [];
     const realTimer = globalThis.setTimeout;
     globalThis.setTimeout = (fn, ms) => { timers.push({fn, ms}); return 1; };
     try {
       await fire(hit, 'click');
-      assert.equal(el('conversation-search-panel').hidden, true, 'jumping to a hit closes the panel first');
-      assert.ok(target.classList.contains('search-jump'), 'the message a hit points at is flashed');
+      // main's shared jumpToMessage(messageId) marks the row instead of a class.
+      assert.equal(target.dataset.searchJump, 'true', 'the message a hit points at is highlighted');
       const flash = timers.find((timer) => typeof timer.fn === 'function');
-      assert.ok(flash, 'the flash clears itself on a timer instead of staying forever');
-      assert.ok(flash.ms >= 1000 && flash.ms <= 5000, 'the flash lasts a few seconds, not ' + flash.ms + 'ms');
+      assert.ok(flash, 'the highlight clears itself on a timer instead of staying forever');
+      assert.ok(flash.ms >= 1000 && flash.ms <= 5000, 'the highlight lasts a few seconds, not ' + flash.ms + 'ms');
       flash.fn();
-      assert.equal(target.classList.contains('search-jump'), false, 'the flash is gone once the timer fires');
+      assert.equal(target.dataset.searchJump, undefined, 'the highlight is gone once the timer fires');
     } finally { globalThis.setTimeout = realTimer; }
 
-    // A live #message-list hands back an HTMLCollection (array-like, no find());
-    // jumping must not depend on the fake document's plain array.
-    await fire(el('conversation-search-open'), 'click');
-    await fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
+    // A live #message-list hands back an HTMLCollection (array-like, no find()).
     el('message-list').children = {0: target, length: 1};
     const again = el('conversation-search-results').children[0];
     await fire(again, 'click');
-    assert.equal(el('conversation-search-panel').hidden, true, 'an HTMLCollection target still closes the panel');
-    assert.ok(target.classList.contains('search-jump'), 'an HTMLCollection target is still flashed');
+    assert.equal(target.dataset.searchJump, 'true', 'an HTMLCollection target is still highlighted');
   } finally { restore(); }
 });
 
@@ -1686,6 +1683,64 @@ test('new dialog and document-card surfaces use actual theme tokens, not undefin
   assert.match(css, /\.chat-document-card \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
 });
 
+
+test('conversation search lists this conversation photos and files from real attachment fields', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  const attachment = (id, title, kind, mime) => ({id: id.repeat(32), title, kind, mime, revision: 1,
+    path: '/v1/workspaces/ws-1/artifacts/' + id.repeat(32) + '/file'});
+  const rows = [
+    // Real uploads all land as kind 'media'; the mime is what separates photos.
+    {id: 'm-1', user_id: bob, body: '', created: '2026-01-01T00:00:00Z', attachment: attachment('a', 'pixel.png', 'media', 'image/png')},
+    {id: 'm-2', user_id: bob, body: '', created: '2026-01-01T00:01:00Z', attachment: attachment('b', 'plan.pdf', 'media', 'application/pdf')},
+  ];
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.startsWith('/v1/workspaces/ws-1/social/conversations/conv-1/messages?')) {
+        return json(200, {items: rows, cursor: null});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('conversation-search-open'), 'click');
+    await fire(el('conversation-search-tab-photos'), 'click');
+    assert.equal(el('conversation-search-tab-photos').getAttribute('aria-selected'), 'true');
+    const photos = el('conversation-search-results').children;
+    assert.equal(photos.length, 1, 'only the image attachment is a photo');
+    assert.ok(descendants(photos[0]).some(node => node.textContent === 'pixel.png'));
+    assert.match(el('conversation-search-status').textContent, /已显示 1 张照片/);
+    await fire(photos[0], 'click');
+    const jumped = el('message-list').children.find(node => node.dataset.messageId === 'm-1');
+    assert.equal(jumped.dataset.searchJump, 'true', 'a photo hit jumps back to its message and highlights it');
+    await fire(el('conversation-search-tab-files'), 'click');
+    const files = el('conversation-search-results').children;
+    assert.equal(files.length, 1, 'the document attachment is a file, not a photo');
+    assert.ok(descendants(files[0]).some(node => node.textContent === 'plan.pdf'));
+    assert.match(el('conversation-search-status').textContent, /已显示 1 个文件/);
+    await fire(files[0], 'click');
+    assert.match(el('conversation-search-status').textContent, /不在当前已加载/, 'a hit outside the loaded window says so instead of pretending');
+  } finally { restore(); }
+});
+
+test('the photos and files tabs say what is missing instead of inventing an empty conversation', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async path => {
+      if (path.startsWith('/v1/workspaces/ws-1/social/conversations/conv-1/messages?')) {
+        return json(500, {error: {code: 'internal', message: 'nope'}});
+      }
+      return original(path);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    await fire(el('conversation-search-open'), 'click');
+    await fire(el('conversation-search-tab-photos'), 'click');
+    assert.match(el('conversation-search-status').textContent, /读不到当前会话的附件/);
+    assert.equal(el('conversation-search-results').children.length, 0);
+  } finally { restore(); }
+});
 
 for (const phase of ['directory', 'fanout']) for (const target of ['ws-1','ws-2']) {
   test(`deferred ${phase} from an older load cannot overwrite the latest ${target} session list`, async () => {

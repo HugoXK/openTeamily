@@ -1,5 +1,6 @@
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
+export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -75,10 +76,6 @@ export function messagePayload(text, chatLanguage = 'auto') {
   }
   return payload;
 }
-
-// A hit the user jumps to is flashed for a few seconds so the eye can land on
-// it, then the class comes off by itself; nothing is persisted.
-export const SEARCH_JUMP_HIGHLIGHT_MS = 2600;
 
 export function messageSearchQuery(query, conversationId = '', cursor = '') {
   const params = new URLSearchParams({q: query, limit: '20'});
@@ -827,7 +824,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const li = document.createElement('li');
       li.dataset.messageId = item.id;
       li.className = item.role === 'user' ? 'user' : 'assistant';
-      if (item.id) li.dataset.messageId = item.id;
       const role = document.createElement('p');
       role.className = 'role';
       role.textContent = item.role === 'user' ? '你' : ((currentAgent && currentAgent.name) || '智能体');
@@ -1157,7 +1153,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       li.dataset.messageId = item.id;
       const mine = item.user_id === (currentUser && currentUser.id);
       li.className = mine ? 'mine' : 'other';
-      if (item.id) li.dataset.messageId = item.id;
       const role = document.createElement('p');
       role.className = 'role';
       const member = people.find(entry => entry.user_id === item.user_id);
@@ -1530,7 +1525,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
-      closeConversationSearch({restoreScroll: false});
+      const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
     currentConversation = result.body.conversation;
@@ -1562,7 +1557,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
-      closeConversationSearch({restoreScroll: false});
+      const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
     currentConversation = result.body.conversation;
@@ -2187,7 +2182,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopPolling();
     closeSearchPanel();
     closeComposeDialog();
-    closeConversationSearch({restoreScroll: false});
+    const inChatPanel = document.getElementById('conversation-search-panel'); if (inChatPanel) inChatPanel.hidden = true;
     writeHash({workspace: workspaceId()});
     applyChatIdentity(document, '聊天');
     document.getElementById('message-list').replaceChildren();
@@ -2222,71 +2217,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-search-status').textContent = state.error || (state.hits.length ? '已显示 ' + state.hits.length + ' 条消息' : '没有找到匹配的消息。试试其他关键词。');
     document.getElementById('conversation-search-more').hidden = !state.cursor;
   }
-  let searchScrollTop = null;
-  function openConversationSearch() {
-    const panel = document.getElementById('conversation-search-panel');
-    if (!panel) return;
-    if (searchScrollTop === null) {
-      const scroller = document.getElementById('message-scroller');
-      searchScrollTop = scroller ? scroller.scrollTop : 0;
-    }
-    panel.hidden = false;
-    const field = document.getElementById('conversation-search-query');
-    if (field) field.focus();
-  }
-  function closeConversationSearch({restoreScroll = true} = {}) {
-    const panel = document.getElementById('conversation-search-panel');
-    if (!panel) { searchScrollTop = null; return; }
-    panel.hidden = true;
-    if (restoreScroll && searchScrollTop !== null) {
-      const scroller = document.getElementById('message-scroller');
-      if (scroller) scroller.scrollTop = searchScrollTop;
-      searchScrollTop = null;
-      return;
-    }
-    // Jumping to a hit closes the panel without restoring yet; keep the
-    // snapshot so an explicit close (or Escape) can still put the scroller back.
-    if (restoreScroll) searchScrollTop = null;
-  }
-  function flashMessage(row) {
-    if (!row || !row.classList) return;
-    row.classList.add('search-jump');
-    if (row.dataset) row.dataset.searchJump = 'true';
-    globalThis.setTimeout(() => {
-      row.classList.remove('search-jump');
-      if (row.dataset) delete row.dataset.searchJump;
-    }, SEARCH_JUMP_HIGHLIGHT_MS);
-  }
-  function jumpToMessage(hit) {
+  // One jump-and-highlight action for both message hits and attachment hits: a
+  // search result never opens a second view, it scrolls the real message back in.
+  function jumpToMessage(messageId) {
     const list = document.getElementById('message-list');
-    // A live #message-list hands back an HTMLCollection, which has no find().
-    const rows = list ? Array.from(list.children || []) : [];
-    const row = hit.messageId
-      ? rows.find(item => item.dataset && item.dataset.messageId === hit.messageId)
-      : null;
-    if (!row) {
+    const target = Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
+    if (!target) {
       document.getElementById('conversation-search-status').textContent = '这条消息不在当前已加载的消息窗口里，请加载更多消息后重试。';
       return;
     }
-    closeConversationSearch({restoreScroll: false});
-    if (typeof row.scrollIntoView === 'function') row.scrollIntoView({block: 'center'});
-    flashMessage(row);
+    target.scrollIntoView?.({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
+    target.tabIndex = -1; target.focus?.({preventScroll: true});
+    for (const node of Array.from(list.children || [])) delete node.dataset.searchJump;
+    target.dataset.searchJump = 'true';
+    setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
   }
   function searchHitRow(hit, query) {
     const li = document.createElement('li');
     li.className = 'search-hit';
-    if (hit.messageId) {
-      li.dataset.messageId = hit.messageId;
-      li.tabIndex = 0;
-      li.setAttribute('role', 'button');
-      li.setAttribute('aria-label', '跳到这条消息：' + (hit.preview || ''));
-      li.addEventListener('click', () => jumpToMessage(hit));
-      li.addEventListener('keydown', event => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        jumpToMessage(hit);
-      });
-    }
+    if (hit.messageId) li.dataset.messageId = hit.messageId;
+    li.tabIndex = 0;
+    li.setAttribute('role', 'button');
+    // Name the hit for screen readers instead of a generic "jump" label.
+    li.setAttribute('aria-label', '跳到这条消息：' + (hit.preview || ''));
+    const jump = () => jumpToMessage(hit.messageId);
+    li.addEventListener('click', jump);
+    li.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
+    });
     const avatar = document.createElement('span');
     avatar.className = 'search-hit-avatar';
     avatar.setAttribute('aria-hidden', 'true');
@@ -2308,11 +2266,134 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     li.append(avatar, head, text);
     return li;
   }
+  // The conversation search covers three scopes of the SAME conversation. The
+  // photo and file scopes read the attachment fields the message rows already
+  // carry (social.py MESSAGE_ROWS -> attachment{id,title,kind,revision,path}),
+  // paged through the existing messages endpoint; no second list is invented.
+  const CONVERSATION_SCOPE_NOTES = {
+    messages: '· 搜索当前会话里你有权查看的消息。',
+    photos: '· 只读取当前会话消息里已有的图片附件。',
+    files: '· 只读取当前会话消息里已有的文件附件。',
+  };
+  const ATTACHMENT_PAGE_LIMIT = 100; // the messages endpoint caps limit at 100
+  const ATTACHMENT_MAX_PAGES = 50;
+  let conversationScope = 'messages';
+  function setConversationScope(tab) {
+    conversationScope = tab;
+    for (const name of ['messages', 'photos', 'files']) {
+      const button = document.getElementById('conversation-search-tab-' + name);
+      if (button) button.setAttribute('aria-selected', String(name === tab));
+    }
+    const note = document.getElementById('conversation-search-scope-note');
+    if (note) note.textContent = CONVERSATION_SCOPE_NOTES[tab] || CONVERSATION_SCOPE_NOTES.messages;
+    const more = document.getElementById('conversation-search-more');
+    if (more) more.hidden = true;
+  }
+  async function conversationAttachments(conversation) {
+    const items = [];
+    let cursor = '';
+    let truncated = false;
+    for (let page = 0; page < ATTACHMENT_MAX_PAGES; page += 1) {
+      const params = new URLSearchParams({limit: String(ATTACHMENT_PAGE_LIMIT)});
+      if (cursor) params.set('cursor', cursor);
+      const result = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages?${params}`);
+      if (result.status !== 200) throw new Error('读不到当前会话的附件。');
+      items.push(...(result.body.items || []));
+      cursor = result.body.cursor || '';
+      if (!cursor) return {items, truncated: false};
+      truncated = true;
+    }
+    return {items, truncated};
+  }
+  function attachmentHitRow(item) {
+    const li = document.createElement('li');
+    li.className = 'search-hit';
+    li.tabIndex = 0;
+    li.setAttribute('role', 'button');
+    li.setAttribute('aria-label', '跳到这条消息');
+    const jump = () => jumpToMessage(item.id);
+    li.addEventListener('click', jump);
+    li.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
+    });
+    const attachment = item.attachment || {};
+    const photo = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
+    const avatar = document.createElement('span');
+    avatar.className = 'search-hit-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    avatar.textContent = photo ? '照' : '件';
+    const head = document.createElement('span');
+    head.className = 'search-hit-head';
+    const name = document.createElement('strong');
+    name.textContent = attachment.title || (photo ? '未命名照片' : '未命名文件');
+    const when = document.createElement('time');
+    when.textContent = item.created ? formatSessionTime(item.created) : '';
+    head.append(name, when);
+    const text = document.createElement('span');
+    text.className = 'search-hit-text';
+    text.textContent = (photo ? '照片' : '文件') + ' · 点开回到这条消息';
+    li.append(avatar, head, text);
+    return li;
+  }
+  async function searchCurrentAttachments(scope) {
+    const conversation = currentConversation;
+    const list = document.getElementById('conversation-search-results');
+    const status = document.getElementById('conversation-search-status');
+    if (!list || !status) return;
+    list.replaceChildren();
+    if (!conversation) { status.textContent = '请先打开一个会话。'; return; }
+    if (currentSource !== 'social') {
+      status.textContent = '智能体会话的消息数据里没有附件字段，读不到照片和文件。';
+      return;
+    }
+    status.textContent = '正在读取当前会话的附件…';
+    const wid = workspaceId();
+    let found;
+    try {
+      found = await conversationAttachments(conversation);
+    } catch (failure) {
+      if (currentConversation && currentConversation.id === conversation.id) {
+        status.textContent = failure.message || '读不到当前会话的附件。';
+      }
+      return;
+    }
+    if (workspaceId() !== wid || !currentConversation || currentConversation.id !== conversation.id) return;
+    if (conversationScope !== scope) return;
+    const photos = scope === 'photos';
+    const hits = found.items.filter(item => {
+      const attachment = item.attachment;
+      if (!attachment) return false;
+      const image = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
+      return photos ? image : !image;
+    });
+    for (const item of hits) list.append(attachmentHitRow(item));
+    if (hits.length) {
+      status.textContent = (photos ? '已显示 ' + hits.length + ' 张照片' : '已显示 ' + hits.length + ' 个文件')
+        + (found.truncated ? ' · 只读取了最近 ' + (ATTACHMENT_PAGE_LIMIT * ATTACHMENT_MAX_PAGES) + ' 条消息' : '');
+    } else {
+      status.textContent = photos ? '这个会话里还没有照片。' : '这个会话里还没有文件。';
+    }
+  }
+  for (const scope of ['messages', 'photos', 'files']) {
+    const button = document.getElementById('conversation-search-tab-' + scope);
+    if (!button) continue;
+    button.addEventListener('click', async () => {
+      setConversationScope(scope);
+      const list = document.getElementById('conversation-search-results');
+      if (scope === 'messages') {
+        const query = (document.getElementById('conversation-search-query').value || '').trim();
+        if (query) await searchCurrentConversation();
+        else { if (list) list.replaceChildren(); document.getElementById('conversation-search-status').textContent = ''; }
+        return;
+      }
+      await searchCurrentAttachments(scope);
+    });
+  }
   const groupInfoToggle = document.getElementById('group-info-toggle');
   if (groupInfoToggle) {
     groupInfoToggle.addEventListener('click', () => {
       const open = groupInfoToggle.getAttribute('aria-expanded') !== 'true';
-      if (open) closeConversationSearch();
+      if (open) document.getElementById('conversation-search-panel').hidden = true;
       setGroupInfoOpen(open);
     });
     document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
@@ -2343,14 +2424,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   if (inChatOpen) inChatOpen.addEventListener('click', () => {
     if (!currentConversation) { show('error', '请先打开一个会话。'); return; }
     setGroupInfoOpen(false);
-    openConversationSearch();
+    if (document.getElementById('conversation-search-panel').hidden) {
+      searchScrollSnapshot = {conversation: currentConversation.id, top: document.getElementById('message-scroller').scrollTop};
+    }
+    document.getElementById('conversation-search-panel').hidden = false;
+    const field = document.getElementById('conversation-search-query'); if (field) field.focus();
   });
   const inChatClose = document.getElementById('conversation-search-close');
-  if (inChatClose) inChatClose.addEventListener('click', () => { closeConversationSearch(); });
+  function closeInChatSearch() {
+    document.getElementById('conversation-search-panel').hidden = true;
+    if (searchScrollSnapshot && currentConversation && currentConversation.id === searchScrollSnapshot.conversation) {
+      document.getElementById('message-scroller').scrollTop = searchScrollSnapshot.top;
+    }
+    searchScrollSnapshot = null;
+    if (inChatOpen) inChatOpen.focus();
+  }
+  if (inChatClose) inChatClose.addEventListener('click', closeInChatSearch);
   document.addEventListener('keydown', event => {
-    if (event.key !== 'Escape') return;
-    const panel = document.getElementById('conversation-search-panel');
-    if (panel && !panel.hidden) closeConversationSearch();
+    if (event.key === 'Escape' && !document.getElementById('conversation-search-panel').hidden) closeInChatSearch();
   });
   const inChatForm = document.getElementById('conversation-search-form');
   if (inChatForm) inChatForm.addEventListener('submit', async event => { event.preventDefault(); await searchCurrentConversation(); });
