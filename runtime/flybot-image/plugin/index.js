@@ -42,7 +42,14 @@ export function apply(ctx, config = {}) {
       return runTurn(rt, ctx, bridge.botId, text, requestId)
     })
     const mainBot = async () => { await bridge.setup(); return bridge.botId }
-    attachRuntime({ rt, ctx, chatTurn, mainBot })
+    const nativeTurn = (botId, sessionId, text, requestId) => bridge.exclusive(async () => {
+      await bridge.setup()
+      if (!rt.botOf(botId)) throw new Error('Mapped native Bot no longer exists')
+      await rt.switchPart(botId, sessionId)
+      await rt.applyModel(rt.botOf(botId), { force: true })
+      return runTurn(rt, ctx, botId, text, requestId)
+    })
+    attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn })
   }
   return attached
 }
