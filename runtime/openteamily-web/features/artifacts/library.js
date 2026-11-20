@@ -1,7 +1,6 @@
 // Works-library operations (legacy artifacts.py + app.py artifact_*), executed
-// inside this user's DS-Bot. Public share pages stay on the platform; this
-// module only stores and lists revocable share records, returning the same
-// /share/<token> path the existing UI already uses.
+// inside this user's DS-Bot. Share records live here; the public /share/<token>
+// page is rendered by the dedicated Bot Social from a published snapshot.
 import { createHash, randomBytes } from 'node:crypto'
 import { digest, HEX32, newId, nowSeconds, refuse, stableJson } from '../../featurekit/http.js'
 import {

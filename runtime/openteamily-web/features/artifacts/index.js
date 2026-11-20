@@ -2,7 +2,7 @@
 // DS-Bot. artifacts/create is the in-process entry B2 team runs call to store
 // a finished step's output. Legacy /v1 studio routes, media, boards, slides,
 // dashboards, history, export and authenticated share records are served here;
-// public /share/<token> pages stay on the platform.
+// public /share/<token> pages are rendered by Bot Social (snapshot published here).
 import { defineFeature } from '../../featurekit/feature.js'
 import { HEX32, refuse } from '../../featurekit/http.js'
 import { createArtifact, listFiles, PER_WORKSPACE, search } from './library.js'

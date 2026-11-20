@@ -94,6 +94,7 @@ pre{white-space:pre-wrap;background:#f6f6f6;padding:1rem;border-radius:8px}
 <h1>${escapeHtml(view.title || view.slug)}</h1>
 ${body}
 ${startList}
+${l.kind === "agent" ? `<p><a href="/messenger/#start=${encodeURIComponent(l.slug)}">登录后开始对话</a></p>` : ""}
 </body></html>
 `;
 }
@@ -236,5 +237,30 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     assert(l.kind === "work", 404, "listing_not_found", "no such listing");
     const snapshot = l.snapshot ? String(l.snapshot).slice(0, 2000) : "";
     return { preview: snapshot.startsWith("{") ? (listingView(ot, l, null).summary || "") : snapshot };
+  });
+
+  // Public homepage "start a conversation": a signed-in visitor talks to the creator's
+  // agent. Bot Social creates one private thread (visitor + creator) with that agent
+  // attached; the creator's own DS-Bot answers through its agent inbox.
+  app.post("/v1/ot/discover/:slug/start", async (req, reply) => {
+    const me = ot.me(req);
+    const l = listedBySlug(ot, params(req).slug);
+    assert(l.kind === "agent", 404, "listing_not_found", "no such listing");
+    assert(l.owner_id !== me.ownerId, 400, "invalid_request", "this is your own agent");
+    const key = `agent:${l.id}:${me.ownerId}`;
+    let conv = ot.get<any>("SELECT * FROM ot_conversations WHERE dm_key = ?", key);
+    const now = ot.now();
+    if (!conv) {
+      const id = newId("otc");
+      ot.tx(() => {
+        ot.run("INSERT INTO ot_conversations(id, kind, title, dm_key, created_by, created_at, updated_at) VALUES (?, 'group', ?, ?, ?, ?, ?)", id, String(l.title).slice(0, 80), key, me.ownerId, now, now);
+        for (const o of [me.ownerId, l.owner_id]) ot.run("INSERT INTO ot_conversation_members(conversation_id, owner_id, created_at) VALUES (?,?,?)", id, o, now);
+        ot.run("INSERT INTO ot_conversation_agents(conversation_id, agent_ref, owner_id, name, auto_reply, created_at) VALUES (?,?,?,?,1,?)", id, l.ref, l.owner_id, String(l.title).slice(0, 80), now);
+      });
+      conv = ot.get<any>("SELECT * FROM ot_conversations WHERE id = ?", id);
+      ot.notify(l.owner_id, "discover.conversation_started", { listing_id: l.id, slug: l.slug, conversation_id: id, visitor: ot.profileView(me.ownerId) });
+      return reply.status(201).send({ conversation_id: conv.id, agent_ref: l.ref, created: true });
+    }
+    return { conversation_id: conv.id, agent_ref: l.ref, created: false };
   });
 }
