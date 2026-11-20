@@ -141,3 +141,14 @@ class CustomMcpTests(unittest.TestCase):
             self.assertEqual(status, 302)  # Client rejects it; transport never follows.
             pinned.assert_called_once_with('mcp.example.test', '8.8.8.8')
             self.assertEqual(resolver.call_count, 1)
+
+    def test_merged_skill_library_install_reaches_native_task_material(self):
+        from openteamily import skill_packages
+        result = self.alice.call('POST', '/v1/skills/installed', {'skill': 'meeting-notes'})
+        self.assertEqual(result['status'], 200, result)
+        with self.app.store.connect() as db:
+            material = skill_packages.material(db, self.task['id'])
+            self.assertIn('meeting-notes', [i['id'] for i in material])
+        self.alice.call('DELETE', '/v1/skills/installed', {'skill': 'meeting-notes'})
+        with self.app.store.connect() as db:
+            self.assertNotIn('meeting-notes', [i['id'] for i in skill_packages.material(db, self.task['id'])])
