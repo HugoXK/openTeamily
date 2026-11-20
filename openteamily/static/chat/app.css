@@ -2166,3 +2166,11 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   .plus-auto > a { white-space: normal; }
   .group-info, #conversation-search-panel { bottom: max(.5rem, env(safe-area-inset-bottom)); }
 }
+
+#public-chat-status {
+  order: 55;
+  margin: 0;
+  padding: .375rem 1rem .125rem;
+  font-size: .8125rem;
+  color: var(--ot-muted);
+}

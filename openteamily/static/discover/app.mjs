@@ -886,7 +886,18 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       use.textContent = '复制';
       use.setAttribute('aria-label', '复制智能体：' + (item.name || item.slug));
       use.addEventListener('click', () => openRemix(item));
-      card.append(avatar, copy, use);
+      card.append(avatar, copy);
+      if (item.chat_enabled && !item.own_agent && validSlug(item.slug)) {
+        const actions = document.createElement('div');
+        actions.className = 'catalog-agent-actions';
+        const chat = document.createElement('a');
+        chat.href = '/chat#public-agent=' + item.slug;
+        chat.className = 'catalog-chat';
+        chat.textContent = '聊天';
+        chat.setAttribute('aria-label', '和 ' + (item.name || item.slug) + ' 聊天');
+        actions.append(chat, use);
+        card.append(actions);
+      } else card.append(use);
       li.append(card);
       list.append(li);
     }
@@ -968,7 +979,17 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       preview.hidden = !allow.checked;
       allow.addEventListener('change', () => { preview.hidden = !allow.checked; });
       label.append(allow, document.createTextNode('公开完整指令，允许复制'));
-      options.append(label, preview);
+      const chatLabel = document.createElement('label');
+      const publicChat = document.createElement('input');
+      publicChat.type = 'checkbox';
+      publicChat.checked = discover.chat_enabled === true;
+      chatLabel.append(publicChat, document.createTextNode('允许访客聊天'));
+      const chatNote = document.createElement('p');
+      chatNote.className = 'note';
+      chatNote.textContent = '自动回复使用已发布的简介、指令和当前对话。你可以查看访客的对话。';
+      chatNote.hidden = !publicChat.checked;
+      publicChat.addEventListener('change', () => { chatNote.hidden = !publicChat.checked; });
+      options.append(label, preview, chatLabel, chatNote);
       const publish = document.createElement('button');
       publish.type = 'button';
       publish.textContent = discover.listed ? '更新发布' : '发布';
@@ -979,7 +1000,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         }
         const result = await request(
           'POST', `/v1/workspaces/${workspaceSelect.value}/agents/${agent.id}/discover`,
-          {slug: input.value.trim(), revision: agent.revision, copy_instructions: allow.checked});
+          {slug: input.value.trim(), revision: agent.revision, copy_instructions: allow.checked, chat_enabled: publicChat.checked});
         if (result.status !== 201 && result.status !== 200) {
           show('error', messageFor(result.body.error, '无法收录。'));
           return;

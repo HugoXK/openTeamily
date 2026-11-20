@@ -410,6 +410,15 @@ export function createAgents({ db, host }) {
       return { message: rows.find((r) => r.id === userId), reply: { ...rows.find((r) => r.id === replyId), meta: JSON.parse(rows.find((r) => r.id === replyId).meta) } }
     },
     turn,
+    async publicReply(p) {
+      if (typeof p?.prompt !== 'string' || !p.prompt.trim() || p.prompt.length > 42000) fail('invalid', 'Invalid public reply prompt', 400)
+      const agent = await native.ensure(loadAny(p.agent_id))
+      if (agent.archived || agent.native_deleted) fail('not-found', 'The published agent is unavailable', 404)
+      const runtime = await host.runtime()
+      if (typeof runtime.backgroundTextOnly !== 'function') fail('runtime-unavailable', 'Text inference is unavailable', 503)
+      const text = await runtime.backgroundTextOnly(p.prompt)
+      return { text }
+    },
 
     async attachment(p) {
       const agent = load(ws(p), p.id)

@@ -676,3 +676,20 @@ html[data-theme-resolved="dark"] .feed-grid > article > div{ gap: .125rem; paddi
   }
   .catalog-filters .catalog-filter-search { min-width: 44px; }
 }
+
+.catalog-agent-actions { display: flex; flex: none; flex-direction: column; gap: .375rem; }
+.catalog article .catalog-chat {
+  display: grid;
+  place-items: center;
+  min-height: 1.75rem;
+  padding: 0 .875rem;
+  border: 1px solid var(--ot-accent);
+  border-radius: 999px;
+  color: var(--ot-accent-hover);
+  font-size: .75rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+.catalog article .catalog-chat:hover { background: var(--ot-accent-soft); }
+.catalog-publish-options .note { margin: .125rem 0 .5rem; }
+@media (pointer: coarse) { .catalog article .catalog-chat { min-height: 44px; } }

@@ -49,6 +49,7 @@ function callContext(ot: OtContext, req: FastifyRequest, teamId: unknown) {
     params(req).id, me.ownerId,
   );
   assert(conversation, 404, "conversation_not_found", "no such conversation");
+  assert(!String(conversation.dm_key ?? "").startsWith("agent:"), 409, "public_chat_fixed", "访客聊天支持文字消息。");
   if (teamId !== undefined) {
     assert(typeof teamId === "string" && (!conversation.team_id || teamId === conversation.team_id),
       404, "conversation_not_found", "no such conversation in this team");
