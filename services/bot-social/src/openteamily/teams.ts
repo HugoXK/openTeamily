@@ -150,8 +150,8 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
   ensureTeamColumns(ot);
   // ---- teams
   // Bind a platform workspace (32-hex id) to one Bot Social team so page /v1 shims
-  // can keep using workspace ids. The first caller becomes the team owner; later
-  // callers must already be members (join via invite or the directory).
+  // can keep using workspace ids. Browser credentials are not authority to claim
+  // platform ownership: only resolve preverified mappings; never create on read.
   app.post("/v1/ot/teams/ensure", async (req, reply) => {
     const me = ot.me(req);
     const b = body(req);
@@ -161,9 +161,7 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
       const { team } = requireMember(ot, existing.id, me.ownerId);
       return teamView(ot, team, me.ownerId);
     }
-    const name = optText(b.name, "name", { min: 1, max: 60 }) ?? "Workspace";
-    const team = insertTeam(ot, me.ownerId, { name, slug: null, summary: "", workspaceId });
-    return reply.status(201).send(teamView(ot, team, me.ownerId));
+    assert(false, 409, "membership_migration_required", "workspace binding requires verified platform membership migration");
   });
   app.get("/v1/ot/teams/by-workspace/:workspace_id", async (req) => {
     const me = ot.me(req);
@@ -184,6 +182,7 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     }
     const summary = optText(b.summary, "summary", { max: 200 }) ?? "";
     const workspaceId = workspaceIdOf(b.workspace_id, false);
+    assert(workspaceId === null, 409, "membership_migration_required", "workspace binding requires verified platform membership migration");
     const team = insertTeam(ot, me.ownerId, { name, slug, summary, workspaceId });
     return reply.status(201).send(teamView(ot, team, me.ownerId));
   });

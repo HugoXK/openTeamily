@@ -133,7 +133,7 @@ export function registerCore(app: FastifyInstance, ot: OtContext) {
     if (b.platform_user_id !== undefined) {
       assert(typeof b.platform_user_id === "string" && /^[0-9a-f]{32}$/.test(b.platform_user_id), 400, "invalid_request", "platform_user_id must be a 32-character hex id");
       const taken = ot.get<any>("SELECT owner_id FROM ot_profiles WHERE platform_user_id = ?", b.platform_user_id);
-      assert(!taken || taken.owner_id === me.ownerId, 409, "conflict", "that platform user is already bound");
+      assert(taken?.owner_id === me.ownerId, 409, "identity_migration_required", "platform identity binding requires verified migration");
       platformUserId = b.platform_user_id;
     }
     ot.run("UPDATE ot_profiles SET display_name = COALESCE(?, display_name), bio = COALESCE(?, bio), platform_user_id = COALESCE(?, platform_user_id), updated_at = ? WHERE owner_id = ?",

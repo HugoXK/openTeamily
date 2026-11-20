@@ -36,7 +36,7 @@ function fakeSocial() {
     const ok = (status, data) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } })
     if (path === '/v1/ot/profile' && init.method === 'PUT') return ok(200, { ...me, platform_user_id: body.platform_user_id || me.platform_user_id })
     if (path === '/v1/ot/me') return ok(200, me)
-    if (path === '/v1/ot/teams/ensure') return ok(200, team)
+    if (path === '/v1/ot/teams/by-workspace/' + WS) return ok(200, team)
     if (path === '/v1/ot/teams/ott_1/members' && init.method === 'GET') {
       return ok(200, { role: 'owner', members: [
         { owner_id: 'own_ann', handle: 'ann.home', display_name: 'Ann', platform_user_id: 'b'.repeat(32), role: 'owner', joined_at: 1_700_000_000_000 },
@@ -71,7 +71,7 @@ function setup() {
   return { social, host }
 }
 
-test('members v1 lists Flask-shaped rows and binds the platform user id', async () => {
+test('members v1 lists Flask-shaped rows using verified workspace mappings', async () => {
   const { social, host } = setup()
   const result = await members(host).endpoints.v1({ method: 'GET', path: `/v1/workspaces/${WS}/members` })
   assert.equal(result.status, 200)
@@ -79,8 +79,8 @@ test('members v1 lists Flask-shaped rows and binds the platform user id', async 
   assert.equal(result.body.items[0].username, 'ann')
   assert.equal(result.body.items[0].role, 'owner')
   assert.equal(result.body.items[1].username, 'bea')
-  assert.ok(social.calls.some((c) => c.path === '/v1/ot/teams/ensure'))
-  assert.ok(social.calls.some((c) => c.path === '/v1/ot/profile' && c.body.platform_user_id === 'b'.repeat(32)))
+  assert.ok(social.calls.some((c) => c.path === '/v1/ot/teams/by-workspace/' + WS))
+  assert.ok(!social.calls.some((c) => c.path === '/v1/ot/profile' || c.path === '/v1/ot/teams/ensure'))
 })
 
 test('invite create returns the one-time token; accept maps a pending request to 202', async () => {
@@ -129,4 +129,13 @@ test('auth and workspace list paths are not claimed by the C v1 handlers', async
   const workspaces = await teams(host).endpoints.v1({ method: 'GET', path: `/v1/workspaces/${WS}` })
   assert.equal(workspaces.status, 404)
   assert.equal(workspaces.body.error.code, 'not_moved')
+})
+
+
+test('unknown workspace fails closed without creating membership or guessing an owner', async () => {
+  const { social, host } = setup()
+  const result = await members(host).endpoints.v1({ method: 'GET', path: `/v1/workspaces/${'f'.repeat(32)}/members` })
+  assert.equal(result.status, 409)
+  assert.equal(result.body.error.code, 'membership_migration_required')
+  assert.ok(social.calls.every(call => call.method === 'GET'))
 })
