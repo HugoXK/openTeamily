@@ -80,3 +80,32 @@ export function fetchHttpTask(base, grant, init, requester = httpRequest) {
     } catch { req?.destroy(); fail() }
   })
 }
+
+// Streaming variant for the in-container loopback model proxy that serves DS-Bot.
+// Same exact-grant rules as fetchHttpTask: only POST to <granted base>/chat/completions,
+// node:http without proxies or redirects (3xx is rejected), IPv4 only, bounded body.
+// onResponse(status, headers, stream) receives the upstream response for piping.
+export const STREAM_LIMIT = 32 * 1024 * 1024
+export function streamHttpTask(base, grant, init, onResponse, requester = httpRequest) {
+  if (!validHttpGrant(base, grant) || init.method !== 'POST' || init.redirect !== 'error') {
+    return Promise.reject(new Error('HTTP model task transport rejected'))
+  }
+  const url = new URL(base + '/chat/completions')
+  return new Promise((resolve, reject) => {
+    let req
+    const fail = () => reject(new Error('HTTP model task request failed'))
+    try {
+      req = requester({hostname:url.hostname, port:url.port || 80, path:url.pathname, method:'POST',
+        headers:init.headers, agent:false, family:4, signal:init.signal}, response => {
+        if (response.statusCode >= 300 && response.statusCode < 400) {
+          response.destroy(); reject(new Error('Model redirect rejected')); return
+        }
+        let length = 0
+        response.on('data', chunk => { length += chunk.length; if (length > STREAM_LIMIT) response.destroy() })
+        resolve(onResponse(response.statusCode, response.headers, response))
+      })
+      req.on('error', fail)
+      req.end(init.body)
+    } catch { req?.destroy(); fail() }
+  })
+}
