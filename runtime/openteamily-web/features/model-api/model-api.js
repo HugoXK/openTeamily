@@ -141,3 +141,15 @@ export function createModelApi({ dir, sealKey, env = process.env, clock = nowSec
     ],
   }
 }
+
+// Per-user import (openteamily/dsbot_bundle.py 'model-api', account scope).
+export const IMPORT_TABLES = { model_api_configs: ['id', 'provider', 'base_url', 'model', 'revision', 'updated', 'key_set'] }
+export function importApplier(sealKey) {
+  return (draft, tables, secrets) => {
+    const [row] = tables.model_api_configs ?? []
+    if (!row || (draft.account && draft.account.revision > row.revision)) return
+    const key = typeof secrets.model_api_key === 'string' && validApiKey(secrets.model_api_key) ? secrets.model_api_key : null
+    draft.account = { provider: row.provider, base_url: row.base_url, model: row.model,
+      key_sealed: key ? seal(sealKey, PURPOSE, key) : null, revision: Math.max(1, Number(row.revision) || 1), updated: row.updated }
+  }
+}

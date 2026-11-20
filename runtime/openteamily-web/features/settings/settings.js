@@ -254,3 +254,29 @@ export function createSettingsFeature({ dir, clock = nowSeconds }) {
     ],
   }
 }
+
+// Per-user import of legacy rows (openteamily/dsbot_bundle.py 'settings').
+// A legacy row wins only when this DS-Bot has nothing newer for it.
+export const IMPORT_TABLES = {
+  user_settings: ['user_id', 'document', 'revision', 'updated'],
+  user_onboarding: ['user_id', 'industry', 'role', 'completed', 'revision', 'created', 'updated'],
+  user_onboarding_steps: ['user_id', 'picks', 'look', 'updated'],
+}
+const parsed = (text, fallback) => { try { return JSON.parse(text) } catch { return fallback } }
+export function applyImport(draft, tables) {
+  const [settingsRow] = tables.user_settings ?? []
+  if (settingsRow && (!draft.settings || draft.settings.revision <= settingsRow.revision)) {
+    draft.settings = { document: migrate(parsed(settingsRow.document, {})), revision: Math.max(1, Number(settingsRow.revision) || 1), updated: settingsRow.updated }
+  }
+  const [onboardingRow] = tables.user_onboarding ?? []
+  if (onboardingRow && (!draft.onboarding || draft.onboarding.revision <= onboardingRow.revision)) {
+    draft.onboarding = { industry: String(onboardingRow.industry ?? ''), role: String(onboardingRow.role ?? ''), completed: onboardingRow.completed ? 1 : 0,
+      revision: Math.max(1, Number(onboardingRow.revision) || 1), created: onboardingRow.created, updated: onboardingRow.updated }
+  }
+  const [stepsRow] = tables.user_onboarding_steps ?? []
+  if (stepsRow && (!draft.onboarding_steps || (draft.onboarding_steps.updated ?? 0) <= stepsRow.updated)) {
+    const picks = parsed(stepsRow.picks, [])
+    const look = stepsRow.look ? parsed(stepsRow.look, null) : null
+    draft.onboarding_steps = { picks: Array.isArray(picks) ? picks.filter(k => typeof k === 'string').slice(0, 6) : [], look: look && validLook(look) ? look : null, updated: stepsRow.updated }
+  }
+}

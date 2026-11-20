@@ -414,3 +414,38 @@ function sortKeys(value) {
   if (isObject(value)) return Object.fromEntries(Object.keys(value).sort().map(k => [k, sortKeys(value[k])]))
   return value
 }
+
+// Per-user import (openteamily/dsbot_bundle.py 'connectors'): the account's own
+// Composio key and connection records, and its custom MCP servers with their
+// sealed configs. Servers without a delivered config are skipped.
+export const IMPORT_TABLES = {
+  composio_user: ['user_ref'],
+  composio_keys: ['user_id', 'key_hint', 'revision', 'updated'],
+  composio_connections: ['id', 'toolkit', 'account_id', 'status', 'status_reason', 'created', 'updated'],
+  custom_mcp_servers: ['id', 'name', 'origin', 'revision', 'created', 'updated'],
+}
+export function importApplier(sealKey) {
+  return (draft, tables, secrets) => {
+    draft.connections ??= []
+    draft.mcp_servers ??= []
+    draft.calls ??= []
+    const [user] = tables.composio_user ?? []
+    if (user && /^openteamily-[0-9a-f]{32}$/.test(String(user.user_ref))) draft.composio_user = user.user_ref
+    const [keyRow] = tables.composio_keys ?? []
+    if (keyRow && composio.validApiKey(secrets.composio_key) && !draft.composio) {
+      draft.composio = { key_sealed: seal(sealKey, KEY_PURPOSE, secrets.composio_key), key_hint: composio.hint(secrets.composio_key), revision: Math.max(1, Number(keyRow.revision) || 1), updated: keyRow.updated }
+      for (const row of tables.composio_connections ?? []) {
+        if (!LOCAL_ID.test(String(row.id)) || !composio.ACCOUNT.test(String(row.account_id)) || !composio.TOOLKIT.test(String(row.toolkit))) continue
+        if (draft.connections.some(c => c.id === row.id || c.account_id === row.account_id) || draft.connections.length >= composio.MAX_CONNECTIONS) continue
+        draft.connections.push({ id: row.id, toolkit: row.toolkit, account_id: row.account_id, status: composio.normalStatus(row.status), status_reason: composio.reasonText(row.status_reason), created: row.created, updated: row.updated })
+      }
+    }
+    for (const row of tables.custom_mcp_servers ?? []) {
+      const config = secrets['mcp:' + row.id]
+      if (!LOCAL_ID.test(String(row.id)) || typeof config !== 'string' || draft.mcp_servers.some(s => s.id === row.id) || draft.mcp_servers.length >= MAX_SERVERS) continue
+      let parsedConfig
+      try { parsedConfig = JSON.parse(config); endpoint(parsedConfig.url) } catch { continue }
+      draft.mcp_servers.push({ id: row.id, name: String(row.name).slice(0, 60), origin: row.origin, config_sealed: seal(sealKey, mcpPurpose(row.id), JSON.stringify({ url: parsedConfig.url, bearer_token: typeof parsedConfig.bearer_token === 'string' ? parsedConfig.bearer_token : '' })), revision: Math.max(1, Number(row.revision) || 1), created: row.created, updated: row.updated })
+    }
+  }
+}

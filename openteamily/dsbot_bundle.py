@@ -49,6 +49,29 @@ FEATURE_TABLES = {
     ],
 }
 
+# Stream B4 (settings, model-api, connectors). Secret columns are never
+# selected here: key blobs travel only through sealed_secrets() below.
+FEATURE_TABLES.update({
+    'settings': [
+        ('user_settings', 'SELECT user_id, document, revision, updated FROM user_settings WHERE user_id = ?'),
+        ('user_onboarding', 'SELECT * FROM user_onboarding WHERE user_id = ?'),
+        ('user_onboarding_steps', 'SELECT * FROM user_onboarding_steps WHERE user_id = ?'),
+    ],
+    'model-api': [
+        ('model_api_configs', "SELECT id, provider, base_url, model, revision, updated, "
+                              "CASE WHEN key_blob IS NULL OR key_blob = '' THEN 0 ELSE 1 END AS key_set "
+                              "FROM model_api_configs WHERE scope = 'account' AND account_id = ?"),
+    ],
+    'connectors': [
+        ('composio_user', "SELECT 'openteamily-' || id AS user_ref FROM users WHERE id = ?"),
+        ('composio_keys', 'SELECT user_id, key_hint, revision, updated FROM composio_keys WHERE user_id = ?'),
+        ('composio_connections', 'SELECT id, toolkit, account_id, status, status_reason, created, updated '
+                                 'FROM composio_connections WHERE user_id = ? ORDER BY created, id'),
+        ('custom_mcp_servers', 'SELECT id, name, origin, revision, created, updated '
+                               'FROM custom_mcp_servers WHERE user_id = ? ORDER BY created, id'),
+    ],
+})
+
 
 def canonical(rows):
     return json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
@@ -74,3 +97,39 @@ def build(db, user_id, feature, now=None):
 
 def dumps(bundle):
     return json.dumps(bundle, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+
+def sealed_secrets(db, store, user_id, feature, seal_key):
+    """B4 secrets of one account, re-wrapped for one target runtime.
+
+    seal_key is the 32-byte key the manager delivers to that runtime as
+    OPENTEAMILY_SEAL_KEY_FILE; values use the model_api.wrap format that the
+    plugin's lib/b4/seal.js unwrapLegacy() reads, then re-seals on its volume.
+    Plain values exist only in this process. Composio keys stay per-user: only
+    this account's own key is ever exported.
+    """
+    from . import composio, custom_mcp, model_api
+    if not isinstance(seal_key, (bytes, bytearray)) or len(seal_key) != 32:
+        raise ValueError('32-byte runtime seal key required')
+    out = {}
+    if feature == 'model-api':
+        row = model_api.load_account(db, user_id)
+        if row is not None and row['key_blob']:
+            out['model_api_key'] = model_api.wrap(bytes(seal_key), model_api.secret(store, row))
+    elif feature == 'connectors':
+        key = composio.user_key(store, db, user_id)
+        if key:
+            out['composio_key'] = model_api.wrap(bytes(seal_key), key)
+        for row in db.execute('SELECT * FROM custom_mcp_servers WHERE user_id = ? ORDER BY created, id', (user_id,)).fetchall():
+            out['mcp:' + row['id']] = model_api.wrap(bytes(seal_key), json.dumps(custom_mcp.secret_config(store, row)))
+    return out
+
+
+def build_with_secrets(db, store, user_id, feature, seal_key=None, now=None):
+    """build() plus, for B4 features, sealed secrets and their digest."""
+    bundle = build(db, user_id, feature, now)
+    if seal_key is not None and feature in ('model-api', 'connectors'):
+        secrets = sealed_secrets(db, store, user_id, feature, seal_key)
+        bundle['secrets'] = secrets
+        bundle['secrets_sha256'] = hashlib.sha256(canonical(secrets).encode('utf-8')).hexdigest()
+    return bundle
