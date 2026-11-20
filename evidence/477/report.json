@@ -1,0 +1,909 @@
+{
+  "issue": "477",
+  "arms": {
+    "before": "af33df0f0ff16007c02fa6818f1f58e3918927f4",
+    "after": "9fafbf2da219752a2b662f4aaacb208c2267f5b1"
+  },
+  "grid": {
+    "viewports": [
+      "1440x900",
+      "390x844"
+    ],
+    "locales": [
+      "zh-CN"
+    ],
+    "themes": [
+      "light"
+    ],
+    "states": [
+      "teams-before",
+      "teams-empty",
+      "teams-listed",
+      "teams-no-match"
+    ]
+  },
+  "counts": {
+    "after": {
+      "ref": "9fafbf2da219752a2b662f4aaacb208c2267f5b1",
+      "count": 4
+    },
+    "before": {
+      "ref": "af33df0f0ff16007c02fa6818f1f58e3918927f4",
+      "count": 1
+    }
+  },
+  "reuse": {
+    "theme": "dsh-client-ui-theme — token names only: the page maps --dsw-alias-* (shellTokens in themes.js) and resolves our dark arm to documentElement.dataset.themeResolved=dark; body[data-ds-dark-theme] is set by the dsh host, absent in these standalone pages (fact darkAttr), so no parallel palette is invented",
+    "viewports": "none — dsh ships no px breakpoint constant (only prefers-reduced-motion/transparency); 1440x900 + 390x844 are the owner rule, kept as-is",
+    "hmr": "none — not needed for static before/after shots"
+  },
+  "generated_at": "2026-11-20T08:09:09.512Z",
+  "images": [
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__discover__teams-empty.png",
+      "state": "teams-empty",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "light",
+      "route": "/discover?tab=agents&section=groups",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 57448
+      },
+      "viewport_size_ok": true,
+      "sha256": "c47be8bce87b445a884a5f729fb0709057ef7e0ce0bfe18cf135b39f082518d3",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI cifixture 发现 智能体 AI 团队 搜索 AI 团队 搜索 + 创建我的 AI 团队 All Marketing Engineering IT & Security Content Creation Operations Product Data Anal",
+        "textLength": 400,
+        "apiItems": 0,
+        "apiNames": [],
+        "reading": {
+          "url": "/discover?tab=agents&section=groups",
+          "note": {
+            "hidden": false,
+            "text": "以下是本实例里公开登记的 AI 团队，按成员数排序。"
+          },
+          "noteRect": {
+            "x": 140,
+            "y": 235,
+            "w": 1216,
+            "h": 20
+          },
+          "cards": 0,
+          "names": [],
+          "metas": [],
+          "summaries": [],
+          "count": "0 支团队",
+          "empty": {
+            "hidden": false,
+            "text": "本实例还没有公开的 AI 团队。创建一个团队，再到团队成员页把它登记到公共目录，就会出现在这里。"
+          },
+          "searchNote": {
+            "hidden": true,
+            "text": "没有匹配的公开 AI 团队，换一个关键词或清空搜索。"
+          },
+          "error": {
+            "hidden": true,
+            "text": ""
+          },
+          "query": ""
+        },
+        "probes": [
+          {
+            "sel": "#teams-note",
+            "count": 1,
+            "visible": true,
+            "text": "以下是本实例里公开登记的 AI 团队，按成员数排序。",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 235,
+              "w": 1216,
+              "h": 20
+            }
+          },
+          {
+            "sel": "#catalog-count",
+            "count": 1,
+            "visible": true,
+            "text": "0 支团队",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 159,
+              "w": 1216,
+              "h": 18
+            }
+          },
+          {
+            "sel": "#discover-list",
+            "count": 1,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 255,
+              "w": 1216,
+              "h": 0
+            }
+          },
+          {
+            "sel": ".catalog-team",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": ".catalog-team h3",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": ".catalog-team .meta",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#discover-empty",
+            "count": 1,
+            "visible": true,
+            "text": "本实例还没有公开的 AI 团队。创建一个团队，再到团队成员页把它登记到公共目录，就会出现在这里。",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 185,
+              "w": 1216,
+              "h": 50
+            }
+          },
+          {
+            "sel": "#teams-search-note",
+            "count": 1,
+            "visible": false,
+            "text": "没有匹配的公开 AI 团队，换一个关键词或清空搜索。",
+            "disabled": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#catalog-query",
+            "count": 1,
+            "visible": true,
+            "text": "",
+            "disabled": false,
+            "rect": {
+              "x": 992,
+              "y": 24,
+              "w": 206,
+              "h": 34
+            }
+          }
+        ]
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__discover__teams-listed.png",
+      "state": "teams-listed",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "light",
+      "route": "/discover?tab=agents&section=groups",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 57505
+      },
+      "viewport_size_ok": true,
+      "sha256": "18b9de8148c3d342b1122ce16e9b364deafcddf6412d7368957f75e3523f1819",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI cifixture 发现 智能体 AI 团队 搜索 AI 团队 搜索 + 创建我的 AI 团队 All Marketing Engineering IT & Security Content Creation Operations Product Data Anal",
+        "textLength": 415,
+        "apiItems": 1,
+        "api": [
+          {
+            "name": "[CI FIXTURE] 发现团队 Alpha",
+            "member_count": 1,
+            "membership": "member"
+          }
+        ],
+        "reading": {
+          "url": "/discover?tab=agents&section=groups",
+          "note": {
+            "hidden": false,
+            "text": "以下是本实例里公开登记的 AI 团队，按成员数排序。"
+          },
+          "noteRect": {
+            "x": 140,
+            "y": 185,
+            "w": 1216,
+            "h": 20
+          },
+          "cards": 1,
+          "names": [
+            "[CI FIXTURE] 发现团队 Alpha"
+          ],
+          "metas": [
+            "1 位成员 · 已加入"
+          ],
+          "summaries": [
+            "合成团队，用于公开目录截图，不是生产数据。"
+          ],
+          "count": "已显示 1 支团队",
+          "empty": {
+            "hidden": true,
+            "text": "暂无公开智能体。"
+          },
+          "searchNote": {
+            "hidden": true,
+            "text": "没有匹配的公开 AI 团队，换一个关键词或清空搜索。"
+          },
+          "error": {
+            "hidden": true,
+            "text": ""
+          },
+          "query": ""
+        },
+        "probes": [
+          {
+            "sel": "#teams-note",
+            "count": 1,
+            "visible": true,
+            "text": "以下是本实例里公开登记的 AI 团队，按成员数排序。",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 185,
+              "w": 1216,
+              "h": 20
+            }
+          },
+          {
+            "sel": "#catalog-count",
+            "count": 1,
+            "visible": true,
+            "text": "已显示 1 支团队",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 159,
+              "w": 1216,
+              "h": 18
+            }
+          },
+          {
+            "sel": "#discover-list",
+            "count": 1,
+            "visible": true,
+            "text": "[CI FIXTURE] 发现团队 Alpha\n\n合成团队，用于公开目录截图，不是生产数据。\n\n1 位成员 · 已加入",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 205,
+              "w": 1216,
+              "h": 142
+            }
+          },
+          {
+            "sel": ".catalog-team",
+            "count": 1,
+            "visible": true,
+            "text": "[CI FIXTURE] 发现团队 Alpha\n\n合成团队，用于公开目录截图，不是生产数据。\n\n1 位成员 · 已加入",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 205,
+              "w": 397,
+              "h": 142
+            }
+          },
+          {
+            "sel": ".catalog-team h3",
+            "count": 1,
+            "visible": true,
+            "text": "[CI FIXTURE] 发现团队 Alpha",
+            "disabled": null,
+            "rect": {
+              "x": 243,
+              "y": 220,
+              "w": 192,
+              "h": 18
+            }
+          },
+          {
+            "sel": ".catalog-team .meta",
+            "count": 1,
+            "visible": true,
+            "text": "1 位成员 · 已加入",
+            "disabled": null,
+            "rect": {
+              "x": 283,
+              "y": 296,
+              "w": 111,
+              "h": 21
+            }
+          },
+          {
+            "sel": "#discover-empty",
+            "count": 1,
+            "visible": false,
+            "text": "暂无公开智能体。",
+            "disabled": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#teams-search-note",
+            "count": 1,
+            "visible": false,
+            "text": "没有匹配的公开 AI 团队，换一个关键词或清空搜索。",
+            "disabled": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#catalog-query",
+            "count": 1,
+            "visible": true,
+            "text": "",
+            "disabled": false,
+            "rect": {
+              "x": 992,
+              "y": 24,
+              "w": 206,
+              "h": 34
+            }
+          }
+        ]
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__discover__teams-no-match.png",
+      "state": "teams-no-match",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "light",
+      "route": "/discover?tab=agents&section=groups",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 52786
+      },
+      "viewport_size_ok": true,
+      "sha256": "0101a064655ea86a6e0740a43435aee21106bdb5ef22fa7a6c7cca7f4b5681ce",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI cifixture 发现 智能体 AI 团队 搜索 AI 团队 搜索 清除 + 创建我的 AI 团队 All Marketing Engineering IT & Security Content Creation Operations Product Data A",
+        "textLength": 374,
+        "query": "zzz-no-such-team",
+        "reading": {
+          "url": "/discover?tab=agents&section=groups",
+          "note": {
+            "hidden": false,
+            "text": "以下是本实例里公开登记的 AI 团队，按成员数排序。"
+          },
+          "noteRect": {
+            "x": 140,
+            "y": 159,
+            "w": 1216,
+            "h": 20
+          },
+          "cards": 0,
+          "names": [],
+          "metas": [],
+          "summaries": [],
+          "count": "",
+          "empty": {
+            "hidden": true,
+            "text": "没有匹配的公开 AI 团队，换一个关键词或清空搜索。"
+          },
+          "searchNote": {
+            "hidden": false,
+            "text": "没有匹配的公开 AI 团队，换一个关键词或清空搜索。"
+          },
+          "error": {
+            "hidden": true,
+            "text": ""
+          },
+          "query": "zzz-no-such-team"
+        },
+        "probes": [
+          {
+            "sel": "#teams-note",
+            "count": 1,
+            "visible": true,
+            "text": "以下是本实例里公开登记的 AI 团队，按成员数排序。",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 159,
+              "w": 1216,
+              "h": 20
+            }
+          },
+          {
+            "sel": "#catalog-count",
+            "count": 1,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 159,
+              "w": 1216,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#discover-list",
+            "count": 1,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 198,
+              "w": 1216,
+              "h": 0
+            }
+          },
+          {
+            "sel": ".catalog-team",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": ".catalog-team h3",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": ".catalog-team .meta",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#discover-empty",
+            "count": 1,
+            "visible": false,
+            "text": "没有匹配的公开 AI 团队，换一个关键词或清空搜索。",
+            "disabled": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#teams-search-note",
+            "count": 1,
+            "visible": true,
+            "text": "没有匹配的公开 AI 团队，换一个关键词或清空搜索。",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 179,
+              "w": 1216,
+              "h": 20
+            }
+          },
+          {
+            "sel": "#catalog-query",
+            "count": 1,
+            "visible": true,
+            "text": "zzz-no-such-team",
+            "disabled": false,
+            "rect": {
+              "x": 992,
+              "y": 24,
+              "w": 160,
+              "h": 34
+            }
+          }
+        ]
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__discover__teams-listed.png",
+      "state": "teams-listed",
+      "viewport": "390x844",
+      "locale": "zh-CN",
+      "theme": "light",
+      "route": "/discover?tab=agents&section=groups",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 45346
+      },
+      "viewport_size_ok": true,
+      "sha256": "4a830707b920ab157a87e289cbd80ba7704937311bd8851cb1e6541d5e6d8391",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI cifixture 发现 智能体 AI 团队 搜索 AI 团队 搜索 + 创建我的 AI 团队 All Marketing Engineering IT & Security Content Creation Operations Product Data Anal",
+        "textLength": 415,
+        "apiItems": 1,
+        "api": [
+          {
+            "name": "[CI FIXTURE] 发现团队 Alpha",
+            "member_count": 1,
+            "membership": "member"
+          }
+        ],
+        "reading": {
+          "url": "/discover?tab=agents&section=groups",
+          "note": {
+            "hidden": false,
+            "text": "以下是本实例里公开登记的 AI 团队，按成员数排序。"
+          },
+          "noteRect": {
+            "x": 76,
+            "y": 276,
+            "w": 295,
+            "h": 39
+          },
+          "cards": 1,
+          "names": [
+            "[CI FIXTURE] 发现团队 Alpha"
+          ],
+          "metas": [
+            "1 位成员 · 已加入"
+          ],
+          "summaries": [
+            "合成团队，用于公开目录截图，不是生产数据。"
+          ],
+          "count": "已显示 1 支团队",
+          "empty": {
+            "hidden": true,
+            "text": "暂无公开智能体。"
+          },
+          "searchNote": {
+            "hidden": true,
+            "text": "没有匹配的公开 AI 团队，换一个关键词或清空搜索。"
+          },
+          "error": {
+            "hidden": true,
+            "text": ""
+          },
+          "query": ""
+        },
+        "probes": [
+          {
+            "sel": "#teams-note",
+            "count": 1,
+            "visible": true,
+            "text": "以下是本实例里公开登记的 AI 团队，按成员数排序。",
+            "disabled": null,
+            "rect": {
+              "x": 76,
+              "y": 276,
+              "w": 295,
+              "h": 39
+            }
+          },
+          {
+            "sel": "#catalog-count",
+            "count": 1,
+            "visible": true,
+            "text": "已显示 1 支团队",
+            "disabled": null,
+            "rect": {
+              "x": 76,
+              "y": 250,
+              "w": 295,
+              "h": 18
+            }
+          },
+          {
+            "sel": "#discover-list",
+            "count": 1,
+            "visible": true,
+            "text": "[CI FIXTURE] 发现团队 Alpha\n\n合成团队，用于公开目录截图，不是生产数据。\n\n1 位成员 · 已加入",
+            "disabled": null,
+            "rect": {
+              "x": 76,
+              "y": 315,
+              "w": 295,
+              "h": 142
+            }
+          },
+          {
+            "sel": ".catalog-team",
+            "count": 1,
+            "visible": true,
+            "text": "[CI FIXTURE] 发现团队 Alpha\n\n合成团队，用于公开目录截图，不是生产数据。\n\n1 位成员 · 已加入",
+            "disabled": null,
+            "rect": {
+              "x": 76,
+              "y": 315,
+              "w": 295,
+              "h": 142
+            }
+          },
+          {
+            "sel": ".catalog-team h3",
+            "count": 1,
+            "visible": true,
+            "text": "[CI FIXTURE] 发现团队 Alpha",
+            "disabled": null,
+            "rect": {
+              "x": 127,
+              "y": 330,
+              "w": 192,
+              "h": 18
+            }
+          },
+          {
+            "sel": ".catalog-team .meta",
+            "count": 1,
+            "visible": true,
+            "text": "1 位成员 · 已加入",
+            "disabled": null,
+            "rect": {
+              "x": 168,
+              "y": 406,
+              "w": 111,
+              "h": 21
+            }
+          },
+          {
+            "sel": "#discover-empty",
+            "count": 1,
+            "visible": false,
+            "text": "暂无公开智能体。",
+            "disabled": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#teams-search-note",
+            "count": 1,
+            "visible": false,
+            "text": "没有匹配的公开 AI 团队，换一个关键词或清空搜索。",
+            "disabled": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#catalog-query",
+            "count": 1,
+            "visible": true,
+            "text": "",
+            "disabled": false,
+            "rect": {
+              "x": 110,
+              "y": 69,
+              "w": 261,
+              "h": 34
+            }
+          }
+        ]
+      },
+      "console": []
+    },
+    {
+      "arm": "before",
+      "file": "before/zh-CN__light__1440x900__discover__teams-before.png",
+      "state": "teams-before",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "light",
+      "route": "/discover?tab=agents&section=groups",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 50117
+      },
+      "viewport_size_ok": true,
+      "sha256": "f4b8c5d7dcf56c50aa59d52a83413c3a6576f200786fb29ccb974c3769bdb1cf",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI cifixture 发现 智能体 AI 团队 搜索 AI 团队 搜索 + 创建我的 AI 团队 All Marketing Engineering IT & Security Content Creation Operations Product Data Anal",
+        "textLength": 372,
+        "apiItems": 1,
+        "apiNames": [
+          "[CI FIXTURE] 发现团队 Alpha"
+        ],
+        "reading": {
+          "url": "/discover?tab=agents&section=groups",
+          "note": {
+            "hidden": false,
+            "text": "公开 AI 团队目录还没有接口，所以这里不会列出模板卡片。也不会复制对照里的团队名称或创建者品牌。"
+          },
+          "noteRect": {
+            "x": 140,
+            "y": 159,
+            "w": 1216,
+            "h": 20
+          },
+          "cards": 0,
+          "names": [],
+          "metas": [],
+          "summaries": [],
+          "count": "",
+          "empty": {
+            "hidden": true,
+            "text": "暂无公开智能体。"
+          },
+          "searchNote": {
+            "hidden": true,
+            "text": "搜索 AI 团队尚未接通：没有对应的公开接口。"
+          },
+          "error": {
+            "hidden": true,
+            "text": ""
+          },
+          "query": ""
+        },
+        "probes": [
+          {
+            "sel": "#teams-note",
+            "count": 1,
+            "visible": true,
+            "text": "公开 AI 团队目录还没有接口，所以这里不会列出模板卡片。也不会复制对照里的团队名称或创建者品牌。",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 159,
+              "w": 1216,
+              "h": 20
+            }
+          },
+          {
+            "sel": "#catalog-count",
+            "count": 1,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 159,
+              "w": 1216,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#discover-list",
+            "count": 1,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": {
+              "x": 140,
+              "y": 179,
+              "w": 1216,
+              "h": 0
+            }
+          },
+          {
+            "sel": ".catalog-team",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": ".catalog-team h3",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": ".catalog-team .meta",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#discover-empty",
+            "count": 1,
+            "visible": false,
+            "text": "暂无公开智能体。",
+            "disabled": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#teams-search-note",
+            "count": 1,
+            "visible": false,
+            "text": "搜索 AI 团队尚未接通：没有对应的公开接口。",
+            "disabled": null,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "w": 0,
+              "h": 0
+            }
+          },
+          {
+            "sel": "#catalog-query",
+            "count": 1,
+            "visible": true,
+            "text": "",
+            "disabled": false,
+            "rect": {
+              "x": 992,
+              "y": 24,
+              "w": 206,
+              "h": 34
+            }
+          }
+        ]
+      },
+      "console": []
+    }
+  ],
+  "failures": []
+}
