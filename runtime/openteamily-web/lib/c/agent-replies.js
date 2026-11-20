@@ -55,6 +55,18 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
   }
   let running = false
 
+  async function changeJob(item, action) {
+    try {
+      await bs.post(`/v1/ot/agent-reply-jobs/${encodeURIComponent(item.job_id)}`, {action, attempt: item.attempt})
+      return true
+    } catch (error) {
+      if (!['social/reply_job_unavailable', 'social/reply_job_not_found'].includes(error?.code)) {
+        log(`agent reply state: ${error?.code ?? 'error'}`)
+      }
+      return false
+    }
+  }
+
   async function once() {
     if (running) return { skipped: true }
     running = true
@@ -64,31 +76,37 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
       const conn = await bs.status()
       if (!conn.connected) return { skipped: conn.reason }
       const after = readCursor()
-      const inbox = await bs.get(`/v1/ot/agent-inbox?after=${after}`)
+      const inbox = await bs.get(`/v1/ot/agent-inbox?managed=1&after=${after}`)
       let replied = 0
-      for (const item of inbox.items ?? []) {
+      for (const item of [...(inbox.jobs ?? []), ...(inbox.items ?? [])]) {
         const id = item.message?.id
         if (!id || !item.agent_ref) continue
+        if (item.job_id && !await changeJob(item, 'start')) continue
+        const requestId = item.job_id ? `ots:${item.job_id}:${item.attempt}` : `ots:${id}:${item.agent_ref}`
         const replyKey = `r:${createHash('sha256').update(JSON.stringify([id, item.agent_ref])).digest('hex')}`
         let text
         try {
           const turn = item.mode === 'public'
             ? await host.call('agents/publicReply', { agent_id: item.agent_ref, prompt: publicReplyPrompt(item) })
-            : await host.call('agents/turn', { agent_id: item.agent_ref, key: `social:${item.conversation_id}`, text: replyPrompt(item), request_id: `ots:${id}:${item.agent_ref}` })
+            : await host.call('agents/turn', { agent_id: item.agent_ref, key: `social:${item.conversation_id}`, text: replyPrompt(item), request_id: requestId })
           text = String(turn?.text ?? '').trim()
         } catch (error) {
           log(`agent turn failed: ${String(error?.code ?? error?.name ?? 'error')}`)
-          if (item.mode !== 'public') continue
-          text = '这次回复失败，请稍后重试。'
+          if (item.mode === 'public') text = '这次回复失败，请稍后重试。'
         }
-        if (!text) continue
+        if (!text) {
+          if (item.job_id) await changeJob(item, 'fail')
+          continue
+        }
         try {
           await bs.post(`/v1/ot/conversations/${encodeURIComponent(item.conversation_id)}/agent-messages`, {
             agent_ref: item.agent_ref, body: text.slice(0, 4000), reply_to: id, mode: item.mode, client_key: replyKey,
+            ...(item.job_id ? {job_id: item.job_id, attempt: item.attempt} : {}),
           })
           replied++
         } catch (error) {
-          if (!['social/agent_reply_limit', 'social/auto_reply_disabled', 'social/public_chat_closed'].includes(error?.code)) log(`agent reply not posted: ${error?.code ?? 'error'}`)
+          if (item.job_id) await changeJob(item, 'fail')
+          if (!['social/agent_reply_limit', 'social/auto_reply_disabled', 'social/public_chat_closed', 'social/reply_job_unavailable'].includes(error?.code)) log(`agent reply not posted: ${error?.code ?? 'error'}`)
         }
       }
       if (typeof inbox.cursor === 'number' && inbox.cursor > after) writeCursor(inbox.cursor)

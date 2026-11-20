@@ -55,7 +55,9 @@ export async function translationRoutes(host) {
   async function sources(workspace, conversation, items = []) {
     try {
       const bs = sharedBotSocial(host)
-      return (await bs.post(`/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}/translation-sources`,{items})).sources
+      const binding = await host.call?.('agents/personal-binding', {})
+      const scope = binding?.workspace_id === workspace ? '' : '/workspaces/' + workspace
+      return (await bs.post(`/v1/ot${scope}/conversations/${seg(conversation)}/translation-sources`,{items})).sources
     } catch (error) {
       if (error.status === 403 || error.status === 404) throw new Fault(404,'not_found','Conversation not available')
       throw new Fault(503,'unavailable','Cannot read messages for translation')

@@ -23,6 +23,7 @@ test('translation runs in the recipient runtime once and caches by revision and 
   const host = {
     featureDir:() => directory,
     call:async name => {
+      if (name === 'agents/personal-binding') return null
       assert.equal(name,'settings/v1')
       return {status:200,body:{settings:{values:{auto_translate:true,chat_language:'ja',language:'zh-CN'}}}}
     },

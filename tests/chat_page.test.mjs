@@ -176,9 +176,10 @@ test('group picker distinguishes stored agents and people; contact picker omits 
   const agents = [{id: 'helper', name: 'Helper'}, {id: 'old', name: 'Archived', archived: 1}];
   const choices = groupPickerChoices(humans, alice, agents);
   assert.deepEqual(choices.map(row => [row.id, row.kind]), [[bob, 'human'], ['helper', 'agent']]);
-  assert.ok(choices[1].label.includes('AI 智能体（自动回复未接通）'));
+  assert.ok(choices[1].label.includes('AI 智能体'));
   assert.deepEqual(groupPickerChoices(humans, alice).map(row => row.id), [bob]);
   assert.equal(composeCreateEnabled({composeMode: 'group', selectedCount: 1, selectedHumanCount: 0}), false);
+  assert.equal(composeCreateEnabled({composeMode: 'group', personal:true, selectedCount: 1, selectedHumanCount: 0, selectedAgentCount: 1}), true);
   assert.equal(composeCreateEnabled({composeMode: 'group', selectedCount: 2, selectedHumanCount: 1}), true);
   assert.equal(composeCreateEnabled({composeMode: 'group', groupMode: 'team', selectedCount: 2, selectedHumanCount: 1}), false);
   assert.deepEqual(composeGroupPayload([bob], '', ['helper']), {
