@@ -97,7 +97,11 @@ def object_only(pairs):
 
 
 class App:
-    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None):
+    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None, model_http_policy=None):
+        from .model_http_policy import ModelHttpPolicy
+        if model_http_policy is not None and not isinstance(model_http_policy, ModelHttpPolicy):
+            raise ValueError("Invalid operator model HTTP policy")
+        self.model_http_policy = model_http_policy or ModelHttpPolicy()
         self.store, self.config, self.clock = store, config, clock
         # Tests inject a fake Composio HTTP transport; production uses urllib.
         self.composio_transport = composio_transport
@@ -1206,7 +1210,7 @@ class App:
             access = re.fullmatch(r'/v1/agent/tasks/([0-9a-f]{32})/model-access', path)
             if access and method == 'POST' and not query:
                 body = self.body(env, ['skill_format'])
-                return self.issue_model_access(db, connection, access[1], now, body.get('skill_format'))
+                return self.issue_model_access(db, connection, access[1], now, body.get('skill_format'), env.get('HTTP_X_OPENTEAMILY_MODEL_HTTP'))
             skill_ack = re.fullmatch(r'/v1/agent/tasks/([0-9a-f]{32})/skills/ack',path)
             if skill_ack and method == 'POST' and not query:
                 body = self.body(env,['digests'])
@@ -1295,7 +1299,7 @@ class App:
             refuse(400, 'invalid', 'Connected tools can only be requested for infer tasks')
         return 201, {'task': runtime_connect.view_with_meta(db, row)}, []
 
-    def issue_model_access(self, db, connection, task_id, now, skill_format=None):
+    def issue_model_access(self, db, connection, task_id, now, skill_format=None, http_capability=None):
         task = runtime_connect.load_task(db, task_id, connection_id=connection['id'])
         if task is None:
             refuse(404, 'not_found', 'Runtime task not found')
@@ -1319,6 +1323,10 @@ class App:
             refuse(409, 'conflict', 'Model API is not configured')
         if public['provider'] not in ('openai', 'custom'):
             refuse(409, 'conflict', 'This agent only supports OpenAI-compatible model APIs')
+        try:
+            grant = model_api.endpoint_grant(public['base_url'], self.model_http_policy, http_capability)
+        except model_api.ModelEndpointError as error:
+            refuse(409, error.code, 'Model endpoint not authorized or runtime upgrade required')
         skill_material = skill_packages.material(db, task['id'])
         expected = skill_packages.selection(db,task['id'])
         if expected and skill_material != expected:
@@ -1329,6 +1337,7 @@ class App:
         runtime_connect.mark_access_issued(db, task['id'])
         runtime_connect.heartbeat(db, connection, now)
         return 200, {'skills': skill_material, 'connected_tools': connected_tools.available(db, task['id']), 'model_api': {
+            **({'http_endpoint_grant': grant} if grant else {}),
             'provider': public['provider'],
             'base_url': public['base_url'],
             'model': public['model'],
@@ -5527,9 +5536,13 @@ class App:
         replacing = 'api_key' in changes and changes['api_key'] is not None
         if replacing and not model_api.valid_api_key(changes['api_key']):
             refuse(400, 'invalid', 'API key must be 8–4096 characters')
-        if not clearing or row is not None:
-            if not model_api.valid_provider(provider) or not model_api.valid_base_url(base_url) or not model_api.valid_model(model_name):
-                refuse(400, 'invalid', 'Provide a supported provider, https base URL and model name')
+        # An operator policy removal must not prevent revoking a stored key.
+        # Mixed metadata updates still receive normal validation.
+        if not (clearing and set(changes) == {'api_key'}):
+            if not model_api.valid_provider(provider) or not model_api.valid_base_url(base_url, self.model_http_policy) or not model_api.valid_model(model_name):
+                refuse(400, 'invalid', 'Provide a supported provider, authorized model base URL and model name')
+        if not clearing and self.model_http_policy.allows(base_url) and provider not in ('openai', 'custom'):
+            refuse(400, 'invalid', 'HTTP model exceptions require an OpenAI-compatible task provider')
         if not replacing and not clearing:
             if (provider, base_url, model_name) == (current['provider'], current['base_url'], current['model']) and row is not None:
                 return 200, {'model_api': current}, []
@@ -5721,7 +5734,7 @@ class App:
             body = self.body(env, ['job_id', 'observed_revision', 'lease'])
             if set(body) != {'job_id', 'observed_revision', 'lease'} or not isinstance(body['job_id'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['job_id']):
                 refuse(400, 'invalid', 'Incomplete or invalid manager observation')
-            return 200, runtime.runtime_secret(manager, secret[1], body['job_id'], body['observed_revision'], body['lease']), []
+            return 200, runtime.runtime_secret(manager, secret[1], body['job_id'], body['observed_revision'], body['lease'], http_policy=self.model_http_policy, capability=env.get('HTTP_X_OPENTEAMILY_MODEL_HTTP')), []
         collaboration = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/runtime-bot-social', path)
         if collaboration and method == 'POST' and not query:
             body = self.body(env, ['job_id', 'observed_revision', 'lease'])
