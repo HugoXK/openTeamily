@@ -71,13 +71,14 @@ export async function importHistory({ db, rt, ctx, bot, conversationId, sessionI
 // for native projection reads; preserve the durable log and source mapping.
 // Empty stream means no recorded transport/usage, never invented token usage.
 export function normalizeImportedSession(session) {
+  const prototype = Object.getPrototypeOf(session)
   const mark = Symbol.for('openteamily.imported-event-normalizer')
-  if (!session || session[mark]) return
-  const read = session.eventAt.bind(session)
-  session.eventAt = seq => {
-    const e = read(seq)
+  if (!prototype || prototype[mark]) return
+  const read = prototype.eventAt
+  prototype.eventAt = function (seq) {
+    const e = read.call(this, seq)
     return e?.type === 'assistant/message' && e.data?.source?.imported === true && /^[0-9a-f]{32}$/.test(e.data.source.openteamilyMessageId || '') && !Array.isArray(e.data.stream)
       ? { ...e, data: { ...e.data, stream: [] } } : e
   }
-  session[mark] = true
+  prototype[mark] = true
 }
