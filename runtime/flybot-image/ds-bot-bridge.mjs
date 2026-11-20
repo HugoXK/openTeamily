@@ -295,9 +295,10 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
 
   async function syncTools(connected) {
     toolsAttached = attachedNow().has(TOOLS_CAPABILITY)
-    if (connected && !toolsAttached) {
-      await rt.capabilitySave({ name: TOOLS_CAPABILITY, kind: 'mcp', description: 'OpenTeamily connected app tools (owner approves every call)', transport: 'streamable-http', url: `http://127.0.0.1:${listenPort}/mcp` }, { ui: true })
-      await rt.changeCapabilityAttachment('attach', { name: TOOLS_CAPABILITY }, botId)
+    if (connected) {
+      const catalog = createHash('sha256').update(JSON.stringify(state.tools)).digest('hex').slice(0, 16)
+      await rt.capabilitySave({ name: TOOLS_CAPABILITY, kind: 'mcp', description: 'OpenTeamily connected app tools (owner approves every call)', transport: 'streamable-http', url: `http://127.0.0.1:${listenPort}/mcp?catalog=${catalog}` }, { ui: true })
+      if (!toolsAttached) await rt.changeCapabilityAttachment('attach', { name: TOOLS_CAPABILITY }, botId)
       toolsAttached = true
     } else if (!connected && toolsAttached) {
       await rt.changeCapabilityAttachment('detach', { name: TOOLS_CAPABILITY }, botId).catch(() => {})
