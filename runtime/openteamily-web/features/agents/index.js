@@ -1,3 +1,4 @@
+import { nativeAgents } from './native.js'
 import { importPending } from '../../src/pending-import.js'
 // Workspace agents inside the user's own DS-Bot (batch B2; moved from
 // openteamily/agents.py + the agent conversation dispatch in app.py).
@@ -53,11 +54,12 @@ export function composePrompt(agent, text, replyLanguage) {
 export function view(row) {
   return { id: row.id, workspace_id: row.workspace_id, name: row.name, summary: row.summary, instructions: row.instructions,
     category: row.category || null, quick_starts: JSON.parse(row.quick_starts), revision: row.revision, created: row.created,
-    updated: row.updated, archived: row.archived, served_by: 'ds-bot' }
+    updated: row.updated, archived: row.archived, native_bot_id: row.native_bot_id || null, native_name: row.native_name || null, native_deleted: row.native_deleted || false, served_by: 'ds-bot' }
 }
 
 export function createAgents({ db, host }) {
   db.exec(SCHEMA)
+  const native = nativeAgents({ host, db })
   const one = (sql, ...a) => db.prepare(sql).get(...a)
   const all = (sql, ...a) => db.prepare(sql).all(...a)
   const run = (sql, ...a) => db.prepare(sql).run(...a)
@@ -80,19 +82,29 @@ export function createAgents({ db, host }) {
 
   // One DS-Bot turn as this agent. Shared by the external API and team runs.
   async function turn({ agent_id: agentId, key, text, request_id: requestId, reply_language: lang }) {
-    const agent = loadAny(agentId)
+    const agent = await native.ensure(loadAny(agentId))
     if (agent.archived) fail('archived', 'Agent is archived', 409)
     if (typeof text !== 'string' || !text.trim() || text.length > LIMITS.text) fail('invalid', 'text must be 1–20000 characters', 400)
     const services = await host.runtime()
     if (typeof services?.chatTurn !== 'function') fail('runtime-unavailable', 'DS-Bot chat service unavailable', 503)
     const sessionKey = `agent:${agent.id}:${typeof key === 'string' && /^[A-Za-z0-9:_-]{1,96}$/.test(key) ? key : 'default'}`
-    const reply = await services.chatTurn(sessionKey, composePrompt(agent, text, lang), requestId || `ot-agent:${newId()}`)
+    const mapping = await native.session(agent, sessionKey, agent.name)
+    if (typeof services.nativeTurn !== 'function') fail('runtime-unavailable', 'Native Bot turn service unavailable', 503)
+    const reply = await services.nativeTurn(mapping.native_bot_id, mapping.native_session_id, lang ? `Reply in ${lang}.\n\n${text}` : text, requestId || `ot-agent:${newId()}`)
     const out = String(reply?.text ?? '').trim()
     if (!out) fail('empty-reply', 'DS-Bot turn ended without a reply', 502)
     return { text: out, agent_id: agent.id, agent_name: agent.name, engine: 'ds-bot', session_key: sessionKey, session_id: reply.sessionId ?? null, turn_id: reply.turnId ?? null }
   }
 
   const endpoints = {
+    async reconcile() {
+      const items = []
+      for (const row of all('SELECT * FROM agents ORDER BY id')) {
+        const a = await native.ensure(row)
+        items.push({ agent_id: row.id, native_bot_id: a.native_bot_id, native_deleted: !!a.native_deleted })
+      }
+      return { items }
+    },
     categories: async () => ({ items: CATEGORIES }),
     async list(p) {
       const workspaceId = ws(p)
@@ -101,9 +113,9 @@ export function createAgents({ db, host }) {
       let rows = all('SELECT * FROM agents WHERE workspace_id=? AND archived=? ORDER BY id', workspaceId, archived)
       if (p.category) rows = rows.filter((r) => r.category === p.category)
       if (needle) rows = rows.filter((r) => r.name.toLowerCase().includes(needle) || r.summary.toLowerCase().includes(needle))
-      return { items: rows.map(view) }
+      return { items: await Promise.all(rows.map(async row => view(await native.ensure(row)))) }
     },
-    get: async (p) => ({ agent: view(load(ws(p), p.id)) }),
+    get: async (p) => ({ agent: view(await native.ensure(load(ws(p), p.id))) }),
     async create(p) {
       const workspaceId = ws(p)
       const { name } = p
@@ -121,7 +133,7 @@ export function createAgents({ db, host }) {
       const prior = one('SELECT * FROM agents WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
       if (prior) {
         if (prior.request_hash !== requestHash) fail('conflict', 'Idempotency key was used for a different request', 409)
-        return { status: 200, agent: view(prior) }
+        return { status: 200, agent: view(await native.ensure(prior)) }
       }
       if (one('SELECT id FROM agents WHERE workspace_id=? AND name_hash=?', workspaceId, sha(clean.toLowerCase()))) fail('conflict', 'An agent with this name already exists', 409)
       if (one('SELECT COUNT(*) AS n FROM agents WHERE workspace_id=?', workspaceId).n >= LIMITS.agents) fail('quota', 'Agent capacity reached', 429)
@@ -129,10 +141,10 @@ export function createAgents({ db, host }) {
       const t = now()
       run('INSERT INTO agents (id, workspace_id, name, name_hash, summary, instructions, category, quick_starts, revision, created, updated, archived, key_hash, request_hash) VALUES(?,?,?,?,?,?,?,?,1,?,?,0,?,?)',
         id, workspaceId, clean, sha(clean.toLowerCase()), summary, instructions, category || null, JSON.stringify(starts.map((s) => s.trim())), t, t, keyHash, requestHash)
-      return { status: 201, agent: view(one('SELECT * FROM agents WHERE id=?', id)) }
+      return { status: 201, agent: view(await native.ensure(one('SELECT * FROM agents WHERE id=?', id))) }
     },
     async update(p) {
-      const row = load(ws(p), p.id)
+      const row = await native.ensure(load(ws(p), p.id))
       const { revision, changes } = p
       if (!Number.isInteger(revision) || !changes || typeof changes !== 'object' || Array.isArray(changes) || !Object.keys(changes).length) fail('invalid', 'Provide the current revision and a non-empty changes object', 400)
       const allowed = new Set(['name', 'summary', 'instructions', 'category', 'quick_starts'])
@@ -145,26 +157,30 @@ export function createAgents({ db, host }) {
       if ('category' in changes) { if (!validCategory(changes.category)) fail('invalid', 'Invalid category', 400); next.category = changes.category || null }
       if ('quick_starts' in changes) { if (!validQuickStarts(changes.quick_starts)) fail('invalid', 'Invalid quick starts', 400); next.quick_starts = changes.quick_starts.map((s) => s.trim()) }
       if (next.name !== row.name && one('SELECT id FROM agents WHERE workspace_id=? AND name_hash=? AND id<>?', row.workspace_id, sha(next.name.toLowerCase()), row.id)) fail('conflict', 'An agent with this name already exists', 409)
+      await native.update(row, next)
       run('UPDATE agents SET name=?, name_hash=?, summary=?, instructions=?, category=?, quick_starts=?, revision=revision+1, updated=? WHERE id=?',
         next.name, sha(next.name.toLowerCase()), next.summary, next.instructions, next.category, JSON.stringify(next.quick_starts), now(), row.id)
-      return { agent: view(one('SELECT * FROM agents WHERE id=?', row.id)) }
+      return { agent: view(await native.ensure(one('SELECT * FROM agents WHERE id=?', row.id))) }
     },
     async archive(p) {
-      const row = load(ws(p), p.id)
+      const row = await native.ensure(load(ws(p), p.id))
       const archived = p.archived === false ? 0 : 1
+      await native.update(row, { archived: !!archived })
       run('UPDATE agents SET archived=?, revision=revision+1, updated=? WHERE id=?', archived, now(), row.id)
-      return { agent: view(one('SELECT * FROM agents WHERE id=?', row.id)) }
+      return { agent: view(await native.ensure(one('SELECT * FROM agents WHERE id=?', row.id))) }
     },
     async conversations(p) {
       const agent = load(ws(p), p.id)
-      return { items: all('SELECT * FROM agent_conversations WHERE agent_id=? ORDER BY updated DESC, id LIMIT 200', agent.id) }
+      const rows = all('SELECT * FROM agent_conversations WHERE agent_id=? ORDER BY updated DESC, id LIMIT 200', agent.id)
+      return { items: await Promise.all(rows.map(async c => ({ ...c, ...await native.session(agent, `agent:${agent.id}:${c.id}`, c.title) }))) }
     },
     async 'conversation-create'(p) {
       const agent = load(ws(p), p.id)
       const title = typeof p.title === 'string' && p.title.trim() ? p.title.trim().slice(0, 120) : agent.name
       const row = { id: newId(), agent_id: agent.id, title, created: now(), updated: now() }
       run('INSERT INTO agent_conversations VALUES(?,?,?,?,?)', row.id, row.agent_id, row.title, row.created, row.updated)
-      return { status: 201, conversation: row }
+      const mapping = await native.session(agent, `agent:${agent.id}:${row.id}`, row.title)
+      return { status: 201, conversation: { ...row, ...mapping } }
     },
     async messages(p) {
       const agent = load(ws(p), p.id)
