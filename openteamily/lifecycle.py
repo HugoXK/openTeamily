@@ -197,21 +197,26 @@ class Lifecycle:
         if db.execute('SELECT COUNT(*) FROM runtime_jobs').fetchone()[0] >= self.policy.max_jobs:
             fail(429, 'quota', 'Runtime job capacity reached; operator archival required')
 
-    def create(self, owner, wid, key):
+    def create(self, owner, wid, key, *, per_user=False):
         if not valid_key(key):
             fail(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         with self.store.transaction() as db:
-            return self.create_with(db, owner, wid, key)
+            return self.create_with(db, owner, wid, key, per_user=per_user)
 
-    def create_with(self, db, owner, wid, key):
+    def create_with(self, db, owner, wid, key, *, per_user=False):
         """Create inside the caller's IMMEDIATE transaction (server-side auto-provisioning)."""
         if not valid_key(key):
             fail(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         now = int(self.clock())
         self.workspace(db, owner, wid, write=True)
-        old = db.execute('SELECT id FROM instances WHERE workspace_id=? AND create_key=?', (wid, digest(key))).fetchone()
-        if old:
-            return False, self.result(db, old['id'])
+        if per_user:
+            existing = runtime_autoprovision.owned_instance(db, owner)
+            if existing is not None:
+                return False, self.result(db, existing)
+        else:
+            old = db.execute('SELECT id FROM instances WHERE workspace_id=? AND create_key=?', (wid, digest(key))).fetchone()
+            if old:
+                return False, self.result(db, old['id'])
         self.capacity(db)
         if (db.execute('SELECT COUNT(*) FROM instances WHERE workspace_id=?', (wid,)).fetchone()[0] >= self.policy.max_instances_per_workspace
                 or db.execute('SELECT COUNT(*) FROM instances').fetchone()[0] >= self.policy.max_instances):
@@ -362,6 +367,13 @@ class Lifecycle:
                 fail(409, 'bot_social_not_applicable', 'Bot Social config is only issued for create, start or restart')
             public, source = bot_social.resolve(db, workspace_id=row['workspace_id'])
             payload = bot_social.container_payload(public, source)
+            if payload is not None and 'displayName' not in payload:
+                # Phase C: the user's DS-Bot onboards as @<username>.home, so teammates find each
+                # other by the OpenTeamily username. Public name only, never a credential.
+                owner = db.execute('SELECT username FROM users WHERE id=?', (row['owner_id'],)).fetchone()
+                name = bot_social.flatten_name(owner['username']) if owner else None
+                if name:
+                    payload['displayName'] = name
             return {'bot_social_present': payload is not None, 'bot_social': payload}
 
     def runtime_agent_key(self, manager, iid, jid, revision, lease, origin):

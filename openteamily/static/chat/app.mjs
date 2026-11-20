@@ -34,6 +34,7 @@ export function jumpToSearchHit(list, messageId, {schedule = globalThis.setTimeo
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
+import { dsbotServed, dsbotRoute, dsbotRequest } from './dsbot.mjs';
 
 export const SEARCH_TABS = [
   ['all', '全部'],
@@ -566,6 +567,82 @@ export function notificationSummary(item) {
 
 // A reminder is not a separate store: it is a one-shot automation created from the
 // message, and its due time is listed as a derived notification.
+
+function zoneClock(ts, zone) {
+  try {
+    const format = new Intl.DateTimeFormat('en-US', {
+      timeZone: zone, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+    const parts = {};
+    for (const part of format.formatToParts(new Date(ts))) {
+      if (part.type !== 'literal') parts[part.type] = Number(part.value);
+    }
+    if (!Number.isFinite(parts.year)) return null;
+    return {...parts, hour: parts.hour % 24};
+  } catch {
+    return null;
+  }
+}
+
+export function zonedInstant(dateText, timeText, zone) {
+  const [year, month, day] = String(dateText || '').split('-').map(Number);
+  const [hour, minute] = String(timeText || '').split(':').map(Number);
+  if (![year, month, day, hour, minute].every(Number.isFinite)) return null;
+  const guess = Date.UTC(year, month - 1, day, hour, minute);
+  const first = zoneClock(guess, zone);
+  if (!first) return null;
+  const offset = Date.UTC(first.year, first.month - 1, first.day, first.hour, first.minute, first.second) - guess;
+  const settled = zoneClock(guess - offset, zone);
+  const finalOffset = settled
+    ? Date.UTC(settled.year, settled.month - 1, settled.day, settled.hour, settled.minute, settled.second) - (guess - offset)
+    : offset;
+  return guess - finalOffset;
+}
+
+export function zoneDayKey(ts, zone) {
+  const clock = zoneClock(ts, zone);
+  if (!clock) return '';
+  return `${clock.year}-${String(clock.month).padStart(2, '0')}-${String(clock.day).padStart(2, '0')}`;
+}
+
+// One-shot automations that already came due, shown in the chat sidebar.
+// Participants may be {user_id, username} (legacy) or {username} (DS-Bot plugin).
+export function dueReminders(items, user, now = Date.now()) {
+  const userId = user && typeof user === 'object' ? user.id : user;
+  const username = user && typeof user === 'object' ? user.username : undefined;
+  const today = [];
+  const older = [];
+  for (const item of items || []) {
+    if (!item || item.enabled === false || item.enabled === 0) continue;
+    const schedule = item.schedule || {};
+    if (schedule.kind !== 'once' || !schedule.date || !schedule.time || !schedule.time_zone) continue;
+    const mine = (item.participants || []).some(person => person && (
+      (userId && person.user_id === userId)
+      || (username && person.username === username)
+      || (!person.user_id && person.username && (person.username === userId || person.username === username))
+    ));
+    if (!mine) continue;
+    const due = zonedInstant(schedule.date, schedule.time, schedule.time_zone);
+    if (due === null || due > now) continue;
+    const row = {id: item.id, title: item.title || '', due, schedule};
+    if (zoneDayKey(due, schedule.time_zone) === zoneDayKey(now, schedule.time_zone)) today.push(row);
+    else older.push(row);
+  }
+  today.sort((left, right) => right.due - left.due);
+  older.sort((left, right) => right.due - left.due);
+  return {today, older};
+}
+
+export function reminderDueLabel(item, now = Date.now()) {
+  const zone = (item.schedule && item.schedule.time_zone) || 'UTC';
+  const clock = zoneClock(item.due, zone);
+  const time = clock ? `${String(clock.hour).padStart(2, '0')}:${String(clock.minute).padStart(2, '0')}` : (item.schedule && item.schedule.time) || '';
+  if (zoneDayKey(item.due, zone) === zoneDayKey(now, zone)) return `今天 ${time} 到点`;
+  return `${String((item.schedule && item.schedule.date) || '').slice(5)} ${time} 到点`;
+}
+
 export const REMINDER_CHOICES = [['remind-1h', 'later'], ['remind-tomorrow', 'tomorrow']];
 
 function zonedParts(moment, timeZone) {
@@ -651,6 +728,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let sessions = [];
   let currentAgent = null;
   let personalAgentId = '';
+  const servedByDsbot = dsbotServed(document);
   let personalLook = null;
   let currentConversation = null;
   // A sidebar message hit survives the hashchange repaint that opening its
@@ -682,6 +760,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function request(method, path, body, extra) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie), ...(extra || {})};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const plugin = servedByDsbot ? dsbotRoute(method, path, body, personalAgentId) : null;
+    if (plugin) return dsbotRequest(fetcher, plugin, personalAgentId, headers);
     const response = await fetcher(path, {
       method, headers, credentials: 'same-origin',
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -792,11 +872,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && globalThis.matchMedia('(max-width: 900px)').matches;
   }
 
+  let sessionsStatus = '';
+
+  function setSessionsStatus(text) {
+    sessionsStatus = text;
+    const notice = document.getElementById('conversations-status');
+    if (notice) {
+      notice.textContent = text;
+      notice.hidden = !text;
+    }
+    if (text) document.getElementById('conversations-empty').hidden = true;
+  }
+
   function renderSessions() {
     const list = document.getElementById('conversation-list');
     list.replaceChildren();
     document.getElementById('conversation-heading').textContent = '对话 · ' + sessions.length;
-    document.getElementById('conversations-empty').hidden = sessions.length > 0;
     const filterNode = document.getElementById('session-filter-value');
     const filter = (filterNode && filterNode.value) || 'all';
     const visible = sessions.filter(item => filter === 'all'
@@ -804,7 +895,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       || (filter === 'unread' && item.unread_count > 0)
       || (filter === 'read' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
-    document.getElementById('conversations-empty').hidden = visible.length > 0;
+    document.getElementById('conversations-empty').hidden = Boolean(sessionsStatus) || visible.length > 0;
     let lastGroup = '';
     for (const session of groupSessionsForDisplay(visible)) {
       const li = document.createElement('li');
@@ -1406,8 +1497,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const handle = globalThis.setInterval(() => {
       if (document.visibilityState === 'hidden' || !currentUser) return;
       loadNotifications();
+      loadDueReminders();
     }, NOTIFICATION_POLL_MS);
     if (handle && typeof handle.unref === 'function') handle.unref();
+  }
+
+
+  let dueSeq = 0;
+
+  function renderDueReminders(state) {
+    const panel = document.getElementById('due-reminders');
+    const heading = document.getElementById('due-reminders-heading');
+    const note = document.getElementById('due-reminders-note');
+    const list = document.getElementById('due-reminders-list');
+    if (!panel || !heading || !note || !list) return;
+    const model = state || {};
+    const today = model.today || [];
+    const older = model.older || [];
+    const failed = Boolean(model.failed);
+    panel.hidden = !failed && today.length + older.length === 0;
+    heading.textContent = failed ? '今天到点的提醒' : `今天到点的提醒 ${today.length} 条`;
+    note.hidden = !failed && older.length === 0;
+    note.textContent = failed ? '读不到到点的提醒。'
+      : (older.length ? `另有 ${older.length} 条更早到点的提醒。` : '');
+    if (failed) { list.replaceChildren(); return; }
+    list.replaceChildren(...[...today, ...older].map(item => {
+      const row = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = '/automations';
+      link.textContent = item.title || '提醒';
+      const when = document.createElement('span');
+      when.className = 'note';
+      when.textContent = reminderDueLabel(item, Date.now());
+      link.append(when);
+      row.append(link);
+      return row;
+    }));
+  }
+
+  async function loadDueReminders() {
+    const wid = workspaceId();
+    if (!wid || !currentUser) return;
+    const token = ++dueSeq;
+    let result;
+    try { result = await request('GET', `/v1/workspaces/${wid}/automations`); } catch { result = {status: 0, body: {}}; }
+    if (token !== dueSeq || workspaceId() !== wid) return;
+    if (result.status !== 200) { renderDueReminders({failed: true}); return; }
+    renderDueReminders(dueReminders(result.body.items || [], currentUser, Date.now()));
   }
 
   function setNotificationsOpen(open) {
@@ -1434,8 +1570,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const sequence = ++sessionsRequest;
     const user = currentUser;
     loadNotifications();
+    loadDueReminders();
     const id = workspaceId();
     if (id !== sessionsWorkspace || user !== sessionsUser || !id) {
+      setSessionsStatus('正在加载对话…');
       sessionsWorkspace = id; sessionsUser = user;
       sessions = []; agents = []; members = []; artifacts = []; socialConversations = [];
       renderSessions();
@@ -1450,7 +1588,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     ]);
     if (!current()) return;
     if (listed.status !== 200) {
-      show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
+      setSessionsStatus('无法加载智能体对话，请重试。');
       return;
     }
     const nextAgents = listed.body.items || [];
@@ -1470,6 +1608,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     sessions = mergeSessions(agentRows, socialConversations, currentUser && currentUser.id);
+    const incomplete = social.status !== 200 || results.some(({result}) => result.status !== 200);
+    setSessionsStatus(incomplete ? '部分对话加载失败，请重试。' : '');
     renderSessions();
     // The first SSE snapshot may immediately refresh; do not invalidate the
     // initial directory before deep-link resolution has a committed snapshot.
@@ -2081,22 +2221,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.body.classList.add('chat-open');
     setSessionsOpen(true);
     document.getElementById('whoami').textContent = currentUser.username;
-    const onboarding = await request('GET', '/v1/onboarding');
+    if (!sessions.length) setSessionsStatus('正在加载对话…');
+    // Personal-agent initialization may create the workspace returned by the list.
+    const personalAndWorkspaces = request('POST', '/v1/personal-agent').then(async personal => {
+      const listed = await request('GET', '/v1/workspaces?limit=100');
+      return {personal, listed};
+    });
+    const [{personal, listed}, onboarding, settings] = await Promise.all([
+      personalAndWorkspaces,
+      request('GET', '/v1/onboarding'),
+      request('GET', '/v1/settings'),
+    ]);
     const banner = document.getElementById('onboarding-banner');
     if (banner && onboarding.status === 200) {
       banner.hidden = Boolean(onboarding.body.onboarding && onboarding.body.onboarding.completed);
     }
 
-    const personal = await request('POST', '/v1/personal-agent');
     const personalWorkspace = personal.status === 200 && personal.body.personal_agent
       ? personal.body.personal_agent.workspace.id : '';
     const personalEntity = personal.status === 200 ? personal.body.personal_agent : null;
     personalAgentId = personalEntity && personalEntity.agent ? personalEntity.agent.id : '';
     personalLook = personalEntity ? personalEntity.look || null : null;
-    const [listed, settings] = await Promise.all([
-      request('GET', '/v1/workspaces?limit=100'),
-      request('GET', '/v1/settings'),
-    ]);
     if (settings.status === 200 && settings.body?.settings?.values) chatPreferences = settings.body.settings.values;
     const stored = settings.status === 200 && settings.body && settings.body.settings
       && settings.body.settings.values && settings.body.settings.values.send_shortcut;
@@ -2105,7 +2250,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && settings.body.settings.values && settings.body.settings.values.chat_language;
     chatLanguage = typeof storedLanguage === 'string' ? storedLanguage : 'auto';
     document.getElementById('chat-body').dataset.sendShortcut = sendShortcut;
-    workspaces = listed.status === 200 ? (listed.body.items || []) : [];
+    if (listed.status !== 200) {
+      setSessionsStatus('无法加载工作区，请重试。');
+      return;
+    }
+    workspaces = listed.body.items || [];
     const wanted = hashParams().workspace || personalWorkspace || workspaceSelect.value;
     workspaceSelect.replaceChildren();
     for (const space of workspaces) {
@@ -2118,6 +2267,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       workspaceSelect.value = wanted;
     }
     if (!workspaces.length) {
+      setSessionsStatus('');
       document.getElementById('conversations-empty').hidden = false;
       document.getElementById('chat-empty').hidden = false;
       show('', '');
