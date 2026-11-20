@@ -4,16 +4,30 @@ Self-written for OpenTeamily; no upstream, Timeline, Project, or Teamily
 source, fonts or marketing copy. Pages, next actions, topics and links are
 workspace-scoped. Pages and actions persist on create and can be edited or
 deleted. The graph is derived from optional page topics, [[Title]] mentions
-in page bodies, and optional manual links. This is not a profile, share/export,
-or Teamily memory parity, and it is not browser E2E acceptance.
+in page bodies, and optional manual links. Export covers one saved page as a
+Markdown file; it is not a workspace export, a share link, a profile, or
+Teamily memory parity, and it is not browser E2E acceptance.
 """
+from datetime import datetime, timezone
 import json
 import re
+from urllib.parse import quote
 
 from .search import snippet
 from .security import digest
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS memory_page_versions (
+ page_id TEXT NOT NULL REFERENCES memory_pages(id) ON DELETE CASCADE,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ revision INTEGER NOT NULL CHECK(revision >= 1),
+ title TEXT NOT NULL,
+ body TEXT NOT NULL,
+ created INTEGER NOT NULL,
+ created_by TEXT NOT NULL REFERENCES users(id),
+ PRIMARY KEY(page_id, revision));
+CREATE INDEX IF NOT EXISTS memory_page_version_owner
+ ON memory_page_versions(workspace_id, page_id, revision);
 CREATE TABLE IF NOT EXISTS memory_pages (
  id TEXT PRIMARY KEY,
  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -85,10 +99,25 @@ CREATE TABLE IF NOT EXISTS memory_profiles (
  professional TEXT NOT NULL, work_style TEXT NOT NULL, communication TEXT NOT NULL,
  revision INTEGER NOT NULL, updated INTEGER NOT NULL,
  PRIMARY KEY(workspace_id,user_id));
+CREATE TABLE IF NOT EXISTS memory_preferences (
+ id TEXT PRIMARY KEY,
+ workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ text TEXT NOT NULL,
+ text_hash TEXT NOT NULL,
+ position INTEGER NOT NULL,
+ created INTEGER NOT NULL,
+ key_hash TEXT NOT NULL,
+ request_hash TEXT NOT NULL,
+ UNIQUE(workspace_id, user_id, text_hash),
+ UNIQUE(workspace_id, user_id, key_hash));
+CREATE INDEX IF NOT EXISTS memory_preference_owner
+ ON memory_preferences(workspace_id, user_id, position, id);
 """
 
 TITLE_MAX = 80
 BODY_MAX = 8000
+PREFERENCE_MAX = 120
 ROW_SELECT = (
     'SELECT p.*, cu.username AS created_by_username, uu.username AS updated_by_username '
     'FROM memory_pages p '
@@ -369,6 +398,127 @@ def graph(db, workspace_id):
     }
 
 
+def valid_preference(value):
+    return (isinstance(value, str) and 1 <= len(value.strip()) <= PREFERENCE_MAX
+            and not re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', value))
+
+
+def preference_hash(text):
+    return digest(text.strip().casefold())
+
+
+def preference_view(row):
+    return {'id': row['id'], 'text': row['text'], 'created': row['created']}
+
+
+def preference_listing(db, workspace_id, user_id):
+    return db.execute(
+        'SELECT * FROM memory_preferences WHERE workspace_id=? AND user_id=? ORDER BY position, id',
+        (workspace_id, user_id),
+    ).fetchall()
+
+
+def load_preference(db, workspace_id, user_id, preference_id):
+    return db.execute(
+        'SELECT * FROM memory_preferences WHERE id=? AND workspace_id=? AND user_id=?',
+        (preference_id, workspace_id, user_id),
+    ).fetchone()
+EXPORT_NAME_MAX = 60
+EXPORT_STAMP = '%Y-%m-%dT%H:%M:%SZ'
+
+
+def export_flat(value):
+    """One front-matter line: whitespace folds so a title cannot add keys."""
+    return ' '.join(str(value or '').split())
+
+
+def export_quoted(value):
+    return '"' + export_flat(value).replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def export_filename(title):
+    """An ASCII-safe attachment name; the exact title travels in filename*."""
+    flat = re.sub(r'[^A-Za-z0-9._-]+', '-', export_flat(title))
+    flat = flat.strip('-._')[:EXPORT_NAME_MAX].strip('-._')
+    return (flat or 'memory') + '.md'
+
+
+def export_disposition(title):
+    """Content-Disposition with an ASCII fallback and an RFC 5987 name."""
+    return ('attachment; filename="' + export_filename(title) + '"; filename*=UTF-8\'\''
+            + quote(export_flat(title)[:TITLE_MAX] or 'memory', safe='') + '.md')
+
+
+def export_document(row, topics):
+    """One saved page as Markdown: YAML front matter, then the body verbatim."""
+    lines = ['---', 'title: ' + export_quoted(row['title'])]
+    names = [name for name in (export_flat(topic) for topic in topics or []) if name]
+    if names:
+        lines.append('topics:')
+        lines.extend('  - ' + export_quoted(name) for name in names)
+    else:
+        lines.append('topics: []')
+    lines.append('revision: %d' % row['revision'])
+    lines.append('updated: ' + datetime.fromtimestamp(row['updated'], timezone.utc).strftime(EXPORT_STAMP))
+    lines.append('---')
+    body = row['body']
+    document = '\n'.join(lines) + '\n\n' + body
+    return document if document.endswith('\n') else document + '\n'
+
+
+VERSION_KEEP = 50
+VERSION_ROW_SELECT = (
+    'SELECT v.*, u.username AS created_by_username FROM memory_page_versions v '
+    'JOIN users u ON u.id=v.created_by '
+)
+
+
+def version_view(row):
+    return {
+        'revision': row['revision'],
+        'title': row['title'],
+        'summary': snippet(row['body']) if row['body'].strip() else '（空白正文）',
+        'created': row['created'],
+        'created_by': row['created_by_username'],
+    }
+
+
+def version_body_view(row):
+    return {
+        'revision': row['revision'],
+        'title': row['title'],
+        'body': row['body'],
+        'created': row['created'],
+        'created_by': row['created_by_username'],
+    }
+
+
+def version_rows(db, workspace_id, page_id, before_revision, limit):
+    return db.execute(
+        VERSION_ROW_SELECT + 'WHERE v.workspace_id=? AND v.page_id=? AND v.revision<? '
+        'ORDER BY v.revision DESC LIMIT ?',
+        (workspace_id, page_id, before_revision, limit),
+    ).fetchall()
+
+
+def load_version(db, workspace_id, page_id, revision):
+    return db.execute(
+        VERSION_ROW_SELECT + 'WHERE v.workspace_id=? AND v.page_id=? AND v.revision=?',
+        (workspace_id, page_id, revision),
+    ).fetchone()
+
+
+def record_version(db, workspace_id, page_id, revision, title, body, now, user_id):
+    db.execute(
+        'INSERT OR IGNORE INTO memory_page_versions VALUES(?,?,?,?,?,?,?)',
+        (page_id, workspace_id, revision, title, body, now, user_id),
+    )
+    # A bounded history keeps the newest VERSION_KEEP revisions; pruning older
+    # snapshots never touches the current revision or the live page row.
+    db.execute(
+        'DELETE FROM memory_page_versions WHERE page_id=? AND revision<=?',
+        (page_id, revision - VERSION_KEEP),
+    )
 SUGGESTION_SELECT = 'SELECT * FROM memory_suggestions WHERE id=? AND workspace_id=? AND page_id=?'
 
 
