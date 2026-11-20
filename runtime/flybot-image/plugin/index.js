@@ -7,6 +7,7 @@ import { createRuntime } from '../../ds-bot-upstream/ds-bot/index.js'
 import { applyOnRuntime } from '../../flybot-social-host/index.js'
 import { registerFlybotRoute } from '../../flybot-web-slots/index.js'
 import { loadBotSocialConfig } from '../bot-social-config.js'
+import { startBridge } from '../ds-bot-bridge.mjs'
 
 // Same inject list as runtime/ds-bot-upstream/ds-bot/index.js — this plugin
 // stands in for ds-bot in the web profile so createRuntime runs once.
@@ -27,6 +28,8 @@ export function apply(ctx, config = {}) {
     ...(config.social ?? {}),
   })
   registerFlybotRoute(ctx, attached.flybot)
+  // OpenTeamily chat tasks run as DS-Bot turns on this runtime (see ds-bot-bridge.mjs).
+  if (config.openteamilyBridge !== false && process.env.OPENTEAMILY_DS_BOT_BRIDGE !== '0') startBridge(rt, ctx)
   return attached
 }
 
