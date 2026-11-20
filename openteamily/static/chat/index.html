@@ -86,6 +86,7 @@
     </div>
     <label class="workspace-pick">工作区
       <select id="workspace"></select>
+      <span id="workspace-events-status" class="note" role="status" aria-live="polite">实时更新未连接</span><button type="button" id="workspace-events-retry">重连更新</button>
     </label>
     <p id="whoami"></p>
     <section id="notifications-panel" class="notifications-panel" hidden aria-labelledby="notifications-heading">
@@ -93,9 +94,9 @@
         <h2 id="notifications-heading">通知</h2>
         <button type="button" id="notifications-read-all" disabled>全部已读</button>
       </div>
-      <p class="note">包含会话里对你的 @ 提及，以及你在群里请求的智能体任务完成情况；每 30 秒刷新一次。智能体单聊未读和服务器推送尚未接通。</p>
+      <p class="note">包含会话里对你的 @ 提及、你在群里请求的智能体任务完成情况，以及你在消息上设的提醒到点；每 30 秒刷新一次。智能体单聊未读和服务器推送尚未接通。</p>
       <ul id="notification-list"></ul>
-      <p id="notifications-empty" class="note" hidden>暂无通知（@提及和智能体任务完成）。</p>
+      <p id="notifications-empty" class="note" hidden>暂无通知（@提及、智能体任务完成和消息提醒到点）。</p>
     </section>
     <section id="due-reminders" class="due-reminders" hidden aria-labelledby="due-reminders-heading">
       <h2 id="due-reminders-heading">今天到点的提醒</h2>
@@ -178,7 +179,7 @@
   <section id="login-panel" hidden>
     <h2>登录</h2>
     <form id="login-form" method="post" action="/v1/auth/login">
-      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>用户名 <input type="text" id="username" name="username" required autocomplete="username" maxlength="64"></label>
       <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
       <button type="submit">登录</button>
     </form>
@@ -243,6 +244,8 @@
       <button type="button" role="menuitem" data-menu="copy">复制</button>
       <button type="button" role="menuitem" data-menu="forward">转发</button>
       <button type="button" role="menuitem" data-menu="pin">置顶</button>
+      <button type="button" role="menuitem" data-menu="remind-1h">提醒我：1 小时后</button>
+      <button type="button" role="menuitem" data-menu="remind-tomorrow">提醒我：明天 9 点</button>
       <button type="button" role="menuitem" data-menu="select">选择消息</button>
       <hr>
       <button type="button" role="menuitem" data-menu="edit">编辑</button>
@@ -255,6 +258,7 @@
       <p id="conversation-search-status" role="status"></p><ul id="conversation-search-results"></ul><button type="button" id="conversation-search-more" hidden>加载更多</button>
     </section>
     <p id="social-agent-members" class="gap-note group-agent-note" hidden></p>
+    <p id="conversation-live-update" class="note" hidden>此会话可能有新内容。<button type="button" id="conversation-live-load">加载会话更新（保留输入草稿）</button></p>
     <section id="pinned-messages" class="chat-strip" hidden aria-labelledby="pinned-messages-heading">
       <h2 id="pinned-messages-heading">置顶消息</h2>
       <ul id="pinned-message-list"></ul>

@@ -58,10 +58,11 @@
   <section id="login-panel" hidden>
     <h2>登录</h2>
     <form id="login-form" method="post" action="/v1/auth/login">
-      <label>用户名 <input id="username" name="username" required autocomplete="username" maxlength="64"></label>
+      <label>用户名 <input type="text" id="username" name="username" required autocomplete="username" maxlength="64"></label>
       <label>密码 <input id="password" name="password" type="password" required autocomplete="current-password" minlength="12" maxlength="256"></label>
       <button type="submit">登录</button>
     </form>
+    <p><a class="login-register-button" href="/register">注册新账户</a> · 需要管理员开放本实例注册；普通账号不会成为平台管理员。</p>
   </section>
   <section id="main-panel" hidden>
     <header class="home-hero-head">

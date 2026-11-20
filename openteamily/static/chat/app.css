@@ -1448,6 +1448,17 @@ html[data-theme-resolved="dark"] #message-list li[data-state="failed"] > p.faile
   font-weight: 650;
 }
 .stream-artifact-copy { display: grid; gap: 0.2rem; min-width: 0; }
+.stream-artifact-picture { grid-template-columns: minmax(0, 1fr); align-items: start; }
+.stream-artifact-image {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: 18rem;
+  object-fit: contain;
+  border-radius: 0.5rem;
+  background: #f4f1e8;
+}
 .stream-artifact-copy strong { font-size: 0.8125rem; font-weight: 650; }
 .stream-artifact-copy a { font-size: 0.75rem; }
 #social-agent-members.group-agent-note,
@@ -1680,6 +1691,8 @@ html[data-theme-resolved="dark"] position: absolute; right: .5rem; bottom: -.625
 #message-list li .message-edit-controls { display: block; }
 #message-list li .message-edit-controls:empty { display: none; }
 #message-list li .message-edit-controls textarea { min-width: 12rem; width: 100%; margin-top: .5rem; }
+#message-list li .message-edit-note { display: block; margin-top: .5rem; font-size: .8125rem; line-height: 1.5; color: var(--ot-muted); }
+#message-list li .message-edit-note + button { margin-top: .5rem; }
 #message-list li > .message-more { position: absolute; top: .25rem; right: -1.875rem; width: 1.625rem; height: 1.625rem; padding: 0; margin: 0; display: grid; place-items: center; background: var(--ot-surface); color: var(--ot-muted); box-shadow: 0 0 0 1px var(--ot-line); }
 #message-list li.mine > .message-more { right: auto; left: -1.875rem; }
 #message-list li > .message-more:focus-visible { opacity: 1; }
