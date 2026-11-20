@@ -489,6 +489,24 @@
           </form>
           <p id="composio-key-message" class="composio-key-message" role="status" aria-live="polite"></p>
         </section>
+        <section id="connectors-overview" class="connectors-overview" aria-labelledby="connectors-overview-title">
+          <h2 id="connectors-overview-title" class="connectors-overview-title">应用连接</h2>
+          <p class="connectors-overview-count">共 39 个应用 · 8 个分类 · 已连接 0 个</p>
+          <p id="connectors-key-hint" class="connectors-key-hint">还没填 Composio API key：下面每一项的「连接」会先把你带到 key 输入框，填好保存后才会真的连接。
+            <a id="connectors-key-jump" class="connectors-key-jump" href="#composio-key-input">去填 key</a>
+          </p>
+          <div id="connectors-groups" class="connectors-groups" role="group" aria-label="按分类筛选">
+            <button type="button" class="connectors-group-chip" data-connector-group="all" aria-pressed="true">全部 39</button>
+            <button type="button" class="connectors-group-chip" data-connector-group="dev" aria-pressed="false">开发 6</button>
+            <button type="button" class="connectors-group-chip" data-connector-group="docs" aria-pressed="false">文档 7</button>
+            <button type="button" class="connectors-group-chip" data-connector-group="work" aria-pressed="false">协作 11</button>
+            <button type="button" class="connectors-group-chip" data-connector-group="commerce" aria-pressed="false">支付 3</button>
+            <button type="button" class="connectors-group-chip" data-connector-group="data" aria-pressed="false">数据 4</button>
+            <button type="button" class="connectors-group-chip" data-connector-group="design" aria-pressed="false">设计 5</button>
+            <button type="button" class="connectors-group-chip" data-connector-group="search" aria-pressed="false">搜索 2</button>
+            <button type="button" class="connectors-group-chip" data-connector-group="mail" aria-pressed="false">邮件 1</button>
+          </div>
+        </section>
         <div class="connectors-toolbar">
           <label class="visually-hidden" for="connector-search">搜索应用</label>
           <div class="connector-search-field">
@@ -510,7 +528,7 @@
               </div>
               <p class="connector-about">Repositories, issues, and pull requests</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="notion" data-composio-toolkit="notion" data-composio-managed="yes" data-category="docs">
             <span class="connector-mark" data-mark="notion" aria-hidden="true"></span>
@@ -521,7 +539,7 @@
               </div>
               <p class="connector-about">Pages, databases, and wiki content</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="linear" data-composio-toolkit="linear" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="linear" aria-hidden="true"></span>
@@ -532,7 +550,7 @@
               </div>
               <p class="connector-about">Issues, projects, and cycles</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="atlassian" data-composio-toolkit="jira" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="atlassian" aria-hidden="true"></span>
@@ -543,7 +561,7 @@
               </div>
               <p class="connector-about">Jira issues and Confluence pages</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="sentry" data-composio-toolkit="sentry" data-composio-managed="yes" data-category="dev">
             <span class="connector-mark" data-mark="sentry" aria-hidden="true"></span>
@@ -554,7 +572,7 @@
               </div>
               <p class="connector-about">Errors, traces, and releases</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="stripe" data-composio-toolkit="stripe" data-composio-managed="yes" data-category="commerce">
             <span class="connector-mark" data-mark="stripe" aria-hidden="true"></span>
@@ -565,7 +583,7 @@
               </div>
               <p class="connector-about">Payments, invoices, and customers</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="paypal" data-composio-toolkit="paypal" data-composio-managed="own" data-category="commerce">
             <span class="connector-mark" data-mark="paypal" aria-hidden="true"></span>
@@ -576,7 +594,7 @@
               </div>
               <p class="connector-about">Orders, payments, and invoices</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="square" data-composio-toolkit="square" data-composio-managed="yes" data-category="commerce">
             <span class="connector-mark" data-mark="square" aria-hidden="true"></span>
@@ -587,7 +605,7 @@
               </div>
               <p class="connector-about">Payments, orders, and catalog</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="cloudflare" data-composio-toolkit="cloudflare" data-composio-managed="key" data-category="dev">
             <span class="connector-mark" data-mark="cloudflare" aria-hidden="true"></span>
@@ -598,7 +616,7 @@
               </div>
               <p class="connector-about">Workers, DNS, and account resources</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="vercel" data-composio-toolkit="vercel" data-composio-managed="own" data-category="dev">
             <span class="connector-mark" data-mark="vercel" aria-hidden="true"></span>
@@ -609,7 +627,7 @@
               </div>
               <p class="connector-about">Projects, deployments, and logs</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="supabase" data-composio-toolkit="supabase" data-composio-managed="yes" data-category="data">
             <span class="connector-mark" data-mark="supabase" aria-hidden="true"></span>
@@ -620,7 +638,7 @@
               </div>
               <p class="connector-about">Databases, tables, and project settings</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="neon" data-composio-toolkit="neon" data-composio-managed="own" data-category="data">
             <span class="connector-mark" data-mark="neon" aria-hidden="true"></span>
@@ -631,7 +649,7 @@
               </div>
               <p class="connector-about">Postgres databases and branches</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="figma" data-composio-toolkit="figma" data-composio-managed="yes" data-category="design">
             <span class="connector-mark" data-mark="figma" aria-hidden="true"></span>
@@ -642,7 +660,7 @@
               </div>
               <p class="connector-about">Design files, components, and comments</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="canva" data-composio-toolkit="canva" data-composio-managed="yes" data-category="design">
             <span class="connector-mark" data-mark="canva" aria-hidden="true"></span>
@@ -653,7 +671,7 @@
               </div>
               <p class="connector-about">Designs, folders, and exports</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="intercom" data-composio-toolkit="intercom" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="intercom" aria-hidden="true"></span>
@@ -664,7 +682,7 @@
               </div>
               <p class="connector-about">Conversations, contacts, and articles</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="monday" data-composio-toolkit="monday" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="monday" aria-hidden="true"></span>
@@ -675,7 +693,7 @@
               </div>
               <p class="connector-about">Boards, items, and workflows</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="webflow" data-composio-toolkit="webflow" data-composio-managed="own" data-category="design">
             <span class="connector-mark" data-mark="webflow" aria-hidden="true"></span>
@@ -686,7 +704,7 @@
               </div>
               <p class="connector-about">Sites, pages, and CMS content</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="wix" data-composio-toolkit="wix" data-composio-managed="own" data-category="design">
             <span class="connector-mark" data-mark="wix" aria-hidden="true"></span>
@@ -697,7 +715,7 @@
               </div>
               <p class="connector-about">Sites, pages, and site content</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="netlify" data-category="dev">
             <span class="connector-mark" data-mark="netlify" aria-hidden="true"></span>
@@ -719,7 +737,7 @@
               </div>
               <p class="connector-about">Bases, tables, and records</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="dropbox" data-composio-toolkit="dropbox" data-composio-managed="yes" data-category="docs">
             <span class="connector-mark" data-mark="dropbox" aria-hidden="true"></span>
@@ -730,7 +748,7 @@
               </div>
               <p class="connector-about">Files and folders</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="zapier" data-category="work">
             <span class="connector-mark" data-mark="zapier" aria-hidden="true"></span>
@@ -752,7 +770,7 @@
               </div>
               <p class="connector-about">Tasks, lists, and docs</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="todoist" data-composio-toolkit="todoist" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="todoist" aria-hidden="true"></span>
@@ -763,7 +781,7 @@
               </div>
               <p class="connector-about">Tasks and projects</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="miro" data-composio-toolkit="miro" data-composio-managed="yes" data-category="design">
             <span class="connector-mark" data-mark="miro" aria-hidden="true"></span>
@@ -774,7 +792,7 @@
               </div>
               <p class="connector-about">Boards and whiteboard items</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="attio" data-composio-toolkit="attio" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="attio" aria-hidden="true"></span>
@@ -785,7 +803,7 @@
               </div>
               <p class="connector-about">CRM records, lists, and notes</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="postman" data-composio-toolkit="postman" data-composio-managed="key" data-category="dev">
             <span class="connector-mark" data-mark="postman" aria-hidden="true"></span>
@@ -796,7 +814,7 @@
               </div>
               <p class="connector-about">Collections, requests, and workspaces</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="asana" data-composio-toolkit="asana" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="asana" aria-hidden="true"></span>
@@ -807,7 +825,7 @@
               </div>
               <p class="connector-about">Tasks, projects, and workspaces</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="box" data-composio-toolkit="box" data-composio-managed="yes" data-category="docs">
             <span class="connector-mark" data-mark="box" aria-hidden="true"></span>
@@ -818,7 +836,7 @@
               </div>
               <p class="connector-about">Files, folders, and metadata</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="hubspot" data-composio-toolkit="hubspot" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="hubspot" aria-hidden="true"></span>
@@ -829,7 +847,7 @@
               </div>
               <p class="connector-about">Contacts, deals, and tickets</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="slack" data-composio-toolkit="slack" data-composio-managed="yes" data-category="work">
             <span class="connector-mark" data-mark="slack" aria-hidden="true"></span>
@@ -840,7 +858,7 @@
               </div>
               <p class="connector-about">Channels and messages</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="huggingface" data-composio-toolkit="hugging_face" data-composio-managed="yes" data-category="data">
             <span class="connector-mark" data-mark="huggingface" aria-hidden="true"></span>
@@ -851,7 +869,7 @@
               </div>
               <p class="connector-about">Models, datasets, and Spaces</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="exa" data-composio-toolkit="exa" data-composio-managed="key" data-category="search">
             <span class="connector-mark" data-mark="exa" aria-hidden="true"></span>
@@ -862,7 +880,7 @@
               </div>
               <p class="connector-about">Web search for agents</p>
             </div>
-            <button type="button" data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接</button>
+            <button type="button" data-composio-action="focus-key" title="未配置 Composio：点这里跳到本页上方的 API key 输入框，填好保存后就能连接。">+ 连接</button>
           </li>
           <li class="connector-row" data-connector-id="deepwiki" data-category="docs">
             <span class="connector-mark" data-mark="deepwiki" aria-hidden="true"></span>
@@ -932,7 +950,7 @@
           </li>
         </ul>
         <p id="connectors-empty" class="settings-card settings-empty" hidden>没有匹配的应用。</p>
-        <p class="note">下列 39 项来自仓内 DS-Bot 开源基线目录，不是对照里约 60 项的第三方清单。名称保留官方英文，简述沿用基线原文一句。这里用首字母占位，不复制第三方标志，也不假装已连上任何账号。每项都是未连接；「连接」保持禁用，因为还没有连接器后端或账号授权接口，不会真连。搜索框按名称、简介或 id 过滤本页目录；没有匹配时显示空态。分类筛选、接通后的排序和真实账号状态未经对照核实，本页没有做。「添加 MCP 服务器」只打开对照里的说明弹层；「知道了」关闭说明，不会添加或连接服务器。OpenTeamily 还没有 MCP 接入接口。</p>
+        <p class="note">下列 39 项来自仓内 DS-Bot 开源基线目录，不是对照里约 60 项的第三方清单。名称保留官方英文，简述沿用基线原文一句。这里用首字母占位，不复制第三方标志，也不假装已连上任何账号。每项都是未连接；没填 key 时「连接」会先跳到上面的 key 输入框，填好保存后才会真的连接；不填就不会连任何账号。搜索框按名称、简介或 id 过滤本页目录；没有匹配时显示空态。分类筛选、接通后的排序和真实账号状态未经对照核实，本页没有做。「添加 MCP 服务器」只打开对照里的说明弹层；「知道了」关闭说明，不会添加或连接服务器。OpenTeamily 还没有 MCP 接入接口。</p>
         <div id="mcp-dialog" class="mcp-dialog" hidden role="dialog" aria-modal="true" aria-labelledby="mcp-dialog-title">
           <div class="mcp-dialog-card">
             <h2 id="mcp-dialog-title">在智能体里添加自定义 MCP 服务器</h2>
