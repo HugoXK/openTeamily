@@ -2320,10 +2320,23 @@ async function main() {
         await page.locator('#onboarding-look select[name="color"]').selectOption('天空蓝');
         await page.locator('#onboarding-look-form button[type="submit"]').click();
         await waitForLocatorText(page, '#onboarding-look-preview', '颜色：天空蓝');
+        // Step 2 reads the user's real Composio connections now. This fixture has no
+        // personal Composio key, so GET /v1/composio/connections answers 409 and the
+        // list cannot be read: every row must say 未接入 (8 of them), and no row may
+        // claim 已连接 -- 未连接 would assert the app is known to be disconnected,
+        // which nobody asked. The connected wording (state=connected -> 已连接) is
+        // pinned in tests/onboarding_step2.test.mjs instead of here: this harness has
+        // no Composio key, and seeding a fake connection would make the screenshot a
+        // false claim about the real Composio state.
+        const appStates = await page.locator('#onboarding-apps .app-state').allTextContents();
+        const rowsUnreadable = appStates.length === 8 && appStates.every((text) => text.trim() === '· 未接入');
+        record('onboarding_connectors_honest',
+          rowsUnreadable && !appsText.includes('已连接'),
+          `No Composio key: ${appStates.length}/8 rows say 未接入, none claims 已连接 | ${(appsText || 'apps empty').slice(0, 240)}`);
         record('onboarding_steps_2_4',
-          appsText.includes('Gmail · 未连接') && !appsText.includes('已连接') && connectDisabled
+          connectDisabled
           && (await visibleText(page.locator('#onboarding-steps-meta'))).includes('形象已保存'),
-          'Steps 2-4 wizard: apps honestly unconnected with disabled connect buttons, picks and look saved');
+          `Steps 2-4 wizard: connect buttons disabled, picks and look saved | ${(appsText || 'apps empty').slice(0, 240)}`);
         screenshots.push(path.basename(await shot(page, outDir, '87-onboarding-steps.png')));
         await page.locator('#onboarding-enter').click();
         await page.waitForURL(url => url.pathname === '/chat');

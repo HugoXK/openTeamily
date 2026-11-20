@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery } from '../openteamily/static/chat/app.mjs';
+import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, homepageStartIndex, stripHomepageStartQuery, wrapBold, inlineBold } from '../openteamily/static/chat/app.mjs';
 
 const alice = 'a'.repeat(32);
 const bob = 'b'.repeat(32);
@@ -1057,7 +1057,9 @@ test('own message editing and confirmed retraction call versioned endpoints', as
     let li = el('message-list').children[0];
     await fire(li.children[3], 'click'); // edit opens inline controls
     li.children[5].children[0].value = 'Edited';
-    await fire(li.children[5].children[1], 'click');
+    await fire(li.children[5].children[1], 'click'); // only opens the confirm step
+    assert.equal(posts.length, 0);
+    await fire(li.children[5].children[1], 'click'); // 确认修改
     assert.equal(text, 'Edited');
     li = el('message-list').children[0];
     await fire(li.children[4], 'click'); // only opens confirmation
@@ -1065,6 +1067,56 @@ test('own message editing and confirmed retraction call versioned endpoints', as
     await fire(li.children[5].children[0], 'click');
     assert.equal(posts.length, 2);
     assert.equal(el('message-list').children[0].children[1].textContent, '此消息已撤回');
+  } finally { restore(); }
+});
+
+test('editing a sent message adds a confirm step before the text is replaced', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {fetcher: original} = sessionFetcher();
+  let text = 'Original', revision = 1;
+  const posts = [];
+  const restore = installChatGlobals({narrow: true});
+  try {
+    await mount(doc, {fetcher: async (path, options = {}) => {
+      if (path.includes('/messages/mine-1/')) {
+        const payload = JSON.parse(options.body); posts.push([path, payload]);
+        revision += 1; text = payload.body;
+        return json(200, {message: {}});
+      }
+      const result = await original(path), body = await result.json();
+      if (path.endsWith('/social/conversations/conv-1')) {
+        body.items = [{id: 'mine-1', user_id: alice, body: text, revision, retracted: false}];
+      }
+      return json(result.status, body);
+    }});
+    await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
+    const controls = () => el('message-list').children[0].children[5];
+    const buttons = () => descendants(controls()).filter(node => node.tagName === 'BUTTON');
+    await fire(el('message-list').children[0].children[3], 'click'); // 编辑
+    controls().children[0].value = 'Edited';
+    await fire(controls().children[1], 'click'); // 保存修改
+    assert.equal(posts.length, 0, '保存修改 must not send the edit on its own');
+    assert.equal(el('message-list').children[0].children[1].textContent, 'Original',
+      'the sent text is unchanged until the confirm step');
+    const confirm = buttons().find(node => node.textContent === '确认修改');
+    assert.ok(confirm, 'a 确认修改 button is shown before the edit is sent');
+    assert.equal(buttons().some(node => node.textContent === '保存修改'), false,
+      '保存修改 is replaced by the confirm step');
+    assert.ok(descendants(controls()).some(node => node.tagName !== 'BUTTON' && /替换/.test(node.textContent || '')),
+      'the confirm step says the sent message is replaced, not appended');
+    const cancel = buttons().find(node => node.textContent === '取消');
+    assert.ok(cancel, '取消 is offered in the confirm step');
+    await fire(cancel, 'click');
+    assert.equal(posts.length, 0, '取消 sends nothing');
+    assert.equal(controls().children.length, 0, '取消 closes the confirm step');
+    await fire(el('message-list').children[0].children[3], 'click');
+    controls().children[0].value = 'Edited again';
+    await fire(controls().children[1], 'click');
+    await fire(buttons().find(node => node.textContent === '确认修改'), 'click');
+    assert.equal(posts.length, 1);
+    assert.match(posts[0][0], /messages\/mine-1\/edit$/);
+    assert.equal(text, 'Edited again');
+    assert.equal(el('message-list').children[0].children[1].textContent, 'Edited again');
   } finally { restore(); }
 });
 
@@ -1426,6 +1478,30 @@ test('removing a group agent sends nothing until the explicit confirmation', asy
     await fire(question.children[2], 'click');
     assert.equal(posts.length,1);
   } finally {restore();}
+});
+
+test('the composer exposes a real bold tool instead of the disabled placeholder', () => {
+  const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
+  const start = html.indexOf('id="chat-format"');
+  assert.ok(start > -1, 'the composer has a format control');
+  const open = html.lastIndexOf('<button', start);
+  const block = html.slice(open, html.indexOf('>', start) + 1);
+  assert.doesNotMatch(block, /disabled/, 'the format control must not be disabled');
+  assert.match(html, /id="chat-format-bold"/, 'the format menu offers bold');
+});
+
+test('wrapBold puts double asterisks around the selected text', () => {
+  assert.deepEqual(wrapBold('你好世界', 2, 4), {text: '你好**世界**', start: 4, end: 6});
+  assert.deepEqual(wrapBold('abc', 1, 1), {text: 'a****bc', start: 3, end: 3});
+  assert.deepEqual(wrapBold('', 0, 0), {text: '****', start: 2, end: 2});
+});
+
+test('inlineBold splits text into plain and bold runs', () => {
+  assert.deepEqual(inlineBold('发 **重要** 通知'), [
+    {text: '发 ', bold: false}, {text: '重要', bold: true}, {text: ' 通知', bold: false},
+  ]);
+  assert.deepEqual(inlineBold('**未闭合'), [{text: '**未闭合', bold: false}]);
+  assert.deepEqual(inlineBold(''), []);
 });
 
 test('the message menu offers delete that hides the message only for this account', () => {
