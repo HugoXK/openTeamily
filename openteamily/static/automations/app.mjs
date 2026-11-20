@@ -1,3 +1,5 @@
+import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
+
 export function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
   return match ? decodeURIComponent(match[1]) : '';
@@ -810,11 +812,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
     const catalog = loadTemplates(seq);
-    const emptyResult = {status: 0, body: {}};
-    const shared = request('GET', '/v1/workspaces?limit=100').catch(() => emptyResult);
-    const personal = await request('GET', '/v1/workspaces?scope=personal').catch(() => emptyResult);
-    const localItems = personal.status === 200 ? (personal.body.items || []) : [];
-    const space = localItems.length ? personal : await shared;
+    const {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100');
     if (seq !== loadRequest) return;
     if (space.status !== 200) {
       show('error', messageFor(space.body.error, '无法读取工作区。'));
@@ -833,18 +831,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     form.hidden = true;
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
-    const updateShared = async () => {
-      const result = await shared;
-      if (!localItems.length || seq !== loadRequest) return;
-      if (result.status !== 200) {
-        workspaceStatus.textContent = '团队工作区暂时无法加载。';
-        return;
-      }
-      const listed = result.body.items || [];
-      const localMissing = localItems.filter(item => !listed.some(other => other.id === item.id));
-      fillWorkspaces([...localMissing, ...listed]);
-    };
-    void updateShared();
+    void supplemental?.then(result => {
+      if (seq !== loadRequest) return;
+      if (result.status === 200) fillWorkspaces(result.body.items);
+      else workspaceStatus.textContent = '团队工作区暂时无法加载。';
+    });
     await Promise.all([loadList(), catalog]);
   }
 

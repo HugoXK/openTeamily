@@ -340,6 +340,11 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(self.call(None, uri='/v1/settings')[0], 401)
         status, headers = self.call(a, uri='/v1/automation-templates')
         self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
+        automation = f"/v1/workspaces/{'3' * 32}/automations/{'4' * 32}"
+        status, headers = self.call(a, uri=automation, method='POST', Origin='https://openteamily.example')
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Instance'], '1' * 32)
+        self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
 
     def test_nginx_forwards_moved_v1_apis_except_platform_exceptions(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
