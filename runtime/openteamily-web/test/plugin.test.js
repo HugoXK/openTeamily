@@ -28,6 +28,8 @@ function fixture() {
   writeFileSync(join(pages, 'chat', 'index.html'), '<!doctype html><html><head><title>Chat</title></head><body>chat</body></html>')
   writeFileSync(join(pages, 'home', 'index.html'), '<html><head></head><body>home</body></html>')
   writeFileSync(join(pages, 'shell', 'app.css'), 'body{}')
+  mkdirSync(join(pages, 'settings'), { recursive: true })
+  writeFileSync(join(pages, 'settings', 'index.html'), '<html><head></head><body>settings</body></html>')
   writeFileSync(join(root, 'secret.txt'), 'outside')
   symlinkSync(join(root, 'secret.txt'), join(pages, 'shell', 'leak.txt'))
   const data = join(root, 'data')
@@ -81,6 +83,23 @@ test('refuses traversal, symlink escape, hidden and unknown files', async () => 
   }
   assert.equal(resolvePagePath('/a\\b/'), null)
   assert.equal(resolvePagePath('/' + 'a'.repeat(300) + '/'), null)
+})
+
+test('extensionless settings subpaths serve the settings page, not 404', async () => {
+  const { pages, data } = fixture()
+  const ctx = fakeCtx()
+  apply(ctx, { pagesDir: pages, dataDir: data })
+  const route = ctx.routes.get(PAGE_PATH)
+  for (const path of ['/settings', '/settings/', '/settings/connectors', '/settings/language']) {
+    const response = await get(route, path)
+    assert.equal(response.status, 200, path)
+    assert.match(await response.text(), /settings/)
+  }
+  assert.deepEqual(resolvePagePath('/settings/connectors'), ['settings', 'index.html'])
+  assert.deepEqual(resolvePagePath('/settings'), ['settings', 'index.html'])
+  assert.deepEqual(resolvePagePath('/chat/app.mjs'), ['chat', 'app.mjs'])
+  assert.equal(resolvePagePath('/settings/x.exe'), null)
+  assert.equal((await get(route, '/settings/missing-asset.css')).status, 404)
 })
 
 test('dispatch answers shell/identity and rejects unknown endpoints', async () => {

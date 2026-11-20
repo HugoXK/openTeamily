@@ -520,6 +520,7 @@ def nginx_config(routes, platform, listen, key_include=None, key=None):
     for page in sorted(routes['moved_pages']):
         if page == 'home':
             locations.append('  location = / { return 418; }')
+        locations.append(f'  location = /{page} {{ return 418; }}')
         locations.append(f'  location ^~ /{page}/ {{ return 418; }}')
     return (NGINX_TEMPLATE.replace('__LISTEN__', str(listen)).replace('__PLATFORM__', platform)
             .replace('__KEY_SETTING__', setting).replace('__DSBOT_LOCATIONS__', '\n'.join(locations)))

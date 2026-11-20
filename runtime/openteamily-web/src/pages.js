@@ -36,8 +36,13 @@ export function resolvePagePath(raw) {
   const parts = raw.slice(1, trailing ? -1 : undefined).split('/')
   if (parts.some((part) => !SEGMENT.test(part) || part.includes('..'))) return null
   if (trailing) return [...parts, 'index.html']
-  if (!Object.hasOwn(TYPES, extname(parts.at(-1)).toLowerCase())) return null
-  return parts
+  const ext = extname(parts.at(-1)).toLowerCase()
+  if (Object.hasOwn(TYPES, ext)) return parts
+  // Extensionless paths (/settings, /settings/connectors, /profile/edit) are
+  // the section's index.html, matching SettingsPage on the platform. Unknown
+  // extensions still 404. The file must exist; a missing index is 404 later.
+  if (ext === '') return [parts[0], 'index.html']
+  return null
 }
 
 const notFound = (identity) => new Response('not found', {
