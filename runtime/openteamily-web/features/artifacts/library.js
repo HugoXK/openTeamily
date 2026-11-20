@@ -14,6 +14,7 @@ import {
   normalizeBoard, normalizeDashboard, normalizeSlides, slidesJson,
 } from './structured.js'
 import { cleanFilename, exportFilename, exportHeaders, renderBoardSvg, renderDashboardPage, renderPage, renderSlidesPage, renderWebsitePage, sniffMime } from './render.js'
+import { exportOffice } from './office.js'
 export const PER_WORKSPACE = 50
 export const MAX_VERSIONS = 100
 export const MAX_SHARES = 10
@@ -471,7 +472,14 @@ export function exportBytes(row, featureDir, workspaceId, fromVersion = false) {
 
 
 export function exportResult(row, featureDir, workspaceId, fromVersion, format) {
-  if (format && OFFICE.has(format)) refuse(400, 'unsupported_export', 'Office export is not in this DS-Bot yet')
+  if (format && OFFICE.has(format)) {
+    try {
+      const result = exportOffice(row, format, fromVersion)
+      return { status: 200, raw: result.payload, headers: exportHeaders(result.contentType, result.filename), filename: result.filename }
+    } catch (error) {
+      refuse(400, 'unsupported_export', String(error?.message ?? error))
+    }
+  }
   if (format) refuse(400, 'invalid', 'Unsupported export format')
   try {
     const result = exportBytes(row, featureDir, workspaceId, fromVersion)
