@@ -432,6 +432,7 @@ function mount() {
 
   async function openMeeting(id) {
     const workspace = workspaceId(), pendingSelection = ++selection;
+    audio.reset();
     clearDraft();
     const result = await request('GET', `${base()}/${id}`);
     if (workspaceId() !== workspace || pendingSelection !== selection) return;
