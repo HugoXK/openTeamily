@@ -105,6 +105,7 @@ export function createAgents({ db, host }) {
       }
       return { items }
     },
+    byId: async p => ({ agent: view(await native.ensure(loadAny(p.id))) }),
     categories: async () => ({ items: CATEGORIES }),
     async list(p) {
       const workspaceId = ws(p)

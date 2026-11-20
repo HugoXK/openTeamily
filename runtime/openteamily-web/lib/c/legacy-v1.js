@@ -87,6 +87,8 @@ function conversationItem(row, me, env, workspaceId) {
     id: row.id,
     workspace_id: workspaceId,
     kind: row.kind,
+    native_room_id: row.native_room_id || null,
+    native_session_id: row.native_session_id || null,
     title: row.title || '',
     created: unix(row.created_at),
     updated: unix(row.updated_at),
@@ -614,6 +616,12 @@ function messengerExtraRoutes(host) {
   }
   const guard = async (bs, wid) => teamFor(bs, wid, 'Workspace', env)
   return [
+    ...['GET', 'POST'].map(method => ({ method, path: /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/announcement$/,
+      handle: async ({ match, body }) => wrap(async () => {
+        const bs = client(host); await teamFor(bs, match[1], 'Workspace', process.env)
+        const path = '/v1/ot/conversations/' + encodeURIComponent(match[2]) + '/announcement'
+        return [200, method === 'GET' ? await bs.get(path) : await bs.post(path, body)]
+      }) })),
     {
       method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/pin'),
       async handle({ match, body }) {
