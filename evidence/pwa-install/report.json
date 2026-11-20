@@ -1,0 +1,312 @@
+{
+  "issue": null,
+  "note": "PWA install slice: manifest + icons + worker make /space installable; after the instance is stopped, a page navigation gets the worker's own offline page",
+  "arms": [
+    {
+      "name": "before",
+      "sha": "af33df0f0ff16007c02fa6818f1f58e3918927f4"
+    },
+    {
+      "name": "after",
+      "sha": "92dd8dfb335d71f3078d9182f05a7d5673203c42"
+    }
+  ],
+  "rows": [
+    {
+      "arm": "before",
+      "armSha": "af33df0f0ff16007c02fa6818f1f58e3918927f4",
+      "file": "before/zh-CN__light__1440x900__space__full-page.png",
+      "viewport": "1440x900",
+      "bytes": 132565,
+      "sha256": "a1e4a00fa2474f6b05e41b82d22e3b059a4e708aabd504b4a0b3485f5da2b8bd",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "manifestHref": null,
+      "themeColor": null,
+      "iconHref": null,
+      "standaloneQuery": false,
+      "routes": [
+        {
+          "path": "/manifest.webmanifest",
+          "status": 404,
+          "type": "application/json"
+        },
+        {
+          "path": "/sw.js",
+          "status": 404,
+          "type": "application/json"
+        },
+        {
+          "path": "/icon.svg",
+          "status": 404,
+          "type": "application/json"
+        },
+        {
+          "path": "/icon-192.png",
+          "status": 404,
+          "type": "application/json"
+        },
+        {
+          "path": "/icon-512.png",
+          "status": 404,
+          "type": "application/json"
+        }
+      ],
+      "manifest": null,
+      "worker": {
+        "supported": true,
+        "active": false
+      },
+      "consoleErrors": [
+        "Loading the image 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' violates the following Content Security Policy directive: \"im",
+        "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      ]
+    },
+    {
+      "arm": "before",
+      "armSha": "af33df0f0ff16007c02fa6818f1f58e3918927f4",
+      "file": "before/zh-CN__light__390x844__space__full-page.png",
+      "viewport": "390x844",
+      "bytes": 81742,
+      "sha256": "9fccc92d8b5f06ff9a3c3109a3d022a219def4bdc583b03faaeeebf696097c7e",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "manifestHref": null,
+      "themeColor": null,
+      "iconHref": null,
+      "standaloneQuery": false,
+      "routes": [
+        {
+          "path": "/manifest.webmanifest",
+          "status": 404,
+          "type": "application/json"
+        },
+        {
+          "path": "/sw.js",
+          "status": 404,
+          "type": "application/json"
+        },
+        {
+          "path": "/icon.svg",
+          "status": 404,
+          "type": "application/json"
+        },
+        {
+          "path": "/icon-192.png",
+          "status": 404,
+          "type": "application/json"
+        },
+        {
+          "path": "/icon-512.png",
+          "status": 404,
+          "type": "application/json"
+        }
+      ],
+      "manifest": null,
+      "worker": {
+        "supported": true,
+        "active": false
+      },
+      "consoleErrors": [
+        "Loading the image 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' violates the following Content Security Policy directive: \"im"
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "92dd8dfb335d71f3078d9182f05a7d5673203c42",
+      "file": "after/zh-CN__light__1440x900__space__full-page.png",
+      "viewport": "1440x900",
+      "bytes": 123505,
+      "sha256": "8a5d1fb2b1a3183ab392c90d4c084e9d0c3da4f5e989b3a227e89a2b2396bebf",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "manifestHref": "/manifest.webmanifest",
+      "themeColor": "#20382d",
+      "iconHref": "/icon.svg",
+      "standaloneQuery": false,
+      "routes": [
+        {
+          "path": "/manifest.webmanifest",
+          "status": 200,
+          "type": "application/manifest+json"
+        },
+        {
+          "path": "/sw.js",
+          "status": 200,
+          "type": "text/javascript"
+        },
+        {
+          "path": "/icon.svg",
+          "status": 200,
+          "type": "image/svg+xml"
+        },
+        {
+          "path": "/icon-192.png",
+          "status": 200,
+          "type": "image/png"
+        },
+        {
+          "path": "/icon-512.png",
+          "status": 200,
+          "type": "image/png"
+        }
+      ],
+      "manifest": {
+        "name": "OpenTeamily",
+        "short_name": "Teamily",
+        "start_url": "/space",
+        "scope": "/",
+        "display": "standalone",
+        "theme_color": "#20382d",
+        "background_color": "#eef2ef",
+        "icons": [
+          "/icon.svg any image/svg+xml",
+          "/icon-192.png 192x192 image/png",
+          "/icon-512.png 512x512 image/png"
+        ]
+      },
+      "worker": {
+        "supported": true,
+        "active": true,
+        "scope": "http://127.0.0.1:18791/",
+        "scriptURL": "http://127.0.0.1:18791/sw.js",
+        "controller": true
+      },
+      "consoleErrors": [
+        "Loading the image 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' violates the following Content Security Policy directive: \"im"
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "92dd8dfb335d71f3078d9182f05a7d5673203c42",
+      "file": "after/zh-CN__light__390x844__space__full-page.png",
+      "viewport": "390x844",
+      "bytes": 83069,
+      "sha256": "67ec8ac5a856139ad050c86e0df3dc6dcbb6f4cacfbc02dd544bf4106337aa79",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "manifestHref": "/manifest.webmanifest",
+      "themeColor": "#20382d",
+      "iconHref": "/icon.svg",
+      "standaloneQuery": false,
+      "routes": [
+        {
+          "path": "/manifest.webmanifest",
+          "status": 200,
+          "type": "application/manifest+json"
+        },
+        {
+          "path": "/sw.js",
+          "status": 200,
+          "type": "text/javascript"
+        },
+        {
+          "path": "/icon.svg",
+          "status": 200,
+          "type": "image/svg+xml"
+        },
+        {
+          "path": "/icon-192.png",
+          "status": 200,
+          "type": "image/png"
+        },
+        {
+          "path": "/icon-512.png",
+          "status": 200,
+          "type": "image/png"
+        }
+      ],
+      "manifest": {
+        "name": "OpenTeamily",
+        "short_name": "Teamily",
+        "start_url": "/space",
+        "scope": "/",
+        "display": "standalone",
+        "theme_color": "#20382d",
+        "background_color": "#eef2ef",
+        "icons": [
+          "/icon.svg any image/svg+xml",
+          "/icon-192.png 192x192 image/png",
+          "/icon-512.png 512x512 image/png"
+        ]
+      },
+      "worker": {
+        "supported": true,
+        "active": true,
+        "scope": "http://127.0.0.1:18791/",
+        "scriptURL": "http://127.0.0.1:18791/sw.js",
+        "controller": true
+      },
+      "consoleErrors": [
+        "Loading the image 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7' violates the following Content Security Policy directive: \"im"
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "92dd8dfb335d71f3078d9182f05a7d5673203c42",
+      "file": "after/zh-CN__light__1440x900__offline__full-page.png",
+      "viewport": "1440x900",
+      "bytes": 27651,
+      "sha256": "fa12621f96de3845de3bba11d7e386c6839fbdd893653397848ef56b6061ac90",
+      "png": {
+        "width": 1440,
+        "height": 900
+      },
+      "screen": "offline-navigation",
+      "worker": {
+        "scope": "http://127.0.0.1:18795/",
+        "active": true,
+        "controller": true
+      },
+      "offlineText": {
+        "probe": "http://127.0.0.1:18795/space?offline-probe=1795155360092",
+        "title": "离线 · OpenTeamily",
+        "heading": "现在连不上这台 OpenTeamily",
+        "body": "现在连不上这台 OpenTeamily 这个窗口里没有缓存页面，所以断网时看不到内容。网络恢复后刷新即可。 自托管实例停在那里就真的停了：请检查管理端进程是否还在运行。"
+      },
+      "consoleErrors": [
+        "Failed to load resource: the server responded with a status of 503 ()",
+        "Failed to load resource: net::ERR_INTERNET_DISCONNECTED"
+      ]
+    },
+    {
+      "arm": "after",
+      "armSha": "92dd8dfb335d71f3078d9182f05a7d5673203c42",
+      "file": "after/zh-CN__light__390x844__offline__full-page.png",
+      "viewport": "390x844",
+      "bytes": 22402,
+      "sha256": "8a166c74cd508f7922259f4a36581f2657623c0235528ee072567d1f9f472949",
+      "png": {
+        "width": 390,
+        "height": 844
+      },
+      "screen": "offline-navigation",
+      "worker": {
+        "scope": "http://127.0.0.1:18795/",
+        "active": true,
+        "controller": true
+      },
+      "offlineText": {
+        "probe": "http://127.0.0.1:18795/space?offline-probe=1795155360412",
+        "title": "离线 · OpenTeamily",
+        "heading": "现在连不上这台 OpenTeamily",
+        "body": "现在连不上这台 OpenTeamily 这个窗口里没有缓存页面，所以断网时看不到内容。网络恢复后刷新即可。 自托管实例停在那里就真的停了：请检查管理端进程是否还在运行。"
+      },
+      "consoleErrors": [
+        "Failed to load resource: the server responded with a status of 503 ()",
+        "Failed to load resource: net::ERR_INTERNET_DISCONNECTED"
+      ]
+    }
+  ],
+  "offlineMethod": "own fixture instance on port 18795, SIGKILLed before the offline navigation",
+  "codeTip": "92dd8dfb335d71f3078d9182f05a7d5673203c42",
+  "codeTree": "f7e79210a82b02500b61e2ce3f970de61c00ead8"
+}
