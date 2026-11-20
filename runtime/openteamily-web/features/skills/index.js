@@ -8,7 +8,16 @@ const PREFIX = 'ot-user-skill-'
 const BOUND = 'ot-bound-'
 const SKILL_ID = /^[a-z0-9][a-z0-9_.-]{0,79}$/i
 const DIGEST = /^[0-9a-f]{64}$/
-export const boundName = (id) => BOUND + String(id).toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 60)
+// DS-Bot's native validator caps the complete capability name at 32 chars and
+// permits only single hyphens. Keep existing valid names; hash the full source
+// identity otherwise (never truncate into collisions or weaken native validation).
+const nativeName = (prefix, id) => {
+  const name = prefix + String(id).toLowerCase()
+  return name.length <= 32 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)
+    ? name : prefix + createHash('sha256').update(String(id)).digest('hex').slice(0, 32 - prefix.length)
+}
+export const boundName = (id) => nativeName(BOUND, id)
+export const userSkillName = (slug) => nativeName(PREFIX, slug)
 
 export default function skills(host) {
   const ready = async () => {
@@ -32,7 +41,7 @@ export default function skills(host) {
         if (!content.trim() || content.length > 20000) fail('skills/invalid', 'content must be 1–20000 characters')
         const description = String(payload?.description ?? slug).slice(0, 200)
         const { rt, botId } = await ready()
-        const name = PREFIX + slug
+        const name = userSkillName(slug)
         await rt.capabilitySave({ name, kind: 'skill', description, content }, { ui: true })
         if (!(rt.botOf(botId)?.capabilities ?? []).includes(name)) await rt.changeCapabilityAttachment('attach', { name }, botId)
         return { name, attached: true }
@@ -59,7 +68,7 @@ export default function skills(host) {
           if (!attachedNow().has(name)) await rt.changeCapabilityAttachment('attach', { name }, botId)
         }
         for (const name of attachedNow()) {
-          if (typeof name === 'string' && name.startsWith(BOUND) && !wanted.has(name)) await rt.changeCapabilityAttachment('detach', { name }, botId).catch(() => {})
+          if (typeof name === 'string' && name.startsWith(BOUND) && !wanted.has(name)) await rt.changeCapabilityAttachment('detach', { name }, botId)
         }
         return { attached: [...wanted.keys()].sort() }
       },
@@ -67,7 +76,8 @@ export default function skills(host) {
         const slug = String(payload?.name ?? '')
         if (!NAME.test(slug)) fail('skills/invalid', 'invalid name')
         const { rt, botId } = await ready()
-        await rt.changeCapabilityAttachment('detach', { name: PREFIX + slug }, botId).catch(() => {})
+        const name = userSkillName(slug)
+        if ((rt.botOf(botId)?.capabilities ?? []).includes(name)) await rt.changeCapabilityAttachment('detach', { name }, botId)
         return { removed: true }
       },
     },
