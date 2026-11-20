@@ -392,3 +392,30 @@ test("chat files are idempotent and readable only by active members of the corre
   assert.equal((await author.call("GET", filePath(sentTo.id, created.id))).status, 404);
   assert.deepEqual(await teammate.ok("GET", filePath(forwardedTo.id, forwarded.id)), file);
 });
+
+test("group translation sources require membership, exclude own media and check the exact revision", async () => {
+  const reader = await home(S.base, "translation-reader");
+  const author = await home(S.base, "translation-author");
+  const outsider = await home(S.base, "translation-outsider");
+  const team = await teamOf(reader, author, outsider);
+  const {workspaces} = await reader.ok("GET", "/v1/ot/workspaces");
+  const workspace = workspaces.find((row: any) => row.id === team.id).workspace_id;
+  const conv = await reader.ok("POST", "/v1/ot/conversations", {
+    kind: "group", title: "Translations", team_id: team.id, members: [author.handle],
+  });
+  const post = `/v1/ot/conversations/${conv.id}/messages`;
+  const own = await reader.ok("POST", post, {body:"My text"});
+  const first = await author.ok("POST", post, {body:"Visible text"});
+  const file = await author.ok("POST", post, {
+    workspace, attachment:{title:"data.txt",mime:"text/plain",data:Buffer.from("File contents").toString("base64")},
+  });
+  const source = `/v1/ot/workspaces/${workspace}/conversations/${conv.id}/translation-sources`;
+  const refs = {items:[own,first,file].map(row => ({id:row.id,revision:row.revision}))};
+  assert.deepEqual((await reader.ok("POST", source, refs)).sources, [{id:first.id,revision:first.revision,body:"Visible text"}]);
+  assert.equal((await outsider.call("POST", source, refs)).status,404);
+  const edited = await author.ok("PATCH", "/v1/ot/messages/"+first.id, {body:"Edited text"});
+  assert.deepEqual((await reader.ok("POST", source, refs)).sources, []);
+  assert.equal((await reader.ok("POST", source, {items:[{id:first.id,revision:edited.revision}]})).sources[0].body,"Edited text");
+  await author.ok("DELETE", "/v1/ot/messages/"+first.id);
+  assert.deepEqual((await reader.ok("POST", source, {items:[{id:first.id,revision:edited.revision}]})).sources, []);
+});

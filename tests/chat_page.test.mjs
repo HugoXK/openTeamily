@@ -1441,7 +1441,8 @@ test('group info panel counts members and agents honestly and picks a readable g
   assert.equal(leadGlyph('---', '群'), '群');
   const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
   for (const label of ['视频通话', '语音通话', '自动回复', '自动翻译', '消息免打扰']) assert.ok(html.includes(label));
-  assert.match(html, /aria-label="自动翻译（未接通）"/);
+  assert.match(html, /id="group-translate"[^>]*aria-label="自动翻译"/);
+  assert.match(html, /id="group-translate-language"/);
 });
 
 test('group members can change automatic replies for their own agent only', async () => {

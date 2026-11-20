@@ -81,10 +81,11 @@ export function apply(ctx, config = {}) {
       if (bytes !== file.bytes) throw new Error('Native attachment size mismatch')
       return Buffer.concat(chunks)
     }
-    const textOnly = prompt => bridge.exclusive(async () => {
+    const privateText = async (prompt, background = false) => {
       await bridge.setup()
       const response = await fetch(bridge.baseURL + '/chat/completions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token },
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + bridge.state.token,
+          ...(background ? {'X-OpenTeamily-Private-Text':'1'} : {}) },
         body: JSON.stringify({ model: 'openteamily-model', messages: [{ role: 'user', content: prompt }], stream: false }),
         signal: AbortSignal.timeout(170000), redirect: 'error',
       })
@@ -92,8 +93,10 @@ export function apply(ctx, config = {}) {
       const data = await response.json(), text = data.choices?.[0]?.message?.content
       if (typeof text !== 'string' || !text.trim()) throw new Error('Text-only model returned no text')
       return text.slice(0, 20000)
-    })
-    attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn, readNativeAttachment, textOnly, exclusive: bridge.exclusive, legacySession: bridge.legacySession })
+    }
+    const textOnly = prompt => bridge.exclusive(() => privateText(prompt))
+    const backgroundTextOnly = prompt => privateText(prompt,true)
+    attachRuntime({ rt, ctx, chatTurn, mainBot, nativeTurn, readNativeAttachment, textOnly, backgroundTextOnly, exclusive: bridge.exclusive, legacySession: bridge.legacySession })
   } else attachRuntime({ rt, ctx })
   return attached
 }

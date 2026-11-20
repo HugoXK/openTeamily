@@ -126,9 +126,10 @@ export function createBridgeServer(state, { log = () => {}, forward = forwardMod
       if (path === '/v1/chat/completions' && req.method === 'POST') {
         if (req.headers.authorization !== 'Bearer ' + state.token) return sendJson(res, 401, { error: { message: 'unauthorized' } })
         const raw = await readBody(req)
-        const modelApi = state.active?.modelApi || state.startupModel()
+        const task = req.headers['x-openteamily-private-text'] === '1' ? null : state.active
+        const modelApi = task?.modelApi || state.startupModel()
         if (!modelApi) return sendJson(res, 503, { error: { message: 'No model is configured for this OpenTeamily runtime yet.' } })
-        if (state.active) state.active.modelCalls += 1
+        if (task) task.modelCalls += 1
         state.modelCalls += 1
         try { await forward(modelApi, raw, res) } catch (error) {
           log('ds-bot-bridge: model upstream failed: ' + redact(error?.message || 'error'))

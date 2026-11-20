@@ -1,6 +1,7 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { mountAgentMentions } from './mentions.mjs';
 import { AGENT_FILE_ACCEPT, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
+import { mountGroupTranslation } from './translation.mjs';
 import { mountChatCalls } from './calls.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
@@ -726,6 +727,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentConversation = null;
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
+  const autoTranslation = mountGroupTranslation(document,{request});
   const chatCalls = mountChatCalls(document, {request, context: () => {
     if (!servedByDsbot || currentSource !== 'social' || !currentConversation) return null;
     return {wid: workspaceId(), cid: currentConversation.id, title: conversationLabel(currentConversation, currentUser?.id)};
@@ -1477,6 +1479,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let lastSocialItems = [];
   function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory)} = {}) {
+    const translateRoom = currentConversation?.kind === 'group' || (currentConversation?.kind === 'dm' && chatPreferences.auto_translate === true);
+    autoTranslation.open(servedByDsbot && currentUser && translateRoom
+      ? {user:currentUser.id,wid:workspaceId(),cid:currentConversation.id}
+      : null);
+    autoTranslation.clearRows();
     const scroller = document.getElementById('message-scroller');
     const oldHeight = scroller.scrollHeight;
     const oldTop = scroller.scrollTop;
@@ -1509,6 +1516,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.className = 'time';
       time.textContent = formatTime(item.created);
       li.append(role, body, time);
+      if (!mine) autoTranslation.add(item,li,body);
       if (item.voice && !item.retracted) li.insertBefore(voicePlayer(item), time);
       if (item.attachment?.bytes !== undefined && !item.retracted) {
         li.insertBefore(renderChatFile(document, item.attachment), time);
@@ -2050,6 +2058,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function setGroupInfo(conversation) {
+    if (!conversation) autoTranslation.open(null);
     const toggle = document.getElementById('group-info-toggle');
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
@@ -2662,6 +2671,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const session = await request('GET', '/v1/auth/session');
     if (session.status !== 200) {
       currentUser = null;
+      autoTranslation.open(null);
       attachmentSender?.reset();
       privateAttempts.clear();
       currentConversation = null;

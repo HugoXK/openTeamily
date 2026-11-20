@@ -6,9 +6,10 @@ import { Fault } from '../../lib/b4/http.js'
 import { openJsonStore } from '../../lib/b4/json-store.js'
 import { importJsonBundles } from '../../lib/b4/importer.js'
 import { loadImportSealKey } from '../../lib/b4/seal.js'
+import { translationRoutes } from './translations.js'
 import { sharedBotSocial } from '../../lib/c/bot-social.js'
 const sha=x=>createHash('sha256').update(x).digest('hex')
-export default function messageAssists(host){
+export default async function messageAssists(host){
  const store=openJsonStore(host.featureDir(),'assists',()=>({items:[]}))
  const imported=importJsonBundles({dataDir:host.dataDir,feature:{name:'message-assists',importTables:{message_assists:[]}},store,sealKey:loadImportSealKey(),log:host.log,
   apply(draft,tables){
@@ -26,7 +27,8 @@ export default function messageAssists(host){
   // A stable message endpoint preserves old-message assistance beyond the latest page.
   return sharedBotSocial(host).get('/v1/ot/messages/'+encodeURIComponent(mid)+'?conversation_id='+encodeURIComponent(cid))
  }
- return {imported,endpoints:{v1:compatHandler(['GET','POST'].map(method=>({method,path:/^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/assists$/,
+ const automatic=await translationRoutes(host)
+ return {imported,endpoints:{v1:compatHandler([...automatic,...['GET','POST'].map(method=>({method,path:/^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/assists$/,
   async handle({match,body:b={},idempotency_key:key}){
    const bs=sharedBotSocial(host),base='/v1/ot/conversations/'+encodeURIComponent(match[2])
    const [team,conv]=await Promise.all([bs.get('/v1/ot/teams/by-workspace/'+match[1]),bs.get(base)])
@@ -55,5 +57,5 @@ export default function messageAssists(host){
    Promise.resolve().then(()=>s.textOnly(prompt)).then(text=>update({status:'succeeded',text})).catch(()=>update({status:'failed',error_code:'inference_failed'}))
    return [201,{id}]
   }
- })))}}
+ }))])}}
 }

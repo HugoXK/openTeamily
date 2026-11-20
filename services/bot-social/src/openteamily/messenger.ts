@@ -354,6 +354,29 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     }));
     return { items, more: rows.length > limit };
   });
+  app.post("/v1/ot/workspaces/:workspace/conversations/:id/translation-sources", async req => {
+    const me = ot.me(req);
+    const {workspace, id} = params(req);
+    const {conv} = workspaceConversation(ot, workspace, id, me.ownerId);
+    const input = body(req).items;
+    assert(Array.isArray(input) && input.length <= 6, 400, "invalid_request", "Provide at most six message revisions");
+    const sources = [];
+    const seen = new Set();
+    for (const item of input) {
+      assert(typeof item?.id === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(item.id)
+        && Number.isSafeInteger(item.revision) && item.revision > 0, 400, "invalid_request", "Invalid message revision");
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      const source = ot.get<{id: string; revision: number; body: string}>(`SELECT m.id, m.revision, m.body
+        FROM ot_messages m WHERE m.conversation_id=? AND m.id=? AND m.revision=? AND m.retracted=0
+        AND (m.author_kind='agent' OR m.author_id<>?)
+        AND NOT EXISTS (SELECT 1 FROM ot_voice_messages v WHERE v.message_id=m.id)
+        AND NOT EXISTS (SELECT 1 FROM ot_message_attachments a WHERE a.message_id=m.id)`,
+      conv.id, item.id, item.revision, me.ownerId);
+      if (source?.body.trim()) sources.push(source);
+    }
+    return {sources};
+  });
   app.get("/v1/ot/workspaces/:workspace/conversations/:id/messages/:message", async req => {
     const me = ot.me(req);
     const {workspace, id, message} = params(req);

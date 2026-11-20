@@ -231,7 +231,14 @@
         <button type="button" class="group-info-row" id="group-call-audio">语音通话</button>
       </section>
       <section class="group-info-card group-info-list" aria-label="群设置">
-        <div class="group-info-toggle-row"><span><strong>自动翻译</strong><small>未接通：没有翻译服务。</small></span><button type="button" role="switch" aria-checked="false" disabled class="group-info-switch" aria-label="自动翻译（未接通）"></button></div>
+        <div class="group-info-toggle-row">
+          <span><strong>自动翻译</strong><small>使用你配置的模型，译文仅自己可见。</small></span>
+          <button type="button" role="switch" id="group-translate" aria-checked="false" disabled class="group-info-switch" aria-label="自动翻译"></button>
+        </div>
+        <label id="group-translate-language-row" class="group-translate-language" hidden>翻译为
+          <select id="group-translate-language"></select>
+        </label>
+        <p id="group-translate-status" class="group-translate-status" role="status"></p>
         <div class="group-info-toggle-row"><span><strong>消息免打扰</strong><small>保留未读消息，静音此会话。</small></span><button type="button" id="group-info-mute" role="switch" aria-checked="false" class="group-info-switch" aria-label="消息免打扰"></button></div>
         <div class="group-info-toggle-row"><span><strong>置顶聊天</strong></span><button type="button" role="switch" aria-checked="false" id="group-info-pin" class="group-info-switch" aria-label="置顶聊天"></button></div>
       </section>
