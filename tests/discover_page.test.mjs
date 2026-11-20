@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { validSlug, catalogInitial, catalogItems, agentDiscoverPairs, isAgentsCatalog, isTeamsCatalog, renderTeamCard, FEED_CATEGORIES, CATALOG_CATEGORIES, TEAM_CATEGORIES, FEED_ACTIVITY_EMPTY_NOTE, FEED_ACTIVITY_LISTED_NOTE, FEED_FOLLOWING_EMPTY_TITLE, FEED_FOLLOWING_EMPTY_BODY, FEED_FOLLOWING_NOTE, FEED_SEARCH_EMPTY_NOTE, feedQuery, formatFeedTime, renderFeedCard, coverPattern, TEAMS_NOTE, TEAMS_SEARCH_NOTE, TEAMS_SEARCH_PLACEHOLDER } from '../openteamily/static/discover/app.mjs';
+import { validSlug, catalogInitial, catalogItems, agentDiscoverPairs, isAgentsCatalog, isTeamsCatalog, renderTeamCard, FEED_CATEGORIES, CATALOG_CATEGORIES, TEAM_CATEGORIES, FEED_ACTIVITY_EMPTY_NOTE, FEED_ACTIVITY_LISTED_NOTE, FEED_FOLLOWING_EMPTY_TITLE, FEED_FOLLOWING_EMPTY_BODY, FEED_FOLLOWING_NOTE, FEED_SEARCH_EMPTY_NOTE, feedQuery, formatFeedTime, renderFeedCard, coverPattern, TEAMS_NOTE, TEAMS_SEARCH_NOTE, TEAMS_SEARCH_PLACEHOLDER, TEAMS_SIGNED_OUT_NOTE } from '../openteamily/static/discover/app.mjs';
 
 
 test('catalogInitial skips leading punctuation like the public homepage initial', () => {
@@ -116,13 +116,13 @@ test('recorded team categories stay in the captured order', () => {
 test('teams filter chrome is present, disabled, and does not copy Teamily branding', () => {
   const html = readFileSync(new URL('../openteamily/static/discover/index.html', import.meta.url), 'utf8');
   assert.match(html, /id="catalog-tab-teams" href="\/discover\?tab=agents&amp;section=groups">AI 团队</);
-  assert.match(html, /id="catalog-create-team"[^>]*disabled[^>]*>\+ 创建我的 AI 团队</);
+  assert.match(html, /<a class="catalog-create" id="catalog-create-team" href="\/team"[^>]*>\+ 创建我的 AI 团队<\/a>/);
   assert.equal(/AI 团队（未接通）/.test(html), false);
   const block = html.split('id="teams-filters"')[1].split('id="catalog-creator"')[0];
   assert.match(block, /aria-current="true"[^>]*>All</);
   for (const label of TEAM_CATEGORIES) {
     const encoded = label.replaceAll('&', '&amp;');
-    assert.match(block, new RegExp(`disabled title="未接通：没有公共 AI 团队目录接口。">${encoded}<`));
+    assert.match(block, new RegExp(`disabled title="公共团队目录没有分类字段。">${encoded}<`));
   }
   const order = ['All', ...TEAM_CATEGORIES.map((label) => label.replaceAll('&', '&amp;'))];
   const positions = order.map((label) => block.indexOf(`>${label}<`));
@@ -136,7 +136,7 @@ test('teams filter chrome is present, disabled, and does not copy Teamily brandi
   assert.equal(/id="teams-filter-search"/.test(block), false);
   assert.equal(/Teamily AI|Full-Stack Delivery Guild|积分|credits/i.test(html), false);
   assert.match(html, /id="teams-filter-note" class="visually-hidden"/);
-  assert.match(html, /也不会复制对照里的团队名称或创建者品牌/);
+  assert.equal(/也不会复制对照里的团队名称或创建者品牌/.test(html), false);
   assert.equal(TEAMS_SEARCH_PLACEHOLDER, '搜索 AI 团队......');
 });
 
@@ -353,17 +353,19 @@ test('teams catalog shows recorded chrome and does not load the agent catalog AP
   assert.equal(el('catalog-tab-teams').attributes['aria-current'], 'page');
   assert.equal(el('catalog-tab-agents').attributes['aria-current'], undefined);
   assert.equal(el('teams-note').hidden, false);
-  assert.equal(el('teams-note').textContent, TEAMS_NOTE);
+  assert.equal(el('teams-note').textContent, TEAMS_SIGNED_OUT_NOTE);
   assert.equal(el('catalog-manage').hidden, true);
   assert.equal(el('discover-list').children.length, 0);
   assert.equal(requests.some(([path]) => path.startsWith('/v1/discover/agents')), false);
   el('catalog-query').value = 'anything';
   el('catalog-search').handlers.submit({preventDefault() {}});
-  assert.equal(el('teams-search-note').hidden, false);
-  assert.equal(el('teams-search-note').textContent, TEAMS_SEARCH_NOTE);
+  await flush();
+  assert.equal(el('teams-note').textContent, TEAMS_SIGNED_OUT_NOTE);
+  assert.equal(requests.some(([path]) => path.startsWith('/v1/team-directory')), false,
+    'a signed-out visitor is told to sign in instead of calling the directory route');
   el('catalog-clear').handlers.click();
+  await flush();
   assert.equal(el('catalog-query').value, '');
-  assert.equal(el('teams-search-note').hidden, true);
   assert.equal(requests.every(([, method]) => method === 'GET'), true);
 });
 
