@@ -3,6 +3,7 @@
 // DS-Bot (lib/c/agent-replies.js); nothing is executed by the platform or by another user's DS-Bot.
 import { sharedBotSocial, seg, qs } from '../../lib/c/bot-social.js'
 import { createAgentReplier, defaultStateFile } from '../../lib/c/agent-replies.js'
+import { messengerV1 } from '../../lib/c/legacy-v1.js'
 
 export default function messenger(host) {
   const bs = () => sharedBotSocial(host)
@@ -14,6 +15,7 @@ export default function messenger(host) {
   return {
     pages: ['messenger'],
     endpoints: {
+      v1: messengerV1(host),
       list: async () => {
         const data = await bs().get('/v1/ot/conversations')
         return { ...data, conversations: (data.conversations ?? []).map((c) => ({ ...c, first_unread_seq: c.unread > 0 ? c.read_seq + 1 : null })) }

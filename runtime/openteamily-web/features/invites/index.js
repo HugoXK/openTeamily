@@ -1,12 +1,14 @@
 // Stream C: invite links and join requests (legacy invites.py), shared via Bot Social.
 // The invite code is shown once to the creator and travels only inside the link they share.
 import { sharedBotSocial, seg, qs } from '../../lib/c/bot-social.js'
+import { invitesV1 } from '../../lib/c/legacy-v1.js'
 
 export default function invites(host) {
   const bs = () => sharedBotSocial(host)
   const team = (p) => `/v1/ot/teams/${seg(p?.team_id, 'team_id')}`
   return {
     endpoints: {
+      v1: invitesV1(host),
       create: async (p) => bs().post(`${team(p)}/invites`, { role: p?.role, ttl_days: p?.ttl_days, max_uses: p?.max_uses, requires_approval: p?.requires_approval === true }),
       // Wizard step 3 (#281): each row is one invite (role + optional approval), codes returned once.
       async createMany(p) {

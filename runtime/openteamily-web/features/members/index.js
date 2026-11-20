@@ -1,5 +1,6 @@
 // Stream C: team members, roles and suspension (legacy members.py), shared via Bot Social.
 import { sharedBotSocial, seg } from '../../lib/c/bot-social.js'
+import { membersV1 } from '../../lib/c/legacy-v1.js'
 
 export default function members(host) {
   const bs = () => sharedBotSocial(host)
@@ -7,6 +8,7 @@ export default function members(host) {
   return {
     pages: ['members'],
     endpoints: {
+      v1: membersV1(host),
       // Wizard step 3 (#281): static OpenTeamily role copy, not a Teamily claim.
       roles: async () => ({ roles: [
         { role: 'owner', title: 'Owner', summary: 'Creates and can delete the team, assigns admin/member roles, and can never be removed or suspended.' },

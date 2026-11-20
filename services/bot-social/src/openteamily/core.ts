@@ -13,7 +13,8 @@ import type { Platform } from "../platform.js";
 export const CORE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_profiles (
   owner_id TEXT PRIMARY KEY REFERENCES owners(id), handle TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL,
-  bio TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  bio TEXT NOT NULL DEFAULT '', platform_user_id TEXT UNIQUE,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS ot_notifications (
   seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, owner_id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -70,16 +71,23 @@ export class OtContext {
     return { ownerId: row.owner_id, handle: row.handle, displayName: row.display_name };
   }
 
-  /** Resolve another member by handle; only accounts that have an OpenTeamily profile exist here. */
+  /** Resolve another member by handle, owner id, or bound platform user id. */
   ownerByHandle(ref: unknown): string {
-    const row = this.get<any>("SELECT owner_id FROM ot_profiles WHERE handle = ?", handleKey(ref));
+    const raw = String(ref ?? "").trim();
+    const key = handleKey(ref);
+    const row = this.get<any>("SELECT owner_id FROM ot_profiles WHERE handle = ?", key)
+      ?? this.get<any>("SELECT owner_id FROM ot_profiles WHERE handle = ?", key + ".home")
+      ?? (/^[0-9a-f]{32}$/.test(key) ? this.get<any>("SELECT owner_id FROM ot_profiles WHERE platform_user_id = ?", key) : undefined)
+      ?? this.get<any>("SELECT owner_id FROM ot_profiles WHERE owner_id = ?", raw);
     assert(row, 404, "member_not_found", "no OpenTeamily member with that handle");
     return row.owner_id;
   }
 
   profileView(ownerId: string) {
-    const row = this.get<any>("SELECT handle, display_name, bio FROM ot_profiles WHERE owner_id = ?", ownerId);
-    return row ? { handle: row.handle, display_name: row.display_name, bio: row.bio } : { handle: null, display_name: "(left)", bio: "" };
+    const row = this.get<any>("SELECT owner_id, handle, display_name, bio, platform_user_id FROM ot_profiles WHERE owner_id = ?", ownerId);
+    return row
+      ? { owner_id: row.owner_id, handle: row.handle, display_name: row.display_name, bio: row.bio, platform_user_id: row.platform_user_id ?? null }
+      : { owner_id: ownerId, handle: null, display_name: "(left)", bio: "", platform_user_id: null };
   }
 
   notify(ownerId: string, kind: string, data: Record<string, unknown>) {
@@ -104,7 +112,14 @@ export const intParam = (raw: unknown, name: string, fallback: number, max = 1_0
   return Math.min(n, max);
 };
 
+function ensureProfileColumns(ot: OtContext) {
+  const cols = new Set(ot.all<any>("PRAGMA table_info(ot_profiles)").map((c) => c.name));
+  if (!cols.has("platform_user_id")) ot.run("ALTER TABLE ot_profiles ADD COLUMN platform_user_id TEXT");
+  ot.run("CREATE UNIQUE INDEX IF NOT EXISTS ot_profiles_platform_user ON ot_profiles(platform_user_id) WHERE platform_user_id IS NOT NULL");
+}
+
 export function registerCore(app: FastifyInstance, ot: OtContext) {
+  ensureProfileColumns(ot);
   app.get("/v1/ot/me", async (req) => {
     const me = ot.me(req);
     return { owner_id: me.ownerId, ...ot.profileView(me.ownerId) };
@@ -114,8 +129,15 @@ export function registerCore(app: FastifyInstance, ot: OtContext) {
     const b = body(req);
     const name = optText(b.display_name, "display_name", { min: 1, max: 60 });
     const bio = optText(b.bio, "bio", { max: 280, multiline: true });
-    ot.run("UPDATE ot_profiles SET display_name = COALESCE(?, display_name), bio = COALESCE(?, bio), updated_at = ? WHERE owner_id = ?",
-      name ?? null, bio ?? null, ot.now(), me.ownerId);
+    let platformUserId: string | null | undefined;
+    if (b.platform_user_id !== undefined) {
+      assert(typeof b.platform_user_id === "string" && /^[0-9a-f]{32}$/.test(b.platform_user_id), 400, "invalid_request", "platform_user_id must be a 32-character hex id");
+      const taken = ot.get<any>("SELECT owner_id FROM ot_profiles WHERE platform_user_id = ?", b.platform_user_id);
+      assert(!taken || taken.owner_id === me.ownerId, 409, "conflict", "that platform user is already bound");
+      platformUserId = b.platform_user_id;
+    }
+    ot.run("UPDATE ot_profiles SET display_name = COALESCE(?, display_name), bio = COALESCE(?, bio), platform_user_id = COALESCE(?, platform_user_id), updated_at = ? WHERE owner_id = ?",
+      name ?? null, bio ?? null, platformUserId ?? null, ot.now(), me.ownerId);
     return ot.profileView(me.ownerId);
   });
   app.get("/v1/ot/profiles/:handle", async (req) => {

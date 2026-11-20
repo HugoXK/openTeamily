@@ -11,8 +11,9 @@ export const TEAMS_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_teams (
   id TEXT PRIMARY KEY, slug TEXT UNIQUE, name TEXT NOT NULL, owner_id TEXT NOT NULL,
   summary TEXT NOT NULL DEFAULT '', listed INTEGER NOT NULL DEFAULT 0, directory_invite_id TEXT,
-  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  workspace_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS ot_teams_workspace ON ot_teams(workspace_id) WHERE workspace_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS ot_team_members (
   team_id TEXT NOT NULL REFERENCES ot_teams(id) ON DELETE CASCADE, owner_id TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('owner','admin','member')), suspended INTEGER NOT NULL DEFAULT 0,
@@ -58,6 +59,7 @@ export function shareTeam(ot: OtContext, a: string, b: string) {
 
 const teamView = (ot: OtContext, t: any, viewer: string) => ({
   id: t.id, slug: t.slug, name: t.name, summary: t.summary, listed: !!t.listed,
+  workspace_id: t.workspace_id ?? null,
   owner: ot.profileView(t.owner_id), role: roleOf(ot, t.id, viewer)?.role ?? null,
   member_count: ot.get<any>("SELECT COUNT(*) AS n FROM ot_team_members WHERE team_id = ?", t.id).n,
   created_at: t.created_at, updated_at: t.updated_at,
@@ -116,8 +118,61 @@ function createInvite(ot: OtContext, teamId: string, by: string, b: any) {
   return { invite: inviteView(ot.get("SELECT * FROM ot_invites WHERE id = ?", id)), code };
 }
 
+const WORKSPACE = /^[0-9a-f]{32}$/;
+function workspaceIdOf(raw: unknown, required = true) {
+  if (raw === undefined || raw === null || raw === "") {
+    assert(!required, 400, "invalid_request", "workspace_id must be a 32-character hex id");
+    return null;
+  }
+  assert(typeof raw === "string" && WORKSPACE.test(raw), 400, "invalid_request", "workspace_id must be a 32-character hex id");
+  return raw;
+}
+
+function ensureTeamColumns(ot: OtContext) {
+  const cols = new Set(ot.all<any>("PRAGMA table_info(ot_teams)").map((c) => c.name));
+  if (!cols.has("workspace_id")) ot.run("ALTER TABLE ot_teams ADD COLUMN workspace_id TEXT");
+  ot.run("CREATE UNIQUE INDEX IF NOT EXISTS ot_teams_workspace ON ot_teams(workspace_id) WHERE workspace_id IS NOT NULL");
+}
+
+function insertTeam(ot: OtContext, meOwnerId: string, { name, slug, summary, workspaceId }: { name: string; slug: string | null; summary: string; workspaceId: string | null }) {
+  if (workspaceId) assert(!ot.get("SELECT 1 FROM ot_teams WHERE workspace_id = ?", workspaceId), 409, "workspace_bound", "that workspace already has a team");
+  assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_teams WHERE owner_id = ?", meOwnerId).n < 50, 429, "too_many_teams", "an account can own at most 50 teams");
+  const id = newId("ott");
+  const now = ot.now();
+  ot.tx(() => {
+    ot.run("INSERT INTO ot_teams(id, slug, name, owner_id, summary, workspace_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)", id, slug, name, meOwnerId, summary, workspaceId, now, now);
+    addMember(ot, id, meOwnerId, "owner", meOwnerId);
+  });
+  return ot.get<any>("SELECT * FROM ot_teams WHERE id = ?", id);
+}
+
 export function registerTeams(app: FastifyInstance, ot: OtContext) {
+  ensureTeamColumns(ot);
   // ---- teams
+  // Bind a platform workspace (32-hex id) to one Bot Social team so page /v1 shims
+  // can keep using workspace ids. The first caller becomes the team owner; later
+  // callers must already be members (join via invite or the directory).
+  app.post("/v1/ot/teams/ensure", async (req, reply) => {
+    const me = ot.me(req);
+    const b = body(req);
+    const workspaceId = workspaceIdOf(b.workspace_id);
+    const existing = ot.get<any>("SELECT * FROM ot_teams WHERE workspace_id = ?", workspaceId);
+    if (existing) {
+      const { team } = requireMember(ot, existing.id, me.ownerId);
+      return teamView(ot, team, me.ownerId);
+    }
+    const name = optText(b.name, "name", { min: 1, max: 60 }) ?? "Workspace";
+    const team = insertTeam(ot, me.ownerId, { name, slug: null, summary: "", workspaceId });
+    return reply.status(201).send(teamView(ot, team, me.ownerId));
+  });
+  app.get("/v1/ot/teams/by-workspace/:workspace_id", async (req) => {
+    const me = ot.me(req);
+    const workspaceId = workspaceIdOf(params(req).workspace_id);
+    const existing = ot.get<any>("SELECT * FROM ot_teams WHERE workspace_id = ?", workspaceId);
+    assert(existing, 404, "team_not_found", "no such team");
+    const { team } = requireMember(ot, existing.id, me.ownerId);
+    return teamView(ot, team, me.ownerId);
+  });
   app.post("/v1/ot/teams", async (req, reply) => {
     const me = ot.me(req);
     const b = body(req);
@@ -128,14 +183,9 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
       assert(!ot.get("SELECT 1 FROM ot_teams WHERE slug = ?", slug), 409, "slug_taken", "that team id is taken");
     }
     const summary = optText(b.summary, "summary", { max: 200 }) ?? "";
-    assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_teams WHERE owner_id = ?", me.ownerId).n < 50, 429, "too_many_teams", "an account can own at most 50 teams");
-    const id = newId("ott");
-    const now = ot.now();
-    ot.tx(() => {
-      ot.run("INSERT INTO ot_teams(id, slug, name, owner_id, summary, created_at, updated_at) VALUES (?,?,?,?,?,?,?)", id, slug, name, me.ownerId, summary, now, now);
-      addMember(ot, id, me.ownerId, "owner", me.ownerId);
-    });
-    return reply.status(201).send(teamView(ot, ot.get("SELECT * FROM ot_teams WHERE id = ?", id), me.ownerId));
+    const workspaceId = workspaceIdOf(b.workspace_id, false);
+    const team = insertTeam(ot, me.ownerId, { name, slug, summary, workspaceId });
+    return reply.status(201).send(teamView(ot, team, me.ownerId));
   });
   app.get("/v1/ot/teams", async (req) => {
     const me = ot.me(req);
@@ -173,6 +223,23 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     const rows = ot.all<any>("SELECT * FROM ot_team_members WHERE team_id = ? ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, created_at", team.id);
     // Suspended members are listed to owners/admins only (legacy behaviour).
     return { role, members: rows.filter((m) => role !== "member" || !m.suspended).map((m) => memberView(ot, m)) };
+  });
+  app.post("/v1/ot/teams/:id/members", async (req, reply) => {
+    const me = ot.me(req);
+    const { team, role } = requireMember(ot, params(req).id, me.ownerId, ["owner", "admin"]);
+    const b = body(req);
+    const target = ot.ownerByHandle(b.handle ?? b.username);
+    const addRole = b.role ?? "member";
+    assert(addRole === "admin" || addRole === "member", 400, "invalid_request", "role must be admin or member");
+    assert(role === "owner" || addRole === "member", 403, "forbidden", "admins can only add members");
+    const current = roleOf(ot, team.id, target);
+    if (current) {
+      assert(current.role === addRole, 409, "conflict", "member already exists with a different role");
+      return memberView(ot, ot.get("SELECT * FROM ot_team_members WHERE team_id = ? AND owner_id = ?", team.id, target));
+    }
+    addMember(ot, team.id, target, addRole, me.ownerId);
+    ot.notify(target, "team.membership_changed", { team_id: team.id, team_name: team.name });
+    return reply.status(201).send(memberView(ot, ot.get("SELECT * FROM ot_team_members WHERE team_id = ? AND owner_id = ?", team.id, target)));
   });
   app.patch("/v1/ot/teams/:id/members/:handle", async (req) => {
     const me = ot.me(req);

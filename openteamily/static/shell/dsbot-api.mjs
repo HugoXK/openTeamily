@@ -34,6 +34,20 @@ export const MOVED = [
   [/^\/v1\/composio\/connections(?:\/[0-9a-f]{32}(?:\/disconnect)?)?$/, 'connectors'],
   [/^\/v1\/composio\/approvals(?:\/[0-9a-f]{32})?$/, 'connectors'],
   [/^\/v1\/mcp\/servers(?:\/[0-9a-f]{32})?$/, 'connectors'],
+  // Stream C: members, invites, directory, messenger and discover. Auth,
+  // GET/POST /v1/workspaces and POST /v1/teams stay on the platform.
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/members(?:\/[A-Za-z0-9._-]{1,80}(?:\/(?:remove|suspend|unsuspend))?)?$/, 'members'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/invites(?:\/[A-Za-z0-9._-]{1,80}\/(?:revoke|freeze|unfreeze))?$/, 'invites'],
+  [/^\/v1\/invites\/accept$/, 'invites'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/join-requests(?:\/[A-Za-z0-9._-]{1,80}\/(?:approve|reject))?$/, 'invites'],
+  [/^\/v1\/join-requests$/, 'invites'],
+  [/^\/v1\/team-directory$/, 'teams'],
+  [/^\/v1\/team-directory\/[A-Za-z0-9._-]{1,80}\/join$/, 'teams'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/directory$/, 'teams'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/social\/conversations(?:\/[A-Za-z0-9._-]{1,80}(?:\/[A-Za-z0-9._\/-]{1,120})?)?$/, 'messenger'],
+  [/^\/v1\/discover\/(?:agents|works|me\/works)$/, 'discover'],
+  [/^\/v1\/discover\/works\/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]\/engagement$/, 'discover'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/discover(?:\/revoke)?$/, 'discover'],
 ];
 
 export function servedByDsBot(doc = globalThis.document) {
