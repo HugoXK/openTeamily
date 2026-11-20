@@ -103,7 +103,12 @@ test("a platform workspace binds to one team; members can be added by handle", a
   const A = await home(S.base, "ws-owner");
   const B = await home(S.base, "ws-bea");
   const workspace = "c".repeat(32);
-  const first = await A.ok("POST", "/v1/ot/teams/ensure", { workspace_id: workspace, name: "Bound Studio" });
+  assert.equal((await B.call("POST", "/v1/ot/teams/ensure", { workspace_id: workspace })).status, 409, "a first caller cannot claim another platform workspace");
+  assert.equal((await B.call("POST", "/v1/ot/teams", { name: "Claim", workspace_id: workspace })).status, 409);
+  const native = await A.ok("POST", "/v1/ot/teams", { name: "Bound Studio" });
+  // Trusted migration fixture, never a browser-supplied ownership claim.
+  S.platform.db.prepare("UPDATE ot_teams SET workspace_id=? WHERE id=?").run(workspace, native.id);
+  const first = await A.ok("POST", "/v1/ot/teams/ensure", { workspace_id: workspace });
   assert.equal(first.workspace_id, workspace);
   assert.equal(first.name, "Bound Studio");
   const again = await A.ok("POST", "/v1/ot/teams/ensure", { workspace_id: workspace });
@@ -116,6 +121,8 @@ test("a platform workspace binds to one team; members can be added by handle", a
   const members = await A.ok("GET", `/v1/ot/teams/${first.id}/members`);
   assert.ok(members.members.some((m: any) => m.handle === B.handle && m.role === "member"));
   const uid = "d".repeat(32);
+  assert.equal((await A.call("PUT", "/v1/ot/profile", { platform_user_id: uid })).status, 409, "a browser cannot claim a platform user id");
+  S.platform.db.prepare("UPDATE ot_profiles SET platform_user_id=? WHERE handle=?").run(uid, B.handle.replace(/^@/, ""));
   const profile = await B.ok("PUT", "/v1/ot/profile", { platform_user_id: uid });
   assert.equal(profile.platform_user_id, uid);
   await A.ok("PATCH", `/v1/ot/teams/${first.id}/members/${uid}`, { role: "admin" });

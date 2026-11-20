@@ -174,21 +174,19 @@ async function wrap(fn) {
   try { return await fn() } catch (error) { rethrow(error) }
 }
 
-async function bindMe(bs, env = process.env) {
-  const id = ownerId(env)
-  if (!HEX.test(id)) return
-  try { await bs.put('/v1/ot/profile', { platform_user_id: id }) } catch { /* older Bot Social, or already bound */ }
-}
-
 async function meOf(bs, env) {
-  await bindMe(bs, env)
   return bs.get('/v1/ot/me')
 }
 
 async function teamFor(bs, workspaceId, name, env) {
   if (!HEX.test(String(workspaceId || ''))) throw new Fault(400, 'invalid', 'Invalid workspace')
-  await bindMe(bs, env)
-  return bs.post('/v1/ot/teams/ensure', { workspace_id: workspaceId, name: name || 'Workspace' })
+  // Workspace ownership is platform authority, never first-browser-call wins.
+  // A verified migration must pre-link the team and preserve its full membership.
+  try { return await bs.get(`/v1/ot/teams/by-workspace/${seg(workspaceId, 'workspace_id')}`) }
+  catch (error) {
+    if (error?.status === 404) throw new Fault(409, 'membership_migration_required', 'This workspace needs verified Bot Social membership migration; legacy data is unchanged')
+    throw error
+  }
 }
 
 function ttlDays(expiresIn) {
@@ -314,8 +312,7 @@ function invitesRoutes(host) {
       async handle({ body }) {
         return wrap(async () => {
           const bs = client(host)
-          await bindMe(bs, env)
-          const data = await bs.post('/v1/ot/invites/accept', { code: body?.token || body?.code })
+                  const data = await bs.post('/v1/ot/invites/accept', { code: body?.token || body?.code })
           if (data.status === 'pending') {
             return [202, { join_request: { id: data.request_id, status: 'pending', team_id: data.team_id } }]
           }
@@ -353,8 +350,7 @@ function invitesRoutes(host) {
       async handle() {
         return wrap(async () => {
           const bs = client(host)
-          await bindMe(bs, env)
-          const data = await bs.get('/v1/ot/join-requests/mine')
+                  const data = await bs.get('/v1/ot/join-requests/mine')
           return [200, { items: (data.requests || []).map((row) => requestItem(row)) }]
         })
       },
@@ -370,8 +366,7 @@ function teamsRoutes(host) {
       async handle({ query }) {
         return wrap(async () => {
           const bs = client(host)
-          await bindMe(bs, env)
-          const q = parseQuery(query)
+                  const q = parseQuery(query)
           const data = await bs.get('/v1/ot/directory' + qs({ q: q.get('q'), limit: q.get('limit') }))
           return [200, {
             items: (data.teams || []).map((t) => ({
@@ -390,8 +385,7 @@ function teamsRoutes(host) {
       async handle({ match }) {
         return wrap(async () => {
           const bs = client(host)
-          await bindMe(bs, env)
-          const id = match[1]
+                  const id = match[1]
           const teamId = HEX.test(id)
             ? (await bs.get(`/v1/ot/teams/by-workspace/${seg(id, 'workspace_id')}`)).id
             : id
@@ -540,8 +534,7 @@ function discoverRoutes(host) {
   const env = process.env
   const feed = (kind) => async ({ query }) => wrap(async () => {
     const bs = client(host)
-    await bindMe(bs, env)
-    const q = parseQuery(query)
+      const q = parseQuery(query)
     const data = await bs.get('/v1/ot/discover' + qs({
       kind, tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'), creator: q.get('creator'),
       before: q.get('cursor'), limit: q.get('limit'),
@@ -558,8 +551,7 @@ function discoverRoutes(host) {
       async handle({ match, body }) {
         return wrap(async () => {
           const bs = client(host)
-          await bindMe(bs, env)
-          const listing = await bs.get(`/v1/ot/discover/${seg(match[1], 'slug')}`)
+                  const listing = await bs.get(`/v1/ot/discover/${seg(match[1], 'slug')}`)
           const action = body?.action
           const on = body?.enabled !== false
           if (action === 'like') await bs.post(`/v1/ot/listings/${seg(listing.id, 'listing_id')}/like`, { on })
@@ -576,8 +568,7 @@ function discoverRoutes(host) {
       async handle({ match }) {
         return wrap(async () => {
           const bs = client(host)
-          await bindMe(bs, env)
-          const mine = await bs.get('/v1/ot/listings/mine')
+                  const mine = await bs.get('/v1/ot/listings/mine')
           const row = (mine.listings || []).find((l) => l.kind === 'agent' && l.ref === match[2] && l.listed)
           return [200, { discover: row ? { listed: true, slug: row.slug, updated: unix(row.updated_at) } : { listed: false } }]
         })
@@ -588,8 +579,7 @@ function discoverRoutes(host) {
       async handle({ match, body }) {
         return wrap(async () => {
           const bs = client(host)
-          await bindMe(bs, env)
-          const slug = body?.slug
+                  const slug = body?.slug
           const data = await bs.put('/v1/ot/listings', {
             kind: 'agent', ref: match[2], slug, title: body?.title || slug, summary: body?.summary || '',
           })
@@ -602,8 +592,7 @@ function discoverRoutes(host) {
       async handle({ match }) {
         return wrap(async () => {
           const bs = client(host)
-          await bindMe(bs, env)
-          const mine = await bs.get('/v1/ot/listings/mine')
+                  const mine = await bs.get('/v1/ot/listings/mine')
           const row = (mine.listings || []).find((l) => l.kind === 'agent' && l.ref === match[2])
           if (row) await bs.del(`/v1/ot/listings/${seg(row.id, 'listing_id')}`)
           return [200, { discover: { listed: false } }]
