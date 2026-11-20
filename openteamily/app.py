@@ -883,7 +883,7 @@ class App:
             if auto_tools_path:
                 return self.automation_connected_tools(db, session, method, query, now, env, *auto_tools_path.groups())
             auto_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel|artifact))?)?)?))?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel|artifact|retry))?)?)?))?', path)
             if auto_path:
                 return self.automation_dispatch(db, session, method, query, now, env, *auto_path.groups())
             artifact_discover_path = re.fullmatch(
@@ -1672,6 +1672,44 @@ class App:
                 if cancelled is None:
                     refuse(409, 'conflict', 'Automation run cannot be cancelled')
                 return 200, {'run': cancelled}, []
+            if run_id and cancelling == 'retry':
+                if method != 'POST' or query:
+                    refuse(400, 'invalid', 'Invalid automation request')
+                if actor not in ('owner', 'admin'):
+                    refuse(403, 'forbidden', 'Not allowed to change automations')
+                self.body(env, [])
+                key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+                if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+                    refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+                item = db.execute(
+                    'SELECT * FROM automation_runs WHERE id=? AND automation_id=? AND workspace_id=?',
+                    (run_id, row['id'], workspace['id']),
+                ).fetchone()
+                if item is None:
+                    refuse(404, 'not_found', 'Automation run not found')
+                # A double click on the same run must not queue the automation
+                # twice: the idempotency key names one retry of one run.
+                key_hash = digest('automation-retry:' + key)
+                prior = db.execute(
+                    'SELECT * FROM automation_run_retries WHERE run_id=? AND key_hash=?',
+                    (run_id, key_hash),
+                ).fetchone()
+                if prior is not None:
+                    again = db.execute('SELECT * FROM automation_runs WHERE id=?',
+                                       (prior['new_run_id'],)).fetchone()
+                    if again is not None:
+                        return 200, {'run': automations.run_view(again)}, []
+                if item['status'] != 'failed':
+                    refuse(409, 'conflict', 'Only a failed run can be retried')
+                retried = scheduler.retry_run(db, row, item, now)
+                if retried is None:
+                    refuse(429, 'quota', 'Automation run capacity reached')
+                run = retried[0]
+                db.execute(
+                    'INSERT INTO automation_run_retries VALUES(?,?,?,?)',
+                    (run_id, key_hash, run['id'], now),
+                )
+                return 201, {'run': run, 'retried': automations.run_view(item)}, []
             if run_id and cancelling == 'artifact':
                 if method != 'POST' or query:
                     refuse(400, 'invalid', 'Invalid automation request')
