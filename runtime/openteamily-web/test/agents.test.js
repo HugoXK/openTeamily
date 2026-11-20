@@ -14,8 +14,8 @@ const W = 'a'.repeat(32)
 function fixture(chatTurn) {
   const turns = []
   const host = { runtime: async () => ({ rt: {}, ctx: {}, chatTurn: chatTurn ?? (async (key, text, rid) => { turns.push({ key, text, rid }); return { text: `DS-Bot reply ${turns.length}`, sessionId: 's-' + key, turnId: 't' } }) }) }
-  const { endpoints: e } = createAgents({ db: new DatabaseSync(join(mkdtempSync(join(tmpdir(), 'ot-agents-')), 'a.sqlite3')), host })
-  return { e, turns }
+  const created = createAgents({ db: new DatabaseSync(join(mkdtempSync(join(tmpdir(), 'ot-agents-')), 'a.sqlite3')), host })
+  return { e: created.endpoints, turns, migrate: created.migrate }
 }
 
 test('categories stay in step with the Python source', () => {
@@ -86,4 +86,58 @@ test('agents load through the extension point', async () => {
   const { table, loaded } = await loadFeatures({ dir: join(HERE, '../features'), identity: { instanceId: 'e'.repeat(32) }, dataDir: mkdtempSync(join(tmpdir(), 'ot-agents-load-')), log: () => {} })
   assert.ok(loaded.includes('agents'))
   assert.ok(table['agents/turn'] && table['agents/send'] && table['agents/conversation-create'])
+})
+
+
+
+test('v1 lists agents and conversations in the legacy /v1 shape', async () => {
+  const { e } = fixture()
+  const created = await e.v1({
+    method: 'POST', path: `/v1/workspaces/${W}/agents`,
+    idempotency_key: 'a'.repeat(20),
+    body: { name: '文档助手', summary: '整理', instructions: '先列要点。' },
+  })
+  assert.equal(created.status, 201, created.body)
+  const id = created.body.agent.id
+  assert.equal(created.body.agent.homepage.visibility, 'restricted')
+  const listed = await e.v1({ method: 'GET', path: `/v1/workspaces/${W}/agents?limit=100` })
+  assert.equal(listed.body.items[0].id, id)
+  const convo = await e.v1({ method: 'POST', path: `/v1/workspaces/${W}/agents/${id}/conversations`, body: { title: '新对话' } })
+  assert.equal(convo.status, 201)
+  const cid = convo.body.conversation.id
+  const sent = await e.v1({
+    method: 'POST', path: `/v1/workspaces/${W}/agents/${id}/conversations/${cid}/messages`,
+    body: { body: '你好' },
+  })
+  assert.equal(sent.status, 201)
+  assert.equal(sent.body.message.body, '你好')
+  assert.equal(sent.body.reply.role, 'assistant')
+  const opened = await e.v1({ method: 'GET', path: `/v1/workspaces/${W}/agents/${id}/conversations/${cid}` })
+  assert.equal(opened.body.items[0].body, '你好')
+  const homepage = await e.v1({ method: 'POST', path: `/v1/workspaces/${W}/agents/${id}/homepage`, body: {} })
+  assert.equal(homepage.status, 404)
+  assert.equal(homepage.body.error.code, 'not_moved')
+})
+
+
+test('official agents bundle imports once including history', async () => {
+  const { createHash } = await import('node:crypto')
+  const sha = (text) => createHash('sha256').update(text, 'utf8').digest('hex')
+  const table = (rows) => {
+    const text = JSON.stringify(rows)
+    return { text, manifest: { rows: rows.length, sha256: sha(text) } }
+  }
+  const aid = 'c'.repeat(32), cid = 'd'.repeat(32), mid = 'e'.repeat(32)
+  const agents = table([{ id: aid, workspace_id: W, name: '旧助手', summary: '整理', instructions: '先列要点。', revision: 1, created: 1, updated: 1, archived: 0 }])
+  const convos = table([{ id: cid, workspace_id: W, agent_id: aid, user_id: 'u'.repeat(32), title: '旧对话', created: 1, updated: 1 }])
+  const messages = table([{ id: mid, conversation_id: cid, workspace_id: W, agent_id: aid, user_id: 'u'.repeat(32), role: 'user', body: '你好', status: 'succeeded', created: 1, updated: 1, seq: 1 }])
+  const bundle = { format: 'openteamily-dsbot-import', version: 1, feature: 'agents', created: 1,
+    tables: { workspace_agents: agents.text, agent_conversations: convos.text, agent_messages: messages.text },
+    manifest: { workspace_agents: agents.manifest, agent_conversations: convos.manifest, agent_messages: messages.manifest } }
+  const { e, migrate } = fixture()
+  const first = await migrate(bundle)
+  assert.equal(first.imported, 1)
+  assert.equal((await e.list({ workspace_id: W })).items[0].name, '旧助手')
+  assert.equal((await e.messages({ workspace_id: W, id: aid, conversation_id: cid })).items[0].text, '你好')
+  assert.equal((await migrate(bundle)).imported, 0)
 })

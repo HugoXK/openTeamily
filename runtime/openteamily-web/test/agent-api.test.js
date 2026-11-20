@@ -77,3 +77,16 @@ test('agent-api loads through the extension point next to agents', async () => {
   assert.ok(loaded.includes('agent-api') && loaded.includes('agents'))
   assert.ok(table['agent-api/invoke'])
 })
+
+
+
+test('v1 lists and creates keys in the legacy /v1 shape', async () => {
+  const { e, agent } = await fixture()
+  const listed = await e.v1({ method: 'GET', path: `/v1/workspaces/${W}/agents/${agent.id}/api-keys` })
+  assert.equal(listed.status, 200)
+  assert.deepEqual(listed.body.items, [])
+  const key = await e.v1({ method: 'POST', path: `/v1/workspaces/${W}/agents/${agent.id}/api-keys`, body: { name: 'ci', rate_per_minute: 10 } })
+  assert.equal(key.status, 201)
+  assert.match(key.body.token, /^ota_/)
+  assert.ok(key.body.key.id)
+})

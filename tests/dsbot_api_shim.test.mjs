@@ -20,7 +20,19 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/search/messages?q=x`, ORIGIN).feature, 'search');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/search/resources?kind=links`, ORIGIN).feature, 'search');
   assert.equal(movedTarget('/v1/auth/session', ORIGIN), null);
-  assert.equal(movedTarget(`/v1/workspaces/${WS}/automations`, ORIGIN), null);
+  assert.equal(movedTarget('/v1/automation-templates', ORIGIN).feature, 'automations');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/automations`, ORIGIN).feature, 'automations');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/tick`, ORIGIN).feature, 'automations');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/${ID}/runs/${ID}/retry`, ORIGIN).feature, 'automations');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents?limit=100`, ORIGIN).feature, 'agents');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/archive`, ORIGIN).feature, 'agents');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/messages`, ORIGIN).feature, 'agents');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys`, ORIGIN).feature, 'agent-api');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys/${ID}/revoke`, ORIGIN).feature, 'agent-api');
+  // Cross-user / provision routes stay on the platform.
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/homepage`, ORIGIN), null);
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/runtime`, ORIGIN), null);
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/discover`, ORIGIN), null);
   assert.equal(movedTarget('/v1/settings', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/notification-prefs', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/onboarding/look', ORIGIN).feature, 'settings');
