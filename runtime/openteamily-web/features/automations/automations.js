@@ -27,10 +27,12 @@ function tx(db, fn) {
 
 // One DS-Bot turn through the runtime wrapper's chatTurn service (B1 contract).
 export function dsBotTurn(host) {
-  return async ({ conversation, prompt, requestId }) => {
+  return async ({ conversation, prompt, requestId, skillScope }) => {
     const services = await host.runtime()
     if (typeof services?.chatTurn !== 'function') throw Object.assign(new Error('DS-Bot chat service unavailable'), { code: 'automations/runtime-unavailable' })
-    const reply = await services.chatTurn(conversation, prompt, requestId)
+    const material = skillScope ? await host.call('skills/materialForScope', { scope: skillScope }) : { items: [] }
+    const context = material.items.map(i => i.content).join('\n\n')
+    const reply = await services.chatTurn(conversation, context ? `[User-approved instruction-only skills]\n${context}\n\n${prompt}` : prompt, requestId)
     return { text: reply?.text, session_id: reply?.sessionId ?? null, turn_id: reply?.turnId ?? null }
   }
 }
@@ -182,6 +184,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       if (!item || item.status !== 'queued') return
       try {
         const reply = await turn({
+          skillScope: `automation:${item.workspace_id}:${item.automation_id}`,
           conversation: `automation:${item.automation_id}`,
           prompt: `[OpenTeamily 自动化 · ${item.title}]\n${item.prompt}`,
           requestId: `ot-automation:${runId}`,

@@ -618,22 +618,6 @@ class App:
                 if method == 'POST' and not query:
                     return self.personal_agent_ensure(db, session, now)
                 refuse(400, 'invalid', 'Invalid personal agent request')
-            if path == '/v1/skills/installed':
-                if method == 'GET' and not query:
-                    return 200, skill_installs.listing(db, session['user_id']), []
-                if method in ('POST', 'DELETE') and not query:
-                    if method == 'DELETE':
-                        self.csrf_check(env, session)
-                    body = self.body(env, ['skill'])
-                    skill_id = body.get('skill')
-                    if not skill_installs.valid_skill(skill_id):
-                        refuse(400, 'invalid', 'Provide a skill id from the skills catalogue')
-                    if method == 'POST':
-                        skill_installs.install(db, session['user_id'], skill_id, now)
-                    else:
-                        skill_installs.uninstall(db, session['user_id'], skill_id)
-                    return 200, skill_installs.listing(db, session['user_id']), []
-                refuse(400, 'invalid', 'Invalid installed-skills request')
             model_path = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/model-api', path)
             if model_path:
                 workspace = members.load(db, model_path[1], session['user_id'])
@@ -683,10 +667,6 @@ class App:
                 except StreamLimit as exc:
                     refuse(429,'stream_limit',str(exc))
                 return 200,stream,[]
-            if path == '/v1/skills/packages' or path.startswith('/v1/skills/packages/'):
-                return self.imported_skill_dispatch(db,session,method,path,query,now,env)
-            if path in ('/v1/skills/catalog', '/v1/skills/bindings'):
-                return self.skill_package_dispatch(db, session, method, query, now, env, path)
             match = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})(/instances)?', path)
             if match:
                 row = members.load(db, match[1], session['user_id'])
@@ -1105,90 +1085,7 @@ class App:
             'created': created, 'skipped': skipped}, []
 
 
-    def imported_skill_dispatch(self,db,session,method,path,query,now,env):
-        packages = skill_packages.imported_skills
-        uid = session['user_id']
-        if query:
-            refuse(400,'invalid','Unexpected package query')
-        match = re.fullmatch(r'/v1/skills/packages(?:/(import-[a-z0-9][a-z0-9-]{1,39})(?:/(revoke|versions)(?:/([0-9]+\.[0-9]+\.[0-9]+))?)?)?',path)
-        if not match:
-            refuse(404,'not_found','Package not found')
-        ident,action,version = match.groups()
-        try:
-            if method=='GET' and not ident:
-                rows = db.execute('SELECT skill_id FROM imported_skill_heads WHERE user_id=? ORDER BY skill_id',(uid,)).fetchall()
-                return 200,{'items':[packages.metadata(db,uid,r['skill_id']) for r in rows]},[]
-            if method=='POST' and not ident:
-                body = self.body(env,['package','revision','consent'])
-                item,state = packages.save(db,uid,body.get('package'),body.get('revision'),body.get('consent'),now)
-                return 200,{'package':item,**state,'installed':False},[]
-            if method=='GET' and action=='versions' and version:
-                row = db.execute('SELECT manifest FROM imported_skill_versions WHERE user_id=? AND skill_id=? AND version=?',(uid,ident,version)).fetchone()
-                if not row:
-                    refuse(404,'not_found','Package version not found')
-                return 200,row['manifest'].encode(),artifacts.export_headers('application/json',ident+'-'+version+'.json')
-            state = packages.metadata(db,uid,ident)
-            if not state:
-                refuse(404,'not_found','Package not found')
-            if method=='GET' and action in (None,'versions'):
-                return 200,state,[]
-            if method=='POST' and action=='revoke':
-                body = self.body(env,['revision'])
-                return 200,packages.revoke(db,uid,ident,body.get('revision'),now),[]
-            refuse(400,'invalid','Invalid package operation')
-        except packages.PackageError as exc:
-            refuse(exc.status,'package_rejected',str(exc))
 
-    def skill_package_dispatch(self, db, session, method, query, now, env, path):
-        if query:
-            refuse(400,'invalid','Unexpected query')
-        uid = session['user_id']
-        if path.endswith('/catalog') and method == 'GET':
-            return 200, {'items':skill_packages.catalogue(db,uid)}, []
-        if path.endswith('/catalog'):
-            refuse(400,'invalid','Catalogue is read-only')
-        if method == 'GET':
-            rows = db.execute('SELECT * FROM skill_bindings WHERE user_id=? ORDER BY scope,skill_id',(uid,)).fetchall()
-            acknowledgements = db.execute('SELECT m.task_id,m.manifest,o.scope FROM skill_task_material m JOIN skill_task_owners o ON o.task_id=m.task_id WHERE o.user_id=? AND m.acknowledged=1 ORDER BY m.rowid DESC LIMIT 100',(uid,)).fetchall()
-            bindings = []
-            for row in rows:
-                last = next((a['task_id'] for a in acknowledgements if (row['scope']=='account' or a['scope']==row['scope']) and any(i['id']==row['skill_id'] and i['digest']==row['digest'] for i in json.loads(a['manifest']))),None)
-                bindings.append(dict(row) | {'last_loaded_task':last})
-            return 200, {'items':bindings}, []
-        if method != 'POST':
-            refuse(400,'invalid','Invalid skill binding request')
-        body = self.body(env,['skill_id','version','digest','scope','enabled','permissions'])
-        item, scope = skill_packages.resolve(body.get('skill_id'),db,uid), body.get('scope')
-        if item is None or type(body.get('enabled')) is not bool or not isinstance(scope,str):
-            refuse(400,'invalid','Select a known package and binding scope')
-        if body.get('version') != item['version'] or body.get('digest') != item['digest']:
-            refuse(409,'conflict','Package version/digest changed; reload catalogue')
-        if body.get('permissions') != skill_packages.PERMISSIONS:
-            refuse(400,'invalid','Only the explicit model_context permission is supported')
-        if scope != 'account' and re.fullmatch(r'(?:(automation):)?[0-9a-f]{32}:[0-9a-f]{32}',scope) is None:
-            refuse(400,'invalid','Invalid binding scope')
-        if body['enabled']:
-            if skill_packages.scope_context(db,uid,scope) is None:
-                refuse(403,'forbidden','Scope requires active workspace administration')
-            if scope.startswith('automation:') and db.execute('SELECT 1 FROM skill_bindings WHERE scope=? AND user_id<>?',(scope,uid)).fetchone():
-                refuse(409,'conflict','This automation already has another skill owner; revoke that binding before transferring')
-        if body['enabled']:
-            current = {i['id']:i for i in skill_packages.catalogue(db,uid)}
-            installed = {r['skill_id'] for r in db.execute('SELECT * FROM skill_bindings WHERE user_id=?',(uid,)) if r['skill_id'] in current and r['version']==current[r['skill_id']]['version'] and r['digest']==current[r['skill_id']]['digest']}
-            if len(installed | {item['id']}) > 10:
-                refuse(429,'quota','At most ten distinct active skills per account; revoke another binding first')
-            if db.execute('SELECT COUNT(*) FROM skill_bindings WHERE user_id=?',(uid,)).fetchone()[0] >= 200 and db.execute('SELECT 1 FROM skill_bindings WHERE user_id=? AND scope=? AND skill_id=?',(uid,scope,item['id'])).fetchone() is None:
-                refuse(429,'quota','Skill binding capacity reached')
-            db.execute('INSERT INTO skill_bindings VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,scope,skill_id) DO UPDATE SET version=excluded.version,digest=excluded.digest', (uid,scope,item['id'],item['version'],item['digest'],now))
-        else:
-            db.execute('DELETE FROM skill_bindings WHERE user_id=? AND scope=? AND skill_id=?',(uid,scope,item['id']))
-            # Cancel loaded tasks; already transmitted provider input cannot be recalled.
-            for record in db.execute("SELECT o.task_id,COALESCE(s.manifest,m.manifest,'[]') AS manifest FROM skill_task_owners o LEFT JOIN skill_task_selection s ON s.task_id=o.task_id LEFT JOIN skill_task_material m ON m.task_id=o.task_id WHERE o.user_id=?",(uid,)).fetchall():
-                if any(i['id']==item['id'] for i in json.loads(record['manifest'])) and not any(i['id']==item['id'] for i in skill_packages.material(db,record['task_id'])):
-                    task = runtime_connect.load_task(db,record['task_id'])
-                    if task and task['status'] in ('queued','claimed'):
-                        runtime_connect.cancel_task(db,task,now)
-        return 200, {'enabled':body['enabled'],'scope':scope,'skill_id':item['id']}, []
 
 
 
