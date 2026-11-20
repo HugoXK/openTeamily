@@ -56,7 +56,7 @@ export function backoffDelay(attempt, { baseMs = BACKOFF.baseMs, maxMs = BACKOFF
   return jittered
 }
 
-async function call(origin, token, method, path, body) {
+export async function call(origin, token, method, path, body) {
   let response
   try {
     response = await fetch(origin + path, {
