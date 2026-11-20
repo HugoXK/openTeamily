@@ -152,6 +152,10 @@ class Lifecycle:
         row = db.execute('SELECT * FROM instances WHERE id=?', (iid,)).fetchone()
         if row is None:
             fail(404, 'not_found', 'Instance not found')
+        if row['backend_mode'] == 'compose':
+            if row['owner_id'] != user or runtime_autoprovision.owned_instance(db, user) != iid:
+                fail(404, 'not_found', 'Instance not found')
+            return row
         workspace = members.load(db, row['workspace_id'], user)
         if workspace is None:
             fail(404, 'not_found', 'Instance not found')
@@ -209,7 +213,8 @@ class Lifecycle:
             fail(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         now = int(self.clock())
         self.workspace(db, owner, wid, write=True)
-        if per_user:
+        owner_scoped = per_user or self.policy.backend_mode == 'compose'
+        if owner_scoped:
             existing = runtime_autoprovision.owned_instance(db, owner)
             if existing is not None:
                 return False, self.result(db, existing)
@@ -222,8 +227,9 @@ class Lifecycle:
                 or db.execute('SELECT COUNT(*) FROM instances').fetchone()[0] >= self.policy.max_instances):
             fail(429, 'quota', 'Instance capacity reached')
         iid, op, jid = uuid4().hex, uuid4().hex, uuid4().hex
+        create_key = digest('owner:' + owner + ':' + key) if owner_scoped else digest(key)
         db.execute('INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,desired,revision,operation_id,operation_type,observed,create_key,created) VALUES(?,?,?,?,?,?,?,\'stopped\',1,?,\'create\',\'pending\',?,?)',
-                   (iid, wid, owner, self.policy.profile, self.policy.backend_mode, self.policy.image_ref, 'ot-' + iid, op, digest(key), now))
+                   (iid, wid, owner, self.policy.profile, self.policy.backend_mode, self.policy.image_ref, 'ot-' + iid, op, create_key, now))
         db.execute("INSERT INTO runtime_jobs(id,instance_id,revision,operation_id,operation_type,status,created) VALUES(?,?,1,?,'create','queued',?)", (jid, iid, op, now))
         return True, self.result(db, iid)
 
@@ -236,6 +242,10 @@ class Lifecycle:
         self.expire()
         with self.store.connect() as db:
             self.workspace(db, owner, wid)
+            if self.policy.backend_mode == 'compose':
+                iid = runtime_autoprovision.owned_instance(db, owner)
+                row = db.execute('SELECT * FROM instances WHERE id=? AND id>?', (iid, cursor)).fetchone() if iid else None
+                return {'items': [self.snapshot(row)] if row else [], 'cursor': None}
             rows = db.execute('SELECT * FROM instances WHERE workspace_id=? AND id>? ORDER BY id LIMIT ?', (wid, cursor, limit + 1)).fetchall()
             return {'items': [self.snapshot(r) for r in rows[:limit]], 'cursor': rows[limit-1]['id'] if len(rows) > limit else None}
 

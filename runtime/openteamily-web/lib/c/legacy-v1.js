@@ -98,7 +98,7 @@ function conversationItem(row, me, env, workspaceId) {
     pinned: !!row.pinned,
     first_unread_seq: row.unread > 0 ? (row.read_seq || 0) + 1 : null,
     members,
-    agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply })),
+    agent_members: (row.agents || []).map((a) => ({ id: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, mine: a.mine === true, owner_id: a.owner?.owner_id || '', owner_name: a.owner?.display_name || a.owner?.handle || '' })),
   }
 }
 
@@ -107,6 +107,7 @@ function messageItem(row, me, env, workspaceId) {
   const agent = row.author_kind === 'agent' || author.kind === 'agent'
   return {
     id: row.id,
+    seq: row.seq,
     conversation_id: row.conversation_id,
     workspace_id: workspaceId,
     user_id: agent ? null : userIdOf(author, me, env),
@@ -115,6 +116,7 @@ function messageItem(row, me, env, workspaceId) {
     revision: row.revision || 1,
     edited: unix(row.edited_at) || null,
     retracted: !!row.retracted,
+    ...(row.voice ? { voice: row.voice } : {}),
     ...(agent ? { role: 'agent', agent_id: row.agent_ref || author.agent_ref, agent_name: row.agent_name || author.name, source: 'runtime_infer' } : {}),
   }
 }
@@ -544,7 +546,7 @@ function messengerRoutes(host) {
             items: (page.messages || []).map((m) => messageItem({ ...m, conversation_id: conv.id }, me, env, match[1])),
             agent_replies: [],
             pinned_messages: [],
-            cursor: null,
+            cursor: page.next_before ?? null,
           }]
         })
       },
@@ -557,8 +559,25 @@ function messengerRoutes(host) {
           await teamFor(bs, match[1], 'Workspace', env)
           const me = await meOf(bs, env)
           const q = parseQuery(query)
-          const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({ limit: q.get('limit') }))
-          return [200, { items: (page.messages || []).map((m) => messageItem({ ...m, conversation_id: match[2] }, me, env, match[1])), cursor: null }]
+          const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
+            limit: q.get('limit'), before: q.get('before') || q.get('cursor'), around: q.get('around'), q: q.get('q'),
+          }))
+          return [200, {
+            items: (page.messages || []).map(m => messageItem({ ...m, conversation_id: match[2] }, me, env, match[1])),
+            cursor: page.next_before ?? null, has_newer: page.has_newer === true,
+          }]
+        })
+      },
+    },
+    {
+      method: 'GET', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})\/messages\/([A-Za-z0-9._-]{1,80})\/voice$/,
+      async handle({ match }) {
+        return wrap(async () => {
+          const bs = client(host)
+          await teamFor(bs, match[1], 'Workspace', env)
+          const conversation = seg(match[2], 'conversation_id')
+          const message = seg(match[3], 'message_id')
+          return [200, await bs.get(`/v1/ot/conversations/${conversation}/messages/${message}/voice`)]
         })
       },
     },
@@ -569,7 +588,7 @@ function messengerRoutes(host) {
           const bs = client(host)
           await teamFor(bs, match[1], 'Workspace', env)
           const me = await meOf(bs, env)
-          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, client_key: idempotency_key, mentions: body?.mentions, reply_to: body?.reply_to })
+          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, voice: body?.voice, client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
         })
       },
@@ -675,12 +694,15 @@ function messengerExtraRoutes(host) {
       method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/save'),
       async handle({ match, body }) {
         return wrap(async () => {
-          const bs = client(host); await guard(bs, match[1])
-          const row = await findMessage(bs, match[2], match[3])
-          if (row.retracted || !row.body) throw new Fault(409, 'conflict', 'This message can no longer be saved')
-          const title = String(body?.title || row.body.slice(0, 40) || '消息').trim().slice(0, 80)
-          const out = await host.call('artifacts/create', { workspace_id: match[1], kind: 'document', title, body: row.body, idempotency_key: ('msg-save-' + match[3]).replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64) })
-          return [201, out]
+          const [, workspace, conversation, message] = match
+          if (!Number.isInteger(body?.revision) || body.revision < 1) throw new Fault(400, 'invalid', 'Provide the message revision')
+          const row = await client(host).get(`/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}/messages/${seg(message)}`)
+          if (row.revision !== body.revision) throw new Fault(409, 'conflict', '消息已修改，请刷新后再保存。')
+          const {status, artifact} = await host.call('artifacts/saveChatMessage', {
+            workspace_id: workspace, conversation_id: conversation, message_id: message,
+            conversation_title: row.title, title: body.title, body: row.body,
+          })
+          return [status, {artifact}]
         })
       },
     },
@@ -698,7 +720,8 @@ function messengerExtraRoutes(host) {
           for (const id of ids) {
             const row = rows.find((m) => m.id === id)
             if (!row || row.retracted || !row.body) continue
-            await bs.post(`${conv(target)}/messages`, { body: `[转发] ${row.body}`.slice(0, 4000), client_key: `fwd:${tag}:${id}`.slice(0, 80) })
+            const voice = row.voice ? await bs.get(`${conv(match[2])}/messages/${seg(id, 'message_id')}/voice`) : undefined
+            await bs.post(`${conv(target)}/messages`, { body: `[转发] ${row.body}`.slice(0, 4000), voice, client_key: `fwd:${tag}:${id}`.slice(0, 80) })
             forwarded++
           }
           return [201, { forwarded, target_conversation_id: target }]
@@ -717,6 +740,17 @@ function messengerExtraRoutes(host) {
             await bs.put(`${conv(match[2])}/agents/${seg(agent.id, 'agent_ref')}`, { name: String(agent.name).slice(0, 40), auto_reply: false })
           }
           return [201, { added: ids.length }]
+        })
+      },
+    },
+    {
+      method: 'POST', path: re('\\/agents\\/([A-Za-z0-9._-]{1,80})\\/auto-reply'),
+      async handle({ match, body }) {
+        return wrap(async () => {
+          if (typeof body?.auto_reply !== 'boolean') throw new Fault(400, 'invalid', 'Provide auto_reply as a boolean')
+          const bs = client(host); await guard(bs, match[1])
+          const result = await bs.patch(`${conv(match[2])}/agents/${seg(match[3], 'agent_ref')}`, { auto_reply: body.auto_reply })
+          return [200, { auto_reply: result.auto_reply }]
         })
       },
     },

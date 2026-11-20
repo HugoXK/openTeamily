@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, workspace_id TEXT NOT NU
   UNIQUE(workspace_id, key_hash), UNIQUE(workspace_id, name_hash));
 CREATE TABLE IF NOT EXISTS agent_conversations (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
   title TEXT NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS agent_conversations_by_agent ON agent_conversations(agent_id, updated DESC, id);
 CREATE TABLE IF NOT EXISTS agent_messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK(role IN ('user','assistant')), text TEXT NOT NULL, status TEXT NOT NULL, created INTEGER NOT NULL, meta TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS agent_messages_by_conversation ON agent_messages(conversation_id, created, id);
@@ -60,6 +61,7 @@ export function view(row) {
 
 export function createAgents({ db, host }) {
   db.exec(SCHEMA)
+  db.function('ot_search_fold', { deterministic: true }, text => text.toLocaleLowerCase('en-US'))
   const native = nativeAgents({ host, db })
   const one = (sql, ...a) => db.prepare(sql).get(...a)
   const all = (sql, ...a) => db.prepare(sql).all(...a)
@@ -80,6 +82,8 @@ export function createAgents({ db, host }) {
     if (!row) fail('not-found', 'Conversation not found', 404)
     return row
   }
+  const conversationMessages = id => all('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created, id', id)
+    .map(message => ({ ...message, meta: JSON.parse(message.meta) }))
 
   // One DS-Bot turn as this agent. Shared by the external API and team runs.
   async function turn({ agent_id: agentId, key, text, request_id: requestId, reply_language: lang, context }) {
@@ -216,6 +220,19 @@ export function createAgents({ db, host }) {
       const rows = all('SELECT * FROM agent_conversations WHERE agent_id=? ORDER BY updated DESC, id LIMIT 200', agent.id)
       return { items: await Promise.all(rows.map(async c => ({ ...c, ...await native.session(agent, `agent:${agent.id}:${c.id}`, c.title) }))) }
     },
+    async conversationSummaries(p) {
+      const workspaceId = ws(p)
+      const ids = p.agent_ids
+      if (!Array.isArray(ids) || ids.length > 100 || ids.some(id => typeof id !== 'string' || !ID.test(id))) {
+        fail('invalid', 'Provide at most 100 agent IDs', 400)
+      }
+      // Listing a conversation must not hydrate its native Session or import its history.
+      const list = db.prepare(`SELECT c.id, c.agent_id, c.title, c.updated
+        FROM agent_conversations c JOIN agents a ON a.id=c.agent_id
+        WHERE c.agent_id=? AND a.workspace_id=?
+        ORDER BY c.updated DESC, c.id LIMIT 200`)
+      return { items: [...new Set(ids)].flatMap(id => list.all(id, workspaceId)) }
+    },
     async 'conversation-create'(p) {
       const agent = load(ws(p), p.id)
       const title = typeof p.title === 'string' && p.title.trim() ? p.title.trim().slice(0, 120) : agent.name
@@ -224,11 +241,63 @@ export function createAgents({ db, host }) {
       const mapping = await native.session(agent, `agent:${agent.id}:${row.id}`, row.title)
       return { status: 201, conversation: { ...row, ...mapping } }
     },
+    async openConversation(p) {
+      const agent = load(ws(p), p.id)
+      const row = conversation(agent, p.conversation_id)
+      const {native_name, ...mapping} = await native.session(agent, `agent:${agent.id}:${row.id}`, row.title)
+      return {
+        agent: view({...load(agent.workspace_id, agent.id), native_bot_id: mapping.native_bot_id, native_name}),
+        conversation: {...row, ...mapping},
+        items: conversationMessages(row.id),
+      }
+    },
+    async searchMessages(p) {
+      const workspaceId = ws(p)
+      const { q, limit, position, cursor, conversation_id: conversationId = null } = p
+      if (typeof q !== 'string' || q.length < 1 || q.length > 80 || CONTROL.test(q)
+          || !Number.isInteger(limit) || limit < 1 || limit > 51
+          || (conversationId !== null && !ID.test(conversationId))
+          || (cursor && !ID.test(cursor))
+          || (position && (!Array.isArray(position) || position.length !== 2
+            || !Number.isSafeInteger(position[0]) || !ID.test(position[1])))) {
+        fail('invalid', 'Invalid message search', 400)
+      }
+      const scope = `FROM agents a JOIN agent_conversations c ON c.agent_id=a.id
+        JOIN agent_messages m ON m.conversation_id=c.id
+        WHERE a.workspace_id=? AND (? IS NULL OR c.id=?)`
+      const bindings = [workspaceId, conversationId, conversationId]
+      let [created, id] = position || [null, null]
+      if (cursor) {
+        const row = one(`SELECT m.created ${scope} AND m.id=?`, ...bindings, cursor)
+        if (!row) fail('invalid', 'Invalid search cursor', 400)
+        created = row.created
+        id = cursor
+      }
+      const comparison = p.ascending === true ? '>' : '<'
+      const order = p.ascending === true ? 'ASC' : 'DESC'
+      const linkFilter = p.links === true ? "AND (instr(m.text,'http://')>0 OR instr(m.text,'https://')>0)" : ''
+      return { items: all(`SELECT m.id, c.id AS conversation_id, a.id AS agent_id, c.title, m.text AS body, m.created
+        ${scope} AND instr(ot_search_fold(m.text),ot_search_fold(?))>0 ${linkFilter}
+        AND (? IS NULL OR (m.created,m.id) ${comparison} (?,?))
+        ORDER BY m.created ${order}, m.id ${order} LIMIT ?`, ...bindings, q, created, created, id, limit) }
+    },
     async messages(p) {
       const agent = load(ws(p), p.id)
       const convo = conversation(agent, p.conversation_id)
       await native.session(agent, `agent:${agent.id}:${convo.id}`, convo.title)
-      return { items: all('SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY created, id', convo.id).map((m) => ({ ...m, meta: JSON.parse(m.meta) })) }
+      return { items: conversationMessages(convo.id) }
+    },
+    async saveMessage(p) {
+      const agent = load(ws(p), p.id)
+      const convo = conversation(agent, p.conversation_id)
+      if (typeof p.message_id !== 'string' || !ID.test(p.message_id)) fail('invalid', 'Invalid message ID', 400)
+      const row = one('SELECT * FROM agent_messages WHERE id=? AND conversation_id=?', p.message_id, convo.id)
+      if (!row) fail('not-found', 'Message not found', 404)
+      if (!['sent', 'succeeded'].includes(row.status) || !row.text.trim()) fail('conflict', 'Only completed text messages can be saved', 409)
+      return host.call('artifacts/saveChatMessage', {
+        workspace_id: agent.workspace_id, agent_id: agent.id, conversation_id: convo.id,
+        conversation_title: convo.title, message_id: row.id, title: p.title, body: row.text,
+      })
     },
     // Send one message to the agent: a native DS-Bot turn on this conversation's session.
     async send(p) {

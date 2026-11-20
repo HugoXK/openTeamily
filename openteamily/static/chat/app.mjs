@@ -1,3 +1,5 @@
+import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
+import { mountAgentMentions } from './mentions.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
@@ -5,6 +7,7 @@ import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/ap
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { dsbotServed, dsbotRoute, dsbotRequest } from './dsbot.mjs';
+import { agentSavePath, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
 
 export const SEARCH_TABS = [
   ['all', '全部'],
@@ -45,6 +48,7 @@ export function mergeSessions(agentRows, socialRows, currentUserId) {
       id: row.id,
       unread_count: Number(row.unread_count) || 0,
       pinned: Boolean(row.pinned),
+      muted: Boolean(row.muted),
       kind: row.kind,
       members: row.members,
       title: conversationLabel(row, currentUserId),
@@ -119,6 +123,7 @@ export function searchHitFromItem(item) {
     title: item.title || '消息',
     preview: item.snippet || '',
     conversationId: item.conversation_id,
+    agentId: item.agent_id || '',
     kind: item.kind,
   };
 }
@@ -139,7 +144,7 @@ export function mergeSearchHits(existing, incoming) {
 // rows already shown and appends the next page, so a failed or repeated page
 // never drops what the user is already reading.
 export function createMessageSearch(loadPage) {
-  const state = {hits: [], cursor: '', loading: false, error: ''};
+  const state = {hits: [], cursor: '', loading: false, error: '', warning: ''};
   let generation = 0;
   let pending = null;
   let activeKey = '';
@@ -150,7 +155,7 @@ export function createMessageSearch(loadPage) {
       generation += 1;
       activeKey = '';
       pending = null;
-      Object.assign(state, {hits: [], cursor: '', error: '', loading: false});
+      Object.assign(state, {hits: [], cursor: '', error: '', warning: '', loading: false});
       return state;
     }
     // A tab switch during the same search must await the existing request,
@@ -162,6 +167,7 @@ export function createMessageSearch(loadPage) {
     if (!append) {
       state.hits = [];
       state.cursor = '';
+      state.warning = '';
     }
     state.loading = true;
     pending = (async () => {
@@ -172,6 +178,7 @@ export function createMessageSearch(loadPage) {
         state.hits = mergeSearchHits(append ? state.hits : [], incoming);
         state.cursor = (page && page.cursor) || '';
         state.error = '';
+        state.warning = (page && page.warning) || '';
       } catch (failure) {
         if (token !== generation) return state;
         state.error = (failure && failure.message) || '无法搜索消息。';
@@ -314,7 +321,7 @@ export function groupInfoCounts(conversation) {
 export function groupAgentSummary(conversation) {
   const list = conversation && conversation.agent_members || [];
   return list.length ? '群内智能体：' + list.map(agent => agent.name).join('、')
-    + '。可明确请求一次回复。未接通：群内自动回复、@Agent 和任务委派。' : '';
+    + '。可明确请求一次回复，或在群信息中为自己的智能体开启自动回复。' : '';
 }
 
 // Personal-runtime states from server-side auto-provisioning (operator opt-in).
@@ -524,6 +531,10 @@ export function notificationSummary(item) {
     const author = item.actor_username || '你关注的作者';
     return item.title ? `${author} 发布了新作品「${item.title}」` : '你关注的作者发布了新作品';
   }
+  if (item.kind === 'messenger.mention') {
+    const author = item.by?.display_name || item.by?.handle || '成员';
+    return `${author} 提及了你`;
+  }
   const where = item.conversation_kind === 'dm' ? '单聊' : (item.conversation_title || '群聊');
   if (item.kind === 'automation_reminder') {
     return `提醒到点：${item.title || '回看一条消息'}`;
@@ -703,6 +714,76 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentConversation = null;
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
+  const agentMentions = mountAgentMentions(document, () => {
+    if (currentSource !== 'social' || currentConversation?.kind !== 'group') return null;
+    return {scope: `${workspaceId()}/${currentConversation.id}`, agents: currentConversation.agent_members || []};
+  });
+  function voiceContext() {
+    if (currentSource !== 'social' || !currentConversation) return null;
+    const wid = workspaceId();
+    const cid = currentConversation.id;
+    return {wid, cid, scope: `${wid}/${cid}`};
+  }
+  const voiceRecorder = mountVoiceRecorder(document, {
+    context: voiceContext,
+    createKey: () => idempotencyKey('voice-'),
+    async send(destination, voice, key) {
+      const {wid, cid, scope} = destination;
+      const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${cid}/messages`,
+        {voice}, {'Idempotency-Key': key});
+      if (![200, 201].includes(result.status) || !result.body?.message?.voice) {
+        throw new Error(messageFor(result.body?.error, '语音发送失败，请重试。'));
+      }
+      if (voiceContext()?.scope === scope) {
+        await openSocialConversation(cid);
+        show('ok', '语音已发送。');
+      }
+    },
+  });
+  const voiceUrls = new Set();
+  function clearVoicePlayers() {
+    for (const url of voiceUrls) URL.revokeObjectURL(url);
+    voiceUrls.clear();
+  }
+  globalThis.addEventListener?.('pagehide', clearVoicePlayers);
+
+  function voicePlayer(item) {
+    const player = document.createElement('section');
+    player.className = 'voice-message';
+    const play = document.createElement('button');
+    play.type = 'button';
+    play.textContent = '播放语音';
+    const destination = voiceContext();
+    if (!destination) return player;
+    play.addEventListener('click', async () => {
+      if (play.disabled || voiceContext()?.scope !== destination.scope) return;
+      play.disabled = true;
+      play.textContent = '正在加载…';
+      try {
+        const path = `/v1/workspaces/${destination.wid}/social/conversations/${destination.cid}/messages/${item.id}/voice`;
+        const result = await request('GET', path);
+        if (result.status !== 200) throw new Error('Voice unavailable');
+        if (voiceContext()?.scope !== destination.scope || player.isConnected === false) return;
+        const url = URL.createObjectURL(decodeVoice(result.body));
+        voiceUrls.add(url);
+        const audio = document.createElement('audio');
+        audio.src = url;
+        audio.controls = true;
+        audio.preload = 'metadata';
+        audio.setAttribute('aria-label', '语音消息');
+        player.replaceChildren(audio);
+        audio.focus();
+        audio.play().catch(() => {});
+      } catch {
+        play.textContent = '重试播放语音';
+        play.disabled = false;
+        show('error', '无法播放语音，请重试。');
+      }
+    });
+    player.append(play);
+    return player;
+  }
+
   let pollTimer = 0;
   let searchTab = 'all';
   let searchConversation = '';
@@ -755,7 +836,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       `/v1/workspaces/${workspaceId()}/search/messages?${messageSearchQuery(query, conversationId, cursor)}`,
     );
     if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法搜索消息。'));
-    return {items: result.body.items || [], cursor: result.body.cursor || ''};
+    return result.body;
   });
 
   function renderGroupReplyAction(requests) {
@@ -850,18 +931,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (text) document.getElementById('conversations-empty').hidden = true;
   }
 
+  let markingConversationsRead = false;
+
   function renderSessions() {
     const list = document.getElementById('conversation-list');
     list.replaceChildren();
-    document.getElementById('conversation-heading').textContent = '对话 · ' + sessions.length;
     const filterNode = document.getElementById('session-filter-value');
     const filter = (filterNode && filterNode.value) || 'all';
     const visible = sessions.filter(item => filter === 'all'
+      || (filter === 'agent' && item.source === 'agent')
+      || (filter === 'personal' && item.source === 'agent' && item.agent_id === personalAgentId)
       || (filter === 'pinned' && item.pinned)
       || (filter === 'unread' && item.unread_count > 0)
       || (filter === 'read' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
-    document.getElementById('conversations-empty').hidden = Boolean(sessionsStatus) || visible.length > 0;
+    document.getElementById('conversation-heading').textContent = '对话 · ' + visible.length;
+    const empty = document.getElementById('conversations-empty');
+    empty.hidden = Boolean(sessionsStatus) || visible.length > 0;
+    if (!empty.hidden) empty.textContent = filter === 'all'
+      ? '还没有对话。用右上角的 + 新建群组或前往智能体目录。' : '当前筛选下没有对话。';
+    const readAll = document.getElementById('conversations-read-all');
+    if (readAll) {
+      readAll.hidden = !sessions.some(item => item.source === 'social' && item.unread_count > 0);
+      readAll.disabled = markingConversationsRead;
+    }
     let lastGroup = '';
     for (const session of groupSessionsForDisplay(visible)) {
       const li = document.createElement('li');
@@ -896,6 +989,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.textContent = formatSessionTime(session.updated);
       time.title = formatTime(session.updated);
       button.append(avatar, copy, time);
+      if (session.muted) button.classList.add('is-muted');
       if (session.unread_count > 0) {
         const unread = document.createElement('span');
         unread.className = 'unread-badge';
@@ -908,7 +1002,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (group !== lastGroup) {
         li.className = 'session-divider'; li.dataset.section = group; lastGroup = group;
       }
-      button.setAttribute('aria-label', group + '：' + session.title);
+      button.setAttribute('aria-label', group + '：' + session.title + (session.muted ? '，免打扰' : ''));
       li.append(button);
       list.append(li);
     }
@@ -948,12 +1042,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       } else {
         li.append(role, body);
       }
-      if (item.role === 'assistant' && item.status === 'succeeded' && item.body) {
-        const save = document.createElement('button');
-        save.type = 'button';
-        save.dataset.save = item.id;
-        save.textContent = '保存到作品库';
-        li.append(save);
+      if (item.role === 'assistant' && saveableAgentMessage(item)) {
+        li.append(saveMessageButton(item, currentAgent.id));
       }
       list.append(li);
       if (waiting) pending = true;
@@ -1108,7 +1198,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function openMessageMenu(item, li, mine, x, y) {
     const menu = document.getElementById('message-context-menu');
     if (!menu) return;
-    messageMenuTarget = {item, li, mine};
+    const scroller = document.getElementById('message-scroller');
+    messageMenuTarget = {item, li, mine, scrollTop: scroller?.scrollTop};
     const reactions = document.getElementById('message-menu-reactions');
     reactions.replaceChildren(...MESSAGE_REACTIONS.map(emoji => {
       const button = document.createElement('button');
@@ -1126,6 +1217,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const edit = menu.querySelector('[data-menu="edit"]');
     if (edit) edit.hidden = !mine;
     menu.querySelector('[data-menu="forward"]').disabled = forwardTargets(socialConversations, currentConversation && currentConversation.id).length === 0;
+    menu.querySelector('[data-menu="save"]').hidden = !saveableSocialMessage(item);
     menu.hidden = false;
     const width = menu.offsetWidth || 200, height = menu.offsetHeight || 360;
     const left = Math.max(8, Math.min(x, globalThis.innerWidth - width - 8));
@@ -1133,7 +1225,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     menu.style.setProperty('left', left + 'px');
     menu.style.setProperty('top', top + 'px');
     const first = menu.querySelector('button:not(:disabled)');
-    if (first) first.focus();
+    if (first) first.focus({preventScroll: true});
   }
 
   const messageMenu = document.getElementById('message-context-menu');
@@ -1193,7 +1285,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.addEventListener('keydown', event => { if (event.key === 'Escape' && !messageMenu.hidden) closeMessageMenu(); });
     globalThis.addEventListener('resize', closeMessageMenu);
     const scroller = document.getElementById('message-scroller');
-    if (scroller) scroller.addEventListener('scroll', closeMessageMenu, {passive: true});
+    if (scroller) scroller.addEventListener('scroll', () => {
+      if (messageMenuTarget && scroller.scrollTop !== messageMenuTarget.scrollTop) closeMessageMenu();
+    }, {passive: true});
   }
 
   let saveMessageTarget = null;
@@ -1218,38 +1312,124 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       reminderNotice(result.status, result.body));
   }
 
-  function openSaveMessage(item) {
-    saveMessageTarget = {item, workspace: workspaceId(), conversation: currentConversation.id};
-    document.getElementById('save-message-title').value = String(item.body || '').replace(/\s+/g, ' ').trim().slice(0, 60) || '消息记录';
+  function openSaveMessage(item, agentId) {
+    if (!currentConversation) return;
+    const workspace = workspaceId(), conversation = currentConversation.id;
+    const path = agentId ? agentSavePath(workspace, agentId, conversation, item.id)
+      : socialSavePath(workspace, conversation, item.id);
+    saveMessageTarget = {workspace, path, revision: agentId ? null : item.revision || 1};
+    document.getElementById('save-message-title').value = defaultSaveTitle(item.body);
     document.getElementById('save-message-error').hidden = true;
     saveMessageDialog.showModal();
     document.getElementById('save-message-title').focus();
   }
+
+  function saveMessageButton(item, agentId) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.save = item.id;
+    button.textContent = '保存到资料空间';
+    button.addEventListener('click', () => openSaveMessage(item, agentId));
+    return button;
+  }
+  saveMessageDialog?.addEventListener('close', () => { saveMessageTarget = null; });
   const saveMessageCancel = document.getElementById('save-message-cancel');
   if (saveMessageCancel) saveMessageCancel.addEventListener('click', () => { saveMessageDialog.close(); saveMessageTarget = null; });
   const saveMessageForm = document.getElementById('save-message-form');
   if (saveMessageForm) saveMessageForm.addEventListener('submit', async event => {
     event.preventDefault();
     if (!saveMessageTarget) return;
-    const {item, workspace, conversation} = saveMessageTarget;
+    const target = saveMessageTarget;
     const button = document.getElementById('save-message-submit');
     const error = document.getElementById('save-message-error');
     if (button.disabled) return;
     button.disabled = true; error.hidden = true;
     try {
-      const result = await request('POST', `/v1/workspaces/${workspace}/social/conversations/${conversation}/messages/${item.id}/save`,
-        {title: document.getElementById('save-message-title').value, revision: item.revision || 1});
+      const body = {title: document.getElementById('save-message-title').value.trim()};
+      if (target.revision !== null) body.revision = target.revision;
+      const result = await request('POST', target.path, body);
+      if (saveMessageTarget !== target || workspaceId() !== target.workspace) return;
       if (result.status !== 200 && result.status !== 201) {
         error.textContent = messageFor(result.body.error, '消息未保存，请重新打开消息后重试。'); error.hidden = false; return;
       }
       saveMessageDialog.close(); saveMessageTarget = null;
-      show('ok', result.status === 201 ? `已保存到工作区资料空间：${result.body.artifact.title}` : `已存在工作区资料空间中（未同步后续编辑）：${result.body.artifact.title}`);
-    } catch { error.textContent = '网络错误，无法确认保存结果。可以重试，不会产生重复副本。'; error.hidden = false; }
+      const artifact = result.body.artifact;
+      show('ok', result.status === 201 ? '已保存到资料空间。' : '资料空间里已有这条消息的副本。');
+      if (artifact?.id) {
+        const link = document.createElement('a');
+        link.href = spaceHref(target.workspace, artifact.id);
+        link.textContent = '打开文档';
+        status.append(document.createTextNode(' '), link);
+      }
+    } catch {
+      if (saveMessageTarget !== target) return;
+      error.textContent = '无法确认保存结果，请重试。';
+      error.hidden = false;
+    }
     finally { button.disabled = false; }
   });
 
+  let socialHistory = null;
+  let socialOpen = 0;
+  let historyJump = 0;
+  const olderMessages = document.getElementById('chat-load-older');
+  const latestMessages = document.getElementById('chat-back-to-latest');
+  const historyNotice = document.getElementById('chat-history-status');
+
+  function setSocialHistory(state) {
+    socialHistory = state;
+    if (historyNotice) historyNotice.textContent = '';
+    updateHistoryControls();
+  }
+
+  function updateHistoryControls() {
+    if (olderMessages) {
+      olderMessages.hidden = !socialHistory?.cursor;
+      olderMessages.disabled = Boolean(socialHistory?.loading);
+    }
+    if (latestMessages) latestMessages.hidden = !socialHistory?.readingHistory;
+  }
+
+  async function historyPage(state, query) {
+    const result = await request('GET', `/v1/workspaces/${state.wid}/social/conversations/${state.cid}/messages?${query}`);
+    return socialHistory === state && currentSource === 'social' && workspaceId() === state.wid
+      && currentConversation?.id === state.cid ? result : null;
+  }
+
+  olderMessages?.addEventListener('click', async () => {
+    const state = socialHistory;
+    if (!state?.cursor || state.loading) return;
+    state.loading = true;
+    updateHistoryControls();
+    if (historyNotice) historyNotice.textContent = '';
+    try {
+      const query = new URLSearchParams({before: String(state.cursor), limit: '50'});
+      const result = await historyPage(state, query);
+      if (!result) return;
+      if (result.status !== 200) throw new Error('History unavailable');
+      const existing = new Set(lastSocialItems.map(item => item.id));
+      const older = (result.body.items || []).filter(item => !existing.has(item.id));
+      state.cursor = result.body.cursor ?? null;
+      state.readingHistory = true;
+      if (older.length) renderSocialMessages([...older, ...lastSocialItems], {keepScroll: true});
+      if (historyNotice) historyNotice.textContent = older.length ? `已加载 ${older.length} 条旧消息。` : '没有更早的消息。';
+    } catch {
+      if (socialHistory === state && historyNotice) historyNotice.textContent = '旧消息加载失败，请重试。';
+    } finally {
+      state.loading = false;
+      updateHistoryControls();
+    }
+  });
+  latestMessages?.addEventListener('click', () => {
+    if (currentSource === 'social' && currentConversation) openSocialConversation(currentConversation.id);
+  });
+
   let lastSocialItems = [];
-  function renderSocialMessages(items) {
+  function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory)} = {}) {
+    const scroller = document.getElementById('message-scroller');
+    const oldHeight = scroller.scrollHeight;
+    const oldTop = scroller.scrollTop;
+    clearVoicePlayers();
     lastSocialItems = items || [];
     const list = document.getElementById('message-list');
     list.replaceChildren();
@@ -1277,6 +1457,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.className = 'time';
       time.textContent = formatTime(item.created);
       li.append(role, body, time);
+      if (item.voice && !item.retracted) li.insertBefore(voicePlayer(item), time);
       if (item.attachment && !item.retracted) {
         const card = document.createElement('article');
         card.className = 'stream-artifact';
@@ -1359,6 +1540,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         });
         li.append(edit, retract, controls);
       }
+      if (item.role === 'agent' && saveableSocialMessage(item)) li.append(saveMessageButton(item));
       if (item.role !== 'agent' && !item.retracted) li.append(messageTools(item));
       if (item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
       if (item.role !== 'agent' && !item.retracted) {
@@ -1382,8 +1564,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       list.append(li);
     }
-    const scroller = document.getElementById('message-scroller');
-    scroller.scrollTop = scroller.scrollHeight;
+    scroller.scrollTop = keepScroll ? Math.max(0, oldTop + scroller.scrollHeight - oldHeight) : scroller.scrollHeight;
     return false;
   }
 
@@ -1403,15 +1584,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   let notificationSeq = 0;
+  let notificationSnapshot = null;
+  const notificationKind = document.getElementById('notifications-kind');
+  const notificationUnread = document.getElementById('notifications-unread');
+
   function renderNotifications(body) {
     const badge = document.getElementById('notification-count');
     const toggle = document.getElementById('notifications-toggle');
     const text = notificationBadgeText(body.unread_count);
     if (badge) { badge.textContent = text; badge.hidden = !text; }
-    if (toggle) toggle.setAttribute('aria-label', text ? `通知，${body.unread_count} 条未读提及` : '通知');
+    if (toggle) toggle.setAttribute('aria-label', text ? `通知，${body.unread_count} 条未读` : '通知');
     const list = document.getElementById('notification-list');
     if (!list) return;
-    const items = body.items || [];
+    const mentionsOnly = notificationKind?.value === 'mention';
+    const items = (body.items || []).filter(item => (!mentionsOnly || item.kind === 'mention' || item.kind === 'messenger.mention')
+      && (!notificationUnread?.checked || !item.read));
     list.replaceChildren(...items.map(item => {
       const li = document.createElement('li');
       const link = item.kind === 'follow_work' && item.path;
@@ -1436,13 +1623,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         setNotificationsOpen(false);
         const target = notificationTarget(item);
         if (target) { globalThis.location.assign(target); return; }
-        await openSocialConversation(item.conversation_id);
+        if (item.conversation_id) {
+          const opened = await openSocialConversation(item.conversation_id, {acknowledge: !item.message_id});
+          if (opened && item.message_id && currentSource === 'social' && currentConversation?.id === item.conversation_id) {
+            await jumpToMessage(item.message_id, status);
+          }
+        }
         await loadNotifications();
       });
       li.append(button);
       return li;
     }));
-    const empty = document.getElementById('notifications-empty'); if (empty) empty.hidden = items.length > 0;
+    const empty = document.getElementById('notifications-empty');
+    if (empty) {
+      empty.hidden = items.length > 0;
+      empty.textContent = mentionsOnly
+        ? (notificationUnread?.checked ? '暂无未读提及。' : '暂无提及。')
+        : (notificationUnread?.checked ? '暂无未读通知。' : '暂无通知。');
+    }
     const all = document.getElementById('notifications-read-all'); if (all) all.disabled = !(body.unread_count > 0);
   }
 
@@ -1454,7 +1652,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     // Notifications are auxiliary: a failed fetch must never break the session list.
     try { result = await request('GET', `/v1/workspaces/${wid}/notifications`); } catch { return; }
     if (token !== notificationSeq || workspaceId() !== wid || result.status !== 200) return;
-    renderNotifications(result.body);
+    notificationSnapshot = result.body;
+    renderNotifications(notificationSnapshot);
   }
 
   // Live-ish delivery: poll the inbox while the tab is visible. No server push.
@@ -1532,6 +1731,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const banner=document.getElementById('conversation-live-update');if(banner)banner.hidden=true;
   });
   let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
+  let membersStatus = '', artifactsStatus = '';
   async function loadSessions() {
     const sequence = ++sessionsRequest;
     const user = currentUser;
@@ -1542,41 +1742,55 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       setSessionsStatus('正在加载对话…');
       sessionsWorkspace = id; sessionsUser = user;
       sessions = []; agents = []; members = []; artifacts = []; socialConversations = [];
+      membersStatus = artifactsStatus = 'loading';
       renderSessions();
     }
     if (!id) return;
     const current = () => sequence === sessionsRequest && id === workspaceId() && user === currentUser;
-    const [listed, social, people, works] = await Promise.all([
-      request('GET', `/v1/workspaces/${id}/agents?limit=100`),
-      request('GET', `/v1/workspaces/${id}/social/conversations?limit=100`),
-      request('GET', `/v1/workspaces/${id}/members`),
-      request('GET', `/v1/workspaces/${id}/artifacts?limit=100`),
+    const path = `/v1/workspaces/${id}`;
+    const read = suffix => request('GET', path + suffix).catch(() => ({status: 0, body: {}}));
+    void read('/members').then(result => {
+      if (!current()) return;
+      membersStatus = result.status === 200 ? '' : 'failed';
+      if (!membersStatus) members = result.body.items || [];
+      if (!document.getElementById('compose-dialog').hidden) renderMemberChoices(composeMode === 'contact', true);
+      if (['all', 'contacts'].includes(searchTab)) refreshDirectorySearch();
+    });
+    void read('/artifacts?limit=100').then(result => {
+      if (!current()) return;
+      artifactsStatus = result.status === 200 ? '' : 'failed';
+      if (!artifactsStatus) artifacts = result.body.items || [];
+      if (['all', 'artifacts', 'documents', 'media'].includes(searchTab)) refreshDirectorySearch();
+    });
+    const [listed, social] = await Promise.all([
+      read('/agents?limit=100&include=conversations'),
+      read('/social/conversations?limit=100'),
     ]);
     if (!current()) return;
-    if (listed.status !== 200) {
-      setSessionsStatus('无法加载智能体对话，请重试。');
-      return;
+    const nextAgents = listed.status === 200 ? listed.body.items || [] : [];
+    let rows = listed.body.conversations;
+    let partial = listed.status !== 200 || social.status !== 200;
+    if (!Array.isArray(rows)) {
+      // A tab served by a previous runtime image may still return only the agent list.
+      const results = await Promise.all(nextAgents.map(async agent => ({
+        agent, response: await read(`/agents/${agent.id}/conversations?limit=100`),
+      })));
+      if (!current()) return;
+      rows = results.flatMap(({agent, response}) => response.status === 200
+        ? (response.body.items || []).map(row => ({...row, agent_id: agent.id})) : []);
+      partial ||= results.some(({response}) => response.status !== 200);
     }
-    const nextAgents = listed.body.items || [];
-    const results = await Promise.all(nextAgents.map(agent =>
-      request('GET', `/v1/workspaces/${id}/agents/${agent.id}/conversations?limit=100`)
-        .then(result => ({agent, result}))));
-    if (!current()) return;
     agents = nextAgents;
-    members = people.status === 200 ? people.body.items || [] : [];
-    artifacts = works.status === 200 ? works.body.items || [] : [];
     socialConversations = social.status === 200 ? social.body.items || [] : [];
-    const agentRows = [];
-    for (const {agent, result} of results) {
-      if (result.status !== 200) continue;
-      for (const row of result.body.items || []) {
-        agentRows.push({...row, agent});
-      }
-    }
-    sessions = mergeSessions(agentRows, socialConversations, currentUser && currentUser.id);
-    const incomplete = social.status !== 200 || results.some(({result}) => result.status !== 200);
-    setSessionsStatus(incomplete ? '部分对话加载失败，请重试。' : '');
+    const agentById = new Map(agents.map(agent => [agent.id, agent]));
+    sessions = mergeSessions(rows.flatMap(row => {
+      const agent = agentById.get(row.agent_id);
+      return agent ? [{...row, agent}] : [];
+    }), socialConversations, currentUser && currentUser.id);
+    setSessionsStatus(partial ? '部分对话加载失败，请重试。' : '');
     renderSessions();
+    if (!document.getElementById('compose-dialog').hidden && composeMode === 'group') renderMemberChoices(false, true);
+    if (['all', 'agents', 'groups'].includes(searchTab)) refreshDirectorySearch();
     // The first SSE snapshot may immediately refresh; do not invalidate the
     // initial directory before deep-link resolution has a committed snapshot.
     workspaceEvents.start(id);
@@ -1606,7 +1820,62 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentsTab.setAttribute('aria-selected', String(which === 'agents'));
     peopleTab.setAttribute('aria-selected', String(which === 'people'));
     document.getElementById('group-info-agents').hidden = which !== 'agents';
+    const autoNote = document.getElementById('group-agent-auto-reply-note');
+    if (autoNote) autoNote.hidden = which !== 'agents';
     document.getElementById('group-info-people').hidden = which !== 'people';
+  }
+
+  const pendingAutoReplies = new Set();
+
+  function renderGroupAgent(conversation, agent) {
+    const mode = agent.auto_reply ? '自动回复已开启' : '自动回复已关闭';
+    const row = memberRow(agent.name, agent.archived ? '已归档' : mode, 'agent');
+    if (!agent.mine || agent.archived) return row;
+    const wid = workspaceId();
+    const key = `${wid}/${conversation.id}/${agent.id}`;
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'group-info-switch';
+    toggle.setAttribute('role', 'switch');
+    toggle.setAttribute('aria-label', `${agent.name}的自动回复`);
+    toggle.setAttribute('aria-checked', String(Boolean(agent.auto_reply)));
+    toggle.setAttribute('aria-describedby', 'group-agent-auto-reply-note');
+    toggle.disabled = pendingAutoReplies.has(key);
+    toggle.addEventListener('click', async () => {
+      if (workspaceId() !== wid || currentConversation?.id !== conversation.id || pendingAutoReplies.has(key)) return;
+      const notice = document.getElementById('group-agent-auto-reply-status');
+      const activeConversation = currentConversation;
+      const enabled = toggle.getAttribute('aria-checked') !== 'true';
+      pendingAutoReplies.add(key);
+      toggle.disabled = true;
+      if (notice) notice.hidden = true;
+      try {
+        const path = `/v1/workspaces/${wid}/social/conversations/${conversation.id}/agents/${encodeURIComponent(agent.id)}/auto-reply`;
+        const result = await request('POST', path, {auto_reply: enabled});
+        if (workspaceId() !== wid || currentConversation?.id !== conversation.id) return;
+        if (result.status !== 200 || result.body.auto_reply !== enabled) throw new Error('Automatic replies were not updated');
+        const currentAgent = currentConversation.agent_members?.find(item => item.id === agent.id && item.mine);
+        if (currentAgent) currentAgent.auto_reply = enabled;
+        if (currentConversation === activeConversation && currentAgent === agent) {
+          toggle.setAttribute('aria-checked', String(enabled));
+          const description = row.children[1]?.children[1];
+          if (description) description.textContent = enabled ? '自动回复已开启' : '自动回复已关闭';
+        }
+      } catch {
+        if (notice && workspaceId() === wid && currentConversation?.id === conversation.id) {
+          notice.textContent = '自动回复设置保存失败，请重试。';
+          notice.hidden = false;
+        }
+      } finally {
+        pendingAutoReplies.delete(key);
+        toggle.disabled = false;
+        if (workspaceId() === wid && currentConversation?.id === conversation.id && currentConversation !== activeConversation) {
+          setGroupInfo(currentConversation);
+        }
+      }
+    });
+    row.append(toggle);
+    return row;
   }
 
   function setGroupInfo(conversation) {
@@ -1628,8 +1897,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-info-tab-agents').textContent = `智能体 (${counts.agents})`;
     document.getElementById('group-info-tab-people').textContent = `成员 (${counts.people})`;
     const agentList = document.getElementById('group-info-agents');
-    agentList.replaceChildren(...(conversation.agent_members || []).map(agent =>
-      memberRow(agent.name, agent.archived ? '已归档' : '可明确请求一次回复', 'agent')));
+    agentList.replaceChildren(...(conversation.agent_members || []).map(agent => renderGroupAgent(conversation, agent)));
     if (!agentList.children.length) agentList.append(memberRow('还没有智能体', '创建群聊时可以加入工作区智能体', 'empty'));
     const peopleList = document.getElementById('group-info-people');
     peopleList.replaceChildren(...(conversation.members || []).map(member =>
@@ -1661,26 +1929,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openAgentConversation(agentId, conversationId) {
+    const open = ++socialOpen;
+    const wid = workspaceId();
+    const result = await request('GET', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${conversationId}`);
+    if (open !== socialOpen || workspaceId() !== wid) return false;
+    if (result.status !== 200) {
+      show('error', messageFor(result.body.error, '无法打开对话。'));
+      return false;
+    }
+    const agent = agents.find(item => item.id === agentId) || result.body.agent;
+    if (!agent) return false;
+    setSocialHistory(null);
+    agentMentions.clear();
+    voiceRecorder.clear();
+    clearVoicePlayers();
     setSocialHeaderTools(false);
     setGroupInfo(null);
     const pin = document.getElementById('pin-conversation');
     if (pin) pin.hidden = true;
-    const agent = agents.find(item => item.id === agentId);
-    if (!agent) {
-      show('error', '找不到这个智能体。');
-      return;
-    }
-    currentAgent = agent;
+    syncMuteButton();
     currentSource = 'agent';
+    currentAgent = agent;
+    voiceRecorder.refresh();
     document.getElementById('social-agent-members').hidden = true;
-    applyChatIdentity(document, agent.name);
     setDirectoryLink({source: 'agent'});
-    const result = await request('GET', `/v1/workspaces/${workspaceId()}/agents/${agentId}/conversations/${conversationId}`);
-    if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法打开对话。'));
-      return;
-    }
+    applyChatIdentity(document, agent.name);
     if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
+      const autoReplyNotice = document.getElementById('group-agent-auto-reply-status');
+      if (autoReplyNotice) autoReplyNotice.hidden = true;
       const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
@@ -1690,35 +1966,47 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pending = renderAgentMessages(result.body.items);
     const finished = (result.body.items || []).filter(item => item.role === 'assistant' && item.status === 'succeeded');
     if (currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
-      const wid = workspaceId(), cid = conversationId;
-      const acknowledged = await request('POST', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${cid}/read`,
+      const acknowledged = await request('POST', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${conversationId}/read`,
         {message_id: finished[finished.length - 1].id});
-      if (acknowledged.status === 200 && workspaceId() === wid) {
-        const session = sessions.find(item => item.source === 'agent' && item.id === cid);
+      if (open !== socialOpen || workspaceId() !== wid) return false;
+      if (acknowledged.status === 200) {
+        const session = sessions.find(item => item.source === 'agent' && item.id === conversationId);
         if (session) session.unread_count = acknowledged.body.unread_count;
       }
     }
     renderSessions();
     if (pending) schedulePoll();
     else stopPolling();
+    return open === socialOpen && workspaceId() === wid;
   }
 
-  async function openSocialConversation(conversationId) {
+  async function openSocialConversation(conversationId, {acknowledge = true} = {}) {
+    const open = ++socialOpen;
+    const wid = workspaceId();
+    if (currentConversation?.id !== conversationId) {
+      setSocialHistory(null);
+      voiceRecorder.clear();
+    }
     currentAgent = null;
     currentSource = 'social';
     stopPolling();
     const result = await request('GET', `${socialBase()}/${conversationId}`);
+    if (open !== socialOpen || workspaceId() !== wid || currentSource !== 'social') return false;
     if (result.status !== 200) {
       show('error', messageFor(result.body.error, '无法打开会话。'));
-      return;
+      return false;
     }
     if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
       const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
       const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
     }
     currentConversation = result.body.conversation;
+    setSocialHistory({wid, cid: conversationId, cursor: result.body.cursor ?? null});
+    agentMentions.refresh();
+    voiceRecorder.refresh();
     setSessionsOpen(false);
     const pin = document.getElementById('pin-conversation');
+    syncMuteButton(currentConversation);
     if (pin) { pin.hidden = false; pin.textContent = sessions.find(item => item.id === conversationId && item.pinned) ? '取消置顶' : '置顶会话'; }
     const agentNote = document.getElementById('social-agent-members');
     agentNote.textContent = groupAgentSummary(currentConversation);
@@ -1741,9 +2029,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     // Acknowledge only the last message actually rendered, not messages that
     // arrived after this snapshot, and never consume unread in a hidden tab.
     const shown = result.body.items || [];
-    if (currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
+    if (acknowledge && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
       const acknowledged = await request('POST', `${socialBase()}/${conversationId}/read`,
-        {message_id: shown[shown.length - 1].id});
+        Number.isSafeInteger(shown[shown.length - 1].seq)
+          ? {seq: shown[shown.length - 1].seq}
+          : {message_id: shown[shown.length - 1].id});
       if (acknowledged.status === 200) {
         const session = sessions.find(item => item.source === 'social' && item.id === conversationId);
         if (session) session.unread_count = acknowledged.body.unread_count;
@@ -1751,6 +2041,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     renderSessions();
     if ((result.body.agent_replies || []).some(item => ['queued', 'running'].includes(item.status))) schedulePoll();
+    return open === socialOpen && workspaceId() === wid && currentSource === 'social';
   }
 
   function schedulePoll() {
@@ -1758,7 +2049,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     pollTimer = globalThis.setTimeout(() => {
       if (currentConversation && currentAgent && currentSource === 'agent') {
         openAgentConversation(currentAgent.id, currentConversation.id);
-      } else if (currentConversation && currentSource === 'social') {
+      } else if (currentConversation && currentSource === 'social' && !socialHistory?.readingHistory) {
         openSocialConversation(currentConversation.id);
       }
     }, 2000);
@@ -1799,7 +2090,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const empty = document.getElementById('compose-members-empty');
     if (!labels.length) {
       empty.hidden = false;
-      empty.textContent = '没有可邀请的工作区成员。';
+      empty.textContent = membersStatus === 'loading' ? '正在加载工作区成员…'
+        : (membersStatus === 'failed' ? '无法加载工作区成员。' : '没有可邀请的工作区成员。');
     } else if (!visible) {
       empty.hidden = false;
       empty.textContent = '没有匹配的成员。';
@@ -1864,8 +2156,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncSelectedCount();
   }
 
-  function renderMemberChoices(single) {
+  function renderMemberChoices(single, preserveSelection = false) {
     const holder = document.getElementById('member-choices');
+    const selected = preserveSelection
+      ? new Set([...document.querySelectorAll('#member-choices input:checked')].map(box => box.name + ':' + box.value))
+      : new Set();
     holder.replaceChildren();
     const choices = groupPickerChoices(members, currentUser && currentUser.id, single ? [] : agents);
     for (const member of choices) {
@@ -1874,6 +2169,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       box.type = single ? 'radio' : 'checkbox';
       box.name = member.kind === 'agent' ? 'agent-member' : 'member';
       box.value = member.id;
+      box.checked = selected.has(box.name + ':' + box.value);
       const text = document.createElement('span');
       text.className = 'choice-label';
       text.textContent = member.label;
@@ -1929,8 +2225,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderSearch();
   }
 
+  function refreshDirectorySearch() {
+    if (isSearchOpen() && !messageSearch.state.loading) void renderSearch({reuseMessages: true});
+  }
+
   function closeSearchPanel() {
     searchSeq++;
+    void messageSearch.load('');
     searchConversation = '';
     document.getElementById('search-panel').hidden = true;
     document.getElementById('search-close').hidden = true;
@@ -2018,12 +2319,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const results = document.getElementById('search-results');
     const empty = document.getElementById('search-empty');
     const note = document.getElementById('search-source-note');
+    const paged = searchTab === 'messages' || searchTab === 'all';
     results.replaceChildren();
     empty.hidden = true;
     note.hidden = Boolean(query) && !searchConversation;
     note.textContent = searchConversation
       ? '仅搜索当前对话：' + searchConversationTitle
-      : '以下是当前工作区里已有的内容，不是站外推荐。';
+      : '搜索当前工作区。';
     const seq = ++searchSeq;
 
     if (searchTab === 'files' || searchTab === 'links') {
@@ -2049,7 +2351,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
 
     let messageItems = [];
-    if ((searchTab === 'messages' || searchTab === 'all') && query) {
+    if (paged && query) {
       if (!reuseMessages) await messageSearch.load(query, searchConversation);
       if (seq !== searchSeq) return;
       const state = messageSearch.state;
@@ -2058,6 +2360,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         empty.textContent = state.error;
         applySearchMore(document.getElementById('search-more'), {cursor: '', loading: false});
         return;
+      }
+      if (state.warning) {
+        note.hidden = false;
+        note.textContent = state.warning;
       }
       messageItems = state.hits;
     }
@@ -2098,6 +2404,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             currentAgent = agents.find(entry => entry.id === item.id) || null;
             currentConversation = null;
             currentSource = 'agent';
+            socialOpen += 1;
+            setSocialHistory(null);
             if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
               currentAgent.id === personalAgentId ? personalLook : null);
             document.getElementById('chat-empty').hidden = false;
@@ -2105,10 +2413,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             writeHash({workspace: workspaceId(), agent: item.id});
           }
         } else if (item.type === 'social' || item.kind === 'social') {
-          await openSocialConversation(item.conversationId || item.id);
+          const opened = await openSocialConversation(item.conversationId || item.id, {acknowledge: !item.messageId});
+          if (opened && item.messageId && currentConversation?.id === item.conversationId) {
+            await jumpToMessage(item.messageId, status);
+          }
         } else if (item.type === 'agent-message' || item.kind === 'agent') {
           const session = sessions.find(row => row.source === 'agent' && row.id === item.conversationId);
-          if (session) await openAgentConversation(session.agent_id, session.id);
+          const agentId = item.agentId || session?.agent_id;
+          if (agentId && await openAgentConversation(agentId, item.conversationId)
+            && item.messageId && currentConversation?.id === item.conversationId) {
+            await jumpToMessage(item.messageId, status);
+          }
         } else if (item.type === 'contact') {
           openComposeDialog('contact');
           const box = document.querySelector(`#member-choices input[value="${item.id}"]`);
@@ -2118,9 +2433,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (!total) {
       empty.hidden = false;
-      empty.textContent = query ? '当前工作区里没有匹配的结果。' : '当前工作区里还没有可列出的内容。';
+      const directoryStatus = searchTab === 'contacts' ? membersStatus
+        : (['artifacts', 'documents', 'media'].includes(searchTab) ? artifactsStatus : '');
+      if (directoryStatus === 'loading') empty.textContent = '正在加载…';
+      else if (directoryStatus === 'failed') empty.textContent = '无法加载搜索范围。';
+      else if (!query) empty.textContent = '当前工作区里还没有可列出的内容。';
+      else if (paged && messageSearch.state.warning) empty.textContent = '可搜索的内容里没有匹配结果。';
+      else empty.textContent = '当前工作区里没有匹配的结果。';
     }
-    const paged = searchTab === 'messages' || searchTab === 'all';
     if (paged && query && messageSearch.state.error) {
       empty.hidden = false;
       empty.textContent = messageSearch.state.error;
@@ -2161,6 +2481,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const session = await request('GET', '/v1/auth/session');
     if (session.status !== 200) {
       currentUser = null;
+      currentConversation = null;
+      socialOpen += 1;
+      setSocialHistory(null);
+      voiceRecorder.refresh();
+      clearVoicePlayers();
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       document.getElementById('session-pane').hidden = true;
@@ -2250,6 +2575,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       else {
         currentAgent = agents.find(item => item.id === start.agent) || null;
         currentSource = 'agent';
+        socialOpen += 1;
+        setSocialHistory(null);
         if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
           currentAgent.id === personalAgentId ? personalLook : null);
         document.getElementById('chat-empty').hidden = false;
@@ -2326,6 +2653,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     out.textContent = `邀请令牌只显示一次：${result.body.token}`;
   });
+  for (const control of [notificationKind, notificationUnread]) {
+    control?.addEventListener('change', () => {
+      if (notificationSnapshot) renderNotifications(notificationSnapshot);
+    });
+  }
   const notificationsToggle = document.getElementById('notifications-toggle');
   if (notificationsToggle) notificationsToggle.addEventListener('click', async () => {
     const panel = document.getElementById('notifications-panel');
@@ -2342,9 +2674,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadNotifications();
   });
   workspaceSelect.addEventListener('change', async () => {
+    socialOpen += 1;
+    setSocialHistory(null);
+    notificationSnapshot = null;
+    agentMentions.clear();
+    renderNotifications({items: [], unread_count: 0});
     currentAgent = null;
     currentConversation = null;
     currentSource = 'agent';
+    voiceRecorder.refresh();
+    clearVoicePlayers();
     stopPolling();
     closeSearchPanel();
     closeComposeDialog();
@@ -2365,6 +2704,24 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else renderSearch();
   });
   const inChatSearch = createMessageSearch(async (query, conversationId, cursor) => {
+    if (currentSource === 'social') {
+      const params = new URLSearchParams({q: query, limit: '20'});
+      if (cursor) params.set('before', cursor);
+      const result = await request('GET', `${socialBase()}/${conversationId}/messages?${params}`);
+      if (result.status !== 200) throw new Error('无法搜索当前会话。');
+      return {
+        items: (result.body.items || []).map(item => {
+          const body = String(item.body || '');
+          const index = body.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+          const start = Math.max(0, index - 48);
+          return {
+            kind: 'social', conversation_id: conversationId, message_id: item.id, created: item.created,
+            snippet: (start > 0 ? '…' : '') + body.slice(start, start + 160) + (body.length > start + 160 ? '…' : ''),
+          };
+        }),
+        cursor: result.body.cursor,
+      };
+    }
     const result = await request('GET', `/v1/workspaces/${workspaceId()}/search/messages?${messageSearchQuery(query, conversationId, cursor)}`);
     if (result.status !== 200) throw new Error('无法搜索当前会话。');
     return result.body;
@@ -2383,13 +2740,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-search-status').textContent = state.error || (state.hits.length ? '已显示 ' + state.hits.length + ' 条消息' : '没有找到匹配的消息。试试其他关键词。');
     document.getElementById('conversation-search-more').hidden = !state.cursor;
   }
-  // One jump-and-highlight action for both message hits and attachment hits: a
-  // search result never opens a second view, it scrolls the real message back in.
-  function jumpToMessage(messageId) {
+  async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status')) {
     const list = document.getElementById('message-list');
-    const target = Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
+    const findTarget = () => Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
+    let target = findTarget();
+    const jump = ++historyJump;
+    const state = socialHistory;
+    if (!target && currentSource === 'social' && state) {
+      try {
+        const query = new URLSearchParams({around: messageId, limit: '50'});
+        const result = await historyPage(state, query);
+        if (!result || jump !== historyJump) return;
+        if (result.status === 200 && result.body.items?.some(item => item.id === messageId)) {
+          setSocialHistory({...state, cursor: result.body.cursor ?? null,
+            readingHistory: true, loading: false});
+          searchScrollSnapshot = null;
+          renderSocialMessages(result.body.items, {keepScroll: false});
+          target = findTarget();
+          if (notice) notice.textContent = '';
+        }
+      } catch {
+        if (socialHistory !== state || jump !== historyJump) return;
+      }
+    }
     if (!target) {
-      document.getElementById('conversation-search-status').textContent = '这条消息不在当前已加载的消息窗口里，请加载更多消息后重试。';
+      if (notice) notice.textContent = '这条消息不在当前已加载的消息窗口里。';
       return;
     }
     target.scrollIntoView?.({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
@@ -2634,11 +3009,97 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     finally { attachmentInput.disabled = false; attachmentInput.value = ''; }
   });
   const filterButton = document.getElementById('session-filter');
-  if (filterButton) filterButton.addEventListener('click', () => {
-    const label = document.getElementById('session-filter-label'); if (label) label.hidden = !label.hidden;
-  });
+  const filterLabel = document.getElementById('session-filter-label');
   const filterValue = document.getElementById('session-filter-value');
-  if (filterValue) filterValue.addEventListener('change', renderSessions);
+  function setFilterOpen(open) {
+    if (!filterLabel || !filterButton) return;
+    filterLabel.hidden = !open;
+    filterButton.setAttribute('aria-expanded', String(open));
+    if (open) filterValue?.focus();
+    else filterButton.focus();
+  }
+  filterButton?.addEventListener('click', () => setFilterOpen(Boolean(filterLabel?.hidden)));
+  filterValue?.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setFilterOpen(false);
+    }
+  });
+  filterValue?.addEventListener('change', () => {
+    const name = filterValue.selectedOptions?.[0]?.textContent;
+    if (name) filterButton?.setAttribute('aria-label', '会话筛选：' + name);
+    setFilterOpen(false);
+    renderSessions();
+  });
+  document.getElementById('conversations-read-all')?.addEventListener('click', async () => {
+    if (markingConversationsRead) return;
+    const wid = workspaceId();
+    const unread = sessions.filter(item => item.source === 'social' && item.unread_count > 0);
+    if (!wid || !unread.length) return;
+    markingConversationsRead = true;
+    renderSessions();
+    try {
+      let updated = 0;
+      // Use the same per-conversation acknowledgement as opening a conversation.
+      // Small batches avoid flooding the user's runtime with simultaneous writes.
+      for (let index = 0; index < unread.length && workspaceId() === wid; index += 6) {
+        const batch = unread.slice(index, index + 6);
+        const results = await Promise.allSettled(batch.map(item =>
+          request('POST', `/v1/workspaces/${wid}/social/conversations/${item.id}/read`, {})));
+        updated += results.filter(result => result.status === 'fulfilled' && result.value.status === 200).length;
+      }
+      if (workspaceId() === wid) {
+        try { await loadSessions(); }
+        catch { show('error', '已提交已读状态，但无法刷新列表。'); return; }
+        if (workspaceId() === wid) show(updated === unread.length ? 'ok' : 'error',
+          updated === unread.length ? '已标记单聊和群聊为已读。' : '部分会话未能标记为已读，请重试。');
+      }
+    } finally {
+      markingConversationsRead = false;
+      renderSessions();
+    }
+  });
+  const muteButton = document.getElementById('mute-conversation');
+  const groupMute = document.getElementById('group-info-mute');
+  let savingMute = false;
+  function syncMuteButton(conversation) {
+    const muted = Boolean(conversation?.muted);
+    if (muteButton) {
+      muteButton.hidden = !conversation || conversation.kind === 'group';
+      muteButton.setAttribute('aria-pressed', String(muted));
+      muteButton.textContent = muted ? '取消免打扰' : '免打扰';
+    }
+    groupMute?.setAttribute('aria-checked', String(muted));
+  }
+  async function toggleMute() {
+    if (currentSource !== 'social' || !currentConversation || savingMute) return;
+    const conversation = currentConversation;
+    const wid = workspaceId();
+    savingMute = true;
+    if (muteButton) muteButton.disabled = true;
+    if (groupMute) groupMute.disabled = true;
+    try {
+      const result = await request('POST', `${socialBase()}/${conversation.id}/preferences`, {muted: !conversation.muted});
+      if (result.status !== 200) throw new Error('Mute preference unavailable');
+      if (workspaceId() !== wid) return;
+      const muted = Boolean(result.body.muted);
+      const row = sessions.find(item => item.source === 'social' && item.id === conversation.id);
+      if (row) row.muted = muted;
+      if (currentSource === 'social' && currentConversation?.id === conversation.id) {
+        currentConversation.muted = muted;
+        syncMuteButton(currentConversation);
+      }
+      renderSessions();
+    } catch {
+      if (workspaceId() === wid) show('error', '免打扰设置保存失败，请重试。');
+    } finally {
+      savingMute = false;
+      if (muteButton) muteButton.disabled = false;
+      if (groupMute) groupMute.disabled = false;
+    }
+  }
+  muteButton?.addEventListener('click', toggleMute);
+  groupMute?.addEventListener('click', toggleMute);
   const pinButton = document.getElementById('pin-conversation');
   if (pinButton) pinButton.addEventListener('click', async () => {
     if (currentSource !== 'social' || !currentConversation) return;
@@ -2654,8 +3115,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (searchTab === 'files' || searchTab === 'links') { if (resourceCursor) await renderSearch({appendResources: true}); return; }
     const query = (document.getElementById('session-search').value || '').trim();
     if (!query || messageSearch.state.loading || !messageSearch.state.cursor) return;
+    const seq = searchSeq;
     await messageSearch.load(query, searchConversation, {append: true});
-    await renderSearch({reuseMessages: true});
+    if (seq === searchSeq) await renderSearch({reuseMessages: true});
   });
   document.getElementById('message-search').addEventListener('click', () => {
     if (!currentConversation) {
@@ -2837,7 +3299,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (currentSource === 'social') {
-      if (!validMessage(text)) {
+      const message = agentMentions.message(text);
+      if (!validMessage(message.body)) {
         show('error', '请输入 1–4000 字符的消息。');
         return;
       }
@@ -2845,16 +3308,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         show('error', '请先打开或创建一个会话。');
         return;
       }
-      const result = await request('POST', `${socialBase()}/${currentConversation.id}/messages`, {body: text}, {
+      const conversationId = currentConversation.id;
+      const wid = workspaceId();
+      const result = await request('POST', `${socialBase()}/${conversationId}/messages`, message, {
         'Idempotency-Key': idempotencyKey('socialmsg-'),
       });
       if (result.status !== 201 && result.status !== 200) {
         show('error', messageFor(result.body.error, '发送失败。'));
         return;
       }
-      document.getElementById('chat-body').value = '';
-      await openSocialConversation(currentConversation.id);
-      show('ok', '已发送。');
+      if (workspaceId() === wid && currentSource === 'social' && currentConversation?.id === conversationId) {
+        document.getElementById('chat-body').value = '';
+        agentMentions.clear();
+        await openSocialConversation(conversationId);
+        show('ok', '已发送。');
+      }
       return;
     }
     if (!currentAgent) {
@@ -2921,7 +3389,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   document.getElementById('chat-body').addEventListener('keydown', event => {
-    if (!shouldSendOnShortcut(event, sendShortcut)) return;
+    if (agentMentions.keydown(event) || !shouldSendOnShortcut(event, sendShortcut)) return;
     event.preventDefault();
     if (!(document.getElementById('chat-body').value || '').trim()) return;
     sendCurrentMessage();
@@ -2930,21 +3398,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('chat-form').addEventListener('submit', event => {
     event.preventDefault();
     sendCurrentMessage();
-  });
-
-  document.getElementById('message-list').addEventListener('click', async event => {
-    const button = event.target.closest('button[data-save]');
-    if (!button || !currentConversation || !currentAgent) return;
-    const result = await request(
-      'POST',
-      `${agentBase()}/conversations/${currentConversation.id}/messages/${button.dataset.save}/artifact`,
-      {},
-    );
-    if (result.status !== 201 && result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法保存到作品库。'));
-      return;
-    }
-    show('ok', '已保存到作品库。');
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
