@@ -1,12 +1,30 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
+import {withSpeechOverlay} from '../speech-overlay.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const repo = join(root, '..', '..')
 const read = (rel) => readFileSync(join(root, rel), 'utf8')
+
+test('the web image enables local meeting speech without repeating the optional voice bundle', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'ot-speech-profile-'))
+  t.after(() => rmSync(home, {recursive:true, force:true}))
+  const profile = join(home, 'profiles', 'web')
+  mkdirSync(profile, {recursive:true})
+  const writeProfile = bundles => writeFileSync(join(profile, 'package.json'), JSON.stringify({dsh:{profile:{bundles}}}))
+  const args = ['--profile', 'web', '--no-open']
+  writeProfile([])
+  const expanded = withSpeechOverlay(args, home)
+  assert.deepEqual(expanded, ['--profile', 'web', '--patch', join(root, 'meeting-speech.patch.yml'), '--no-open'])
+  assert.match(read('meeting-speech.patch.yml'), /defaultProvider: sensevoice-local/)
+  assert.match(read('meeting-speech.patch.yml'), /dshHomePath\('speech-to-text', 'sensevoice'\)/)
+  writeProfile(['@deepseek-ai/dsh-experimental-voice-input-bundle'])
+  assert.deepEqual(withSpeechOverlay(args, home), args)
+})
 
 test('image matches the compose manager contract (UID 1000, port 8080, healthcheck)', () => {
   const docker = read('Dockerfile')
