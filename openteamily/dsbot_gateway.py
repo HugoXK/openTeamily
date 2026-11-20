@@ -26,6 +26,12 @@ ROUTE_PATH = '/v1/platform/route'
 UPSTREAM_PATH = re.compile(r'/v1/internal/instances/([0-9a-f]{32})/dsbot-upstream')
 KEY_HEADER = 'HTTP_X_OT_GATEWAY_KEY'
 PAGE_ROUTE = '/api/openteamily/page'
+API_ROUTE = '/api/openteamily'
+GATEWAY_PREFIX = '/v1/gateway/'
+GATEWAY_TOKEN = re.compile(r'^ota_([0-9a-f]{32})_([A-Za-z0-9_-]{43})$')
+GATEWAY_INVOKE = re.compile(r'^/v1/gateway/agents/([0-9a-f]{32})/invocations$')
+GATEWAY_STATUS = re.compile(r'^/v1/gateway/invocations/([0-9a-f]{32})$')
+BEARER = re.compile(r'^Bearer ([A-Za-z0-9._~+/-]+=*)$')
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS dsbot_upstreams (
@@ -82,6 +88,8 @@ def target_for(uri, routes):
         return rest + ('?' + query if query else '')
     if any(path.startswith(prefix) for prefix in routes['passthrough']):
         return uri
+    if path.startswith(GATEWAY_PREFIX) and not query:
+        return path  # authorize() rewrites this to /api/openteamily after the key is parsed
     first = path.split('/')[1] if path != '/' else 'home'
     if first in routes['moved_pages'] and not query:
         return PAGE_ROUTE + '?path=' + quote(path, safe='')
@@ -105,18 +113,77 @@ def _same_origin(method, origin, fetch_site, fetch_mode, upgrade, public_origin)
     return origin == public_origin and fetch_site in ('', 'same-origin', 'none')
 
 
+
+def gateway_call(uri, authorization):
+    """Map /v1/gateway/* + Bearer ota_<instance>_<secret> to a plugin call.
+
+    The instance id in the key is used only to pick the owner's DS-Bot. The secret
+    is passed in the JSON body so the DS-Bot can verify it; nginx still strips
+    Authorization so the raw key never arrives as a header.
+    """
+    parts = urlsplit(uri)
+    path = parts.path
+    if parts.query or not path.startswith(GATEWAY_PREFIX):
+        return None
+    presented = authorization or ''
+    match = BEARER.fullmatch(presented.strip())
+    token = match[1] if match else ''
+    parsed = GATEWAY_TOKEN.fullmatch(token)
+    if not parsed:
+        raise GatewayError(401, 'unauthorized')
+    invoke = GATEWAY_INVOKE.fullmatch(path)
+    status = GATEWAY_STATUS.fullmatch(path)
+    if invoke:
+        endpoint, extra = 'agent-api/invoke', {'agent_id': invoke[1]}
+    elif status:
+        endpoint, extra = 'agent-api/invocation', {'id': status[1]}
+    else:
+        raise GatewayError(404, 'not_found')
+    return parsed[1], endpoint, extra, token
+
+
+def _upstream_row(db, instance_id):
+    row = db.execute(
+        "SELECT i.id, u.address, u.auth_cookie FROM instances i JOIN dsbot_upstreams u ON u.instance_id=i.id "
+        "WHERE i.id=? AND i.desired='running' AND i.observed='running' AND i.health='healthy' "
+        "AND i.blocked=0 AND i.observed_revision=i.revision",
+        (instance_id,)).fetchone()
+    if row is None:
+        raise GatewayError(503, 'dsbot_not_ready')
+    return row
+
+
 def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_site, fetch_mode,
-              upgrade, public_origin, now, routes):
+              upgrade, public_origin, now, routes, authorization=''):
     """Return the internal headers for the edge, or raise GatewayError."""
-    upstream_path = target_for(uri, routes)
-    if upstream_path is None:
-        raise GatewayError(404, 'not_gateway')
     method = (method or '').upper()
     if method not in ('GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE'):
         raise GatewayError(405, 'method')
     upgrade = (upgrade or '').lower()
     if upgrade not in ('', 'websocket'):
         raise GatewayError(400, 'upgrade')
+    call = gateway_call(uri, authorization)
+    if call is not None:
+        # External Agent API: no browser session, no Origin requirement. The key's
+        # instance id picks the owner's DS-Bot; the secret is verified there.
+        if upgrade:
+            raise GatewayError(400, 'upgrade')
+        instance_id, endpoint, extra, token = call
+        row = _upstream_row(db, instance_id)
+        address = validate_address(row[1])
+        # Path includes the original /v1/gateway/... so the plugin can dispatch;
+        # the token travels in a dedicated header (not Authorization; nginx strips that).
+        return [
+            ('X-OT-Upstream', address),
+            ('X-OT-Upstream-Path', '/api/openteamily/gateway?path=' + quote(urlsplit(uri).path, safe='')),
+            ('X-OT-Upstream-Origin', 'http://' + address),
+            ('X-OT-Upstream-Cookie', row[2]),
+            ('X-OT-Instance', row[0]),
+            ('X-OT-Upstream-Token', token),
+        ]
+    upstream_path = target_for(uri, routes)
+    if upstream_path is None:
+        raise GatewayError(404, 'not_gateway')
     if not _same_origin(method, origin or '', (fetch_site or '').lower(), (fetch_mode or '').lower(),
                         bool(upgrade), public_origin):
         raise GatewayError(403, 'origin')
@@ -228,7 +295,8 @@ class GatewayApp:
                 method=env.get('HTTP_X_ORIGINAL_METHOD', ''), uri=env.get('HTTP_X_ORIGINAL_URI', ''),
                 origin=env.get('HTTP_ORIGIN', ''), fetch_site=env.get('HTTP_SEC_FETCH_SITE', ''),
                 fetch_mode=env.get('HTTP_SEC_FETCH_MODE', ''), upgrade=env.get('HTTP_X_ORIGINAL_UPGRADE', ''),
-                public_origin=self.public_origin, now=int(self.clock()), routes=self.routes)
+                public_origin=self.public_origin, now=int(self.clock()), routes=self.routes,
+                authorization=env.get('HTTP_AUTHORIZATION', ''))
 
     def record(self, env, iid):
         """Manager report: where instance ``iid`` listens and its DSH session cookie."""
@@ -364,6 +432,7 @@ __KEY_SETTING__
     proxy_set_header X-Original-URI $request_uri;
     proxy_set_header X-Original-Method $request_method;
     proxy_set_header X-Original-Upgrade $http_upgrade;
+    proxy_set_header Authorization $http_authorization;
     proxy_set_header X-OT-Gateway-Key $ot_gateway_key;
   }
 __DSBOT_LOCATIONS__
@@ -388,6 +457,29 @@ __DSBOT_LOCATIONS__
     proxy_read_timeout 3600s;
     proxy_redirect off;
     proxy_hide_header Set-Cookie;
+  }
+  location ^~ /v1/gateway/ {
+    auth_request /_ot_authz;
+    auth_request_set $ot_upstream $upstream_http_x_ot_upstream;
+    auth_request_set $ot_path $upstream_http_x_ot_upstream_path;
+    auth_request_set $ot_origin $upstream_http_x_ot_upstream_origin;
+    auth_request_set $ot_cookie $upstream_http_x_ot_upstream_cookie;
+    auth_request_set $ot_token $upstream_http_x_ot_upstream_token;
+    proxy_pass http://$ot_upstream$ot_path;
+    proxy_http_version 1.1;
+    proxy_set_header Host $ot_upstream;
+    proxy_set_header Origin $ot_origin;
+    proxy_set_header Cookie $ot_cookie;
+    proxy_set_header Authorization "";
+    proxy_set_header X-OT-Gateway-Token $ot_token;
+    proxy_set_header Sec-Fetch-Site "";
+    proxy_set_header X-OT-Upstream "";
+    proxy_set_header X-OT-Upstream-Cookie "";
+    proxy_set_header X-OT-Upstream-Token "";
+    proxy_hide_header Set-Cookie;
+    proxy_buffering off;
+    proxy_read_timeout 120s;
+    proxy_redirect off;
   }
   recursive_error_pages on;
   error_page 418 = @ot_dsbot;
