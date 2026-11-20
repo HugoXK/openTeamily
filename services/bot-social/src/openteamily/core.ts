@@ -1,0 +1,140 @@
+// OpenTeamily shared social state on Bot Social (phase C of docs/DSBOT_PLUGIN_ARCHITECTURE.md).
+// OpenTeamily-authored (MIT, see ../../OPENTEAMILY.md). Each user's own DS-Bot plugin
+// (@openteamily/web) calls these routes with that home's connector token; Bot Social only
+// relays and stores the state that is shared between users (teams, membership, invites,
+// member conversations, discover listings, follows). Private data never comes here.
+import type Database from "better-sqlite3";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import { createHash, randomBytes } from "node:crypto";
+import { ApiError, assert } from "../errors.js";
+import { newId } from "../ids.js";
+import type { Platform } from "../platform.js";
+
+export const CORE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS ot_profiles (
+  owner_id TEXT PRIMARY KEY REFERENCES owners(id), handle TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL,
+  bio TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ot_notifications (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, owner_id TEXT NOT NULL, kind TEXT NOT NULL,
+  data TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL, read_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS ot_notifications_owner ON ot_notifications(owner_id, seq);
+`;
+
+export type Me = { ownerId: string; handle: string; displayName: string };
+
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
+
+export function text(value: unknown, name: string, { min = 0, max = 200, multiline = false } = {}): string {
+  assert(typeof value === "string", 400, "invalid_request", `${name} must be a string`);
+  const v = multiline ? value : value.replace(/\s+/g, " ").trim();
+  assert(v.length >= min && v.length <= max, 400, "invalid_request", `${name} must be ${min}-${max} characters`);
+  assert(!CONTROL.test(v) && !(!multiline && /[\r\n\t]/.test(v)), 400, "invalid_request", `${name} has control characters`);
+  return v;
+}
+
+export function optText(value: unknown, name: string, opts: { min?: number; max?: number; multiline?: boolean } = {}) {
+  return value === undefined || value === null ? undefined : text(value, name, opts);
+}
+
+export const handleKey = (ref: unknown) => String(ref ?? "").trim().replace(/^@/, "").toLowerCase();
+export const hashCode = (code: string) => createHash("sha256").update(code).digest("hex");
+export const secretCode = () => randomBytes(24).toString("base64url");
+
+export class OtContext {
+  constructor(readonly platform: Platform) {}
+  get db(): Database.Database { return this.platform.db; }
+  now() { return this.platform.nowMs(); }
+  get<T = any>(sql: string, ...args: unknown[]): T | undefined { return this.db.prepare(sql).get(...args) as T | undefined; }
+  all<T = any>(sql: string, ...args: unknown[]): T[] { return this.db.prepare(sql).all(...args) as T[]; }
+  run(sql: string, ...args: unknown[]) { return this.db.prepare(sql).run(...args); }
+  tx<T>(fn: () => T): T { return this.db.transaction(fn)(); }
+
+  /** Owner (login or connector token) behind the request, with its OpenTeamily profile ensured. */
+  me(req: FastifyRequest): Me {
+    const h = req.headers.authorization;
+    const p = this.platform.authenticate(h?.startsWith("Bearer ") ? h.slice(7) : undefined);
+    if (p.kind !== "owner") throw new ApiError(403, "owner_only", "owner or connector token required");
+    let row = this.get<any>("SELECT * FROM ot_profiles WHERE owner_id = ?", p.ownerId);
+    if (!row) {
+      const home = this.get<any>("SELECT handle, display_name FROM bots WHERE owner_id = ? AND integration_type = 'flybot-home' AND status != 'deleted' ORDER BY created_at LIMIT 1", p.ownerId);
+      const owner = this.get<any>("SELECT username, display_name FROM owners WHERE id = ?", p.ownerId);
+      assert(owner, 404, "owner_not_found", "no such owner");
+      const handle = handleKey(home?.handle ?? owner.username);
+      const now = this.now();
+      this.run("INSERT OR IGNORE INTO ot_profiles(owner_id, handle, display_name, created_at, updated_at) VALUES (?,?,?,?,?)",
+        p.ownerId, handle, String(home?.display_name ?? owner.display_name ?? handle).slice(0, 60), now, now);
+      row = this.get<any>("SELECT * FROM ot_profiles WHERE owner_id = ?", p.ownerId);
+    }
+    return { ownerId: row.owner_id, handle: row.handle, displayName: row.display_name };
+  }
+
+  /** Resolve another member by handle; only accounts that have an OpenTeamily profile exist here. */
+  ownerByHandle(ref: unknown): string {
+    const row = this.get<any>("SELECT owner_id FROM ot_profiles WHERE handle = ?", handleKey(ref));
+    assert(row, 404, "member_not_found", "no OpenTeamily member with that handle");
+    return row.owner_id;
+  }
+
+  profileView(ownerId: string) {
+    const row = this.get<any>("SELECT handle, display_name, bio FROM ot_profiles WHERE owner_id = ?", ownerId);
+    return row ? { handle: row.handle, display_name: row.display_name, bio: row.bio } : { handle: null, display_name: "(left)", bio: "" };
+  }
+
+  notify(ownerId: string, kind: string, data: Record<string, unknown>) {
+    this.run("INSERT INTO ot_notifications(id, owner_id, kind, data, created_at) VALUES (?,?,?,?,?)",
+      newId("otn"), ownerId, kind, JSON.stringify(data), this.now());
+  }
+}
+
+export const body = (req: FastifyRequest) => (req.body ?? {}) as any;
+export const params = (req: FastifyRequest) => req.params as Record<string, string>;
+export const query = (req: FastifyRequest) => (req.query ?? {}) as Record<string, unknown>;
+export const one = (raw: unknown, name: string): string | undefined => {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "string") return raw;
+  throw new ApiError(400, "invalid_request", `${name} must be sent once`);
+};
+export const intParam = (raw: unknown, name: string, fallback: number, max = 1_000_000_000) => {
+  const s = one(raw, name);
+  if (s === undefined || s.trim() === "") return fallback;
+  const n = Number(s);
+  assert(Number.isSafeInteger(n) && n >= 0, 400, "invalid_request", `${name} must be a non-negative integer`);
+  return Math.min(n, max);
+};
+
+export function registerCore(app: FastifyInstance, ot: OtContext) {
+  app.get("/v1/ot/me", async (req) => {
+    const me = ot.me(req);
+    return { owner_id: me.ownerId, ...ot.profileView(me.ownerId) };
+  });
+  app.put("/v1/ot/profile", async (req) => {
+    const me = ot.me(req);
+    const b = body(req);
+    const name = optText(b.display_name, "display_name", { min: 1, max: 60 });
+    const bio = optText(b.bio, "bio", { max: 280, multiline: true });
+    ot.run("UPDATE ot_profiles SET display_name = COALESCE(?, display_name), bio = COALESCE(?, bio), updated_at = ? WHERE owner_id = ?",
+      name ?? null, bio ?? null, ot.now(), me.ownerId);
+    return ot.profileView(me.ownerId);
+  });
+  app.get("/v1/ot/profiles/:handle", async (req) => {
+    ot.me(req);
+    return ot.profileView(ot.ownerByHandle(params(req).handle));
+  });
+  app.get("/v1/ot/notifications", async (req) => {
+    const me = ot.me(req);
+    const after = intParam(query(req).after, "after", 0);
+    const limit = intParam(query(req).limit, "limit", 50, 200);
+    const rows = ot.all<any>("SELECT * FROM ot_notifications WHERE owner_id = ? AND seq > ? ORDER BY seq LIMIT ?", me.ownerId, after, limit);
+    const unread = ot.get<any>("SELECT COUNT(*) AS n FROM ot_notifications WHERE owner_id = ? AND read_at IS NULL", me.ownerId).n;
+    return { unread, notifications: rows.map((r) => ({ seq: r.seq, id: r.id, kind: r.kind, data: JSON.parse(r.data), created_at: r.created_at, read: r.read_at !== null })) };
+  });
+  app.post("/v1/ot/notifications/read", async (req) => {
+    const me = ot.me(req);
+    const upTo = Number(body(req).up_to);
+    assert(Number.isSafeInteger(upTo) && upTo >= 0, 400, "invalid_request", "up_to must be a sequence number");
+    const r = ot.run("UPDATE ot_notifications SET read_at = ? WHERE owner_id = ? AND seq <= ? AND read_at IS NULL", ot.now(), me.ownerId, upTo);
+    return { marked: r.changes };
+  });
+}

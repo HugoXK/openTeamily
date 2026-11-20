@@ -24,3 +24,23 @@ Existing frozen `compose-*.json` files written before this second bind was added
 ## Not in this slice
 
 No live call to a third-party Bot Social, no connector-token storage, no settings UI, no Teamily comparison. Unit tests use in-process WSGI and a temporary SQLite store only. Compose-manager tests use the filesystem Docker stub, not a Docker engine. CI image smoke against an in-container fake server is a separate path and is not management-plane proof. This box has no Docker engine.
+
+## Phase C: cross-user OpenTeamily features through Bot Social
+
+Per `docs/DSBOT_PLUGIN_ARCHITECTURE.md`, features that involve more than one user run between users' own
+DS-Bots through Bot Social. `services/bot-social/src/openteamily/` adds `/v1/ot/*` routes (OpenTeamily-authored,
+recorded in `docs/upstream/migration-manifest.json` as additions to the snapshot). Every route takes the
+FlyBot home **connector token** (or an owner login) — the same identity `@flybot/social` saves at onboarding —
+so each DS-Bot acts only as its own owner. Bot Social stores only shared state; private data stays on the
+user's volume.
+
+| Area | Routes | DS-Bot plugin feature |
+|---|---|---|
+| profile, notifications | `GET /v1/ot/me`, `PUT /v1/ot/profile`, `GET /v1/ot/profiles/:handle`, `GET /v1/ot/notifications`, `POST /v1/ot/notifications/read` | `social/*` |
+| teams, directory | `POST/GET /v1/ot/teams`, `GET/PATCH/DELETE /v1/ot/teams/:id`, `PUT /v1/ot/teams/:id/listing`, `GET /v1/ot/directory`, `POST /v1/ot/directory/:id/join` | `teams/*` |
+| members | `GET /v1/ot/teams/:id/members`, `PATCH/DELETE /v1/ot/teams/:id/members/:handle` | `members/*` |
+| invites, join requests | `POST/GET /v1/ot/teams/:id/invites`, `PATCH …/invites/:invite`, `POST /v1/ot/invites/preview`, `POST /v1/ot/invites/accept`, `GET/POST /v1/ot/teams/:id/join-requests[/:request]`, `GET /v1/ot/join-requests/mine` | `invites/*` |
+
+The member handle is the owner's FlyBot home handle (`@<name>.home`). Non-members get `404` for a team.
+Invite codes are returned once, stored as SHA-256 only. The plugin client (`runtime/openteamily-web/lib/c/bot-social.js`)
+uses the manager-delivered server URL and the saved connector token; it never returns or logs the token.
