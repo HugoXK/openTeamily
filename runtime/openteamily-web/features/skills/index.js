@@ -2,6 +2,7 @@
 // Main Bot (moved from skill_installs.py / skill_execution.py). Instruction-only.
 import { createHash } from 'node:crypto'
 import { fail } from '../../src/store.js'
+import { skillLibrary } from './library.js'
 import { skillRunsV1 } from './runs.js'
 
 const NAME = /^[a-z0-9][a-z0-9-]{1,47}$/
@@ -21,6 +22,8 @@ export const boundName = (id) => nativeName(BOUND, id)
 export const userSkillName = (slug) => nativeName(PREFIX, slug)
 
 export default function skills(host) {
+  const library = skillLibrary(host, { boundName })
+  const runs = skillRunsV1(host, { boundName, userSkillName })
   const ready = async () => {
     const services = await host.runtime()
     if (typeof services.mainBot !== 'function') fail('skills/runtime-unavailable', 'DS-Bot skills are not available in this runtime')
@@ -30,7 +33,9 @@ export default function skills(host) {
   return {
     pages: ['skills'],
     endpoints: {
-      v1: skillRunsV1(host, { boundName, userSkillName }),
+      v1: async p => { const result=await library.v1(p); return result.status === 404 && result.body?.error?.code === 'not_moved' ? runs(p) : result },
+      materialForScope: library.materialForScope,
+      reconcile: async () => { await library.syncAll(); return { reconciled: true } },
       async list() {
         const { rt, botId } = await ready()
         const attached = [...(rt.botOf(botId)?.capabilities ?? [])].filter((name) => typeof name === 'string')

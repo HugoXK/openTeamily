@@ -52,6 +52,7 @@ PAGE_SEGMENT = re.compile(r'[a-z0-9][a-z0-9-]{0,40}')
 # here stays on the platform (auth, skill-secrets, /v1/onboarding/automations, the
 # Composio callback bounce page, workspace lists, C pages, automations/agents until B2).
 MOVED_APIS = (
+    (re.compile(r'^/v1/skills/(?:catalog|bindings|installed|packages(?:/import-[a-z0-9][a-z0-9-]{1,39}(?:/(?:revoke|versions(?:/[0-9.]+)?))?)?)$'), 'skills'),
     (re.compile(r'^/v1/skill-secrets$'), 'skill-secrets'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/overview$'), 'overview'),
     (re.compile(r'^/v1/team-templates$'), 'team-templates'),
@@ -99,6 +100,7 @@ MOVED_APIS = (
 # Nginx locations that send a moved /v1 API to the owner's DS-Bot. More-specific
 # platform exceptions (automations, composio callback) are emitted first.
 MOVED_API_LOCATIONS = (
+    'location ^~ /v1/skills/ { return 418; }',
     'location = /v1/skill-secrets { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/overview$ { return 418; }',
     'location = /v1/team-templates { return 418; }',

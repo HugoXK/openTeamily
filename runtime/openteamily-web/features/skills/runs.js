@@ -28,14 +28,17 @@ export function skillRunsV1(host, { boundName, userSkillName }) {
     const caps = s.rt.botOf(await s.mainBot())?.capabilities ?? []
     return caps.includes(boundName(skillId)) || caps.includes(userSkillName(skillId))
   }
-  const readiness = (scope) => {
+  const readiness = async (scope) => {
     const s = services()
     const base = { scope, ready: false, runtime_url: '/settings', model_url: '/settings#model-api-form', hostname: 'ds-bot' }
     if (!s || typeof s.chatTurn !== 'function') return { ...base, code: 'runtime_offline' }
-    return { ...base, ready: true, code: 'ready', model_source: 'ds-bot' }
+    const settings = await host.call('model-api/get')
+    if (!settings.effective?.api_key_set) return { ...base, code: 'no_model' }
+    await host.call('skills/materialForScope', { scope })
+    return { ...base, ready: true, code: 'ready', model_source: settings.effective.source || 'ds-bot' }
   }
   const view = (r) => ({ ...r, verified: r.loaded && r.task.status === 'succeeded' && !!String(r.task.result?.text ?? '').trim() })
-  const scopeOk = (scope) => scope === 'account'
+  const scopeOk = scope => scope === 'account' || /^(?:automation:)?[0-9a-f]{32}:[0-9a-f]{32}$/.test(scope || '')
 
   return compatHandler([
     { method: 'GET', path: /^\/v1\/skills\/scopes$/, handle: async () => [200, { items: [{ scope: 'account', kind: 'account', label: '我的账户', workspace_id: null }] }] },
@@ -44,7 +47,7 @@ export function skillRunsV1(host, { boundName, userSkillName }) {
       async handle({ query }) {
         const scope = new URLSearchParams(query || '').get('scope') || 'account'
         if (!scopeOk(scope)) throw new Fault(404, 'not_found', 'Scope not available')
-        return [200, readiness(scope)]
+        return [200, await readiness(scope)]
       },
     },
     { method: 'GET', path: /^\/v1\/skills\/runs$/, handle: async () => [200, { items: load().map(view) }] },
@@ -63,8 +66,9 @@ export function skillRunsV1(host, { boundName, userSkillName }) {
           if (prior.request_hash !== requestHash) throw new Fault(409, 'conflict', 'Idempotency key was used for a different skill run')
           return [200, view(prior)]
         }
-        if (!(await attached(skillId))) throw new Fault(409, 'skill_not_installed', 'Install the current skill version in this scope first')
-        const ready = readiness(scope)
+        const material = await host.call('skills/materialForScope', { scope })
+        if (!material.items.some(i => i.id === skillId) && !(scope === 'account' && await attached(skillId))) throw new Fault(409, 'skill_not_installed', 'Install the current skill version in this scope first')
+        const ready = await readiness(scope)
         if (!ready.ready) throw new Fault(409, ready.code, 'Skill runtime is not ready: ' + ready.code)
         const id = randomBytes(16).toString('hex')
         const now = Math.floor(Date.now() / 1000)
@@ -73,9 +77,17 @@ export function skillRunsV1(host, { boundName, userSkillName }) {
           scope, skill_id: skillId, loaded: true, skills: [{ id: skillId }], key_hash: keyHash, request_hash: requestHash,
         }
         save([record, ...load()])
-        const text = `Use your "${skillId}" skill for this task.\n\n${prompt}`
+        const selected = material.items.find(i => i.id === skillId)
+        const text = selected ? `${selected.content}\n\nTask:\n${prompt}` : `Use your "${skillId}" skill for this task.\n\n${prompt}`
         Promise.resolve()
-          .then(() => services().chatTurn(`skill-run:${id}`, text, `ot-skill:${id}`))
+          .then(async () => {
+            const agentScope = /^([0-9a-f]{32}):([0-9a-f]{32})$/.exec(scope)
+            if (agentScope) {
+              const turn = await host.call('agents/turn', { agent_id: agentScope[2], key: `skill-run:${id}`, text, request_id: `ot-skill:${id}` })
+              return { text: turn.text, sessionId: turn.session_id, turnId: turn.turn_id }
+            }
+            return services().chatTurn(`skill-run:${id}`, text, `ot-skill:${id}`)
+          })
           .then((turn) => update(id, { status: load().find((r) => r.task.id === id)?.task.status === 'cancelled' ? 'cancelled' : 'succeeded', result: { text: String(turn?.text ?? '') }, updated: Math.floor(Date.now() / 1000) }))
           .catch((error) => update(id, { status: 'failed', error: String(error?.message ?? error).slice(0, 300), updated: Math.floor(Date.now() / 1000) }))
         return [201, view(record)]

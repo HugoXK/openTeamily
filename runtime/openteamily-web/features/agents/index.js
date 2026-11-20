@@ -88,6 +88,7 @@ export function createAgents({ db, host }) {
     const services = await host.runtime()
     if (typeof services?.chatTurn !== 'function') fail('runtime-unavailable', 'DS-Bot chat service unavailable', 503)
     const sessionKey = `agent:${agent.id}:${typeof key === 'string' && /^[A-Za-z0-9:_-]{1,96}$/.test(key) ? key : 'default'}`
+    await host.call('skills/materialForScope', { scope: agent.workspace_id + ':' + agent.id })
     const mapping = await native.session(agent, sessionKey, agent.name)
     if (typeof services.nativeTurn !== 'function') fail('runtime-unavailable', 'Native Bot turn service unavailable', 503)
     const reply = await services.nativeTurn(mapping.native_bot_id, mapping.native_session_id, lang ? `Reply in ${lang}.\n\n${text}` : text, requestId || `ot-agent:${newId()}`)

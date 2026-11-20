@@ -48,6 +48,12 @@ def _via_artifact(table, order):
 
 # Parents come before children; the plugin imports in its own declared order.
 FEATURE_TABLES = {
+    'skills': [
+        ('imported_skill_heads', 'SELECT * FROM imported_skill_heads WHERE user_id=? ORDER BY skill_id'),
+        ('imported_skill_versions', 'SELECT * FROM imported_skill_versions WHERE user_id=? ORDER BY skill_id,created,version'),
+        ('skill_bindings', 'SELECT * FROM skill_bindings WHERE user_id=? ORDER BY scope,skill_id'),
+        ('skill_installs', 'SELECT * FROM skill_installs WHERE user_id=? ORDER BY installed,skill_id'),
+    ],
     'skill-secrets': [('skill_secrets', 'SELECT name,updated FROM skill_secrets WHERE user_id=? ORDER BY name')],
     'meetings': [
         ('meetings', 'SELECT m.* FROM meetings m JOIN workspaces w ON w.id = m.workspace_id '
