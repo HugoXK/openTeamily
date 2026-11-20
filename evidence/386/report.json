@@ -1,0 +1,888 @@
+{
+  "slug": "ev386",
+  "reuse": {
+    "theme": "dsh-client-ui-theme — token names only: the page maps --dsw-alias-* (shellTokens in themes.js) and resolves our dark arm to documentElement.dataset.themeResolved=dark; body[data-ds-dark-theme] is set by the dsh host, absent in these standalone pages (fact darkAttr), so no parallel palette is invented",
+    "viewports": "none — dsh ships no px breakpoint constant (only prefers-reduced-motion/transparency); 1440x900 + 390x844 are the owner rule, kept as-is",
+    "hmr": "none — not needed for static before/after shots"
+  },
+  "generated_at": "2026-11-20T06:19:13.069Z",
+  "sides": [
+    {
+      "name": "before",
+      "ref": "af33df0f0ff16007c02fa6818f1f58e3918927f4",
+      "url": "http://127.0.0.1:8101"
+    },
+    {
+      "name": "after",
+      "ref": "108b024d6f5cbf0c47bd232effb09ad590e0207e",
+      "url": "http://127.0.0.1:8102"
+    }
+  ],
+  "images": [
+    {
+      "arm": "before",
+      "file": "before/ev386__before__zh-CN__light__1440x900__settings-channels.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "light",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 57853
+      },
+      "viewport_size_ok": true,
+      "sha256": "60d6d3aa2db69531d8ddee268ea1c0d64711d1de1eba01a5e31ebab78ab9a021",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account + 连接 Apple iMessage + 连接 Slack ",
+        "textLength": 275,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev386__after__zh-CN__light__1440x900__settings-channels.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "light",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 62841
+      },
+      "viewport_size_ok": true,
+      "sha256": "d1086487b35ee9283494e963977dd66c11c64f03e197cf18a709993b961eb605",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 4,
+            "visible": true,
+            "text": "如何接入",
+            "disabled": null,
+            "rect": {
+              "x": 914,
+              "y": 145,
+              "w": 56,
+              "h": 21
+            }
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev386__before__zh-CN__dark__1440x900__settings-channels.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 55796
+      },
+      "viewport_size_ok": true,
+      "sha256": "5e2524e94b83f3190473cbc581b87f696bde73be49f6c8112f290b3afeacb509",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account + 连接 Apple iMessage + 连接 Slack ",
+        "textLength": 275,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev386__after__zh-CN__dark__1440x900__settings-channels.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 61020
+      },
+      "viewport_size_ok": true,
+      "sha256": "bcd31e5bf8b3733571077f26b00ffe1bf73ff081f8ca95744090fdb213409274",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 4,
+            "visible": true,
+            "text": "如何接入",
+            "disabled": null,
+            "rect": {
+              "x": 910,
+              "y": 145,
+              "w": 60,
+              "h": 24
+            }
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev386__before__en__light__1440x900__settings-channels.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "en",
+      "theme": "light",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 57853
+      },
+      "viewport_size_ok": true,
+      "sha256": "60d6d3aa2db69531d8ddee268ea1c0d64711d1de1eba01a5e31ebab78ab9a021",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account + 连接 Apple iMessage + 连接 Slack ",
+        "textLength": 275,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev386__after__en__light__1440x900__settings-channels.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "en",
+      "theme": "light",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 62841
+      },
+      "viewport_size_ok": true,
+      "sha256": "d1086487b35ee9283494e963977dd66c11c64f03e197cf18a709993b961eb605",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 4,
+            "visible": true,
+            "text": "如何接入",
+            "disabled": null,
+            "rect": {
+              "x": 914,
+              "y": 145,
+              "w": 56,
+              "h": 21
+            }
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev386__before__en__dark__1440x900__settings-channels.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "en",
+      "theme": "dark",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 55796
+      },
+      "viewport_size_ok": true,
+      "sha256": "5e2524e94b83f3190473cbc581b87f696bde73be49f6c8112f290b3afeacb509",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account + 连接 Apple iMessage + 连接 Slack ",
+        "textLength": 275,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev386__after__en__dark__1440x900__settings-channels.png",
+      "state": "default",
+      "viewport": "1440x900",
+      "locale": "en",
+      "theme": "dark",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 61020
+      },
+      "viewport_size_ok": true,
+      "sha256": "bcd31e5bf8b3733571077f26b00ffe1bf73ff081f8ca95744090fdb213409274",
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 4,
+            "visible": true,
+            "text": "如何接入",
+            "disabled": null,
+            "rect": {
+              "x": 910,
+              "y": 145,
+              "w": 60,
+              "h": 24
+            }
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev386__before__zh-CN__light__390x844__settings-channels.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "zh-CN",
+      "theme": "light",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 50678
+      },
+      "viewport_size_ok": true,
+      "sha256": "d265e71a920f65d68ebdd83eef10f09c4385e5e732dde80f63771fc05b05d2a4",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account + 连接 Apple iMessage + 连接 Slack ",
+        "textLength": 275,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev386__after__zh-CN__light__390x844__settings-channels.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "zh-CN",
+      "theme": "light",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 54289
+      },
+      "viewport_size_ok": true,
+      "sha256": "9070cb22c609b628ff421a2cdcaa7d5407a22be7d07b1f11bb77041517ff864c",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 4,
+            "visible": true,
+            "text": "如何接入",
+            "disabled": null,
+            "rect": {
+              "x": 300,
+              "y": 148,
+              "w": 56,
+              "h": 21
+            }
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev386__before__zh-CN__dark__390x844__settings-channels.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 50324
+      },
+      "viewport_size_ok": true,
+      "sha256": "7c024d442a71b503e11c1f4c8c297224b2f7f46b0b3990480fdbe478ebdf05f5",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account + 连接 Apple iMessage + 连接 Slack ",
+        "textLength": 275,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev386__after__zh-CN__dark__390x844__settings-channels.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 54145
+      },
+      "viewport_size_ok": true,
+      "sha256": "d2f0ac1c06f67ba17674f7e6a9bdd5125a452bbf9d071f2cfb324e2c388aaafa",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 4,
+            "visible": true,
+            "text": "如何接入",
+            "disabled": null,
+            "rect": {
+              "x": 296,
+              "y": 151,
+              "w": 60,
+              "h": 24
+            }
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev386__before__en__light__390x844__settings-channels.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "en",
+      "theme": "light",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 50678
+      },
+      "viewport_size_ok": true,
+      "sha256": "d265e71a920f65d68ebdd83eef10f09c4385e5e732dde80f63771fc05b05d2a4",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account + 连接 Apple iMessage + 连接 Slack ",
+        "textLength": 275,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev386__after__en__light__390x844__settings-channels.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "en",
+      "theme": "light",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 54289
+      },
+      "viewport_size_ok": true,
+      "sha256": "9070cb22c609b628ff421a2cdcaa7d5407a22be7d07b1f11bb77041517ff864c",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 4,
+            "visible": true,
+            "text": "如何接入",
+            "disabled": null,
+            "rect": {
+              "x": 300,
+              "y": 148,
+              "w": 56,
+              "h": 21
+            }
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "before",
+      "file": "before/ev386__before__en__dark__390x844__settings-channels.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "en",
+      "theme": "dark",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 50324
+      },
+      "viewport_size_ok": true,
+      "sha256": "3cf030a714136348bb6d6cd4f08df26bdfb874206cfecd3cf7ba719f7abda3df",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account + 连接 Apple iMessage + 连接 Slack ",
+        "textLength": 275,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/ev386__after__en__dark__390x844__settings-channels.png",
+      "state": "default",
+      "viewport": "390x844",
+      "locale": "en",
+      "theme": "dark",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 54145
+      },
+      "viewport_size_ok": true,
+      "sha256": "ad5746dccecaedc4973cf6ceee146ffe3c95e8aebbac78607c46070748b35824",
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 CI ‹ Agent 渠道 通过 WeChat Official Account、Apple iMessage、Slack 或 WhatsApp 联系你的助手。 WeChat Official Account 如何接入 Apple iMessage 如何接入 Slack ",
+        "textLength": 303,
+        "visibleDialogs": 0,
+        "probes": [
+          {
+            "sel": "a[href^=\"/help#channel-\"]",
+            "count": 4,
+            "visible": true,
+            "text": "如何接入",
+            "disabled": null,
+            "rect": {
+              "x": 296,
+              "y": 151,
+              "w": 60,
+              "h": 24
+            }
+          },
+          {
+            "sel": "#channel-rows",
+            "count": 0,
+            "visible": false,
+            "text": "",
+            "disabled": null,
+            "rect": null
+          }
+        ]
+      },
+      "console": [
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><circle cx='12' cy='11' r='6'/><path d='M8 17 7 20l4-2'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M5 7h14v9H9l-4 3V7Z'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n",
+        "error: Refused to load the image 'data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='1.8'><path d='M8 8h8v8H8z M12 6v12 M6 12h12'/></svg>' because it violates the following Content Security Policy directive: \"img-src 'self'\".\n"
+      ]
+    }
+  ],
+  "failures": [],
+  "arms": {
+    "before": {
+      "ref": "af33df0f0ff16007c02fa6818f1f58e3918927f4",
+      "count": 8
+    },
+    "after": {
+      "ref": "108b024d6f5cbf0c47bd232effb09ad590e0207e",
+      "count": 8
+    }
+  },
+  "grid": {
+    "viewports": [
+      "1440x900",
+      "390x844"
+    ],
+    "locales": [
+      "zh-CN",
+      "en"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ]
+  }
+}

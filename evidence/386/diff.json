@@ -1,0 +1,433 @@
+{
+  "slug": "ev386",
+  "sides": [
+    "http://127.0.0.1:8101",
+    "http://127.0.0.1:8102"
+  ],
+  "diffs": [
+    {
+      "route": "/settings/channels",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev386/before/ev386__before__zh-CN__light__1440x900__settings-channels.png",
+      "after": "ev386/after/ev386__after__zh-CN__light__1440x900__settings-channels.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 275
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 9399,
+      "ratio": 0.007252314814814815,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 9399,
+        "ratio": 0.007735802469135802
+      },
+      "bbox": {
+        "x": 516,
+        "y": 138,
+        "width": 459,
+        "height": 297
+      },
+      "text": {
+        "changedLines": 10,
+        "sample": [
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "对照页标题带有专有品牌，这里只用「Agent 渠道」。没有复制第三方渠道标志。连接会进入外部账号流程，本页只展示记录下来的渠道名单，按钮保持禁用。"
+        ]
+      }
+    },
+    {
+      "route": "/settings/channels",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev386/before/ev386__before__zh-CN__dark__1440x900__settings-channels.png",
+      "after": "ev386/after/ev386__after__zh-CN__dark__1440x900__settings-channels.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 275
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 27406,
+      "ratio": 0.021146604938271606,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 27406,
+        "ratio": 0.022556378600823046
+      },
+      "bbox": {
+        "x": 511,
+        "y": 138,
+        "width": 474,
+        "height": 298
+      },
+      "text": {
+        "changedLines": 10,
+        "sample": [
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "对照页标题带有专有品牌，这里只用「Agent 渠道」。没有复制第三方渠道标志。连接会进入外部账号流程，本页只展示记录下来的渠道名单，按钮保持禁用。"
+        ]
+      }
+    },
+    {
+      "route": "/settings/channels",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev386/before/ev386__before__en__light__1440x900__settings-channels.png",
+      "after": "ev386/after/ev386__after__en__light__1440x900__settings-channels.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 275
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 9399,
+      "ratio": 0.007252314814814815,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 9399,
+        "ratio": 0.007735802469135802
+      },
+      "bbox": {
+        "x": 516,
+        "y": 138,
+        "width": 459,
+        "height": 297
+      },
+      "text": {
+        "changedLines": 10,
+        "sample": [
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "对照页标题带有专有品牌，这里只用「Agent 渠道」。没有复制第三方渠道标志。连接会进入外部账号流程，本页只展示记录下来的渠道名单，按钮保持禁用。"
+        ]
+      }
+    },
+    {
+      "route": "/settings/channels",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev386/before/ev386__before__en__dark__1440x900__settings-channels.png",
+      "after": "ev386/after/ev386__after__en__dark__1440x900__settings-channels.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 275
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 27406,
+      "ratio": 0.021146604938271606,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 27406,
+        "ratio": 0.022556378600823046
+      },
+      "bbox": {
+        "x": 511,
+        "y": 138,
+        "width": 474,
+        "height": 298
+      },
+      "text": {
+        "changedLines": 10,
+        "sample": [
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "对照页标题带有专有品牌，这里只用「Agent 渠道」。没有复制第三方渠道标志。连接会进入外部账号流程，本页只展示记录下来的渠道名单，按钮保持禁用。"
+        ]
+      }
+    },
+    {
+      "route": "/settings/channels",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev386/before/ev386__before__zh-CN__light__390x844__settings-channels.png",
+      "after": "ev386/after/ev386__after__zh-CN__light__390x844__settings-channels.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 275
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 9380,
+      "ratio": 0.028496779681613803,
+      "rail": {
+        "changed": 271,
+        "ratio": 0.00356766719325961
+      },
+      "content": {
+        "changed": 9109,
+        "ratio": 0.03597551342812006
+      },
+      "bbox": {
+        "x": 80,
+        "y": 141,
+        "width": 277,
+        "height": 338
+      },
+      "text": {
+        "changedLines": 10,
+        "sample": [
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "对照页标题带有专有品牌，这里只用「Agent 渠道」。没有复制第三方渠道标志。连接会进入外部账号流程，本页只展示记录下来的渠道名单，按钮保持禁用。"
+        ]
+      }
+    },
+    {
+      "route": "/settings/channels",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev386/before/ev386__before__zh-CN__dark__390x844__settings-channels.png",
+      "after": "ev386/after/ev386__after__zh-CN__dark__390x844__settings-channels.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 275
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 21310,
+      "ratio": 0.06474055170737635,
+      "rail": {
+        "changed": 632,
+        "ratio": 0.00832016850974197
+      },
+      "content": {
+        "changed": 20678,
+        "ratio": 0.08166666666666667
+      },
+      "bbox": {
+        "x": 10,
+        "y": 23,
+        "width": 361,
+        "height": 464
+      },
+      "text": {
+        "changedLines": 10,
+        "sample": [
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "对照页标题带有专有品牌，这里只用「Agent 渠道」。没有复制第三方渠道标志。连接会进入外部账号流程，本页只展示记录下来的渠道名单，按钮保持禁用。"
+        ]
+      }
+    },
+    {
+      "route": "/settings/channels",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev386/before/ev386__before__en__light__390x844__settings-channels.png",
+      "after": "ev386/after/ev386__after__en__light__390x844__settings-channels.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 275
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 9380,
+      "ratio": 0.028496779681613803,
+      "rail": {
+        "changed": 271,
+        "ratio": 0.00356766719325961
+      },
+      "content": {
+        "changed": 9109,
+        "ratio": 0.03597551342812006
+      },
+      "bbox": {
+        "x": 80,
+        "y": 141,
+        "width": 277,
+        "height": 338
+      },
+      "text": {
+        "changedLines": 10,
+        "sample": [
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "对照页标题带有专有品牌，这里只用「Agent 渠道」。没有复制第三方渠道标志。连接会进入外部账号流程，本页只展示记录下来的渠道名单，按钮保持禁用。"
+        ]
+      }
+    },
+    {
+      "route": "/settings/channels",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev386/before/ev386__before__en__dark__390x844__settings-channels.png",
+      "after": "ev386/after/ev386__after__en__dark__390x844__settings-channels.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 275
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 303
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 21310,
+      "ratio": 0.06474055170737635,
+      "rail": {
+        "changed": 632,
+        "ratio": 0.00832016850974197
+      },
+      "content": {
+        "changed": 20678,
+        "ratio": 0.08166666666666667
+      },
+      "bbox": {
+        "x": 10,
+        "y": 23,
+        "width": 361,
+        "height": 464
+      },
+      "text": {
+        "changedLines": 10,
+        "sample": [
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "+ 连接",
+          "对照页标题带有专有品牌，这里只用「Agent 渠道」。没有复制第三方渠道标志。连接会进入外部账号流程，本页只展示记录下来的渠道名单，按钮保持禁用。"
+        ]
+      }
+    }
+  ]
+}
