@@ -46,6 +46,7 @@ All responses are JSON and no-store. There is no CORS support. Errors are `{erro
 | GET/POST | `/v1/workspaces/{id}/bot-social` | Optional workspace Bot Social server URL; see [BOT_SOCIAL.md](BOT_SOCIAL.md) |
 | GET/POST | `/v1/skill-secrets` | Write-only skill secrets for the signed-in account; see [SETTINGS.md](SETTINGS.md) |
 | GET/POST | `/v1/settings` | Per-account interface preferences with revision check; added after PR16, see [SETTINGS.md](SETTINGS.md) |
+| GET | `/v1/workspaces/{id}/overview` | Signed-in home summaries: real counts, recent own conversations, artifacts and meetings, unread notifications; no bodies, prompts or transcripts. See [HOME.md](HOME.md). A same-origin page is at `/` |
 | GET/POST | `/v1/workspaces/{id}/members` | Membership and roles; added after PR16, see [MEMBERS.md](MEMBERS.md). List/get workspaces include membership, not only ownership. A same-origin page is at `/members` |
 | GET/POST | `/v1/workspaces/{id}/invites` | Invite links; added after PR16, see [INVITES.md](INVITES.md) |
 | POST | `/v1/invites/accept` | `{token}`; signed-in caller joins the workspace |

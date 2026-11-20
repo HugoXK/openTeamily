@@ -908,6 +908,37 @@ body.app-workspace #overview-panel .graph-stage,
   color: var(--ot-muted); font-size: 0.75rem;
 }
 .editor-top-actions button:disabled { opacity: 0.7; cursor: not-allowed; }
+.page-history {
+  margin: 0.4rem 0 0.75rem; padding: 0.75rem 0.85rem;
+  border: 1px solid var(--ot-line); border-radius: 0.6rem;
+  background: var(--ot-surface);
+}
+.page-history-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.page-history-head h2 { margin: 0; font-size: 0.95rem; }
+.page-history-head button {
+  height: 1.7rem; padding: 0 0.55rem; border-radius: 999px;
+  border: 1px solid var(--ot-line); background: var(--ot-surface);
+  color: var(--ot-muted); font-size: 0.72rem;
+}
+#page-history-list { list-style: none; margin: 0.5rem 0; padding: 0; display: grid; gap: 0.25rem; }
+.page-history-item {
+  width: 100%; padding: 0.4rem 0.5rem; border-radius: 0.4rem; border: 1px solid transparent;
+  background: var(--ot-bg-accent); color: var(--ot-ink);
+  font-size: 0.78rem; text-align: left; line-height: 1.35;
+}
+.page-history-item:hover, .page-history-item:focus-visible { border-color: var(--ot-line); }
+.page-history-preview { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px dashed var(--ot-line); }
+.page-history-preview h3 { margin: 0 0 0.35rem; font-size: 0.8rem; color: var(--ot-muted); }
+.page-history-preview pre {
+  margin: 0 0 0.5rem; max-height: 12rem; overflow: auto; white-space: pre-wrap;
+  font: inherit; font-size: 0.8rem; color: var(--ot-ink);
+}
+#page-history-restore {
+  height: 1.9rem; padding: 0 0.75rem; border-radius: 999px;
+  border: 0; background: var(--ot-accent); color: var(--ot-on-accent);
+  font-size: 0.78rem; font-weight: 650;
+}
+.editor-export-status { margin: 0; align-self: center; font-size: 0.7rem; color: var(--ot-muted); }
 .editor-toolbar {
   display: flex; flex-wrap: wrap; gap: 0.2rem;
   padding: 0.25rem 0; border-top: 1px solid var(--ot-line);
@@ -992,6 +1023,15 @@ body.app-workspace #editor-rich:focus-visible, #editor-rich:focus { outline: non
 #editor-rich h2 { font-size: 1.25rem; }
 #editor-rich h3 { font-size: 1.0625rem; }
 #editor-form .editor-link-row { display: flex; align-items: center; gap: .5rem; margin: .5rem 0; }
-#editor-form .editor-link-row label { display: flex; align-items: center; gap: .5rem; flex: 1 1 auto; min-width: 0; margin: 0; font-size: .8125rem; color: var(--ot-muted); white-space: nowrap; }
-#editor-form .editor-link-row select { flex: 1 1 auto; min-width: 0; height: 2rem; min-height: 0; padding: 0 .625rem; line-height: 2rem; font-size: .8125rem; }
-#editor-form .editor-link-row button { flex: none; height: 2rem; min-height: 0; padding: 0 .875rem; border-radius: 999px; font-size: .8125rem; }
+html[data-theme-resolved="dark"] #editor-form .editor-link-row label{ display: flex; align-items: center; gap: .5rem; flex: 1 1 auto; min-width: 0; margin: 0; font-size: .8125rem; color: var(--ot-muted); white-space: nowrap; }html[data-theme-resolved="dark"] #editor-form .editor-link-row select{ flex: 1 1 auto; min-width: 0; height: 2rem; min-height: 0; padding: 0 .625rem; line-height: 2rem; font-size: .8125rem; }html[data-theme-resolved="dark"] #editor-form .editor-link-row button{ flex: none; height: 2rem; min-height: 0; padding: 0 .875rem; border-radius: 999px; font-size: .8125rem; }html[data-theme-resolved="dark"] /* Aurora Glass: memory */
+.memory-dir, html[data-theme-resolved="dark"] .memory-side, html[data-theme-resolved="dark"] .overview-panel, html[data-theme-resolved="dark"] .actions-panel, html[data-theme-resolved="dark"] #meetings-panel, html[data-theme-resolved="dark"] .memory-top{
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+}html[data-theme-resolved="dark"] .memory-views button[aria-current="page"], html[data-theme-resolved="dark"] .side-tabs button[aria-selected="true"]{
+  background: var(--ot-grad-soft);
+  color: var(--ot-accent);
+}
