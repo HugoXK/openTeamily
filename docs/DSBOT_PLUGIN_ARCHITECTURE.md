@@ -72,7 +72,9 @@ All of these already exist in the pinned tree and are used by today's runtime im
 * Each feature ships its own tests in `runtime/openteamily-web/test/<name>*.test.js` (run by
   `npm test` in the image recipe job) and, where it needs a running DS-Bot, a container check.
 * The browser keeps calling legacy `/v1/...` until the page is flipped in `dsbot_routes.json`
-  (`moved_pages`); a moved page calls `/b/api/openteamily` instead.
+  (`moved_pages`); a moved page calls `/b/api/openteamily` instead. Flip a page only once its moved
+  calls are covered: a row in `static/shell/dsbot-api.mjs` `MOVED` (generic `<feature>/v1` shim) or a
+  page adapter (chat: `static/chat/dsbot.mjs`). Moved so far: `chat`, `meetings`.
 
 Plugin storage lives on the user's volume under `/data/openteamily/` (SQLite via `node:sqlite` on Node 24,
 plus files), owned by uid 1000 like the rest of `/data`. Nothing about one user is stored in another user's
