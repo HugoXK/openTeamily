@@ -117,6 +117,39 @@ try {
     const result = await response.json()
     assert.ok(result.ok, result.error?.message)
     assert.ok(Array.isArray(result.value.bots), 'the DS Bot runtime must load')
+    // Exercise the actual native validator/storage/Main Bot, not a permissive mock.
+    // Mirrors the deployment acceptance slug which previously exceeded 32 chars
+    // once prefixed. The CI container runs UID 1000 with a read-only rootfs.
+    const call = async (path, endpoint, payload = {}) => {
+      const response = await fetch('http://${address}:8080' + path, {
+        method: 'POST', headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ endpoint, payload }),
+      })
+      const body = await response.json()
+      assert.ok(response.ok && body.ok, endpoint + ': ' + JSON.stringify(body.error))
+      return body.value
+    }
+    const slug = 'deploy-accept-00000000'
+    const content = '# CI native skill\nRead these instructions.'
+    const saved = await call('/api/openteamily', 'skills/save', { name: slug, content })
+    assert.equal(saved.attached, true)
+    assert.ok(saved.name.length <= 32)
+    const state = await call('/api/bot', 'state')
+    assert.equal(state.capabilities.find(c => c.name === saved.name)?.content, content)
+    assert.ok(state.bots.some(bot => bot.capabilities?.includes(saved.name)))
+    assert.ok((await call('/api/openteamily', 'skills/list')).items.some(c => c.name === saved.name))
+    const { createHash } = await import('node:crypto')
+    const bound = await call('/api/openteamily', 'skills/sync', { items: [{
+      id: '0123456789abcdef'.repeat(2), content,
+      digest: createHash('sha256').update(content).digest('hex'),
+    }] })
+    assert.equal(bound.attached.length, 1)
+    assert.ok(bound.attached[0].length <= 32)
+    await call('/api/openteamily', 'skills/remove', { name: slug })
+    await call('/api/openteamily', 'skills/sync', { items: [] })
+    const revoked = await call('/api/bot', 'state')
+    assert.ok(revoked.bots.every(bot => !bot.capabilities?.includes(saved.name) && !bot.capabilities?.includes(bound.attached[0])))
+
     const flybot = await fetch('http://${address}:8080/api/flybot', {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie },

@@ -116,3 +116,48 @@ test('skills/sync materializes digest-checked bound skills and detaches stale on
     await assert.rejects(table['skills/sync']({ items: [{ id: 'weekly-review', digest, content: 'tampered' }] }), { code: 'skills/digest-mismatch' })
   } finally { detachRuntime() }
 })
+
+
+test('native skill names fit DS-Bot after migrated profiles; save, bind and revoke use stable identities', async () => {
+  const { userSkillName, boundName } = await import('../features/skills/index.js')
+  const { createHash } = await import('node:crypto')
+  const table = await load()
+  const bot = { capabilities: ['ot-skill-existing', 'ot-bound-old'] }
+  const library = new Map()
+  const rt = {
+    botOf: () => bot,
+    capabilitySave: async cap => {
+      assert.ok(cap.name.length <= 32)
+      assert.match(cap.name, /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/)
+      library.set(cap.name, cap)
+    },
+    changeCapabilityAttachment: async (op, { name }, caller) => {
+      assert.equal(caller, 'migrated-main')
+      bot.capabilities = bot.capabilities.filter(n => n !== name)
+      if (op === 'attach') { assert.ok(library.has(name)); bot.capabilities.push(name) }
+    },
+  }
+  attachRuntime({ rt, ctx: {}, mainBot: async () => 'migrated-main' })
+  try {
+    for (const slug of ['deploy-accept-00000000', 'a'.repeat(48), 'a--b', 'a-']) {
+      const saved = await table['skills/save']({ name: slug, content: 'Read this native skill.' })
+      assert.equal(saved.name, userSkillName(slug))
+      assert.equal(library.get(saved.name).content, 'Read this native skill.')
+      assert.ok(bot.capabilities.includes(saved.name))
+      await table['skills/remove']({ name: slug })
+      await table['skills/remove']({ name: slug }) // idempotent revocation
+      assert.ok(!bot.capabilities.includes(saved.name))
+    }
+    assert.equal(userSkillName('weekly-review'), 'ot-user-skill-weekly-review')
+    assert.notEqual(userSkillName('a'.repeat(47) + 'b'), userSkillName('a'.repeat(47) + 'c'))
+    const content = '# Bound instructions'
+    const id = '0123456789abcdef'.repeat(2)
+    await table['skills/sync']({ items: [{ id, digest: createHash('sha256').update(content).digest('hex'), content }] })
+    assert.ok(bot.capabilities.includes(boundName(id)))
+    assert.equal(library.get(boundName(id)).content, content)
+    assert.ok(bot.capabilities.includes('ot-skill-existing'))
+    assert.ok(!bot.capabilities.includes('ot-bound-old'))
+    await table['skills/sync']({ items: [] })
+    assert.deepEqual(bot.capabilities, ['ot-skill-existing'])
+  } finally { detachRuntime() }
+})
