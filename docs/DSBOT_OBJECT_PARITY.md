@@ -56,3 +56,25 @@ Remaining: reverse native
 creation requires explicit workspace selection; initial reconciliation still
 requires a conversation read; historical event import/adoption still needs native-view evidence. Do not label full feature parity accepted until test-account
 native-view consistency evidence exists after deployment.
+
+
+## Current closeout: personal execution identity correction (acceptance pending)
+
+Private `chat/*` now delegates creation, listing, messages and actual model execution to
+its existing, explicitly scoped workspace-agent/native Bot mapping. It no longer executes
+through Main Bot. Existing Bot IDs are retained; the native Main Bot remains a separate
+native assistant, not falsely relabelled as the platform agent. No duplicate Bot is created.
+
+Owner-filtered agents bundles carry the authoritative `personal_agents` binding. During
+import, retained `chat.sqlite3` conversations/messages are copied by their original IDs
+into canonical agent history; originals are retained. Conflicting workspace/agent/message
+ownership is rejected. Chat feature loads before agent import so acceptance cannot precede
+this adoption. All owned legacy `agent:...`, plain conversation and `plugin:...` Main Bot
+Session parts are adopted; existing mapped parts are retained and scanned too. Historical
+`otp:` user request IDs are matched before text matching. No historical turn is replayed.
+The schema adapter is installed before core restoration; append-only old logs are not rewritten.
+
+Deployment and real-model/native-history proof are still pending for this correction.
+Private chat rename/remove via the old plugin API are explicitly rejected rather than
+silently altering retained legacy rows; full native part deletion parity is not implemented.
+Previously documented unrelated migration gaps and Teamily interaction verification remain open.

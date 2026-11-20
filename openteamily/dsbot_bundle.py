@@ -104,6 +104,7 @@ FEATURE_TABLES.update({
          'WHERE a.workspace_id IN (' + _OWNED + ') ORDER BY r.id'),
     ],
     'agents': [
+        ('personal_agents', 'SELECT * FROM personal_agents WHERE user_id=? ORDER BY agent_id'),
         ('workspace_agents', _scoped('workspace_agents')),
         ('workspace_agent_categories',
          'SELECT c.* FROM workspace_agent_categories c JOIN workspace_agents a ON a.id = c.agent_id '

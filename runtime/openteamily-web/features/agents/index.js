@@ -22,6 +22,7 @@ const sha = (t) => createHash('sha256').update(String(t)).digest('hex')
 const now = () => Math.floor(Date.now() / 1000)
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS native_personal_binding (singleton INTEGER PRIMARY KEY CHECK(singleton=1), workspace_id TEXT NOT NULL, agent_id TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, name_hash TEXT NOT NULL,
   summary TEXT NOT NULL, instructions TEXT NOT NULL, category TEXT, quick_starts TEXT NOT NULL DEFAULT '[]',
   revision INTEGER NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0,
@@ -81,7 +82,7 @@ export function createAgents({ db, host }) {
   }
 
   // One DS-Bot turn as this agent. Shared by the external API and team runs.
-  async function turn({ agent_id: agentId, key, text, request_id: requestId, reply_language: lang }) {
+  async function turn({ agent_id: agentId, key, text, request_id: requestId, reply_language: lang, context }) {
     const agent = await native.ensure(loadAny(agentId))
     if (agent.archived) fail('archived', 'Agent is archived', 409)
     if (typeof text !== 'string' || !text.trim() || text.length > LIMITS.text) fail('invalid', 'text must be 1–20000 characters', 400)
@@ -91,13 +92,42 @@ export function createAgents({ db, host }) {
     await host.call('skills/materialForScope', { scope: agent.workspace_id + ':' + agent.id })
     const mapping = await native.session(agent, sessionKey, agent.name)
     if (typeof services.nativeTurn !== 'function') fail('runtime-unavailable', 'Native Bot turn service unavailable', 503)
-    const reply = await services.nativeTurn(mapping.native_bot_id, mapping.native_session_id, lang ? `Reply in ${lang}.\n\n${text}` : text, requestId || `ot-agent:${newId()}`)
+    const reply = await services.nativeTurn(mapping.native_bot_id, mapping.native_session_id, [typeof context === 'string' ? context.slice(0, 20000) : '', lang ? `Reply in ${lang}.\n\n${text}` : text].filter(Boolean).join('\n\n'), requestId || `ot-agent:${newId()}`)
     const out = String(reply?.text ?? '').trim()
     if (!out) fail('empty-reply', 'DS-Bot turn ended without a reply', 502)
     return { text: out, agent_id: agent.id, agent_name: agent.name, engine: 'ds-bot', session_key: sessionKey, session_id: reply.sessionId ?? null, turn_id: reply.turnId ?? null }
   }
 
   const endpoints = {
+    async 'personal-binding'() { return one('SELECT workspace_id,agent_id FROM native_personal_binding WHERE singleton=1') || null },
+    async 'adopt-personal-chat'(p) {
+      const agent = load(ws(p), p.id)
+      const binding = one('SELECT * FROM native_personal_binding WHERE singleton=1')
+      if (binding && (binding.agent_id !== agent.id || binding.workspace_id !== agent.workspace_id)) fail('personal-binding-conflict', 'Personal agent is already explicitly bound', 409)
+      const list = Array.isArray(p.conversations) ? p.conversations : (await host.call('chat/exportLegacy', {})).conversations
+      db.exec('BEGIN')
+      try {
+        run('INSERT OR IGNORE INTO native_personal_binding VALUES(1,?,?)', agent.workspace_id, agent.id)
+        const locked = one('SELECT * FROM native_personal_binding WHERE singleton=1')
+        if (locked.agent_id !== agent.id || locked.workspace_id !== agent.workspace_id) fail('personal-binding-conflict', 'Personal binding changed during adoption', 409)
+        for (const c of list) {
+          if (!ID.test(c?.id || '')) fail('invalid', 'Invalid private conversation id', 400)
+          const existing = one('SELECT agent_id FROM agent_conversations WHERE id=?', c.id)
+          if (existing && existing.agent_id !== agent.id) fail('personal-binding-conflict', 'Private conversation belongs to another agent', 409)
+          const stamp = v => Number(v) > 1e12 ? Math.floor(Number(v) / 1000) : Number(v) || now()
+          run('INSERT OR IGNORE INTO agent_conversations VALUES(?,?,?,?,?)', c.id, agent.id, String(c.title || 'Personal chat').slice(0,120), stamp(c.created), stamp(c.updated))
+          for (const m of c.messages || []) {
+            if (!ID.test(m?.id || '') || !['user','assistant'].includes(m.role)) fail('invalid', 'Invalid private message', 400)
+            const present = one('SELECT conversation_id FROM agent_messages WHERE id=?', m.id)
+            if (present && present.conversation_id !== c.id) fail('personal-binding-conflict', 'Private message belongs to another conversation', 409)
+            run('INSERT OR IGNORE INTO agent_messages VALUES(?,?,?,?,?,?,?)', m.id, c.id, m.role, String(m.text || ''), 'succeeded', stamp(m.created), JSON.stringify({...m.meta, legacy_chat_created:m.created}))
+          }
+        }
+        db.exec('COMMIT')
+      } catch (e) { db.exec('ROLLBACK'); throw e }
+      for (const c of list) await native.session(agent, `agent:${agent.id}:${c.id}`, c.title)
+      return { workspace_id: agent.workspace_id, agent_id:agent.id, native_bot_id:(await native.ensure(agent)).native_bot_id }
+    },
     async reconcile() {
       const items = []
       for (const row of all('SELECT * FROM agents ORDER BY id')) {
@@ -208,7 +238,7 @@ export function createAgents({ db, host }) {
       run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', userId, convo.id, 'user', text, 'sent', now(), JSON.stringify({ nativePending:true }))
       const replyId = newId()
       try {
-        const reply = await turn({ agent_id: agent.id, key: convo.id, text, request_id: `ot-agent:${userId}`, reply_language: p.reply_language })
+        const reply = await turn({ agent_id: agent.id, key: convo.id, text, request_id: `ot-agent:${userId}`, reply_language: p.reply_language, context: p.context })
         run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({session_id:reply.session_id}), userId)
         run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', replyId, convo.id, 'assistant', reply.text, 'succeeded', now(),
           JSON.stringify({ engine: 'ds-bot', session_id: reply.session_id, turn_id: reply.turn_id }))

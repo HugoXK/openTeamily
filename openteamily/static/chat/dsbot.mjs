@@ -20,10 +20,10 @@ export function dsbotRoute(method, path, body, personalAgentId) {
   const [, , cid, tail] = match;
   const base = String(path).replace(/\/conversations.*$/, '');
   if (!cid && method === 'GET') return {endpoint: 'chat/conversations', payload: {}, shape: 'list', base};
-  if (!cid && method === 'POST') return {endpoint: 'chat/create', payload: {title: (body && body.title) || ''}, shape: 'created'};
-  if (cid && !tail && method === 'GET') return {endpoint: 'chat/messages', payload: {conversation_id: cid}, shape: 'open', cid};
+  if (!cid && method === 'POST') return {endpoint: 'chat/create', payload: {title: (body && body.title) || ''}, shape: 'created', base};
+  if (cid && !tail && method === 'GET') return {endpoint: 'chat/messages', payload: {conversation_id: cid}, shape: 'open', cid, base};
   if (cid && tail === '/messages' && method === 'POST') {
-    return {endpoint: 'chat/send', payload: {conversation_id: cid, text: (body && body.body) || ''}, shape: 'sent', cid};
+    return {endpoint: 'chat/send', payload: {conversation_id: cid, text: (body && body.body) || ''}, shape: 'sent', cid, base};
   }
   if (cid && tail === '/read' && method === 'POST') return {endpoint: null, shape: 'read', cid};
   return null;
@@ -109,14 +109,15 @@ export async function dsbotRequest(fetcher, route, agentId, headers) {
     skillsSyncedAt = Date.now();
     await syncSkillsToDsBot(fetcher, headers, PLUGIN_API).catch(() => { skillsSyncedAt = 0; });
   }
-  const out = await call(route.endpoint, route.payload);
+  const scope = /\/workspaces\/([^/]+)\/agents\//.exec(route.base || '');
+  const out = await call(route.endpoint, {...route.payload, agent_id:agentId, ...(scope ? {workspace_id:scope[1]} : {})});
   if (out.error) return out.error;
   const value = out.value;
   if (route.shape === 'list') return {status: 200, body: {items: (value.items || []).map(row => conversation(row, agentId))}};
   if (route.shape === 'created') return {status: 201, body: {conversation: conversation(value, agentId)}};
   if (route.shape === 'sent') return {status: 201, body: {reply: {id: value.reply.id, status: 'succeeded', engine: 'ds-bot'}}};
   // open: the conversation row comes from the list (one small extra call).
-  const listed = await call('chat/conversations', {});
+  const listed = await call('chat/conversations', {agent_id:agentId, workspace_id:scope?.[1]});
   const row = listed.value && (listed.value.items || []).find(item => item.id === route.cid);
   if (!row) return {status: 404, body: {error: {code: 'chat/not-found'}}};
   return {status: 200, body: {conversation: conversation(row, agentId), items: (value.items || []).map(message)}};

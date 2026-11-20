@@ -1,6 +1,7 @@
 // Private chat with the personal agent, executed as native DS-Bot turns in the
 // user's own DS-Bot (moved from conversations.py / personal.py / agent_memory.py).
-// Each conversation is its own native DS-Bot session ('plugin:<id>').
+// Private chat now delegates to the same mapped native Bot as its workspace agent.
+// Former plugin:<id> Main-Bot parts and local rows are retained and adopted once.
 import { openDatabase, newId, fail } from '../../src/store.js'
 import { rank, noteBlock } from './recall.js'
 
@@ -36,8 +37,6 @@ export default function chat(host) {
     if (!row) fail('chat/not-found', 'Conversation not found')
     return row
   }
-  let queue = Promise.resolve()
-  const serial = (fn) => { const run = queue.then(fn, fn); queue = run.catch(() => {}); return run }
 
   async function recall(text, profile) {
     if (profile?.recall === 'off') return { notes: '', refs: [] }
@@ -47,9 +46,13 @@ export default function chat(host) {
     return { notes: noteBlock(hits, text), refs: hits.map(({ page, score }) => ({ id: page.id, revision: page.revision ?? 1, title: page.title ?? '', score: Number(score.toFixed(3)) })) }
   }
 
-  return {
+  const feature = {
     pages: ['chat'],
     endpoints: {
+      async exportLegacy() {
+        const d = await database()
+        return {conversations:d.prepare('SELECT * FROM conversations ORDER BY created,id').all().map(c=>({...c,messages:d.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY created,id').all(c.id).map(m=>({...m,meta:JSON.parse(m.meta)}))}))}
+      },
       async conversations() {
         return { items: (await database()).prepare('SELECT * FROM conversations ORDER BY updated DESC, id LIMIT 200').all() }
       },
@@ -113,26 +116,46 @@ export default function chat(host) {
         } catch (error) { d.exec('ROLLBACK'); throw error }
         return { conversations, messages, done: payload?.finish === true }
       },
-      async send(payload) {
-        const convo = await conversation(payload?.conversation_id)
-        const text = typeof payload?.text === 'string' ? payload.text.trim() : ''
-        if (!text || text.length > 20000) fail('chat/invalid', 'text must be 1–20000 characters')
-        const services = await host.runtime()
-        if (typeof services.chatTurn !== 'function') fail('chat/runtime-unavailable', 'DS-Bot chat is not available in this runtime')
-        const d = await database()
-        const userRow = { id: newId(), created: now() }
-        d.prepare("INSERT INTO messages VALUES(?,?,'user',?,?,'{}')").run(userRow.id, convo.id, text, userRow.created)
-        let profile = null
-        try { profile = await host.call('personal/get', {}) } catch { profile = null }
-        const { notes, refs } = await recall(text, profile)
-        const prompt = composePrompt({ text, profile, notes })
-        const turn = await serial(() => services.chatTurn('plugin:' + convo.id, prompt, 'otp:' + userRow.id))
-        const reply = { id: newId(), created: now() }
-        const meta = { engine: 'ds-bot', session_id: turn.sessionId ?? null, turn_id: turn.turnId ?? null, memory_refs: refs }
-        d.prepare("INSERT INTO messages VALUES(?,?,'assistant',?,?,?)").run(reply.id, convo.id, String(turn.text ?? ''), reply.created, JSON.stringify(meta))
-        d.prepare('UPDATE conversations SET updated=? WHERE id=?').run(reply.created, convo.id)
-        return { user_message_id: userRow.id, reply: { id: reply.id, text: String(turn.text ?? ''), created: reply.created, meta } }
-      },
+
     },
   }
+  let linked
+  const binding = async p => {
+    const d = await database()
+    const saved = d.prepare("SELECT value FROM chat_state WHERE key='native_personal_binding'").get()
+    const existing = saved ? JSON.parse(saved.value) : await host.call('agents/personal-binding',{})
+    const scope = p?.agent_id && p?.workspace_id ? {agent_id:p.agent_id,workspace_id:p.workspace_id} : existing
+    if (!scope || !ID.test(scope.agent_id) || !ID.test(scope.workspace_id)) fail('chat/identity-required', 'Explicit personal agent and workspace mapping required')
+    if (existing && (existing.agent_id !== scope.agent_id || existing.workspace_id !== scope.workspace_id)) fail('chat/identity-conflict', 'Personal agent mapping differs from its durable binding')
+    if (!linked) {
+      linked = (async () => {
+        const conversations = d.prepare('SELECT * FROM conversations ORDER BY created,id').all().map(c => ({...c,messages:d.prepare('SELECT * FROM messages WHERE conversation_id=? ORDER BY created,id').all(c.id).map(m=>({...m,meta:JSON.parse(m.meta)}))}))
+        const result = await host.call('agents/adopt-personal-chat',{...scope,id:scope.agent_id,conversations})
+        d.prepare("INSERT OR REPLACE INTO chat_state VALUES('native_personal_binding',?)").run(JSON.stringify(scope))
+        return result
+      })().catch(e => {linked=undefined;throw e})
+    }
+    return {...await linked,id:scope.agent_id}
+  }
+  for (const name of ['conversations','create','messages','send','rename','remove']) {
+    feature.endpoints[name] = async (p = {}) => {
+      const scope = await binding(p)
+      const payload = {...p,...scope}
+      if (name === 'conversations') return host.call('agents/conversations',payload)
+      if (name === 'create') return (await host.call('agents/conversation-create',payload)).conversation
+      if (name === 'messages') return host.call('agents/messages',payload)
+      if (name === 'send') {
+        const profile = await host.call('personal/get',{})
+        const {notes,refs} = await recall(p.text,profile)
+        const context = composePrompt({text:'',profile,notes}).trim()
+        const out = await host.call('agents/send',{...payload,context})
+        return {user_message_id:out.message.id,reply:{...out.reply,meta:{...out.reply.meta,memory_refs:refs}}}
+      }
+      fail('chat/native-operation-required','Use canonical agent conversation management; retained legacy rows were not altered')
+    }
+  }
+  const importLegacy = feature.endpoints.import
+  feature.endpoints.import = async p => {const out=await importLegacy(p);linked=undefined;return out}
+  return feature
+
 }

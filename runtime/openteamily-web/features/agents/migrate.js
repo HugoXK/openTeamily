@@ -58,5 +58,9 @@ export async function importOfficialBundle(endpoints, bundle) {
   if (typeof endpoints.importHistory === 'function') {
     await endpoints.importHistory({ conversations: tables.agent_conversations ?? [], messages: tables.agent_messages ?? [] })
   }
+  for (const binding of tables.personal_agents || []) {
+    if (agentsById.get(binding.agent_id)?.workspace_id !== binding.workspace_id) throw new Error('personal agent ownership mismatch')
+    await endpoints['adopt-personal-chat']({workspace_id:binding.workspace_id,id:binding.agent_id})
+  }
   return result
 }
