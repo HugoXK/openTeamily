@@ -678,3 +678,12 @@ test('the status line is a polite live region for the create receipt', () => {
   assert.match(html, /<p id="status" role="status" aria-live="polite">/);
   assert.equal(html.includes('catalog-reuse-note'), false);
 });
+
+test('document thumbnails preserve only bounded semantic text blocks', () => {
+  const model = thumbModel({type:'document',heading:'Title',lines:['one'],blocks:[
+    {type:'heading',text:'Title'}, {type:'list',text:'item'}, {type:'code',text:'x = 1'},
+    {type:'script',text:'not a supported shape'}, {type:'quote',text:'quote'},
+  ]});
+  assert.deepEqual(model.blocks.map(block=>block.type), ['heading','list','code','quote']);
+  assert.equal(model.blocks[1].text,'item');
+});

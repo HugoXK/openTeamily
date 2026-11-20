@@ -32,7 +32,7 @@ with a 1px ring instead of heavy shadows.
 | Settings hub | 04a-settings-top, 04b-settings-bottom | settings | Centered ~32rem column, 11px group labels, white rounded groups, 2.5rem rows with 16px outline icons and muted chevrons, compact identity card and 成员 pill. | No usage/credits card and no 创作者与奖励 / 套餐 groups (out of scope by design). |
 | Settings – language | 09c-settings-language | settings-language | Plain “‹ 语言” back header; label above full-width rounded selects in one white card; checkbox row. | — |
 | Settings – Agent API | 09d-settings-agent-access | settings-agent-access | Plain back header, grey empty boxes, accurate note pointing to per-agent API keys on /agents. | Keys are not aggregated on this page; no AI-client authorisation. |
-| Settings – connectors / channels | 09f-settings-connectors, 09i-settings-channels | settings-connectors, settings-channels | Plain back header, compact rows, pill actions. | Connect actions stay unconnected (no OAuth). |
+| Settings – connectors / channels | 09f-settings-connectors, 09i-settings-channels | settings-connectors, settings-channels | Plain back header, compact rows, pill actions. | Connectors: real connect/disconnect through the user's own Composio API key (docs/COMPOSIO.md); rows stay disabled and say 未配置 Composio until that key is saved, and apps without a Composio toolkit stay 未接通. Only verified with a fake Composio transport. Channels stay unconnected. |
 | Settings – skill configuration | 09e-settings-skill-configuration | settings-skill-configuration | New `/settings/skill-configuration` subpage: “‹ 技能配置” back, green info banner, collapsible “正在编写 Skill?”, “我的密钥” with a green “+ 添加密钥”, empty state “暂无密钥”. Adding a key uses the existing write-only `/v1/skill-secrets` API; values are never echoed. | No in-product Skill-authoring tutorial (the disclosure only restates the name rules). |
 | Settings – runtimes | 09g-settings-runtimes-top, 09h-settings-runtimes-bottom | runtimes | `/runtimes` now uses a “‹ 运行时” back header, underline 运行时/连接 tabs, white ring cards with glyphs, a local FlyBot card with numbered three-step setup and zipapp download tiles, and a detected-runtime bar with 检测 / + 连接远程机器. Hosted cloud Agent and hosted computer stay honestly 未提供 / 即将推出. | OpenTeamily has no hosted cloud Agent, hosted computer, or official desktop app; download tiles point at flybot.pyz and `/download`, not a vendor desktop package. |
 | Space (works) | 07a/07b/07c-space-*, 11a–11d | space | Full-height white directory column at the left; scope/filter/layout toolbar across the top of the content; green 新建 pill, pill search, kind list with soft-green current row; centered empty state with tinted CTA rows and round green arrows. Also fixes a nested `<form>` that ended the editor form early (save/back/delete buttons rendered outside the editor). Populated library (11a–11d): grid cards with a kind badge (DOC/WEB/…), ⋯ menu shown on hover, soft kind-tinted cover, title and source line; list view with 名称 / 来源 / 创建时间 / 最近动态 columns from real `created`/`updated`; ⋯ menus — grid 重命名/删除, list 发送到聊天/重命名/删除 — where 重命名 opens the editor on the title and 删除 confirms then calls the existing remove API. Opening a document shows a calm reading column (large borderless title, borderless body). Grid cards now show a bookmark icon (disabled, 未接通). Title/source typography matches the denser recorded cards. | Covers show the kind, not thumbnails. Media items can be sent to a social group or DM through the existing attachment API; documents, websites, boards and slides stay disabled and labelled 未接通 (that API only accepts media). Bookmark is not wired (no favorites API). Documents open in place, not in a new tab. |
@@ -114,3 +114,148 @@ Wired in this pass: media attach shortcuts, `/space?new=` and `/automations?temp
 Remaining visual gaps: per-message hover actions still sit in flow under the bubble (Teamily floats them); the new-document editor in space is plain; thumbnails are drawn from text, not rendered screenshots; connector marks remain original geometrics.
 
 `impeccable detect` (v4.9.2) on this pass’s changed pages and styles (chat, memory, discover, artifacts, settings, about, profile, automations, shell, thumb.mjs, rich.mjs): 2 findings, down from 11 in the previous pass. Both are nested-card reports for popovers that open inside a card (the session-pane compose menu and the composer’s +/attachment sheets) and were left as detector false positives. The onboarding page (not changed here) still has its pre-existing cramped-padding advisories.
+
+## Functional parity pass 6 (2026-11-19)
+
+This pass starts at `af18ab1a`, reads the existing private reference notes/images and
+tracking issues #9/#14/#86/#90/#231/#243/#264, and combines interaction repairs with
+real persistence. It is **not all-feature completion**, and no page is declared
+accepted merely because CI renders it. Earlier follow-up sections are historical;
+this section and `FUNCTIONAL_COMPLETION.md` describe the current boundaries.
+
+| Surface / evidence | Implemented and locally exercised | Still different / unverified |
+|---|---|---|
+| Chat message hover and menu — 01b/01b2 | Reaction/overflow controls float outside the bubble; hidden legacy edit/pin/retract controls no longer reserve a row. Keyboard overflow entry and Shift-F10 open the same real menu. Editing, reactions, copy, pin, forwarding, selection and author-only retraction retain their existing APIs. | Reference shows an emoji-only hover affordance; our extra keyboard-accessible overflow entry is deliberate. Agent-conversation messages still have a different action surface. Translate / ask-AI / personal delete remain disabled, not simulated. |
+| Save a social message — menu in 01b2 | A native dialog explains that **every workspace member can read the copy**, and retraction will not remove it. Explicit confirmation calls a membership-checked, revision-checked, idempotent save endpoint; it creates a versioned document and source record. Cancel sends nothing. Repeated saves return the same artifact. | Only text is copied, not attachments. The reference menu was captured without clicking this operation; its dialog and persistence semantics remain **unverified**. |
+| In-conversation search — 01c1/01c2, functional defect #264 | Click/Enter/Space jumps to a loaded message, outlines it briefly, and supports both agent and social message IDs. A hit outside the loaded window explains the limitation without fake navigation. No-hit text is explicit. Closing/Escape restores the pre-search scroll position and entry focus. 390px capture has no horizontal overflow. | No automatic loading of older windows; resource/attachment search tabs and cross-resource thumbnails remain incomplete. Reference hit-click/close behavior was not recorded: **unverified**. |
+| Group member operations — 10c/10d, #243 | Removing a group agent now asks in place; cancel sends nothing, confirm calls the existing API, and stale workspace/conversation state cannot issue the removal. #124's explicit selected-agent reply protocol is unchanged. | No captured removal operation; **unverified**. Group announcement, proactive agent policy, auto-translate, mute and A/V remain disabled. |
+| Library document — 11d, 05c for editor language only | New/existing documents use a WYSIWYG surface backed by the same markdown/revision/version/export/share APIs. Headings/lists/quote/code/basic emphasis/rules, plain-text paste, source toggle, author/revision metadata and an in-toolbar save action. Untouched source stays byte-for-byte; duplicate concurrent submits are blocked and failures do not show success. Websites still edit HTML source. | 11d records only a plain document view, not rich editing. Rich toolbar operation parity is **unverified**. Supported markdown subset, no collaborative editing, image/table editing or server autosave; opens in place rather than a new tab. |
+| Library bookmark — 11a–11c | Per-user, persistent favorite table/API; bookmark state survives reload and the 收藏 scope filters actual server flags. Authorization, CSRF, isolation and idempotency are tested. | Reference shows the icon but not its toggled result; interaction semantics **unverified**. This is separate from Discover public-work collections. |
+| Cover fidelity — 11a / previous pass | Document covers preserve the first six actual block shapes (heading, list, code, quote, text), with bounded text; safe DOM rendering only. Other supported cover models remain content-derived. | Not real browser-rendered website/document screenshots. No reference for all populated work kinds; **unverified**. |
+| Skill catalogue — no reference skill-library capture | Search is functional; pretend in-memory “已安装” toggles are removed. Install controls are disabled and say 未接通. | Real install/uninstall, skill files, execution and runtime loading are still missing. No claim of persistence or installation. |
+
+### CI investigation (no reruns)
+
+The original main screenshot run `44495861614` had three hard failures:
+
+- `artifacts_document`: a real product race. `loadList()` accepted an older workspace
+  response after the picker had moved to another workspace and could replace the
+  populated list with an old empty list. A deterministic local delayed-response
+  reproduction shows the seeded document missing before the change and present
+  after. A generation + workspace check now rejects stale responses (also protects
+  search requests). The original seeded-document assertion is retained.
+- `runtimes_connect_key_prefix_only` / `runtimes_connect_daemon_after_key` (and soft
+  `runtimes_connection`): fixture timing, not missing persistence. The page shows
+  `main-panel` before asynchronous key/connection loading completes. Delaying the
+  key response reproduces an empty list at panel visibility and the correct seeded
+  key afterwards. The screenshot harness now waits on the actual key, connection
+  and daemon state before applying the same assertions. No runtime backend changes.
+- Management (3.11), run `44495861780`: its log says **476 tests OK**, then “The
+  operation was canceled.” It is not evidence of a failing Python assertion; the
+  cancellation initiator is unknown. No job was rerun and no product change is
+  claimed to repair GitHub cancellation.
+
+### Merge-gate follow-up recommendation
+
+The body-only closing-keyword check misses closing references in older commits
+newly entering main. Coordinate a separate gate patch to inspect **every commit in
+base..head** (including merged-in commits) plus the PR body, and test mixed-case,
+qualified repository references and multiline messages. Fail closed and require a
+reviewed exact SHA. This pass neither modifies the shared gate nor rewrites history.
+
+### Evidence and remaining capture needs
+
+Private after-renders live outside the repository under
+`2026-11-19-parity-functional6-after/`; targeted shots cover hover/menu, the sharing
+warning, search jump/empty/narrow, rich/source document, favorites and honest skills.
+Impeccable 4.9.2: two existing nested-card advisories for the compose popovers, plus
+one pre-existing repeating-gradient advisory from the original avatar preview's
+scanline texture (`look/app.css`). The customizer is unchanged; no new contrast or
+cramped-padding finding on the document editor.
+
+Small fresh reference needs (not performed here): (1) a disposable document while
+editing a heading/list and after reload, (2) a disposable message's save-to-library
+confirmation and resulting document, (3) a library bookmark toggled and 收藏 opened,
+(4) search-hit click and close scroll behavior. These operations are not inferred
+from static menu screenshots. All tracking/unverified issues remain open.
+
+Initial local validation: 478 Python tests; 339 Node tests across all 26 CI-listed suites;
+95 clean-fixture browser screenshots with zero hard/soft failures (including
+heading-toolbar editing, source round-trip, saved-message API readback and bookmark
+reload). Follow-up targeted chat/artifact tests cover final error-state/access
+refinements. Compileall, JavaScript syntax, CLI help, whitespace and quick
+secrets/assets/dependency/license review passed. Synthetic local evidence does not
+verify real providers, production deployment or Teamily operation equivalence.
+
+## Connected app tool execution (2026-11-19)
+
+The per-user Composio settings flow now has a task-scoped tool broker and an
+explicit one-shot approval area on the connectors page. Python FlyBot/zipapp and
+container management task loops can feed discovered schemas to an OpenAI-style
+model, submit immutable proposals, wait for owner approval and feed results back.
+No Composio key is given to the runtime. This is functional in **synthetic/mock
+tests only**, not real provider or Teamily parity acceptance. Group/automation/
+gateway work and standalone DSH sessions do not receive personal-tool access.
+The skill-library install control is now disabled by functional pass 6, not a real installed skill.
+Full boundaries, user steps and remaining blockers: [CONNECTED_TOOLS.md](CONNECTED_TOOLS.md).
+
+Ordinary main synchronization: `077cf231` (connected-tools #267) landed during
+the first read-only gate and made the earlier head conflict. Both append-only
+documentation sections were retained; product code merged without conflict.
+Final integrated local validation: **490 Python tests, 344 Node tests in 26
+suites, 95 browser screenshots with no hard/soft failures**. No CI job was rerun.
+
+## Visible-functions aggregate, skills first (2026-11-19)
+
+This corrects a real usability defect: the skills library previously had no execution lifecycle. It now has original actual content, persisted scoped bindings, supported-runtime handshake, digest-verified model-context loading and acknowledgement, plus real revocation. See [SKILLS](SKILLS.md) and the [complete visible-function execution inventory](VISIBLE_FUNCTIONS_INVENTORY.md). This is **instruction-skill functionality**, not a Teamily marketplace, executable package manager, or standalone DSH integration.
+
+Other real flows added: private configured-model translate/ask-AI, revisioned group announcements, all-work-kind version-pinned chat send/forward, explicit saved-document/memory insertion, emoji insertion, real skills/tools navigation and persisted rendering preferences. These are not cosmetic enabled buttons or hardcoded model output. Existing #268 rich editor, message hover/search behavior, stale work-list response guard and daemon fixture readiness remain intact.
+
+### Scene evidence boundary
+
+Existing private reference notes and images remain `/workspace/openteamily-review/2026-11-19-parity-capture/notes.md`: 01b/01b2 message hover/menu, 01c1/01c2 search, 10c/10d group information, 11a–11d works/list/menu/detail. Reference comparison is limited to those scenes. Skills lifecycle, translation/ask-AI dialog, announcement editor and their permission/error interactions have **no reference operation capture** and remain unverified for parity; no fresh browser dispatch was attempted. The new original dialogs preserve the shell rather than invent Teamily claims. True page-render thumbnails, full editor fidelity and unsupplied scenes remain gaps.
+
+Private synthetic after evidence: `/workspace/openteamily-review/2026-11-19-visible-functions-after/`. No screenshots, account data, Teamily icons/fonts/logos/prose or secrets are added to this PR. Impeccable 4.9.2 findings and local validation are recorded with the private evidence; CI screenshots are local app evidence only, not parity or real-vendor acceptance.
+
+The prior main `af18ab1a` failure diagnosis and #268 corrections above are retained: artifacts were a real stale-response product race; runtime key-prefix/daemon scenes were fixture readiness/timing defects; cancelled management(3.11) was not proof of a product failure. No CI reruns or empty retrigger commits are used.
+
+### Merge-gate keyword gap (recommendation only)
+
+The gate's PR-body Related-only policy does not stop older commit messages from containing automatic issue-closing keywords. Recommend a separately coordinated gate change that inspects all proposed merge commit messages (with explicit allowlist/review policy for historical inherited text) and tests that issue auto-closure cannot bypass the intended tracking policy. This PR does not rewrite history, edit others' commits, close tracking issues, or change shared gate code. New commits and PR body use Related-only references.
+
+### Local validation for this aggregate (not vendor/parity acceptance)
+
+- 503 Python tests passed; all 27 management Node CI commands passed (372 tests). Additional runtime-image 23, web-slots 16, social-host 26, social-plugin 165 and upstream-pin 4 tests passed. Syntax/compile/CLI entry and diff checks passed. Shared merge-gate regressions: 13 passed; this is not an exact-head merge authorization.
+- Final fresh synthetic browser run: **104 screenshots, zero hard or soft failures**, including skill install/reload → real daemon/model context receipt → uninstall, private assistance, announcement reload, resource/emoji draft insertion and dark-action contrast. Screenshots remain private in the `release/` subdirectory of the evidence path above.
+- Impeccable **4.9.2** retained 13 static warnings: six contrast, three palette, two nested-card, one dark-glow and one stripe-gradient. They are not declared “all cleared.” Existing dark-theme/nested-shell heuristics require scene judgement. Follow-up actual computed normal/hover light/dark testing found and corrected unsafe new dark modal primary actions; final tested pairs were at least **5.55:1**. Expanded skill cards now align at the top and wrap content/digests at 390px. Full-scene pixel parity is still unverified.
+- Local upstream/service suites were attempted without installs: upstream reported 605 passes / 173 failures, with missing esbuild/DSH/undici/transport modules and consequent gateway assertions (not assumed flaky); the TypeScript social service could not load `tsx` (388 failures). Those local runs are **not green**. No package installation, environment/proxy workaround, assertion weakening or vendor changes were made. CI's normal dependency setup and exact push/PR checks are still required; Docker/vendor builds were not claimed locally.
+- Private evidence also records two local acceptance-test defects corrected before delivery: async browser predicates could treat a pending Promise as truthy before persisted runtime completion, and resource checks ran before the detail fetch completed. Semantic API polling and modal-close waits now assert actual outcomes. A genuine product race allowing late resource insertion after modal cancellation was fixed and covered by a negative test. These were local reproductions, not CI reruns.
+
+Ordinary main sync incorporated contributor #307 at main `2e3e7de` (help/terms/privacy pages and real menu links); no competing implementation was added. The census now includes these landed surfaces. Earlier local counts above refer to the pre-sync baseline; exact-head validation and CI must include the newly landed docs suites.
+
+Final scene review found a genuine new dark-dialog defect despite the primary-button contrast check: undefined generic surface variables fell back to white while text inherited the dark theme. Assistance/announcement/resource dialogs and document cards now use actual shared theme tokens. Browser regression additionally checks heading/label/helper-text contrast across all four new dialog surfaces; this is not a blanket dark-theme or Teamily parity certification.
+
+
+## Skills/runtime usability follow-up (not Teamily parity)
+
+Library structure/branding retained; a run-and-proof section below the catalogue adds actual readiness, isolated skill execution, reload-persistent result history, cancellation and explicit document saving. Automation scopes are an original functional extension. No skill-operation reference capture exists, so these scenes are **unverified against Teamily**, even when synthetic CI screenshots pass. CI screenshot acceptance now includes actual UI-run → digest receipt/result → reload → save → real rich editor; no manual account/browser operation or real-vendor claim. Runtime/member/cancellation defects are functional fixes, not cosmetic parity completion. Remaining static design warnings are retained in private Impeccable4.9.2 findings, not waived by CI.
+
+
+### PR342 substantive repair checkpoint (not parity acceptance)
+
+The first exact-head screenshot runs exposed a genuine HTTP400: the saved-result editor target existed in JavaScript but not the strict HTML query allowlist. The repair permits only a complete lowercase32hex workspace/artifact pair on `/space` and `/artifacts`; duplicate/extra/encoded/traversal/asset queries still fail. Raw HTTP plus restarted-session document reads cover successful navigation, unauthenticated/foreign-workspace/missing-record denial. UI screenshots must still prove actual editor text and uninstall after that step; a saved-document id is not whole-flow acceptance.
+
+The enabled run primary now uses opaque white-on-green normal/hover states in both themes, rather than dark ink inherited from the shared dark gradient. CI measures actual computed contrast/background/opacity for all four states and captures the dark hover scene; no existing assertion or scan finding is suppressed. The result-document link stays together instead of wrapping in half.
+
+Node22 annotation dismissal was a test-ordering defect reproduced with a controlled clock: the old5ms barrier can become due **before** the close timer scheduled after an awaited mock send. An owned, test-only loader overlays only that helper with a causal microtask-then-zero-timer barrier, never a longer sleep. All vendor test bodies/assertions remain identical and the vendor bytes/pin remain unchanged; unexpected upstream source hashes fail closed. Independent tests retain normal/delayed send/dismiss/clear and failed-send cases. This is not an inference/privacy-isolation claim or permission to rerun an old CI job.
+
+Management cancellation was independently diagnosed from its check annotation: `The job has exceeded the maximum execution time of 5m0s`. The full500+ Python cases and28 Node command lists remain required; the job has a bounded10m execution budget. No test is skipped, retried, or loosened. Actual Docker/build and exact-head CI results remain separate acceptance evidence.
+
+The owner's expanded six-category scope is tracked in [FUNCTIONAL_COMPLETION_PLAN.md](FUNCTIONAL_COMPLETION_PLAN.md); none is silently dropped or treated as solely a credentials problem.
+
+
+#### Cross-realm completion correction
+The intermediate314a582 head passed all screenshot/management/build checks, including actual rich-editor opening, reload-persistent uninstall and all four enabled button contrasts (5.55:1 normal,6.69:1 hover), but its host-microtask clock overlay was insufficient for the component's **separate VM Promise realm**. Both Node22/24 still observed dismissal0. This is not treated as flakiness or rerun permission. The corrected owned fixture observes the actual `dismiss` or `reportError` callback and awaits that completion; unresolved sends cannot become completed, and no number of microtasks or milliseconds is assumed. Tests execute the real pinned async-send code in a VM, reproduce BOTH old helper failures and cover delayed/normal/error/pending sends. All original assertion bytes and vendor source remain intact; only test-bench completion/wait wiring changes. Exact-head first-run CI remains mandatory; no old job/head is rerun.
+
+## Functional completion follow-on (t234u/t235u, evidence pending)
+Adds actual registration/first-use, private imported instructions/version/revoke, authorised SSE invalidations with draft-aware revision controls, and typed Office/text-PDF downloads. CI scene definitions109–115 exercise real app pages and controlled runtime paths; images are not committed. No capture/contrast/parity success is claimed until exact-head CI artifacts are inspected. Existing342 scenes and race fixes remain. Full CRDT/Office editing, audio/video/media generation, semantic memory, executable/DSH/shared skills and other plan gaps remain.

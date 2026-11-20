@@ -10,7 +10,7 @@ The operator enables providers with `--oidc-providers`, a private JSON file cont
 |---|---|---|
 | GET | `/v1/auth/providers` | `{items:[{id,type,label}]}` for enabled providers only. Unauthenticated |
 | POST | `/v1/auth/oidc/start` | `{provider}`. Exact Origin required. Returns `{authorization_url}`. PKCE S256, unguessable `state`, and (except GitHub) a `nonce` are stored server-side, wrapped, one-time, 10 minutes |
-| GET | `/v1/auth/oidc/callback` | Provider redirect with `code` and `state`. Verifies token/signature/audience/issuer/nonce/expiry and a **verified** email. Sets the session cookie and returns `302` `/settings` |
+| GET | `/v1/auth/oidc/callback` | Provider redirect with `code` and `state`. Verifies token/signature/audience/issuer/nonce/expiry and a **verified** email. Sets the session cookie and returns `302` `/` |
 | POST | `/v1/auth/oidc/link` | `{token}` when already signed in (CSRF + Origin), or `{token,username,password}` to confirm. Required when a verified email already belongs to an account and the caller was not signed in |
 
 `redirect_uri` is always `{origin}/v1/auth/oidc/callback`. Authorization Code + PKCE only. Google and generic OIDC use an ID token (RS256, JWKS). GitHub uses the emails API and requires a primary verified address. New accounts get a unique username derived from the email local part and a random, unusable password so only the linked provider (or a later password set) can sign in.

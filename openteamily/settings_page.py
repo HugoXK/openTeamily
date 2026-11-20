@@ -4,6 +4,7 @@ Serves only an exact asset allowlist. API security stays in App; this wrapper
 does not interpret /v1 routes. Self-written; no upstream or Teamily source.
 """
 import os
+import re
 from pathlib import Path
 import stat
 from urllib.parse import parse_qsl, urlsplit
@@ -13,6 +14,9 @@ from . import discover
 
 class SettingsPage:
     ASSETS = {
+        '/register': ('register', 'index.html', 'text/html; charset=utf-8'),
+        '/register/app.mjs': ('register', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/register/app.css': ('register', 'app.css', 'text/css; charset=utf-8'),
         '/settings': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/appearance': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/language': ('settings', 'index.html', 'text/html; charset=utf-8'),
@@ -23,6 +27,7 @@ class SettingsPage:
         '/settings/agent-access': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/connectors': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/skill-configuration': ('settings', 'index.html', 'text/html; charset=utf-8'),
+        '/settings/connected-tools.mjs': ('settings', 'connected-tools.mjs', 'text/javascript; charset=utf-8'),
         '/settings/app.mjs': ('settings', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/settings/app.css': ('settings', 'app.css', 'text/css; charset=utf-8'),
         '/automations': ('automations', 'index.html', 'text/html; charset=utf-8'),
@@ -53,8 +58,10 @@ class SettingsPage:
         '/install/flybot.ps1': ('install', 'flybot.ps1', 'text/plain; charset=utf-8'),
         '/shell/app.css': ('shell', 'app.css', 'text/css; charset=utf-8'),
         '/shell/app.mjs': ('shell', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/rich-editor.mjs': ('shell', 'rich-editor.mjs', 'text/javascript; charset=utf-8'),
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
+        '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.css': ('chat', 'app.css', 'text/css; charset=utf-8'),
         '/messenger': ('messenger', 'index.html', 'text/html; charset=utf-8'),
@@ -82,8 +89,22 @@ class SettingsPage:
         '/about/app.css': ('about', 'app.css', 'text/css; charset=utf-8'),
         '/look/app.mjs': ('look', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/look/app.css': ('look', 'app.css', 'text/css; charset=utf-8'),
+        '/skills': ('skills', 'index.html', 'text/html; charset=utf-8'),
+        '/skills/imports.mjs': ('skills', 'imports.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/workspace-events.mjs': ('shell', 'workspace-events.mjs', 'text/javascript; charset=utf-8'),
+        '/skills/execution.mjs': ('skills', 'execution.mjs', 'text/javascript; charset=utf-8'),
+        '/skills/app.mjs': ('skills', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/skills/app.css': ('skills', 'app.css', 'text/css; charset=utf-8'),
+        '/help': ('help', 'index.html', 'text/html; charset=utf-8'),
+        '/terms': ('terms', 'index.html', 'text/html; charset=utf-8'),
+        '/privacy': ('privacy', 'index.html', 'text/html; charset=utf-8'),
+        '/docs/app.css': ('docs', 'app.css', 'text/css; charset=utf-8'),
+        '/': ('home', 'index.html', 'text/html; charset=utf-8'),
+        '/home': ('home', 'index.html', 'text/html; charset=utf-8'),
+        '/home/app.mjs': ('home', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/home/app.css': ('home', 'app.css', 'text/css; charset=utf-8'),
     }
-    PREFIXES = ('/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about')
+    PREFIXES = ('/register', '/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")
@@ -161,12 +182,22 @@ class SettingsPage:
         if not query:
             return True
         if path in ('/space', '/artifacts'):
+            # A result link selects a record; the API still authorizes every read.
+            # Match the complete raw pair: no duplicates, extras, encoded keys,
+            # traversal, or queries on the CSS/JS assets can slip through.
+            identifier = r'[0-9a-f]{32}'
+            if re.fullmatch(rf'workspace={identifier}&artifact={identifier}|artifact={identifier}&workspace={identifier}', query):
+                return True
             # new=<kind> opens that 新建 editor (chat composer 创建 grid).
             return query in ('view=created', 'view=starred', 'view=memory', 'view=meetings',
                              'new=document', 'new=website', 'new=slides', 'new=dashboard',
                              'new=whiteboard')
         if path == '/automations':
-            # template=<id> opens the editor prefilled from a known template.
+            # template=<id> opens the editor prefilled from a known template;
+            # runs=<filter> keeps the run-history filter shareable. The two are
+            # one-shot and permanent respectively, so they never share a URL.
+            if query in ('runs=all', 'runs=succeeded', 'runs=failed'):
+                return True
             from .automations import TEMPLATES
             template = query[len('template='):] if query.startswith('template=') else ''
             return template in TEMPLATES and template != 'custom'

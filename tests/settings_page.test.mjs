@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { applyConnectorSearch, applySettingsView, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
+import { applyComposioRows, applyConnectorSearch, applySettingsView, composioRowState, pickConnection, CONNECTOR_CATALOG, csrfCookie, describeAppearance, diff, filterConnectorCatalog, mount, newlineBinding, privacyChanges, readForm, settingsViewFromLocation, syncAppearanceExtras, syncMcpDialog, syncPrivacySaveButton, syncShortcutRows } from '../openteamily/static/settings/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -338,9 +338,13 @@ test('settings connectors markup lists the catalog as disconnected without leaki
   const ids = [...html.matchAll(/data-connector-id="([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(ids, CONNECTOR_CATALOG.map((item) => item.id));
   assert.equal((html.match(/class="connector-row"/g) || []).length, 39);
-  assert.equal((html.match(/<span class="connector-status">未连接<\/span>/g) || []).length, 39);
-  assert.equal((html.match(/不会真连。">\+ 连接<\/button>/g) || []).length, 39);
-  assert.equal((html.match(/disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。"/g) || []).length, 39);
+  // Before the signed-in Composio state loads, every row is disabled: 31 rows
+  // map to a Composio toolkit and say 未配置 Composio, 8 have no toolkit (未接通).
+  assert.equal((html.match(/<span class="connector-status" data-state="unconfigured">未配置 Composio<\/span>/g) || []).length, 31);
+  assert.equal((html.match(/<span class="connector-status" data-state="unavailable">未接通<\/span>/g) || []).length, 8);
+  assert.equal((html.match(/data-composio-action="connect" disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">\+ 连接<\/button>/g) || []).length, 31);
+  assert.equal((html.match(/disabled title="未接通：Composio 没有这个应用，暂时不能连接。">\+ 连接<\/button>/g) || []).length, 8);
+  assert.match(html, /id="composio-key-input" name="api_key" type="password"/);
   assert.equal((html.match(/class="connector-mark"/g) || []).length, 39);
   assert.match(html, /data-mark="github"/);
   assert.match(html, /class="channel-mark" data-mark="slack"/);
@@ -680,4 +684,70 @@ test('re-rendering the list retires a pending delete question', async () => {
   doc.fire('keydown', {key: 'Escape'});
   await settleSettings();
   assert.equal(doc.activeElement, null, 'Escape finds no stale question left over from the old rows');
+});
+
+test('composioRowState never shows success without a real connected state', () => {
+  const mapped = {toolkit: 'github', managed: 'yes'};
+  assert.deepEqual(composioRowState(null, true, null).disabled, true);
+  assert.equal(composioRowState({toolkit: null}, true, null).status, '未接通');
+  const unconfigured = composioRowState(mapped, false, {state: 'connected', id: 'x'});
+  assert.equal(unconfigured.status, '未配置 Composio');
+  assert.equal(unconfigured.disabled, true);
+  assert.match(unconfigured.title, /你自己的 Composio API key/);
+  assert.equal(composioRowState(mapped, true, null).status, '未连接');
+  assert.equal(composioRowState(mapped, true, null).action, 'connect');
+  assert.equal(composioRowState(mapped, true, {state: 'connecting'}).status, '连接中…');
+  assert.equal(composioRowState(mapped, true, {state: 'connected'}).status, '已连接');
+  assert.equal(composioRowState(mapped, true, {state: 'connected'}).action, 'disconnect');
+  const failed = composioRowState(mapped, true, {state: 'failed', status_reason: 'User denied'});
+  assert.equal(failed.status, '连接失败');
+  assert.match(failed.title, /User denied/);
+  const own = composioRowState({toolkit: 'vercel', managed: 'own'}, true, null);
+  assert.equal(own.disabled, true);
+  assert.match(own.title, /未接通/);
+});
+
+test('pickConnection prefers a connected account and ignores deleted ones', () => {
+  const items = [
+    {id: 'a', toolkit: 'github', state: 'failed', created_at: 3},
+    {id: 'b', toolkit: 'github', state: 'connected', created_at: 1},
+    {id: 'c', toolkit: 'notion', state: 'connected', created_at: 2},
+    {id: 'd', toolkit: 'github', state: 'failed', status: 'DELETED', created_at: 9},
+  ];
+  assert.equal(pickConnection(items, 'github').id, 'b');
+  assert.equal(pickConnection(items, 'linear'), null);
+});
+
+test('applyComposioRows updates status, button and connection id from server data', () => {
+  function node(attrs) {
+    const status = {textContent: '', attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }};
+    const button = {textContent: '', disabled: true, title: '', attrs: {},
+                    setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; }};
+    return {status, button, getAttribute: k => attrs[k] ?? null,
+            querySelector: sel => sel === 'button' ? button : status};
+  }
+  const github = node({'data-connector-id': 'github', 'data-composio-toolkit': 'github', 'data-composio-managed': 'yes'});
+  const amap = node({'data-connector-id': 'amap'});
+  const document = {getElementById: id => id === 'connectors-catalog' ? {querySelectorAll: () => [github, amap]} : null};
+  applyComposioRows(document, true, [{id: 'c1', toolkit: 'github', state: 'connected', created_at: 1}]);
+  assert.equal(github.status.textContent, '已连接');
+  assert.equal(github.status.attrs['data-state'], 'connected');
+  assert.equal(github.button.textContent, '断开');
+  assert.equal(github.button.disabled, false);
+  assert.equal(github.button.attrs['data-connection-id'], 'c1');
+  assert.equal(amap.status.textContent, '未接通');
+  assert.equal(amap.button.disabled, true);
+  applyComposioRows(document, false, []);
+  assert.equal(github.status.textContent, '未配置 Composio');
+  assert.equal(github.button.disabled, true);
+  assert.equal(github.button.attrs['data-connection-id'], undefined);
+});
+
+
+test('connected-tool approvals do not imply a connected account before key setup', () => {
+  const source = readFileSync(fileURLToPath(new URL('../openteamily/static/settings/connected-tools.mjs', import.meta.url)), 'utf8');
+  assert.doesNotMatch(source, /已连接/);
+  assert.match(source, /允许此调用一次/);
+  assert.match(source, /decision/);
+  assert.doesNotMatch(source, /innerHTML/);
 });

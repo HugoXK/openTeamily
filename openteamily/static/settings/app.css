@@ -888,3 +888,59 @@ html[data-theme-resolved="dark"] #settings-panel :is(a.settings-row, .settings-r
 html[data-theme-resolved="dark"] #settings-panel :is(a.settings-row, .settings-row):hover :is(.settings-row-label, .settings-row-title, .settings-row-copy) {
   color: #e8f6ef;
 }
+
+/* Composio per-user key card and real connection states. Original marks only. */
+.composio-key-card {
+  display: grid;
+  gap: .75rem;
+  margin: 0 0 1rem;
+  padding: 1rem;
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius, .9rem);
+  background: var(--ot-surface);
+}
+.composio-key-head { display: flex; align-items: flex-start; gap: .75rem; }
+.composio-key-mark {
+  flex: 0 0 auto;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: .55rem;
+  background:
+    radial-gradient(circle at 50% 50%, var(--ot-surface) 0 .28rem, transparent .3rem),
+    conic-gradient(from 45deg, var(--ot-accent) 0 25%, var(--ot-accent-hover) 0 50%, var(--ot-accent) 0 75%, var(--ot-accent-hover) 0);
+}
+.composio-key-copy { flex: 1 1 auto; min-width: 0; }
+.composio-key-title { margin: 0; font-size: .95rem; font-weight: 600; }
+.composio-key-lead { margin: .2rem 0 0; color: var(--ot-muted); font-size: .82rem; line-height: 1.5; }
+.composio-key-form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+.composio-key-form input { flex: 1 1 14rem; min-width: 0; font-family: var(--ot-mono); }
+.composio-key-form button { width: auto; margin: 0; }
+.composio-key-message { margin: 0; color: var(--ot-muted); font-size: .8rem; }
+.composio-key-message:empty { display: none; }
+.composio-key-message[data-kind="error"] { color: var(--ot-danger); }
+.connector-status[data-state="unconfigured"],
+.connector-status[data-state="needs-auth-config"] { color: #92400e; }
+.connector-status[data-state="connecting"] { color: var(--ot-accent-hover); }
+.connector-status[data-state="connected"] {
+  color: var(--ot-ok);
+  font-weight: 600;
+}
+.connector-status[data-state="connected"]::before {
+  content: "";
+  display: inline-block;
+  width: .45rem;
+  height: .45rem;
+  margin-right: .3rem;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: .08em;
+}
+html[data-theme-resolved="dark"] .connector-status[data-state="failed"], html[data-theme-resolved="dark"] .connector-status[data-state="inactive"]{ color: var(--ot-danger); }html[data-theme-resolved="dark"] #composio-key-state[data-state="configured"]{ color: var(--ot-ok); font-weight: 600; }html[data-theme-resolved="dark"] /* Aurora Glass: settings */
+#settings-panel > section{
+  background: var(--ot-surface);
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  box-shadow: var(--ot-shadow-sm);
+  -webkit-backdrop-filter: var(--ot-blur);
+  backdrop-filter: var(--ot-blur);
+}

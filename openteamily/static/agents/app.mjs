@@ -834,7 +834,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   createForm.addEventListener('submit', async event => {
     event.preventDefault();
     const id = workspaceId();
-    const values = readAgentForm(event.currentTarget);
+    const form = event.currentTarget;
+    const values = readAgentForm(form);
     if (!values.name) {
       show('error', '请填写名称。');
       return;
@@ -846,7 +847,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '无法创建智能体。'));
       return;
     }
-    event.currentTarget.reset();
+    form.reset();
     show('ok', '已保存到目录。对话仍由已连接的运行时执行。');
     await loadWorkspace();
     if (result.body.agent) {

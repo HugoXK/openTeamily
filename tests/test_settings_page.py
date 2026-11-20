@@ -74,6 +74,29 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/memory/rich.mjs')['status'], 200)
         self.assertEqual(self.raw.call('GET', '/shell/thumb.mjs', query='x=1')['status'], 400)
 
+    def test_saved_document_deep_link_is_strict_html_only_not_authorization(self):
+        workspace, artifact = 'a' * 32, 'b' * 32
+        query = f'workspace={workspace}&artifact={artifact}'
+        for route in ('/space', '/artifacts'):
+            for pair in (query, f'artifact={artifact}&workspace={workspace}'):
+                for method in ('GET', 'HEAD'):
+                    response = self.raw.call(method, route, query=pair)
+                    self.assertEqual(response['status'], 200, (route, pair, method))
+                    self.assertIn("default-src 'none'", response['headers']['Content-Security-Policy'])
+            for invalid in (f'workspace={workspace}', f'artifact={artifact}',
+                            query + '&artifact=' + artifact, query + '&new=document',
+                            query + '&x=1', query + '&', 'x=1&' + query,
+                            query.replace('workspace=', '%77orkspace='),
+                            query.replace(workspace, '../' + workspace),
+                            query.replace(artifact, '%62' * 32),
+                            query.replace(artifact, 'B' * 32),
+                            query.replace(artifact, artifact[:-1])):
+                self.assertEqual(self.raw.call('GET', route, query=invalid)['status'], 400, invalid)
+        for asset in ('/artifacts/app.mjs', '/artifacts/app.css', '/skills/app.mjs', '/settings'):
+            self.assertEqual(self.raw.call('GET', asset, query=query)['status'], 400, asset)
+        self.assertEqual(self.raw.call('GET', '/space', query=query, origin='https://evil.test')['status'], 403)
+        self.assertEqual(self.raw.call('POST', '/space', query=query)['status'], 405)
+
     def test_page_rejects_cross_origin_queries_and_writes(self):
         self.assertEqual(self.raw.call('GET', '/settings', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/settings', host='evil.test')['status'], 403)
@@ -230,9 +253,12 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('不会添加或连接服务器', connectors)
         self.assertIn('class="connector-search-icon"', connectors)
         self.assertEqual(connectors.count('class="connector-row"'), 39)
-        self.assertEqual(connectors.count('>未连接<'), 39)
-        self.assertEqual(connectors.count('不会真连。">+ 连接'), 39)
-        self.assertEqual(connectors.count('disabled title="未实现：还没有连接器后端或账号授权接口，不会真连。"'), 39)
+        # Rows start disabled until the user's own Composio key is loaded.
+        self.assertEqual(connectors.count('>未配置 Composio<'), 32)  # 31 rows + key card badge
+        self.assertEqual(connectors.count('data-state="unavailable">未接通<'), 8)
+        self.assertEqual(connectors.count('disabled title="未配置 Composio：先在本页上方填入你自己的 Composio API key，才能连接。">+ 连接'), 31)
+        self.assertEqual(connectors.count('disabled title="未接通：Composio 没有这个应用，暂时不能连接。">+ 连接'), 8)
+        self.assertIn('id="composio-key-form"', connectors)
         self.assertIn('id="connectors-catalog"', connectors)
         self.assertIn('没有匹配的应用。', connectors)
         self.assertIn('id="connectors-empty"', connectors)
