@@ -131,34 +131,36 @@
       <a class="catalog-create" id="catalog-create-agent" href="/agents">+ 创建我的智能体</a>
       <a class="catalog-create" id="catalog-create-team" href="/team" hidden>+ 创建团队</a>
     </header>
-    <div id="catalog-filters" class="catalog-filters" aria-label="分类" aria-describedby="catalog-filter-note">
+    <div id="catalog-filters" class="catalog-filters" aria-label="分类">
       <div class="catalog-filter-scroll">
-      <button type="button" class="catalog-filter-all" aria-current="true" disabled title="这是未筛选的完整目录。分类筛选未接通：公共目录没有分类字段。">全部</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Content Creation</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Customer Support</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Data Analysis</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Design</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Education</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Engineering</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Finance</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">IT &amp; Security</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Investment</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Legal</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Life</button>
-      <button type="button" disabled title="未接通：公共目录没有分类字段。">Marketing</button>
+        <button type="button" data-catalog-category="all" aria-pressed="true">全部</button>
+        <button type="button" data-catalog-category="content-creation" aria-pressed="false">Content Creation</button>
+        <button type="button" data-catalog-category="customer-support" aria-pressed="false">Customer Support</button>
+        <button type="button" data-catalog-category="data-analysis" aria-pressed="false">Data Analysis</button>
+        <button type="button" data-catalog-category="design" aria-pressed="false">Design</button>
+        <button type="button" data-catalog-category="education" aria-pressed="false">Education</button>
+        <button type="button" data-catalog-category="engineering" aria-pressed="false">Engineering</button>
+        <button type="button" data-catalog-category="finance" aria-pressed="false">Finance</button>
+        <button type="button" data-catalog-category="it-security" aria-pressed="false">IT &amp; Security</button>
+        <button type="button" data-catalog-category="investment" aria-pressed="false">Investment</button>
+        <button type="button" data-catalog-category="legal" aria-pressed="false">Legal</button>
+        <button type="button" data-catalog-category="life" aria-pressed="false">Life</button>
+        <button type="button" data-catalog-category="marketing" aria-pressed="false">Marketing</button>
+        <button type="button" data-catalog-category="operations" aria-pressed="false">Operations</button>
+        <button type="button" data-catalog-category="product" aria-pressed="false">Product</button>
+        <button type="button" data-catalog-category="recruiting" aria-pressed="false">Recruiting</button>
+        <button type="button" data-catalog-category="research" aria-pressed="false">Research</button>
+        <button type="button" data-catalog-category="sales" aria-pressed="false">Sales</button>
       </div>
-      <button type="button" id="catalog-filter-search" class="catalog-filter-search" disabled aria-label="搜索分类" title="对照里可以看到搜索分类控件，但没有打开面板，所以这里不发明搜索弹层。">
-        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
-          <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/>
-          <path d="M10.5 10.5 L14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      <button type="button" id="catalog-filter-search" class="catalog-filter-search" aria-label="搜索分类" aria-haspopup="dialog" title="搜索分类">
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 4 4"/>
         </svg>
       </button>
-      <button type="button" id="catalog-filter-more" class="catalog-filter-more" disabled aria-label="更多分类" title="对照里未展开其余分类，所以这里不发明更多分类。">›</button>
     </div>
-    <div class="catalog-creator-row">
-      <button type="button" id="catalog-creator" class="catalog-creator" disabled aria-haspopup="listbox" title="未接通：公共目录没有创建者字段。">创建者 <span aria-hidden="true">▾</span></button>
-    </div>
-    <p id="catalog-filter-note" class="visually-hidden">分类和创建者筛选未接通：公共目录没有对应字段。</p>
+    <p id="catalog-creator-filter" class="catalog-creator-row" hidden>
+      <span id="catalog-creator-label"></span><button type="button" id="catalog-clear-creator" aria-label="清除创建者筛选">清除</button>
+    </p>
     <section aria-label="公共目录" id="catalog-panel">
       <h2 id="catalog-heading" class="visually-hidden">公共智能体</h2>
       <p id="catalog-count" role="status" aria-live="polite"></p>
@@ -169,18 +171,42 @@
       <button type="button" id="catalog-more" hidden>加载更多</button>
     </section>
     <details id="catalog-manage" hidden>
-      <summary>收录管理（OpenTeamily）</summary>
-      <p class="note">公共目录只显示自愿收录的名称和简介。没有推荐信息流或公共智能体聊天接口。</p>
-      <p class="note"><a href="/discover">返回发现动态</a>。这是 OpenTeamily 的目录入口，对照里的智能体目录页没有这个返回链接。</p>
+      <summary>发布管理</summary>
+      <p class="note">发布后所有人都能看到名称、简介和分类。可选择公开完整指令，供其他用户复制。</p>
       <label class="workspace-pick">工作区
         <select id="workspace"></select>
       </label>
-      <p class="note">只有工作区所有者或管理员可以改动收录。slug 需为 3–30 个字符的小写字母、数字或连字符。</p>
+      <p class="note">为自己创建的智能体填写公开地址，使用 3–30 个小写字母、数字或连字符。</p>
       <p id="manage-empty" class="note" hidden>这个工作区还没有智能体。</p>
       <ul id="manage-list" class="manage-list"></ul>
     </details>
     </section>
   </section>
   </main>
+  <dialog id="catalog-category-dialog" class="catalog-dialog" aria-labelledby="catalog-category-title">
+    <h2 id="catalog-category-title">分类</h2>
+    <label>搜索分类 <input type="search" id="catalog-category-query" maxlength="60" autocomplete="off"></label>
+    <div id="catalog-category-options"></div>
+    <p id="catalog-category-empty" hidden>没有匹配的分类。</p>
+    <button type="button" id="catalog-category-close">关闭</button>
+  </dialog>
+  <dialog id="catalog-remix-dialog" class="catalog-dialog" aria-labelledby="catalog-remix-title">
+    <h2 id="catalog-remix-title">复制智能体</h2>
+    <p id="catalog-remix-summary"></p>
+    <details id="catalog-remix-instructions" hidden>
+      <summary>查看发布的指令</summary>
+      <pre id="catalog-remix-prompt"></pre>
+    </details>
+    <p id="catalog-remix-description"></p>
+    <form id="catalog-remix-form">
+      <label>智能体名称 <input id="catalog-remix-name" type="text" required maxlength="80"></label>
+      <label>复制到 <select id="catalog-remix-workspace" required></select></label>
+      <p id="catalog-remix-status" role="status"></p>
+      <div class="catalog-dialog-actions">
+        <button type="button" id="catalog-remix-cancel">关闭</button>
+        <button type="submit" id="catalog-remix-submit" disabled>创建副本</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

@@ -149,7 +149,8 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   });
   app.get("/v1/ot/listings/mine", async (req) => {
     const me = ot.me(req);
-    return { listings: ot.all<any>("SELECT * FROM ot_listings WHERE owner_id = ? ORDER BY updated_at DESC", me.ownerId).map((l) => listingView(ot, l, me.ownerId)) };
+    const rows = ot.all<any>("SELECT * FROM ot_listings WHERE owner_id = ? ORDER BY updated_at DESC", me.ownerId);
+    return { listings: rows.map((l) => ({ ...listingView(ot, l, me.ownerId), ref: l.ref })) };
   });
   app.get("/v1/ot/discover", async (req) => {
     const me = ot.me(req);

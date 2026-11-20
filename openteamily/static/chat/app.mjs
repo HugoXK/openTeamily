@@ -2777,8 +2777,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         currentSource = 'agent';
         socialOpen += 1;
         setSocialHistory(null);
-        if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
-          currentAgent.id === personalAgentId ? personalLook : null);
+        if (currentAgent) {
+          applyChatIdentity(document, currentAgent.name, null, currentAgent.id === personalAgentId ? personalLook : null);
+          setSessionsOpen(false);
+        }
         document.getElementById('chat-empty').hidden = false;
         writeHash({workspace: workspaceId(), agent: start.agent});
       }

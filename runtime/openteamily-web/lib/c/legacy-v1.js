@@ -4,6 +4,8 @@
 // talk to Bot Social and return the Flask JSON shapes those pages already expect.
 // Shared workspaces are Bot Social teams. The private workspace can also be
 // listed from the personal-agent binding in this user's runtime.
+import { createHash } from 'node:crypto'
+import { CATEGORIES as agentCategories, LIMITS as agentLimits } from '../../features/agents/index.js'
 import { compatHandler } from '../b4/compat.js'
 import { Fault } from '../b4/http.js'
 import { ownerId } from '../../featurekit/v1.js'
@@ -149,6 +151,7 @@ function agentItem(row) {
     name: row.title || row.name,
     summary: row.summary || '',
     category: row.category || '',
+    creator: row.creator ? { handle: row.creator.handle, name: row.creator.display_name || usernameOf(row.creator) } : null,
     updated: unix(row.updated_at),
     tags: [],
     members: [],
@@ -877,13 +880,31 @@ function messengerExtraRoutes(host) {
   ]
 }
 
+function remixInstructions(row) {
+  if (!row?.snapshot) return ''
+  try {
+    const data = JSON.parse(row.snapshot)
+    const instructions = data?.instructions
+    return data?.version === 1 && typeof instructions === 'string' && instructions.length <= agentLimits.instructions
+      ? instructions : ''
+  } catch { return '' }
+}
+
+function remixTemplate(row) {
+  const template = { name: row.title, summary: row.summary || '', category: agentCategories.includes(row.category) ? row.category : null,
+    instructions: remixInstructions(row) }
+  const revision = createHash('sha256').update(JSON.stringify([row.id, template])).digest('hex')
+  return { ...template, revision }
+}
+
 function discoverRoutes(host) {
   const env = process.env
   const feed = (kind) => async ({ query }) => wrap(async () => {
     const bs = client(host)
     const q = parseQuery(query)
     const data = await bs.get('/v1/ot/discover' + qs({
-      kind, tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'), creator: q.get('creator'),
+      kind, tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'),
+      creator: q.get('creator'), category: q.get('category'),
       before: q.get('cursor'), limit: q.get('limit'),
     }))
     const items = (data.items || []).map((row) => (kind === 'agent' ? agentItem(row) : workItem(row)))
@@ -932,6 +953,33 @@ function discoverRoutes(host) {
         return wrap(async () => [200, await client(host).post(`/v1/ot/discover/${seg(match[1], 'slug')}/start`)])
       },
     },
+    ...['GET', 'POST'].map(method => ({
+      method, path: /^\/v1\/discover\/agents\/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])\/remix$/,
+      async handle({ match, body, idempotency_key }) {
+        return wrap(async () => {
+          const bs = client(host)
+          const row = await bs.get('/v1/ot/discover/' + seg(match[1], 'slug'))
+          if (!row.listed || row.kind !== 'agent') throw new Fault(404, 'not_found', '该智能体已下架。')
+          const template = remixTemplate(row)
+          if (method === 'GET') return [200, { template }]
+          if (body?.revision !== template.revision) throw new Fault(409, 'listing_changed', '发布内容已更新，请重新预览。')
+          const workspaceId = body?.workspace_id
+          if (!HEX.test(String(workspaceId || ''))) throw new Fault(400, 'invalid', '请选择工作区。')
+          const binding = await host.call('agents/personal-binding', {})
+          if (binding?.workspace_id !== workspaceId) await teamFor(bs, workspaceId, 'Workspace', env)
+          try {
+            const created = await host.call('agents/create', {
+              workspace_id: workspaceId, idempotency_key, name: body?.name ?? template.name,
+              summary: template.summary, category: template.category, instructions: template.instructions,
+            })
+            return [created.status, { agent: { id: created.agent.id, name: created.agent.name, workspace_id: workspaceId } }]
+          } catch (error) {
+            if (error?.status === 409) throw new Fault(409, 'name_conflict', '工作区已有同名智能体，请换个名称。')
+            throw error
+          }
+        })
+      },
+    })),
     { method: 'GET', path: /^\/v1\/discover\/agents$/, handle: feed('agent') },
     { method: 'GET', path: /^\/v1\/discover\/works$/, handle: feed('work') },
     { method: 'GET', path: /^\/v1\/discover\/me\/works$/, handle: feed('work') },
@@ -959,7 +1007,10 @@ function discoverRoutes(host) {
           const bs = client(host)
           const mine = await bs.get('/v1/ot/listings/mine')
           const row = (mine.listings || []).find((l) => l.kind === 'agent' && l.ref === match[2] && l.listed)
-          return [200, { discover: row ? { listed: true, slug: row.slug, updated: unix(row.updated_at) } : { listed: false } }]
+          const listing = row ? await bs.get('/v1/ot/discover/' + seg(row.slug, 'slug')) : null
+          return [200, { discover: listing?.listed
+            ? { listed: true, slug: row.slug, category: row.category, copy_instructions: Boolean(remixInstructions(listing)), updated: unix(row.updated_at) }
+            : { listed: false } }]
         })
       },
     },
@@ -968,11 +1019,19 @@ function discoverRoutes(host) {
       async handle({ match, body }) {
         return wrap(async () => {
           const bs = client(host)
-          const slug = body?.slug
+          const { agent } = await host.call('agents/get', { id: match[2], workspace_id: match[1] })
+          if (!agent || agent.archived || agent.native_deleted) throw new Fault(404, 'not_found', '该智能体已归档。')
+          if (body?.revision !== undefined && body.revision !== agent.revision) {
+            throw new Fault(409, 'agent_changed', '智能体已更新，请刷新后重新预览。')
+          }
+          const instructions = body?.copy_instructions === true ? agent.instructions : ''
+          const snapshot = instructions ? JSON.stringify({ version: 1, instructions }) : undefined
           const data = await bs.put('/v1/ot/listings', {
-            kind: 'agent', ref: match[2], slug, title: body?.title || slug, summary: body?.summary || '',
+            kind: 'agent', ref: agent.id, slug: body?.slug, title: agent.name, summary: agent.summary,
+            category: agent.category, snapshot,
           })
-          return [data.id ? 200 : 200, { discover: { listed: true, slug: data.slug, updated: unix(data.updated_at) } }]
+          return [200, { discover: { listed: true, slug: data.slug, category: data.category,
+            copy_instructions: Boolean(instructions), updated: unix(data.updated_at) } }]
         })
       },
     },

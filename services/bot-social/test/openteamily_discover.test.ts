@@ -31,7 +31,9 @@ test("publish, discover, like, collect, follow and notify followers", async () =
   assert.equal(all.items.length, 1);
   assert.equal(all.items[0].following, true);
   assert.equal(all.items[0].snapshot, undefined, "list never carries snapshots");
-  assert.equal((await B.ok("GET", `/v1/ot/discover?kind=agent&creator=${A.handle}`)).items.length, 1);
+  const publicAgents = (await B.ok("GET", `/v1/ot/discover?kind=agent&creator=${A.handle}&category=content-creation`)).items;
+  assert.equal(publicAgents.length, 1);
+  assert.equal(publicAgents[0].ref, undefined, "the public directory does not expose local identifiers");
   assert.equal((await B.ok("GET", `/v1/ot/discover?tab=following&creator=${A.handle}`)).items.length, 2);
   await B.ok("POST", `/v1/ot/listings/${work.id}/like`, {});
   await B.ok("POST", `/v1/ot/listings/${work.id}/collect`, {});
@@ -46,7 +48,10 @@ test("publish, discover, like, collect, follow and notify followers", async () =
   await A.ok("DELETE", `/v1/ot/listings/${work.id}`);
   assert.equal((await B.call("GET", `/v1/ot/discover/deck-${tag}`)).status, 404);
   assert.equal((await A.ok("GET", `/v1/ot/discover/deck-${tag}`)).listed, false, "the creator still sees it");
-  assert.equal((await A.ok("GET", "/v1/ot/listings/mine")).listings.length, 2);
+  const mine = (await A.ok("GET", "/v1/ot/listings/mine")).listings;
+  assert.equal(mine.length, 2);
+  assert.equal(mine.find((entry: any) => entry.id === agent.id).ref, "bot_writer");
+  assert.deepEqual((await B.ok("GET", "/v1/ot/listings/mine")).listings, []);
   const f = await A.ok("GET", "/v1/ot/follows");
   assert.deepEqual(f.followers.map((p: any) => p.handle), [B.handle]);
   await B.ok("POST", "/v1/ot/follows", { handle: A.handle, on: false });
