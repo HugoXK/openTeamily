@@ -1,0 +1,47 @@
+[
+ "zh-CN__light__1440x900__register.png",
+ {
+  "page": "/register",
+  "scheme": "light",
+  "viewport": {
+   "width": 1440,
+   "height": 900
+  },
+  "label": "1440x900",
+  "hasEmailForm": 0
+ },
+ "zh-CN__light__390x844__register.png",
+ {
+  "page": "/register",
+  "scheme": "light",
+  "viewport": {
+   "width": 390,
+   "height": 844
+  },
+  "label": "390x844",
+  "hasEmailForm": 0
+ },
+ "zh-CN__dark__1440x900__register.png",
+ {
+  "page": "/register",
+  "scheme": "dark",
+  "viewport": {
+   "width": 1440,
+   "height": 900
+  },
+  "label": "1440x900",
+  "hasEmailForm": 0
+ },
+ "zh-CN__light__1440x900__set-password-404.png",
+ {
+  "page": "/set-password",
+  "status": 401,
+  "label": "1440x900"
+ },
+ "zh-CN__light__390x844__set-password-404.png",
+ {
+  "page": "/set-password",
+  "status": 401,
+  "label": "390x844"
+ }
+]

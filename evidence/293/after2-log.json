@@ -1,0 +1,41 @@
+[
+ "zh-CN__light__1440x900__set-password-bad-link-400.png",
+ {
+  "state": "bad-format-link",
+  "status": 400
+ },
+ "zh-CN__light__1440x900__set-password-unknown-token.png",
+ {
+  "state": "unknown-token",
+  "lead": "链接已识别。设置密码后即可用邮箱和密码登录。",
+  "formCount": 1
+ },
+ "zh-CN__light__1440x900__set-password-form.png",
+ {
+  "state": "form",
+  "label": "1440x900",
+  "lead": "链接已识别。设置密码后即可用邮箱和密码登录。"
+ },
+ "zh-CN__light__390x844__set-password-form.png",
+ {
+  "state": "form",
+  "label": "390x844",
+  "lead": "链接已识别。设置密码后即可用邮箱和密码登录。"
+ },
+ "zh-CN__light__1440x900__set-password-mismatch.png",
+ {
+  "state": "mismatch",
+  "status": "两次输入的密码不一致。"
+ },
+ "zh-CN__light__1440x900__set-password-saving.png",
+ {
+  "state": "saving",
+  "status": "正在保存密码…"
+ },
+ {
+  "state": "after-submit",
+  "url": "http://127.0.0.1:18904/#workspace=6e22ebce22da4fd0ba1372613a224c4a",
+  "title": "首页 · OpenTeamily"
+ },
+ "zh-CN__light__1440x900__set-password-after-submit.png"
+]
