@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
+from . import skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams, skill_installs
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -97,7 +97,11 @@ def object_only(pairs):
 
 
 class App:
-    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None):
+    def __init__(self, store, config, clock=time.time, lifecycle=None, manager_auth=None, automation_backend=None, operator_admin=None, oidc_registry=None, composio_transport=None, model_http_policy=None):
+        from .model_http_policy import ModelHttpPolicy
+        if model_http_policy is not None and not isinstance(model_http_policy, ModelHttpPolicy):
+            raise ValueError("Invalid operator model HTTP policy")
+        self.model_http_policy = model_http_policy or ModelHttpPolicy()
         self.store, self.config, self.clock = store, config, clock
         # Tests inject a fake Composio HTTP transport; production uses urllib.
         self.composio_transport = composio_transport
@@ -472,6 +476,8 @@ class App:
             refuse(405, 'method', 'Only GET, POST and DELETE are supported')
         if method == 'POST' and query:
             refuse(400, 'invalid', 'Query parameters are not accepted for writes')
+        if method == 'DELETE' and query:
+            refuse(400, 'invalid', 'Query parameters are not accepted for writes')
         now = int(self.clock())
         share_path = re.fullmatch(r'/share/([A-Za-z0-9_-]{43})', path)
         if share_path:
@@ -675,11 +681,20 @@ class App:
                 if method == 'POST' and not query:
                     return self.save_profile(db, session, now, env)
                 refuse(400, 'invalid', 'Invalid profile request')
+            if path == '/v1/onboarding/recommendations' and method == 'GET' and not query:
+                row = onboarding.load(db, session['user_id'])
+                role = row['role'] if row is not None else ''
+                return 200, {'items': onboarding.automation_recommendations(role)}, []
+            if path == '/v1/onboarding/automations':
+                if method == 'POST' and not query:
+                    return self.create_onboarding_automations(db, session, now, env)
+                refuse(400, 'invalid', 'Invalid onboarding automation request')
             if path == '/v1/onboarding':
                 if method == 'GET' and not query:
                     row = onboarding.load(db, session['user_id'])
                     return 200, {'onboarding': onboarding.view(row) if row is not None else None,
                                  'industries': onboarding.industries_view(),
+                                 'automation_templates': onboarding.automation_recommendations(row['role'] if row is not None else ''),
                                  'steps': onboarding.steps_view(onboarding.load_steps(db, session['user_id']),
                                                                 row['industry'] if row is not None else '')}, []
                 if method == 'POST' and not query:
@@ -738,6 +753,22 @@ class App:
                 except ValueError:
                     refuse(429, 'quota', 'Skill secret limit reached')
                 return 200, skill_secrets.list_secrets(db, session['user_id']), []
+            if path == '/v1/skills/installed':
+                if method == 'GET' and not query:
+                    return 200, skill_installs.listing(db, session['user_id']), []
+                if method in ('POST', 'DELETE') and not query:
+                    if method == 'DELETE':
+                        self.csrf_check(env, session)
+                    body = self.body(env, ['skill'])
+                    skill_id = body.get('skill')
+                    if not skill_installs.valid_skill(skill_id):
+                        refuse(400, 'invalid', 'Provide a skill id from the skills catalogue')
+                    if method == 'POST':
+                        skill_installs.install(db, session['user_id'], skill_id, now)
+                    else:
+                        skill_installs.uninstall(db, session['user_id'], skill_id)
+                    return 200, skill_installs.listing(db, session['user_id']), []
+                refuse(400, 'invalid', 'Invalid installed-skills request')
             if path == '/v1/runtime-keys' and method == 'GET' and not query:
                 return 200, {
                     'items': runtime_keys.listing(db, session['user_id']),
@@ -879,7 +910,7 @@ class App:
             if auto_tools_path:
                 return self.automation_connected_tools(db, session, method, query, now, env, *auto_tools_path.groups())
             auto_path = re.fullmatch(
-                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel|artifact))?)?)?))?', path)
+                r'/v1/workspaces/([0-9a-f]{32})/automations(?:/(tick)|(?:/([0-9a-f]{32})(?:/(remove)|/(runs)(?:/([0-9a-f]{32})(?:/(cancel|artifact|retry))?)?)?))?', path)
             if auto_path:
                 return self.automation_dispatch(db, session, method, query, now, env, *auto_path.groups())
             artifact_discover_path = re.fullmatch(
@@ -890,6 +921,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|favorite|preview|file|export|restore|versions(?:/(\d{1,8})(?:/(export))?)?|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
             if artifact_path:
                 return self.artifact_dispatch(db, session, method, query, now, env, *artifact_path.groups())
+            memory_dream_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/memory/([0-9a-f]{32})/dream(?:/([0-9a-f]{32}))?', path)
+            if memory_dream_path:
+                return self.memory_dream_dispatch(db, session, method, query, now, env, *memory_dream_path.groups())
             memory_action_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/memory/actions(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if memory_action_path:
@@ -1206,7 +1241,7 @@ class App:
             access = re.fullmatch(r'/v1/agent/tasks/([0-9a-f]{32})/model-access', path)
             if access and method == 'POST' and not query:
                 body = self.body(env, ['skill_format'])
-                return self.issue_model_access(db, connection, access[1], now, body.get('skill_format'))
+                return self.issue_model_access(db, connection, access[1], now, body.get('skill_format'), env.get('HTTP_X_OPENTEAMILY_MODEL_HTTP'))
             skill_ack = re.fullmatch(r'/v1/agent/tasks/([0-9a-f]{32})/skills/ack',path)
             if skill_ack and method == 'POST' and not query:
                 body = self.body(env,['digests'])
@@ -1295,7 +1330,7 @@ class App:
             refuse(400, 'invalid', 'Connected tools can only be requested for infer tasks')
         return 201, {'task': runtime_connect.view_with_meta(db, row)}, []
 
-    def issue_model_access(self, db, connection, task_id, now, skill_format=None):
+    def issue_model_access(self, db, connection, task_id, now, skill_format=None, http_capability=None):
         task = runtime_connect.load_task(db, task_id, connection_id=connection['id'])
         if task is None:
             refuse(404, 'not_found', 'Runtime task not found')
@@ -1319,6 +1354,10 @@ class App:
             refuse(409, 'conflict', 'Model API is not configured')
         if public['provider'] not in ('openai', 'custom'):
             refuse(409, 'conflict', 'This agent only supports OpenAI-compatible model APIs')
+        try:
+            grant = model_api.endpoint_grant(public['base_url'], self.model_http_policy, http_capability)
+        except model_api.ModelEndpointError as error:
+            refuse(409, error.code, 'Model endpoint not authorized or runtime upgrade required')
         skill_material = skill_packages.material(db, task['id'])
         expected = skill_packages.selection(db,task['id'])
         if expected and skill_material != expected:
@@ -1329,6 +1368,7 @@ class App:
         runtime_connect.mark_access_issued(db, task['id'])
         runtime_connect.heartbeat(db, connection, now)
         return 200, {'skills': skill_material, 'connected_tools': connected_tools.available(db, task['id']), 'model_api': {
+            **({'http_endpoint_grant': grant} if grant else {}),
             'provider': public['provider'],
             'base_url': public['base_url'],
             'model': public['model'],
@@ -1663,6 +1703,44 @@ class App:
                 if cancelled is None:
                     refuse(409, 'conflict', 'Automation run cannot be cancelled')
                 return 200, {'run': cancelled}, []
+            if run_id and cancelling == 'retry':
+                if method != 'POST' or query:
+                    refuse(400, 'invalid', 'Invalid automation request')
+                if actor not in ('owner', 'admin'):
+                    refuse(403, 'forbidden', 'Not allowed to change automations')
+                self.body(env, [])
+                key = env.get('HTTP_IDEMPOTENCY_KEY', '')
+                if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
+                    refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+                item = db.execute(
+                    'SELECT * FROM automation_runs WHERE id=? AND automation_id=? AND workspace_id=?',
+                    (run_id, row['id'], workspace['id']),
+                ).fetchone()
+                if item is None:
+                    refuse(404, 'not_found', 'Automation run not found')
+                # A double click on the same run must not queue the automation
+                # twice: the idempotency key names one retry of one run.
+                key_hash = digest('automation-retry:' + key)
+                prior = db.execute(
+                    'SELECT * FROM automation_run_retries WHERE run_id=? AND key_hash=?',
+                    (run_id, key_hash),
+                ).fetchone()
+                if prior is not None:
+                    again = db.execute('SELECT * FROM automation_runs WHERE id=?',
+                                       (prior['new_run_id'],)).fetchone()
+                    if again is not None:
+                        return 200, {'run': automations.run_view(again)}, []
+                if item['status'] != 'failed':
+                    refuse(409, 'conflict', 'Only a failed run can be retried')
+                retried = scheduler.retry_run(db, row, item, now)
+                if retried is None:
+                    refuse(429, 'quota', 'Automation run capacity reached')
+                run = retried[0]
+                db.execute(
+                    'INSERT INTO automation_run_retries VALUES(?,?,?,?)',
+                    (run_id, key_hash, run['id'], now),
+                )
+                return 201, {'run': run, 'retried': automations.run_view(item)}, []
             if run_id and cancelling == 'artifact':
                 if method != 'POST' or query:
                     refuse(400, 'invalid', 'Invalid automation request')
@@ -1877,7 +1955,7 @@ class App:
             refuse(400, 'invalid', 'Provide valid slide content')
         if dashboard is not None and not artifacts.attach_dashboard(db, aid, dashboard):
             refuse(400, 'invalid', 'Provide valid dashboard content')
-        return self.artifact_saved(db, workspace['id'], aid, 201)
+        return self.artifact_saved(db, workspace['id'], aid, 201, session, now)
 
     def update_artifact(self, db, workspace, session, actor, row, now, body):
         if not artifacts.can_edit(actor, session['user_id'], row):
@@ -1955,12 +2033,16 @@ class App:
             refuse(400, 'invalid', 'Provide valid slide content')
         if kind == 'dashboard' and not artifacts.attach_dashboard(db, row['id'], dashboard):
             refuse(400, 'invalid', 'Provide valid dashboard content')
-        return self.artifact_saved(db, workspace['id'], row['id'], 200)
+        return self.artifact_saved(db, workspace['id'], row['id'], 200, session, now)
 
 
-    def artifact_saved(self, db, workspace_id, artifact_id, status):
+    def artifact_saved(self, db, workspace_id, artifact_id, status, session=None, now=0):
         row = artifacts.load(db, workspace_id, artifact_id)
         artifacts.record_version(db, row)
+        if session is not None:
+            notifications.record_artifact(db, workspace_id, session['user_id'], artifact_id,
+                                          'created' if status == 201 else 'updated',
+                                          now or row['updated'])
         return status, {'artifact': artifacts.view(row)}, []
 
     def guard_artifact_versions(self, db, artifact_id):
@@ -2086,7 +2168,7 @@ class App:
             db.execute('DELETE FROM artifact_boards WHERE artifact_id=?', (row['id'],))
             db.execute('DELETE FROM artifact_slides WHERE artifact_id=?', (row['id'],))
             db.execute('DELETE FROM artifact_dashboards WHERE artifact_id=?', (row['id'],))
-        return self.artifact_saved(db, row['workspace_id'], row['id'], 200)
+        return self.artifact_saved(db, row['workspace_id'], row['id'], 200, session, now)
 
     def artifact_share_dispatch(self, db, session, method, query, now, env, actor, row, share_id, share_revoking):
         if share_id is None and method == 'GET' and not query:
@@ -2220,7 +2302,7 @@ class App:
              session['user_id'], session['user_id'], key_hash, request_hash),
         )
         artifacts.attach_media(db, aid, mime, len(data), digest_hex, filename)
-        return self.artifact_saved(db, workspace['id'], aid, 201)
+        return self.artifact_saved(db, workspace['id'], aid, 201, session, now)
 
     def replace_media_artifact(self, db, workspace, session, row, now, env):
         fields, data, mime, filename, title = self._media_upload(env)
@@ -2257,7 +2339,7 @@ class App:
         artifacts.attach_media(db, row['id'], mime, len(data), digest_hex, filename)
         if previous and previous != digest_hex:
             artifacts.unlink_media(self.store.data_dir, workspace['id'], previous, db)
-        return self.artifact_saved(db, workspace['id'], row['id'], 200)
+        return self.artifact_saved(db, workspace['id'], row['id'], 200, session, now)
 
     def save_run_artifact(self, db, workspace, session, automation, run, now, body):
         title = body.get('title')
@@ -2299,7 +2381,7 @@ class App:
             db, aid, workspace['id'], now, 'automation_run', run['id'],
             automation_id=automation['id'], automation_title=auto_title,
         )
-        return self.artifact_saved(db, workspace['id'], aid, 201)
+        return self.artifact_saved(db, workspace['id'], aid, 201, session, now)
 
     def save_task_artifact(self, db, session, task, now, body):
         title = body.get('title')
@@ -2347,7 +2429,7 @@ class App:
         artifacts.attach_source(
             db, aid, workspace['id'], now, 'agent_task', row['id'], task_kind=row['kind'],
         )
-        return self.artifact_saved(db, workspace['id'], aid, 201)
+        return self.artifact_saved(db, workspace['id'], aid, 201, session, now)
 
 
 
@@ -2409,6 +2491,39 @@ class App:
         if method != 'POST' or query or removing:
             refuse(400, 'invalid', 'Invalid memory request')
         return self.update_memory_page(db, workspace, session, actor, row, now, self.body(env, ['revision', 'changes']))
+
+    def memory_dream_dispatch(self, db, session, method, query, now, env, workspace_id, page_id, suggestion_id):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        row = memory.load(db, workspace['id'], page_id)
+        if row is None:
+            refuse(404, 'not_found', 'Memory page not found')
+        if not memory.can_edit(actor, session['user_id'], row):
+            refuse(403, 'forbidden', 'Not allowed to consolidate this memory page')
+        if method != 'POST' or query:
+            refuse(400, 'invalid', 'Invalid memory request')
+        if suggestion_id is None:
+            self.body(env, [])
+            proposed = memory.propose(db, workspace['id'], row, now, uuid4().hex)
+            if proposed is None:
+                return 200, {'suggestion': None,
+                             'message': '这一页现在没有可以合并的重复段落，原文未改动。'}, []
+            return 200, {'suggestion': memory.suggestion_view(proposed)}, []
+        body = self.body(env, ['action'])
+        action = body.get('action')
+        if action not in ('accept', 'ignore'):
+            refuse(400, 'invalid', 'Provide accept or ignore')
+        suggestion = memory.load_suggestion(db, workspace['id'], page_id, suggestion_id)
+        if suggestion is None:
+            refuse(404, 'not_found', 'Memory suggestion not found')
+        applied = None
+        if suggestion['status'] == 'open':
+            applied = memory.decide(db, workspace, row, suggestion, action, session['user_id'], now)
+        suggestion = memory.load_suggestion(db, workspace['id'], page_id, suggestion_id)
+        page = memory.decorate(db, memory.load(db, workspace['id'], page_id))
+        return 200, {'suggestion': memory.suggestion_view(suggestion), 'page': page, 'applied': applied}, []
 
     def create_memory_page(self, db, workspace, session, now, env):
         body = self.body(env, ['title', 'body', 'topics'])
@@ -3269,14 +3384,23 @@ class App:
                      'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
 
     def send_conversation_message(self, db, workspace, session, agent, row, now, env):
-        body = self.body(env, ['body'])
+        body = self.body(env, ['body', 'chat_language'])
         text = body.get('body')
         if not conversations.valid_message(text):
             refuse(400, 'invalid', 'Provide a message')
+        requested_language = body.get('chat_language')
+        if requested_language is not None and not settings.valid_value('chat_language', requested_language):
+            refuse(400, 'invalid', 'Unsupported chat language')
+        # The composer sends the stored preference; a client that does not send
+        # it still gets the account's choice, so the setting never depends on a
+        # page having been upgraded.
+        chat_language = requested_language or settings.stored_chat_language(db, session['user_id'])
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         payload = {'body': text}
+        if requested_language is not None:
+            payload['chat_language'] = requested_language
         key_hash, request_hash = digest('message:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         )
@@ -3308,7 +3432,8 @@ class App:
                 > self.config.max_messages_per_conversation):
             refuse(429, 'quota', 'Conversation message capacity reached')
         history = conversations.history_for_prompt(db, row['id'])
-        prompt = conversations.compose_prompt(agent, history, text)
+        prompt = conversations.compose_prompt(
+            agent, history, text, settings.chat_language_name(chat_language))
         if not runtime_connect.valid_prompt(prompt):
             refuse(400, 'invalid', 'Provide a message')
         user_id = uuid4().hex
@@ -3503,7 +3628,7 @@ class App:
         )
         artifacts.attach_chat_source(
             db, artifact_id, workspace['id'], now, row['id'], message['id'], row['agent_id'])
-        return self.artifact_saved(db, workspace['id'], artifact_id, 201)
+        return self.artifact_saved(db, workspace['id'], artifact_id, 201, session, now)
 
     def profile_follow_work(self, db, session, method, now, env):
         if method == 'GET':
@@ -3694,6 +3819,62 @@ class App:
                 for item in personal.builtins(db, row['workspace_id'])
             ],
         }
+
+    def create_onboarding_automations(self, db, session, now, env):
+        body = self.body(env, ['template_ids'])
+        template_ids = body.get('template_ids')
+        if (not isinstance(template_ids, list) or not 1 <= len(template_ids) <= 6
+                or any(not isinstance(item, str) or item not in automations.TEMPLATES or item == 'custom'
+                       for item in template_ids)
+                or len(set(template_ids)) != len(template_ids)):
+            refuse(400, 'invalid', 'Provide 1–6 known automation templates')
+        workspace = db.execute('SELECT * FROM workspaces WHERE owner_id=? ORDER BY id LIMIT 1',
+                               (session['user_id'],)).fetchone()
+        if workspace is None:
+            if (db.execute('SELECT COUNT(*) FROM workspaces WHERE owner_id=?',
+                           (session['user_id'],)).fetchone()[0] >= self.config.max_workspaces_per_user
+                    or db.execute('SELECT COUNT(*) FROM workspaces').fetchone()[0] >= self.config.max_workspaces):
+                refuse(429, 'quota', 'Workspace capacity reached')
+            workspace_id = uuid4().hex
+            db.execute('INSERT INTO workspaces VALUES(?,?,?,?,?,?)',
+                       (workspace_id, session['user_id'], '个人空间', now,
+                        digest('onboarding-space:' + session['user_id']), digest('个人空间')))
+            workspace = db.execute('SELECT * FROM workspaces WHERE id=?', (workspace_id,)).fetchone()
+        current = db.execute('SELECT COUNT(*) FROM automations WHERE workspace_id=?',
+                             (workspace['id'],)).fetchone()[0]
+        schedule = {'kind': 'daily', 'time': '09:00', 'time_zone': 'Asia/Shanghai'}
+        schedule_json = json.dumps(schedule, sort_keys=True, separators=(',', ':'))
+        participants = [{'user_id': session['user_id'], 'username': session['username']}]
+        participants_json = json.dumps(participants, sort_keys=True, separators=(',', ':'))
+        created, skipped = [], []
+        for template_id in template_ids:
+            template = automations.TEMPLATES[template_id]
+            title = template['title']
+            title_digest = digest(title.casefold())
+            key_hash = digest('onboarding-automation:' + session['user_id'] + ':' + template_id)
+            if (db.execute('SELECT id FROM automations WHERE workspace_id=? AND title_hash=?',
+                           (workspace['id'], title_digest)).fetchone()
+                    or db.execute('SELECT id FROM automations WHERE workspace_id=? AND key_hash=?',
+                                  (workspace['id'], key_hash)).fetchone()):
+                skipped.append({'template_id': template_id, 'title': title})
+                continue
+            if current + len(created) >= self.config.max_automations_per_workspace:
+                refuse(429, 'quota', 'Automation capacity reached')
+            prompt = automations.compile_prompt(template_id, '', 'ongoing', schedule,
+                                                [session['username']], [])
+            request_hash = digest(json.dumps({'template_id': template_id, 'title': title,
+                                              'schedule': schedule, 'participants': [session['username']]},
+                                             sort_keys=True, separators=(',', ':')))
+            automation_id = uuid4().hex
+            db.execute('INSERT INTO automations VALUES(?,?,?,?,?,?,?,?,0,1,?,?,?,?)',
+                       (automation_id, workspace['id'], title, title_digest, prompt, template_id,
+                        schedule_json, participants_json, now, now, key_hash, request_hash))
+            db.execute('INSERT INTO automation_editors VALUES(?,?,?,?,?)',
+                       (automation_id, '', 'ongoing', '[]', 1))
+            created.append({'id': automation_id, 'template_id': template_id, 'title': title})
+        return (201 if created else 200), {
+            'workspace': {'id': workspace['id'], 'name': workspace['name']},
+            'created': created, 'skipped': skipped}, []
 
     def meeting_export(self, db, session, method, query, workspace_id, meeting_id):
         if method != 'GET':
@@ -4326,7 +4507,7 @@ class App:
                     message['body'][:artifacts.BODY_MAX], now, now, session['user_id'], session['user_id'],
                     digest('artifact-source:social_message:' + message_id), digest('social-message:' + message_id)))
         artifacts.attach_chat_source(db, artifact_id, workspace['id'], now, conversation['id'], message_id)
-        return self.artifact_saved(db, workspace['id'], artifact_id, 201)
+        return self.artifact_saved(db, workspace['id'], artifact_id, 201, session, now)
 
     def pin_social_message(self, db, session, row, message_id, now, env):
         pinned = self.body(env, ['pinned']).get('pinned')
@@ -5527,9 +5708,13 @@ class App:
         replacing = 'api_key' in changes and changes['api_key'] is not None
         if replacing and not model_api.valid_api_key(changes['api_key']):
             refuse(400, 'invalid', 'API key must be 8–4096 characters')
-        if not clearing or row is not None:
-            if not model_api.valid_provider(provider) or not model_api.valid_base_url(base_url) or not model_api.valid_model(model_name):
-                refuse(400, 'invalid', 'Provide a supported provider, https base URL and model name')
+        # An operator policy removal must not prevent revoking a stored key.
+        # Mixed metadata updates still receive normal validation.
+        if not (clearing and set(changes) == {'api_key'}):
+            if not model_api.valid_provider(provider) or not model_api.valid_base_url(base_url, self.model_http_policy) or not model_api.valid_model(model_name):
+                refuse(400, 'invalid', 'Provide a supported provider, authorized model base URL and model name')
+        if not clearing and self.model_http_policy.allows(base_url) and provider not in ('openai', 'custom'):
+            refuse(400, 'invalid', 'HTTP model exceptions require an OpenAI-compatible task provider')
         if not replacing and not clearing:
             if (provider, base_url, model_name) == (current['provider'], current['base_url'], current['model']) and row is not None:
                 return 200, {'model_api': current}, []
@@ -5721,7 +5906,7 @@ class App:
             body = self.body(env, ['job_id', 'observed_revision', 'lease'])
             if set(body) != {'job_id', 'observed_revision', 'lease'} or not isinstance(body['job_id'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['job_id']):
                 refuse(400, 'invalid', 'Incomplete or invalid manager observation')
-            return 200, runtime.runtime_secret(manager, secret[1], body['job_id'], body['observed_revision'], body['lease']), []
+            return 200, runtime.runtime_secret(manager, secret[1], body['job_id'], body['observed_revision'], body['lease'], http_policy=self.model_http_policy, capability=env.get('HTTP_X_OPENTEAMILY_MODEL_HTTP')), []
         collaboration = re.fullmatch(r'/v1/internal/instances/([0-9a-f]{32})/runtime-bot-social', path)
         if collaboration and method == 'POST' and not query:
             body = self.body(env, ['job_id', 'observed_revision', 'lease'])

@@ -70,6 +70,12 @@
       <p id="onboarding-step-label" class="onboarding-step-label">第 1 步，共 4 步</p>
       <ol class="onboarding-progress" aria-hidden="true"><li data-bar="1"></li><li data-bar="2"></li><li data-bar="3"></li><li data-bar="4"></li></ol>
     </header>
+    <section class="onboarding-steps" aria-labelledby="onboarding-steps-title">
+      <h2 id="onboarding-steps-title">开始使用</h2>
+      <p class="note">这三步只看本账户的真实数据；判不出来的步骤会直接写明原因，不会先打勾。</p>
+      <ul id="onboarding-checklist" class="onboarding-checklist"></ul>
+      <p id="onboarding-ready" class="note" hidden></p>
+    </section>
     <form id="onboarding-form" class="onboarding-card" data-step="1">
       <h2>聊聊你的工作</h2>
       <p class="note">选择你的行业和角色，让工作区从一开始就有合适的背景。</p>
@@ -100,7 +106,8 @@
     <section id="onboarding-steps" class="onboarding-card" hidden>
       <div class="onboarding-step" data-step="2">
         <h2>连接你在用的应用</h2>
-        <p class="note">连接后，你的 Personal Agent 能更好地帮你。应用连接在 OpenTeamily 里尚未实现（没有第三方授权），这里的应用都显示为未连接，可以直接继续。</p>
+        <p class="note">连接后，你的 Personal Agent 能更好地帮你。下面每行是你工作区里真实读到的连接状态：配置了自己的 Composio key 并在<a href="/settings/connectors">设置 → 应用连接器</a>里授权过的应用显示「已连接」；读不到连接列表的写「未接入」，不会当成「未连接」。</p>
+        <p id="onboarding-reality" class="note"></p>
         <h3 class="onboarding-group">常用应用</h3>
         <ul id="onboarding-apps" class="app-rows"></ul>
         <p class="onboarding-hint"><span aria-hidden="true">ⓘ</span> 不会代你连接任何账号；以后可在设置 → 应用连接器查看。</p>
@@ -114,6 +121,15 @@
         <h2>我们能帮你分担些什么？</h2>
         <p class="note">选几件想交给 Agent 的事。建议按你的行业给出（OpenTeamily 自拟文案）；选择会被保存，但不会自动创建任务或例行任务。</p>
         <div id="onboarding-picks" class="pick-groups"></div>
+        <fieldset class="onboarding-automation-choices">
+          <legend>可选：创建暂停的自动化</legend>
+          <p class="note">以下是可创建的真实模板，与上方保存的偏好分开选择（默认不选）。只有点击“创建选中模板（暂停）”才会创建；保存、跳过和完成引导都不会创建。</p>
+          <div id="onboarding-automation-templates" class="pick-list"></div>
+          <p class="note">创建到你拥有的工作区；没有时新建个人空间。每日 09:00（北京时间），但默认暂停，需到自动化页检查并手动启用。不会连接应用或自动执行。</p>
+          <button type="button" id="create-onboarding-automations" class="secondary">创建选中模板（暂停）</button>
+          <p id="onboarding-automation-status" role="status" aria-live="polite"></p>
+          <a href="/automations">查看并配置自动化</a>
+        </fieldset>
         <div class="onboarding-actions">
           <button type="button" class="secondary" data-go="2">← 上一步</button>
           <button type="submit">保存并继续 <span aria-hidden="true">→</span></button>
