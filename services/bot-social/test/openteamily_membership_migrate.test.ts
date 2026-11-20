@@ -41,6 +41,10 @@ async function flyHome(name: string) {
     });
     return { status: res.status, data: await res.json() };
   };
+  // The runtime obtains its attestation by resolving the connector's profile.
+  const profile = await call("GET", "/v1/ot/me");
+  assert.equal(profile.status, 200);
+  assert.equal(profile.data.owner_id, r.owner_id);
   return {
     social_owner_id: r.owner_id as string,
     home_id: r.home.bot_id as string,

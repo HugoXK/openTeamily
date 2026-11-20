@@ -82,7 +82,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:tick|[0-9a-f]{32}(?:/(?:remove|runs(?:/[0-9a-f]{32}(?:/(?:cancel|retry|artifact))?)?)?))?)?$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/api-keys(?:/[0-9a-f]{32}/revoke)?$'), 'agent-api'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents(?:/[0-9a-f]{32}(?:/(?:archive|conversations(?:/[0-9a-f]{32}(?:/messages(?:/[0-9a-f]{32}/artifact)?)?)?))?)?$'), 'agents'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/meetings(?:/[0-9a-f]{32}(?:/(?:remove|export))?)?$'), 'meetings'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:draft|speech|transcribe)|/[0-9a-f]{32}(?:/(?:remove|export))?)?$'), 'meetings'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory(?:/[0-9a-f]{32}(?:/(?:remove|export|dream(?:/[0-9a-f]{32})?|versions(?:/\d{1,8}(?:/restore)?)?))?)?$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/(?:profile|graph|(?:actions|links|preferences)(?:/[0-9a-f]{32}(?:/remove)?)?)$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$'), 'search'),
@@ -132,7 +132,7 @@ MOVED_API_LOCATIONS = (
     'location = /v1/onboarding/automations { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/automations(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/agents(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/[0-9a-f]{32}(?:/(?:remove|export))?)?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:draft|speech|transcribe)|/[0-9a-f]{32}(?:/(?:remove|export))?)?$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/memory(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }',
@@ -429,6 +429,12 @@ class GatewayApp:
             row = db.execute('SELECT owner_id FROM instances WHERE id=?', (iid,)).fetchone()
             if row is None or not Lifecycle.grants(db, manager, iid):
                 raise GatewayError(403, 'not_granted')
+            try:
+                destination = owned_instance(db, row[0])
+            except RuntimeFault as error:
+                raise GatewayError(409, 'import_destination') from error
+            if destination != iid:
+                raise GatewayError(409, 'import_destination')
             features = []
             for feature in dsbot_bundle.FEATURE_TABLES:
                 bundle = dsbot_bundle.build_with_secrets(db, self.store, row[0], feature, seal, int(self.clock()))
@@ -652,7 +658,7 @@ __DSBOT_LOCATIONS__
   recursive_error_pages on;
   error_page 418 = @ot_dsbot;
   error_page 401 = @ot_login;
-  location @ot_login { return 302 /register/; }
+  location @ot_login { return 302 /login; }
   location / {
     proxy_pass http://__PLATFORM__;
     proxy_set_header Host $host;

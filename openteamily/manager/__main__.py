@@ -63,7 +63,8 @@ def poll_once(args):
                 except ManagerError as error:
                     results.append({'status': 'route_refused', 'instance_id': iid, 'reason': error.code})
                 try:
-                    results.append(dsbot_import.deliver(engine, client, iid))
+                    with instance_lock(registry.root, iid):
+                        results.append(dsbot_import.deliver(engine, client, iid))
                 except ManagerError as error:
                     results.append({'status': 'import_refused', 'instance_id': iid, 'reason': error.code})
         except ManagerError as error:
