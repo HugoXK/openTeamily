@@ -136,8 +136,9 @@ class SkillsPageTests(unittest.TestCase):
                                           origin='https://evil.test')['status'], 403)
         self.assertEqual(self.client.call('GET', '/v1/skills/installed')['body'],
                          {'installed': ['meeting-notes']})
-        # The DELETE exemption is one path only; every other route still refuses it.
-        self.assertEqual(self.client.call('DELETE', '/v1/settings')['status'], 405)
+        # main now admits DELETE generally (405 → routing); a route without a DELETE
+        # handler must still refuse it and must not change anything.
+        self.assertIn(self.client.call('DELETE', '/v1/settings')['status'], (404, 405))
 
 
 if __name__ == '__main__':
