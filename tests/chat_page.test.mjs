@@ -1286,6 +1286,91 @@ test('composer + creation grid deep-links real editors and labels the rest 未�
   assert.ok((html.match(/未接通/g) || []).length >= 5);
 });
 
+// Media shared in a chat is uploaded to the workspace library before the
+// message is sent, so the message carries an attachment with a mime type. The
+// message list has to show an image as an image: the document card with a DOC
+// cover and a download link is what an attachment used to look like for every
+// file type, and it hides the picture a user just sent.
+
+function attachmentFetcher(item) {
+  const aliceRow = {user_id: alice, username: 'alice'};
+  const conversation = {
+    id: 'conv-1', kind: 'dm', title: 'bob', updated: 30,
+    members: [aliceRow, {user_id: bob, username: 'bob'}],
+  };
+  const fetcher = async (path) => {
+    if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
+    if (path === '/v1/onboarding') return json(200, {onboarding: {completed: true}});
+    if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: 'ws-1'}}});
+    if (path === '/v1/workspaces?limit=100') return json(200, {items: [{id: 'ws-1', name: 'Desk'}]});
+    if (path === '/v1/settings') return json(200, {settings: {values: {}}});
+    if (path === '/v1/workspaces/ws-1/agents?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/members') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/artifacts?limit=100') return json(200, {items: []});
+    if (path === '/v1/workspaces/ws-1/social/conversations?limit=100') return json(200, {items: [conversation]});
+    if (path === '/v1/workspaces/ws-1/social/conversations/conv-1') {
+      return json(200, {conversation, items: [item]});
+    }
+    throw new Error('unexpected ' + path);
+  };
+  return {fetcher};
+}
+
+const imageAttachment = {
+  id: 'a'.repeat(32), title: '日落.png', mime: 'image/png',
+  path: '/v1/workspaces/ws-1/artifacts/' + 'a'.repeat(32) + '/file',
+};
+
+function attachmentMessage(attachment) {
+  return {
+    id: 'm-1', conversation_id: 'conv-1', workspace_id: 'ws-1', user_id: bob,
+    body: '附件：' + attachment.title, created: '2026-01-01T00:00:00Z', attachment,
+  };
+}
+
+test('a picture shared in a chat renders as an image, not a document card', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher: attachmentFetcher(attachmentMessage(imageAttachment)).fetcher});
+    await settle();
+    const row = el('message-list').children[0];
+    assert.ok(row, 'the fixture conversation renders its message');
+    const image = descendants(row).find((node) => node.tagName === 'IMG');
+    assert.ok(image, 'an image attachment must render as an <img>, otherwise the picture is invisible in chat');
+    assert.equal(image.src, imageAttachment.path, 'the image reads the attachment the message points at');
+    assert.equal(image.alt, '日落.png', 'the image alt text is the attachment title');
+    assert.equal(image.getAttribute('loading'), 'lazy', 'a shared picture is not loaded before it is seen');
+    assert.ok(
+      !descendants(row).some((node) => String(node.textContent).trim() === 'DOC'),
+      'the document cover must not label an image attachment',
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('an audio attachment keeps the document card instead of becoming an image', async () => {
+  const attachment = {id: 'b'.repeat(32), title: '备忘.m4a', mime: 'audio/mp4', path: '/v1/workspaces/ws-1/artifacts/' + 'b'.repeat(32) + '/file'};
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const restore = installChatGlobals();
+  try {
+    await mount(doc, {fetcher: attachmentFetcher(attachmentMessage(attachment)).fetcher});
+    await settle();
+    const row = el('message-list').children[0];
+    assert.ok(
+      !descendants(row).some((node) => node.tagName === 'IMG'),
+      'a non-image attachment must not be forced into an image element',
+    );
+    assert.ok(
+      descendants(row).some((node) => String(node.textContent).trim() === 'DOC'),
+      'a non-image attachment keeps the document card',
+    );
+  } finally {
+    restore();
+  }
+});
+
 test('in-chat search jumps to loaded messages, explains unloaded hits, and restores scroll on close', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
@@ -1428,4 +1513,61 @@ test('new dialog and document-card surfaces use actual theme tokens, not undefin
   assert.match(css, /#message-assist-dialog, #announcement-dialog \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
   assert.match(css, /#resource-picker \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
   assert.match(css, /\.chat-document-card \{[^}]*color:var\(--ot-ink\);background:var\(--ot-surface\)/);
+});
+
+
+for (const phase of ['directory', 'fanout']) for (const target of ['ws-1','ws-2']) {
+  test(`deferred ${phase} from an older load cannot overwrite the latest ${target} session list`, async () => {
+    const {doc, el} = fakeChatDocument(chatHtml()); const restore = installChatGlobals();
+    let release, first=true; const requests=[];
+    const row=id=>({id,kind:'group',title:id,updated:30,members:[]});
+    const fetcher=async path=>{
+      requests.push(path);
+      if(path==='/v1/auth/session')return json(200,{user:{id:'user-1',username:'alice'}});
+      if(path==='/v1/onboarding')return json(200,{onboarding:{completed:true}});
+      if(path==='/v1/personal-agent')return json(200,{personal_agent:{workspace:{id:'ws-1'}}});
+      if(path==='/v1/workspaces?limit=100')return json(200,{items:[{id:'ws-1',name:'First'},{id:'ws-2',name:'Second'}]});
+      if(path==='/v1/settings')return json(200,{settings:{values:{}}});
+      if(path.endsWith('/agents?limit=100')){
+        if(first){first=false;
+          if(phase==='directory')return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'old-agent',name:'old'}]}));});
+          return json(200,{items:[{id:'old-agent',name:'old'}]});
+        }
+        return json(200,{items:[]});
+      }
+      if(path.includes('/agents/old-agent/conversations?'))return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'stale-agent-conversation',title:'stale',updated:40}]}));});
+      if(path.endsWith('/social/conversations?limit=100'))return json(200,{items:[row(release?'new-current':'old-stale')]});
+      if(path.endsWith('/members')||path.endsWith('/artifacts?limit=100'))return json(200,{items:[]});
+      return json(404,{error:{message:'not in synthetic fixture'}});
+    };
+    try{
+      mount(doc,{fetcher}); await settle(); assert.equal(typeof release,'function','first real request is pending');
+      el('workspace').value=target; await fire(el('workspace'),'change'); await settle();
+      const ids=()=>el('conversation-list').children.map(li=>li.children[0]?.dataset.conversation).filter(Boolean);
+      assert.deepEqual(ids(),['new-current']);
+      release(); await settle(); assert.deepEqual(ids(),['new-current'],'late old data must not overwrite a newer successful load');
+      if(phase==='directory')assert.equal(requests.some(path=>path.includes('/agents/old-agent/')),false,'stale directory must not trigger new fanout');
+    }finally{restore();}
+  });
+}
+
+
+test('initial SSE cannot supersede an uncommitted session directory and lose a conversation deep link',async()=>{
+ const {doc,el}=fakeChatDocument(chatHtml()),restore=installChatGlobals();const saved=globalThis.EventSource;
+ const sources=[];let release,first=true;
+ class Source{constructor(){this.handlers={};sources.push(this)}addEventListener(n,fn){this.handlers[n]=fn}close(){}}
+ globalThis.EventSource=Source;globalThis.location.hash='#workspace=ws-1&agent=agent-1&conversation=conv-1';
+ const fallback=chatFetcher().fetcher;
+ const fetcher=async(path,options)=>{
+  if(path.endsWith('/agents?limit=100')){if(first){first=false;return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'agent-1',name:'Deep link agent'}]}));});}return json(200,{items:[{id:'agent-1',name:'Deep link agent'}]});}
+  if(path.endsWith('/agents/agent-1/conversations?limit=100'))return json(200,{items:[{id:'conv-1',title:'Stored conversation'}]});
+  if(path.endsWith('/agents/agent-1/conversations/conv-1'))return json(200,{conversation:{id:'conv-1',title:'Stored conversation'},items:[{id:'m-1',role:'assistant',body:'Stored actual response',status:'succeeded'}]});
+  return fallback(path,options);
+ };
+ try{
+  mount(doc,{fetcher});await settle();assert.equal(typeof release,'function');assert.equal(sources.length,0,'subscribe only after the initial directory commits');
+  release();await settle();assert.equal(sources.length,1);
+  sources[0].handlers.invalidate({data:JSON.stringify({version:'f'.repeat(64),domains:{social:'a'.repeat(64),artifacts:'b'.repeat(64),notifications:'c'.repeat(64)}})});
+  await settle();assert.match(el('chat-title').textContent,/Deep link agent/);assert.ok(el('message-list').children.length>0,'initial snapshot refresh retains the deep-linked history');
+ }finally{if(saved===undefined)delete globalThis.EventSource;else globalThis.EventSource=saved;restore();}
 });
