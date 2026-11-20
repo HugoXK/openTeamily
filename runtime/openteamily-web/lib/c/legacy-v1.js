@@ -763,7 +763,43 @@ function discoverRoutes(host) {
     const items = (data.items || []).map((row) => (kind === 'agent' ? agentItem(row) : workItem(row)))
     return [200, { items, cursor: data.next_before ?? null }]
   })
+  const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
+  const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path } : { listed: false })
   return [
+    // Publish a work (artifact on this DS-Bot) to the public Bot Social catalog (/w/<slug>).
+    {
+      method: 'GET', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/discover$/,
+      async handle({ match }) { return wrap(async () => [200, { discover: workMeta(await workListing(client(host), match[2])) }]) },
+    },
+    {
+      method: 'POST', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/discover$/,
+      async handle({ match, body }) {
+        return wrap(async () => {
+          const bs = client(host)
+          const got = await host.call('artifacts/v1', { method: 'GET', path: `/v1/workspaces/${match[1]}/artifacts/${match[2]}` })
+          const artifact = got?.body?.artifact
+          if (!artifact) throw new Fault(404, 'not_found', 'Artifact not found')
+          const prior = await workListing(bs, match[2])
+          const kind = ['document', 'website', 'whiteboard', 'media', 'slides', 'dashboard'].includes(artifact.kind) ? artifact.kind : 'document'
+          const data = await bs.put('/v1/ot/listings', {
+            kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
+            summary: String(artifact.body || '').slice(0, 300), work_kind: kind, snapshot: String(artifact.body || '').slice(0, 200000),
+          })
+          return [prior ? 200 : 201, { discover: workMeta(data) }]
+        })
+      },
+    },
+    {
+      method: 'POST', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/artifacts\/([0-9a-f]{32})\/discover\/revoke$/,
+      async handle({ match }) {
+        return wrap(async () => {
+          const bs = client(host)
+          const row = await workListing(bs, match[2])
+          if (row?.listed) await bs.del(`/v1/ot/listings/${seg(row.id, 'listing_id')}`)
+          return [200, { discover: { listed: false } }]
+        })
+      },
+    },
     {
       method: 'POST', path: /^\/v1\/discover\/agents\/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])\/start$/,
       async handle({ match }) {
