@@ -36,11 +36,46 @@ export function avatarTone(name) {
   return String((hash % 6) + 1);
 }
 
+export const FOLLOW_WORK_EMPTY = '还没有关注任何人。先在发现页关注作者，再回来打开作品通知。';
+
+export function followWorkNotice(enabled) {
+  return enabled ? '已打开作品通知。' : '已关闭作品通知。';
+}
+
+export function followWorkSwitchLabel(name) {
+  return name ? name + ' 的作品通知' : '这个账号的作品通知';
+}
+
 export function monogram(name) {
   const letters = String(name || '').match(/\p{L}|\p{N}/gu) || [];
   if (!letters.length) return '?';
   if (letters.length === 1) return letters[0].toUpperCase();
   return (letters[0] + letters[1]).toUpperCase();
+}
+
+export const AVATAR_LIMIT = 2 * 1024 * 1024;
+
+// The server owns the rules (2 MB cap, PNG/JPG only, session required); the page
+// only turns its status codes into Chinese, and never reports success on failure.
+export function avatarNotice(status, error) {
+  if (status === 413) return '头像不能超过 2 MB。';
+  if (status === 415) return '头像只支持 PNG 或 JPG。';
+  if (status === 400) return '这张图片无法识别，请换一张 PNG 或 JPG。';
+  if (status === 401) return '登录状态已失效，请重新登录。';
+  if (status === 403) return '页面已过期，请刷新后重试。';
+  return messageFor(error, '头像上传失败，请稍后重试。');
+}
+
+export function paintAvatarImage(node, avatar) {
+  if (!node) return false;
+  if (avatar && avatar.url) {
+    node.setAttribute('src', avatar.url);
+    node.hidden = false;
+    return true;
+  }
+  node.setAttribute('src', '');
+  node.hidden = true;
+  return false;
 }
 
 function $(id) {
@@ -81,6 +116,7 @@ function mount() {
   let revision = 0;
   let snapshot = '';
   let currentUsername = '';
+  let currentHandle = '';
 
   function show(kind, text) {
     status.dataset.kind = kind;
@@ -96,10 +132,62 @@ function mount() {
     if (edit) edit.hidden = !editing;
   }
 
+  function publicProfileUrl(handle) {
+    const origin = (typeof location !== 'undefined' && location.origin) || '';
+    return origin + '/p/' + encodeURIComponent(handle);
+  }
+
+  function openEditView() {
+    if (typeof history === 'undefined' || typeof history.pushState !== 'function') return;
+    if (!isEditPath()) history.pushState({}, '', '/profile/edit');
+    syncView();
+  }
+
+  function showShareFallback(url) {
+    const box = document.querySelector && document.querySelector('#profile-share-fallback');
+    const code = document.querySelector && document.querySelector('#profile-share-link');
+    if (code) code.textContent = url;
+    if (box) box.hidden = false;
+  }
+
+  async function shareProfile() {
+    if (!currentHandle) {
+      show('', '先设置 Teamily ID 才能分享。');
+      openEditView();
+      const input = document.getElementById('profile-handle');
+      if (input && typeof input.focus === 'function') input.focus();
+      return;
+    }
+    const url = publicProfileUrl(currentHandle);
+    const clipboard = typeof navigator !== 'undefined' && navigator.clipboard;
+    if (clipboard && typeof clipboard.writeText === 'function') {
+      try {
+        await clipboard.writeText(url);
+        show('ok', '公开主页链接已复制。');
+        return;
+      } catch {
+        // The browser refused the clipboard; fall through to the manual-copy line.
+      }
+    }
+    show('error', '浏览器没有给出剪贴板权限，请手动复制下面的链接。');
+    showShareFallback(url);
+  }
+
   function paintAvatar(node, name) {
     if (!node) return;
     node.textContent = monogram(name);
     if (node.dataset) node.dataset.tone = avatarTone(name);
+  }
+
+  function applyAvatar(avatar) {
+    const home = document.querySelector && document.querySelector('#profile-avatar-image');
+    const edit = document.querySelector && document.querySelector('#profile-edit-avatar-image');
+    const homeTone = document.querySelector && document.querySelector('#profile-avatar');
+    const editTone = document.querySelector && document.querySelector('#profile-edit-avatar');
+    const shown = paintAvatarImage(home, avatar);
+    paintAvatarImage(edit, avatar);
+    if (homeTone) homeTone.hidden = shown;
+    if (editTone) editTone.hidden = shown;
   }
 
   function updateCounters() {
@@ -158,6 +246,7 @@ function mount() {
       if (input) input.value = (value.goals && value.goals[key]) || '';
     }
     revision = Number(value.revision || 0);
+    currentHandle = value.handle || '';
     const meta = document.getElementById('profile-meta');
     meta.textContent = revision
       ? '修订 ' + revision + ' · Teamily ID 可用于公开资料地址'
@@ -176,6 +265,83 @@ function mount() {
       if (title) title.textContent = username || '';
       updateCounters();
       markClean();
+    }
+  }
+
+  function closeFollowWork() {
+    const dialog = document.querySelector('#follow-work-dialog');
+    if (dialog) dialog.hidden = true;
+  }
+
+  function followWorkRow(item) {
+    const li = document.createElement('li');
+    li.className = 'follow-work-row';
+    const label = document.createElement('label');
+    label.className = 'follow-work-label';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = item.enabled;
+    input.setAttribute('aria-label', followWorkSwitchLabel(item.name));
+    input.dataset.creator = item.creator_id;
+    const copy = document.createElement('span');
+    copy.className = 'follow-work-copy';
+    const name = document.createElement('strong');
+    name.textContent = item.name || item.username;
+    const handle = document.createElement('span');
+    handle.className = 'follow-work-handle';
+    handle.textContent = '@' + (item.handle || item.username);
+    copy.append(name, handle);
+    label.append(input, copy);
+    input.addEventListener('change', async () => {
+      input.disabled = true;
+      try {
+        const result = await request('POST', '/v1/profile/follow-work',
+          {creator_id: item.creator_id, enabled: input.checked});
+        const status = document.querySelector('#follow-work-status');
+        if (result.status !== 200) {
+          input.checked = !input.checked;
+          if (status) {
+            status.hidden = false;
+            status.textContent = messageFor(result.body.error, '无法保存作品通知设置。');
+          }
+          return;
+        }
+        if (status) {
+          status.hidden = false;
+          status.textContent = followWorkNotice(input.checked);
+        }
+      } finally {
+        input.disabled = false;
+      }
+    });
+    li.append(label);
+    return li;
+  }
+
+  async function loadFollowWork() {
+    const list = document.querySelector('#follow-work-list');
+    const empty = document.querySelector('#follow-work-empty');
+    const status = document.querySelector('#follow-work-status');
+    if (!list) return;
+    if (status) {
+      status.hidden = true;
+      status.textContent = '';
+    }
+    const result = await request('GET', '/v1/profile/follow-work');
+    if (result.status !== 200) {
+      list.hidden = true;
+      if (empty) {
+        empty.hidden = false;
+        empty.textContent = messageFor(result.body.error, '无法读取作品通知设置。');
+      }
+      return;
+    }
+    const items = result.body.items || [];
+    list.replaceChildren(...items.map(followWorkRow));
+    list.hidden = items.length === 0;
+    if (empty) {
+      empty.hidden = items.length > 0;
+      empty.textContent = FOLLOW_WORK_EMPTY;
     }
   }
 
@@ -284,7 +450,46 @@ function mount() {
       return;
     }
     fill(result.body.profile, username);
+    applyAvatar(result.body.avatar);
     if (hasHome()) await loadAgents();
+  }
+
+  const changeAvatar = document.getElementById('profile-change-avatar');
+  const avatarInput = document.getElementById('profile-avatar-input');
+  if (changeAvatar && avatarInput) {
+    changeAvatar.addEventListener('click', () => {
+      if (changeAvatar.disabled) return;
+      avatarInput.click();
+    });
+    avatarInput.addEventListener('change', async () => {
+      const file = avatarInput.files && avatarInput.files[0];
+      avatarInput.value = '';
+      if (!file || changeAvatar.disabled) return;
+      changeAvatar.disabled = true;
+      show('', '正在上传头像…');
+      try {
+        const form = new FormData();
+        form.append('file', file, file.name || 'avatar.png');
+        const response = await fetch('/v1/profile/avatar', {
+          method: 'POST',
+          headers: {Accept: 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)},
+          credentials: 'same-origin',
+          body: form,
+        });
+        let payload = {};
+        try { payload = await response.json(); } catch { payload = {}; }
+        if (response.status !== 200 || !payload.avatar) {
+          show('error', avatarNotice(response.status, payload && payload.error));
+          return;
+        }
+        applyAvatar(payload.avatar);
+        show('ok', '头像已更新。');
+      } catch {
+        show('error', '头像上传失败，请检查网络后重试。');
+      } finally {
+        changeAvatar.disabled = false;
+      }
+    });
   }
 
   const save = document.getElementById('profile-save');
@@ -425,8 +630,28 @@ function mount() {
     const tabR = document.querySelector('#dialog-tab-followers');
     if (tabF) tabF.addEventListener('click', () => openFollowers('following'));
     if (tabR) tabR.addEventListener('click', () => openFollowers('followers'));
+    const share = document.querySelector('#profile-share');
+    if (share) share.addEventListener('click', shareProfile);
+    const notifyOpen = document.querySelector('#profile-notify-open');
+    if (notifyOpen) notifyOpen.addEventListener('click', () => {
+      const dialog = document.querySelector('#follow-work-dialog');
+      if (!dialog) return;
+      dialog.hidden = false;
+      loadFollowWork();
+    });
+    const notifyClose = document.querySelector('#follow-work-dialog-close');
+    if (notifyClose) notifyClose.addEventListener('click', closeFollowWork);
+    const notifyDialog = document.querySelector('#follow-work-dialog');
+    if (notifyDialog) {
+      notifyDialog.addEventListener('click', event => {
+        if (event.target === notifyDialog) closeFollowWork();
+      });
+    }
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape') closeFollowers();
+      if (event.key === 'Escape') {
+        closeFollowers();
+        closeFollowWork();
+      }
     });
   }
 
