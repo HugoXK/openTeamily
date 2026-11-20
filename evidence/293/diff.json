@@ -1,0 +1,209 @@
+{
+  "slug": "ev293",
+  "sides": [
+    "http://127.0.0.1:8101",
+    "http://127.0.0.1:8102"
+  ],
+  "diffs": [
+    {
+      "route": "/settings",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev293/before/zh-CN__light__1440x900__settings.png",
+      "after": "ev293/after/zh-CN__light__1440x900__settings.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 88
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 91
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 390,
+      "ratio": 0.00030092592592592595,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 390,
+        "ratio": 0.00032098765432098765
+      },
+      "bbox": {
+        "x": 619,
+        "y": 117,
+        "width": 42,
+        "height": 14
+      },
+      "text": {
+        "changedLines": 2,
+        "sample": [
+          "用户名",
+          "+用户名或邮箱"
+        ]
+      }
+    },
+    {
+      "route": "/settings",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev293/before/zh-CN__dark__1440x900__settings.png",
+      "after": "ev293/after/zh-CN__dark__1440x900__settings.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 88
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 91
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 462,
+      "ratio": 0.0003564814814814815,
+      "rail": {
+        "changed": 2,
+        "ratio": 0.000024691358024691357
+      },
+      "content": {
+        "changed": 460,
+        "ratio": 0.0003786008230452675
+      },
+      "bbox": {
+        "x": 10,
+        "y": 23,
+        "width": 669,
+        "height": 233
+      },
+      "text": {
+        "changedLines": 2,
+        "sample": [
+          "用户名",
+          "+用户名或邮箱"
+        ]
+      }
+    },
+    {
+      "route": "/settings",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev293/before/zh-CN__light__390x844__settings.png",
+      "after": "ev293/after/zh-CN__light__390x844__settings.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 88
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 91
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 390,
+      "ratio": 0.001184834123222749,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 390,
+        "ratio": 0.0015402843601895735
+      },
+      "bbox": {
+        "x": 135,
+        "y": 117,
+        "width": 42,
+        "height": 14
+      },
+      "text": {
+        "changedLines": 2,
+        "sample": [
+          "用户名",
+          "+用户名或邮箱"
+        ]
+      }
+    },
+    {
+      "route": "/settings",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev293/before/zh-CN__dark__390x844__settings.png",
+      "after": "ev293/after/zh-CN__dark__390x844__settings.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 88
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 91
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 461,
+      "ratio": 0.0014005346943735569,
+      "rail": {
+        "changed": 1,
+        "ratio": 0.000013164823591363876
+      },
+      "content": {
+        "changed": 460,
+        "ratio": 0.0018167456556082149
+      },
+      "bbox": {
+        "x": 10,
+        "y": 23,
+        "width": 185,
+        "height": 229
+      },
+      "text": {
+        "changedLines": 2,
+        "sample": [
+          "用户名",
+          "+用户名或邮箱"
+        ]
+      }
+    }
+  ]
+}
