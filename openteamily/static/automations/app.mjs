@@ -366,9 +366,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
   const runButton = document.getElementById('tick-automation');
+  const newButton = document.getElementById('new-automation');
   let currentUser = null;
   let workspaces = [];
   let templates = [];
+  let templateState = 'loading';
   let current = null;
   let category = 'mine';
   let runTimer = 0;
@@ -685,13 +687,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function fillTemplates() {
     const select = form.elements.template_id;
+    const selected = select.value;
     select.textContent = '';
-    for (const item of templates) {
+    const available = templates.some(item => item.id === 'custom')
+      ? templates : [{id: 'custom', title: '自定义'}, ...templates];
+    for (const item of available) {
       const option = document.createElement('option');
       option.value = item.id;
       option.textContent = item.title;
       select.appendChild(option);
     }
+    if (available.some(item => item.id === selected)) select.value = selected;
+  }
+
+  async function loadTemplates() {
+    templateState = 'loading';
+    const catalog = await request('GET', '/v1/automation-templates').catch(() => ({status: 0}));
+    templateState = catalog.status === 200 ? 'ready' : 'failed';
+    templates = catalog.status === 200 ? (catalog.body.items || []) : [];
+    fillTemplates();
+    if (category !== 'mine' && !listPanel.hidden) await loadList();
   }
 
   function openEditor(item) {
@@ -722,7 +737,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const list = document.getElementById('automation-list');
     const empty = document.getElementById('list-empty');
     if (category === 'work' || category === 'life') {
-      empty.textContent = '没有匹配的模板。';
+      empty.textContent = {
+        loading: '正在加载模板…', failed: '无法加载模板。', ready: '没有匹配的模板。',
+      }[templateState];
       renderCatalog(
         catalogItems(templates, category, search.value),
         list,
@@ -751,6 +768,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function load() {
+    newButton.disabled = true;
     const session = await request('GET', '/v1/auth/session');
     if (session.status === 401) {
       loginPanel.hidden = false;
@@ -767,17 +785,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
-    const [space, catalog] = await Promise.all([
-      request('GET', '/v1/workspaces?limit=100'),
-      request('GET', '/v1/automation-templates'),
-    ]);
+    const catalog = loadTemplates();
+    const space = await request('GET', '/v1/workspaces?limit=100');
     if (space.status !== 200) {
       show('error', messageFor(space.body.error, '无法读取工作区。'));
-      return;
+      return catalog;
     }
     workspaces = space.body.items || [];
-    templates = catalog.status === 200 ? (catalog.body.items || []) : [];
-    fillTemplates();
     const previous = workspaceSelect.value;
     workspaceSelect.textContent = '';
     for (const item of workspaces) {
@@ -793,13 +807,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.getElementById('automation-list').textContent = '';
       document.getElementById('list-empty').hidden = false;
       document.getElementById('list-empty').textContent = '还没有工作区。';
-      return;
+      return catalog;
     }
+    newButton.disabled = false;
     document.getElementById('list-empty').textContent = '这个分类下还没有自动化。';
     form.hidden = true;
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
-    await loadList();
+    await Promise.all([loadList(), catalog]);
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -859,7 +874,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
-  document.getElementById('new-automation').addEventListener('click', () => {
+  newButton.addEventListener('click', () => {
     openEditor(null);
   });
   form.elements.kind.addEventListener('change', () => syncScheduleFields(form));
@@ -1011,7 +1026,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   return load().then(() => {
     const view = document.defaultView;
     const wanted = templateFromSearch(view && view.location && view.location.search);
-    if (!wanted || mainPanel.hidden || !workspaceId()) return;
+    if (!wanted || mainPanel.hidden || !workspaceId() || !form.hidden) return;
     const template = templates.find(item => item.id === wanted);
     if (!template) return;
     openEditor(draftFromTemplate(template, currentUser && currentUser.username));

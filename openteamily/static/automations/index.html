@@ -68,7 +68,7 @@
     <header class="page-top">
       <div class="page-heading">
         <h1>自动化</h1>
-        <button type="button" id="new-automation">新建自动化</button>
+        <button type="button" id="new-automation" disabled>新建自动化</button>
       </div>
 
     </header>
@@ -135,7 +135,7 @@
       <details class="editor-options">
         <summary>更多设置</summary>
         <div class="editor-option-fields">
-          <label>模板 <select name="template_id"></select></label>
+          <label>模板 <select name="template_id"><option value="custom">自定义</option></select></label>
           <label>意图
             <select name="intent">
               <option value="">（不指定）</option>

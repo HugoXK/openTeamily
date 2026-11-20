@@ -183,6 +183,33 @@ async function mountList(items) {
   return {list: elements.get('automation-list'), calls};
 }
 
+test('my automations are available while the template library is loading', async () => {
+  const {doc, elements} = fakeDocument();
+  const {promise: catalog, resolve: resolveCatalog} = Promise.withResolvers();
+  const respond = body => ({status: 200, json: async () => body});
+  const fetcher = async path => {
+    if (path === '/v1/auth/session') return respond({user: {username: 'alice'}});
+    if (path === '/v1/workspaces?limit=100') return respond({items: [{id: 'ws1', name: '个人工作区'}]});
+    if (path === '/v1/automation-templates') return catalog;
+    if (path === '/v1/workspaces/ws1/automations?category=mine') {
+      return respond({items: [{id: 'a1', title: '每日简报', schedule: {kind: 'now'}}]});
+    }
+    throw new Error('unexpected ' + path);
+  };
+  const saved = globalThis.document;
+  globalThis.document = doc;
+  const mounted = mount(doc, {fetcher});
+  try {
+    await flush();
+    assert.equal(elements.get('new-automation').disabled, false);
+    assert.match(elements.get('automation-list').textContent, /每日简报/);
+  } finally {
+    resolveCatalog(respond({items: []}));
+    await mounted;
+    if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
+  }
+});
+
 test('scheduleSummary writes the editor wording for every recorded schedule kind', () => {
   assert.equal(scheduleSummary({kind: 'now', time_zone: 'Asia/Shanghai'}, true), '立即运行 · 已启用');
   assert.equal(scheduleSummary({kind: 'now', time_zone: 'UTC'}, false), '立即运行 · 未启用');
