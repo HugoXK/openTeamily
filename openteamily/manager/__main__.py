@@ -10,7 +10,7 @@ from .client import ManagerClient, check_id
 from .engine import Registry, Runner, ComposeEngine, manifest
 from .safety import ManagerError, require, trusted_path, write_new, instance_lock, redact
 from .worker import ManagerWorker
-from . import dsbot_route
+from . import dsbot_import, dsbot_route
 
 
 def initialize(args):
@@ -62,6 +62,10 @@ def poll_once(args):
                     results.append(dsbot_route.publish(engine, client, iid))
                 except ManagerError as error:
                     results.append({'status': 'route_refused', 'instance_id': iid, 'reason': error.code})
+                try:
+                    results.append(dsbot_import.deliver(engine, client, iid))
+                except ManagerError as error:
+                    results.append({'status': 'import_refused', 'instance_id': iid, 'reason': error.code})
         except ManagerError as error:
             results.append({'status': 'refused', 'instance_id': iid, 'reason': error.code})
     uncertain = any(r.get('status') == 'uncertain' for r in results)

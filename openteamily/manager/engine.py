@@ -23,8 +23,10 @@ BOT_SOCIAL_TARGET = '/run/secrets/openteamily-bot-social.json'
 BOT_SOCIAL_BIND_SUFFIX = ':' + BOT_SOCIAL_TARGET + ':ro'
 RUNTIME_KEY_TARGET = '/run/secrets/openteamily-runtime-key.json'
 RUNTIME_KEY_BIND_SUFFIX = ':' + RUNTIME_KEY_TARGET + ':ro'
-ALLOWED_BIND_SUFFIXES = (SECRET_BIND_SUFFIX, BOT_SOCIAL_BIND_SUFFIX, RUNTIME_KEY_BIND_SUFFIX)
-ALLOWED_BIND_TARGETS = (SECRET_TARGET, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET)
+SEAL_KEY_TARGET = '/run/secrets/openteamily-seal.key'
+SEAL_KEY_BIND_SUFFIX = ':' + SEAL_KEY_TARGET + ':ro'
+ALLOWED_BIND_SUFFIXES = (SECRET_BIND_SUFFIX, BOT_SOCIAL_BIND_SUFFIX, RUNTIME_KEY_BIND_SUFFIX, SEAL_KEY_BIND_SUFFIX)
+ALLOWED_BIND_TARGETS = (SECRET_TARGET, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET, SEAL_KEY_TARGET)
 
 def compose_bytes(document):
     return (json.dumps(document, sort_keys=True, separators=(',', ':')) + '\n').encode()
@@ -93,6 +95,11 @@ def runtime_key_relpath(iid):
     return 'secrets/runtime-key-' + iid + '.json'
 
 
+def seal_key_relpath(iid):
+    check_id(iid)
+    return 'secrets/seal-' + iid + '.key'
+
+
 def manifest(iid, entry):
     check_id(iid)
     require(isinstance(entry, dict) and set(entry) == {'image', 'healthcheck', 'publish_port'}, 'registry_fields')
@@ -111,6 +118,7 @@ def manifest(iid, entry):
                    {'type': 'bind', 'source': secret_relpath(iid), 'target': SECRET_TARGET, 'read_only': True},
                    {'type': 'bind', 'source': bot_social_relpath(iid), 'target': BOT_SOCIAL_TARGET, 'read_only': True},
                    {'type': 'bind', 'source': runtime_key_relpath(iid), 'target': RUNTIME_KEY_TARGET, 'read_only': True},
+                   {'type': 'bind', 'source': seal_key_relpath(iid), 'target': SEAL_KEY_TARGET, 'read_only': True},
                ],
                'tmpfs': ['/tmp:rw,noexec,nosuid,size=67108864'],
                'logging': {'driver': 'local', 'options': {'max-size': '10m', 'max-file': '3'}}}
@@ -329,6 +337,9 @@ class ComposeEngine:
     def runtime_key_path(self, iid):
         return self.registry.root / runtime_key_relpath(iid)
 
+    def seal_key_path(self, iid):
+        return self.registry.root / seal_key_relpath(iid)
+
     def install_secret(self, iid, payload, heartbeat=lambda: None):
         """Write the resolved model-API file (or empty). Never logs the key."""
         self.registry.entry(iid)
@@ -386,6 +397,19 @@ class ComposeEngine:
         publish_container_secret(path)
         return path
 
+
+    def install_seal_key(self, iid):
+        """Create or reuse this instance's 32-byte seal key. Never rotated automatically."""
+        self.registry.entry(iid)
+        path = self.seal_key_path(iid)
+        if path.exists() and not path.is_symlink() and path.stat().st_size == 32:
+            publish_container_secret(path)
+            return path, path.read_bytes()
+        key = os.urandom(32)
+        replace_private(path, key)
+        publish_container_secret(path)
+        return path, key
+
     def compose(self, iid, operation, *, heartbeat=lambda: None, tail=100):
         _, path = self.registry.entry(iid)
         require(type(tail) is int and 1 <= tail <= 100, 'log_tail')
@@ -396,6 +420,8 @@ class ComposeEngine:
                 self.install_bot_social(iid, None)
             if not self.runtime_key_path(iid).exists():
                 self.install_runtime_key(iid, None)
+            if not self.seal_key_path(iid).exists():
+                self.install_seal_key(iid)
         # Exact argv grammar only; neither API nor registry can supply a verb/flags.
         commands = {
             'create': ['create', '--no-build', '--no-recreate', '--pull', 'never', 'flybot'],
