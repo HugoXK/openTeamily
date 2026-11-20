@@ -3309,7 +3309,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadSessions(); await openSocialConversation(id);
   });
   document.getElementById('search-close').addEventListener('click', closeSearchPanel);
-  document.getElementById('chat-back').addEventListener('click', () => setSessionsOpen(true));
+  document.getElementById('chat-back').addEventListener('click', () => {
+    setSessionsOpen(true);
+    document.getElementById('conversation-list').querySelector('[aria-current="true"]')?.focus();
+  });
+
+  const chatMore = document.getElementById('chat-more');
+  const extraActions = document.getElementById('chat-extra-actions');
+  chatMore?.addEventListener('click', () => {
+    const open = chatMore.getAttribute('aria-expanded') !== 'true';
+    chatMore.setAttribute('aria-expanded', String(open));
+  });
+  document.addEventListener('click', event => {
+    if (chatMore?.getAttribute('aria-expanded') !== 'true' || chatMore.contains(event.target)) return;
+    const inside = extraActions.contains(event.target);
+    if (inside && !event.target.closest('button, a')) return;
+    if (inside && extraActions.contains(document.activeElement)) chatMore.focus();
+    chatMore.setAttribute('aria-expanded', 'false');
+  });
+
   document.getElementById('search-more').addEventListener('click', async () => {
     if (searchTab === 'files' || searchTab === 'links') { if (resourceCursor) await renderSearch({appendResources: true}); return; }
     const query = (document.getElementById('session-search').value || '').trim();
@@ -3337,8 +3355,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('conversation-list').addEventListener('click', async event => {
     const button = event.target.closest('button[data-conversation]');
     if (!button) return;
-    if (button.dataset.source === 'social') await openSocialConversation(button.dataset.conversation);
-    else await openAgentConversation(button.dataset.agent, button.dataset.conversation);
+    const opened = button.dataset.source === 'social'
+      ? await openSocialConversation(button.dataset.conversation)
+      : await openAgentConversation(button.dataset.agent, button.dataset.conversation);
+    if (opened && narrowScreen() && !document.body.classList.contains('sessions-open')
+      && document.activeElement === document.body) document.getElementById('chat-title').focus();
   });
 
   document.getElementById('new-conversation').addEventListener('click', event => {
@@ -3689,7 +3710,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeComposeMenu();
   });
   document.addEventListener('keydown', event => {
-    if (event.key !== 'Escape') return;
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    if (chatMore?.getAttribute('aria-expanded') === 'true') {
+      chatMore.setAttribute('aria-expanded', 'false');
+      chatMore.focus();
+      return;
+    }
     closeComposeMenu();
     if (isSearchOpen()) closeSearchPanel();
     closeComposeDialog();
