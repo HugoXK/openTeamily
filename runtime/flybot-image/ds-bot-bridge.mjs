@@ -20,6 +20,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { createServer, request as httpRequest } from 'node:http'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
+import { startOpenPart } from '../ds-bot-upstream/ds-bot/src/host/threads.js'
 import { request as httpsRequest } from 'node:https'
 import { call, loadSkillMaterial, main as agentMain, toolBridge } from './agent-loop.mjs'
 import { streamHttpTask, validateModelEndpoint } from './model-http-policy.mjs'
@@ -243,8 +244,14 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     const map = loadChats()
     if (map[id]) { await rt.switchPart(botId, map[id]); return }
     // Each OpenTeamily conversation gets a separate native DS-Bot chat/session.
-    await rt.newPart(rt.chatOf(botId))
-    map[id] = rt.chatOf(botId)
+    const bot = rt.botOf(botId)
+    const freshId = await rt.createSession(bot.name, { dir: rt.workDirOf({ botId }) })
+    startOpenPart(bot, freshId)
+    rt.chatOwners.set(freshId, botId)
+    await rt.save()
+    await rt.applyModel(bot, { force: true })
+    await rt.applyPermission(bot, freshId, undefined)
+    map[id] = freshId
     writeFileSync(chatsPath + '.tmp', JSON.stringify(map), { mode: 0o600 })
     renameSync(chatsPath + '.tmp', chatsPath)
   }
