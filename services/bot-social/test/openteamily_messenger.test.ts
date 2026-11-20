@@ -324,3 +324,32 @@ test("workspace message search requires active workspace and conversation member
   assert.equal((await B.call("GET", search)).status, 404);
   assert.deepEqual((await A.ok("GET", search + "&conversation_id=" + dm.id)).items, []);
 });
+
+test("standalone video meetings grant access to the call only, and only its host can end it", async () => {
+  const host = await home(S.base, "meeting-host");
+  const guest = await home(S.base, "meeting-guest");
+  const outsider = await home(S.base, "meeting-outsider");
+  await teamOf(host);
+  await teamOf(guest);
+  const path = "/v1/ot/meeting-calls";
+  const input = {title: "Design review", peer_id: "meeting-host-browser"};
+  assert.equal((await host.call("POST", path + "/create", {title: input.title})).status, 400);
+  const created = await host.ok("POST", path + "/create", input);
+  assert.equal(created.meeting.host, true);
+  assert.match(created.meeting.code, /^[\w-]{24}$/);
+  assert.deepEqual((await host.ok("POST", path + "/create", input)).meeting, created.meeting);
+  assert.equal((await guest.call("POST", path + "/preview", {code: "a".repeat(24)})).status, 404);
+  assert.deepEqual(await guest.ok("POST", path + "/preview", {code: created.meeting.code}), {title: input.title});
+  const joined = await guest.ok("POST", path + "/join", {code: created.meeting.code, peer_id: "meeting-guest-browser"});
+  assert.deepEqual(joined.meeting, {title: input.title, host: false});
+  assert.equal(joined.call.id, created.call.id);
+  assert.deepEqual((await guest.ok("GET", "/v1/ot/conversations")).conversations, []);
+  assert.deepEqual((await host.ok("GET", "/v1/ot/conversations")).conversations, []);
+  const guestPeer = {call_id: joined.call.id, peer_id: joined.peer_id};
+  assert.equal((await guest.ok("POST", path + "/poll", guestPeer)).call.peers.length, 2);
+  assert.equal((await outsider.call("POST", path + "/poll", guestPeer)).status, 404);
+  assert.equal((await guest.call("POST", path + "/end", guestPeer)).status, 403);
+  await host.ok("POST", path + "/end", {call_id: created.call.id, peer_id: created.peer_id});
+  assert.equal((await guest.call("POST", path + "/poll", guestPeer)).status, 404);
+  assert.equal((await guest.call("POST", path + "/preview", {code: created.meeting.code})).status, 404);
+});

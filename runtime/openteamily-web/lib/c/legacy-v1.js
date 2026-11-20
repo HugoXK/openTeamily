@@ -657,6 +657,10 @@ function messengerExtraRoutes(host) {
   const guard = async (bs, wid) => teamFor(bs, wid, 'Workspace', env)
   return [
     {
+      method: 'POST', path: /^\/v1\/meeting-calls\/(create|preview|join|poll|signal|leave|end)$/,
+      handle: ({ match, body }) => wrap(async () => [200, await client(host).post('/v1/ot/meeting-calls/' + match[1], body)]),
+    },
+    {
       method: 'GET', path: re('\\/call'),
       handle: async ({ match }) => wrap(async () => {
         const bs = client(host)

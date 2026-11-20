@@ -81,8 +81,8 @@
           <a href="/automations" role="menuitem"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h3 M4 12h3 M4 18h3 M11 6h9 M11 12h9 M11 18h9"/></svg>创建自动化</a>
           <a href="/meetings#new=1" id="compose-meeting-notes" role="menuitem">新建会议纪要</a>
           <button type="button" role="menuitem" disabled title="未实现：还没有第三方智能体接入"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14v11H5z M9 4h6 M12 4v4 M9 13h1 M14 13h1"/></svg>创建第三方智能体</button>
-          <button type="button" role="menuitem" disabled title="未实现：还没有视频会议"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h13v12H3z M16 10l5-3v10l-5-3"/></svg>发起视频会议</button>
-          <button type="button" role="menuitem" disabled title="未实现：还没有视频会议"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h13v12H3z M16 10l5-3v10l-5-3"/></svg>加入视频会议</button>
+          <button type="button" role="menuitem" id="start-video-meeting" aria-haspopup="dialog"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h13v12H3z M16 10l5-3v10l-5-3"/></svg>发起视频会议</button>
+          <button type="button" role="menuitem" id="join-video-meeting" aria-haspopup="dialog"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h13v12H3z M16 10l5-3v10l-5-3"/></svg>加入视频会议</button>
         </div>
       </div>
     </div>
@@ -251,25 +251,6 @@
       <span id="chat-call-incoming-label"></span>
       <button type="button" id="chat-call-join">加入通话</button>
     </aside>
-    <dialog id="chat-call-dialog" aria-labelledby="chat-call-title">
-      <h2 id="chat-call-title">通话</h2>
-      <p id="chat-call-conversation"></p>
-      <p id="chat-call-status" role="status"></p>
-      <div id="chat-call-media" hidden>
-        <div id="chat-call-local"><video muted autoplay playsinline></video><span>你</span></div>
-        <div id="chat-call-peers"></div>
-      </div>
-      <div class="actions" id="chat-call-choices">
-        <button type="button" id="chat-call-start-audio">语音通话</button>
-        <button type="button" id="chat-call-start-video">视频通话</button>
-      </div>
-      <div class="actions" id="chat-call-controls" hidden>
-        <button type="button" id="chat-call-mute" aria-pressed="false">静音</button>
-        <button type="button" id="chat-call-camera" aria-pressed="true">关闭摄像头</button>
-        <button type="button" id="chat-call-play" hidden>播放声音</button>
-      </div>
-      <div class="actions" id="chat-call-footer"><button type="button" id="chat-call-close">关闭</button></div>
-    </dialog>
     <dialog id="group-invite-dialog" aria-labelledby="group-invite-heading">
       <form id="group-invite-form">
         <h2 id="group-invite-heading">添加群成员</h2>
@@ -469,6 +450,50 @@
     </section>
   </section>
   </main>
+
+<dialog id="chat-call-dialog" aria-labelledby="chat-call-title">
+  <h2 id="chat-call-title">通话</h2>
+  <p id="chat-call-conversation"></p>
+  <p id="chat-call-status" role="status"></p>
+  <form id="chat-meeting-form" hidden>
+    <label id="chat-meeting-field">
+      <span id="chat-meeting-field-label">会议名称</span>
+      <input id="chat-meeting-input" type="text" autocomplete="off">
+    </label>
+    <fieldset>
+      <legend>加入时的设备</legend>
+      <label><input id="chat-meeting-mic" type="checkbox" checked> 麦克风</label>
+      <label><input id="chat-meeting-camera" type="checkbox" checked> 摄像头</label>
+    </fieldset>
+  </form>
+  <div id="chat-call-media" hidden>
+    <div id="chat-call-local"><video muted autoplay playsinline></video><span>你</span></div>
+    <div id="chat-call-peers"></div>
+  </div>
+  <div class="actions" id="chat-call-choices">
+    <button type="button" id="chat-call-start-audio">语音通话</button>
+    <button type="button" id="chat-call-start-video">视频通话</button>
+  </div>
+  <div class="actions" id="chat-call-controls" hidden>
+    <button type="button" id="chat-call-mute" aria-pressed="false">静音</button>
+    <button type="button" id="chat-call-camera" aria-pressed="true">关闭摄像头</button>
+    <button type="button" id="chat-call-play" hidden>播放声音</button>
+  </div>
+  <div id="chat-meeting-share" hidden>
+    <label for="chat-meeting-link">邀请链接</label>
+    <div>
+      <input id="chat-meeting-link" type="url" readonly>
+      <button type="button" id="chat-meeting-copy">复制链接</button>
+    </div>
+    <p id="chat-meeting-share-status" role="status"></p>
+  </div>
+  <div class="actions" id="chat-call-footer">
+    <button type="button" id="chat-meeting-end" hidden>结束会议</button>
+    <button type="button" id="chat-meeting-hangup" hidden>离开会议</button>
+    <button type="button" id="chat-call-close">关闭</button>
+    <button type="submit" form="chat-meeting-form" id="chat-meeting-submit" hidden>加入会议</button>
+  </div>
+</dialog>
 
 <dialog id="message-assist-dialog" aria-labelledby="message-assist-heading">
  <h2 id="message-assist-heading">问 AI</h2>

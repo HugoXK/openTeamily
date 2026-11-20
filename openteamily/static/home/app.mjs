@@ -1,3 +1,4 @@
+import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 
@@ -76,6 +77,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   const greeting = document.getElementById('home-greeting');
   if (!loginPanel || !mainPanel || !form || !workspaceSelect) return null;
 
+  const view = document.defaultView ?? globalThis;
+  const pendingKey = 'ot-pending-meeting';
+  const meetingFromLink = meetingCodeFromHash(view.location?.hash);
+  if (meetingFromLink) {
+    try { view.sessionStorage.setItem(pendingKey, meetingFromLink); } catch {}
+  }
   let currentUser = null;
   let workspaces = [];
   let personal = null;
@@ -265,6 +272,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       }
       if (session.status !== 200 || !session.body.user) {
         show(document, 'error', (session.body.error && session.body.error.message) || '无法读取会话。');
+        return;
+      }
+      let meeting = meetingFromLink;
+      try {
+        meeting ||= view.sessionStorage.getItem(pendingKey);
+        view.sessionStorage.removeItem(pendingKey);
+      } catch {}
+      const target = meetingHref(meeting);
+      if (target) {
+        view.location.replace(target);
         return;
       }
       if (globalThis.location?.pathname === '/login') {

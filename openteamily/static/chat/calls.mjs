@@ -1,3 +1,5 @@
+import { meetingCodeFromHash, meetingHref, parseMeetingCode } from '../shell/meeting-link.mjs';
+
 const POLL_MS = 900;
 const typeLabel = kind => kind === 'video' ? '视频通话' : '语音通话';
 const stopTracks = stream => stream?.getTracks().forEach(track => track.stop());
@@ -5,7 +7,7 @@ const stopTracks = stream => stream?.getTracks().forEach(track => track.stop());
 export function mountChatCalls(document, {request, context} = {}) {
   const element = id => document.getElementById(id);
   const launcher = element('chat-call');
-  if (!launcher) return {refresh() {}, sync() {}};
+  if (!launcher) return {refresh() {}, sync() {}, openMeeting() {}, resumeMeeting() {}};
   const dialog = element('chat-call-dialog');
   const status = element('chat-call-status');
   const incoming = element('chat-call-incoming');
@@ -20,11 +22,23 @@ export function mountChatCalls(document, {request, context} = {}) {
   const startAudio = element('chat-call-start-audio');
   const startVideo = element('chat-call-start-video');
   const controls = element('chat-call-controls');
+  const form = element('chat-meeting-form');
+  const field = element('chat-meeting-field');
+  const input = element('chat-meeting-input');
+  const submit = element('chat-meeting-submit');
+  const mic = element('chat-meeting-mic');
+  const webcam = element('chat-meeting-camera');
+  const share = element('chat-meeting-share');
+  const link = element('chat-meeting-link');
+  const shareStatus = element('chat-meeting-share-status');
+  const end = element('chat-meeting-end');
+  const hangup = element('chat-meeting-hangup');
   const view = document.defaultView ?? globalThis;
   const setTimer = view.setTimeout?.bind(view) ?? globalThis.setTimeout;
   const clearTimer = view.clearTimeout?.bind(view) ?? globalThis.clearTimeout;
   let current = null;
   let available = null;
+  let prejoin = null;
   let active = null;
   let joining = null;
   let readSequence = 0;
@@ -32,7 +46,7 @@ export function mountChatCalls(document, {request, context} = {}) {
   let watching = true;
 
   const currentKey = value => value ? value.wid + '/' + value.cid : '';
-  const path = (scope, action = '') =>
+  const path = (scope, action = '') => scope.meeting ? '/v1/meeting-calls/' + action :
     `/v1/workspaces/${scope.wid}/social/conversations/${scope.cid}/call${action && '/' + action}`;
   const payload = own => ({call_id: own.call.id, peer_id: own.id});
   const note = text => { status.textContent = text; };
@@ -78,14 +92,23 @@ export function mountChatCalls(document, {request, context} = {}) {
     controls.hidden = true;
     media.hidden = true;
     play.hidden = true;
+    camera.disabled = false;
+    mute.disabled = false;
+    close.hidden = false;
     close.textContent = '关闭';
+    share.hidden = true;
+    end.hidden = true;
+    hangup.hidden = true;
     renderLauncher();
   }
 
   async function leave({dismiss = true} = {}) {
     const own = active;
     joining = null;
-    if (dismiss && dialog.open) dialog.close();
+    if (dismiss) {
+      prejoin = null;
+      if (dialog.open) dialog.close();
+    }
     stopLocal(own);
     if (own) {
       await request('POST', path(own.scope, 'leave'), payload(own)).catch(() => {});
@@ -97,7 +120,7 @@ export function mountChatCalls(document, {request, context} = {}) {
     const next = context();
     if (currentKey(current) === currentKey(next)) return;
     readSequence++;
-    if (dialog.open || active) void leave();
+    if ((dialog.open || active) && !prejoin?.scope.meeting && !active?.scope.meeting) void leave();
     current = next;
     available = null;
     renderLauncher();
@@ -105,15 +128,17 @@ export function mountChatCalls(document, {request, context} = {}) {
     watch();
   }
 
-  function showDialog() {
-    if (!current) return false;
-    element('chat-call-conversation').textContent = current.title;
+  function showDialog(scope = current) {
+    if (!scope) return false;
+    element('chat-call-conversation').textContent = scope.title || '';
     if (!dialog.open) dialog.showModal();
     return true;
   }
 
   function showChoices() {
     if (!showDialog() || active || joining) return;
+    prejoin = null;
+    drawPrejoin(false);
     element('chat-call-title').textContent = '通话';
     choices.hidden = false;
     startAudio.disabled = false;
@@ -121,6 +146,57 @@ export function mountChatCalls(document, {request, context} = {}) {
     close.textContent = '关闭';
     note(available ? `正在进行${typeLabel(available.kind)}，可以加入。` : '');
     startAudio.focus();
+  }
+
+  function drawPrejoin(visible) {
+    form.hidden = !visible;
+    submit.hidden = !visible;
+    dialog.toggleAttribute('data-prejoin', visible);
+  }
+
+  function prepareVideo(scope, action, code = '') {
+    if (active || joining || !showDialog(scope)) return;
+    prejoin = {scope, action};
+    const creating = action === 'create';
+    const invite = scope.meeting && !creating;
+    element('chat-call-title').textContent = creating ? '发起视频会议' : '加入视频会议';
+    element('chat-meeting-field-label').textContent = invite ? '会议链接或会议码' : '会议名称';
+    field.hidden = !creating && !invite;
+    input.required = !field.hidden;
+    input.maxLength = invite ? 512 : 80;
+    input.value = invite ? code : creating ? (scope.title || '视频会议').slice(0, 80) : '';
+    mic.checked = true;
+    webcam.checked = true;
+    submit.disabled = false;
+    submit.textContent = creating ? '开始会议' : '加入会议';
+    close.textContent = '取消';
+    choices.hidden = true;
+    drawPrejoin(true);
+    note('');
+    if (field.hidden) submit.focus();
+    else {
+      input.focus();
+      if (creating) input.select();
+    }
+  }
+
+  function openMeeting(action, code) {
+    prepareVideo({meeting: true}, action, code);
+  }
+
+  function resumeMeeting() {
+    const code = meetingCodeFromHash(view.location?.hash);
+    if (!code) return;
+    view.history.replaceState(view.history.state, '', view.location.pathname + view.location.search);
+    openMeeting('join', code);
+  }
+
+  function openCall(kind, start = !available) {
+    if (available) kind = available.kind;
+    if (kind === 'video' && current) {
+      const scope = {...current, title: available?.title || current.title};
+      prepareVideo(scope, start ? 'create' : 'join');
+    } else void join(kind, {start});
   }
 
   function peerStatus(own) {
@@ -188,6 +264,7 @@ export function mountChatCalls(document, {request, context} = {}) {
     tile.append(video, name);
     peersNode.append(tile);
     const peer = {id: item.id, tile, video, connection, outgoing: Promise.resolve(), localReady: false,
+      senders: new Map(), remote: new view.MediaStream(),
       earlyLocal: [], earlyRemote: [], playbackBlocked: false};
     own.peers.set(item.id, peer);
     video.addEventListener('playing', () => {
@@ -197,10 +274,15 @@ export function mountChatCalls(document, {request, context} = {}) {
     connection.onconnectionstatechange = () => peerStatus(own);
     connection.ontrack = event => {
       if (active !== own) return;
-      const stream = event.streams[0];
-      if (!stream) return;
-      if (video.srcObject !== stream) video.srcObject = stream;
-      video.hidden = !stream.getVideoTracks().length;
+      const track = event.track;
+      peer.remote.addTrack(track);
+      if (video.srcObject !== peer.remote) video.srcObject = peer.remote;
+      if (track.kind === 'video') {
+        const update = () => { video.hidden = track.muted; };
+        track.addEventListener('mute', update);
+        track.addEventListener('unmute', update);
+        update();
+      }
       void playRemote(own, peer);
     };
     connection.onicecandidate = event => {
@@ -209,9 +291,15 @@ export function mountChatCalls(document, {request, context} = {}) {
       if (peer.localReady) void queueSignal(own, peer, {candidate});
       else peer.earlyLocal.push(candidate);
     };
-    for (const track of own.stream.getTracks()) connection.addTrack(track, own.stream);
-    // The lower tab identifier sends the single initial offer for this pair.
-    if (own.id < item.id) void describePeer(own, peer, 'offer').catch(() => peerStatus(own));
+    // One tab assigns the audio and video slots. A slot stays usable with its device off.
+    if (own.id < item.id) {
+      for (const kind of own.kinds) {
+        const track = own.stream.getTracks().find(item => item.kind === kind);
+        const {sender} = connection.addTransceiver(track || kind, {direction: 'sendrecv'});
+        peer.senders.set(kind, sender);
+      }
+      void describePeer(own, peer, 'offer').catch(() => peerStatus(own));
+    }
     return peer;
   }
 
@@ -236,7 +324,16 @@ export function mountChatCalls(document, {request, context} = {}) {
       if ((signal.description.type === 'offer') !== (own.id > peer.id)) return;
       await pc.setRemoteDescription(signal.description);
       for (const candidate of peer.earlyRemote.splice(0)) await pc.addIceCandidate(candidate);
-      if (signal.description.type === 'offer') await describePeer(own, peer, 'answer');
+      if (signal.description.type === 'offer') {
+        for (const slot of pc.getTransceivers()) {
+          const kind = slot.receiver.track.kind;
+          slot.direction = 'sendrecv';
+          peer.senders.set(kind, slot.sender);
+          const track = own.stream.getTracks().find(item => item.kind === kind);
+          if (track) await slot.sender.replaceTrack(track);
+        }
+        await describePeer(own, peer, 'answer');
+      }
     } else if (signal.candidate) {
       if (pc.remoteDescription) await pc.addIceCandidate(signal.candidate);
       else peer.earlyRemote.push(signal.candidate);
@@ -251,7 +348,7 @@ export function mountChatCalls(document, {request, context} = {}) {
         stopLocal(own);
         available = null;
         renderLauncher();
-        note('通话已结束。');
+        note(own.scope.meeting ? '会议已结束。' : '通话已结束。');
         return;
       }
       if (result.status !== 200) throw new Error('Call poll failed');
@@ -275,95 +372,202 @@ export function mountChatCalls(document, {request, context} = {}) {
     if (active === own) own.timer = setTimer(() => poll(own), POLL_MS);
   }
 
-  async function join(kind, {start = true} = {}) {
-    if (!showDialog() || active || joining) return;
-    const scope = current;
+  async function join(kind, {start = true, setup = null} = {}) {
+    const scope = setup?.scope || current;
+    if (active || joining || !showDialog(scope)) return;
     const ticket = {scope};
     joining = ticket;
-    kind = available?.kind || kind;
     choices.hidden = true;
-    element('chat-call-title').textContent = typeLabel(kind);
-    note(kind === 'video' ? '正在请求摄像头和麦克风权限…' : '正在请求麦克风权限…');
+    submit.disabled = true;
+    const roomLabel = scope.meeting || setup ? '会议' : '通话';
+    if (!setup) {
+      drawPrejoin(false);
+      element('chat-call-title').textContent = typeLabel(kind);
+    }
     let stream;
     let own;
     try {
-      if (!view.navigator?.mediaDevices?.getUserMedia || typeof view.RTCPeerConnection !== 'function') {
+      if (typeof view.RTCPeerConnection !== 'function') {
         note('当前浏览器无法使用实时通话。请在支持通话的 HTTPS 页面打开。');
         return;
       }
-      stream = await view.navigator.mediaDevices.getUserMedia({audio: true, video: kind === 'video'});
+      if (setup?.code) {
+        note('正在查找会议…');
+        const preview = await request('POST', path(scope, 'preview'), {code: setup.code});
+        if (joining !== ticket) return;
+        if (preview.status !== 200) {
+          note(preview.status === 404 ? '会议不存在或已结束。' : '暂时无法验证会议，请重试。');
+          return;
+        }
+        element('chat-call-conversation').textContent = preview.body.title;
+      }
+      const devices = {audio: setup?.audio ?? true, video: kind === 'video' && (setup?.video ?? true)};
+      if (devices.audio || devices.video) {
+        if (!view.navigator?.mediaDevices?.getUserMedia) {
+          note('无法访问设备，请在支持通话的 HTTPS 页面打开。');
+          return;
+        }
+        note('正在请求设备权限…');
+        stream = await view.navigator.mediaDevices.getUserMedia(devices);
+      } else stream = new view.MediaStream();
       if (joining !== ticket) return;
-      note('正在加入通话…');
+      note('正在加入' + roomLabel + '…');
       const id = view.crypto.randomUUID();
-      const data = {kind, start, peer_id: id};
-      const url = path(scope, 'join');
+      const action = scope.meeting && start ? 'create' : 'join';
+      const data = {peer_id: id, ...(scope.meeting ? {} : {kind, start})};
+      if (setup?.title) data.title = setup.title;
+      if (setup?.code) data.code = setup.code;
+      const url = path(scope, action);
       let result;
       try { result = await request('POST', url, data); }
       catch { result = await request('POST', url, data); }
       if (result.status !== 200) {
         const code = result.body?.error?.code;
-        if (joining === ticket) note(code === 'call_full' ? '通话已达到 6 人上限。'
-          : code === 'call_already_joined' ? '此账号已经在另一个标签页加入通话。'
-          : code === 'call_ended' ? '通话已结束。' : '无法加入通话，请重试。');
+        if (joining === ticket) note(code === 'call_full' ? roomLabel + '已达到 6 人上限。'
+          : code === 'call_already_joined' ? '此账号已经在另一个标签页加入。'
+          : ['call_ended', 'meeting_ended'].includes(code) ? roomLabel + '已结束。'
+          : '无法加入' + roomLabel + '，请重试。');
         return;
       }
+      const meeting = result.body.meeting;
       own = {scope, id: result.body.peer_id, call: result.body.call, ice: result.body.ice_servers,
-        stream, peers: new Map(), cursor: 0, failures: 0, timer: null};
+        stream, kinds: kind === 'video' ? ['audio', 'video'] : ['audio'], deviceBusy: new Set(),
+        peers: new Map(), cursor: 0, failures: 0, timer: null};
       if (joining !== ticket) {
         void request('POST', path(scope, 'leave'), payload(own)).catch(() => {});
         return;
       }
       active = own;
-      available = null;
+      prejoin = null;
+      drawPrejoin(false);
       renderLauncher();
       controls.hidden = false;
       media.hidden = false;
+      element('chat-call-title').textContent = meeting?.title || own.call.title || typeLabel(kind);
+      element('chat-call-conversation').textContent = meeting ? '视频会议' : current?.title || '';
       local.srcObject = stream;
-      local.hidden = !stream.getVideoTracks().length;
-      camera.hidden = local.hidden;
-      camera.setAttribute('aria-pressed', 'true');
-      camera.textContent = '关闭摄像头';
-      mute.setAttribute('aria-pressed', 'false');
-      mute.textContent = '静音';
+      camera.hidden = kind !== 'video';
+      updateDevices(own);
+      close.hidden = Boolean(meeting);
       close.textContent = '挂断';
+      hangup.hidden = !meeting;
+      share.hidden = !meeting?.host;
+      end.hidden = !meeting?.host;
+      end.disabled = false;
+      end.textContent = '结束会议';
+      shareStatus.textContent = '';
+      if (meeting?.host) link.value = new URL(meetingHref(meeting.code), view.location.origin).href;
+      (meeting?.host ? element('chat-meeting-copy') : mute).focus();
       syncPeers(own, own.call);
       void poll(own);
     } catch (error) {
       if (joining !== ticket) return;
       if (active === own) void leave({dismiss: false});
-      note(error?.name === 'NotAllowedError' ? '使用通话需要允许麦克风或摄像头。'
-        : error?.name === 'NotFoundError' ? '找不到可用的麦克风或摄像头。'
-        : '无法开始通话，请重试。');
+      note(error?.name === 'NotAllowedError' ? '设备权限未开启，可以关掉对应设备后加入。'
+        : error?.name === 'NotFoundError' ? '未找到设备，可以关掉对应设备后加入。'
+        : '无法开始' + roomLabel + '，请重试。');
     } finally {
       if (!own || active !== own) stopTracks(stream);
       if (joining === ticket) {
         joining = null;
-        if (!active) choices.hidden = false;
+        if (!active && !setup) choices.hidden = false;
+        submit.disabled = false;
+        if (!active && setup && dialog.open) submit.focus();
       }
     }
   }
 
-  launcher.addEventListener('click', () => available ? void join(available.kind, {start: false}) : showChoices());
-  element('group-call-video').addEventListener('click', () => join('video'));
-  element('group-call-audio').addEventListener('click', () => join('audio'));
-  element('chat-call-join').addEventListener('click', () => available && join(available.kind, {start: false}));
-  startAudio.addEventListener('click', () => join('audio', {start: !available}));
-  startVideo.addEventListener('click', () => join('video', {start: !available}));
+  function updateDevices(own) {
+    const audioOn = Boolean(own.stream.getAudioTracks().length);
+    const videoOn = Boolean(own.stream.getVideoTracks().length);
+    local.hidden = !videoOn;
+    mute.setAttribute('aria-pressed', String(!audioOn));
+    mute.textContent = audioOn ? '静音' : '打开麦克风';
+    camera.setAttribute('aria-pressed', String(videoOn));
+    camera.textContent = videoOn ? '关闭摄像头' : '开启摄像头';
+  }
+
+  async function toggleDevice(kind, button) {
+    const own = active;
+    if (!own || own.deviceBusy.has(kind)) return;
+    own.deviceBusy.add(kind);
+    button.disabled = true;
+    let captured;
+    try {
+      let track = own.stream.getTracks().find(item => item.kind === kind);
+      if (track) {
+        own.stream.removeTrack(track);
+        track.stop();
+        track = null;
+      } else {
+        captured = await view.navigator.mediaDevices.getUserMedia({[kind]: true});
+        if (active !== own) return;
+        track = captured.getTracks()[0];
+        own.stream.addTrack(track);
+      }
+      await Promise.all([...own.peers.values()].map(peer => peer.senders.get(kind)?.replaceTrack(track)));
+      if (active === own) updateDevices(own);
+    } catch {
+      if (active === own) note(kind === 'audio' ? '无法访问麦克风。' : '无法访问摄像头。');
+    } finally {
+      if (active !== own) stopTracks(captured);
+      if (!active || active === own) button.disabled = false;
+      own.deviceBusy.delete(kind);
+    }
+  }
+
+  launcher.addEventListener('click', () => available ? openCall(available.kind, false) : showChoices());
+  element('group-call-video').addEventListener('click', () => openCall('video'));
+  element('group-call-audio').addEventListener('click', () => openCall('audio'));
+  element('chat-call-join').addEventListener('click', () => available && openCall(available.kind, false));
+  startAudio.addEventListener('click', () => openCall('audio'));
+  startVideo.addEventListener('click', () => openCall('video'));
   close.addEventListener('click', () => leave());
+  hangup.addEventListener('click', () => leave());
   dialog.addEventListener('cancel', event => { event.preventDefault(); void leave(); });
-  mute.addEventListener('click', () => {
-    if (!active) return;
-    const muted = mute.getAttribute('aria-pressed') !== 'true';
-    active.stream.getAudioTracks().forEach(track => { track.enabled = !muted; });
-    mute.setAttribute('aria-pressed', String(muted));
-    mute.textContent = muted ? '取消静音' : '静音';
+  mute.addEventListener('click', () => toggleDevice('audio', mute));
+  camera.addEventListener('click', () => toggleDevice('video', camera));
+  input.addEventListener('input', () => { if (!joining) note(''); });
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    if (!prejoin) return;
+    const {scope, action} = prejoin;
+    const start = action === 'create';
+    const title = start ? input.value.trim() : '';
+    const code = scope.meeting && !start ? parseMeetingCode(input.value, view.location.origin) : '';
+    if ((start && !title) || (scope.meeting && !start && !code)) {
+      note(start ? '请输入会议名称。' : '请输入有效的会议链接或会议码。');
+      input.focus();
+      return;
+    }
+    void join('video', {start, setup: {scope, title, code, audio: mic.checked, video: webcam.checked}});
   });
-  camera.addEventListener('click', () => {
-    if (!active) return;
-    const enabled = camera.getAttribute('aria-pressed') !== 'true';
-    active.stream.getVideoTracks().forEach(track => { track.enabled = enabled; });
-    camera.setAttribute('aria-pressed', String(enabled));
-    camera.textContent = enabled ? '关闭摄像头' : '开启摄像头';
+  element('chat-meeting-copy').addEventListener('click', async () => {
+    try {
+      await view.navigator.clipboard.writeText(link.value);
+      shareStatus.textContent = '邀请链接已复制。';
+    } catch {
+      link.select();
+      shareStatus.textContent = '已选中链接，可以手动复制。';
+    }
+  });
+  end.addEventListener('click', async () => {
+    const own = active;
+    if (!own?.scope.meeting) return;
+    if (end.textContent !== '确认结束') {
+      end.textContent = '确认结束';
+      shareStatus.textContent = '结束后，所有参会者都会离开。';
+      return;
+    }
+    end.disabled = true;
+    const result = await request('POST', path(own.scope, 'end'), payload(own)).catch(() => null);
+    if (active !== own) return;
+    end.disabled = false;
+    if (result?.status === 200 || result?.status === 404) {
+      stopLocal(own);
+      note('会议已结束。');
+      close.focus();
+    } else shareStatus.textContent = '无法结束会议，请重试。';
   });
   play.addEventListener('click', async () => {
     const own = active;
@@ -381,12 +585,13 @@ export function mountChatCalls(document, {request, context} = {}) {
       stopLocal(own);
     }
     joining = null;
+    prejoin = null;
   });
   view.addEventListener?.('pageshow', () => {
     watching = true;
-    if (dialog.open && !active && !joining) dialog.close();
+    if (dialog.open && !prejoin && !active && !joining) dialog.close();
     void refresh();
     watch();
   });
-  return {sync, refresh};
+  return {sync, refresh, openMeeting, resumeMeeting};
 }

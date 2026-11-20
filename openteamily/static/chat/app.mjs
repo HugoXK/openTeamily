@@ -2667,6 +2667,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
+    if (servedByDsbot) chatCalls.resumeMeeting();
     document.getElementById('session-pane').hidden = false;
     document.body.classList.add('chat-open');
     setSessionsOpen(true);
@@ -3324,6 +3325,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     menu.hidden = !open;
     button.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
+  for (const [id, action] of [['start-video-meeting', 'create'], ['join-video-meeting', 'join']]) {
+    const button = document.getElementById(id);
+    button.hidden = !servedByDsbot;
+    button.addEventListener('click', () => {
+      closeComposeMenu();
+      document.getElementById('new-conversation').focus();
+      chatCalls.openMeeting(action);
+    });
+  }
   document.getElementById('group-agent-form').addEventListener('submit', async event => {
     event.preventDefault();
     if (groupReplyBusy || currentSource !== 'social' || !currentConversation) return;
