@@ -93,14 +93,23 @@ export const LEGACY_PATH = '/api/openteamily/legacy'
 const FEATURE = /^[a-z][a-z0-9-]{0,39}$/
 const V1_PATH = /^\/v1\/[A-Za-z0-9/_.-]{1,240}$/
 const CHAT_FILE_POST = /^\/v1\/workspaces\/[0-9a-f]{32}\/social\/conversations\/[A-Za-z0-9._-]{1,80}\/messages$/
+const AGENT_FILE_POST = /^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/conversations\/[0-9a-f]{32}\/messages$/
 const CHAT_FILE_MAX = 8 * 1024 * 1024
 
-async function chatAttachment(request) {
-  const parts = (await request.formData()).getAll('file')
-  const [file] = parts
-  if (parts.length !== 1 || typeof file === 'string' || !file.size) throw new Error('Select one file')
-  if (file.size > CHAT_FILE_MAX) throw Object.assign(new Error('Files can contain up to 8 MiB'), {status:413})
-  return {attachment:{title:file.name, mime:file.type, data:Buffer.from(await file.arrayBuffer()).toString('base64')}}
+async function composeAttachments(request, agent) {
+  const form = await request.formData()
+  const files = form.getAll('file')
+  if (!files.length || files.length > (agent ? 4 : 1) || files.some(file => typeof file === 'string' || !file.size)) {
+    throw new Error('Select files')
+  }
+  if (files.reduce((size,file) => size + file.size, 0) > CHAT_FILE_MAX) {
+    throw Object.assign(new Error('Files must total 8 MiB or less'), {status:413})
+  }
+  const attachments = []
+  for (const file of files) {
+    attachments.push({title:file.name, mime:file.type, data:Buffer.from(await file.arrayBuffer()).toString('base64')})
+  }
+  return agent ? {body:form.get('body'), reply_language:form.get('reply_language'), attachments} : {attachment:attachments[0]}
 }
 
 function fileResponse(request, {data, content_type, filename, inline}) {
@@ -156,12 +165,13 @@ export function createLegacyDispatch({ endpoints }) {
       })
     }
     let body
-    const encodeChatFile = feature === 'messenger' && request.method === 'POST' && CHAT_FILE_POST.test(path)
-      && request.headers.get('content-type')?.toLowerCase().startsWith('multipart/form-data;')
-    if (encodeChatFile) {
-      try { body = await chatAttachment(request) } catch (error) {
+    const agentFiles = feature === 'agents' && AGENT_FILE_POST.test(path)
+    const socialFile = feature === 'messenger' && CHAT_FILE_POST.test(path)
+    if ((agentFiles || socialFile) && request.method === 'POST'
+      && request.headers.get('content-type')?.toLowerCase().startsWith('multipart/form-data;')) {
+      try { body = await composeAttachments(request, agentFiles) } catch (error) {
         const large = error?.status === 413
-        return gatewayError(large ? 413 : 400, large ? 'attachment_too_large' : 'invalid', 'Provide one nonempty file up to 8 MiB')
+        return gatewayError(large ? 413 : 400, large ? 'attachment_too_large' : 'invalid', 'Provide nonempty files totaling up to 8 MiB')
       }
     } else if (request.method !== 'GET' && request.method !== 'HEAD') {
       const text = await request.text()

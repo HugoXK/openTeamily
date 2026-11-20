@@ -1,4 +1,6 @@
 export const MAX_CHAT_FILE_BYTES = 8 * 1024 * 1024;
+export const AGENT_FILE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,.pdf,.txt,.md,.csv,.tsv,.json,.docx,.xlsx,.pptx';
+const AGENT_FILE_EXT = new Set(['png','jpg','jpeg','gif','webp','pdf','txt','md','csv','tsv','json','docx','xlsx','pptx']);
 
 const MEDIA_TYPES = {
   png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', webp:'image/webp',
@@ -65,22 +67,29 @@ export function renderChatFile(document, attachment, {pending = false} = {}) {
   return card;
 }
 
-function uploadFile(view, url, headers, file, onProgress) {
+function uploadForm(view, url, headers, body, onProgress, timeout = 180_000) {
   return new Promise((resolve, reject) => {
     const xhr = new view.XMLHttpRequest();
     xhr.open('POST', url);
     xhr.responseType = 'json';
-    xhr.timeout = 180_000;
+    xhr.timeout = timeout;
     for (const [key, value] of Object.entries(headers)) xhr.setRequestHeader(key, value);
     xhr.upload.onprogress = event => {
       if (event.lengthComputable) onProgress(Math.min(99, Math.round(event.loaded * 100 / event.total)));
     };
+    xhr.upload.onload = () => onProgress(100);
     xhr.onload = () => resolve({status: xhr.status, body: xhr.response || {}});
     xhr.onerror = xhr.ontimeout = () => reject(new Error('Upload interrupted'));
-    const body = new view.FormData();
-    body.append('file', file);
     xhr.send(body);
   });
+}
+
+export function sendPrivateAttachmentMessage(view, path, message, files, headers, onProgress) {
+  const form = new view.FormData();
+  form.set('body', message.body || '');
+  if (message.reply_language) form.set('reply_language', message.reply_language);
+  for (const file of files) form.append('file',file);
+  return uploadForm(view,path,headers,form,onProgress,240_000);
 }
 
 function errorText(result) {
@@ -101,6 +110,10 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
   const scroller = document.getElementById('message-scroller');
   const status = document.getElementById('chat-upload-error');
   const jobs = new Set();
+  const drafts = new Map();
+  const draftRail = document.getElementById('agent-file-draft');
+  const field = document.getElementById('chat-body');
+  const draftFiles = scope => (drafts.get(scope) || []).map(item => item.file);
   const make = (tag, text) => {
     const el = document.createElement(tag);
     if (text) el.textContent = text;
@@ -114,6 +127,12 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
       else job.node.remove();
     }
     if (messageList.children.length) empty.hidden = true;
+    if (draftRail) {
+      const items = current?.private ? drafts.get(current.scope) || [] : [];
+      draftRail.hidden = items.length === 0;
+      draftRail.replaceChildren(...items.map(item => item.card));
+      field.required = items.length === 0;
+    }
   }
 
   function remove(job) {
@@ -137,10 +156,12 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
         remove(job);
         return;
       }
-      const result = await uploadFile(view, job.destination.path, {
+      const form = new view.FormData();
+      form.append('file',job.file);
+      const result = await uploadForm(view, job.destination.path, {
         Accept: 'application/json',
         'X-CSRF-Token': csrfToken(), 'Idempotency-Key': job.key,
-      }, job.file, percentage => { job.progress.value = percentage; });
+      }, form, percentage => { job.progress.value = percentage; });
       if (!jobs.has(job)) return;
       if (![200, 201].includes(result.status) || !result.body?.message?.attachment) {
         throw new Error(errorText(result));
@@ -193,6 +214,46 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     jobs.add(job);
   }
 
+  function clearDraft(scope, files = draftFiles(scope)) {
+    const kept = [];
+    for (const item of drafts.get(scope) || []) {
+      if (files.includes(item.file)) {
+        if (item.preview) view.URL.revokeObjectURL(item.preview);
+      } else kept.push(item);
+    }
+    if (kept.length) drafts.set(scope,kept);
+    else drafts.delete(scope);
+    render();
+  }
+
+  function stageFiles(scope, files) {
+    const existing = drafts.get(scope) || [];
+    const valid = files.filter(file => AGENT_FILE_EXT.has(file.name.toLowerCase().split('.').at(-1)));
+    if (valid.length !== files.length) status.textContent = '智能体私聊支持图片、PDF、Office 文档和文本文件。';
+    let bytes = existing.reduce((sum,item) => sum + item.file.size,0);
+    for (const file of valid) {
+      if (existing.length >= 4 || bytes + file.size > MAX_CHAT_FILE_BYTES) {
+        status.textContent = '每条消息最多 4 个附件，合计 8 MB。';
+        break;
+      }
+      bytes += file.size;
+      const mime = fileType(file), preview = mime?.startsWith('image/') ? view.URL.createObjectURL(file) : '';
+      const card = renderChatFile(document,{title:file.name,mime,bytes:file.size,path:preview},{pending:true});
+      const remove = make('button','×');
+      remove.type = 'button';
+      remove.setAttribute('aria-label','移除 '+file.name);
+      remove.className = 'agent-file-remove';
+      remove.addEventListener('click',() => {
+        const current = context();
+        if (current?.private) clearDraft(current.scope,[file]);
+      });
+      card.append(remove);
+      existing.push({file,card,preview});
+    }
+    if (existing.length) drafts.set(scope,existing);
+    render();
+  }
+
   input.addEventListener('change', () => {
     const destination = context();
     const picked = [...input.files];
@@ -201,12 +262,24 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     status.textContent = '';
     const accepted = picked.filter(file => file.size > 0 && file.size <= MAX_CHAT_FILE_BYTES);
     if (accepted.length !== picked.length) status.textContent = '空文件和超过 8 MB 的文件无法发送。';
+    if (destination.private) {
+      stageFiles(destination.scope,accepted);
+      return;
+    }
     for (const file of accepted) enqueue(file, destination);
     render();
     if (accepted.length) scroller.scrollTop = scroller.scrollHeight;
     void drain();
   });
-  return {render, reset() {
+  return {render,draftFiles,clearDraft, moveDraft(from,to) {
+    const saved = drafts.get(from);
+    if (saved) {
+      drafts.set(to,saved);
+      drafts.delete(from);
+    }
+    render();
+  }, reset() {
+    for (const scope of drafts.keys()) clearDraft(scope);
     for (const job of jobs) remove(job);
     status.textContent = '';
   }};

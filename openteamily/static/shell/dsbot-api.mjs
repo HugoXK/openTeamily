@@ -21,7 +21,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/automations(?:\/(?:tick|[0-9a-f]{32}))?$/, 'automations'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/automations\/[0-9a-f]{32}\/(?:run|remove|runs(?:\/[0-9a-f]{32}(?:\/(?:cancel|retry|artifact))?)?)$/, 'automations'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/api-keys(?:\/[0-9a-f]{32}\/revoke)?$/, 'agent-api'],
-  [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents(?:\/[0-9a-f]{32}(?:\/(?:archive|conversations(?:\/[0-9a-f]{32}(?:\/messages(?:\/[0-9a-f]{32}\/artifact)?)?)?))?)?$/, 'agents'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/agents(?:\/[0-9a-f]{32}(?:\/(?:archive|conversations(?:\/[0-9a-f]{32}(?:\/messages(?:\/[0-9a-f]{32}\/(?:artifact|files\/[0-3]))?)?)?))?)?$/, 'agents'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/meetings(?:\/(?:draft|speech|transcribe)|\/[0-9a-f]{32}(?:\/(?:remove|export))?)?$/, 'meetings'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory(?:\/[0-9a-f]{32}(?:\/(?:remove|export|dream(?:\/[0-9a-f]{32})?|versions(?:\/\d{1,8}(?:\/restore)?)?))?)?$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/(?:profile|graph|(?:actions|links|preferences)(?:\/[0-9a-f]{32}(?:\/remove)?)?)$/, 'memory'],
@@ -153,7 +153,7 @@ export function install(win = globalThis.window) {
   win.document.addEventListener('click', async (event) => {
     const anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
     const target = anchor ? movedTarget(anchor.getAttribute('href'), origin) : null;
-    if (!target || (target.feature === 'messenger' && anchor.hasAttribute('download'))) return;
+    if (!target || (['messenger', 'agents'].includes(target.feature) && anchor.hasAttribute('download'))) return;
     event.preventDefault();
     const response = await viaDsBot(target, 'GET');
     if (!response.ok) {
