@@ -65,11 +65,12 @@ test('meeting speech prepares and uses the local provider in the signed-in runti
   assert.equal((await call('GET', 'speech')).body.phase, 'unavailable')
   let phase = 'unprepared'
   let location = 'host-local'
+  let accepted = false
   let calls = 0
   const providerId = 'sensevoice-local'
   const speech = {
     snapshot: () => ({selection: {providerId}, providers: [{id: providerId, location, preparation: {phase}}]}),
-    prepare(id) { assert.equal(id, providerId); phase = 'ready' },
+    prepare(id) { assert.equal(id, providerId); accepted = true },
     resolve(spec) { return spec },
     async transcribe(spec, signal) {
       calls += 1
@@ -84,7 +85,10 @@ test('meeting speech prepares and uses the local provider in the signed-in runti
   t.after(detachRuntime)
   const body = {audio_base64: waveBase64(new Float32Array([-1, 0, 1]))}
   assert.equal((await call('POST', 'transcribe', body)).status, 409)
-  assert.equal((await call('POST', 'speech', {})).body.ready, true)
+  assert.deepEqual((await call('POST', 'speech', {})).body, {phase: 'checking', ready: false, progress: null})
+  assert.equal(accepted, true)
+  phase = 'ready'
+  assert.equal((await call('GET', 'speech')).body.ready, true)
   assert.equal((await call('POST', 'transcribe', {audio_base64: 'AAAA'})).status, 400)
   assert.equal((await call('POST', 'transcribe', {audio_base64: waveBase64(new Float32Array(240001))})).status, 400)
   assert.deepEqual((await call('POST', 'transcribe', body)).body, {text: '周四发布'})

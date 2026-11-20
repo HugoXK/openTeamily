@@ -32,14 +32,15 @@ export async function speechStatus(req) {
   if (req.method === 'GET') return {body: provider(req.host).status}
   requireBodyKeys(await req.json(), [])
   const local = requireProvider(req.host)
-  if (!local.status.ready && !PREPARING.has(local.status.phase)) {
-    try {
-      local.speech.prepare(local.id)
-    } catch {
-      refuse(503, 'speech_setup_failed', '无法开始准备语音识别，请重试。')
-    }
+  if (local.status.ready || PREPARING.has(local.status.phase)) return {body: local.status}
+  try {
+    local.speech.prepare(local.id)
+  } catch {
+    refuse(503, 'speech_setup_failed', '无法开始准备语音识别，请重试。')
   }
-  return {body: provider(req.host).status}
+  const status = provider(req.host).status
+  // The native provider can enqueue preparation before publishing its first status.
+  return {body: status.phase === local.status.phase ? {...status, phase: 'checking'} : status}
 }
 
 function decodeWave(encoded) {
