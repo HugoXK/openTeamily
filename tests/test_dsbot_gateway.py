@@ -183,6 +183,22 @@ class GatewayTest(unittest.TestCase):
         self.assertNotIn('location = /members { return 418; }', conf)
         self.assertNotIn('location = /discover { return 418; }', conf)
 
+    def test_nginx_config_optional_social_path(self):
+        routes = gw.load_routes()
+        conf = gw.nginx_config(routes, '127.0.0.1:8080', 8081, key='k' * 40)
+        self.assertNotIn('location ^~ /social/', conf)
+        with self.assertRaises(ValueError):
+            gw.nginx_config(routes, '127.0.0.1:8080', 8081, key='k' * 40, bot_social='http://bad')
+        social = gw.nginx_config(routes, '127.0.0.1:8080', 8081, key='k' * 40, bot_social='bot-social:8787')
+        self.assertIn('location = /social { return 308 /social/; }', social)
+        self.assertIn('location ^~ /social/', social)
+        self.assertIn('proxy_pass http://bot-social:8787/;', social)
+        self.assertIn('X-Forwarded-Prefix /social;', social)
+        self.assertIn('proxy_set_header X-OT-Gateway-Key "";', social)
+        # The path stays on the existing origin; admin and FlyBot routes stay blocked.
+        self.assertIn('location ^~ /v1/admin/ { return 404; }', social)
+
+
     def report(self, iid, body, manager_token):
         import io
         raw = json.dumps(body).encode()

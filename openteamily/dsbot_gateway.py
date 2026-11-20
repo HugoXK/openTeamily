@@ -588,6 +588,7 @@ __KEY_SETTING__
   location = /v1/admin { return 404; }
   location ^~ /v1/admin/ { return 404; }
   location = /v1/platform/route { return 404; }
+__SOCIAL_LOCATION__
   location = /_ot_authz {
     internal;
     proxy_pass http://__PLATFORM__/v1/platform/route;
@@ -660,12 +661,38 @@ __DSBOT_LOCATIONS__
 '''
 
 
-def nginx_config(routes, platform, listen, key_include=None, key=None):
+SOCIAL_UPSTREAM = re.compile(r'^[0-9A-Za-z.\-]+:\d{2,5}$')
+
+# Isolated OpenTeamily Bot Social is reached at /social/ on the existing public
+# origin. The prefix is stripped; the container sees /v1/... and /healthz.
+# Omit bot_social to leave this location out (current sites without the service).
+def social_location(upstream):
+    if not SOCIAL_UPSTREAM.fullmatch(upstream):
+        raise ValueError('Invalid Bot Social upstream')
+    return (
+        '  location = /social { return 308 /social/; }\n'
+        '  location ^~ /social/ {\n'
+        f'    proxy_pass http://{upstream}/;\n'
+        '    proxy_http_version 1.1;\n'
+        '    proxy_set_header Host $host;\n'
+        '    proxy_set_header X-Forwarded-Proto $scheme;\n'
+        '    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n'
+        '    proxy_set_header X-Forwarded-Prefix /social;\n'
+        '    proxy_set_header X-OT-Gateway-Key "";\n'
+        '    proxy_read_timeout 60s;\n'
+        '    proxy_redirect off;\n'
+        '  }'
+    )
+
+
+def nginx_config(routes, platform, listen, key_include=None, key=None, bot_social=None):
     """Render the edge config.
 
     Production passes ``key_include``: the absolute path of an operator-owned nginx
     include containing ``set $ot_gateway_key "<key>";`` so the key never sits in the
-    rendered file. Tests may pass ``key`` directly.
+    rendered file. Tests may pass ``key`` directly. ``bot_social`` is ``host:port``
+    of the isolated OpenTeamily Bot Social on the compose network; leave it unset
+    when that service is not running.
     """
     if (key_include is None) == (key is None):
         raise ValueError('Pass exactly one of key_include or key')
@@ -690,8 +717,10 @@ def nginx_config(routes, platform, listen, key_include=None, key=None):
             locations.append('  location = / { return 418; }')
         locations.append(f'  location = /{page} {{ return 418; }}')
         locations.append(f'  location ^~ /{page}/ {{ return 418; }}')
+    social = social_location(bot_social) if bot_social else ''
     return (NGINX_TEMPLATE.replace('__LISTEN__', str(listen)).replace('__PLATFORM__', platform)
-            .replace('__KEY_SETTING__', setting).replace('__DSBOT_LOCATIONS__', '\n'.join(locations)))
+            .replace('__KEY_SETTING__', setting).replace('__DSBOT_LOCATIONS__', '\n'.join(locations))
+            .replace('__SOCIAL_LOCATION__', social))
 
 
 def main(argv=None):
@@ -704,8 +733,11 @@ def main(argv=None):
     render.add_argument('--listen', required=True, help='nginx listen address, e.g. 127.0.0.1:8081')
     render.add_argument('--key-include', required=True, help='absolute path of the operator include setting $ot_gateway_key')
     render.add_argument('--routes', default=str(ROUTES_FILE))
+    render.add_argument('--bot-social', default=None,
+                        help='host:port of the isolated OpenTeamily Bot Social (compose service, e.g. bot-social:8787). Adds /social/ on this origin.')
     args = parser.parse_args(argv)
-    print(nginx_config(load_routes(args.routes), args.platform, args.listen, key_include=args.key_include), end='')
+    print(nginx_config(load_routes(args.routes), args.platform, args.listen,
+                       key_include=args.key_include, bot_social=args.bot_social), end='')
 
 
 if __name__ == '__main__':
