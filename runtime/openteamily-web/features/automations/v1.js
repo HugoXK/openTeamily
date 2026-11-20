@@ -20,9 +20,18 @@ function wrap(fn) {
   }
 }
 
-export function automationsV1({ endpoints, log }) {
+export function automationsV1({ endpoints, log, personalBinding }) {
   const call = (name, payload) => endpoints[name](payload)
   const routes = [
+    { pattern: /^\/v1\/onboarding\/automations$/, handle: wrap(async (req) => {
+      if (req.method !== 'POST' || req.query.size) throw new FeatureError(400, 'invalid', 'Invalid onboarding automation request')
+      const { workspace_id, template_ids, username } = await req.json() || {}
+      const binding = await personalBinding?.()
+      if (!binding?.workspace_id) throw new FeatureError(503, 'unavailable', 'Personal workspace is still being initialized')
+      if (workspace_id !== binding.workspace_id) throw new FeatureError(403, 'forbidden', 'Onboarding requires the personal workspace')
+      const { status, created, skipped } = await call('createOnboarding', { workspace_id, template_ids, username: usernameOf() || username })
+      return { status, body: { created, skipped } }
+    }) },
     { pattern: /^\/v1\/automation-templates$/, handle: wrap(async () => ({ status: 200, body: await call('templates') })) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/tick$`), handle: wrap(async (req, workspaceId) => ({ status: 200, body: await call('tick', { workspace_id: workspaceId }) })) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/runs/${HEX}/(cancel|retry|artifact)$`), handle: wrap(async (req, workspaceId, id, runId, action) => {

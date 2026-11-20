@@ -51,7 +51,7 @@ PAGE_SEGMENT = re.compile(r'[a-z0-9][a-z0-9-]{0,40}')
 
 # Browser and non-browser /v1 routes that the signed-in owner's DS-Bot now serves.
 # Kept in sync with openteamily/static/shell/dsbot-api.mjs `MOVED`. A path not listed
-# here stays on the platform (auth, skill-secrets, /v1/onboarding/automations, the
+# here stays on the platform (auth, the
 # Composio callback bounce page, workspace lists, C pages, automations/agents until B2).
 MOVED_APIS = (
     (re.compile(r'^/v1/skills/(?:catalog|bindings|installed|packages(?:/import-[a-z0-9][a-z0-9-]{1,39}(?:/(?:revoke|versions(?:/[0-9.]+)?))?)?)$'), 'skills'),
@@ -78,7 +78,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
     (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/engagement$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
-    (re.compile(r'^/v1/automation-templates$'), 'automations'),
+    (re.compile(r'^/v1/(?:automation-templates|onboarding/automations)$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:tick|[0-9a-f]{32}(?:/(?:remove|runs(?:/[0-9a-f]{32}(?:/(?:cancel|retry|artifact))?)?)?))?)?$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/api-keys(?:/[0-9a-f]{32}/revoke)?$'), 'agent-api'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents(?:/[0-9a-f]{32}(?:/(?:archive|conversations(?:/[0-9a-f]{32}(?:/messages(?:/[0-9a-f]{32}/artifact)?)?)?))?)?$'), 'agents'),
@@ -119,7 +119,6 @@ MOVED_API_LOCATIONS = (
     'location ^~ /v1/team-directory/ { return 418; }',
     'location ^~ /v1/discover/ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:members|invites|join-requests|directory|social)(?:/|$) { return 418; }',
-    'location = /v1/onboarding/automations { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
     'location = /v1/composio/callback { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
     'location = /v1/settings { return 418; }',
     'location = /v1/notification-prefs { return 418; }',
@@ -130,6 +129,7 @@ MOVED_API_LOCATIONS = (
     'location ^~ /v1/composio/ { return 418; }',
     'location ^~ /v1/mcp/servers { return 418; }',
     'location = /v1/automation-templates { return 418; }',
+    'location = /v1/onboarding/automations { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/automations(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/agents(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/[0-9a-f]{32}(?:/(?:remove|export))?)?$ { return 418; }',
@@ -138,48 +138,6 @@ MOVED_API_LOCATIONS = (
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }',
 )
 
-
-
-def owner_dsbot_ready(db, owner_id):
-    """True when this account has a healthy published DS-Bot the edge can route to."""
-    if not owner_id:
-        return False
-    try:
-        row = db.execute(
-            "SELECT 1 FROM instances i JOIN dsbot_upstreams u ON u.instance_id=i.id "
-            "WHERE i.owner_id=? AND i.desired='running' AND i.observed='running' AND i.health='healthy' "
-            "AND i.blocked=0 AND i.observed_revision=i.revision LIMIT 1",
-            (owner_id,)).fetchone()
-    except Exception:
-        return False
-    return row is not None
-
-
-def workspace_moved_to_dsbot(db, workspace_id, page, routes=None):
-    """True when `page` is in moved_pages and the workspace owner has a live DS-Bot.
-
-    Used by the legacy server scheduler so it does not fire the same automation
-    the owner's DS-Bot clock will run. Workspaces whose owner has no runtime
-    keep the server scheduler until one is published.
-    """
-    routes = routes or load_routes()
-    if page not in routes['moved_pages']:
-        return False
-    row = db.execute('SELECT owner_id FROM workspaces WHERE id=?', (workspace_id,)).fetchone()
-    return bool(row) and owner_dsbot_ready(db, row[0])
-
-
-def workspace_conversation_moved_to_dsbot(db, workspace_id, routes=None):
-    """True when agent/chat conversations already run on the owner's DS-Bot.
-
-    Flask must not queue a second ``runtime_connect`` infer for those
-    conversations (send, reconcile, or the leftover External Agent API
-    handler). Group replies stay on the platform until C pages move, so
-    they keep using the central infer path.
-    """
-    routes = routes or load_routes()
-    return any(workspace_moved_to_dsbot(db, workspace_id, page, routes)
-               for page in ('agents', 'chat'))
 
 
 def moved_api(path):
