@@ -1367,6 +1367,8 @@ class App:
         runtime_connect.mark_access_issued(db, task['id'])
         runtime_connect.heartbeat(db, connection, now)
         chat = db.execute('SELECT conversation_id FROM agent_messages WHERE task_id=? LIMIT 1', (task['id'],)).fetchone()
+        if chat is None:
+            chat = db.execute("SELECT 'social:' || conversation_id || ':' || agent_id AS conversation_id FROM social_agent_replies WHERE task_id=? LIMIT 1", (task['id'],)).fetchone()
         return 200, {'conversation_id': chat['conversation_id'] if chat else None, 'skills': skill_material, 'connected_tools': connected_tools.available(db, task['id']), 'model_api': {
             **({'http_endpoint_grant': grant} if grant else {}),
             'provider': public['provider'],

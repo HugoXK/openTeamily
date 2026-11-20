@@ -314,7 +314,7 @@ export function createBridge(rt, ctx, { env = process.env, log = console.error, 
     state.active = active
     try {
       await ensureSetup()
-      await selectConversation(access.conversation_id)
+      await selectConversation(access.conversation_id || (rt.createSession ? 'task:' + payload.id : null))
       stage = 'skill verification/loading'
       const material = access.skills || []
       loadSkillMaterial(material, '')
