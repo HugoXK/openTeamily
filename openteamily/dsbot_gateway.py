@@ -50,8 +50,10 @@ PAGE_SEGMENT = re.compile(r'[a-z0-9][a-z0-9-]{0,40}')
 # Browser and non-browser /v1 routes that the signed-in owner's DS-Bot now serves.
 # Kept in sync with openteamily/static/shell/dsbot-api.mjs `MOVED`. A path not listed
 # here stays on the platform (auth, skill-secrets, /v1/onboarding/automations, the
-# Composio callback bounce page, workspace lists, C pages, automations/agents until B2).
+# Composio callback bounce page, workspace lists, C pages). Personal-agent is part
+# of the B1 cutover; the old homepage start is retired (410) in favour of Bot Social.
 MOVED_APIS = (
+    (re.compile(r'^/v1/personal-agent$'), 'personal'),
     (re.compile(r'^/v1/skills/(?:catalog|bindings|installed|packages(?:/import-[a-z0-9][a-z0-9-]{1,39}(?:/(?:revoke|versions(?:/[0-9.]+)?))?)?)$'), 'skills'),
     (re.compile(r'^/v1/skill-secrets$'), 'skill-secrets'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/overview$'), 'overview'),
@@ -119,6 +121,7 @@ MOVED_API_LOCATIONS = (
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:members|invites|join-requests|directory|social)(?:/|$) { return 418; }',
     'location = /v1/onboarding/automations { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
     'location = /v1/composio/callback { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
+    'location = /v1/personal-agent { return 418; }',
     'location = /v1/settings { return 418; }',
     'location = /v1/notification-prefs { return 418; }',
     'location = /v1/onboarding { return 418; }',

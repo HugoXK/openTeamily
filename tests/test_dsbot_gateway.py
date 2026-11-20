@@ -141,7 +141,7 @@ class GatewayTest(unittest.TestCase):
         ws, aid = 'a' * 32, 'b' * 32
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/export'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/revoke'), 'artifacts')
-        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'))
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'), 'discover')
 
     def test_c_api_routing_matches_plugin_features_without_platform_execution(self):
         ws, ident = 'a' * 32, 'b' * 32
@@ -158,8 +158,8 @@ class GatewayTest(unittest.TestCase):
             (f'/v1/workspaces/{ws}/agents/{ident}/discover', 'discover'),
         ):
             self.assertEqual(gw.moved_api(path), feature, path)
-        self.assertIsNone(gw.moved_api('/v1/teams'))
-        self.assertIsNone(gw.moved_api('/v1/workspaces'))
+        self.assertEqual(gw.moved_api('/v1/teams'), 'teams')
+        self.assertEqual(gw.moved_api('/v1/workspaces'), 'teams')
 
     def test_record_upstream_validation(self):
         with self.store.transaction() as db:
@@ -314,12 +314,40 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(self.call(None, uri='/v1/settings')[0], 401)
         status, headers = self.call(a, uri='/v1/automation-templates')
         self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
+        # B1: the personal agent belongs to the owner's DS-Bot.
+        status, headers = self.call(a, uri='/v1/personal-agent', method='POST',
+                                    Origin='https://openteamily.example')
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Instance'], '1' * 32)
+        self.assertIn('feature=personal', headers['X-OT-Upstream-Path'])
+        self.assertEqual(self.call(None, uri='/v1/personal-agent', method='POST',
+                                   Origin='https://openteamily.example')[0], 401)
+        status, headers = self.call(b, uri='/v1/personal-agent', method='POST',
+                                    Origin='https://openteamily.example')
+        self.assertEqual(headers['X-OT-Instance'], '2' * 32)
         # onboarding automations still stay on the platform (B2 page is /automations/, not this path)
         self.assertEqual(self.call(a, uri='/v1/onboarding/automations')[0], 404)
+
+    def test_personal_agent_is_moved_to_the_owner(self):
+        a, b = self.tokens['a' * 32], self.tokens['b' * 32]
+        self.assertEqual(gw.moved_api('/v1/personal-agent'), 'personal')
+        self.assertIsNone(gw.moved_api('/v1/agent-homepages/start'))
+        status, headers = self.call(a, uri='/v1/personal-agent', method='POST', origin=ORIGIN)
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Instance'], '1' * 32)
+        self.assertIn('/api/openteamily/legacy?feature=personal', headers['X-OT-Upstream-Path'])
+        status, headers = self.call(b, uri='/v1/personal-agent', method='POST', origin=ORIGIN)
+        self.assertEqual(headers['X-OT-Instance'], '2' * 32)
+        self.assertEqual(self.call(None, uri='/v1/personal-agent', method='POST', origin=ORIGIN)[0], 401)
+        with self.store.transaction() as db:
+            db.execute("UPDATE instances SET health='unknown' WHERE id=?", ('1' * 32,))
+        self.assertEqual(self.call(a, uri='/v1/personal-agent', method='POST', origin=ORIGIN)[0], 503)
 
     def test_nginx_forwards_moved_v1_apis_except_platform_exceptions(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
         self.assertIn('location = /v1/settings { return 418; }', conf)
+        self.assertIn('location = /v1/personal-agent { return 418; }', conf)
+        self.assertIn('location = /v1/agent-homepages/start { return 410; }', conf)
         self.assertIn('location = /v1/onboarding/automations', conf)
         self.assertIn('location = /v1/composio/callback', conf)
         # Exceptions must appear before the prefix locations that would catch them.

@@ -19,6 +19,10 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/bogus`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/search/messages?q=x`, ORIGIN).feature, 'search');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/search/resources?kind=links`, ORIGIN).feature, 'search');
+  // B1: the personal agent is served by the owner's DS-Bot. The old homepage
+  // start route is retired in favour of Bot Social's discover start.
+  assert.equal(movedTarget('/v1/personal-agent', ORIGIN).feature, 'personal');
+  assert.equal(movedTarget('/v1/agent-homepages/start', ORIGIN), null);
   assert.equal(movedTarget('/v1/auth/session', ORIGIN), null);
   assert.equal(movedTarget('/v1/automation-templates', ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations`, ORIGIN).feature, 'automations');
@@ -42,7 +46,7 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/composio/connections/${ID}/disconnect`, ORIGIN).feature, 'connectors');
   assert.equal(movedTarget(`/v1/mcp/servers/${ID}`, ORIGIN).feature, 'connectors');
   assert.equal(movedTarget('/v1/composio/callback', ORIGIN), null);
-  assert.equal(movedTarget('/v1/skill-secrets', ORIGIN), null);
+  assert.equal(movedTarget('/v1/skill-secrets', ORIGIN).feature, 'skill-secrets');
   assert.equal(movedTarget('/v1/onboarding/automations', ORIGIN), null);
   assert.equal(movedTarget(`https://evil.example/v1/workspaces/${WS}/meetings`, ORIGIN), null);
 });
@@ -65,11 +69,11 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget('/v1/discover/agents?q=x', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/me/works?tab=following', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/works/my-essay/engagement', ORIGIN).feature, 'discover');
-  // Workspace list/create and the platform team-create stay on the site.
+  // Auth stays on the platform; workspace lists and teams are served by the DS-Bot.
   assert.equal(movedTarget('/v1/auth/session', ORIGIN), null);
-  assert.equal(movedTarget('/v1/workspaces?limit=100', ORIGIN), null);
+  assert.equal(movedTarget('/v1/workspaces?limit=100', ORIGIN).feature, 'teams');
   assert.equal(movedTarget(`/v1/workspaces/${WS}`, ORIGIN), null);
-  assert.equal(movedTarget('/v1/teams', ORIGIN), null);
+  assert.equal(movedTarget('/v1/teams', ORIGIN).feature, 'teams');
 });
 
 test('the envelope carries method, path, body and idempotency key only', () => {
