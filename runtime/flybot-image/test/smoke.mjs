@@ -93,6 +93,7 @@ try {
   assert.ok(manifest.dsh?.profile?.bundles?.includes('@openteamily/flybot-runtime'), 'wrapper must be a profile bundle')
   assert.ok(manifest.dsh?.profile?.bundles?.includes('@openteamily/flybot-social-web'), 'social web client must be a profile bundle')
   assert.ok(!manifest.dsh?.profile?.bundles?.includes('ds-bot'), 'upstream ds-bot must not also be a bundle')
+  assert.ok(manifest.dsh?.profile?.bundles?.includes('@openteamily/web'), 'OpenTeamily DS-Bot plugin must be a profile bundle')
 
   const loginUrl = combined.match(/http:\/\/127\.0\.0\.1:8080\/\?token=[^\s]+/)?.[0]
     ?? combined.match(/http:\/\/[0-9.]+:8080\/\?token=[^\s]+/)?.[0]
