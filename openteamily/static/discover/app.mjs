@@ -1,4 +1,4 @@
-import { csrfCookie } from '../agents/app.mjs';
+import { AGENT_CATEGORIES, categoryFromSearch, categoryLabel, csrfCookie } from '../agents/app.mjs';
 import { renderThumb, thumbModel } from '../shell/thumb.mjs';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
@@ -40,36 +40,31 @@ export function agentDiscoverPairs(agents, statuses) {
   }));
 }
 
-export function catalogQuery(text = '', cursor = '') {
+export function catalogQuery(text = '', cursor = '', category = 'all', creator = '') {
   const params = new URLSearchParams({limit: '12'});
   if (text.trim()) params.set('q', text.trim());
   if (cursor) params.set('cursor', cursor);
+  if (category !== 'all') params.set('category', category);
+  if (creator) params.set('creator', creator);
   return '/v1/discover/agents?' + params.toString();
 }
 
-export const FEED_CATEGORIES = [
-  '热门', '网页', '小游戏', '图片', '音乐', '幻灯片', '视频', '3D 作品',
-  '短剧', '文章', '教程', '看板', '行情', '小程序', '故事', '娱乐', 'AI 与科技', '美容',
-];
+export const FEED_CATEGORIES = ['网页', '图片', '音乐', '幻灯片', '视频'];
 
-export const CATALOG_CATEGORIES = [
-  'Content Creation', 'Customer Support', 'Data Analysis', 'Design',
-  'Education', 'Engineering', 'Finance', 'IT & Security', 'Investment',
-  'Legal', 'Life', 'Marketing',
-];
+export const CATALOG_CATEGORIES = AGENT_CATEGORIES.map(({label}) => label);
 
 const TEAM_DIRECTORY_LIMIT = 100;
 const TEAM_DIRECTORY_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const TEAM_MEMBERSHIP = {member: '已加入', pending: '等待审批', suspended: '已暂停'};
 const TEAM_SEARCH_LIMIT = 60;
 
-export const FEED_ACTIVITY_EMPTY_NOTE = '还没有公开作品，所以这里不会列出作品卡片。也不会展示奖励活动或推荐内容。支持点赞、收录和关注作者；其他分类尚未接通。';
-export const FEED_ACTIVITY_LISTED_NOTE = '以下是工作区自愿公开的作品，不是推荐或奖励内容。支持点赞、收录和关注作者；其他分类尚未接通。';
+export const FEED_ACTIVITY_EMPTY_NOTE = '暂时没有公开作品。';
+export const FEED_ACTIVITY_LISTED_NOTE = '';
 export const FEED_ACTIVITY_NOTE = FEED_ACTIVITY_EMPTY_NOTE;
 export const FEED_FOLLOWING_EMPTY_TITLE = '关注列表暂无动态';
 export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显示在这里。';
-export const FEED_FOLLOWING_NOTE = '这里只展示你关注的作者已公开的作品，不是推荐或奖励活动。';
-export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。支持点赞、收录和关注作者；其他分类尚未接通。';
+export const FEED_FOLLOWING_NOTE = '你关注的作者已公开的作品会显示在这里。';
+export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。';
 
 export const FEED_KINDS = ['', 'website', 'image', 'audio', 'slides', 'video'];
 
@@ -303,12 +298,15 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const mainPanel = document.getElementById('main-panel');
   const workspaceSelect = document.getElementById('workspace');
   let currentUser = null;
-  // A refused workspace list and an empty one both leave the selector blank, but
-  // they are different states: only the second one means "you have no workspace".
-  let workspaceListFailed = false;
+  let workspaceListState = 'loading';
   let catalog = [];
   let cursor = '';
   let activeQuery = '';
+  let activeCategory = categoryFromSearch(location?.search);
+  let activeCreator = null;
+  let remix = null;
+  let remixLoading = false;
+  let manageRequest = 0;
   let catalogRequest = 0;
   let directoryItems = [];
   let directoryLoading = false;
@@ -330,12 +328,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function applyCatalogChrome() {
+    setCurrent('catalog-tab-feed', !catalogView);
     setCurrent('catalog-tab-agents', agentsView);
     setCurrent('catalog-tab-teams', teamsView);
     const agentFilters = document.getElementById('catalog-filters');
     if (agentFilters) agentFilters.hidden = !agentsView;
-    const creator = document.getElementById('catalog-creator');
-    if (creator) creator.hidden = teamsView;
     const createAgent = document.getElementById('catalog-create-agent');
     const createTeam = document.getElementById('catalog-create-team');
     if (createAgent) createAgent.hidden = !agentsView;
@@ -709,6 +706,138 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return { status: response.status, body: parsed };
   }
 
+  function applyCatalogFilters() {
+    for (const chip of document.querySelectorAll('[data-catalog-category]')) {
+      chip.setAttribute('aria-pressed', String(chip.dataset.catalogCategory === activeCategory));
+    }
+    const filter = document.getElementById('catalog-creator-filter');
+    filter.hidden = !activeCreator;
+    document.getElementById('catalog-creator-label').textContent = activeCreator ? '创建者 · ' + activeCreator.name : '';
+  }
+
+  function setCategory(category) {
+    activeCategory = category;
+    if (history?.replaceState) {
+      const params = new URLSearchParams(location.search);
+      if (category === 'all') params.delete('category');
+      else params.set('category', category);
+      history.replaceState(null, '', '/discover?' + params.toString());
+    }
+    return loadCatalog();
+  }
+
+  const categoryDialog = document.getElementById('catalog-category-dialog');
+  const categoryQuery = document.getElementById('catalog-category-query');
+  function renderCategoryOptions() {
+    const options = document.getElementById('catalog-category-options');
+    const term = categoryQuery.value.trim().toLowerCase();
+    options.replaceChildren();
+    for (const {slug, label} of [{slug: 'all', label: '全部'}, ...AGENT_CATEGORIES]) {
+      if (term && !label.toLowerCase().includes(term)) continue;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.setAttribute('aria-pressed', String(slug === activeCategory));
+      button.addEventListener('click', () => {
+        categoryDialog.close();
+        setCategory(slug);
+      });
+      options.append(button);
+    }
+    document.getElementById('catalog-category-empty').hidden = options.childElementCount > 0;
+  }
+
+  const remixDialog = document.getElementById('catalog-remix-dialog');
+  const remixName = document.getElementById('catalog-remix-name');
+  const remixWorkspace = document.getElementById('catalog-remix-workspace');
+  const remixStatus = document.getElementById('catalog-remix-status');
+  const remixSubmit = document.getElementById('catalog-remix-submit');
+
+  function syncRemixWorkspaces() {
+    const previous = remixWorkspace.value || workspaceSelect.value;
+    remixWorkspace.replaceChildren(...Array.from(workspaceSelect.options, option => {
+      const choice = document.createElement('option');
+      choice.value = option.value;
+      choice.textContent = option.textContent;
+      return choice;
+    }));
+    if (Array.from(remixWorkspace.options).some(option => option.value === previous)) remixWorkspace.value = previous;
+    remixSubmit.disabled = !remix?.template || !remixWorkspace.value || remixLoading;
+    if (remix?.template && !remixWorkspace.value) {
+      remixStatus.textContent = {
+        loading: '正在读取可用工作区…', failed: '无法读取工作区。请刷新后重试。', ready: '暂无可用工作区。',
+      }[workspaceListState];
+    } else if (remix?.template && workspaceListState === 'ready' && remixStatus.textContent === '正在读取可用工作区…') {
+      remixStatus.textContent = '';
+    }
+  }
+
+  async function openRemix(item) {
+    if (!currentUser) {
+      show('error', '请登录后复制智能体。');
+      return;
+    }
+    const entry = {slug: item.slug, key: reuseKey(), template: null};
+    remix = entry;
+    remixName.value = item.name;
+    document.getElementById('catalog-remix-summary').textContent = item.summary || '';
+    const instructions = document.getElementById('catalog-remix-instructions');
+    instructions.hidden = true;
+    instructions.open = false;
+    const description = document.getElementById('catalog-remix-description');
+    description.textContent = '';
+    remixStatus.textContent = '正在读取发布内容…';
+    syncRemixWorkspaces();
+    if (!remixDialog.open) remixDialog.showModal();
+    try {
+      const result = await request('GET', '/v1/discover/agents/' + entry.slug + '/remix');
+      if (remix !== entry || !remixDialog.open) return;
+      if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法读取发布内容。'));
+      const template = result.body.template;
+      entry.template = template;
+      remixName.value = template.name;
+      document.getElementById('catalog-remix-summary').textContent = template.summary;
+      document.getElementById('catalog-remix-prompt').textContent = template.instructions;
+      instructions.hidden = !template.instructions;
+      description.textContent = template.instructions
+        ? '副本包含发布的指令，可在自己的工作区修改。'
+        : '此发布只包含名称、简介和分类。创建后可补充自己的指令。';
+      remixStatus.textContent = '';
+      syncRemixWorkspaces();
+    } catch (error) {
+      if (remix === entry && remixDialog.open) remixStatus.textContent = error.message;
+    }
+  }
+
+  async function submitRemix(event) {
+    event.preventDefault();
+    const entry = remix;
+    if (remixLoading || !entry?.template || !remixWorkspace.value) return;
+    remixLoading = true;
+    remixSubmit.disabled = true;
+    remixStatus.textContent = '正在创建副本…';
+    try {
+      const result = await request('POST', '/v1/discover/agents/' + entry.slug + '/remix', {
+        revision: entry.template.revision, workspace_id: remixWorkspace.value, name: remixName.value.trim(),
+      }, {'Idempotency-Key': entry.key});
+      if (![200, 201].includes(result.status)) {
+        if (result.body.error?.code === 'listing_changed') {
+          entry.template = null;
+          throw new Error('发布内容已更新。关闭后重新预览。');
+        }
+        throw new Error(messageFor(result.body.error, '无法创建副本，请重试。'));
+      }
+      const agent = result.body.agent;
+      const hash = new URLSearchParams({workspace: agent.workspace_id, agent: agent.id});
+      location.assign('/chat#' + hash.toString());
+    } catch (error) {
+      if (remix === entry) remixStatus.textContent = error.message;
+    } finally {
+      remixLoading = false;
+      syncRemixWorkspaces();
+    }
+  }
+
   function renderCatalog(items) {
     const list = document.getElementById('discover-list');
     list.replaceChildren();
@@ -728,65 +857,45 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       const summary = document.createElement('p');
       summary.className = 'summary';
       summary.textContent = item.summary || '没有简介。';
-      const chat = document.createElement('button');
-      chat.type = 'button';
-      chat.disabled = true;
-      chat.textContent = '聊天';
-      chat.title = '未接通：公共目录没有发起聊天的接口';
-      chat.setAttribute('aria-label', (item.name || item.slug) + '：聊天未接通');
       copy.append(name, summary);
-      // Public catalog entries carry only a name and a summary (no prompts, no
-      // instructions), so 用这个智能体 really calls the existing workspace-agent
-      // create endpoint with those two fields and lands on /agents. It does not
-      // copy a prompt nobody published, and it does not fake a local receipt.
+      const meta = document.createElement('div');
+      meta.className = 'catalog-card-meta';
+      if (item.category) {
+        const tag = document.createElement('span');
+        tag.textContent = categoryLabel(item.category);
+        if (tag.textContent) meta.append(tag);
+      }
+      if (item.creator?.handle) {
+        const creator = document.createElement('button');
+        creator.type = 'button';
+        creator.className = 'catalog-author';
+        creator.textContent = item.creator.name || item.creator.handle;
+        creator.title = '查看此创建者的智能体';
+        creator.addEventListener('click', () => {
+          activeCreator = item.creator;
+          loadCatalog();
+        });
+        meta.append(creator);
+      }
+      if (meta.childElementCount) copy.append(meta);
       const use = document.createElement('button');
       use.type = 'button';
       use.className = 'catalog-use';
-      use.textContent = '用这个智能体';
-      use.title = '按公共目录里的名称和简介，在你的工作区里新建一个同名智能体；说明需要你之后自己补。';
-      use.setAttribute('aria-label', '用这个智能体：「' + (item.name || item.slug) + '」');
-      use.addEventListener('click', async () => {
-        const label = item.name || item.slug;
-        if (!currentUser) {
-          show('error', '请先登录，再把这个智能体放进你的工作区。');
-          return;
-        }
-        const space = workspaceSelect.value;
-        if (!space) {
-          // Never tell a user to create a workspace when the list simply failed to load.
-          show('error', workspaceListFailed
-            ? '工作区列表读取失败，请稍后重试。'
-            : '先创建一个工作区，才能放进这个智能体。');
-          return;
-        }
-        if (use.disabled) return;
-        use.disabled = true;
-        let result;
-        try {
-          result = await request('POST', `/v1/workspaces/${space}/agents`, {
-            name: label,
-            summary: item.summary || '',
-            instructions: '',
-          }, {'Idempotency-Key': reuseKey()});
-        } catch {
-          result = {status: 0, body: {}};
-        }
-        use.disabled = false;
-        if (result.status === 201 || result.status === 200) {
-          show('ok', '已创建「' + label + '」，正在打开智能体页。');
-          if (typeof location.assign === 'function') location.assign('/agents');
-          else location.href = '/agents';
-          return;
-        }
-        if (result.status === 409) {
-          show('error', '你的工作区里已有同名智能体；改名后再从目录创建。');
-          return;
-        }
-        show('error', messageFor(result.body && result.body.error, '无法创建智能体。'));
-      });
-      card.append(avatar, copy, chat, use);
-      // Slugs identify records, but no public detail route exists, so the card
-      // carries no hover text: a "/d/<slug>" tooltip would promise a 404.
+      use.textContent = '复制';
+      use.setAttribute('aria-label', '复制智能体：' + (item.name || item.slug));
+      use.addEventListener('click', () => openRemix(item));
+      card.append(avatar, copy);
+      if (item.chat_enabled && !item.own_agent && validSlug(item.slug)) {
+        const actions = document.createElement('div');
+        actions.className = 'catalog-agent-actions';
+        const chat = document.createElement('a');
+        chat.href = '/chat#public-agent=' + item.slug;
+        chat.className = 'catalog-chat';
+        chat.textContent = '聊天';
+        chat.setAttribute('aria-label', '和 ' + (item.name || item.slug) + ' 聊天');
+        actions.append(chat, use);
+        card.append(actions);
+      } else card.append(use);
       li.append(card);
       list.append(li);
     }
@@ -795,6 +904,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function loadCatalog(append = false) {
     const seq = ++catalogRequest;
     if (!append) {
+      applyCatalogFilters();
       activeQuery = document.getElementById('catalog-query').value.trim();
       catalog = [];
       cursor = '';
@@ -809,7 +919,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     count.textContent = append ? '正在加载更多…' : '正在加载…';
     document.getElementById('catalog-panel').setAttribute('aria-busy', 'true');
     try {
-      const listed = await request('GET', catalogQuery(activeQuery, cursor));
+      const listed = await request('GET', catalogQuery(activeQuery, cursor, activeCategory, activeCreator?.handle));
       if (seq !== catalogRequest) return;
       if (listed.status !== 200) throw new Error(messageFor(listed.body.error, '无法加载公共目录。'));
       const incoming = catalogItems(listed.body);
@@ -818,8 +928,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       cursor = listed.body.cursor || '';
       renderCatalog(catalog);
       more.hidden = !cursor;
-      document.getElementById('discover-empty').textContent = activeQuery
-        ? '没有匹配的智能体。试试其他关键词。' : '暂无公开智能体。';
+      document.getElementById('discover-empty').textContent = activeQuery || activeCategory !== 'all' || activeCreator
+        ? '没有匹配的智能体。' : '暂无公开智能体。';
       count.textContent = '已显示 ' + catalog.length + ' 个智能体' + (cursor ? '，还有更多' : '');
     } catch (failure) {
       if (seq !== catalogRequest) return;
@@ -848,15 +958,39 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       title.textContent = agent.name;
       const state = document.createElement('span');
       state.className = 'state';
-      state.textContent = discover.listed ? '已收录：' + discover.slug : '未收录';
+      state.textContent = discover.listed ? '已发布' : '未发布';
       const input = document.createElement('input');
       input.type = 'text';
       input.maxLength = 30;
-      input.placeholder = 'slug';
+      input.placeholder = '公开地址';
+      input.setAttribute('aria-label', agent.name + ' 的公开地址');
       input.value = discover.slug || '';
+      const options = document.createElement('div');
+      options.className = 'catalog-publish-options';
+      const label = document.createElement('label');
+      const allow = document.createElement('input');
+      allow.type = 'checkbox';
+      allow.disabled = !agent.instructions;
+      allow.checked = Boolean(agent.instructions && discover.copy_instructions);
+      const preview = document.createElement('pre');
+      preview.textContent = agent.instructions || '';
+      preview.hidden = !allow.checked;
+      allow.addEventListener('change', () => { preview.hidden = !allow.checked; });
+      label.append(allow, document.createTextNode('公开完整指令，允许复制'));
+      const chatLabel = document.createElement('label');
+      const publicChat = document.createElement('input');
+      publicChat.type = 'checkbox';
+      publicChat.checked = discover.chat_enabled === true;
+      chatLabel.append(publicChat, document.createTextNode('允许访客聊天'));
+      const chatNote = document.createElement('p');
+      chatNote.className = 'note';
+      chatNote.textContent = '自动回复使用已发布的简介、指令和当前对话。你可以查看访客的对话。';
+      chatNote.hidden = !publicChat.checked;
+      publicChat.addEventListener('change', () => { chatNote.hidden = !publicChat.checked; });
+      options.append(label, preview, chatLabel, chatNote);
       const publish = document.createElement('button');
       publish.type = 'button';
-      publish.textContent = '收录 / 更新';
+      publish.textContent = discover.listed ? '更新发布' : '发布';
       publish.addEventListener('click', async () => {
         if (!validSlug(input.value.trim())) {
           show('error', 'slug 需为 3–30 个字符的小写字母、数字或连字符。');
@@ -864,18 +998,18 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         }
         const result = await request(
           'POST', `/v1/workspaces/${workspaceSelect.value}/agents/${agent.id}/discover`,
-          {slug: input.value.trim()});
+          {slug: input.value.trim(), revision: agent.revision, copy_instructions: allow.checked, chat_enabled: publicChat.checked});
         if (result.status !== 201 && result.status !== 200) {
           show('error', messageFor(result.body.error, '无法收录。'));
           return;
         }
-        show('ok', '已收录。');
+        show('ok', '已发布。');
         await loadCatalog();
         await loadManage();
       });
       const revoke = document.createElement('button');
       revoke.type = 'button';
-      revoke.textContent = '取消收录';
+      revoke.textContent = '取消发布';
       revoke.disabled = !discover.listed;
       revoke.addEventListener('click', async () => {
         const result = await request(
@@ -884,22 +1018,24 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
           show('error', messageFor(result.body.error, '无法取消收录。'));
           return;
         }
-        show('ok', '已取消收录。');
+        show('ok', '已取消发布。');
         await loadCatalog();
         await loadManage();
       });
-      li.append(title, state, input, publish, revoke);
+      li.append(title, state, input, publish, revoke, options);
       list.append(li);
     }
   }
 
   async function loadManage() {
+    const seq = ++manageRequest;
     const id = workspaceSelect.value;
     if (!id) {
       renderManage([]);
       return;
     }
     const listed = await request('GET', `/v1/workspaces/${id}/agents?limit=100`);
+    if (seq !== manageRequest) return;
     if (listed.status !== 200) {
       renderManage([]);
       return;
@@ -908,13 +1044,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const statuses = await Promise.all(agents.map(agent =>
       request('GET', `/v1/workspaces/${id}/agents/${agent.id}/discover`)
         .then(result => (result.status === 200 ? result.body.discover : {listed: false}))));
-    renderManage(agentDiscoverPairs(agents, statuses));
+    if (seq === manageRequest) renderManage(agentDiscoverPairs(agents, statuses));
   }
 
   async function load() {
     showDiscoverView();
-    if (agentsView) await loadCatalog();
-    const session = await request('GET', '/v1/auth/session');
+    const sessionLoad = request('GET', '/v1/auth/session');
+    const directoryLoad = agentsView ? loadCatalog() : null;
+    const session = await sessionLoad;
     if (session.status !== 200) {
       currentUser = null;
       loginPanel.hidden = false;
@@ -922,6 +1059,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       document.getElementById('catalog-manage').hidden = true;
       show('', '');
       if (teamsView) await loadTeams();
+      await directoryLoad;
       return;
     }
     currentUser = session.body.user;
@@ -931,8 +1069,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     document.getElementById('whoami').textContent = currentUser.username;
     if (agentsView) {
       const listed = await request('GET', '/v1/workspaces?limit=100');
-      workspaceListFailed = listed.status !== 200;
-      const workspaces = workspaceListFailed ? [] : (listed.body.items || []);
+      workspaceListState = listed.status === 200 ? 'ready' : 'failed';
+      const workspaces = workspaceListState === 'ready' ? (listed.body.items || []) : [];
       workspaceSelect.replaceChildren();
       for (const space of workspaces) {
         const option = document.createElement('option');
@@ -940,10 +1078,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         option.textContent = space.name;
         workspaceSelect.append(option);
       }
-      await loadManage();
+      syncRemixWorkspaces();
+      if (document.getElementById('catalog-manage').open) void loadManage();
     }
     show('', '');
     if (teamsView) await loadTeams();
+    await directoryLoad;
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -960,6 +1100,31 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   });
 
   workspaceSelect.addEventListener('change', loadManage);
+  const manage = document.getElementById('catalog-manage');
+  manage.addEventListener('toggle', () => { if (manage.open) void loadManage(); });
+  if (agentsView) {
+    for (const chip of document.querySelectorAll('[data-catalog-category]')) {
+      chip.addEventListener('click', () => setCategory(chip.dataset.catalogCategory));
+    }
+    document.getElementById('catalog-filter-search').addEventListener('click', () => {
+      categoryQuery.value = '';
+      renderCategoryOptions();
+      categoryDialog.showModal();
+      categoryQuery.focus();
+    });
+    categoryQuery.addEventListener('input', renderCategoryOptions);
+    document.getElementById('catalog-category-close').addEventListener('click', () => categoryDialog.close());
+    document.getElementById('catalog-clear-creator').addEventListener('click', () => {
+      activeCreator = null;
+      loadCatalog();
+    });
+    document.getElementById('catalog-remix-form').addEventListener('submit', submitRemix);
+    document.getElementById('catalog-remix-cancel').addEventListener('click', () => {
+      if (!remixLoading) remixDialog.close();
+    });
+    remixDialog.addEventListener('cancel', event => { if (remixLoading) event.preventDefault(); });
+    remixDialog.addEventListener('close', () => { remix = null; });
+  }
   document.getElementById('catalog-search').addEventListener('submit', event => {
     event.preventDefault();
     if (agentsView) return loadCatalog();

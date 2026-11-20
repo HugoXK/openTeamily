@@ -4,6 +4,8 @@
 // talk to Bot Social and return the Flask JSON shapes those pages already expect.
 // Shared workspaces are Bot Social teams. The private workspace can also be
 // listed from the personal-agent binding in this user's runtime.
+import { createHash } from 'node:crypto'
+import { CATEGORIES as agentCategories, LIMITS as agentLimits } from '../../features/agents/index.js'
 import { compatHandler } from '../b4/compat.js'
 import { Fault } from '../b4/http.js'
 import { ownerId } from '../../featurekit/v1.js'
@@ -87,6 +89,7 @@ function conversationItem(row, me, env, workspaceId) {
     id: row.id,
     workspace_id: workspaceId,
     kind: row.kind,
+    ...(row.public_agent ? {public_agent: row.public_agent} : {}),
     native_room_id: row.native_room_id || null,
     native_session_id: row.native_session_id || null,
     title: row.title || '',
@@ -149,6 +152,9 @@ function agentItem(row) {
     name: row.title || row.name,
     summary: row.summary || '',
     category: row.category || '',
+    creator: row.creator ? { handle: row.creator.handle, name: row.creator.display_name || usernameOf(row.creator) } : null,
+    chat_enabled: row.chat_enabled === true,
+    own_agent: row.own === true,
     updated: unix(row.updated_at),
     tags: [],
     members: [],
@@ -181,6 +187,7 @@ function rethrow(error) {
     call_already_joined: 'call_already_joined',
     call_ended: 'call_ended',
     meeting_ended: 'meeting_ended',
+    public_chat_closed: 'public_chat_closed',
   })[code] || (status === 404 ? 'not_found' : status === 403 ? 'forbidden' : status === 409 ? 'conflict' : status === 410 ? 'not_found' : status === 429 ? 'quota' : code || 'internal')
   throw new Fault(status === 410 ? 404 : status, mapped, error?.message || 'Bot Social request failed')
 }
@@ -523,6 +530,20 @@ function teamsRoutes(host) {
   ]
 }
 
+async function messengerScope(host, bs, workspace, conversationId, messageId) {
+  const binding = await host.call?.('agents/personal-binding', {})
+  if (binding?.workspace_id !== workspace) {
+    await teamFor(bs, workspace, 'Workspace', process.env)
+    return {personal: false}
+  }
+  if (!conversationId) return {personal: true}
+  const path = '/v1/ot/conversations/' + seg(conversationId, 'conversation_id')
+  const conversation = await bs.get(path)
+  if (!conversation.public_agent) throw new Fault(404, 'not_found', '该会话不在个人工作区。')
+  if (messageId) await bs.get('/v1/ot/messages/' + seg(messageId, 'message_id') + qs({conversation_id: conversationId}))
+  return {personal: true, conversation}
+}
+
 function messengerRoutes(host) {
   const env = process.env
   const convPath = /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations$/
@@ -533,10 +554,11 @@ function messengerRoutes(host) {
       async handle({ match, query }) {
         return wrap(async () => {
           const bs = client(host)
-          await teamFor(bs, match[1], 'Workspace', env)
+          const {personal} = await messengerScope(host, bs, match[1])
           const me = await meOf(bs, env)
-          const data = await bs.get('/v1/ot/conversations')
-          const items = (data.conversations || []).map((c) => conversationItem(c, me, env, match[1]))
+          const data = await bs.get('/v1/ot/conversations?scope=' + (personal ? 'public' : 'member'))
+          const items = (data.conversations || []).filter(c => Boolean(c.public_agent) === personal)
+            .map(c => conversationItem(c, me, env, match[1]))
           return [200, { items, cursor: null }]
         })
       },
@@ -568,9 +590,9 @@ function messengerRoutes(host) {
       async handle({ match }) {
         return wrap(async () => {
           const bs = client(host)
-          await teamFor(bs, match[1], 'Workspace', env)
+          const scope = await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
-          const conv = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}`)
+          const conv = scope.conversation || await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}`)
           const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({ limit: 100 }))
           return [200, {
             conversation: conversationItem(conv, me, env, match[1]),
@@ -587,7 +609,7 @@ function messengerRoutes(host) {
       async handle({ match, query }) {
         return wrap(async () => {
           const bs = client(host)
-          await teamFor(bs, match[1], 'Workspace', env)
+          await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
           const q = parseQuery(query)
           const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({
@@ -605,7 +627,7 @@ function messengerRoutes(host) {
       async handle({ match }) {
         return wrap(async () => {
           const bs = client(host)
-          await teamFor(bs, match[1], 'Workspace', env)
+          await messengerScope(host, bs, match[1], match[2])
           const conversation = seg(match[2], 'conversation_id')
           const message = seg(match[3], 'message_id')
           return [200, await bs.get(`/v1/ot/conversations/${conversation}/messages/${message}/voice`)]
@@ -617,7 +639,7 @@ function messengerRoutes(host) {
       async handle({ match, body, idempotency_key }) {
         return wrap(async () => {
           const bs = client(host)
-          await teamFor(bs, match[1], 'Workspace', env)
+          await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
           const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, voice: body?.voice, attachment: body?.attachment, workspace: match[1], client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
@@ -629,7 +651,7 @@ function messengerRoutes(host) {
       async handle({ match, body }) {
         return wrap(async () => {
           const bs = client(host)
-          await teamFor(bs, match[1], 'Workspace', env)
+          await messengerScope(host, bs, match[1], match[2])
           const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/read`, body?.seq === undefined ? {} : { seq: body.seq })
           return [200, { unread_count: data.unread ?? 0 }]
         })
@@ -640,7 +662,7 @@ function messengerRoutes(host) {
       async handle({ match, body }) {
         return wrap(async () => {
           const bs = client(host)
-          await teamFor(bs, match[1], 'Workspace', env)
+          await messengerScope(host, bs, match[1], match[2])
           const data = await bs.patch(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}`, { pinned: body?.pinned, muted: body?.muted })
           return [200, { pinned: !!data.pinned, muted: !!data.muted }]
         })
@@ -659,11 +681,7 @@ function messengerExtraRoutes(host) {
   const conv = (id) => `/v1/ot/conversations/${seg(id, 'conversation_id')}`
   const msg = (id) => `/v1/ot/messages/${seg(id, 'message_id')}`
   const page = async (bs, cid) => (await bs.get(`${conv(cid)}/messages` + qs({ limit: 100 }))).messages || []
-  const findMessage = async (bs, cid, mid) => {
-    const row = (await page(bs, cid)).find((m) => m.id === mid)
-    if (!row) throw new Fault(404, 'not_found', 'Message not found')
-    return row
-  }
+  const findMessage = (bs, cid, mid) => bs.get(msg(mid) + qs({conversation_id: cid}))
   const guard = async (bs, wid) => teamFor(bs, wid, 'Workspace', env)
   return [
     {
@@ -727,7 +745,7 @@ function messengerExtraRoutes(host) {
       method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/pin'),
       async handle({ match, body }) {
         return wrap(async () => {
-          const bs = client(host); await guard(bs, match[1])
+          const bs = client(host); await messengerScope(host, bs, match[1], match[2], match[3])
           await bs.post(`${msg(match[3])}/pin`, { on: body?.pinned !== false })
           const me = await meOf(bs, env)
           const pinned = (await page(bs, match[2])).filter((m) => m.pinned).map((m) => messageItem({ ...m, conversation_id: match[2] }, me, env, match[1]))
@@ -739,7 +757,7 @@ function messengerExtraRoutes(host) {
       method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/reactions'),
       async handle({ match, body }) {
         return wrap(async () => {
-          const bs = client(host); await guard(bs, match[1])
+          const bs = client(host); await messengerScope(host, bs, match[1], match[2], match[3])
           const data = await bs.post(`${msg(match[3])}/reactions`, { emoji: body?.emoji, on: body?.active !== false })
           return [200, { reactions: data.reactions || [] }]
         })
@@ -749,7 +767,7 @@ function messengerExtraRoutes(host) {
       method: 'DELETE', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})'),
       async handle({ match }) {
         return wrap(async () => {
-          const bs = client(host); await guard(bs, match[1])
+          const bs = client(host); await messengerScope(host, bs, match[1], match[2], match[3])
           await bs.del(msg(match[3]))
           return [204, {}]
         })
@@ -759,7 +777,7 @@ function messengerExtraRoutes(host) {
       method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/(edit|retract)'),
       async handle({ match, body }) {
         return wrap(async () => {
-          const bs = client(host); await guard(bs, match[1])
+          const bs = client(host); await messengerScope(host, bs, match[1], match[2], match[3])
           const me = await meOf(bs, env)
           if (match[4] === 'retract') {
             await bs.del(msg(match[3]))
@@ -857,6 +875,7 @@ function messengerExtraRoutes(host) {
           const services = host.currentRuntime?.()
           if (!services || typeof services.chatTurn !== 'function') throw new Fault(503, 'runtime_unavailable', 'DS-Bot chat service unavailable')
           const conversation = await bs.get(conv(match[2]))
+          if (conversation.public_agent) throw new Fault(409, 'public_chat_fixed', '公开智能体会话会自动回复。')
           const context = (await page(bs, match[2])).slice(-12).map((m) => ({ author: m.author, body: m.body }))
           const tag = String(key || Date.now()).slice(0, 40)
           const me = await meOf(bs, env)
@@ -877,13 +896,31 @@ function messengerExtraRoutes(host) {
   ]
 }
 
+function remixInstructions(row) {
+  if (!row?.snapshot) return ''
+  try {
+    const data = JSON.parse(row.snapshot)
+    const instructions = data?.instructions
+    return data?.version === 1 && typeof instructions === 'string' && instructions.length <= agentLimits.instructions
+      ? instructions : ''
+  } catch { return '' }
+}
+
+function remixTemplate(row) {
+  const template = { name: row.title, summary: row.summary || '', category: agentCategories.includes(row.category) ? row.category : null,
+    instructions: remixInstructions(row) }
+  const revision = createHash('sha256').update(JSON.stringify([row.id, template])).digest('hex')
+  return { ...template, revision }
+}
+
 function discoverRoutes(host) {
   const env = process.env
   const feed = (kind) => async ({ query }) => wrap(async () => {
     const bs = client(host)
     const q = parseQuery(query)
     const data = await bs.get('/v1/ot/discover' + qs({
-      kind, tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'), creator: q.get('creator'),
+      kind, tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'),
+      creator: q.get('creator'), category: q.get('category'),
       before: q.get('cursor'), limit: q.get('limit'),
     }))
     const items = (data.items || []).map((row) => (kind === 'agent' ? agentItem(row) : workItem(row)))
@@ -929,9 +966,41 @@ function discoverRoutes(host) {
     {
       method: 'POST', path: /^\/v1\/discover\/agents\/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])\/start$/,
       async handle({ match }) {
-        return wrap(async () => [200, await client(host).post(`/v1/ot/discover/${seg(match[1], 'slug')}/start`)])
+        return wrap(async () => {
+          const binding = await host.call('agents/personal-binding', {})
+          if (!HEX.test(binding?.workspace_id || '')) throw new Fault(409, 'no_personal_workspace', '请先打开个人工作区。')
+          const result = await client(host).post(`/v1/ot/discover/${seg(match[1], 'slug')}/start`)
+          return [200, { ...result, workspace_id: binding.workspace_id }]
+        })
       },
     },
+    ...['GET', 'POST'].map(method => ({
+      method, path: /^\/v1\/discover\/agents\/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])\/remix$/,
+      async handle({ match, body, idempotency_key }) {
+        return wrap(async () => {
+          const bs = client(host)
+          const row = await bs.get('/v1/ot/discover/' + seg(match[1], 'slug'))
+          if (!row.listed || row.kind !== 'agent') throw new Fault(404, 'not_found', '该智能体已下架。')
+          const template = remixTemplate(row)
+          if (method === 'GET') return [200, { template }]
+          if (body?.revision !== template.revision) throw new Fault(409, 'listing_changed', '发布内容已更新，请重新预览。')
+          const workspaceId = body?.workspace_id
+          if (!HEX.test(String(workspaceId || ''))) throw new Fault(400, 'invalid', '请选择工作区。')
+          const binding = await host.call('agents/personal-binding', {})
+          if (binding?.workspace_id !== workspaceId) await teamFor(bs, workspaceId, 'Workspace', env)
+          try {
+            const created = await host.call('agents/create', {
+              workspace_id: workspaceId, idempotency_key, name: body?.name ?? template.name,
+              summary: template.summary, category: template.category, instructions: template.instructions,
+            })
+            return [created.status, { agent: { id: created.agent.id, name: created.agent.name, workspace_id: workspaceId } }]
+          } catch (error) {
+            if (error?.status === 409) throw new Fault(409, 'name_conflict', '工作区已有同名智能体，请换个名称。')
+            throw error
+          }
+        })
+      },
+    })),
     { method: 'GET', path: /^\/v1\/discover\/agents$/, handle: feed('agent') },
     { method: 'GET', path: /^\/v1\/discover\/works$/, handle: feed('work') },
     { method: 'GET', path: /^\/v1\/discover\/me\/works$/, handle: feed('work') },
@@ -959,7 +1028,10 @@ function discoverRoutes(host) {
           const bs = client(host)
           const mine = await bs.get('/v1/ot/listings/mine')
           const row = (mine.listings || []).find((l) => l.kind === 'agent' && l.ref === match[2] && l.listed)
-          return [200, { discover: row ? { listed: true, slug: row.slug, updated: unix(row.updated_at) } : { listed: false } }]
+          const listing = row ? await bs.get('/v1/ot/discover/' + seg(row.slug, 'slug')) : null
+          return [200, { discover: listing?.listed
+            ? { listed: true, slug: row.slug, category: row.category, chat_enabled: row.chat_enabled === true, copy_instructions: Boolean(remixInstructions(listing)), updated: unix(row.updated_at) }
+            : { listed: false } }]
         })
       },
     },
@@ -968,11 +1040,19 @@ function discoverRoutes(host) {
       async handle({ match, body }) {
         return wrap(async () => {
           const bs = client(host)
-          const slug = body?.slug
+          const { agent } = await host.call('agents/get', { id: match[2], workspace_id: match[1] })
+          if (!agent || agent.archived || agent.native_deleted) throw new Fault(404, 'not_found', '该智能体已归档。')
+          if (body?.revision !== undefined && body.revision !== agent.revision) {
+            throw new Fault(409, 'agent_changed', '智能体已更新，请刷新后重新预览。')
+          }
+          const instructions = body?.copy_instructions === true ? agent.instructions : ''
+          const snapshot = instructions ? JSON.stringify({ version: 1, instructions }) : undefined
           const data = await bs.put('/v1/ot/listings', {
-            kind: 'agent', ref: match[2], slug, title: body?.title || slug, summary: body?.summary || '',
+            kind: 'agent', ref: agent.id, slug: body?.slug, title: agent.name, summary: agent.summary,
+            category: agent.category, snapshot, chat_enabled: body?.chat_enabled,
           })
-          return [data.id ? 200 : 200, { discover: { listed: true, slug: data.slug, updated: unix(data.updated_at) } }]
+          return [200, { discover: { listed: true, slug: data.slug, category: data.category,
+            chat_enabled: data.chat_enabled === true, copy_instructions: Boolean(instructions), updated: unix(data.updated_at) } }]
         })
       },
     },

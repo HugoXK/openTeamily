@@ -77,9 +77,30 @@ const MENTION_PER_HOUR = 30;
 const HOUR = 3_600_000;
 const AGENT_REF = /^[A-Za-z0-9._:-]{1,80}$/;
 
+function publicListing(ot: OtContext, conversation: {dm_key?: string | null}) {
+  const key = conversation.dm_key;
+  if (!key?.startsWith("agent:")) return null;
+  return ot.get<{
+    ref: string; owner_id: string; slug: string; title: string; summary: string; snapshot: string | null;
+    listed: number; chat_enabled: number; chat_from: number;
+  }>("SELECT ref, owner_id, slug, title, summary, snapshot, listed, chat_enabled, chat_from FROM ot_listings WHERE id=? AND kind='agent'", key.split(":")[1]) ?? null;
+}
+
+function fixedPublicThread(conv: {dm_key?: string | null}) {
+  return !!conv.dm_key?.startsWith("agent:");
+}
+
+function publicParticipant(ot: OtContext, conv: any, owner: string) {
+  return !fixedPublicThread(conv) || conv.created_by === owner || publicListing(ot, conv)?.owner_id === owner;
+}
+
+function requireOrdinaryGroup(conv: any) {
+  assert(!fixedPublicThread(conv), 409, "public_chat_fixed", "公开智能体会话使用固定成员。");
+}
+
 function memberOf(ot: OtContext, convId: string, ownerId: string) {
   const conv = ot.get<any>("SELECT c.* FROM ot_conversations c JOIN ot_conversation_members m ON m.conversation_id = c.id WHERE c.id = ? AND m.owner_id = ?", convId, ownerId);
-  assert(conv, 404, "conversation_not_found", "no such conversation");
+  assert(conv && publicParticipant(ot, conv, ownerId), 404, "conversation_not_found", "no such conversation");
   return conv;
 }
 
@@ -118,11 +139,20 @@ const messageView = (ot: OtContext, m: any, viewer?: string) => ({
 });
 
 function conversationView(ot: OtContext, c: any, viewer: string) {
-  const members = ot.all<any>("SELECT owner_id, read_seq, pinned, muted FROM ot_conversation_members WHERE conversation_id = ? ORDER BY created_at", c.id);
+  const published = publicListing(ot, c);
+  const members = ot.all<any>("SELECT owner_id, read_seq, pinned, muted FROM ot_conversation_members WHERE conversation_id = ? ORDER BY created_at", c.id).filter(m => publicParticipant(ot, c, m.owner_id));
   const mine = members.find((m) => m.owner_id === viewer);
   const last = ot.get<any>("SELECT * FROM ot_messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1", c.id);
   const peer = c.kind === "dm" ? members.find((m) => m.owner_id !== viewer) : undefined;
+  const open = !!(published?.listed && published.chat_enabled);
+  const pending = open && !!ot.get(`SELECT 1 FROM ot_messages m
+    WHERE m.conversation_id=? AND m.rowseq>? AND m.author_id=? AND m.author_kind='member' AND m.retracted=0
+      AND m.created_at>? AND NOT EXISTS (
+        SELECT 1 FROM ot_messages answer WHERE answer.conversation_id=m.conversation_id AND answer.reply_to=m.id
+          AND answer.author_id=? AND answer.agent_ref=? AND answer.author_kind='agent')
+    LIMIT 1`, c.id, published.chat_from, c.created_by, ot.now() - 180_000, published.owner_id, published.ref);
   return {
+    ...(fixedPublicThread(c) ? {public_agent: {open, pending, publisher: published ? ot.profileView(published.owner_id).display_name : ""}} : {}),
     id: c.id, kind: c.kind, title: c.kind === "dm" ? (peer ? ot.profileView(peer.owner_id).display_name : c.title) : c.title,
     team_id: c.team_id, members: members.map((m) => ot.profileView(m.owner_id)),
     agents: ot.all<any>("SELECT agent_ref, owner_id, name, auto_reply FROM ot_conversation_agents WHERE conversation_id = ?", c.id).map((a) => ({ agent_ref: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, owner: ot.profileView(a.owner_id), mine: a.owner_id === viewer })),
@@ -232,8 +262,13 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
 
   app.get("/v1/ot/conversations", async (req) => {
     const me = ot.me(req);
-    const rows = ot.all<any>("SELECT c.* FROM ot_conversations c JOIN ot_conversation_members m ON m.conversation_id = c.id WHERE m.owner_id = ? ORDER BY m.pinned DESC, c.updated_at DESC LIMIT 200", me.ownerId);
-    const list = rows.map((c) => conversationView(ot, c, me.ownerId));
+    const scope = query(req).scope;
+    assert(scope === undefined || scope === "public" || scope === "member", 400, "invalid_request", "Invalid conversation scope");
+    const filter = scope === "public" ? " AND c.dm_key LIKE 'agent:%'"
+      : scope === "member" ? " AND (c.dm_key IS NULL OR c.dm_key NOT LIKE 'agent:%')" : "";
+    const rows = ot.all<any>(`SELECT c.* FROM ot_conversations c JOIN ot_conversation_members m ON m.conversation_id=c.id
+      WHERE m.owner_id=?${filter} ORDER BY m.pinned DESC,c.updated_at DESC LIMIT 200`, me.ownerId);
+    const list = rows.filter(c => publicParticipant(ot, c, me.ownerId)).map((c) => conversationView(ot, c, me.ownerId));
     return { conversations: list, unread: list.reduce((n, c) => n + (c.muted ? 0 : c.unread), 0) };
   });
   app.get("/v1/ot/conversations/:id", async (req) => {
@@ -245,6 +280,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const conv = memberOf(ot, params(req).id, me.ownerId);
     const b = body(req);
     if (b.title !== undefined) {
+      requireOrdinaryGroup(conv);
       assert(conv.kind === "group", 400, "invalid_request", "only groups have a title");
       ot.run("UPDATE ot_conversations SET title = ?, updated_at = ? WHERE id = ?", text(b.title, "title", { min: 1, max: 80 }), ot.now(), conv.id);
     }
@@ -257,6 +293,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   app.post("/v1/ot/conversations/:id/members", async (req) => {
     const me = ot.me(req);
     const conv = memberOf(ot, params(req).id, me.ownerId);
+    requireOrdinaryGroup(conv);
     assert(conv.kind === "group", 400, "invalid_request", "members are added to groups only");
     const input = body(req);
     const teamId = input.team_id ?? conv.team_id;
@@ -285,6 +322,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   app.delete("/v1/ot/conversations/:id/members/:handle", async (req) => {
     const me = ot.me(req);
     const conv = memberOf(ot, params(req).id, me.ownerId);
+    requireOrdinaryGroup(conv);
     assert(conv.kind === "group", 400, "invalid_request", "a direct message has no members to remove");
     const o = ot.ownerByHandle(params(req).handle);
     assert(o === me.ownerId || conv.created_by === me.ownerId, 403, "forbidden", "only the group creator removes others");
@@ -454,6 +492,17 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         );
         if (previous) return previous;
       }
+      if (fixedPublicThread(conv)) {
+        const listing = publicListing(ot, conv);
+        assert(listing?.listed && listing.chat_enabled, 409, "public_chat_closed", "公开智能体已关闭访客聊天。");
+        assert(!sourceConversation && b.attachment === undefined && b.voice === undefined,
+          400, "invalid_request", "访客聊天支持文字消息。");
+        if (me.ownerId === conv.created_by) {
+          const sent = ot.get<{n: number}>(`SELECT COUNT(*) AS n FROM ot_messages
+            WHERE conversation_id=? AND author_id=? AND author_kind='member' AND created_at>?`, conv.id, me.ownerId, ot.now() - HOUR)!.n;
+          assert(sent < MENTION_PER_HOUR, 429, "agent_reply_limit", "本会话发送频率已达上限，请稍后重试。");
+        }
+      }
       const voice = b.voice === undefined ? null : voiceData(b.voice);
       let file = b.attachment === undefined ? null : decodeChatFile(b.attachment);
       if (sourceConversation && sourceMessage) {
@@ -548,6 +597,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   app.put("/v1/ot/conversations/:id/agents/:agent", async (req) => {
     const me = ot.me(req);
     const conv = memberOf(ot, params(req).id, me.ownerId);
+    requireOrdinaryGroup(conv);
     assert(conv.kind === "group", 400, "invalid_request", "agents join groups only");
     const ref = params(req).agent;
     assert(AGENT_REF.test(ref), 400, "invalid_request", "agent id is invalid");
@@ -564,6 +614,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   app.patch("/v1/ot/conversations/:id/agents/:agent", async (req) => {
     const me = ot.me(req);
     const conv = memberOf(ot, params(req).id, me.ownerId);
+    requireOrdinaryGroup(conv);
     assert(conv.kind === "group", 400, "invalid_request", "agents join groups only");
     const enabled = body(req).auto_reply;
     assert(typeof enabled === "boolean", 400, "invalid_request", "auto_reply must be a boolean");
@@ -577,6 +628,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   app.delete("/v1/ot/conversations/:id/agents/:agent", async (req) => {
     const me = ot.me(req);
     const conv = memberOf(ot, params(req).id, me.ownerId);
+    requireOrdinaryGroup(conv);
     ot.run("DELETE FROM ot_conversation_agents WHERE conversation_id = ? AND agent_ref = ? AND owner_id = ?", conv.id, params(req).agent, me.ownerId);
     return conversationView(ot, conv, me.ownerId);
   });
@@ -605,14 +657,27 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       if (items.length >= limit && m.rowseq > cursor) break;
       cursor = Math.max(cursor, m.rowseq);
       const mentions: string[] = JSON.parse(m.mentions);
-      const conv = ot.get<any>("SELECT title, dm_key FROM ot_conversations WHERE id = ?", m.conversation_id);
-      // A public-homepage thread (visitor + creator's agent) addresses the agent directly.
-      const homepage = String(conv.dm_key ?? "").startsWith("agent:");
+      const conv = ot.get<any>("SELECT dm_key,title,created_by FROM ot_conversations WHERE id=?", m.conversation_id);
+      if (fixedPublicThread(conv)) {
+        const listing = publicListing(ot, conv);
+        if (!listing?.listed || !listing.chat_enabled || listing.owner_id !== me.ownerId
+          || listing.ref !== m.my_agent || conv.created_by !== m.author_id || m.rowseq <= listing.chat_from
+          || m.created_at <= ot.now() - 180_000
+          || ot.get(`SELECT 1 FROM ot_messages WHERE conversation_id=? AND reply_to=? AND author_id=? AND agent_ref=?`,
+            m.conversation_id, m.id, me.ownerId, m.my_agent)) continue;
+        const context = ot.all<any>(`SELECT * FROM (SELECT * FROM ot_messages WHERE conversation_id=? AND seq<=?
+          AND retracted=0 AND author_id IN (?,?) ORDER BY seq DESC LIMIT 12) ORDER BY seq`,
+        m.conversation_id, m.seq, conv.created_by, listing.owner_id);
+        items.push({ conversation_id: m.conversation_id, conversation_title: listing.title, agent_ref: listing.ref,
+          agent_name: listing.title, mode: "public", message: messageView(ot, m), context: context.map(c => messageView(ot, c)),
+          published: {title: listing.title, summary: listing.summary, snapshot: listing.snapshot} });
+        continue;
+      }
       const agentRef = String(m.my_agent).toLowerCase();
       const explicit = mentions.some(mention => typeof mention === "string" && mention.startsWith("/agent/"));
-      const mentioned = homepage || (explicit
+      const mentioned = explicit
         ? mentions.includes(agentMentionKey(me.ownerId, String(m.my_agent)))
-        : mentions.includes(agentRef) || mentions.includes(String(m.my_agent_name).toLowerCase()));
+        : mentions.includes(agentRef) || mentions.includes(String(m.my_agent_name).toLowerCase());
       if (!mentioned && (!m.my_auto || m.seq <= m.auto_after_seq)) continue;
       const context = ot.all<any>("SELECT * FROM (SELECT * FROM ot_messages WHERE conversation_id = ? AND seq <= ? ORDER BY seq DESC LIMIT 12) ORDER BY seq", m.conversation_id, m.seq);
       items.push({ conversation_id: m.conversation_id, conversation_title: conv.title, agent_ref: m.my_agent, agent_name: m.my_agent_name, mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: context.map((c) => messageView(ot, c)) });
@@ -624,11 +689,24 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const b = body(req);
     const ref = String(b.agent_ref ?? "");
     const bodyText = text(b.body, "body", { min: 1, max: BODY_MAX, multiline: true });
-    const mode = b.mode === "auto" ? "auto" : "mention";
+    const mode = b.mode === "auto" ? "auto" : b.mode === "public" ? "public" : "mention";
     const msg = ot.tx(() => {
       const conv = memberOf(ot, params(req).id, me.ownerId);
       const agent = ot.get<any>("SELECT * FROM ot_conversation_agents WHERE conversation_id = ? AND agent_ref = ? AND owner_id = ?", conv.id, ref, me.ownerId);
       assert(agent, 404, "agent_not_found", "that agent of yours is not in this group");
+      if (fixedPublicThread(conv)) {
+        const listing = publicListing(ot, conv);
+        assert(mode === "public" && listing?.listed && listing.chat_enabled && listing.owner_id === me.ownerId
+          && listing.ref === ref, 409, "public_chat_closed", "公开智能体已关闭访客聊天。");
+        const original = ot.get<any>(`SELECT * FROM ot_messages WHERE id=? AND conversation_id=? AND author_id=?
+          AND author_kind='member' AND retracted=0`, String(b.reply_to ?? ""), conv.id, conv.created_by);
+        assert(original && original.rowseq > listing.chat_from, 409, "public_chat_closed", "原消息已不可回复。");
+        const answered = ot.get<any>(`SELECT * FROM ot_messages WHERE conversation_id=? AND reply_to=? AND author_id=?
+          AND agent_ref=? AND author_kind='agent'`, conv.id, original.id, me.ownerId, ref);
+        if (answered) return answered;
+      } else {
+        assert(mode !== "public", 400, "invalid_request", "Public mode requires a public agent thread");
+      }
       if (mode === "auto") {
         assert(agent.auto_reply, 409, "auto_reply_disabled", "automatic replies are disabled for this agent");
         if (b.reply_to) {

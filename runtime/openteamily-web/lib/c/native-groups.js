@@ -12,7 +12,7 @@ export function nativeGroupClient(host, raw) {
     if (installed.has(rt)) return installed.get(rt)
     const roomFor = id => rt.roomOf(id)?.openteamily?.conversation_id
     const syncOne = async conversation => {
-      if (conversation?.kind !== 'group') return conversation
+      if (conversation?.kind !== 'group' || conversation.public_agent) return conversation
       let room = Object.values(rt.state.rooms).find(r => r.openteamily?.conversation_id === conversation.id)
       if (!room) {
         const id = await rt.createSession(conversation.title || 'OpenTeamily group')

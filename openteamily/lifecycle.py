@@ -397,13 +397,18 @@ class Lifecycle:
                 fail(409, 'runtime_key_not_applicable', 'Instance runtime key is only issued for create, start or restart')
             existing = agent_runtime.load_instance_key(db, iid)
             wrap_key = agent_runtime.wrapping_key(self.store)
+            now = int(self.clock())
+            payload = {'origin': origin, 'hostname': agent_runtime.hostname_for(iid)}
+            if runtime_autoprovision.is_auto(db, iid):
+                from . import dsbot_bundle
+                bootstrap = dsbot_bundle.build_personal_bootstrap(db, row['owner_id'], iid, now)
+                if bootstrap is not None:
+                    payload['agent_bootstrap'] = bootstrap
             if existing and existing['issued_job_id'] == job['id']:
                 token = agent_runtime.unwrap(wrap_key, existing['token_blob'])
-                return {'runtime_key_present': True, 'runtime_key': {
-                    'origin': origin, 'token': token, 'hostname': agent_runtime.hostname_for(iid)}}
+                return {'runtime_key_present': True, 'runtime_key': {**payload, 'token': token}}
             if existing:
                 runtime_keys.revoke(db, existing['key_id'])
-            now = int(self.clock())
             key_id, token = runtime_keys.issue_instance(db, row['owner_id'], now, iid)
             blob = agent_runtime.wrap(wrap_key, token)
             if existing:
@@ -416,8 +421,7 @@ class Lifecycle:
                     'INSERT INTO instance_runtime_keys VALUES(?,?,?,?,?,?,?)',
                     (iid, row['workspace_id'], key_id, blob, job['id'], now, now),
                 )
-            return {'runtime_key_present': True, 'runtime_key': {
-                'origin': origin, 'token': token, 'hostname': agent_runtime.hostname_for(iid)}}
+            return {'runtime_key_present': True, 'runtime_key': {**payload, 'token': token}}
 
     def heartbeat(self, manager, iid, jid, revision, lease):
         self.expire()

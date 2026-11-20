@@ -285,7 +285,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         return;
       }
       if (globalThis.location?.pathname === '/login') {
-        globalThis.location.replace('/');
+        const params = new URLSearchParams((globalThis.location.hash || '').slice(1));
+        const slug = params.get('public-agent') || params.get('start');
+        globalThis.location.replace(slug && /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug)
+          ? '/chat#public-agent=' + slug : '/');
         return;
       }
       currentUser = session.body.user;

@@ -2,7 +2,8 @@
    visit (rail + ~350px session column + main canvas + bottom composer).
    Colors stay FlyBot tokens. Non-empty message bubbles are an original
    supplement and were not compared this round. */
-.visually-hidden {
+.visually-hidden,
+body.app-workspace > #status[data-announce-only="true"] {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -2001,7 +2002,7 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   font-size: .75rem;
 }
 
-.mobile-inbox-heading, .mobile-inbox-nav, #chat-more, .chat-action-label { display: none; }
+.mobile-inbox-heading, #chat-more, .chat-action-label { display: none; }
 #chat-extra-actions { display: flex; align-items: center; gap: inherit; }
 #chat-back {
   flex: none;
@@ -2101,39 +2102,6 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
     color: var(--ot-muted);
   }
   .mobile-inbox-heading a:hover { background: var(--ot-bg-accent); }
-  body.app-workspace.chat-open.sessions-open > .mobile-inbox-nav {
-    grid-column: 1;
-    grid-row: 3;
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    padding: .25rem .5rem max(.25rem, env(safe-area-inset-bottom));
-    border-top: 1px solid var(--ot-line);
-    background: var(--ot-surface);
-  }
-  .mobile-inbox-nav a {
-    display: grid;
-    justify-items: center;
-    align-content: center;
-    gap: .125rem;
-    min-height: 3rem;
-    border-radius: .5rem;
-    color: var(--ot-muted);
-    font-size: .75rem;
-    text-decoration: none;
-  }
-  .mobile-inbox-nav svg {
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.65;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-  .mobile-inbox-nav a[aria-current="page"] {
-    background: var(--ot-accent-soft);
-    color: var(--ot-accent-hover);
-    font-weight: 650;
-  }
-  .mobile-inbox-nav a:hover { background: var(--ot-bg-accent); }
   .session-toolbar { gap: .25rem; }
   .session-toolbar :is(.toolbar-icon, #new-conversation, #search-close) { width: 2.75rem; height: 2.75rem; }
   .session-toolbar input[type="search"] { font-size: 1rem; }
@@ -2164,4 +2132,12 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   .composer-plus-sheet { left: 0; width: min(30rem, calc(100vw - 1.875rem)); }
   .plus-auto > a { white-space: normal; }
   .group-info, #conversation-search-panel { bottom: max(.5rem, env(safe-area-inset-bottom)); }
+}
+
+#public-chat-status {
+  order: 55;
+  margin: 0;
+  padding: .375rem 1rem .125rem;
+  font-size: .8125rem;
+  color: var(--ot-muted);
 }

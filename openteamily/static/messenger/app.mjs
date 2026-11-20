@@ -245,13 +245,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
-    // Public agent homepage "开始对话" (#start=<slug>): Bot Social opens a thread with the
-    // creator's agent; the creator's own DS-Bot replies.
-    const startSlug = new URLSearchParams(String((globalThis.location && globalThis.location.hash) || '').replace(/^#/, '')).get('start');
+    // Preserve previously shared agent links through the current chat page.
+    const startSlug = new URLSearchParams(String(globalThis.location?.hash || '').slice(1)).get('start');
     if (startSlug && /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(startSlug)) {
-      const started = await request('POST', `/v1/discover/agents/${startSlug}/start`, {});
-      if (started.status === 200 || started.status === 201) globalThis.location.hash = 'conversation=' + encodeURIComponent(started.body.conversation_id);
-      else show('error', messageFor(started.body.error, '无法开始对话。'));
+      globalThis.location.replace('/chat#public-agent=' + startSlug);
+      return;
     }
     const listed = await request('GET', '/v1/workspaces?limit=100');
     const workspaces = listed.status === 200 ? (listed.body.items || []) : [];

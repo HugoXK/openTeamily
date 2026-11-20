@@ -409,6 +409,11 @@ class ComposeEngine:
         else:
             require(isinstance(payload, dict) and payload.get('token') and payload.get('origin') and payload.get('hostname'), 'runtime_key_payload')
             allowed = {key: payload[key] for key in ('origin', 'token', 'hostname')}
+            if 'agent_bootstrap' in payload:
+                bootstrap = payload['agent_bootstrap']
+                require(isinstance(bootstrap, dict) and bootstrap.get('feature') == 'agents'
+                        and bootstrap.get('instance_id') == iid, 'runtime_key_payload')
+                allowed['agent_bootstrap'] = bootstrap
             raw = (json.dumps(allowed, separators=(',', ':')) + '\n').encode()
         replace_private(path, raw)
         publish_container_secret(path)

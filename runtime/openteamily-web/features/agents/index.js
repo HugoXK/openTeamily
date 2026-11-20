@@ -1,3 +1,4 @@
+import { loadRuntimeKey } from '../../../flybot-image/agent-loop.mjs'
 import { nativeAgents } from './native.js'
 import { importPending } from '../../src/pending-import.js'
 // Workspace agents inside the user's own DS-Bot (batch B2; moved from
@@ -410,6 +411,15 @@ export function createAgents({ db, host }) {
       return { message: rows.find((r) => r.id === userId), reply: { ...rows.find((r) => r.id === replyId), meta: JSON.parse(rows.find((r) => r.id === replyId).meta) } }
     },
     turn,
+    async publicReply(p) {
+      if (typeof p?.prompt !== 'string' || !p.prompt.trim() || p.prompt.length > 42000) fail('invalid', 'Invalid public reply prompt', 400)
+      const agent = await native.ensure(loadAny(p.agent_id))
+      if (agent.archived || agent.native_deleted) fail('not-found', 'The published agent is unavailable', 404)
+      const runtime = await host.runtime()
+      if (typeof runtime.backgroundTextOnly !== 'function') fail('runtime-unavailable', 'Text inference is unavailable', 503)
+      const text = await runtime.backgroundTextOnly(p.prompt)
+      return { text }
+    },
 
     async attachment(p) {
       const agent = load(ws(p), p.id)
@@ -469,6 +479,18 @@ export default async function agents(host) {
   const db = await openDatabase(host, 'agents.sqlite3')
   const { endpoints, migrate } = createAgents({ db, host })
   await importPending({ host, db, migrate })
+  if (!await endpoints['personal-binding']()) {
+    let bootstrap
+    try { bootstrap = loadRuntimeKey()?.agentBootstrap } catch {
+      throw new Error('Personal agent bootstrap configuration is unreadable')
+    }
+    if (bootstrap) {
+      if (bootstrap.instance_id !== (host.identity?.routingInstanceId || host.identity?.instanceId)) {
+        throw new Error('Personal agent bootstrap target mismatch')
+      }
+      await migrate(bootstrap)
+    }
+  }
   const timer = setTimeout(() => endpoints.reconcile().catch(() => host.log('native agent history reconciliation pending; retry agents/reconcile')), 10000)
   timer.unref?.()
   const wrapped = {}
