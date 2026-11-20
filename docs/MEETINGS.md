@@ -48,6 +48,8 @@ The container launch overlay activates DSH's local SenseVoice recognizer. Profil
 official Voice Input bundle use its configured local recognizer. The first preparation downloads
 the model into the user's volume. The browser previews audio locally and submits segments only
 when transcription starts. The meeting stores the reviewed text through the regular save flow.
+The default local worker uses one thread and releases its model after one minute idle.
+The Compose manager allows 1.5 GiB per user runtime for DS-Bot and the speech worker.
 `docs/screenshots/meetings/` holds synthetic review captures.
 
 ## Remaining meeting features
