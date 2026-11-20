@@ -48,6 +48,14 @@ CREATE TABLE IF NOT EXISTS ot_messages (
   created_at INTEGER NOT NULL, edited_at INTEGER, retracted INTEGER NOT NULL DEFAULT 0, pinned_by TEXT,
   UNIQUE (conversation_id, seq), UNIQUE (conversation_id, author_id, client_key)
 );
+CREATE TABLE IF NOT EXISTS ot_agent_reply_jobs (
+  id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES ot_messages(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL, agent_ref TEXT NOT NULL, agent_name TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued','running','failed','replied')),
+  attempt INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL,
+  UNIQUE (message_id, owner_id, agent_ref)
+);
+CREATE INDEX IF NOT EXISTS ot_agent_reply_jobs_queue ON ot_agent_reply_jobs(owner_id, status, updated_at);
 CREATE TABLE IF NOT EXISTS ot_voice_messages (
   message_id TEXT PRIMARY KEY REFERENCES ot_messages(id) ON DELETE CASCADE,
   mime TEXT NOT NULL, data BLOB NOT NULL
@@ -61,6 +69,40 @@ CREATE TABLE IF NOT EXISTS ot_reactions (
 
 export const REACTIONS = ["👍", "❤️", "😄", "🎉", "👀", "✅"];
 const BODY_MAX = 4000;
+const REPLY_JOB_TIMEOUT = 180_000;
+const REPLY_JOB_ATTEMPTS = 3;
+
+type ReplyAgent = {owner_id: string; agent_ref: string; name: string};
+type ReplyJob = {
+  id: string; message_id: string; owner_id: string; agent_ref: string; agent_name: string;
+  status: "queued" | "running" | "failed" | "replied"; attempt: number; updated_at: number;
+  available: number;
+};
+
+const REPLY_JOB_SOURCE = `SELECT j.*, src.conversation_id, src.retracted, src.seq, c.title AS conversation_title,
+  (src.retracted=0 AND member.owner_id IS NOT NULL AND agent.owner_id IS NOT NULL
+    AND (c.team_id IS NULL OR team.owner_id IS NOT NULL)) AS available
+  FROM ot_agent_reply_jobs j JOIN ot_messages src ON src.id=j.message_id
+  JOIN ot_conversations c ON c.id=src.conversation_id
+  LEFT JOIN ot_conversation_members member ON member.conversation_id=c.id AND member.owner_id=j.owner_id
+  LEFT JOIN ot_conversation_agents agent ON agent.conversation_id=c.id AND agent.owner_id=j.owner_id AND agent.agent_ref=j.agent_ref
+  LEFT JOIN ot_team_members team ON team.team_id=c.team_id AND team.owner_id=j.owner_id AND team.suspended=0`;
+
+function replyJobState(job: ReplyJob, now: number) {
+  if ((job.status === "queued" || job.status === "running")
+      && (!job.available || job.updated_at <= now - REPLY_JOB_TIMEOUT)) return "failed";
+  return job.status;
+}
+
+function replyJobViews(ot: OtContext, message: any, viewer?: string) {
+  if (message.retracted || message.mentions === "[]") return [];
+  const now = ot.now();
+  return ot.all<ReplyJob>(REPLY_JOB_SOURCE + " WHERE j.message_id=? ORDER BY j.rowid", message.id).map(job => {
+    const status = replyJobState(job, now);
+    return {id: job.id, agent_name: job.agent_name, status,
+      can_retry: Boolean(viewer === message.author_id && job.available && status === "failed" && job.attempt < REPLY_JOB_ATTEMPTS)};
+  });
+}
 const VOICE_MAX_BYTES = 128 * 1024;
 
 function voiceData(value: any) {
@@ -158,7 +200,7 @@ const messageView = (ot: OtContext, m: any, viewer?: string) => ({
   author: m.author_kind === "agent" ? { kind: "agent", agent_ref: m.agent_ref, name: m.agent_name, owner: ot.profileView(m.author_id) } : { kind: "member", ...ot.profileView(m.author_id) },
   mine: viewer ? m.author_id === viewer && m.author_kind === "member" : undefined,
   body: m.retracted ? "" : m.body, revision: m.revision, retracted: !!m.retracted, edited_at: m.edited_at, created_at: m.created_at,
-  mentions: JSON.parse(m.mentions), reply_to: m.reply_to, pinned: !!m.pinned_by,
+  mentions: JSON.parse(m.mentions), ...(viewer ? {reply_jobs: replyJobViews(ot, m, viewer)} : {}), reply_to: m.reply_to, pinned: !!m.pinned_by,
   attachment: m.retracted ? undefined : attachmentView(ot, m.id),
   voice: m.retracted ? undefined : ot.get<{mime: string}>("SELECT mime FROM ot_voice_messages WHERE message_id=?", m.id),
   reactions: ot.all<any>("SELECT emoji, COUNT(*) AS n, SUM(owner_id = ?) AS me FROM ot_reactions WHERE message_id = ? GROUP BY emoji", viewer ?? "", m.id).map((r) => ({ emoji: r.emoji, count: r.n, mine: !!r.me })),
@@ -218,17 +260,24 @@ function insertMessage(ot: OtContext, conv: any, row: { author: string; kind: "m
 
 const agentMentionKey = (ownerId: string, ref: string) => `/agent/${ownerId}/${ref}`;
 
+function agentMentioned(mentions: string[], agent: ReplyAgent) {
+  return mentions.some(mention => mention.startsWith("/agent/"))
+    ? mentions.includes(agentMentionKey(agent.owner_id, agent.agent_ref))
+    : mentions.includes(agent.agent_ref.toLowerCase()) || mentions.includes(agent.name.toLowerCase());
+}
+
 function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: string, selectedAgents: unknown) {
   const handles = new Set<string>();
   if (Array.isArray(raw)) for (const h of raw.slice(0, 20)) handles.add(handleKey(h));
   for (const m of bodyText.matchAll(/@([a-z0-9._-]{2,40})/gi)) handles.add(handleKey(m[1]));
   const members = new Set(ot.all<any>("SELECT p.handle FROM ot_conversation_members m JOIN ot_profiles p ON p.owner_id = m.owner_id WHERE m.conversation_id = ?", convId).map((r) => r.handle));
-  const agents = ot.all<{agent_ref: string; owner_id: string; name: string}>(
+  const agents = ot.all<ReplyAgent>(
     "SELECT agent_ref, owner_id, name FROM ot_conversation_agents WHERE conversation_id = ?", convId,
   );
   if (selectedAgents === undefined) {
     const legacy = new Set(agents.flatMap(agent => [agent.agent_ref.toLowerCase(), agent.name.toLowerCase()]));
-    return { mentions: [...handles].filter(h => members.has(h) || legacy.has(h)), body: bodyText };
+    const mentions = [...handles].filter(h => members.has(h) || legacy.has(h));
+    return { mentions, body: bodyText, agents: agents.filter(agent => agentMentioned(mentions, agent)) };
   }
 
   assert(Array.isArray(selectedAgents) && selectedAgents.length <= 20, 400, "invalid_request", "Choose at most 20 group agents");
@@ -246,8 +295,14 @@ function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: st
   const prefix = [...targets.values()].map(name => "@" + name).join(" ");
   return {
     mentions: [...handles].filter(handle => members.has(handle)).concat([...targets.keys()]),
+    agents: agents.filter(agent => targets.has(agentMentionKey(agent.owner_id, agent.agent_ref))),
     body: prefix ? text(prefix + " " + bodyText, "body", { min: 1, max: BODY_MAX, multiline: true }) : bodyText,
   };
+}
+
+function replyContext(ot: OtContext, conversationId: string, seq: number) {
+  return ot.all<any>(`SELECT * FROM (SELECT * FROM ot_messages
+    WHERE conversation_id=? AND seq<=? ORDER BY seq DESC LIMIT 12) ORDER BY seq`, conversationId, seq).map(m => messageView(ot, m));
 }
 
 export function registerMessenger(app: FastifyInstance, ot: OtContext) {
@@ -602,6 +657,12 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo: b.reply_to ? String(b.reply_to) : null, clientKey });
       if (voice) ot.run("INSERT INTO ot_voice_messages VALUES (?,?,?)", m.id, voice.mime, voice.data);
       if (file) saveAttachment(ot, m.id, me.ownerId, file);
+      if (conv.kind === "group" && !fixedPublicThread(conv) && !voice && !file) {
+        for (const agent of parsed.agents) {
+          ot.run(`INSERT INTO ot_agent_reply_jobs(id,message_id,owner_id,agent_ref,agent_name,status,updated_at)
+            VALUES (?,?,?,?,?,'queued',?)`, newId("otj"), m.id, agent.owner_id, agent.agent_ref, agent.name, ot.now());
+        }
+      }
       for (const h of mentions) {
         const row = ot.get<any>("SELECT owner_id FROM ot_profiles WHERE handle = ?", h);
         if (row && row.owner_id !== me.ownerId) ot.notify(row.owner_id, "messenger.mention", { conversation_id: conv.id, message_id: m.id, by: ot.profileView(me.ownerId) });
@@ -725,6 +786,43 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     ot.run("DELETE FROM ot_conversation_agents WHERE conversation_id = ? AND agent_ref = ? AND owner_id = ?", conv.id, params(req).agent, me.ownerId);
     return conversationView(ot, conv, me.ownerId);
   });
+  app.post("/v1/ot/conversations/:id/messages/:message/agent-retry", async req => {
+    const me = ot.me(req);
+    const {id, message} = params(req);
+    const jobId = text(body(req).job_id, "job_id", {min: 1, max: 80});
+    return ot.tx(() => {
+      const conv = memberOf(ot, id, me.ownerId);
+      if (conv.team_id) requireMember(ot, conv.team_id, me.ownerId);
+      const original = ot.get<any>(`SELECT * FROM ot_messages WHERE id=? AND conversation_id=? AND author_id=?
+        AND author_kind='member' AND retracted=0`, message, id, me.ownerId);
+      assert(original, 404, "message_not_found", "原消息已不可回复。");
+      const job = ot.get<ReplyJob>(REPLY_JOB_SOURCE + " WHERE j.id=? AND j.message_id=?", jobId, message);
+      assert(job, 404, "reply_job_not_found", "找不到这次回复。");
+      const now = ot.now();
+      assert(job.available && replyJobState(job, now) === "failed" && job.attempt < REPLY_JOB_ATTEMPTS,
+        409, "reply_job_unavailable", "当前无法重试这次回复。");
+      ot.run("UPDATE ot_agent_reply_jobs SET status='queued',attempt=attempt+1,updated_at=? WHERE id=?", now, job.id);
+      return {reply_jobs: replyJobViews(ot, original, me.ownerId)};
+    });
+  });
+
+  app.post("/v1/ot/agent-reply-jobs/:id", async req => {
+    const me = ot.me(req);
+    const b = body(req);
+    assert(b.action === "start" || b.action === "fail", 400, "invalid_request", "Invalid reply job action");
+    return ot.tx(() => {
+      const job = ot.get<ReplyJob>(REPLY_JOB_SOURCE + " WHERE j.id=? AND j.owner_id=?", params(req).id, me.ownerId);
+      assert(job, 404, "reply_job_not_found", "找不到这次回复。");
+      const now = ot.now();
+      const expected = b.action === "start" ? "queued" : "running";
+      assert(job.attempt === b.attempt && replyJobState(job, now) === expected,
+        409, "reply_job_unavailable", "这次回复的状态已更新。");
+      ot.run("UPDATE ot_agent_reply_jobs SET status=?,updated_at=? WHERE id=?",
+        b.action === "start" ? "running" : "failed", now, job.id);
+      return {ok: true};
+    });
+  });
+
   /** Messages the caller's agents should answer: @mentions of the agent, or any member message in a group
    *  where the agent has auto-reply on. `after` is a global cursor (`cursor` in the answer). */
   app.get("/v1/ot/agent-inbox", async (req) => {
@@ -743,6 +841,16 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     SELECT m.*, a.agent_ref AS my_agent, a.name AS my_agent_name, a.auto_reply AS my_auto, a.auto_reply_after_seq AS auto_after_seq
     FROM pending m JOIN ot_conversation_agents a ON a.conversation_id=m.conversation_id AND a.owner_id=?
     ORDER BY m.rowseq, a.agent_ref`, after, me.ownerId, me.ownerId, limit * 4, me.ownerId);
+    const managed = query(req).managed === "1";
+    const jobs = managed ? ot.all<ReplyJob & {conversation_id: string; conversation_title: string; seq: number}>(
+      REPLY_JOB_SOURCE + ` WHERE j.owner_id=? AND j.status='queued' AND j.updated_at>?
+        AND available ORDER BY j.updated_at,j.rowid LIMIT ?`, me.ownerId, ot.now() - REPLY_JOB_TIMEOUT, Math.min(8, limit),
+    ).map(job => {
+      const message = ot.get<any>("SELECT * FROM ot_messages WHERE id=?", job.message_id);
+      return {job_id: job.id, attempt: job.attempt, conversation_id: job.conversation_id,
+        conversation_title: job.conversation_title, agent_ref: job.agent_ref, agent_name: job.agent_name,
+        mode: "mention", message: messageView(ot, message), context: replyContext(ot, job.conversation_id, job.seq)};
+    }) : [];
     let cursor = after;
     const items: any[] = [];
     for (const m of rows) {
@@ -766,16 +874,15 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
           published: {title: listing.title, summary: listing.summary, snapshot: listing.snapshot} });
         continue;
       }
-      const agentRef = String(m.my_agent).toLowerCase();
-      const explicit = mentions.some(mention => typeof mention === "string" && mention.startsWith("/agent/"));
-      const mentioned = explicit
-        ? mentions.includes(agentMentionKey(me.ownerId, String(m.my_agent)))
-        : mentions.includes(agentRef) || mentions.includes(String(m.my_agent_name).toLowerCase());
+      const tracked = ot.get("SELECT 1 FROM ot_agent_reply_jobs WHERE message_id=? AND owner_id=? AND agent_ref=?",
+        m.id, me.ownerId, m.my_agent);
+      if (tracked && managed) continue;
+      const mentioned = agentMentioned(mentions, {owner_id: me.ownerId, agent_ref: m.my_agent, name: m.my_agent_name});
       if (!mentioned && (!m.my_auto || m.seq <= m.auto_after_seq)) continue;
-      const context = ot.all<any>("SELECT * FROM (SELECT * FROM ot_messages WHERE conversation_id = ? AND seq <= ? ORDER BY seq DESC LIMIT 12) ORDER BY seq", m.conversation_id, m.seq);
-      items.push({ conversation_id: m.conversation_id, conversation_title: conv.title, agent_ref: m.my_agent, agent_name: m.my_agent_name, mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: context.map((c) => messageView(ot, c)) });
+      items.push({ conversation_id: m.conversation_id, conversation_title: conv.title, agent_ref: m.my_agent, agent_name: m.my_agent_name,
+        mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: replyContext(ot, m.conversation_id, m.seq) });
     }
-    return { cursor, items };
+    return managed ? { cursor, items, jobs } : { cursor, items };
   });
   app.post("/v1/ot/conversations/:id/agent-messages", async (req, reply) => {
     const me = ot.me(req);
@@ -800,6 +907,22 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       } else {
         assert(mode !== "public", 400, "invalid_request", "Public mode requires a public agent thread");
       }
+      const originalId = b.reply_to ? String(b.reply_to) : null;
+      const job = originalId && mode === "mention" ? ot.get<ReplyJob>(REPLY_JOB_SOURCE
+        + " WHERE j.message_id=? AND j.owner_id=? AND j.agent_ref=? AND src.conversation_id=?", originalId, me.ownerId, ref, conv.id) : undefined;
+      if (b.job_id !== undefined) {
+        assert(job && job.id === b.job_id && job.attempt === b.attempt && job.available
+          && (job.status === "running" || job.status === "replied"),
+        409, "reply_job_unavailable", "这次回复的状态已更新。");
+      } else if (job) {
+        // Older inbox clients can finish a first attempt while containers update.
+        assert(job.available && job.attempt === 1 && job.status !== "failed",
+          409, "reply_job_unavailable", "这次回复的状态已更新。");
+      }
+      if (job?.status === "replied") {
+        return ot.get<any>(`SELECT * FROM ot_messages WHERE conversation_id=? AND reply_to=? AND author_id=?
+          AND agent_ref=? AND author_kind='agent' AND reply_mode='mention' ORDER BY seq LIMIT 1`, conv.id, originalId, me.ownerId, ref);
+      }
       if (mode === "auto") {
         assert(agent.auto_reply, 409, "auto_reply_disabled", "automatic replies are disabled for this agent");
         if (b.reply_to) {
@@ -811,7 +934,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const used = ot.get<any>("SELECT COUNT(*) AS n FROM ot_messages WHERE conversation_id = ? AND author_kind = 'agent' AND reply_mode = ? AND created_at > ?", conv.id, mode, since).n;
       assert(used < (mode === "auto" ? AUTO_PER_HOUR : MENTION_PER_HOUR), 429, "agent_reply_limit", mode === "auto" ? "automatic agent replies are limited to 3 per hour in a group" : "agent reply limit reached");
       if (b.reply_to) assert(ot.get("SELECT 1 FROM ot_messages WHERE id = ? AND conversation_id = ?", String(b.reply_to), conv.id), 400, "invalid_request", "reply_to is not in this conversation");
-      return insertMessage(ot, conv, { author: me.ownerId, kind: "agent", agentRef: agent.agent_ref, agentName: agent.name, body: bodyText, mentions: [], replyTo: b.reply_to ? String(b.reply_to) : null, replyMode: mode, clientKey: b.client_key ? text(b.client_key, "client_key", { min: 1, max: 80 }) : null });
+      const response = insertMessage(ot, conv, { author: me.ownerId, kind: "agent", agentRef: agent.agent_ref,
+        agentName: agent.name, body: bodyText, mentions: [], replyTo: originalId, replyMode: mode,
+        clientKey: job ? `job:${job.id}` : b.client_key ? text(b.client_key, "client_key", { min: 1, max: 80 }) : null });
+      if (job) ot.run("UPDATE ot_agent_reply_jobs SET status='replied',updated_at=? WHERE id=?", ot.now(), job.id);
+      return response;
     });
     return reply.status(201).send(messageView(ot, msg, me.ownerId));
   });

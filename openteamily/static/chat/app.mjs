@@ -1495,7 +1495,62 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   let lastSocialItems = [];
-  function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory)} = {}) {
+  function hasPendingReplies(items = lastSocialItems) {
+    return items?.some(item => item.reply_jobs?.some(job => job.status === 'queued' || job.status === 'running'));
+  }
+
+  function renderReplyJobs(item) {
+    const rows = document.createElement('div');
+    rows.className = 'group-reply-jobs';
+    for (const job of item.reply_jobs || []) {
+      if (job.status === 'replied') continue;
+      const row = document.createElement('div');
+      row.className = 'group-reply-job';
+      row.dataset.state = job.status;
+      const note = document.createElement('span');
+      const states = {queued: ' · 等待回复', running: ' · 正在回复', failed: ' · 回复失败'};
+      note.textContent = job.agent_name + (states[job.status] || '');
+      row.append(note);
+      if (job.can_retry) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = '重试';
+        button.setAttribute('aria-label', '重试 ' + job.agent_name);
+        button.addEventListener('click', async () => {
+          const cid = currentConversation.id;
+          const wid = workspaceId();
+          button.disabled = true;
+          button.textContent = '重试中…';
+          const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/agent-retry`, {job_id: job.id})
+            .catch(() => ({status: 0, body: {}}));
+          if (workspaceId() !== wid || currentSource !== 'social' || currentConversation?.id !== cid) return;
+          if (result.status === 200) {
+            // A response from a poll started before the click may still be in flight.
+            socialOpen++;
+            const list = document.getElementById('message-list');
+            const message = lastSocialItems.find(current => current.id === item.id);
+            if (message) {
+              message.reply_jobs = result.body.reply_jobs;
+              const updated = renderReplyJobs(message);
+              const target = [...list.children].find(element => element.dataset.messageId === item.id);
+              target?.querySelector('.group-reply-jobs')?.replaceWith(updated);
+            }
+            if (!socialHistory?.readingHistory) schedulePoll(1800);
+            show('ok', '已重新请求 ' + job.agent_name + ' 回复。', {announceOnly: true});
+          } else {
+            button.disabled = false;
+            button.textContent = '重试';
+            show('error', messageFor(result.body.error, '暂时无法重试，请稍后再试。'));
+          }
+        });
+        row.append(button);
+      }
+      rows.append(row);
+    }
+    return rows;
+  }
+
+  function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory), refresh = false} = {}) {
     const translateRoom = currentConversation?.kind === 'group' || (currentConversation?.kind === 'dm' && chatPreferences.auto_translate === true);
     autoTranslation.open(servedByDsbot && currentUser && translateRoom && !currentConversation?.public_agent
       ? {user:currentUser.id,wid:workspaceId(),cid:currentConversation.id}
@@ -1504,6 +1559,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const scroller = document.getElementById('message-scroller');
     const oldHeight = scroller.scrollHeight;
     const oldTop = scroller.scrollTop;
+    const wasAtLatest = oldHeight - oldTop - scroller.clientHeight < 48;
     clearVoicePlayers();
     lastSocialItems = items || [];
     const list = document.getElementById('message-list');
@@ -1533,6 +1589,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.className = 'time';
       time.textContent = formatTime(item.created);
       li.append(role, body, time);
+      if (!item.retracted && item.reply_jobs?.length) li.insertBefore(renderReplyJobs(item), time);
       if (!mine) autoTranslation.add(item,li,body);
       if (item.voice && !item.retracted) li.insertBefore(voicePlayer(item), time);
       if (item.attachment?.bytes !== undefined && !item.retracted) {
@@ -1645,7 +1702,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     renderPendingSend();
     attachmentSender?.render();
-    scroller.scrollTop = keepScroll ? Math.max(0, oldTop + scroller.scrollHeight - oldHeight) : scroller.scrollHeight;
+    if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
+    else scroller.scrollTop = refresh && !wasAtLatest ? oldTop : scroller.scrollHeight;
     return false;
   }
 
@@ -2219,18 +2277,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const result = await request('GET', `${socialBase()}/${conversationId}`);
     if (open !== socialOpen || workspaceId() !== wid || currentSource !== 'social') return false;
     if (result.status !== 200) {
-      if (refresh && pollsAccountThread(currentConversation)) {
-        schedulePoll(8000);
+      if (refresh && (pollsAccountThread(currentConversation) || hasPendingReplies())) {
+        schedulePoll(hasPendingReplies() ? 2500 : 8000);
         return false;
       }
       show('error', messageFor(result.body.error, '无法打开会话。'));
       return false;
     }
     const updated = result.body.conversation;
-    if (refresh && currentConversation?.id === updated.id && (updated.public_agent || updated.direct || updated.account_group)
+    if (refresh && currentConversation?.id === updated.id
       && JSON.stringify(currentConversation) === JSON.stringify(updated)
       && JSON.stringify(lastSocialItems) === JSON.stringify(result.body.items)) {
-      if (pollsAccountThread(updated)) schedulePoll(updated.public_agent?.pending ? 2000 : 8000);
+      if (hasPendingReplies()) schedulePoll(1800);
+      else if (pollsAccountThread(updated)) schedulePoll(updated.public_agent?.pending ? 2000 : 8000);
       return true;
     }
     if (!currentConversation || currentConversation.id !== updated.id) {
@@ -2265,7 +2324,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setChatSubtitle(publicChat ? '公开智能体 · 发布者可查看此对话'
       : currentConversation.kind === 'group' ? groupInfoCounts(currentConversation).text
         : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
-    renderSocialMessages(result.body.items);
+    renderSocialMessages(result.body.items, {refresh});
     renderGroupReplyAction(result.body.agent_replies || []);
     // Acknowledge only the last message actually rendered, not messages that
     // arrived after this snapshot, and never consume unread in a hidden tab.
@@ -2281,7 +2340,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
     }
     renderSessions();
-    if (pollsAccountThread(currentConversation)) schedulePoll(publicChat?.pending ? 2000 : 8000);
+    if (hasPendingReplies()) schedulePoll(1800);
+    else if (pollsAccountThread(currentConversation)) schedulePoll(publicChat?.pending ? 2000 : 8000);
     else if ((result.body.agent_replies || []).some(item => ['queued', 'running'].includes(item.status))) schedulePoll();
     return open === socialOpen && workspaceId() === wid && currentSource === 'social';
   }
@@ -2297,16 +2357,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (currentConversation && currentAgent && currentSource === 'agent') {
         openAgentConversation(currentAgent.id, currentConversation.id);
       } else if (currentConversation && currentSource === 'social' && !socialHistory?.readingHistory) {
-        const accountThread = Boolean(currentConversation.public_agent || currentConversation.direct || currentConversation.account_group);
-        if (!accountThread || document.visibilityState !== 'hidden') {
-          openSocialConversation(currentConversation.id, {refresh: accountThread});
+        if (document.visibilityState !== 'hidden') {
+          openSocialConversation(currentConversation.id, {refresh: true});
         }
       }
     }, delay);
   }
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && currentSource === 'social' && (currentConversation?.public_agent || currentConversation?.direct || currentConversation?.account_group)
+    if (document.visibilityState === 'visible' && currentSource === 'social' && currentConversation && (pollsAccountThread(currentConversation) || hasPendingReplies())
       && !pollTimer && !socialHistory?.readingHistory) {
       void openSocialConversation(currentConversation.id, {refresh: true});
     }
@@ -3749,6 +3808,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (currentConversation.public_agent?.open) {
           showPublicChatState({open: true, pending: true});
           schedulePoll();
+        } else if (hasPendingReplies()) {
+          schedulePoll(1800);
         }
         show('ok', '已发送。', {announceOnly: true});
       } else {

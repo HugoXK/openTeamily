@@ -122,6 +122,7 @@ function messageItem(row, me, env, workspaceId) {
     edited: unix(row.edited_at) || null,
     retracted: !!row.retracted,
     ...(row.voice ? { voice: row.voice } : {}),
+    ...(row.reply_jobs?.length ? {reply_jobs: row.reply_jobs} : {}),
     ...(row.attachment ? { attachment: {...row.attachment, id: row.id,
       path: `/v1/workspaces/${workspaceId}/social/conversations/${seg(row.conversation_id)}/messages/${seg(row.id)}/file`,
     } } : {}),
@@ -547,7 +548,7 @@ async function messengerScope(host, bs, workspace, conversationId, messageId) {
   return {personal: true, conversation}
 }
 
-function messengerRoutes(host) {
+function messengerRoutes(host, wakeReplies) {
   const env = process.env
   const convPath = /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations$/
   const onePath = /^\/v1\/workspaces\/([0-9a-f]{32})\/social\/conversations\/([A-Za-z0-9._-]{1,80})$/
@@ -654,6 +655,7 @@ function messengerRoutes(host) {
           const scope = await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
           const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, voice: body?.voice, attachment: body?.attachment, workspace: match[1], direct: accountConversation(scope.conversation), client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
+          if (data.reply_jobs?.some(job => job.status === 'queued')) wakeReplies()
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
         })
       },
@@ -686,7 +688,7 @@ function messengerRoutes(host) {
 // Remaining legacy messenger subroutes (message pin/react/edit/retract/delete/save,
 // forward, group agents, manual agent replies). Agent replies run as one native
 // turn on THIS user's DS-Bot; nothing falls back to the platform.
-function messengerExtraRoutes(host) {
+function messengerExtraRoutes(host, wakeReplies) {
   const env = process.env
   const base = '^\\/v1\\/workspaces\\/([0-9a-f]{32})\\/social\\/conversations\\/([A-Za-z0-9._-]{1,80})'
   const re = (tail) => new RegExp(base + tail + '$')
@@ -703,6 +705,17 @@ function messengerExtraRoutes(host) {
     {
       method: 'POST', path: /^\/v1\/meeting-calls\/(create|preview|join|poll|signal|leave|end)$/,
       handle: ({ match, body }) => wrap(async () => [200, await client(host).post('/v1/ot/meeting-calls/' + match[1], body)]),
+    },
+    {
+      method: 'POST', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/agent-retry'),
+      handle: ({match, body}) => wrap(async () => {
+        const [, workspace, conversation, message] = match
+        const bs = client(host)
+        await messengerScope(host, bs, workspace, conversation)
+        const result = await bs.post(conv(conversation) + '/messages/' + seg(message) + '/agent-retry', {job_id: body?.job_id})
+        wakeReplies()
+        return [200, result]
+      }),
     },
     {
       method: 'GET', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/file'),
@@ -1105,5 +1118,7 @@ function discoverRoutes(host) {
 export function membersV1(host) { return compatHandler(membersRoutes(host)) }
 export function invitesV1(host) { return compatHandler(invitesRoutes(host)) }
 export function teamsV1(host) { return compatHandler(teamsRoutes(host)) }
-export function messengerV1(host) { return compatHandler([...messengerRoutes(host), ...messengerExtraRoutes(host)]) }
+export function messengerV1(host, wakeReplies = () => {}) {
+  return compatHandler([...messengerRoutes(host, wakeReplies), ...messengerExtraRoutes(host, wakeReplies)])
+}
 export function discoverV1(host) { return compatHandler(discoverRoutes(host)) }

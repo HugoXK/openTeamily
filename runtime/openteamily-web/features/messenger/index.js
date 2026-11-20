@@ -11,11 +11,15 @@ export default function messenger(host) {
   const msg = (p) => `/v1/ot/messages/${seg(p?.message_id, 'message_id')}`
   let replier
   const agentReplier = () => (replier ??= createAgentReplier({ bs: bs(), host, stateFile: defaultStateFile(host), log: host.log ?? (() => {}) }))
-  if (typeof host.runtime === 'function' && process.env.OPENTEAMILY_SOCIAL_AGENTS !== '0') agentReplier().start()
+  const automaticReplies = typeof host.runtime === 'function' && process.env.OPENTEAMILY_SOCIAL_AGENTS !== '0'
+  if (automaticReplies) agentReplier().start()
+  const wakeReplies = () => {
+    if (automaticReplies) void agentReplier().once().catch(error => host.log?.(`agent inbox: ${error?.code ?? 'error'}`))
+  }
   return {
     pages: ['messenger'],
     endpoints: {
-      v1: messengerV1(host),
+      v1: messengerV1(host, wakeReplies),
       list: async () => {
         const data = await bs().get('/v1/ot/conversations')
         return { ...data, conversations: (data.conversations ?? []).map((c) => ({ ...c, first_unread_seq: c.unread > 0 ? c.read_seq + 1 : null })) }

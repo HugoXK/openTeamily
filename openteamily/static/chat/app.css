@@ -575,6 +575,31 @@ body.app-workspace > #status[data-announce-only="true"] {
   font-weight: 500;
 }
 
+.group-reply-jobs { display: grid; gap: 0.25rem; margin-top: 0.4rem; }
+.group-reply-jobs:empty { display: none; }
+.group-reply-job {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.1rem 0.55rem;
+  color: var(--ot-muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.group-reply-job[data-state="failed"] { color: var(--ot-danger); }
+.group-reply-job button {
+  min-height: 2rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid currentColor;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--ot-accent-hover);
+  font: inherit;
+  cursor: pointer;
+}
+.group-reply-job button:hover { background: var(--ot-bg-accent); }
+.group-reply-job button:disabled { opacity: 0.6; cursor: wait; }
+
 #group-agent-action { padding: .6rem 1rem; border-bottom: 1px solid var(--ot-line); }
 #group-agent-action[hidden] { display: none; }
 #group-agent-action h2 { font-size: .9rem; margin: 0 0 .3rem; }
