@@ -1,0 +1,370 @@
+{
+  "slug": "ev464",
+  "sides": [
+    "http://127.0.0.1:8101",
+    "http://127.0.0.1:8102"
+  ],
+  "diffs": [
+    {
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev464/before/ev464__before__zh-CN__light__1440x900__chat.png",
+      "after": "ev464/after/ev464__after__zh-CN__light__1440x900__chat.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 644
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 644
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 156,
+      "ratio": 0.00012037037037037037,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 156,
+        "ratio": 0.00012839506172839505
+      },
+      "bbox": {
+        "x": 264,
+        "y": 18,
+        "width": 1176,
+        "height": 882
+      },
+      "text": {
+        "changedLines": 0,
+        "sample": []
+      }
+    },
+    {
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev464/before/ev464__before__zh-CN__dark__1440x900__chat.png",
+      "after": "ev464/after/ev464__after__zh-CN__dark__1440x900__chat.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 644
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 644
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 290,
+      "ratio": 0.00022376543209876544,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 290,
+        "ratio": 0.00023868312757201646
+      },
+      "bbox": {
+        "x": 992,
+        "y": 794,
+        "width": 36,
+        "height": 36
+      },
+      "text": {
+        "changedLines": 0,
+        "sample": []
+      }
+    },
+    {
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev464/before/ev464__before__en__light__1440x900__chat.png",
+      "after": "ev464/after/ev464__after__en__light__1440x900__chat.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 644
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 644
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 175,
+      "ratio": 0.00013503086419753085,
+      "rail": {
+        "changed": 3,
+        "ratio": 0.000037037037037037037
+      },
+      "content": {
+        "changed": 172,
+        "ratio": 0.00014156378600823044
+      },
+      "bbox": {
+        "x": 65,
+        "y": 3,
+        "width": 1375,
+        "height": 897
+      },
+      "text": {
+        "changedLines": 0,
+        "sample": []
+      }
+    },
+    {
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "default",
+      "before": "ev464/before/ev464__before__en__dark__1440x900__chat.png",
+      "after": "ev464/after/ev464__after__en__dark__1440x900__chat.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 644
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 644
+      },
+      "sizeMismatch": false,
+      "width": 1440,
+      "height": 900,
+      "total": 1296000,
+      "changed": 290,
+      "ratio": 0.00022376543209876544,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 290,
+        "ratio": 0.00023868312757201646
+      },
+      "bbox": {
+        "x": 992,
+        "y": 794,
+        "width": 36,
+        "height": 36
+      },
+      "text": {
+        "changedLines": 0,
+        "sample": []
+      }
+    },
+    {
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev464/before/ev464__before__zh-CN__light__390x844__chat.png",
+      "after": "ev464/after/ev464__after__zh-CN__light__390x844__chat.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 351
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 351
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 0,
+      "ratio": 0,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "bbox": null,
+      "text": {
+        "changedLines": 0,
+        "sample": []
+      }
+    },
+    {
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev464/before/ev464__before__zh-CN__dark__390x844__chat.png",
+      "after": "ev464/after/ev464__after__zh-CN__dark__390x844__chat.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 351
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 351
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 0,
+      "ratio": 0,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "bbox": null,
+      "text": {
+        "changedLines": 0,
+        "sample": []
+      }
+    },
+    {
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev464/before/ev464__before__en__light__390x844__chat.png",
+      "after": "ev464/after/ev464__after__en__light__390x844__chat.png",
+      "before_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 351
+      },
+      "after_diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 351
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 0,
+      "ratio": 0,
+      "rail": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "content": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "bbox": null,
+      "text": {
+        "changedLines": 0,
+        "sample": []
+      }
+    },
+    {
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "default",
+      "before": "ev464/before/ev464__before__en__dark__390x844__chat.png",
+      "after": "ev464/after/ev464__after__en__dark__390x844__chat.png",
+      "before_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 351
+      },
+      "after_diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 351
+      },
+      "sizeMismatch": false,
+      "width": 390,
+      "height": 844,
+      "total": 329160,
+      "changed": 1,
+      "ratio": 0.0000030380362133916637,
+      "rail": {
+        "changed": 1,
+        "ratio": 0.000013164823591363876
+      },
+      "content": {
+        "changed": 0,
+        "ratio": 0
+      },
+      "bbox": {
+        "x": 10,
+        "y": 23,
+        "width": 1,
+        "height": 1
+      },
+      "text": {
+        "changedLines": 0,
+        "sample": []
+      }
+    }
+  ]
+}
