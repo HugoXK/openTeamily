@@ -24,11 +24,11 @@ export function apply(ctx, config = {}) {
     inboxPollMs: 15_000,
     facePollMs: 4_000,
     presence: true,
+    ...(config.social ?? {}),
     ...(collaboration.server ? {
       server: collaboration.server,
       ...(collaboration.displayName ? { displayName: collaboration.displayName } : {}),
     } : {}),
-    ...(config.social ?? {}),
   })
   registerFlybotRoute(ctx, attached.flybot)
   // OpenTeamily chat tasks run as DS-Bot turns on this runtime (see ds-bot-bridge.mjs).
