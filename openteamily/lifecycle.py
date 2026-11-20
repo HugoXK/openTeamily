@@ -317,7 +317,7 @@ class Lifecycle:
             fail(409, 'stale_observation', 'Stale or invalid manager lease/revision')
         return row, job
 
-    def runtime_secret(self, manager, iid, jid, revision, lease):
+    def runtime_secret(self, manager, iid, jid, revision, lease, *, http_policy=None, capability=None):
         """Lease-gated resolved model API for container start. The key is not stored on the job."""
         self.expire()
         with self.store.transaction() as db:
@@ -325,7 +325,10 @@ class Lifecycle:
             if job['operation_type'] not in ('create', 'start', 'restart'):
                 fail(409, 'secret_not_applicable', 'Model API secret is only issued for create, start or restart')
             public, key, source = model_api.resolve(db, self.store, workspace_id=row['workspace_id'], user_id=row['owner_id'])
-            payload = model_api.container_payload(public, key, source)
+            try:
+                payload = model_api.container_payload(public, key, source, http_policy=http_policy, capability=capability)
+            except model_api.ModelEndpointError as error:
+                fail(409, error.code, 'Model endpoint not authorized or runtime upgrade required')
             return {'model_api_present': payload is not None, 'model_api': payload}
 
     def runtime_bot_social(self, manager, iid, jid, revision, lease):

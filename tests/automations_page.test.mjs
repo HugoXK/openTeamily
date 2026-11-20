@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, mount, namesFromList, readEditor, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
+import { cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -243,11 +243,18 @@ function holdRunPolling() {
   };
 }
 
-async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 'ws1', name: '团队'}]} = {}) {
+async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 'ws1', name: '团队'}],
+  search = '', pushes = [], windowHandlers = {}} = {}) {
   // The click handlers resolve `document` and the run poll from globals, so both
   // stay installed until the test calls restore().
   const restorePolling = holdRunPolling();
   const {doc, elements} = fakeDocument();
+  const view = {
+    location: {search},
+    history: {pushState(state, title, url) { pushes.push(url); view.location.search = url; }},
+    addEventListener(type, handler) { (windowHandlers[type] ||= []).push(handler); },
+  };
+  doc.defaultView = view;
   const calls = [];
   const fetcher = async (path, options = {}) => {
     const method = options.method || 'GET';
@@ -257,9 +264,11 @@ async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 
     if (path === '/v1/automation-templates') return {status: 200, json: async () => ({items: []})};
     const listed = path.match(/^\/v1\/workspaces\/([^/]+)\/automations\?category=mine$/);
     if (method === 'GET' && listed) return {status: 200, json: async () => ({items})};
-    const listedRuns = path.match(/^\/v1\/workspaces\/([^/]+)\/automations\/([^/]+)\/runs\?limit=20$/);
+    const listedRuns = path.match(/^\/v1\/workspaces\/([^/]+)\/automations\/([^/]+)\/runs\?limit=20(?:&status=([a-z]+))?$/);
     if (method === 'GET' && listedRuns) {
-      return {status: 200, json: async () => ({items: listedRuns[2] === 'a1' ? runs : []})};
+      const wanted = listedRuns[3] || '';
+      const rows = runs.filter(item => !wanted || item.status === wanted);
+      return {status: 200, json: async () => ({items: listedRuns[2] === 'a1' ? rows : []})};
     }
     if (method === 'POST' && /^\/v1\/workspaces\/[^/]+\/automations\/[^/]+\/remove$/.test(path)) {
       return {status: 200, json: async () => ({})};
@@ -276,7 +285,7 @@ async function mountEditor({items = [AUTOMATION], runs = [], workspaces = [{id: 
   globalThis.document = doc;
   await mount(doc, {fetcher});
   return {
-    doc, elements, calls,
+    doc, elements, calls, view,
     restore() {
       if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
       restorePolling();
@@ -536,4 +545,275 @@ test('?template= accepts only a plain template id', () => {
   assert.equal(templateFromSearch('?template=daily_brief'), 'daily_brief');
   assert.equal(templateFromSearch('?template=../x'), '');
   assert.equal(templateFromSearch(''), '');
+});
+
+test('runFilterFromSearch and runFilterSearchText round-trip the runs query', () => {
+  assert.equal(runFilterFromSearch(''), 'all');
+  assert.equal(runFilterFromSearch('?runs=failed'), 'failed');
+  assert.equal(runFilterFromSearch('?runs=succeeded'), 'succeeded');
+  assert.equal(runFilterFromSearch('?runs=all'), 'all');
+  assert.equal(runFilterFromSearch('?runs=1'), 'all');
+  assert.equal(runFilterFromSearch('?runs=FAILED'), 'all');
+  assert.equal(runFilterFromSearch('?template=daily_brief&runs=failed'), 'failed');
+  assert.equal(runFilterSearchText('all'), '');
+  assert.equal(runFilterSearchText('failed'), '?runs=failed');
+  assert.equal(runFilterSearchText('succeeded'), '?runs=succeeded');
+});
+
+test('matchesRunFilter keeps only the requested stored statuses', () => {
+  assert.equal(matchesRunFilter({status: 'failed'}, 'all'), true);
+  assert.equal(matchesRunFilter({status: 'succeeded'}, 'all'), true);
+  assert.equal(matchesRunFilter({status: 'failed'}, 'failed'), true);
+  assert.equal(matchesRunFilter({status: 'queued'}, 'failed'), false);
+  assert.equal(matchesRunFilter({status: 'succeeded'}, 'failed'), false);
+  assert.equal(matchesRunFilter({status: 'cancelled'}, 'failed'), true,
+    'run_view reports a cancelled run as cancelled; the server stores it as failed');
+  assert.equal(matchesRunFilter({status: 'timeout'}, 'failed'), true);
+  assert.equal(matchesRunFilter({status: 'succeeded'}, 'succeeded'), true);
+  assert.equal(matchesRunFilter({status: 'failed'}, 'succeeded'), false);
+  assert.equal(matchesRunFilter({}, 'succeeded'), false);
+});
+
+const RUNS = [
+  {id: 'r1', status: 'succeeded', error_code: null, due_at: 1795085700, started: 1795085700, finished: 1795085760},
+  {id: 'r2', status: 'failed', error_code: 'runtime_failure', due_at: 1795085800, started: 1795085800, finished: 1795085860},
+  {id: 'r3', status: 'failed', error_code: 'timeout', due_at: 1795085900, started: 1795085900, finished: 1795085960},
+];
+
+test('点「失败」只请求失败运行，并把 ?runs=failed 写进地址栏', async () => {
+  const pushes = [];
+  const {elements, calls, restore} = await mountEditor({runs: RUNS, pushes});
+  try {
+    await openFirst(elements);
+    calls.length = 0;
+    await elements.get('run-filter-failed').handlers.click[0]();
+    await flush();
+    assert.ok(calls.includes('GET /v1/workspaces/ws1/automations/a1/runs?limit=20&status=failed'),
+      `the failed filter must ask the server for failed runs: ${calls.join(' | ')}`);
+    assert.deepEqual(pushes, ['/automations?runs=failed'], 'choosing a run filter must leave a shareable URL');
+    assert.equal(elements.get('run-filter-failed').getAttribute('aria-current'), 'true');
+    assert.equal(elements.get('run-filter-all').getAttribute('aria-current'), 'false');
+    assert.equal(elements.get('run-filter-succeeded').getAttribute('aria-current'), 'false');
+    assert.equal(elements.get('run-list').children.length, 2, 'only the two failed runs stay listed');
+    assert.equal(elements.get('run-filter-empty').hidden, true);
+  } finally {
+    restore();
+  }
+});
+
+test('带 ?runs=failed 直接打开时首屏就请求失败列表，按钮也已经选中', async () => {
+  const handlers = {};
+  const {elements, calls, restore} = await mountEditor({runs: RUNS, search: '?runs=failed', windowHandlers: handlers});
+  try {
+    await openFirst(elements);
+    assert.ok(calls.includes('GET /v1/workspaces/ws1/automations/a1/runs?limit=20&status=failed'),
+      `a shared URL must be honoured on the first run request: ${calls.join(' | ')}`);
+    assert.equal(elements.get('run-filter-failed').getAttribute('aria-current'), 'true');
+    assert.equal(elements.get('run-filter-all').getAttribute('aria-current'), 'false');
+    assert.equal(elements.get('run-list').children.length, 2);
+  } finally {
+    restore();
+  }
+});
+
+test('筛选没有匹配项时给一句空态，而不是空白列表', async () => {
+  const only = [{id: 'r1', status: 'succeeded', error_code: null, due_at: 1795085700}];
+  const {elements, restore} = await mountEditor({runs: only, search: '?runs=failed'});
+  try {
+    await openFirst(elements);
+    assert.equal(elements.get('run-list').children.length, 0);
+    assert.equal(elements.get('run-filter-empty').hidden, false,
+      'a filter with no match must say so instead of leaving the list blank');
+    assert.equal(elements.get('run-empty').hidden, true,
+      'the old empty note belongs to the unfiltered list only');
+  } finally {
+    restore();
+  }
+});
+
+test('浏览器后退回到「全部」时按地址栏重载，不再写一次历史', async () => {
+  const pushes = [];
+  const handlers = {};
+  const {elements, calls, view, restore} = await mountEditor({runs: RUNS, pushes, windowHandlers: handlers});
+  try {
+    await openFirst(elements);
+    await elements.get('run-filter-succeeded').handlers.click[0]();
+    await flush();
+    assert.deepEqual(pushes, ['/automations?runs=succeeded']);
+    assert.ok(handlers.popstate && handlers.popstate.length, 'the page must listen for back/forward');
+    calls.length = 0;
+    view.location.search = '';
+    handlers.popstate[0]({});
+    await flush();
+    assert.deepEqual(pushes, ['/automations?runs=succeeded'], 'back/forward must not push another history entry');
+    assert.ok(calls.includes('GET /v1/workspaces/ws1/automations/a1/runs?limit=20'),
+      `going back to 全部 must reload the unfiltered list: ${calls.join(' | ')}`);
+    assert.equal(elements.get('run-filter-all').getAttribute('aria-current'), 'true');
+    assert.equal(elements.get('run-list').children.length, 3);
+  } finally {
+    restore();
+  }
+});
+
+// A failed or timed-out run used to be a dead end: the only control was 取消这次运行
+// on a queued run, so the next attempt was whatever the schedule produced. These
+// tests drive the real mount() and read the request the retry button sends.
+
+const RETRY_RUNS = [
+  {id: 'r1', status: 'succeeded', error_code: null, due_at: 1795085600, started: 1795085600, finished: 1795085660},
+  {id: 'r2', status: 'failed', error_code: 'runtime_failure', due_at: 1795085700, started: 1795085700, finished: 1795085760},
+  {id: 'r3', status: 'timeout', error_code: 'timeout', due_at: 1795085800, started: 1795085800, finished: 1795085860},
+  {id: 'r4', status: 'queued', error_code: null, due_at: 1795085900, started: 1795085900, finished: null},
+];
+
+function runRowButtons(elements, label) {
+  const list = elements.get('run-list');
+  const found = [];
+  for (const row of list.children) {
+    const nodes = row.children.flatMap(node => [node, ...(node.children || [])]);
+    for (const node of nodes) {
+      if (node.tagName === 'BUTTON' && String(node.textContent).trim() === label) found.push(node);
+    }
+  }
+  return found;
+}
+
+async function mountRuns({runs = RETRY_RUNS, retry = 'ok'} = {}) {
+  const restorePolling = holdRunPolling();
+  const {doc, elements} = fakeDocument();
+  const calls = [];
+  const posts = [];
+  let listed = runs.slice();
+  const fetcher = async (path, options = {}) => {
+    const method = options.method || 'GET';
+    calls.push(`${method} ${path}`);
+    if (path === '/v1/auth/session') return {status: 200, json: async () => ({user: {username: 'alice'}})};
+    if (path === '/v1/workspaces?limit=100') return {status: 200, json: async () => ({items: [{id: 'ws1', name: '团队'}]})};
+    if (path === '/v1/automation-templates') return {status: 200, json: async () => ({items: []})};
+    if (path === '/v1/workspaces/ws1/automations?category=mine') {
+      return {status: 200, json: async () => ({items: [AUTOMATION]})};
+    }
+    if (method === 'GET' && /^\/v1\/workspaces\/ws1\/automations\/a1\/runs\?limit=20$/.test(path)) {
+      return {status: 200, json: async () => ({items: listed})};
+    }
+    if (method === 'POST' && /^\/v1\/workspaces\/ws1\/automations\/a1\/runs\/[^/]+\/retry$/.test(path)) {
+      posts.push({path, headers: options.headers || {}, body: options.body});
+      if (retry === 'ok') {
+        const fresh = {id: 'r9', status: 'queued', error_code: 'no_agent', due_at: 1795086000, started: 1795086000, finished: null};
+        listed = [fresh, ...listed];
+        return {status: 201, json: async () => ({run: fresh})};
+      }
+      return {status: retry, json: async () => ({error: {code: 'conflict', message: 'Only a failed run can be retried'}})};
+    }
+    throw new Error('unexpected ' + method + ' ' + path);
+  };
+  const saved = globalThis.document;
+  globalThis.document = doc;
+  await mount(doc, {fetcher});
+  await openFirst(elements);
+  return {
+    elements, calls, posts,
+    restore() {
+      if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
+      restorePolling();
+    },
+  };
+}
+
+test('only failed, timed-out and cancelled runs offer 重新运行', async () => {
+  const {elements, restore} = await mountRuns({
+    runs: [...RETRY_RUNS, {id: 'r5', status: 'cancelled', error_code: 'cancelled', due_at: 1, started: 1, finished: 2}],
+  });
+  try {
+    const retry = runRowButtons(elements, '重新运行');
+    assert.equal(retry.length, 3, 'the failed, timed-out and cancelled rows each offer one retry');
+    const succeeded = elements.get('run-list').children[0];
+    assert.ok(!succeeded.children.flatMap(node => [node, ...(node.children || [])])
+      .some(node => String(node.textContent).trim() === '重新运行'), 'a finished success has nothing to re-run');
+    const queued = elements.get('run-list').children[3];
+    assert.ok(!queued.children.flatMap(node => [node, ...(node.children || [])])
+      .some(node => String(node.textContent).trim() === '重新运行'), 'a queued run is not retryable, it is cancellable');
+  } finally {
+    restore();
+  }
+});
+
+test('点「重新运行」带幂等键请求 /retry，成功后列表出现一条排队中的新运行', async () => {
+  const {elements, posts, restore} = await mountRuns();
+  try {
+    const [button] = runRowButtons(elements, '重新运行');
+    await button.handlers.click[0]();
+    await flush();
+    assert.equal(posts.length, 1, 'one click is one request');
+    assert.equal(posts[0].path, '/v1/workspaces/ws1/automations/a1/runs/r2/retry');
+    assert.match(posts[0].headers['Idempotency-Key'] || '', /^[A-Za-z0-9_-]{16,64}$/,
+      'the request needs an idempotency key or a double click queues the automation twice');
+    const rows = elements.get('run-list').children;
+    assert.equal(rows.length, 5, 'the reloaded list now carries the new queued run');
+    assert.match(rows[0].textContent, /等待已连接的代理|运行中/, 'the new run is queued, not a finished failure');
+    assert.match(elements.get('status').textContent, /重新排队/);
+  } finally {
+    restore();
+  }
+});
+
+test('连点两次用同一把幂等键，不会排两次队', async () => {
+  const {elements, posts, restore} = await mountRuns();
+  try {
+    const [button] = runRowButtons(elements, '重新运行');
+    const handler = button.handlers.click[0];
+    await Promise.all([handler(), handler()]);
+    await flush();
+    assert.equal(posts.length, 2, 'both clicks reach the server');
+    assert.equal(posts[0].headers['Idempotency-Key'], posts[1].headers['Idempotency-Key'],
+      'two clicks on the same run must reuse one key, otherwise the server queues two runs');
+  } finally {
+    restore();
+  }
+});
+
+test('服务端说不能重跑时贴出原因，不假装成功', async () => {
+  const {elements, restore} = await mountRuns({retry: 409});
+  try {
+    const [button] = runRowButtons(elements, '重新运行');
+    await button.handlers.click[0]();
+    await flush();
+    const status = elements.get('status');
+    assert.equal(status.dataset.kind, 'error');
+    assert.match(status.textContent, /Only a failed run can be retried/);
+  } finally {
+    restore();
+  }
+});
+
+// A run row expands in place: the summary, the status code and the failure
+// reason come from fields the server already returns (automations.py run_view).
+test('a failed run names a readable reason and keeps the raw code visible', () => {
+  const failed = {id: 'r1', status: 'failed', error_code: 'provider_error', result: {}};
+  assert.equal(runErrorReason(failed), '模型提供方这次没有返回结果。');
+  assert.deepEqual(runDetailFields(failed).map(field => field.label), ['状态码', '失败原因']);
+  assert.equal(runDetailFields(failed)[0].value, 'provider_error');
+});
+
+test('an explicit result.error wins over the mapped code', () => {
+  const failed = {status: 'failed', error_code: 'provider_error', result: {error: '上游 502：bad gateway'}};
+  assert.equal(runErrorReason(failed), '上游 502：bad gateway');
+});
+
+test('an unknown code falls back to the raw code, never to an empty box', () => {
+  const failed = {status: 'failed', error_code: 'mystery', result: {}};
+  assert.equal(runErrorReason(failed), '服务端只留下错误代码：mystery');
+});
+
+test('a run that left nothing says so instead of showing an empty box', () => {
+  assert.equal(RUN_DETAIL_EMPTY, '这次运行没有留下输出');
+  assert.deepEqual(runDetailFields({status: 'succeeded', result: {}}), []);
+});
+
+test('a succeeded run expands to its summary and the model that wrote it', () => {
+  const succeeded = {status: 'succeeded', error_code: null, result: {text: '今天的简报', model: 'deepseek-v4'}};
+  assert.deepEqual(runDetailFields(succeeded), [
+    {label: '摘要', value: '今天的简报'},
+    {label: '模型', value: 'deepseek-v4'},
+  ]);
 });

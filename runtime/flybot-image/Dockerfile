@@ -113,3 +113,6 @@ LABEL org.opencontainers.image.title="OpenTeamily FlyBot runtime" \
       org.opencontainers.image.description="Self-host FlyBot runtime: unmodified DS-Bot v0.3.6 plus the social host adapter, served by dsh web on 8080." \
       org.opencontainers.image.source="https://github.com/openTeamily/openTeamily" \
       org.opencontainers.image.licenses="MIT AND Apache-2.0"
+
+# Pinned-image capability; manager checks before materializing HTTP task keys.
+LABEL io.openteamily.model-http="openteamily.exact-http-task.v1"

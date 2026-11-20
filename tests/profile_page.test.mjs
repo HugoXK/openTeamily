@@ -36,6 +36,9 @@ class FakeElement {
   setAttribute(name, value) { this.attributes[name] = value; }
   getAttribute(name) { return this.attributes[name]; }
   requestSubmit() { this.submits += 1; }
+  replaceChildren(...nodes) { this.children = nodes; }
+  append(...nodes) { (this.children ||= []).push(...nodes); }
+  appendChild(node) { (this.children ||= []).push(node); return node; }
 }
 
 const PROFILE_FIELDS = ['name', 'handle', 'bio', 'tags', 'gender', 'location', 'website'];
@@ -59,6 +62,51 @@ function fakeDocument() {
   };
 }
 
+function homeDocument() {
+  const doc = fakeDocument();
+  const bySelector = new Map();
+  doc.querySelector = selector => {
+    if (String(selector).startsWith('#')) return doc.getElementById(String(selector).slice(1));
+    if (!bySelector.has(selector)) bySelector.set(selector, new FakeElement('div'));
+    return bySelector.get(selector);
+  };
+  doc.querySelectorAll = () => [];
+  doc.addEventListener = () => {};
+  doc.createElement = tag => new FakeElement(tag);
+  return doc;
+}
+
+function installShareGlobals({pathname = '/profile', clipboard = 'stub'} = {}) {
+  const savedNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const savedLocation = globalThis.location;
+  const savedHistory = globalThis.history;
+  const copied = [];
+  const pushes = [];
+  const loc = {pathname, origin: 'https://teamily.ai', search: '', href: 'https://teamily.ai' + pathname};
+  globalThis.location = loc;
+  globalThis.history = {
+    pushState(state, title, url) {
+      pushes.push(url);
+      const [path, query] = String(url).split('?');
+      loc.pathname = path;
+      loc.search = query ? '?' + query : '';
+    },
+  };
+  const nav = {};
+  if (clipboard === 'stub') nav.clipboard = {writeText: async text => { copied.push(text); }};
+  if (clipboard === 'reject') nav.clipboard = {writeText: async () => { throw new Error('clipboard denied'); }};
+  Object.defineProperty(globalThis, 'navigator', {value: nav, configurable: true, writable: true});
+  return {
+    copied, pushes, loc,
+    restore() {
+      if (savedNavigator) Object.defineProperty(globalThis, 'navigator', savedNavigator);
+      else delete globalThis.navigator;
+      if (savedLocation === undefined) delete globalThis.location; else globalThis.location = savedLocation;
+      if (savedHistory === undefined) delete globalThis.history; else globalThis.history = savedHistory;
+    },
+  };
+}
+
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 function installGlobals(doc, fetcher) {
@@ -72,7 +120,7 @@ function installGlobals(doc, fetcher) {
 }
 
 async function mountProfile(options = {}) {
-  const doc = fakeDocument();
+  const doc = options.home ? homeDocument() : fakeDocument();
   const calls = [];
   let release = () => {};
   let releasePost = () => {};
@@ -307,4 +355,76 @@ test('资料首次加载用用户名兜底显示名和 handle，并给出对应�
     assert.equal(doc.getElementById('profile-public').href, '/p/alice.smith',
       'a saved handle must link to the public profile page');
   } finally { saved.restore(); }
+});
+
+function shareHandler(doc) {
+  const share = doc.getElementById('profile-share');
+  assert.ok(Array.isArray(share.handlers.click) && share.handlers.click.length === 1,
+    'the 分享 button has no click handler, so clicking it does nothing');
+  return share.handlers.click[0];
+}
+
+test('有 Teamily ID 时分享按钮把公开主页链接复制到剪贴板', async () => {
+  const env = installShareGlobals({pathname: '/profile'});
+  try {
+    const {doc, restore} = await mountProfile({
+      tag: 'share-handle',
+      home: true,
+      profile: {name: 'Alice', handle: 'alice.smith', revision: 3},
+    });
+    try {
+      await shareHandler(doc)({preventDefault() {}});
+      assert.deepEqual(env.copied, ['https://teamily.ai/p/alice.smith'],
+        'clicking 分享 must copy the public profile URL built from the saved handle');
+      const status = doc.getElementById('status');
+      assert.equal(status.dataset.kind, 'ok');
+      assert.equal(status.textContent, '公开主页链接已复制。');
+      assert.equal(doc.querySelector('#profile-share-fallback').hidden, true,
+        'a successful copy must not open the manual-copy fallback');
+    } finally { restore(); }
+  } finally { env.restore(); }
+});
+
+test('没有 Teamily ID 时分享按钮不写剪贴板，先提示再切到编辑页', async () => {
+  const env = installShareGlobals({pathname: '/profile'});
+  try {
+    const {doc, restore} = await mountProfile({
+      tag: 'share-no-handle',
+      home: true,
+      profile: {name: 'Alice', handle: '', revision: 0},
+    });
+    try {
+      await shareHandler(doc)({preventDefault() {}});
+      assert.equal(env.copied.length, 0,
+        'a profile without a handle has no public URL, so nothing must be copied');
+      assert.equal(doc.getElementById('status').textContent, '先设置 Teamily ID 才能分享。');
+      assert.deepEqual(env.pushes, ['/profile/edit'],
+        'without a handle the share button must take the person to the edit page');
+      assert.equal(env.loc.pathname, '/profile/edit');
+      assert.equal(doc.querySelector('#profile-home').hidden, true,
+        'the in-page edit view must replace the profile home after switching to /profile/edit');
+      assert.equal(doc.querySelector('#profile-edit').hidden, false);
+    } finally { restore(); }
+  } finally { env.restore(); }
+});
+
+test('剪贴板不可用时把链接显示出来让人手动复制', async () => {
+  const env = installShareGlobals({pathname: '/profile', clipboard: 'reject'});
+  try {
+    const {doc, restore} = await mountProfile({
+      tag: 'share-clipboard-denied',
+      home: true,
+      profile: {name: 'Alice', handle: 'alice.smith', revision: 3},
+    });
+    try {
+      await shareHandler(doc)({preventDefault() {}});
+      assert.equal(doc.getElementById('status').dataset.kind, 'error');
+      assert.match(doc.getElementById('status').textContent, /手动复制/);
+      const fallback = doc.querySelector('#profile-share-fallback');
+      assert.equal(fallback.hidden, false,
+        'when the clipboard refuses the copy the URL must be shown for manual copying');
+      assert.equal(doc.querySelector('#profile-share-link').textContent,
+        'https://teamily.ai/p/alice.smith');
+    } finally { restore(); }
+  } finally { env.restore(); }
 });
