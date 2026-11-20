@@ -12,6 +12,8 @@ import { createHash } from 'node:crypto'
 import { TEMPLATES, INTENTS } from './templates.js'
 import { dueAt, normalizeSchedule, validSchedule } from './schedule.js'
 import { newId } from '../../src/store.js'
+import { automationsV1 } from './v1.js'
+import { importOfficialBundle, recordLegacyRuns } from './migrate.js'
 
 const nowSec = () => Math.floor(Date.now() / 1000)
 export function refuse(status, code, message, details) {
@@ -430,7 +432,14 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     'automations/import': importRows,
   }
 
-  return { db, endpoints, tick, start, stop, execute, inflight }
+  const ops = {}
+  for (const [name, handler] of Object.entries(endpoints)) ops[name.slice('automations/'.length)] = handler
+  ops.v1 = automationsV1({ endpoints: ops, log })
+  ops.importRuns = (p) => ({ imported: recordLegacyRuns(db, p) })
+  endpoints['automations/v1'] = ops.v1
+  endpoints['automations/import-runs'] = ops.importRuns
+  const migrate = async (bundle) => (bundle?.format === 'openteamily-dsbot-import' ? importOfficialBundle(ops, bundle) : ops.import(bundle))
+  return { db, endpoints, ops, migrate, tick, start, stop, execute, inflight }
 }
 
 export default async function automations(host) {
@@ -441,6 +450,8 @@ export default async function automations(host) {
   // runtime that is still booting.
   if (process.env.OPENTEAMILY_AUTOMATIONS_CLOCK !== '0') host.runtime({ timeoutMs: 10 * 60_000 }).then(() => feature.start(), () => feature.start())
   const ops = {}
-  for (const [name, handler] of Object.entries(feature.endpoints)) ops[name.slice('automations/'.length)] = async (payload) => handler(payload ?? {})
-  return { pages: ['automations'], endpoints: ops, migrate: async (bundle) => ops.import(bundle) }
+  for (const [name, handler] of Object.entries(feature.ops)) ops[name] = async (payload) => handler(payload ?? {})
+  ops.v1 = feature.ops.v1
+  ops.importRuns = feature.ops.importRuns
+  return { pages: ['automations'], endpoints: ops, migrate: feature.migrate }
 }

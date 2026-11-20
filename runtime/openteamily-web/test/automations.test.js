@@ -148,3 +148,49 @@ test('the feature loads through the extension point and runs turns via the DS-Bo
   await assert.rejects(turn({ conversation: 'c', prompt: 'p' }), (err) => err.code === 'automations/runtime-unavailable')
   detachRuntime()
 })
+
+
+
+test('v1 lists templates and automations in the legacy /v1 shape', async () => {
+  const { e } = fixture()
+  const templates = await e['automations/v1']({ method: 'GET', path: '/v1/automation-templates' })
+  assert.equal(templates.status, 200)
+  assert.ok(templates.body.items.some((item) => item.id === 'custom'))
+  const created = await e['automations/v1']({
+    method: 'POST', path: `/v1/workspaces/${W}/automations`,
+    idempotency_key: 'a'.repeat(20),
+    body: { title: '晨报', prompt: '汇总。', template_id: 'custom', schedule: { kind: 'daily', time: '09:00', time_zone: 'Asia/Shanghai' }, participants: ['alice'] },
+  })
+  assert.equal(created.status, 201, created.body)
+  const id = created.body.automation.id
+  const listed = await e['automations/v1']({ method: 'GET', path: `/v1/workspaces/${W}/automations` })
+  assert.equal(listed.body.items[0].id, id)
+  const got = await e['automations/v1']({ method: 'GET', path: `/v1/workspaces/${W}/automations/${id}` })
+  assert.equal(got.body.automation.title, '晨报')
+  const updated = await e['automations/v1']({ method: 'POST', path: `/v1/workspaces/${W}/automations/${id}`, body: { revision: 1, changes: { enabled: true } } })
+  assert.equal(updated.body.automation.enabled, true)
+  const unknown = await e['automations/v1']({ method: 'GET', path: `/v1/workspaces/${W}/meetings` })
+  assert.equal(unknown.status, 404)
+  assert.equal(unknown.body.error.code, 'not_moved')
+})
+
+test('official import bundle marks the current slot skipped and does not re-import', async () => {
+  const { createHash } = await import('node:crypto')
+  const sha = (text) => createHash('sha256').update(text, 'utf8').digest('hex')
+  const at = zonedEpoch('UTC', 2027, 1, 4, 9, 30)
+  const { e, feature } = fixture(null, at)
+  const automations = [{
+    id: 'c'.repeat(32), workspace_id: W, title: '旧报', title_hash: 'x', prompt: '汇总。', template_id: 'custom',
+    schedule: { kind: 'daily', time: '09:00', time_zone: 'UTC' }, participants: [{ username: 'alice' }], enabled: 1, revision: 1, created: 1, updated: 1,
+  }]
+  const text = JSON.stringify(automations)
+  const bundle = { format: 'openteamily-dsbot-import', version: 1, feature: 'automations', created: 1,
+    tables: { automations: text }, manifest: { automations: { rows: 1, sha256: sha(text) } } }
+  const first = await feature.migrate(bundle)
+  assert.equal(first.imported, 1)
+  assert.equal(e['automations/list']({ workspace_id: W }).items[0].title, '旧报')
+  const runs = e['automations/runs']({ workspace_id: W, id: 'c'.repeat(32) })
+  assert.ok(runs.items.some((row) => row.status === 'skipped' && row.error_code === 'migrated'))
+  assert.equal(feature.tick().length, 0)
+  assert.equal((await feature.migrate(bundle)).imported, 0)
+})

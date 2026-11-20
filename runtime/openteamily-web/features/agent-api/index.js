@@ -8,6 +8,7 @@
 // of the named agent (agents/turn), run in the background and polled by id.
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { openDatabase, newId } from '../../src/store.js'
+import { agentApiV1 } from './v1.js'
 
 export const MAX_KEYS_PER_AGENT = 10
 export const DEFAULT_RATE = 10
@@ -142,6 +143,7 @@ export function createAgentApi({ db, host, clock = now }) {
       return { invocation: invocationView(row) }
     },
   }
+  endpoints.v1 = agentApiV1({ endpoints, log: host?.log })
   return { endpoints, inflight, execute }
 }
 

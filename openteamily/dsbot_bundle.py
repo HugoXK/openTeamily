@@ -49,6 +49,35 @@ FEATURE_TABLES = {
     ],
 }
 
+
+# Stream B2 (automations, agents). Queued automation runs are exported so the
+# plugin can mark those slots skipped and not fire them again; the platform
+# must also stop the legacy scheduler for this user at the same cutover.
+FEATURE_TABLES.update({
+    'automations': [
+        ('automations', _scoped('automations')),
+        ('automation_editors',
+         'SELECT e.* FROM automation_editors e JOIN automations a ON a.id = e.automation_id '
+         'WHERE a.workspace_id IN (' + _OWNED + ') ORDER BY e.automation_id'),
+        ('automation_runs',
+         'SELECT r.* FROM automation_runs r JOIN automations a ON a.id = r.automation_id '
+         'WHERE a.workspace_id IN (' + _OWNED + ') ORDER BY r.id'),
+    ],
+    'agents': [
+        ('workspace_agents', _scoped('workspace_agents')),
+        ('workspace_agent_categories',
+         'SELECT c.* FROM workspace_agent_categories c JOIN workspace_agents a ON a.id = c.agent_id '
+         'WHERE a.workspace_id IN (' + _OWNED + ') ORDER BY c.agent_id'),
+        ('workspace_agent_quick_starts',
+         'SELECT q.* FROM workspace_agent_quick_starts q JOIN workspace_agents a ON a.id = q.agent_id '
+         'WHERE a.workspace_id IN (' + _OWNED + ') ORDER BY q.agent_id, q.position'),
+        ('agent_conversations', _scoped('agent_conversations')),
+        ('agent_messages',
+         'SELECT m.* FROM agent_messages m JOIN agent_conversations c ON c.id = m.conversation_id '
+         'WHERE c.workspace_id IN (' + _OWNED + ') ORDER BY m.conversation_id, m.seq, m.id'),
+    ],
+})
+
 # Stream B4 (settings, model-api, connectors). Secret columns are never
 # selected here: key blobs travel only through sealed_secrets() below.
 FEATURE_TABLES.update({

@@ -47,5 +47,35 @@ class BundleTests(unittest.TestCase):
             dsbot_bundle.build(db, 'x', 'nope')
 
 
+
+    def test_automations_and_agents_bundles_are_scoped_to_one_account(self):
+        schedule = {'kind': 'daily', 'time': '09:00', 'time_zone': 'Asia/Shanghai'}
+        for client, wid, title, key in ((self.alice, self.wid, '晨报', 'bundle-auto-0001'),
+                                        (self.bob, self.bob_wid, 'bob 的报', 'bundle-auto-0002')):
+            self.assertEqual(client.call('POST', f'/v1/workspaces/{wid}/automations',
+                                         {'title': title, 'prompt': '汇总。', 'template_id': 'custom',
+                                          'schedule': schedule, 'participants': [client is self.alice and 'alice' or 'bob']},
+                                         {'HTTP_IDEMPOTENCY_KEY': key})['status'], 201)
+        for client, wid, name, key in ((self.alice, self.wid, '文档助手', 'bundle-agent-0001xxxx'),
+                                       (self.bob, self.bob_wid, 'bob 助手', 'bundle-agent-0002xxxx')):
+            self.assertEqual(client.call('POST', f'/v1/workspaces/{wid}/agents',
+                                         {'name': name, 'summary': '整理', 'instructions': '先列要点。'},
+                                         {'HTTP_IDEMPOTENCY_KEY': key})['status'], 201)
+        with self.store.connect() as db:
+            auto = dsbot_bundle.build(db, self.user(db, 'alice'), 'automations', now=1)
+            agents = dsbot_bundle.build(db, self.user(db, 'alice'), 'agents', now=1)
+            before_auto = db.execute('SELECT COUNT(*) FROM automations').fetchone()[0]
+            before_agents = db.execute('SELECT COUNT(*) FROM workspace_agents').fetchone()[0]
+        titles = [row['title'] for row in json.loads(auto['tables']['automations'])]
+        self.assertEqual(titles, ['晨报'])
+        self.assertEqual(auto['feature'], 'automations')
+        self.assertEqual(auto['manifest']['automations']['rows'], 1)
+        names = [row['name'] for row in json.loads(agents['tables']['workspace_agents'])]
+        self.assertEqual(names, ['文档助手'])
+        self.assertEqual(agents['feature'], 'agents')
+        self.assertEqual(before_auto, 2, 'legacy rows are left untouched')
+        self.assertEqual(before_agents, 2, 'legacy rows are left untouched')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -7,6 +7,8 @@
 // Bot Social (phase C); this feature keeps only the owner's private data.
 import { createHash } from 'node:crypto'
 import { openDatabase, newId } from '../../src/store.js'
+import { agentsV1 } from './v1.js'
+import { importOfficialBundle } from './migrate.js'
 
 export const CATEGORIES = ['content-creation', 'customer-support', 'data-analysis', 'design', 'education', 'engineering',
   'finance', 'it-security', 'investment', 'legal', 'life', 'marketing', 'operations', 'product', 'recruiting', 'research', 'sales']
@@ -191,6 +193,24 @@ export function createAgents({ db, host }) {
       return { message: rows.find((r) => r.id === userId), reply: { ...rows.find((r) => r.id === replyId), meta: JSON.parse(rows.find((r) => r.id === replyId).meta) } }
     },
     turn,
+
+    async importHistory(bundle) {
+      let conversations = 0, messages = 0
+      for (const row of bundle?.conversations ?? []) {
+        if (!row?.id || !row.agent_id || one('SELECT id FROM agent_conversations WHERE id=?', row.id)) continue
+        if (!one('SELECT id FROM agents WHERE id=?', row.agent_id)) continue
+        run('INSERT INTO agent_conversations VALUES(?,?,?,?,?)', row.id, row.agent_id, String(row.title || '新对话').slice(0, 120), Number(row.created) || now(), Number(row.updated) || now())
+        conversations += 1
+      }
+      for (const row of bundle?.messages ?? []) {
+        if (!row?.id || !row.conversation_id || one('SELECT id FROM agent_messages WHERE id=?', row.id)) continue
+        if (!one('SELECT id FROM agent_conversations WHERE id=?', row.conversation_id)) continue
+        const status = row.status === 'queued' || row.status === 'running' ? 'failed' : (row.status === 'sent' || row.status === 'succeeded' ? (row.role === 'user' ? 'sent' : 'succeeded') : (row.status || 'failed'))
+        run('INSERT INTO agent_messages VALUES(?,?,?,?,?,?,?)', row.id, row.conversation_id, row.role === 'assistant' ? 'assistant' : 'user', row.body ?? row.text ?? '', status, Number(row.created) || now(), JSON.stringify({ imported: true, error_code: row.error_code ?? (status === 'failed' ? 'migrated' : undefined) }))
+        messages += 1
+      }
+      return { conversations, messages }
+    },
     // Legacy rows from the management export bundle (idempotent by id).
     async import(bundle) {
       const rows = Array.isArray(bundle?.agents) ? bundle.agents : null
@@ -212,13 +232,15 @@ export function createAgents({ db, host }) {
       return { imported }
     },
   }
-  return { endpoints }
+  endpoints.v1 = agentsV1({ endpoints, log: host?.log })
+  const migrate = async (bundle) => (bundle?.format === 'openteamily-dsbot-import' ? importOfficialBundle(endpoints, bundle) : endpoints.import(bundle))
+  return { endpoints, migrate }
 }
 
 export default async function agents(host) {
   const db = await openDatabase(host, 'agents.sqlite3')
-  const { endpoints } = createAgents({ db, host })
+  const { endpoints, migrate } = createAgents({ db, host })
   const wrapped = {}
   for (const [name, fn] of Object.entries(endpoints)) wrapped[name] = async (payload) => fn(payload ?? {})
-  return { pages: ['agents'], endpoints: wrapped, migrate: async (bundle) => endpoints.import(bundle) }
+  return { pages: ['agents'], endpoints: wrapped, migrate }
 }
