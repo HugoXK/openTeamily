@@ -30,6 +30,8 @@ export function nativeGroupClient(host, raw) {
       room.members = locals
       room.remoteParticipants = (conversation.members || []).map(m => ({ id: m.owner_id, handle: m.handle, kind: 'human', remote: true, name: m.display_name || m.handle, platform_user_id: m.platform_user_id }))
       room.openteamily.team_id = conversation.team_id
+      const announcement = await raw.get('/v1/ot/conversations/'+encodeURIComponent(conversation.id)+'/announcement')
+      room.notice = announcement.announcement.body
       await rt.save()
       return { ...conversation, native_room_id: room.id, native_session_id: room.id }
     }
@@ -69,9 +71,18 @@ export function nativeGroupClient(host, raw) {
         patch.remove = previous.filter(bid => !patch.members.includes(bid))
         delete patch.members
       }
-      const allowed = new Set(['name','add','remove','notice'])
+      const allowed = new Set(['name','add','remove','notice','remoteParticipants'])
       if (Object.keys(patch).some(k => !allowed.has(k))) throw new Error('Change shared group settings in OpenTeamily; unsupported native changes are not applied locally')
       const base = '/v1/ot/conversations/' + encodeURIComponent(cid)
+      if (patch.remoteParticipants !== undefined) {
+        if (!Array.isArray(patch.remoteParticipants) || patch.remoteParticipants.length > 200 || patch.remoteParticipants.some(h => typeof h !== 'string' || !/^[A-Za-z0-9._-]{1,80}$/.test(h))) throw new Error('Provide member handles, not native Bot IDs')
+        const current = await raw.get(base), me = await raw.get('/v1/ot/me')
+        const wanted = [...new Set(patch.remoteParticipants)]
+        if (!wanted.includes(me.handle)) throw new Error('Use Leave group to remove yourself')
+        const previous = (current.members || []).map(m=>m.handle)
+        for (const handle of wanted.filter(h=>!previous.includes(h))) await raw.post(base+'/members', {handle})
+        for (const handle of previous.filter(h=>!wanted.includes(h))) await raw.del(base+'/members/'+encodeURIComponent(handle))
+      }
       if (patch.name !== undefined) await raw.patch(base, { title: patch.name })
       for (const bid of patch.add || []) {
         const bot = rt.botOf(bid)
