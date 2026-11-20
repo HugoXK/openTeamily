@@ -221,6 +221,7 @@ def build_with_secrets(db, store, user_id, feature, seal_key=None, now=None):
     bundle = build(db, user_id, feature, now)
     if seal_key is not None and feature in ('model-api', 'connectors'):
         secrets = sealed_secrets(db, store, user_id, feature, seal_key)
+        bundle['seal_key_id'] = hashlib.sha256(bytes(seal_key)).hexdigest()
         bundle['secrets'] = secrets
         bundle['secrets_sha256'] = hashlib.sha256(canonical(secrets).encode('utf-8')).hexdigest()
     return bundle

@@ -17,6 +17,7 @@ const sha256 = text => createHash('sha256').update(text, 'utf8').digest('hex')
 const sorted = obj => Object.fromEntries(Object.keys(obj).sort().map(k => [k, obj[k]]))
 
 export function readSecrets(bundle, sealKey) {
+  if (bundle.seal_key_id && bundle.seal_key_id !== createHash('sha256').update(sealKey).digest('hex')) throw new Error('runtime import key mismatch; preserve bundle and restore manager key mount')
   const secrets = bundle.secrets
   if (secrets === undefined) return {}
   if (!secrets || typeof secrets !== 'object' || Array.isArray(secrets)) throw new Error('invalid secrets')
@@ -41,7 +42,8 @@ export function importJsonBundles({ dataDir, feature, store, sealKey = null, app
       const digest = sha256(text)
       if ((store.read().imports ?? []).includes(digest)) { unlinkSync(file); results.push({ name, status: 'already-imported' }); continue }
       const tables = verifyBundle(bundle, feature)
-      const secrets = bundle.secrets === undefined ? {} : sealKey ? readSecrets(bundle, sealKey) : null
+      if (bundle.seal_key_id && bundle.seal_key_id !== createHash('sha256').update(sealKey).digest('hex')) throw new Error('runtime import key mismatch; preserve bundle and restore manager key mount')
+  const secrets = bundle.secrets === undefined ? {} : sealKey ? readSecrets(bundle, sealKey) : null
       if (secrets === null) throw new Error('bundle has secrets but this runtime has no seal key')
       store.update((draft) => {
         apply(draft, tables, secrets)
