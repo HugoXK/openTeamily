@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notification_prefs, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams
+from . import skill_packages, agent_runtime, agents, artifacts, automations, bot_social, composio, composio_principals, connected_tools, conversations, discover, gateway, invites, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_connect, runtime_keys, search, settings, skill_secrets, social, team_directory, team_templates, teams, skill_installs, notification_prefs
 from .scheduler import AgentAutomationBackend, BackgroundWorker, Scheduler
 
 
@@ -476,6 +476,8 @@ class App:
             refuse(405, 'method', 'Only GET, POST, PUT and DELETE are supported')
         if method in ('POST', 'PUT', 'DELETE') and query:
             refuse(400, 'invalid', 'Query parameters are not accepted for writes')
+        if method == 'DELETE' and query:
+            refuse(400, 'invalid', 'Query parameters are not accepted for writes')
         now = int(self.clock())
         share_path = re.fullmatch(r'/share/([A-Za-z0-9_-]{43})', path)
         if share_path:
@@ -679,11 +681,20 @@ class App:
                 if method == 'POST' and not query:
                     return self.save_profile(db, session, now, env)
                 refuse(400, 'invalid', 'Invalid profile request')
+            if path == '/v1/onboarding/recommendations' and method == 'GET' and not query:
+                row = onboarding.load(db, session['user_id'])
+                role = row['role'] if row is not None else ''
+                return 200, {'items': onboarding.automation_recommendations(role)}, []
+            if path == '/v1/onboarding/automations':
+                if method == 'POST' and not query:
+                    return self.create_onboarding_automations(db, session, now, env)
+                refuse(400, 'invalid', 'Invalid onboarding automation request')
             if path == '/v1/onboarding':
                 if method == 'GET' and not query:
                     row = onboarding.load(db, session['user_id'])
                     return 200, {'onboarding': onboarding.view(row) if row is not None else None,
                                  'industries': onboarding.industries_view(),
+                                 'automation_templates': onboarding.automation_recommendations(row['role'] if row is not None else ''),
                                  'steps': onboarding.steps_view(onboarding.load_steps(db, session['user_id']),
                                                                 row['industry'] if row is not None else '')}, []
                 if method == 'POST' and not query:
@@ -752,6 +763,22 @@ class App:
                 except ValueError:
                     refuse(429, 'quota', 'Skill secret limit reached')
                 return 200, skill_secrets.list_secrets(db, session['user_id']), []
+            if path == '/v1/skills/installed':
+                if method == 'GET' and not query:
+                    return 200, skill_installs.listing(db, session['user_id']), []
+                if method in ('POST', 'DELETE') and not query:
+                    if method == 'DELETE':
+                        self.csrf_check(env, session)
+                    body = self.body(env, ['skill'])
+                    skill_id = body.get('skill')
+                    if not skill_installs.valid_skill(skill_id):
+                        refuse(400, 'invalid', 'Provide a skill id from the skills catalogue')
+                    if method == 'POST':
+                        skill_installs.install(db, session['user_id'], skill_id, now)
+                    else:
+                        skill_installs.uninstall(db, session['user_id'], skill_id)
+                    return 200, skill_installs.listing(db, session['user_id']), []
+                refuse(400, 'invalid', 'Invalid installed-skills request')
             if path == '/v1/runtime-keys' and method == 'GET' and not query:
                 return 200, {
                     'items': runtime_keys.listing(db, session['user_id']),
@@ -904,6 +931,10 @@ class App:
                 r'/v1/workspaces/([0-9a-f]{32})/artifacts(?:/([0-9a-f]{32})(?:/(remove|favorite|preview|file|export|restore|versions(?:/(\d{1,8})(?:/(export))?)?|shares(?:/([0-9a-f]{32})(/revoke)?)?))?)?', path)
             if artifact_path:
                 return self.artifact_dispatch(db, session, method, query, now, env, *artifact_path.groups())
+            memory_dream_path = re.fullmatch(
+                r'/v1/workspaces/([0-9a-f]{32})/memory/([0-9a-f]{32})/dream(?:/([0-9a-f]{32}))?', path)
+            if memory_dream_path:
+                return self.memory_dream_dispatch(db, session, method, query, now, env, *memory_dream_path.groups())
             memory_action_path = re.fullmatch(
                 r'/v1/workspaces/([0-9a-f]{32})/memory/actions(?:/([0-9a-f]{32})(?:/(remove))?)?', path)
             if memory_action_path:
@@ -2471,6 +2502,39 @@ class App:
             refuse(400, 'invalid', 'Invalid memory request')
         return self.update_memory_page(db, workspace, session, actor, row, now, self.body(env, ['revision', 'changes']))
 
+    def memory_dream_dispatch(self, db, session, method, query, now, env, workspace_id, page_id, suggestion_id):
+        workspace = members.load(db, workspace_id, session['user_id'])
+        if workspace is None:
+            refuse(404, 'not_found', 'Workspace not found')
+        actor = members.role_of(db, workspace, session['user_id'])
+        row = memory.load(db, workspace['id'], page_id)
+        if row is None:
+            refuse(404, 'not_found', 'Memory page not found')
+        if not memory.can_edit(actor, session['user_id'], row):
+            refuse(403, 'forbidden', 'Not allowed to consolidate this memory page')
+        if method != 'POST' or query:
+            refuse(400, 'invalid', 'Invalid memory request')
+        if suggestion_id is None:
+            self.body(env, [])
+            proposed = memory.propose(db, workspace['id'], row, now, uuid4().hex)
+            if proposed is None:
+                return 200, {'suggestion': None,
+                             'message': '这一页现在没有可以合并的重复段落，原文未改动。'}, []
+            return 200, {'suggestion': memory.suggestion_view(proposed)}, []
+        body = self.body(env, ['action'])
+        action = body.get('action')
+        if action not in ('accept', 'ignore'):
+            refuse(400, 'invalid', 'Provide accept or ignore')
+        suggestion = memory.load_suggestion(db, workspace['id'], page_id, suggestion_id)
+        if suggestion is None:
+            refuse(404, 'not_found', 'Memory suggestion not found')
+        applied = None
+        if suggestion['status'] == 'open':
+            applied = memory.decide(db, workspace, row, suggestion, action, session['user_id'], now)
+        suggestion = memory.load_suggestion(db, workspace['id'], page_id, suggestion_id)
+        page = memory.decorate(db, memory.load(db, workspace['id'], page_id))
+        return 200, {'suggestion': memory.suggestion_view(suggestion), 'page': page, 'applied': applied}, []
+
     def create_memory_page(self, db, workspace, session, now, env):
         body = self.body(env, ['title', 'body', 'topics'])
         title, content = body.get('title'), body.get('body', '')
@@ -3330,14 +3394,23 @@ class App:
                      'cursor': rows[int(limit) - 1]['id'] if len(rows) > int(limit) else None}, []
 
     def send_conversation_message(self, db, workspace, session, agent, row, now, env):
-        body = self.body(env, ['body'])
+        body = self.body(env, ['body', 'chat_language'])
         text = body.get('body')
         if not conversations.valid_message(text):
             refuse(400, 'invalid', 'Provide a message')
+        requested_language = body.get('chat_language')
+        if requested_language is not None and not settings.valid_value('chat_language', requested_language):
+            refuse(400, 'invalid', 'Unsupported chat language')
+        # The composer sends the stored preference; a client that does not send
+        # it still gets the account's choice, so the setting never depends on a
+        # page having been upgraded.
+        chat_language = requested_language or settings.stored_chat_language(db, session['user_id'])
         key = env.get('HTTP_IDEMPOTENCY_KEY', '')
         if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
             refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
         payload = {'body': text}
+        if requested_language is not None:
+            payload['chat_language'] = requested_language
         key_hash, request_hash = digest('message:' + key), digest(
             json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
         )
@@ -3369,7 +3442,8 @@ class App:
                 > self.config.max_messages_per_conversation):
             refuse(429, 'quota', 'Conversation message capacity reached')
         history = conversations.history_for_prompt(db, row['id'])
-        prompt = conversations.compose_prompt(agent, history, text)
+        prompt = conversations.compose_prompt(
+            agent, history, text, settings.chat_language_name(chat_language))
         if not runtime_connect.valid_prompt(prompt):
             refuse(400, 'invalid', 'Provide a message')
         user_id = uuid4().hex
@@ -3755,6 +3829,62 @@ class App:
                 for item in personal.builtins(db, row['workspace_id'])
             ],
         }
+
+    def create_onboarding_automations(self, db, session, now, env):
+        body = self.body(env, ['template_ids'])
+        template_ids = body.get('template_ids')
+        if (not isinstance(template_ids, list) or not 1 <= len(template_ids) <= 6
+                or any(not isinstance(item, str) or item not in automations.TEMPLATES or item == 'custom'
+                       for item in template_ids)
+                or len(set(template_ids)) != len(template_ids)):
+            refuse(400, 'invalid', 'Provide 1–6 known automation templates')
+        workspace = db.execute('SELECT * FROM workspaces WHERE owner_id=? ORDER BY id LIMIT 1',
+                               (session['user_id'],)).fetchone()
+        if workspace is None:
+            if (db.execute('SELECT COUNT(*) FROM workspaces WHERE owner_id=?',
+                           (session['user_id'],)).fetchone()[0] >= self.config.max_workspaces_per_user
+                    or db.execute('SELECT COUNT(*) FROM workspaces').fetchone()[0] >= self.config.max_workspaces):
+                refuse(429, 'quota', 'Workspace capacity reached')
+            workspace_id = uuid4().hex
+            db.execute('INSERT INTO workspaces VALUES(?,?,?,?,?,?)',
+                       (workspace_id, session['user_id'], '个人空间', now,
+                        digest('onboarding-space:' + session['user_id']), digest('个人空间')))
+            workspace = db.execute('SELECT * FROM workspaces WHERE id=?', (workspace_id,)).fetchone()
+        current = db.execute('SELECT COUNT(*) FROM automations WHERE workspace_id=?',
+                             (workspace['id'],)).fetchone()[0]
+        schedule = {'kind': 'daily', 'time': '09:00', 'time_zone': 'Asia/Shanghai'}
+        schedule_json = json.dumps(schedule, sort_keys=True, separators=(',', ':'))
+        participants = [{'user_id': session['user_id'], 'username': session['username']}]
+        participants_json = json.dumps(participants, sort_keys=True, separators=(',', ':'))
+        created, skipped = [], []
+        for template_id in template_ids:
+            template = automations.TEMPLATES[template_id]
+            title = template['title']
+            title_digest = digest(title.casefold())
+            key_hash = digest('onboarding-automation:' + session['user_id'] + ':' + template_id)
+            if (db.execute('SELECT id FROM automations WHERE workspace_id=? AND title_hash=?',
+                           (workspace['id'], title_digest)).fetchone()
+                    or db.execute('SELECT id FROM automations WHERE workspace_id=? AND key_hash=?',
+                                  (workspace['id'], key_hash)).fetchone()):
+                skipped.append({'template_id': template_id, 'title': title})
+                continue
+            if current + len(created) >= self.config.max_automations_per_workspace:
+                refuse(429, 'quota', 'Automation capacity reached')
+            prompt = automations.compile_prompt(template_id, '', 'ongoing', schedule,
+                                                [session['username']], [])
+            request_hash = digest(json.dumps({'template_id': template_id, 'title': title,
+                                              'schedule': schedule, 'participants': [session['username']]},
+                                             sort_keys=True, separators=(',', ':')))
+            automation_id = uuid4().hex
+            db.execute('INSERT INTO automations VALUES(?,?,?,?,?,?,?,?,0,1,?,?,?,?)',
+                       (automation_id, workspace['id'], title, title_digest, prompt, template_id,
+                        schedule_json, participants_json, now, now, key_hash, request_hash))
+            db.execute('INSERT INTO automation_editors VALUES(?,?,?,?,?)',
+                       (automation_id, '', 'ongoing', '[]', 1))
+            created.append({'id': automation_id, 'template_id': template_id, 'title': title})
+        return (201 if created else 200), {
+            'workspace': {'id': workspace['id'], 'name': workspace['name']},
+            'created': created, 'skipped': skipped}, []
 
     def meeting_export(self, db, session, method, query, workspace_id, meeting_id):
         if method != 'GET':
