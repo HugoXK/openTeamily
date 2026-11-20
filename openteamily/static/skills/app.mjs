@@ -1,3 +1,4 @@
+import { mountImportedSkills } from './imports.mjs';
 import { mountSkillExecution } from './execution.mjs';
 import { csrfCookie } from '../agents/app.mjs';
 // Original content packages are loaded from the authenticated catalogue; no fake page-local installation.
@@ -27,6 +28,10 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
     return data;
   }
   const execution=mountSkillExecution(document,{request,scope});
+  const imports=mountImportedSkills(document,{request,onChange:async()=>{
+    const results=await Promise.all([request('GET','/v1/skills/catalog'),request('GET','/v1/skills/bindings')]);
+    catalogue=results[0].items||[];bindings=results[1].items||[];render();await execution.refresh();
+  }});
   function render() {
     execution.setSkills(catalogue,bindings);
     const matches = filterSkills(catalogue,input.value);
@@ -39,7 +44,7 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
       const status = document.createElement('p');
       const binding = bindings.find(b => b.scope === scope.value && b.skill_id === skill.id);
       if(binding)item.className+=' is-installed';
-      status.textContent = binding && (binding.version!==skill.version || binding.digest!==skill.digest) ? '版本已变化；请卸载后重新安装' : binding ? (binding.last_loaded_task ? '已安装；历史任务已有加载回执（新任务重新校验）' : '已安装；等待下次推理任务加载') : '未安装';
+      status.textContent = binding && (binding.version!==skill.version || binding.digest!==skill.digest) ? '版本已变化；请阅读新内容并重新安装' : binding ? (binding.last_loaded_task ? '已安装；历史任务已有加载回执（新任务重新校验）' : '已安装；等待下次推理任务加载') : '未安装';
       const details = document.createElement('details'), summary = document.createElement('summary');summary.textContent='查看真实技能内容 · '+skill.version;
       const content = document.createElement('pre');content.style.whiteSpace='pre-wrap';content.textContent=skill.content;
       const digest = document.createElement('small');digest.textContent='SHA-256: '+skill.digest;
@@ -57,8 +62,29 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
         } catch(e) {error.textContent=e.message || '网络错误，结果未知，请刷新检查。';}
         finally {busy=false;render();}
       });
+      if(skill.source==='user-imported'){
+        const manage=document.createElement('button');manage.type='button';manage.textContent='管理版本';manage.addEventListener('click',()=>imports?.edit(skill));
+        const revoke=document.createElement('button');revoke.type='button';revoke.textContent='撤销私有包';revoke.addEventListener('click',()=>imports?.revoke(skill));
+        const download=document.createElement('a');download.textContent='下载 JSON 包';download.href='/v1/skills/packages/'+encodeURIComponent(skill.id)+'/versions/'+encodeURIComponent(skill.version);
+        copy.append(manage,download,revoke);
+      }
       item.append(mark,copy,button);
-      if(binding){const use=document.createElement('button');use.type='button';use.textContent='使用技能';use.className='skill-use';use.addEventListener('click',()=>execution.selectSkill(skill.id));item.append(use);}
+      if(binding){
+        const current=binding.version===skill.version&&binding.digest===skill.digest;
+        const use=document.createElement('button');use.type='button';use.textContent=current?'使用技能':'重新安装当前版本';use.className='skill-use';use.disabled=busy;
+        use.addEventListener('click',async()=>{
+          if(current){execution.selectSkill(skill.id);return;}
+          if(busy)return;
+          if(!permission.checked){error.textContent='请阅读新版本内容并确认模型上下文权限，再重新安装。';return;}
+          busy=true;render();
+          try{
+            await request('POST','/v1/skills/bindings',{skill_id:skill.id,version:skill.version,digest:skill.digest,scope:scope.value,enabled:true,permissions:['model_context']});
+            bindings=(await request('GET','/v1/skills/bindings')).items||[];permission.checked=false;error.textContent='新版本绑定已保存；等待实际任务加载，不复用旧版本回执。';
+            await execution.refresh();
+          }catch(e){error.textContent=e.message||'绑定结果未知，请刷新核对。';}
+          finally{busy=false;render();}
+        });item.append(use);
+      }
       list.append(item);
     }
     const empty=document.getElementById('skills-empty');if(empty)empty.hidden=matches.length>0;
