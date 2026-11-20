@@ -192,6 +192,14 @@ function ownerWriteBody(body: any): any {
 const SCOPED_CAPABILITIES = new Set(["calendar.freebusy.read"]);
 
 export class Platform {
+  sealChatAttachment(messageId: string, data: Buffer): Buffer {
+    return sealBytes(this.kmsKey, data, `chat-attachment:${messageId}`);
+  }
+
+  openChatAttachment(messageId: string, data: Buffer): Buffer {
+    return unsealBytes(this.kmsKey, data, `chat-attachment:${messageId}`);
+  }
+
   meetingInviteCode(roomId: string): string {
     return createHmac("sha256", this.kmsKey)
       .update("openteamily/meeting-invite/v1:").update(roomId)

@@ -153,7 +153,7 @@ export function install(win = globalThis.window) {
   win.document.addEventListener('click', async (event) => {
     const anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
     const target = anchor ? movedTarget(anchor.getAttribute('href'), origin) : null;
-    if (!target) return;
+    if (!target || (target.feature === 'messenger' && anchor.hasAttribute('download'))) return;
     event.preventDefault();
     const response = await viaDsBot(target, 'GET');
     if (!response.ok) {

@@ -10,6 +10,8 @@ import { newId } from "../ids.js";
 import { body, handleKey, intParam, OtContext, optText, params, query, text } from "./core.js";
 import { shareTeam, requireMember } from "./teams.js";
 
+import { CHAT_FILE_BODY_LIMIT, CHAT_FILES_SCHEMA, attachmentView, decodeChatFile, readAttachment, saveAttachment } from "./chat-files.js";
+
 export const MESSENGER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_group_announcements (
   conversation_id TEXT PRIMARY KEY, body TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 0,
@@ -44,6 +46,7 @@ CREATE TABLE IF NOT EXISTS ot_voice_messages (
   message_id TEXT PRIMARY KEY REFERENCES ot_messages(id) ON DELETE CASCADE,
   mime TEXT NOT NULL, data BLOB NOT NULL
 );
+${CHAT_FILES_SCHEMA}
 CREATE TABLE IF NOT EXISTS ot_reactions (
   message_id TEXT NOT NULL REFERENCES ot_messages(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, emoji TEXT NOT NULL,
   created_at INTEGER NOT NULL, PRIMARY KEY (message_id, owner_id, emoji)
@@ -87,12 +90,29 @@ function workspaceTeam(ot: OtContext, workspace: string, ownerId: string) {
   return requireMember(ot, match.id, ownerId).team;
 }
 
+function workspaceConversation(ot: OtContext, workspace: string, id: string, ownerId: string) {
+  const team = workspaceTeam(ot, workspace, ownerId);
+  const conv = memberOf(ot, id, ownerId);
+  let directPeer: string | undefined;
+  if (conv.kind === "dm" && conv.team_id === null) {
+    const peer = ot.get<{owner_id: string}>(`SELECT teammate.owner_id FROM ot_conversation_members member
+      JOIN ot_team_members teammate ON teammate.owner_id=member.owner_id AND teammate.team_id=? AND teammate.suspended=0
+      WHERE member.conversation_id=? AND member.owner_id<>?`, team.id, conv.id, ownerId);
+    assert(peer, 404, "conversation_not_found", "no such conversation in this workspace");
+    directPeer = peer.owner_id;
+  } else {
+    assert(conv.team_id === team.id, 404, "conversation_not_found", "no such conversation in this workspace");
+  }
+  return {conv, directPeer};
+}
+
 const messageView = (ot: OtContext, m: any, viewer?: string) => ({
   id: m.id, conversation_id: m.conversation_id, seq: m.seq,
   author: m.author_kind === "agent" ? { kind: "agent", agent_ref: m.agent_ref, name: m.agent_name, owner: ot.profileView(m.author_id) } : { kind: "member", ...ot.profileView(m.author_id) },
   mine: viewer ? m.author_id === viewer && m.author_kind === "member" : undefined,
   body: m.retracted ? "" : m.body, revision: m.revision, retracted: !!m.retracted, edited_at: m.edited_at, created_at: m.created_at,
   mentions: JSON.parse(m.mentions), reply_to: m.reply_to, pinned: !!m.pinned_by,
+  attachment: m.retracted ? undefined : attachmentView(ot, m.id),
   voice: m.retracted ? undefined : ot.get<{mime: string}>("SELECT mime FROM ot_voice_messages WHERE message_id=?", m.id),
   reactions: ot.all<any>("SELECT emoji, COUNT(*) AS n, SUM(owner_id = ?) AS me FROM ot_reactions WHERE message_id = ? GROUP BY emoji", viewer ?? "", m.id).map((r) => ({ emoji: r.emoji, count: r.n, mine: !!r.me })),
 });
@@ -337,22 +357,13 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   app.get("/v1/ot/workspaces/:workspace/conversations/:id/messages/:message", async req => {
     const me = ot.me(req);
     const {workspace, id, message} = params(req);
-    const team = workspaceTeam(ot, workspace, me.ownerId);
-    const conv = memberOf(ot, id, me.ownerId);
-    let title = conv.title;
-    if (conv.kind === "dm" && conv.team_id === null) {
-      const peer = ot.get<{owner_id: string}>(`SELECT teammate.owner_id FROM ot_conversation_members member
-        JOIN ot_team_members teammate ON teammate.owner_id=member.owner_id AND teammate.team_id=? AND teammate.suspended=0
-        WHERE member.conversation_id=? AND member.owner_id<>?`, team.id, conv.id, me.ownerId);
-      assert(peer, 404, "conversation_not_found", "no such conversation in this workspace");
-      title = ot.profileView(peer.owner_id).display_name;
-    } else {
-      assert(conv.team_id === team.id, 404, "conversation_not_found", "no such conversation in this workspace");
-    }
+    const {conv, directPeer} = workspaceConversation(ot, workspace, id, me.ownerId);
+    const title = directPeer ? ot.profileView(directPeer).display_name : conv.title;
     const row = ot.get<{body: string; revision: number; retracted: number}>(`SELECT body, revision, retracted
       FROM ot_messages WHERE id=? AND conversation_id=?`, message, id);
     assert(row, 404, "message_not_found", "Message not found in this conversation");
-    assert(!row.retracted && row.body.trim() && !ot.get("SELECT 1 FROM ot_voice_messages WHERE message_id=?", message),
+    assert(!row.retracted && row.body.trim() && !attachmentView(ot, message)
+      && !ot.get("SELECT 1 FROM ot_voice_messages WHERE message_id=?", message),
       409, "conflict", "Only available text messages can be saved");
     return { body: row.body, revision: row.revision, title };
   });
@@ -401,25 +412,38 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       has_newer: (rows.at(-1)?.seq ?? conv.last_seq) < conv.last_seq,
     };
   });
-  app.post("/v1/ot/conversations/:id/messages", async (req, reply) => {
+  app.post("/v1/ot/conversations/:id/messages", {bodyLimit: CHAT_FILE_BODY_LIMIT}, async (req, reply) => {
     const me = ot.me(req);
     const b = body(req);
-    const voice = b.voice === undefined ? null : voiceData(b.voice);
-    const bodyText = text(voice && !b.body ? "语音消息" : b.body, "body", { min: 1, max: BODY_MAX, multiline: true });
+    const sourceConversation = b.attachment_from === undefined ? null : text(b.attachment_from?.conversation_id, "conversation_id", {min: 1, max: 80});
+    const sourceMessage = sourceConversation ? text(b.attachment_from?.message_id, "message_id", {min: 1, max: 80}) : null;
+    assert(Number(b.voice !== undefined) + Number(b.attachment !== undefined) + Number(Boolean(sourceMessage)) <= 1,
+      400, "invalid_request", "Send a single file per message");
     const clientKey = optText(b.client_key, "client_key", { min: 1, max: 80 }) ?? null;
     const msg = ot.tx(() => {
-      const conv = memberOf(ot, params(req).id, me.ownerId);
+      const workspace = sourceConversation || b.attachment !== undefined
+        ? text(b.workspace, "workspace", {min: 32, max: 32}) : "";
+      const conv = workspace ? workspaceConversation(ot, workspace, params(req).id, me.ownerId).conv
+        : memberOf(ot, params(req).id, me.ownerId);
       if (clientKey) {
         const previous = ot.get<any>(
           "SELECT * FROM ot_messages WHERE conversation_id=? AND author_id=? AND client_key=?", conv.id, me.ownerId, clientKey,
         );
         if (previous) return previous;
       }
+      const voice = b.voice === undefined ? null : voiceData(b.voice);
+      let file = b.attachment === undefined ? null : decodeChatFile(b.attachment);
+      if (sourceConversation && sourceMessage) {
+        workspaceConversation(ot, workspace, sourceConversation, me.ownerId);
+        file = readAttachment(ot, sourceConversation, sourceMessage);
+      }
+      const bodyText = text(b.body || file?.title || (voice ? "语音消息" : b.body), "body", {min: 1, max: BODY_MAX, multiline: true});
       if (b.reply_to) assert(ot.get("SELECT 1 FROM ot_messages WHERE id = ? AND conversation_id = ?", String(b.reply_to), conv.id), 400, "invalid_request", "reply_to is not in this conversation");
       const parsed = parseMentions(ot, conv.id, b.mentions, bodyText, b.agent_mentions);
       const mentions = parsed.mentions;
       const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo: b.reply_to ? String(b.reply_to) : null, clientKey });
       if (voice) ot.run("INSERT INTO ot_voice_messages VALUES (?,?,?)", m.id, voice.mime, voice.data);
+      if (file) saveAttachment(ot, m.id, me.ownerId, file);
       for (const h of mentions) {
         const row = ot.get<any>("SELECT owner_id FROM ot_profiles WHERE handle = ?", h);
         if (row && row.owner_id !== me.ownerId) ot.notify(row.owner_id, "messenger.mention", { conversation_id: conv.id, message_id: m.id, by: ot.profileView(me.ownerId) });
@@ -427,6 +451,13 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       return m;
     });
     return reply.status(201).send(messageView(ot, msg, me.ownerId));
+  });
+  app.get("/v1/ot/workspaces/:workspace/conversations/:id/messages/:message/file", async req => {
+    const me = ot.me(req);
+    const {workspace, id, message} = params(req);
+    const {conv} = workspaceConversation(ot, workspace, id, me.ownerId);
+    const file = readAttachment(ot, conv.id, message);
+    return {title: file.title, mime: file.mime, data: file.data.toString("base64")};
   });
   app.get("/v1/ot/conversations/:id/messages/:message/voice", async req => {
     const me = ot.me(req);
@@ -468,7 +499,10 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     const m = ownMessage(params(req).id, me.ownerId);
     assert(m.author_id === me.ownerId, 403, "forbidden", "you can retract your own messages (or your agents') only");
-    ot.run("UPDATE ot_messages SET retracted = 1, revision = revision + 1, body = '', edited_at = ? WHERE id = ?", ot.now(), m.id);
+    ot.tx(() => {
+      ot.run("UPDATE ot_messages SET retracted = 1, revision = revision + 1, body = '', edited_at = ? WHERE id = ?", ot.now(), m.id);
+      ot.run("DELETE FROM ot_message_attachments WHERE message_id=?", m.id);
+    });
     return { retracted: true };
   });
   app.post("/v1/ot/messages/:id/reactions", async (req) => {
@@ -533,6 +567,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       SELECT m.* FROM ot_messages m
       WHERE m.rowseq > ? AND m.author_kind = 'member' AND m.retracted = 0
         AND NOT EXISTS (SELECT 1 FROM ot_voice_messages v WHERE v.message_id=m.id)
+        AND NOT EXISTS (SELECT 1 FROM ot_message_attachments a WHERE a.message_id=m.id)
         AND EXISTS (SELECT 1 FROM ot_conversation_members cm WHERE cm.conversation_id=m.conversation_id AND cm.owner_id=?)
         AND EXISTS (SELECT 1 FROM ot_conversation_agents ca WHERE ca.conversation_id=m.conversation_id AND ca.owner_id=?)
       ORDER BY m.rowseq LIMIT ?

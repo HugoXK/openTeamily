@@ -117,6 +117,9 @@ function messageItem(row, me, env, workspaceId) {
     edited: unix(row.edited_at) || null,
     retracted: !!row.retracted,
     ...(row.voice ? { voice: row.voice } : {}),
+    ...(row.attachment ? { attachment: {...row.attachment, id: row.id,
+      path: `/v1/workspaces/${workspaceId}/social/conversations/${seg(row.conversation_id)}/messages/${seg(row.id)}/file`,
+    } } : {}),
     ...(agent ? { role: 'agent', agent_id: row.agent_ref || author.agent_ref, agent_name: row.agent_name || author.name, source: 'runtime_infer' } : {}),
   }
 }
@@ -171,6 +174,9 @@ function rethrow(error) {
     not_reachable: 'invalid',
     not_in_team: 'invalid',
     too_many_teams: 'quota',
+    attachment_too_large: 'attachment_too_large',
+    attachment_type_blocked: 'attachment_type_blocked',
+    attachment_storage_full: 'attachment_storage_full',
     call_full: 'call_full',
     call_already_joined: 'call_already_joined',
     call_ended: 'call_ended',
@@ -613,7 +619,7 @@ function messengerRoutes(host) {
           const bs = client(host)
           await teamFor(bs, match[1], 'Workspace', env)
           const me = await meOf(bs, env)
-          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, voice: body?.voice, client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
+          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, voice: body?.voice, attachment: body?.attachment, workspace: match[1], client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
         })
       },
@@ -663,6 +669,15 @@ function messengerExtraRoutes(host) {
     {
       method: 'POST', path: /^\/v1\/meeting-calls\/(create|preview|join|poll|signal|leave|end)$/,
       handle: ({ match, body }) => wrap(async () => [200, await client(host).post('/v1/ot/meeting-calls/' + match[1], body)]),
+    },
+    {
+      method: 'GET', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})\\/file'),
+      handle: ({ match, query }) => wrap(async () => {
+        const [, workspace, conversation, message] = match
+        const file = await client(host).get(`/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}/messages/${seg(message)}/file`)
+        const inline = /^(image|audio|video)\//.test(file.mime) && new URLSearchParams(query).get('download') !== '1'
+        return [200, null, {filename: file.title, content_type: file.mime, data: file.data, inline}]
+      }),
     },
     {
       method: 'GET', path: re('\\/call'),
@@ -780,7 +795,9 @@ function messengerExtraRoutes(host) {
             const row = rows.find((m) => m.id === id)
             if (!row || row.retracted || !row.body) continue
             const voice = row.voice ? await bs.get(`${conv(match[2])}/messages/${seg(id, 'message_id')}/voice`) : undefined
-            await bs.post(`${conv(target)}/messages`, { body: `[转发] ${row.body}`.slice(0, 4000), voice, client_key: `fwd:${tag}:${id}`.slice(0, 80) })
+            const attachment_from = row.attachment ? {conversation_id: match[2], message_id: id} : undefined
+            await bs.post(`${conv(target)}/messages`, { body: `[转发] ${row.body}`.slice(0, 4000), voice,
+              workspace: match[1], attachment_from, client_key: `fwd:${tag}:${id}`.slice(0, 80) })
             forwarded++
           }
           return [201, { forwarded, target_conversation_id: target }]

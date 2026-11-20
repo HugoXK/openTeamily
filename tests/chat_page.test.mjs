@@ -1256,12 +1256,12 @@ test('session timestamps use Hong Kong calendar boundaries and never invent unre
   assert.equal(formatSessionTime('invalid', now), '');
 });
 
-test('icon chat controls preserve accessible names and attachment privacy', () => {
+test('icon chat controls have accessible names and a direct file picker', () => {
   const html = chatHtml();
   assert.match(html, /id="conversation-search-open"[^>]*aria-label="搜索当前会话"[\s\S]*?<svg/);
   assert.match(html, /id="chat-call" hidden aria-label="通话" aria-haspopup="dialog"/);
-  assert.match(html, /class="attachment-menu"[\s\S]*?id="chat-attachment"/);
-  assert.match(html, /工作区成员可在作品库查看/);
+  assert.match(html, /id="chat-attachment-open"[^>]*aria-label="发送文件"/);
+  assert.match(html, /id="chat-attachment"[^>]*multiple hidden/);
   assert.match(html, /id="voice-record"[^>]*aria-label="录制语音"/);
   assert.match(html, /id="voice-preview" controls/);
 });

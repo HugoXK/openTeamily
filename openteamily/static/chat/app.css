@@ -845,13 +845,6 @@
 .composer-tools { gap: .3rem; align-items: center; }
 .composer-tools button { min-width: 2rem; min-height: 2rem; padding: .3rem; display: inline-flex; align-items: center; justify-content: center; border-radius: .4rem; }
 .composer-tools button:disabled { color: var(--ot-muted); opacity: .65; }
-.attachment-menu { position: relative; flex: 0 0 auto; }
-.attachment-menu > summary { display: grid; place-items: center; width: 2.1rem; height: 2.1rem; border-radius: .4rem; list-style: none; cursor: pointer; color: var(--ot-muted); }
-.attachment-menu > summary::-webkit-details-marker { display: none; }
-.attachment-menu[open] > summary { background: var(--ot-accent-soft); color: var(--ot-accent-hover); }
-.attachment-sheet { position: absolute; bottom: calc(100% + .65rem); left: 0; width: min(20rem, calc(100vw - 7rem)); z-index: 14; padding: .85rem; border: 1px solid var(--ot-line); border-radius: .75rem; background: var(--ot-surface); box-shadow: var(--ot-shadow); font-size: .85rem; }
-.attachment-sheet label { display: grid; gap: .65rem; }
-.attachment-sheet input { max-width: 100%; }
 #conversation-search-panel { margin: .6rem .8rem 0; padding: .75rem; border: 1px solid var(--ot-line); border-radius: .7rem; background: var(--ot-surface); max-height: 45vh; overflow: auto; }
 #conversation-search-form { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem; padding: 0; margin: 0; border: 0; background: transparent; box-shadow: none; }
 #conversation-search-form label { flex: 1 1 10rem; display: grid; gap: .3rem; font-size: .8rem; }
@@ -866,7 +859,7 @@
   #chat-form { padding: .4rem; }
   #message-scroller { padding: .75rem; }
 }
-@media (pointer: coarse) { .chat-actions button, .chat-actions a, .attachment-menu > summary, .composer-tools button { min-width: 44px; min-height: 44px; } }
+@media (pointer: coarse) { .chat-actions button, .chat-actions a, .composer-tools button { min-width: 44px; min-height: 44px; } }
 
 #conversation-list li.session-divider::before { content: attr(data-section); margin: .75rem .4rem .25rem; color: var(--ot-muted); font-size: .75rem; font-weight: 500; }
 #message-list li.mine, #message-list li.user { background: var(--ot-accent-soft); color: var(--ot-ink); }
@@ -1138,7 +1131,7 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
   min-height: 2rem; padding: 0 .875rem; border-radius: 999px; background: var(--ot-accent); color: var(--ot-on-accent, #fff); font-weight: 600;
 }
 .composer-tools { gap: .125rem; margin-top: .25rem; }
-.composer-tools button, .attachment-menu > summary { width: 2rem; min-width: 2rem; height: 2rem; min-height: 2rem; border: 0; border-radius: .5rem; background: transparent; color: var(--ot-muted); }
+.composer-tools button { width: 2rem; min-width: 2rem; height: 2rem; min-height: 2rem; border: 0; border-radius: .5rem; background: transparent; color: var(--ot-muted); }
 .composer-tools button[title*="模式"] { width: auto; padding: 0 .5rem; font-size: .75rem; }
 .composer-tools svg { width: 17px; height: 17px; }
 
@@ -1955,3 +1948,24 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
 #chat-meeting-end { color: var(--ot-danger); }
 #chat-meeting-hangup { background: var(--ot-danger); color: white; border: 0; }
 #chat-call-controls:not([hidden]) ~ #chat-call-footer #chat-call-close { background: var(--ot-danger); color: white; border: 0; }
+
+#chat-upload-error { margin: 0 .5rem .25rem; font-size: .8125rem; color: var(--ot-danger); }
+#chat-upload-error:empty, .chat-file [hidden] { display: none; }
+.chat-file { display: grid; gap: .5rem; min-width: 0; max-width: min(100%, 23rem); }
+.chat-file img, .chat-file video {
+  display: block;
+  max-width: 100%;
+  max-height: min(45dvh, 20rem);
+  object-fit: contain;
+  border-radius: .65rem;
+}
+.chat-file video { width: 100%; background: #16201a; }
+.chat-file audio { min-width: 0; max-width: 100%; }
+.chat-file-details, .chat-file-actions { display: flex; align-items: center; gap: .5rem; }
+.chat-file-info { display: grid; flex: 1; gap: .125rem; min-width: 0; overflow-wrap: anywhere; font-size: .875rem; }
+.chat-file-info small, .chat-file p { color: var(--ot-muted); font-size: .75rem; }
+.chat-file p { margin: 0; }
+.chat-file progress { width: 100%; height: .375rem; accent-color: var(--ot-accent); }
+.chat-file a { flex-shrink: 0; padding: .625rem .25rem; font-size: .8125rem; }
+.chat-file-actions button { min-height: 2.5rem; }
+#chat-attachment[hidden] { display: none; }
