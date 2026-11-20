@@ -1,13 +1,19 @@
 """Per-user DS-Bot import bundles (docs/DSBOT_PLUGIN_ARCHITECTURE.md §5)."""
 import base64
 import hashlib
+import io
 import json
 from pathlib import Path
+import secrets
 import tempfile
 import unittest
 
 from openteamily import dsbot_bundle
+from openteamily import dsbot_gateway as gw
+from openteamily import lifecycle
 from openteamily.app import App, Config
+from openteamily.lifecycle import ManagerAuth, ManagerIdentity
+from openteamily.security import digest
 from openteamily.store import Store
 from tests.test_management import Client, ORIGIN
 
@@ -26,6 +32,22 @@ class BundleTests(unittest.TestCase):
 
     def user(self, db, name):
         return db.execute('SELECT id FROM users WHERE username=?', (name,)).fetchone()[0]
+
+    def upload_media(self, client, wid, key, payload, filename='dot.png'):
+        boundary = '----ot-test-boundary'
+        raw = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="title"\r\n\r\ncover\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="kind"\r\n\r\nmedia\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f'Content-Type: image/png\r\n\r\n'
+        ).encode() + payload + f'\r\n--{boundary}--\r\n'.encode()
+        uploaded = client.call(
+            'POST', f'/v1/workspaces/{wid}/artifacts', raw=raw, headers={
+                'CONTENT_TYPE': f'multipart/form-data; boundary={boundary}',
+                'HTTP_IDEMPOTENCY_KEY': key,
+            })
+        self.assertEqual(uploaded['status'], 201, uploaded)
+        return uploaded
 
     def test_meetings_bundle_is_scoped_to_one_account_and_verifiable(self):
         for client, wid, title, key in ((self.alice, self.wid, '周会', 'bundle-meeting-0001'),
@@ -109,6 +131,59 @@ class BundleTests(unittest.TestCase):
                          hashlib.sha256(bundle['media'].encode('utf-8')).hexdigest())
         self.assertEqual(base64.b64decode(media[0]['data']), png)
 
+    def test_artifacts_media_is_delivered_through_build_with_secrets(self):
+        png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==')
+        bob_png = png + b'\x00'
+        self.upload_media(self.alice, self.wid, 'bundle-secret-media-0001', png)
+        self.upload_media(self.bob, self.bob_wid, 'bundle-secret-media-0002', bob_png, 'bob.png')
+        with self.store.connect() as db:
+            bundle = dsbot_bundle.build_with_secrets(db, self.store, self.user(db, 'alice'), 'artifacts', now=1)
+        self.assertIn('media', bundle)
+        self.assertEqual(bundle['manifest']['media']['sha256'],
+                         hashlib.sha256(bundle['media'].encode('utf-8')).hexdigest())
+        media = json.loads(bundle['media'])
+        self.assertEqual(len(media), 1)
+        self.assertEqual(bundle['manifest']['media']['rows'], 1)
+        self.assertEqual(media[0]['workspace_id'], self.wid)
+        self.assertEqual(media[0]['sha256'], hashlib.sha256(png).hexdigest())
+        self.assertEqual(media[0]['byte_count'], len(png))
+        self.assertEqual(base64.b64decode(media[0]['data']), png)
+        self.assertNotIn(self.bob_wid, {item['workspace_id'] for item in media})
+        self.assertNotIn('secrets', bundle)
+
+    def test_gateway_import_path_delivers_artifact_media(self):
+        png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==')
+        self.upload_media(self.alice, self.wid, 'bundle-gateway-media-01', png)
+        iid = '1' * 32
+        token = secrets.token_urlsafe(32)
+        seal = 'ab' * 32
+        with self.store.transaction() as db:
+            db.executescript(lifecycle.SCHEMA)
+            db.execute(
+                "INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,desired,revision,"
+                "operation_id,operation_type,observed,observed_revision,health,process_ref,error_code,blocked,create_key,created) "
+                "VALUES(?,?,?,'p','compose','img',?,'running',1,'op','create','running',1,'healthy',NULL,NULL,0,?,?)",
+                (iid, self.wid, self.user(db, 'alice'), 'vol-gateway', 'create-gateway', 1800000000))
+        gateway = gw.GatewayApp(self.store, ORIGIN, '__Host-ot_session', 'k' * 40)
+        gateway.manager_auth = ManagerAuth([
+            ManagerIdentity('manager-a', digest(token), frozenset({iid}), 'compose')])
+        body = json.dumps({'seal_key': seal}).encode()
+        env = {'REQUEST_METHOD': 'POST', 'PATH_INFO': f'/v1/internal/instances/{iid}/dsbot-import',
+               'REMOTE_ADDR': '127.0.0.1', 'CONTENT_LENGTH': str(len(body)), 'wsgi.input': io.BytesIO(body),
+               'HTTP_AUTHORIZATION': f'Bearer manager-a.{token}'}
+        headers, raw = gateway.import_bundles(env, iid)
+        payload = json.loads(raw)
+        self.assertTrue(payload['owner_imported'])
+        bundle = next(item['bundle'] for item in payload['features'] if item['name'] == 'artifacts')
+        self.assertIn('media', bundle)
+        media = json.loads(bundle['media'])
+        self.assertEqual(len(media), 1)
+        self.assertEqual(bundle['manifest']['media']['rows'], 1)
+        self.assertEqual(bundle['manifest']['media']['sha256'],
+                         hashlib.sha256(bundle['media'].encode('utf-8')).hexdigest())
+        self.assertEqual(media[0]['workspace_id'], self.wid)
+        self.assertEqual(media[0]['sha256'], hashlib.sha256(png).hexdigest())
+        self.assertEqual(base64.b64decode(media[0]['data']), png)
 
 
 class PersonalBootstrapTests(unittest.TestCase):
