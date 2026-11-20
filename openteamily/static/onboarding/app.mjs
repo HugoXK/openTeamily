@@ -24,6 +24,54 @@ async function request(method, path, body) {
 
 const LOOK_LABELS = {color: '颜色', expression: '表情', headwear: '头饰', glasses: '眼镜', hand: '手持'};
 
+// Composio toolkit slugs for the step-2 catalog in openteamily/onboarding.py.
+// The catalog uses dashed ids; Composio does not, so the mapping is explicit
+// instead of guessed from the display name.
+const TOOLKITS = {
+  gmail: 'gmail', outlook: 'outlook', 'google-calendar': 'googlecalendar', github: 'github',
+  'google-drive': 'googledrive', notion: 'notion', 'google-sheets': 'googlesheets', 'google-docs': 'googledocs',
+};
+
+// The words for one app row come from the real read, never from a constant.
+// `readable: false` means the connection list could not be read (no Composio
+// key of the user's own, or another refusal): that row says 未接入, because
+// claiming 未连接 would assert something about an app nobody asked.
+export function appConnectionState(app, {connections = [], readable = true, sync = 'ok'} = {}) {
+  if (!readable) {
+    return {state: 'unknown', label: '未接入', connected: false,
+            title: '还没有配置你自己的 Composio key，读不到这个应用的连接状态'};
+  }
+  if (sync === 'failed') {
+    return {state: 'unknown', label: '状态未知', connected: false,
+            title: 'Composio 同步失败，这次读到的连接状态不可信'};
+  }
+  const slug = TOOLKITS[app.key] || String(app.key || '');
+  const rows = (connections || []).filter(row => row && String(row.toolkit || '').toLowerCase() === slug);
+  if (rows.some(row => row.state === 'connected')) {
+    return {state: 'connected', label: '已连接', connected: true, title: '这个应用已经有真实的连接'};
+  }
+  if (rows.some(row => row.state === 'connecting')) {
+    return {state: 'connecting', label: '连接中', connected: false, title: '授权流程还没有完成'};
+  }
+  if (rows.some(row => row.state === 'inactive')) {
+    return {state: 'inactive', label: '已停用', connected: false, title: '连接存在但已停用，需要重新授权'};
+  }
+  if (rows.some(row => row.state === 'failed')) {
+    return {state: 'failed', label: '连接失败', connected: false, title: '上次授权失败，需要重新连接'};
+  }
+  return {state: 'unconnected', label: '未连接', connected: false, title: '还没有这个应用的连接'};
+}
+
+// What the workspace already has, said in one line instead of "everything is
+// unconnected". Empty string when the reads returned nothing to report.
+export function realitySummary({agents = 0, runtimes = 0, online = 0} = {}) {
+  const parts = [];
+  if (agents > 0) parts.push(`${agents} 个智能体`);
+  if (runtimes > 0) parts.push(online > 0 ? `${online} 个运行时连接在线` : `${runtimes} 个运行时连接（都不在线）`);
+  if (!parts.length) return '';
+  return '你的工作区已经有 ' + parts.join('，') + '。';
+}
+
 
 const TILE_TONES = 6;
 
@@ -227,18 +275,45 @@ function mount() {
     industries = result.body.industries || [];
     populateIndustries();
     fill(result.body.onboarding);
-    renderSteps(result.body.steps, result.body.onboarding);
+    await renderSteps(result.body.steps, result.body.onboarding);
     const ready = document.getElementById('onboarding-ready-name');
     if (ready) ready.textContent = session.body.user.username + '，';
     goStep(step);
   }
 
-  function renderSteps(steps, state) {
+  async function readReality() {
+    const out = {agents: 0, runtimes: 0, online: 0, connections: [], readable: true, sync: 'ok'};
+    const spaces = await request('GET', '/v1/workspaces?limit=100');
+    const workspace = spaces.status === 200 ? (spaces.body.items || [])[0] : null;
+    if (workspace) {
+      const listed = await request('GET', `/v1/workspaces/${workspace.id}/agents?limit=100`);
+      if (listed.status === 200) out.agents = (listed.body.items || []).length;
+    }
+    const runtimes = await request('GET', '/v1/runtime/connections');
+    if (runtimes.status === 200) {
+      const items = runtimes.body.items || [];
+      out.runtimes = items.length;
+      out.online = items.filter(item => item && item.status === 'online').length;
+    }
+    const listed = await request('GET', '/v1/composio/connections');
+    if (listed.status === 200) {
+      out.connections = listed.body.items || [];
+      out.sync = listed.body.sync === 'failed' ? 'failed' : 'ok';
+    } else {
+      out.readable = false;
+    }
+    return out;
+  }
+
+  async function renderSteps(steps, state) {
     const section = document.getElementById('onboarding-steps');
     if (!section) return;
     if (!steps) return;
     const apps = document.getElementById('onboarding-apps');
     apps.textContent = '';
+    const reality = await readReality();
+    const summary = document.getElementById('onboarding-reality');
+    if (summary) summary.textContent = realitySummary(reality);
     for (const app of steps.apps || []) {
       const li = document.createElement('li');
       const tile = document.createElement('span');
@@ -252,15 +327,18 @@ function mount() {
       name.textContent = app.name;
       const state = document.createElement('span');
       state.className = 'app-state';
-      state.textContent = ' · 未连接';
+      const info = appConnectionState(app, reality);
+      state.dataset.state = info.state;
+      state.textContent = ' · ' + info.label;
+      state.title = info.title;
       copy.append(name, state);
       const connect = document.createElement('button');
       connect.type = 'button';
       connect.disabled = true;
       connect.className = 'app-connect';
-      connect.textContent = '+ 连接';
-      connect.title = '未接通：OpenTeamily 还没有第三方授权';
-      connect.setAttribute('aria-label', app.name + '：连接未接通');
+      connect.textContent = info.connected ? '已连接' : '+ 连接';
+      connect.title = info.connected ? info.title : info.title + '；连接在 设置 → 应用连接器 里做';
+      connect.setAttribute('aria-label', app.name + '：' + info.label);
       li.append(tile, copy, connect);
       apps.appendChild(li);
     }

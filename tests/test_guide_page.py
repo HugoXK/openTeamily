@@ -60,9 +60,11 @@ class GuidePageTests(unittest.TestCase):
         self.assertIn('/settings#send-shortcut', script)
         self.assertIn('现在能做什么：', script)
         self.assertIn('已知边界：', script)
-        # The three greyed entry points stay greyed; this slice never fakes them.
+        # The graph view stays greyed; this slice never fakes it. The help centre is now a
+        # real /help page (main), so the account menu links to it instead of a greyed stub.
         self.assertIn('id="view-graph" disabled', html)
-        self.assertIn('title="未实现：还没有 OpenTeamily 帮助中心页"', html)
+        self.assertIn('<a href="/help" role="menuitem">帮助中心</a>', html)
+        self.assertNotIn('未实现：还没有 OpenTeamily 帮助中心页', html)
 
     def test_guide_search_box_names_itself_and_states_the_empty_copy(self):
         page = self.raw.call('GET', '/guide')

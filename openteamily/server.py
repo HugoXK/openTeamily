@@ -9,6 +9,7 @@ from .lifecycle import Lifecycle, RuntimePolicy
 from .operator_config import load_manager_auth, load_operator_admin
 from .oidc import load_oidc_providers
 from .settings_page import SettingsPage
+from .model_http_policy import load_model_http_policy
 
 
 class QuietHandler(WSGIRequestHandler):
@@ -41,6 +42,7 @@ def main():
     parser.add_argument('--compose-image', help='Explicit Compose execution profile; operator-supplied image@sha256 digest, never pulled by Web')
     parser.add_argument('--manager-grants', help='Operator-owned private JSON file containing manager credential digests and explicit instance grants')
     parser.add_argument('--operator-admin', help='Operator-owned private JSON file with a credential_hash for admin APIs (platform model API)')
+    parser.add_argument('--model-http-policy', help='Private operator file of exact public IPv4 HTTP task-model bases; HTTPS default unchanged')
     parser.add_argument('--oidc-providers', help='Operator-owned private JSON file of OIDC/OAuth client credentials; secrets are never logged')
     parser.add_argument('--no-automation-worker', action='store_true',
                         help='Do not start the background automation worker; explicit tick still works')
@@ -58,8 +60,9 @@ def main():
         manager_auth = load_manager_auth(args.manager_grants) if args.manager_grants else None
         operator_admin = load_operator_admin(args.operator_admin) if args.operator_admin else None
         oidc_registry = load_oidc_providers(args.oidc_providers) if args.oidc_providers else None
+        http_policy = load_model_http_policy(args.model_http_policy) if args.model_http_policy else None
         app = App(store, Config(origin=args.origin, insecure_local=args.insecure_local,
-                                allow_registration=args.open_registration), lifecycle=lifecycle, manager_auth=manager_auth, operator_admin=operator_admin, oidc_registry=oidc_registry)
+                                allow_registration=args.open_registration), lifecycle=lifecycle, manager_auth=manager_auth, operator_admin=operator_admin, oidc_registry=oidc_registry, model_http_policy=http_policy)
     except (OSError, ValueError, TypeError):
         parser.error('Cannot initialize private storage or origin configuration')
     page = SettingsPage(app)
