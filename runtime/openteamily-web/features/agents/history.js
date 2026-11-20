@@ -50,11 +50,28 @@ export async function importHistory({ db, rt, ctx, bot, conversationId, sessionI
   const used = new Set(events.flatMap((e,i)=>db.prepare('SELECT 1 FROM native_agent_events WHERE session_id=? AND event_seq=?').get(e.id,e.seq) ? [i] : [])), put = db.prepare('INSERT OR IGNORE INTO native_agent_events VALUES(?,?,?,?)')
   const agent = await rt.resolveAgent(sessionId)
   let imported=0,matched=0
+  // A native system head must precede the first surface message. This is an
+  // EMPTY current initialization, not a historical prompt or model response.
+  // Native execution replaces it with the actual scoped prompt before inference.
+  const initializeHead = async () => {
+    if (agent.session.surface.nodes.length) return
+    const native = await import(pathToFileURL(createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').resolve('@deepseek-ai/dsh-llm')).href)
+    const source={kind:'openteamily-initialization',reason:'protect-native-history-head',noModelCall:true}
+    let turn=1
+    for(let seq=0;seq<agent.session.seq;seq++){const e=agent.session.eventAt(seq);if(e.type==='turn/start')turn=Math.max(turn,e.data.turn+1)}
+    agent.session.append('turn/start',{turn,source})
+    agent.session.append('step/start',{turn,step:1,source})
+    agent.session.append('system/message',{turn,step:1,message:native.createSystemMessage('')},{surfaceOp:'append'})
+    agent.session.append('step/end',{turn,step:1,source})
+    agent.session.append('turn/end',{turn,source})
+    await ctx.sessions.flush(agent.session)
+  }
   for(const row of rows){
     if(db.prepare('SELECT 1 FROM native_agent_events WHERE message_id=?').get(row.id)) continue
     if(JSON.parse(row.meta || '{}').nativePending) continue
     const known=events.find((e,i)=>!used.has(i) && (e.tag===row.id || e.rpc==='ot-agent:'+row.id || e.rpc==='otp:'+row.id || (e.role===row.role && e.text===row.text && row.text)))
     if(known){ used.add(events.indexOf(known));put.run(row.id,known.id,known.seq,'adopted');matched++;continue }
+    await initializeHead()
     // Failed/empty messages remain visible diagnostic events, not fabricated replies.
     const source={kind:'user',openteamilyMessageId:row.id,originalTime:row.created*1000,imported:true,status:row.status}
     let event

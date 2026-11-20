@@ -98,3 +98,12 @@ remapped transactionally by message ID. Bot, Session, platform message IDs, cont
 original timestamps are preserved. Native envelope events are inserted, explicitly marked
 as imported transcript boundaries rather than newly executed model turns. Completion still
 requires deployment, repair proof, restart, and test-account native/history acceptance.
+
+
+### Bounded restoration follow-up (2026-11-20 Asia/Shanghai)
+
+- Readiness: publish the native runtime handle only after bridge services exist; pending imports must not retain the early incomplete frozen handle.
+- Native current-format validation also requires a protected system surface head. Source-marked imports made before the first actual native turn lacked that structural head. The narrowly scoped repair adds an **empty current initialization** (public `createSystemMessage('')`, lifecycle boundaries, no model call), not an inferred historical prompt, user message, assistant response, provider or usage. Every original message payload and original timestamp is retained, originals backed up byte-for-byte, typed native references and durable import mappings remapped. Strict published codec validation is required before replacement.
+- New imports initialize the same empty native head before their first surface record. Actual execution replaces the empty head with its real scoped current prompt.
+- Dedicated Social onboarding collision retries now send an explicit supported home handle whose suffix remains within the server's 20-character derived stem. Existing credentials/handles are untouched; HTTP 429 still terminates retry and no rate limit is relaxed or bypassed.
+- Deployment and finite live acceptance for this follow-up remain pending; retained personal-agent bundles are NOT declared imported.
