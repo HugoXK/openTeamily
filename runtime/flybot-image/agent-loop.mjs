@@ -2,6 +2,7 @@
 // Uses the lease-injected runtime key file. Never writes the token to stdout.
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { validateModelEndpoint, fetchHttpTask, MODEL_HTTP_FORMAT, MODEL_HTTP_HEADER } from './model-http-policy.mjs'
 
 export const DEFAULT_KEY_FILE = '/run/secrets/openteamily-runtime-key.json'
 
@@ -36,6 +37,7 @@ async function call(origin, token, method, path, body) {
       'Authorization': 'Bearer ' + token,
       'Content-Type': 'application/json',
       'Accept': 'application/json',
+      ...(path.endsWith('/model-access') ? {[MODEL_HTTP_HEADER]: MODEL_HTTP_FORMAT} : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
@@ -50,16 +52,22 @@ async function call(origin, token, method, path, body) {
 }
 
 export async function infer(modelApi, prompt, bridge = null, fetcher = globalThis.fetch) {
-  const base = String(modelApi.base_url || '').replace(/\/+$/, '')
+  const httpTask = validateModelEndpoint(modelApi?.base_url, modelApi?.http_endpoint_grant)
+  const base = httpTask ? modelApi.base_url : String(modelApi.base_url || '').replace(/\/+$/, '')
+  const transport = httpTask && fetcher === globalThis.fetch
+    ? (_target, init) => fetchHttpTask(base, modelApi.http_endpoint_grant, init) : fetcher
   const messages = [{ role: 'user', content: prompt }]
   const tools = bridge ? (await bridge.discover()).tools || [] : []
   for (let round = 0; round < 5; round += 1) {
-    const response = await fetcher(base + '/chat/completions', {
+    const response = await transport(base + '/chat/completions', {
       method: 'POST', signal: AbortSignal.timeout(30000),
+      ...(httpTask ? {redirect: 'error'} : {}),
       headers: { 'Authorization': 'Bearer ' + modelApi.api_key, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: modelApi.model, messages,
         ...(tools.length ? {tools, parallel_tool_calls: false} : {}) }),
     })
+    if (httpTask && (response.redirected || (response.status >= 300 && response.status < 400)
+        || (response.url && response.url !== base + '/chat/completions'))) throw new Error('Model redirect rejected')
     const parsed = await response.json()
     const message = parsed?.choices?.[0]?.message
     if (!response.ok || !message) throw new Error('model provider returned an unexpected body')
