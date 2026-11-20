@@ -54,6 +54,10 @@ def endpoint(value):
 
 
 def public_ip(ip):
+    # Exclude IPv6 translation/tunnel space (including NAT64) as well as the
+    # standard non-public ranges; only native global-unicast IPv6 is eligible.
+    if ip.version == 6 and ip not in ipaddress.ip_network('2000::/3'):
+        return False
     return ip.is_global and not (ip.is_multicast or ip.is_reserved or ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_private) and not getattr(ip, 'ipv4_mapped', None) and not getattr(ip, 'sixtofour', None) and not getattr(ip, 'teredo', None)
 
 

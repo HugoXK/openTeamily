@@ -112,7 +112,7 @@ class CustomMcpTests(unittest.TestCase):
             with self.assertRaises(connected_tools.Fault):
                 custom_mcp.transport('https://mcp.example.test/mcp', {}, b'{}')
             pinned.assert_not_called()
-        for addr in ['127.0.0.1', '10.0.0.1', '169.254.169.254', '::1', '::ffff:8.8.8.8', '224.0.0.1']:
+        for addr in ['127.0.0.1', '10.0.0.1', '169.254.169.254', '::1', '::ffff:8.8.8.8', '64:ff9b::a00:1', '64:ff9b:1::1', '224.0.0.1']:
             self.assertFalse(custom_mcp.public_ip(ipaddress.ip_address(addr)))
 
     def test_redirect_and_oversized_responses_rejected_without_retry(self):
@@ -124,3 +124,20 @@ class CustomMcpTests(unittest.TestCase):
             with self.assertRaises(connected_tools.Fault):
                 custom_mcp.Client({'url': 'https://mcp.example.test/mcp'}, fake).initialize()
             self.assertEqual(len(calls), 1)
+
+    def test_public_dns_is_pinned_and_mixed_private_answers_fail_closed(self):
+        public = (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('8.8.8.8', 443))
+        private = (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('10.0.0.1', 443))
+        with patch.object(socket, 'getaddrinfo', return_value=[public, private]), patch.object(custom_mcp, 'PinnedHTTPS') as pinned:
+            with self.assertRaises(connected_tools.Fault):
+                custom_mcp.transport('https://mcp.example.test/mcp', {}, b'{}')
+            pinned.assert_not_called()
+        with patch.object(socket, 'getaddrinfo', return_value=[public]) as resolver, patch.object(custom_mcp, 'PinnedHTTPS') as pinned:
+            response = pinned.return_value.getresponse.return_value
+            response.status = 302
+            response.read.return_value = b''
+            response.getheaders.return_value = [('Location', 'https://127.0.0.1/private')]
+            status, _, _ = custom_mcp.transport('https://mcp.example.test/mcp', {}, b'{}')
+            self.assertEqual(status, 302)  # Client rejects it; transport never follows.
+            pinned.assert_called_once_with('mcp.example.test', '8.8.8.8')
+            self.assertEqual(resolver.call_count, 1)
