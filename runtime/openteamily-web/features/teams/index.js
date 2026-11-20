@@ -1,11 +1,13 @@
 // Stream C: teams and the team directory (legacy teams.py / team_directory.py), shared via Bot Social.
 import { sharedBotSocial, seg, qs } from '../../lib/c/bot-social.js'
+import { teamsV1 } from '../../lib/c/legacy-v1.js'
 
 export default function teams(host) {
   const bs = () => sharedBotSocial(host)
   return {
     pages: ['team'],
     endpoints: {
+      v1: teamsV1(host),
       list: async () => bs().get('/v1/ot/teams'),
       create: async (p) => bs().post('/v1/ot/teams', { name: p?.name, slug: p?.slug, summary: p?.summary }),
       get: async (p) => bs().get(`/v1/ot/teams/${seg(p?.team_id, 'team_id')}`),

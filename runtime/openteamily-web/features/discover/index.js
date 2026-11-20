@@ -3,12 +3,14 @@
 // What is published is only the projection the owner passes here (title, summary, category, kind,
 // optional public snapshot) — never instructions, memory or credentials.
 import { sharedBotSocial, seg, qs } from '../../lib/c/bot-social.js'
+import { discoverV1 } from '../../lib/c/legacy-v1.js'
 
 export default function discover(host) {
   const bs = () => sharedBotSocial(host)
   return {
     pages: ['discover'],
     endpoints: {
+      v1: discoverV1(host),
       publish: async (p) => bs().put('/v1/ot/listings', {
         kind: p?.kind, ref: p?.ref, slug: p?.slug, title: p?.title, summary: p?.summary,
         category: p?.category, work_kind: p?.work_kind, snapshot: p?.snapshot,

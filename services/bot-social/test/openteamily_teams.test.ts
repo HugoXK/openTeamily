@@ -98,3 +98,28 @@ test("approval invites and the team directory queue join requests for owners and
   await A.ok("DELETE", `/v1/ot/teams/${team.id}`);
   assert.equal((await C.ok("GET", "/v1/ot/teams")).teams.length, 0);
 });
+
+test("a platform workspace binds to one team; members can be added by handle", async () => {
+  const A = await home(S.base, "ws-owner");
+  const B = await home(S.base, "ws-bea");
+  const workspace = "c".repeat(32);
+  const first = await A.ok("POST", "/v1/ot/teams/ensure", { workspace_id: workspace, name: "Bound Studio" });
+  assert.equal(first.workspace_id, workspace);
+  assert.equal(first.name, "Bound Studio");
+  const again = await A.ok("POST", "/v1/ot/teams/ensure", { workspace_id: workspace });
+  assert.equal(again.id, first.id);
+  assert.equal((await B.call("POST", "/v1/ot/teams/ensure", { workspace_id: workspace })).status, 404, "non-member cannot claim a bound team");
+  const looked = await A.ok("GET", `/v1/ot/teams/by-workspace/${workspace}`);
+  assert.equal(looked.id, first.id);
+  const added = await A.call("POST", `/v1/ot/teams/${first.id}/members`, { handle: B.handle, role: "member" });
+  assert.equal(added.status, 201);
+  const members = await A.ok("GET", `/v1/ot/teams/${first.id}/members`);
+  assert.ok(members.members.some((m: any) => m.handle === B.handle && m.role === "member"));
+  const uid = "d".repeat(32);
+  const profile = await B.ok("PUT", "/v1/ot/profile", { platform_user_id: uid });
+  assert.equal(profile.platform_user_id, uid);
+  await A.ok("PATCH", `/v1/ot/teams/${first.id}/members/${uid}`, { role: "admin" });
+  const after = await A.ok("GET", `/v1/ot/teams/${first.id}/members`);
+  assert.equal(after.members.find((m: any) => m.handle === B.handle).role, "admin");
+  assert.equal((await A.call("POST", "/v1/ot/teams", { name: "Other", workspace_id: workspace })).status, 409);
+});

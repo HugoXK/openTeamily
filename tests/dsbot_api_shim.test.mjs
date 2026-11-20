@@ -32,7 +32,8 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   // Cross-user / provision routes stay on the platform.
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/homepage`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/runtime`, ORIGIN), null);
-  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/discover`, ORIGIN), null);
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/discover`, ORIGIN).feature, 'discover');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/discover/revoke`, ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/settings', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/notification-prefs', ORIGIN).feature, 'settings');
   assert.equal(movedTarget('/v1/onboarding/look', ORIGIN).feature, 'settings');
@@ -44,6 +45,31 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget('/v1/skill-secrets', ORIGIN), null);
   assert.equal(movedTarget('/v1/onboarding/automations', ORIGIN), null);
   assert.equal(movedTarget(`https://evil.example/v1/workspaces/${WS}/meetings`, ORIGIN), null);
+});
+
+
+test('members, team, messenger and discover /v1 routes go to the C features', () => {
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/members`, ORIGIN).feature, 'members');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/members/${ID}/remove`, ORIGIN).feature, 'members');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/members/ann.home/suspend`, ORIGIN).feature, 'members');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/invites`, ORIGIN).feature, 'invites');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/invites/oti_01/revoke`, ORIGIN).feature, 'invites');
+  assert.equal(movedTarget('/v1/invites/accept', ORIGIN).feature, 'invites');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/join-requests/${ID}/approve`, ORIGIN).feature, 'invites');
+  assert.equal(movedTarget('/v1/join-requests', ORIGIN).feature, 'invites');
+  assert.equal(movedTarget('/v1/team-directory?q=guild', ORIGIN).feature, 'teams');
+  assert.equal(movedTarget(`/v1/team-directory/${WS}/join`, ORIGIN).feature, 'teams');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/directory`, ORIGIN).feature, 'teams');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations?limit=20`, ORIGIN).feature, 'messenger');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations/otc_01/messages`, ORIGIN).feature, 'messenger');
+  assert.equal(movedTarget('/v1/discover/agents?q=x', ORIGIN).feature, 'discover');
+  assert.equal(movedTarget('/v1/discover/me/works?tab=following', ORIGIN).feature, 'discover');
+  assert.equal(movedTarget('/v1/discover/works/my-essay/engagement', ORIGIN).feature, 'discover');
+  // Workspace list/create and the platform team-create stay on the site.
+  assert.equal(movedTarget('/v1/auth/session', ORIGIN), null);
+  assert.equal(movedTarget('/v1/workspaces?limit=100', ORIGIN), null);
+  assert.equal(movedTarget(`/v1/workspaces/${WS}`, ORIGIN), null);
+  assert.equal(movedTarget('/v1/teams', ORIGIN), null);
 });
 
 test('the envelope carries method, path, body and idempotency key only', () => {
