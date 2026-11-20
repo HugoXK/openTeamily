@@ -71,6 +71,23 @@ test('create is idempotent, titles are unique, updates check revision', async ()
   assert.equal(e['automations/list']({ workspace_id: 'b'.repeat(32) }).items.length, 0)
 })
 
+test('the mine tab lists saved automations for the signed-in runtime owner', async () => {
+  const { e } = fixture()
+  const draft = { workspace_id: W, template_id: 'custom', prompt: 'Respond once',
+    schedule: { kind: 'now', time_zone: 'UTC' } }
+  const { automation } = e['automations/create']({
+    ...draft, title: '我的任务', participants: ['alice'], idempotency_key: 'a'.repeat(16),
+  })
+  e['automations/create']({
+    ...draft, title: '其他人的任务', participants: ['bobby'], idempotency_key: 'b'.repeat(16),
+  })
+  const path = `/v1/workspaces/${W}/automations?category=mine`
+  const request = new Request('https://example.test', { headers: { 'x-ot-owner-username': 'Alice' } })
+  const result = await e['automations/v1']({ path }, { request })
+  assert.equal(result.status, 200)
+  assert.deepEqual(result.body.items.map(item => item.id), [automation.id])
+})
+
 test('a due schedule fires inside DS-Bot once per slot and records the DS-Bot reply', async () => {
   const at = zonedEpoch('UTC', 2027, 1, 4, 9, 1)
   const { e, calls, feature, clock } = fixture(null, at)

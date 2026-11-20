@@ -91,9 +91,11 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(headers['X-OT-Upstream'], '172.30.0.11:8080')
         self.assertEqual(headers['X-OT-Instance'], '1' * 32)
         self.assertEqual(headers['X-OT-Upstream-Path'], '/')
+        self.assertEqual(headers['X-OT-Owner-Username'], 'user0')
         status, headers = self.call(b, uri='/b/api/bot?x=1')
         self.assertEqual((status, headers['X-OT-Upstream']), (204, '172.30.0.12:8080'))
         self.assertEqual(headers['X-OT-Upstream-Path'], '/api/bot?x=1')
+        self.assertEqual(headers['X-OT-Owner-Username'], 'user1')
 
     def test_request_fields_cannot_select_another_instance(self):
         a = self.tokens['a' * 32]
@@ -291,6 +293,7 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(headers['X-OT-Instance'], '1' * 32)
         self.assertTrue(headers['X-OT-Upstream-Path'].startswith('/api/openteamily/gateway?path='))
         self.assertEqual(headers['X-OT-Upstream-Token'], token)
+        self.assertNotIn('X-OT-Owner-Username', headers)
         # A key for B must never reach A.
         other = 'ota_' + '2' * 32 + '_' + 'K' * 43
         status, headers = self.call(
@@ -315,6 +318,13 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('proxy_set_header Authorization $http_authorization;', conf)
         # The caller's Authorization still never reaches a runtime.
         self.assertIn('proxy_set_header Authorization "";', conf)
+
+    def test_nginx_sets_runtime_owner_from_the_authorization_response(self):
+        conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
+        browser, external = conf.split('location @ot_dsbot {', 1)[1].split('location ^~ /v1/gateway/ {', 1)
+        self.assertIn('auth_request_set $ot_owner_username $upstream_http_x_ot_owner_username;', browser)
+        self.assertIn('proxy_set_header X-OT-Owner-Username $ot_owner_username;', browser)
+        self.assertIn('proxy_set_header X-OT-Owner-Username "";', external)
 
 
 

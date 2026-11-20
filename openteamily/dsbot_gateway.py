@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS dsbot_upstreams (
 
 SAFE_METHODS = ('GET', 'HEAD', 'OPTIONS')
 TOKEN = re.compile(r'[A-Za-z0-9_-]{43}')
+OWNER_USERNAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{2,63}')
 ADDRESS = re.compile(r'(\d{1,3}(?:\.\d{1,3}){3}):(\d{2,5})')
 COOKIE_NAME = re.compile(r'dsh-auth-[A-Za-z0-9._:%-]{1,200}')
 PAGE_SEGMENT = re.compile(r'[a-z0-9][a-z0-9-]{0,40}')
@@ -303,8 +304,10 @@ def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_s
     token = _cookies(cookie_header).get(session_cookie, '')
     if not TOKEN.fullmatch(token):
         raise GatewayError(401, 'unauthorized')
-    session = db.execute('SELECT user_id FROM sessions WHERE token_hash=? AND expires>?',
-                         (digest(token), now)).fetchone()
+    session = db.execute(
+        'SELECT sessions.user_id, users.username FROM sessions JOIN users ON users.id=sessions.user_id '
+        'WHERE sessions.token_hash=? AND sessions.expires>?', (digest(token), now),
+    ).fetchone()
     if session is None:
         raise GatewayError(401, 'unauthorized')
     try:
@@ -313,12 +316,14 @@ def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_s
         raise GatewayError(503, 'dsbot_not_ready') from error
     row = _upstream_row(db, instance_id)
     address = validate_address(row[1])
+    username = session[1]
     return [
         ('X-OT-Upstream', address),
         ('X-OT-Upstream-Path', upstream_path),
         ('X-OT-Upstream-Origin', 'http://' + address),
         ('X-OT-Upstream-Cookie', row[2]),
         ('X-OT-Instance', row[0]),
+        ('X-OT-Owner-Username', username if OWNER_USERNAME.fullmatch(username) else ''),
     ]
 
 
@@ -619,6 +624,7 @@ __DSBOT_LOCATIONS__
     auth_request_set $ot_path $upstream_http_x_ot_upstream_path;
     auth_request_set $ot_origin $upstream_http_x_ot_upstream_origin;
     auth_request_set $ot_cookie $upstream_http_x_ot_upstream_cookie;
+    auth_request_set $ot_owner_username $upstream_http_x_ot_owner_username;
     proxy_pass http://$ot_upstream$ot_path;
     proxy_http_version 1.1;
     proxy_set_header Host $ot_upstream;
@@ -628,6 +634,7 @@ __DSBOT_LOCATIONS__
     proxy_set_header Sec-Fetch-Site "";
     proxy_set_header X-OT-Upstream "";
     proxy_set_header X-OT-Upstream-Cookie "";
+    proxy_set_header X-OT-Owner-Username $ot_owner_username;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $ot_connection_upgrade;
     proxy_buffering off;
@@ -653,6 +660,7 @@ __DSBOT_LOCATIONS__
     proxy_set_header X-OT-Upstream "";
     proxy_set_header X-OT-Upstream-Cookie "";
     proxy_set_header X-OT-Upstream-Token "";
+    proxy_set_header X-OT-Owner-Username "";
     proxy_hide_header Set-Cookie;
     proxy_buffering off;
     proxy_read_timeout 120s;
