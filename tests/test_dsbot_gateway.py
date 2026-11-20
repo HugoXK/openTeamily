@@ -138,6 +138,8 @@ class GatewayTest(unittest.TestCase):
     def test_moved_pages_map_to_plugin_route(self):
         routes = dict(gw.load_routes(), moved_pages=frozenset({'chat', 'home'}))
         self.assertEqual(gw.target_for('/chat/', routes), '/api/openteamily/page?path=%2Fchat%2F')
+        self.assertEqual(gw.target_for('/chat?start=0', routes), '/api/openteamily/page?path=%2Fchat')
+        self.assertEqual(gw.target_for('/chat/app.mjs?v=1', routes), '/api/openteamily/page?path=%2Fchat%2Fapp.mjs')
         self.assertEqual(gw.target_for('/', routes), '/api/openteamily/page?path=%2F')
         self.assertIsNone(gw.target_for('/privacy/', routes))
 
@@ -159,6 +161,10 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/export'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/revoke'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'), 'discover')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/draft'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/speech'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/transcribe'), 'meetings')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/draft'))
 
     def test_c_api_routing_matches_plugin_features_without_platform_execution(self):
         ws, ident = 'a' * 32, 'b' * 32
@@ -218,7 +224,8 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('location = /members { return 418; }', conf)
         self.assertIn('location = /discover { return 418; }', conf)
         self.assertIn('absolute_redirect off;', conf)
-        self.assertIn('location @ot_login { return 302 /register/; }', conf)
+        self.assertIn('location @ot_login { return 302 /login; }', conf)
+        self.assertNotIn('location = /login { return 418; }', conf)
         self.assertIn('location ^~ /v1/discover/ { return 418; }', conf)
 
     def test_nginx_config_optional_social_path(self):
@@ -347,7 +354,7 @@ class GatewayTest(unittest.TestCase):
     def test_manager_import_bundles_are_scoped_to_the_granted_owner(self):
         import io
         token = secrets.token_urlsafe(32)
-        self.app.manager_auth = ManagerAuth([ManagerIdentity('manager-a', digest(token), frozenset({'1' * 32}), 'compose')])
+        self.app.manager_auth = ManagerAuth([ManagerIdentity('manager-a', digest(token), frozenset({'1' * 32, '3' * 32}), 'compose')])
         seal = 'ab' * 32
         raw = json.dumps({'seal_key': seal}).encode()
 
@@ -370,6 +377,16 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(post('2' * 32)[0], 403)
         self.assertEqual(post('1' * 32, tok='x' * 43)[0], 401)
         self.assertEqual(post('1' * 32, body=json.dumps({'seal_key': '00'}).encode())[0], 400)
+        with self.store.transaction() as db:
+            db.execute("INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,"
+                       "desired,revision,operation_id,operation_type,observed,observed_revision,health,create_key,created) "
+                       "VALUES(?,?,?,'p','compose','img','legacy-volume','running',1,'op','create','running',1,'healthy','legacy',0)",
+                       ('3' * 32, '0' * 32, 'a' * 32))
+            db.execute('INSERT INTO runtime_auto_provisions VALUES(?,?,?,?,?,?)',
+                       ('a' * 32, '0' * 32, 'a' * 32, '1' * 32, 'manager-a', 1))
+        status, rejected = post('3' * 32)
+        self.assertEqual((status, rejected['error']['code']), (409, 'import_destination'))
+        self.assertEqual(post('1' * 32)[0], 200)
 
 if __name__ == '__main__':
     unittest.main()

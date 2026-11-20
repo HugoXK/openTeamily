@@ -370,12 +370,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const emptyEl = document.getElementById('list-empty');
   const editor = document.getElementById('editor-form');
   const actionEditor = document.getElementById('action-editor-form');
+  const newPageButton = document.getElementById('new-page');
   const listPanel = document.getElementById('list-panel');
   let currentUser = null;
   let workspaces = [];
   let currentPage = null;
   let currentAction = null;
   let pageChoices = [];
+  let workspaceRequest = 0;
   let currentView = 'overview';
   let listFilter = 'all';
   let topicFilter = '';
@@ -917,12 +919,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function loadWorkspace() {
     closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
+    const seq = ++workspaceRequest;
+    newPageButton.disabled = true;
     currentPage = null;
     currentAction = null;
     syncExportButton();
     editor.hidden = true;
     if (actionEditor) actionEditor.hidden = true;
     listPanel.hidden = false;
+    showView(currentView);
     if (!id) {
       pageChoices = [];
       renderDirectory();
@@ -930,10 +935,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       fillPageSelect(document.getElementById('new-action-page'), '');
       renderActions([]);
       renderGraph({nodes: [], edges: [], topics: [], counts: {nodes: 0, edges: 0, topics: 0}});
-      showView(currentView);
       return;
     }
     const listed = await request('GET', `/v1/workspaces/${id}/memory`);
+    if (seq !== workspaceRequest) return;
     if (listed.status !== 200) {
       pageChoices = [];
       renderDirectory();
@@ -946,11 +951,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderDirectory();
     renderRecent(pageChoices);
     fillPageSelect(document.getElementById('new-action-page'), '');
+    newPageButton.disabled = false;
     await loadActions();
+    if (seq !== workspaceRequest) return;
     await loadGraph();
+    if (seq !== workspaceRequest) return;
     renderDirectory();
     renderRecent(pageChoices);
-    showView(currentView);
   }
 
   // While a page or action is open the directory column stays visible (as in
@@ -1176,12 +1183,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     hideGraphHoverCard(document.getElementById('graph-hover-card'));
     const id = workspaceId();
     if (!id) return;
+    const seq = workspaceRequest;
     const seen = await request('GET', `/v1/workspaces/${id}/memory/${pageId}`);
+    if (seq !== workspaceRequest) return;
     if (seen.status !== 200 || !seen.body.page) {
       show('error', messageFor(seen.body.error, '无法打开记忆页。'));
       return;
     }
-    currentPage = seen.body.page;
+    showPage(seen.body.page);
+  }
+
+  function showPage(page) {
+    currentPage = page;
     currentAction = null;
     if (dreamPanel) dreamPanel.hidden = true;
     dreamSuggestion = null;
@@ -1204,6 +1217,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
     renderPageLinks();
     syncExportButton();
+  }
+
+  function rememberPage(page) {
+    pageChoices = [page, ...pageChoices.filter(item => item.id !== page.id)];
+    renderDirectory();
+    renderRecent(pageChoices);
   }
 
   const historyPanel = document.getElementById('page-history');
@@ -1615,29 +1634,28 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
-  document.getElementById('new-page').addEventListener('click', async () => {
+  newPageButton.addEventListener('click', async () => {
     const id = workspaceId();
-    if (!id) return;
+    if (!id || newPageButton.disabled) return;
+    const seq = workspaceRequest;
+    newPageButton.disabled = true;
     const title = unusedTitle('未命名页面');
-    const created = await fetcher(`/v1/workspaces/${id}/memory`, {
-      method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        'X-CSRF-Token': csrfCookie(document.cookie),
-        'Idempotency-Key': randomKey(),
-      },
-      credentials: 'same-origin',
-      body: JSON.stringify({title, body: ''}),
-    });
-    let parsed = {};
-    try { parsed = await created.json(); } catch { parsed = {}; }
-    if (created.status !== 201 && created.status !== 200) {
-      show('error', messageFor(parsed.error, '无法创建记忆页。'));
-      return;
+    try {
+      const created = await request('POST', `/v1/workspaces/${id}/memory`, {title, body: ''}, {'Idempotency-Key': randomKey()});
+      if (seq !== workspaceRequest) return;
+      if (![200, 201].includes(created.status) || !created.body.page) {
+        show('error', messageFor(created.body.error, '无法创建记忆页。'));
+        return;
+      }
+      rememberPage(created.body.page);
+      showPage(created.body.page);
+      editor.elements.title.focus();
+      show('ok', '已创建记忆页。');
+    } catch {
+      if (seq === workspaceRequest) show('error', '无法连接，请重试。');
+    } finally {
+      if (seq === workspaceRequest) newPageButton.disabled = false;
     }
-    show('ok', '已创建记忆页。');
-    await openPage(parsed.page.id);
   });
 
   const toolbar = editor.querySelector('.editor-toolbar');
@@ -1678,6 +1696,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     closeDeleteConfirm({restoreFocus: false});
     currentPage = saved.body.page;
+    rememberPage(currentPage);
     syncExportButton();
     editor.elements.topics.value = formatTopics(currentPage.topics);
     document.getElementById('editor-meta').textContent =

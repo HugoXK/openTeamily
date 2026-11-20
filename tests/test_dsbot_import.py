@@ -1,6 +1,6 @@
 """Manager job that writes per-user import bundles and the runtime seal key."""
 import json
-import os
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,8 +16,9 @@ class FakeRunner:
         self.running = True
         self.files = set()
         self.unreadable = set()
+        self.received = {}
 
-    def run(self, args, heartbeat=lambda: None, timeout=10):
+    def run(self, args, heartbeat=lambda: None, timeout=10, stdin=None):
         self.calls.append(args)
         if args[:3] == ['inspect', '-f', '{{.State.Running}}']:
             return ('true\n' if self.running else 'false\n'), ''
@@ -26,25 +27,16 @@ class FakeRunner:
             if marker in self.files and bundle not in self.unreadable:
                 return '', ''
             raise ManagerError('exec_failed')
-        if args[0] == 'exec' and args[-3:-1] == ['test', '-r']:
-            if args[-1] in self.files and args[-1] not in self.unreadable:
-                return '', ''
-            raise ManagerError('exec_failed')
-        if args[0] == 'exec' and args[-2:] == ['-p', '/data/openteamily/import']:
-            return '', ''
-        if args[0] == 'cp':
-            dest = args[-1].split(':', 1)[-1]
+        if args[:4] == ['exec', '-i', '-u', '1000:1000'] and args[-4] == 'receive-bundle':
+            filename, checksum, marker = args[-3:]
+            raw = stdin.read()
+            if hashlib.sha256(raw).hexdigest() != checksum:
+                raise ManagerError('exec_failed')
+            dest = f'/data/openteamily/import/{filename}'
             self.files.add(dest)
             self.unreadable.discard(dest)
-            return '', ''
-        if args[0] == 'exec' and 'chown' in args:
-            return '', ''
-        if args[0] == 'exec' and 'sh' in args:
-            cmd = args[-1]
-            # `touch /data/openteamily/import/.delivered-<feature>-v1`
-            for part in cmd.split():
-                if part.startswith('/data/openteamily/import/.delivered-'):
-                    self.files.add(part)
+            self.received[filename] = json.loads(raw)
+            self.files.add(f'/data/openteamily/import/{marker}')
             return '', ''
         raise ManagerError('unexpected')
 
@@ -85,14 +77,14 @@ class ImportJobTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
 
-    @mock.patch('openteamily.manager.dsbot_import.os.fchown')
-    def test_writes_bundles_once_and_reuses_the_seal_key(self, _chown):
+    def test_writes_bundles_once_and_reuses_the_seal_key(self):
         engine, client = FakeEngine(self.tmp.name), FakeClient()
         iid = '1' * 32
         first = dsbot_import.deliver(engine, client, iid)
         self.assertEqual(first['status'], 'imported')
         self.assertEqual(client.seen[1], '11' * 32)
-        self.assertTrue(any(c[0] == 'cp' for c in engine.runner.calls))
+        self.assertEqual(engine.runner.received['settings-v1.bundle']['feature'], 'settings')
+        self.assertFalse(any(c[0] == 'cp' for c in engine.runner.calls))
         self.assertIn('automations-v1.bundle', first['features'])
         self.assertIn('agents-v1.bundle', first['features'])
         self.assertIn('artifacts-v1.bundle', first['features'])
@@ -101,8 +93,7 @@ class ImportJobTests(unittest.TestCase):
         self.assertEqual(again['status'], 'already-imported')
         self.assertFalse(any(c[0] == 'cp' for c in engine.runner.calls))
 
-    @mock.patch('openteamily.manager.dsbot_import.os.fchown')
-    def test_redelivers_unreadable_bundles_with_legacy_markers(self, _chown):
+    def test_redelivers_unreadable_bundles_with_legacy_markers(self):
         engine, client = FakeEngine(self.tmp.name), FakeClient()
         iid = '1' * 32
         dsbot_import.deliver(engine, client, iid)
@@ -114,6 +105,14 @@ class ImportJobTests(unittest.TestCase):
         self.assertEqual(retry['features'], ['agents-v1.bundle'])
         self.assertNotIn(bundle, engine.runner.unreadable)
         self.assertEqual(dsbot_import.deliver(engine, client, iid)['status'], 'already-imported')
+
+    def test_skips_a_historical_runtime_without_writing_a_bundle(self):
+        engine, client = FakeEngine(self.tmp.name), FakeClient()
+        iid = '1' * 32
+        with mock.patch.object(client, 'dsbot_import', side_effect=ManagerError('import_destination')):
+            result = dsbot_import.deliver(engine, client, iid)
+        self.assertEqual(result['status'], 'import_skipped')
+        self.assertEqual(engine.runner.received, {})
 
     def test_refuses_when_the_runtime_is_down(self):
         engine, client = FakeEngine(self.tmp.name), FakeClient()

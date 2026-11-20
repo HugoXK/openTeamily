@@ -36,6 +36,19 @@ class RegistrationPageTests(unittest.TestCase):
             self.assertEqual(self.raw.call('GET', path)['status'], 200)
         self.assertEqual(self.raw.call('GET', '/register/missing')['status'], 404)
 
+    def test_login_is_public_with_registration_closed(self):
+        self.api.config = replace(self.api.config, allow_registration=False)
+        login = self.raw.call('GET', '/login')
+        self.assertEqual(login['status'], 200)
+        self.assertIn(b'action="/v1/auth/login"', login['body'])
+        self.assertEqual(login['headers']['Cache-Control'], 'no-store')
+        self.assertEqual(self.raw.call('HEAD', '/login')['body'], b'')
+        self.assertEqual(self.raw.call('POST', '/login')['status'], 405)
+        self.assertEqual(self.raw.call('GET', '/login', query='next=https://example.com')['status'], 400)
+        register = self.raw.call('GET', '/register/')
+        self.assertEqual(register['status'], 200)
+        self.assertIn(b'href="/login"', register['body'])
+
     def test_page_policy_not_weakened(self):
         self.assertEqual(self.raw.call('GET', '/register', origin='https://evil.test')['status'], 403)
         self.assertEqual(self.raw.call('GET', '/register', host='evil.test')['status'], 403)
@@ -48,7 +61,7 @@ class RegistrationPageTests(unittest.TestCase):
         self.assertEqual(result['status'], 201)
         self.assertNotIn(PASSWORD, str(result))
         self.assertEqual(self.client.call('GET', '/v1/auth/session')['status'], 200)
-        self.assertEqual(self.client.call('POST', '/v1/settings', {}, csrf=False)['status'], 403)
+        self.assertEqual(self.client.call('POST', '/v1/auth/logout', {}, csrf=False)['status'], 403)
 
     def test_api_origin_registration_policy_and_validation(self):
         body = {'username': 'test-user', 'password': PASSWORD}

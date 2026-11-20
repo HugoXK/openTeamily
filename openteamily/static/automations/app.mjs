@@ -225,7 +225,7 @@ function clampNumber(value, low, high, fallback) {
   return Math.min(Math.max(Math.trunc(number), low), high);
 }
 
-// The list row says the same thing as the editor radios, and never leaks the
+// The list row says the same thing as the schedule picker, and never leaks the
 // stored kind (`now`, `once`, `daily`, ...) to the reader.
 export function scheduleSummary(schedule, enabled) {
   const state = enabled ? '已启用' : '未启用';
@@ -250,7 +250,7 @@ export function scheduleSummary(schedule, enabled) {
   return `已安排 · ${state}`;
 }
 
-function fillEditor(form, item, templates, username) {
+function fillEditor(form, item, username) {
   const schedule = (item && item.schedule) || {kind: 'now', time_zone: 'Asia/Shanghai'};
   const kind = kindOf(schedule);
   form.elements.template_id.value = (item && item.template_id) || 'custom';
@@ -260,9 +260,7 @@ function fillEditor(form, item, templates, username) {
     ? item.participants.map(row => row.username || row).join(', ')
     : (username || '');
   form.elements.agents.value = item && item.agents ? item.agents.join(', ') : '';
-  for (const option of form.querySelectorAll('[name="kind"]')) {
-    option.checked = option.value === kind;
-  }
+  form.elements.kind.value = kind;
   form.elements.date.value = schedule.date || '';
   form.elements.time.value = schedule.time || '09:00';
   form.elements.weekday.value = String(schedule.weekday || 1);
@@ -270,9 +268,18 @@ function fillEditor(form, item, templates, username) {
   form.elements.time_zone.value = schedule.time_zone || 'Asia/Shanghai';
   form.elements.prompt.value = (item && item.prompt) || '';
   form.elements.enabled.checked = Boolean(item && item.enabled);
-  form.elements.title.value = (item && item.title) || (templates.find(row => row.id === form.elements.template_id.value) || {}).title || '';
+  form.elements.title.value = item?.title || '';
+  syncScheduleFields(form);
 }
 
+function syncScheduleFields(form) {
+  const kind = form.elements.kind.value;
+  for (const field of form.querySelectorAll('[data-schedule-kind]')) {
+    const fieldKind = field.dataset.scheduleKind;
+    field.hidden = fieldKind !== kind && !(fieldKind === 'timed' && kind !== 'now');
+  }
+  form.elements.date.required = kind === 'later';
+}
 
 function setBusy(node, busy) {
   if (!node) return;
@@ -358,12 +365,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const listPanel = document.getElementById('list-panel');
   const workspaceSelect = document.getElementById('workspace');
   const search = document.getElementById('search');
+  const runButton = document.getElementById('tick-automation');
   let currentUser = null;
   let workspaces = [];
   let templates = [];
   let current = null;
   let category = 'mine';
   let runTimer = 0;
+  let runRequest = 0;
+  let listRequest = 0;
+  let recentRuns = [];
+  const manualKeys = new Map();
+  const manualPending = new Set();
   const view = document.defaultView;
   const readSearch = () => (view && view.location && view.location.search) || '';
   let runFilter = runFilterFromSearch(readSearch());
@@ -476,6 +489,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const empty = document.getElementById('run-empty');
     const panel = document.getElementById('run-panel');
     if (!list || !panel) return;
+    recentRuns = items;
     panel.hidden = false;
     list.textContent = '';
     const visible = items.filter(item => matchesRunFilter(item, runFilter));
@@ -495,17 +509,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       toggle.className = 'run-toggle';
       const open = expandedRuns.has(item.id);
       toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-      const status = document.createElement('strong');
-      status.textContent = runStatusLabel(item);
+      const when = document.createElement('strong');
+      when.textContent = item.started ? new Date(item.started * 1000).toLocaleString('zh-CN', {
+        month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      }) : '运行';
       const pill = document.createElement('span');
       pill.className = 'status-pill' + (item.status === 'succeeded' ? ' is-on' : '');
-      pill.textContent = item.status || '';
-      const meta = document.createElement('span');
-      meta.className = 'note';
-      meta.textContent = item.error_code ? item.error_code : '';
-      toggle.appendChild(status);
+      pill.dataset.status = item.status || '';
+      pill.textContent = runStatusLabel(item);
+      toggle.appendChild(when);
       toggle.appendChild(pill);
-      toggle.appendChild(meta);
       const detail = document.createElement('div');
       detail.className = 'run-detail';
       detail.hidden = !open;
@@ -628,8 +641,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       stopRunPoll();
       return;
     }
+    const workspace = workspaceId(), automation = current.id;
+    const seq = ++runRequest;
     const wanted = runFilter === 'all' ? '' : `&status=${runFilter}`;
-    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/automations/${current.id}/runs?limit=20${wanted}`);
+    const listed = await request('GET', `/v1/workspaces/${workspace}/automations/${automation}/runs?limit=20${wanted}`);
+    if (seq !== runRequest || workspaceId() !== workspace || current?.id !== automation || form.hidden) return;
     if (listed.status !== 200) {
       show('error', messageFor(listed.body.error, '无法读取运行记录。'));
       return;
@@ -637,6 +653,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const items = listed.body.items || [];
     renderRuns(items);
     const pending = items.some(item => item.status === 'queued');
+    runButton.disabled = pending || manualPending.has(automation);
+    runButton.textContent = pending ? '运行中…' : '运行一次';
     if (pending && !runTimer) {
       runTimer = globalThis.setInterval(() => { loadRuns(); }, 3000);
     }
@@ -681,18 +699,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     // drops the question instead of showing it again above a different item.
     closeConfirm({restoreFocus: false});
     current = item;
+    recentRuns = [];
+    stopRunPoll();
     listPanel.hidden = true;
     form.hidden = false;
     mainPanel.classList.add('is-editing');
-    fillEditor(form, item, templates, currentUser && currentUser.username);
+    fillEditor(form, item, currentUser && currentUser.username);
+    form.elements.template_id.disabled = Boolean(item?.id);
+    const heading = document.getElementById('editor-heading');
+    if (heading) heading.textContent = item?.id ? item.title : '新建自动化';
     document.getElementById('remove-automation').hidden = !item || !item.id;
-    document.getElementById('tick-automation').hidden = !item || !item.id;
+    runButton.hidden = !item?.id;
+    runButton.disabled = Boolean(item?.id && manualPending.has(item.id));
+    runButton.textContent = '运行一次';
     loadRuns();
   }
 
   async function loadList() {
     const id = workspaceId();
     if (!id) return;
+    const seq = ++listRequest;
     const list = document.getElementById('automation-list');
     const empty = document.getElementById('list-empty');
     if (category === 'work' || category === 'life') {
@@ -711,6 +737,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setBusy(empty, true);
     empty.textContent = '正在加载自动化…';
     const listed = await request('GET', `/v1/workspaces/${id}/automations${listQuery(category, search.value)}`);
+    if (seq !== listRequest || workspaceId() !== id) return;
     setBusy(empty, false);
     setBusy(list, false);
     if (listed.status !== 200) {
@@ -833,14 +860,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   document.getElementById('new-automation').addEventListener('click', () => {
-    const selected = (category === 'work' || category === 'life')
-      ? templates.find(item => item.category === category)
-      : null;
-    openEditor(selected ? draftFromTemplate(selected, currentUser && currentUser.username) : null);
-    form.elements.kind.value = form.elements.kind.value || 'now';
-    const kind = (form.elements.kind.value) || 'now';
-    for (const option of form.querySelectorAll('[name="kind"]')) option.checked = option.value === kind;
+    openEditor(null);
   });
+  form.elements.kind.addEventListener('change', () => syncScheduleFields(form));
 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
     closeConfirm({restoreFocus: false});
@@ -897,22 +919,48 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     current = result.body.automation;
     closeConfirm({restoreFocus: false});
-    fillEditor(form, current, templates, currentUser && currentUser.username);
+    fillEditor(form, current, currentUser && currentUser.username);
+    form.elements.template_id.disabled = true;
+    const heading = document.getElementById('editor-heading');
+    if (heading) heading.textContent = current.title;
     document.getElementById('remove-automation').hidden = false;
-    document.getElementById('tick-automation').hidden = false;
-    show('ok', '已保存。若已启用，后台会在到期时运行。');
+    runButton.hidden = false;
+    show('ok', current.enabled ? '已保存，自动运行已启用。' : '已保存，自动运行未启用。');
     await loadRuns();
   });
 
-  document.getElementById('tick-automation').addEventListener('click', async () => {
-    if (!workspaceId()) return;
-    const result = await request('POST', `/v1/workspaces/${workspaceId()}/automations/tick`, {});
-    if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '触发失败。'));
-      return;
+  runButton.addEventListener('click', async () => {
+    const workspace = workspaceId(), automation = current?.id;
+    if (!workspace || !automation || runButton.disabled) return;
+    const isCurrent = () => workspaceId() === workspace && current?.id === automation && !form.hidden;
+    if (!manualKeys.has(automation)) manualKeys.set(automation, idempotencyKey());
+    manualPending.add(automation);
+    runButton.disabled = true;
+    runButton.textContent = '正在提交…';
+    try {
+      const result = await request('POST', `/v1/workspaces/${workspace}/automations/${automation}/run`,
+        {}, {'Idempotency-Key': manualKeys.get(automation)});
+      if (result.status !== 200 && result.status !== 202) {
+        if (isCurrent()) show('error', messageFor(result.body.error, '无法启动这条自动化。'));
+        return;
+      }
+      manualKeys.delete(automation);
+      if (!isCurrent()) return;
+      runFilter = 'all';
+      syncRunFilters();
+      pushRunFilter(runFilter);
+      renderRuns([result.body.run, ...recentRuns.filter(run => run.id !== result.body.run.id)]);
+      show('ok', '已提交，结果会出现在运行记录中。');
+    } catch {
+      if (isCurrent()) show('error', '暂时无法确认是否提交成功，可以重试。');
+    } finally {
+      manualPending.delete(automation);
+      if (isCurrent()) {
+        runButton.disabled = recentRuns.some(run => run.status === 'queued');
+        runButton.textContent = runButton.disabled ? '运行中…' : '运行一次';
+        await loadRuns();
+      }
     }
-    show('ok', '已请求触发一次。若已有在线代理，结果会出现在下方运行记录里。假提供方的输出不能当成真实模型已经验证。');
-    await loadRuns();
   });
 
   const removeButton = document.getElementById('remove-automation');

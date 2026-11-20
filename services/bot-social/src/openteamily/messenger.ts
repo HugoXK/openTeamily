@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS ot_conversation_members (
 CREATE INDEX IF NOT EXISTS ot_conversation_members_owner ON ot_conversation_members(owner_id);
 CREATE TABLE IF NOT EXISTS ot_conversation_agents (
   conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE, agent_ref TEXT NOT NULL,
-  owner_id TEXT NOT NULL, name TEXT NOT NULL, auto_reply INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+  owner_id TEXT NOT NULL, name TEXT NOT NULL, auto_reply INTEGER NOT NULL DEFAULT 0,
+  auto_reply_after_seq INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
   PRIMARY KEY (conversation_id, agent_ref, owner_id)
 );
 CREATE TABLE IF NOT EXISTS ot_messages (
@@ -39,6 +40,10 @@ CREATE TABLE IF NOT EXISTS ot_messages (
   created_at INTEGER NOT NULL, edited_at INTEGER, retracted INTEGER NOT NULL DEFAULT 0, pinned_by TEXT,
   UNIQUE (conversation_id, seq), UNIQUE (conversation_id, author_id, client_key)
 );
+CREATE TABLE IF NOT EXISTS ot_voice_messages (
+  message_id TEXT PRIMARY KEY REFERENCES ot_messages(id) ON DELETE CASCADE,
+  mime TEXT NOT NULL, data BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ot_reactions (
   message_id TEXT NOT NULL REFERENCES ot_messages(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, emoji TEXT NOT NULL,
   created_at INTEGER NOT NULL, PRIMARY KEY (message_id, owner_id, emoji)
@@ -47,6 +52,23 @@ CREATE TABLE IF NOT EXISTS ot_reactions (
 
 export const REACTIONS = ["👍", "❤️", "😄", "🎉", "👀", "✅"];
 const BODY_MAX = 4000;
+const VOICE_MAX_BYTES = 128 * 1024;
+
+function voiceData(value: any) {
+  const mime = value?.mime;
+  const encoded = value?.data;
+  assert(typeof encoded === "string" && encoded.length <= Math.ceil(VOICE_MAX_BYTES / 3) * 4,
+    400, "invalid_voice", "Voice messages can contain up to 128 KiB");
+  const data = Buffer.from(encoded, "base64");
+  assert(data.length >= 12 && data.length <= VOICE_MAX_BYTES && data.toString("base64") === encoded,
+    400, "invalid_voice", "Invalid voice message data");
+  const webm = mime === "audio/webm" && data.readUInt32BE(0) === 0x1a45dfa3;
+  const ogg = mime === "audio/ogg" && data.toString("ascii", 0, 4) === "OggS";
+  const mp4 = mime === "audio/mp4" && data.toString("ascii", 4, 8) === "ftyp";
+  assert(webm || ogg || mp4, 400, "invalid_voice", "Use a WebM, Ogg, or MP4 audio recording");
+  return {mime, data};
+}
+
 const AUTO_PER_HOUR = 3;
 const MENTION_PER_HOUR = 30;
 const HOUR = 3_600_000;
@@ -58,12 +80,20 @@ function memberOf(ot: OtContext, convId: string, ownerId: string) {
   return conv;
 }
 
+function workspaceTeam(ot: OtContext, workspace: string, ownerId: string) {
+  assert(/^[0-9a-f]{32}$/.test(workspace), 400, "invalid_request", "Invalid workspace");
+  const match = ot.get<{id: string}>("SELECT id FROM ot_teams WHERE workspace_id=?", workspace);
+  assert(match, 404, "team_not_found", "Workspace not found");
+  return requireMember(ot, match.id, ownerId).team;
+}
+
 const messageView = (ot: OtContext, m: any, viewer?: string) => ({
   id: m.id, conversation_id: m.conversation_id, seq: m.seq,
   author: m.author_kind === "agent" ? { kind: "agent", agent_ref: m.agent_ref, name: m.agent_name, owner: ot.profileView(m.author_id) } : { kind: "member", ...ot.profileView(m.author_id) },
   mine: viewer ? m.author_id === viewer && m.author_kind === "member" : undefined,
   body: m.retracted ? "" : m.body, revision: m.revision, retracted: !!m.retracted, edited_at: m.edited_at, created_at: m.created_at,
   mentions: JSON.parse(m.mentions), reply_to: m.reply_to, pinned: !!m.pinned_by,
+  voice: m.retracted ? undefined : ot.get<{mime: string}>("SELECT mime FROM ot_voice_messages WHERE message_id=?", m.id),
   reactions: ot.all<any>("SELECT emoji, COUNT(*) AS n, SUM(owner_id = ?) AS me FROM ot_reactions WHERE message_id = ? GROUP BY emoji", viewer ?? "", m.id).map((r) => ({ emoji: r.emoji, count: r.n, mine: !!r.me })),
 });
 
@@ -106,18 +136,47 @@ function insertMessage(ot: OtContext, conv: any, row: { author: string; kind: "m
   return ot.get<any>("SELECT * FROM ot_messages WHERE id = ?", id);
 }
 
-function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: string): string[] {
+const agentMentionKey = (ownerId: string, ref: string) => `/agent/${ownerId}/${ref}`;
+
+function parseMentions(ot: OtContext, convId: string, raw: unknown, bodyText: string, selectedAgents: unknown) {
   const handles = new Set<string>();
   if (Array.isArray(raw)) for (const h of raw.slice(0, 20)) handles.add(handleKey(h));
   for (const m of bodyText.matchAll(/@([a-z0-9._-]{2,40})/gi)) handles.add(handleKey(m[1]));
   const members = new Set(ot.all<any>("SELECT p.handle FROM ot_conversation_members m JOIN ot_profiles p ON p.owner_id = m.owner_id WHERE m.conversation_id = ?", convId).map((r) => r.handle));
-  const agents = new Set(ot.all<any>("SELECT lower(agent_ref) AS a, lower(name) AS n FROM ot_conversation_agents WHERE conversation_id = ?", convId).flatMap((r) => [r.a, r.n]));
-  return [...handles].filter((h) => members.has(h) || agents.has(h));
+  const agents = ot.all<{agent_ref: string; owner_id: string; name: string}>(
+    "SELECT agent_ref, owner_id, name FROM ot_conversation_agents WHERE conversation_id = ?", convId,
+  );
+  if (selectedAgents === undefined) {
+    const legacy = new Set(agents.flatMap(agent => [agent.agent_ref.toLowerCase(), agent.name.toLowerCase()]));
+    return { mentions: [...handles].filter(h => members.has(h) || legacy.has(h)), body: bodyText };
+  }
+
+  assert(Array.isArray(selectedAgents) && selectedAgents.length <= 20, 400, "invalid_request", "Choose at most 20 group agents");
+  const available = new Map(agents.map(agent => [agentMentionKey(agent.owner_id, agent.agent_ref), agent]));
+  const targets = new Map<string, string>();
+  for (const target of selectedAgents) {
+    assert(target && typeof target.owner_id === "string" && !target.owner_id.includes("/")
+      && typeof target.agent_id === "string" && AGENT_REF.test(target.agent_id),
+    400, "invalid_request", "An agent mention requires an owner and agent ID");
+    const key = agentMentionKey(target.owner_id, target.agent_id);
+    const agent = available.get(key);
+    assert(agent, 400, "invalid_request", "A mentioned agent is no longer in this conversation");
+    targets.set(key, agent.name);
+  }
+  const prefix = [...targets.values()].map(name => "@" + name).join(" ");
+  return {
+    mentions: [...handles].filter(handle => members.has(handle)).concat([...targets.keys()]),
+    body: prefix ? text(prefix + " " + bodyText, "body", { min: 1, max: BODY_MAX, multiline: true }) : bodyText,
+  };
 }
 
 export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   const messageCols = new Set(ot.all<any>("PRAGMA table_info(ot_messages)").map(c => c.name));
   if (!messageCols.has("revision")) ot.run("ALTER TABLE ot_messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
+  const agentCols = new Set(ot.all<any>("PRAGMA table_info(ot_conversation_agents)").map(c => c.name));
+  if (!agentCols.has("auto_reply_after_seq")) {
+    ot.run("ALTER TABLE ot_conversation_agents ADD COLUMN auto_reply_after_seq INTEGER NOT NULL DEFAULT 0");
+  }
   app.post("/v1/ot/conversations", async (req, reply) => {
     const me = ot.me(req);
     const b = body(req);
@@ -219,31 +278,130 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   });
 
   // ---- messages
+  app.get("/v1/ot/workspaces/:workspace/messages/search", async req => {
+    const me = ot.me(req);
+    const team = workspaceTeam(ot, params(req).workspace, me.ownerId);
+
+    const q = query(req);
+    const term = text(q.q, "q", { min: 1, max: 80 });
+    const limit = Math.max(1, intParam(q.limit, "limit", 20, 51));
+    assert(q.before === undefined || (typeof q.before === "string" && /^[0-9]{1,16}:[0-9]{1,16}$/.test(q.before)),
+      400, "invalid_request", "Invalid search cursor");
+    const [beforeTime, beforeRow] = typeof q.before === "string" ? q.before.split(":").map(Number) : [0, 0];
+    assert(Number.isSafeInteger(beforeTime) && Number.isSafeInteger(beforeRow), 400, "invalid_request", "Invalid search cursor");
+    assert(q.conversation_id === undefined || (typeof q.conversation_id === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(q.conversation_id)),
+      400, "invalid_request", "Invalid conversation");
+    const conversation = q.conversation_id ?? null;
+    const rows = ot.all<any>(`SELECT m.id, m.conversation_id, m.rowseq, m.body, m.created_at,
+      CASE WHEN c.kind='dm' THEN (
+        SELECT p.display_name FROM ot_conversation_members peer JOIN ot_profiles p ON p.owner_id=peer.owner_id
+        WHERE peer.conversation_id=c.id AND peer.owner_id<>? LIMIT 1)
+      ELSE c.title END AS title
+      FROM ot_messages m
+      JOIN ot_conversations c ON c.id=m.conversation_id
+      JOIN ot_conversation_members mine ON mine.conversation_id=c.id AND mine.owner_id=?
+      WHERE m.retracted=0 AND (? IS NULL OR c.id=?)
+        AND (c.team_id=? OR (c.kind='dm' AND c.team_id IS NULL AND EXISTS (
+          SELECT 1 FROM ot_conversation_members peer
+          JOIN ot_team_members teammate ON teammate.owner_id=peer.owner_id AND teammate.team_id=? AND teammate.suspended=0
+          WHERE peer.conversation_id=c.id AND peer.owner_id<>?)))
+        AND (?=0 OR m.created_at<? OR (m.created_at=? AND m.rowseq<?))
+        AND instr(lower(m.body),lower(?))>0
+      ORDER BY m.created_at DESC, m.rowseq DESC LIMIT ?`,
+    me.ownerId, me.ownerId, conversation, conversation, team.id, team.id, me.ownerId,
+    beforeRow, beforeTime, beforeTime, beforeRow, term, limit + 1);
+    const items = rows.slice(0, limit).map(row => ({
+      conversation_id: row.conversation_id, message_id: row.id, title: row.title || "会话",
+      body: row.body, created_ms: row.created_at, cursor: `${row.created_at}:${row.rowseq}`,
+    }));
+    return { items, more: rows.length > limit };
+  });
+  app.get("/v1/ot/workspaces/:workspace/conversations/:id/messages/:message", async req => {
+    const me = ot.me(req);
+    const {workspace, id, message} = params(req);
+    const team = workspaceTeam(ot, workspace, me.ownerId);
+    const conv = memberOf(ot, id, me.ownerId);
+    let title = conv.title;
+    if (conv.kind === "dm" && conv.team_id === null) {
+      const peer = ot.get<{owner_id: string}>(`SELECT teammate.owner_id FROM ot_conversation_members member
+        JOIN ot_team_members teammate ON teammate.owner_id=member.owner_id AND teammate.team_id=? AND teammate.suspended=0
+        WHERE member.conversation_id=? AND member.owner_id<>?`, team.id, conv.id, me.ownerId);
+      assert(peer, 404, "conversation_not_found", "no such conversation in this workspace");
+      title = ot.profileView(peer.owner_id).display_name;
+    } else {
+      assert(conv.team_id === team.id, 404, "conversation_not_found", "no such conversation in this workspace");
+    }
+    const row = ot.get<{body: string; revision: number; retracted: number}>(`SELECT body, revision, retracted
+      FROM ot_messages WHERE id=? AND conversation_id=?`, message, id);
+    assert(row, 404, "message_not_found", "Message not found in this conversation");
+    assert(!row.retracted && row.body.trim() && !ot.get("SELECT 1 FROM ot_voice_messages WHERE message_id=?", message),
+      409, "conflict", "Only available text messages can be saved");
+    return { body: row.body, revision: row.revision, title };
+  });
   app.get("/v1/ot/conversations/:id/messages", async (req) => {
     const me = ot.me(req);
     const conv = memberOf(ot, params(req).id, me.ownerId);
     const q = query(req);
-    const limit = intParam(q.limit, "limit", 50, 200);
+    const limit = Math.max(1, intParam(q.limit, "limit", 50, 200));
     const before = intParam(q.before, "before", 0);
     const after = intParam(q.after, "after", 0);
-    const rows = before
-      ? ot.all<any>("SELECT * FROM (SELECT * FROM ot_messages WHERE conversation_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?) ORDER BY seq", conv.id, before, limit)
-      : after
-        ? ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id = ? AND seq > ? ORDER BY seq LIMIT ?", conv.id, after, limit)
-        : ot.all<any>("SELECT * FROM (SELECT * FROM ot_messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq", conv.id, limit);
+    const around = q.around;
+    const term = q.q === undefined ? "" : text(q.q, "q", { min: 1, max: 80 });
+    assert(!term || (around === undefined && !after), 400, "invalid_request", "Search supports only an older cursor");
+    assert(Number(Boolean(before)) + Number(Boolean(after)) + Number(around !== undefined) <= 1,
+      400, "invalid_request", "Choose one message cursor");
+    let rows;
+    if (term) {
+      const matches = ot.all<any>(`SELECT * FROM ot_messages WHERE conversation_id=? AND retracted=0
+        AND (?=0 OR seq<?) AND instr(lower(body),lower(?))>0 ORDER BY seq DESC LIMIT ?`,
+      conv.id, before, before, term, limit + 1);
+      const cursor = matches.length > limit ? matches[limit - 1].seq : null;
+      return { messages: matches.slice(0, limit).map(m => messageView(ot, m, me.ownerId)), next_before: cursor };
+    }
+    if (around !== undefined) {
+      assert(typeof around === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(around), 400, "invalid_request", "Invalid message ID");
+      const anchor = ot.get<{seq: number}>("SELECT seq FROM ot_messages WHERE id=? AND conversation_id=?", around, conv.id);
+      assert(anchor, 404, "message_not_found", "Message not found in this conversation");
+      const preceding = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND seq<? ORDER BY seq DESC LIMIT ?",
+        conv.id, anchor.seq, Math.floor((limit - 1) / 2));
+      const following = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND seq>=? ORDER BY seq LIMIT ?",
+        conv.id, anchor.seq, limit - preceding.length);
+      rows = [...preceding.reverse(), ...following];
+    } else if (before) {
+      rows = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND seq<? ORDER BY seq DESC LIMIT ?", conv.id, before, limit).reverse();
+    } else if (after) {
+      rows = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND seq>? ORDER BY seq LIMIT ?", conv.id, after, limit);
+    } else {
+      rows = ot.all<any>("SELECT * FROM ot_messages WHERE conversation_id=? ORDER BY seq DESC LIMIT ?", conv.id, limit).reverse();
+    }
     const mine = ot.get<any>("SELECT read_seq FROM ot_conversation_members WHERE conversation_id = ? AND owner_id = ?", conv.id, me.ownerId);
-    return { messages: rows.map((m) => messageView(ot, m, me.ownerId)), read_seq: mine.read_seq, last_seq: conv.last_seq };
+    const first = rows[0]?.seq;
+    const hasOlder = first > 1 && ot.get("SELECT 1 FROM ot_messages WHERE conversation_id=? AND seq<? LIMIT 1", conv.id, first);
+    return {
+      messages: rows.map(m => messageView(ot, m, me.ownerId)), read_seq: mine.read_seq, last_seq: conv.last_seq,
+      next_before: hasOlder ? first : null,
+      has_newer: (rows.at(-1)?.seq ?? conv.last_seq) < conv.last_seq,
+    };
   });
   app.post("/v1/ot/conversations/:id/messages", async (req, reply) => {
     const me = ot.me(req);
     const b = body(req);
-    const bodyText = text(b.body, "body", { min: 1, max: BODY_MAX, multiline: true });
+    const voice = b.voice === undefined ? null : voiceData(b.voice);
+    const bodyText = text(voice && !b.body ? "语音消息" : b.body, "body", { min: 1, max: BODY_MAX, multiline: true });
     const clientKey = optText(b.client_key, "client_key", { min: 1, max: 80 }) ?? null;
     const msg = ot.tx(() => {
       const conv = memberOf(ot, params(req).id, me.ownerId);
+      if (clientKey) {
+        const previous = ot.get<any>(
+          "SELECT * FROM ot_messages WHERE conversation_id=? AND author_id=? AND client_key=?", conv.id, me.ownerId, clientKey,
+        );
+        if (previous) return previous;
+      }
       if (b.reply_to) assert(ot.get("SELECT 1 FROM ot_messages WHERE id = ? AND conversation_id = ?", String(b.reply_to), conv.id), 400, "invalid_request", "reply_to is not in this conversation");
-      const mentions = parseMentions(ot, conv.id, b.mentions, bodyText);
-      const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: bodyText, mentions, replyTo: b.reply_to ? String(b.reply_to) : null, clientKey });
+      const parsed = parseMentions(ot, conv.id, b.mentions, bodyText, b.agent_mentions);
+      const mentions = parsed.mentions;
+      const m = insertMessage(ot, conv, { author: me.ownerId, kind: "member", body: parsed.body, mentions, replyTo: b.reply_to ? String(b.reply_to) : null, clientKey });
+      if (voice) ot.run("INSERT INTO ot_voice_messages VALUES (?,?,?)", m.id, voice.mime, voice.data);
       for (const h of mentions) {
         const row = ot.get<any>("SELECT owner_id FROM ot_profiles WHERE handle = ?", h);
         if (row && row.owner_id !== me.ownerId) ot.notify(row.owner_id, "messenger.mention", { conversation_id: conv.id, message_id: m.id, by: ot.profileView(me.ownerId) });
@@ -252,13 +410,23 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     });
     return reply.status(201).send(messageView(ot, msg, me.ownerId));
   });
+  app.get("/v1/ot/conversations/:id/messages/:message/voice", async req => {
+    const me = ot.me(req);
+    const conv = memberOf(ot, params(req).id, me.ownerId);
+    const voice = ot.get<{mime: string; data: Buffer}>(`SELECT v.mime,v.data FROM ot_voice_messages v
+      JOIN ot_messages m ON m.id=v.message_id WHERE m.id=? AND m.conversation_id=? AND m.retracted=0`,
+    params(req).message, conv.id);
+    assert(voice, 404, "message_not_found", "Voice message not found");
+    return {mime: voice.mime, data: voice.data.toString("base64")};
+  });
   app.post("/v1/ot/conversations/:id/read", async (req) => {
     const me = ot.me(req);
     const conv = memberOf(ot, params(req).id, me.ownerId);
     const seq = body(req).seq === undefined ? conv.last_seq : Number(body(req).seq);
     assert(Number.isSafeInteger(seq) && seq >= 0, 400, "invalid_request", "seq must be a sequence number");
     ot.run("UPDATE ot_conversation_members SET read_seq = MAX(read_seq, ?) WHERE conversation_id = ? AND owner_id = ?", Math.min(seq, conv.last_seq), conv.id, me.ownerId);
-    return { read_seq: ot.get<any>("SELECT read_seq FROM ot_conversation_members WHERE conversation_id = ? AND owner_id = ?", conv.id, me.ownerId).read_seq };
+    const readSeq = ot.get<any>("SELECT read_seq FROM ot_conversation_members WHERE conversation_id = ? AND owner_id = ?", conv.id, me.ownerId).read_seq;
+    return { read_seq: readSeq, unread: Math.max(0, conv.last_seq - readSeq) };
   });
   const ownMessage = (id: string, ownerId: string) => {
     const m = ot.get<any>("SELECT * FROM ot_messages WHERE id = ?", id);
@@ -310,9 +478,26 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     assert(AGENT_REF.test(ref), 400, "invalid_request", "agent id is invalid");
     const b = body(req);
     const name = text(b.name, "name", { min: 1, max: 40 });
-    ot.run("INSERT INTO ot_conversation_agents(conversation_id, agent_ref, owner_id, name, auto_reply, created_at) VALUES (?,?,?,?,?,?) ON CONFLICT(conversation_id, agent_ref, owner_id) DO UPDATE SET name = excluded.name, auto_reply = excluded.auto_reply",
-      conv.id, ref, me.ownerId, name, b.auto_reply ? 1 : 0, ot.now());
+    ot.run(`INSERT INTO ot_conversation_agents(conversation_id, agent_ref, owner_id, name, auto_reply, auto_reply_after_seq, created_at)
+      VALUES (?,?,?,?,?,?,?) ON CONFLICT(conversation_id, agent_ref, owner_id) DO UPDATE SET
+        name=excluded.name, auto_reply=excluded.auto_reply,
+        auto_reply_after_seq=CASE WHEN ot_conversation_agents.auto_reply=0 AND excluded.auto_reply=1
+          THEN excluded.auto_reply_after_seq ELSE ot_conversation_agents.auto_reply_after_seq END`,
+    conv.id, ref, me.ownerId, name, b.auto_reply === true ? 1 : 0, conv.last_seq, ot.now());
     return conversationView(ot, conv, me.ownerId);
+  });
+  app.patch("/v1/ot/conversations/:id/agents/:agent", async (req) => {
+    const me = ot.me(req);
+    const conv = memberOf(ot, params(req).id, me.ownerId);
+    assert(conv.kind === "group", 400, "invalid_request", "agents join groups only");
+    const enabled = body(req).auto_reply;
+    assert(typeof enabled === "boolean", 400, "invalid_request", "auto_reply must be a boolean");
+    const result = ot.run(`UPDATE ot_conversation_agents SET
+      auto_reply_after_seq=CASE WHEN auto_reply=0 AND ?=1 THEN ? ELSE auto_reply_after_seq END,
+      auto_reply=? WHERE conversation_id=? AND agent_ref=? AND owner_id=?`,
+    Number(enabled), conv.last_seq, Number(enabled), conv.id, params(req).agent, me.ownerId);
+    assert(result.changes === 1, 404, "agent_not_found", "that agent of yours is not in this group");
+    return { auto_reply: enabled };
   });
   app.delete("/v1/ot/conversations/:id/agents/:agent", async (req) => {
     const me = ot.me(req);
@@ -325,24 +510,36 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   app.get("/v1/ot/agent-inbox", async (req) => {
     const me = ot.me(req);
     const after = intParam(query(req).after, "after", 0);
-    const limit = intParam(query(req).limit, "limit", 20, 50);
-    const rows = ot.all<any>(`SELECT m.*, a.agent_ref AS my_agent, a.name AS my_agent_name, a.auto_reply AS my_auto
-      FROM ot_messages m JOIN ot_conversation_agents a ON a.conversation_id = m.conversation_id AND a.owner_id = ?
-      JOIN ot_conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.owner_id = ?
-      WHERE m.rowseq > ? AND m.author_kind = 'member' AND m.retracted = 0 ORDER BY m.rowseq LIMIT ?`, me.ownerId, me.ownerId, after, limit * 4);
+    const limit = Math.max(1, intParam(query(req).limit, "limit", 20, 50));
+    const rows = ot.all<any>(`WITH pending AS (
+      SELECT m.* FROM ot_messages m
+      WHERE m.rowseq > ? AND m.author_kind = 'member' AND m.retracted = 0
+        AND NOT EXISTS (SELECT 1 FROM ot_voice_messages v WHERE v.message_id=m.id)
+        AND EXISTS (SELECT 1 FROM ot_conversation_members cm WHERE cm.conversation_id=m.conversation_id AND cm.owner_id=?)
+        AND EXISTS (SELECT 1 FROM ot_conversation_agents ca WHERE ca.conversation_id=m.conversation_id AND ca.owner_id=?)
+      ORDER BY m.rowseq LIMIT ?
+    )
+    SELECT m.*, a.agent_ref AS my_agent, a.name AS my_agent_name, a.auto_reply AS my_auto, a.auto_reply_after_seq AS auto_after_seq
+    FROM pending m JOIN ot_conversation_agents a ON a.conversation_id=m.conversation_id AND a.owner_id=?
+    ORDER BY m.rowseq, a.agent_ref`, after, me.ownerId, me.ownerId, limit * 4, me.ownerId);
     let cursor = after;
     const items: any[] = [];
     for (const m of rows) {
+      // A cursor acknowledges the entire message, including its other recipients.
+      if (items.length >= limit && m.rowseq > cursor) break;
       cursor = Math.max(cursor, m.rowseq);
       const mentions: string[] = JSON.parse(m.mentions);
       const conv = ot.get<any>("SELECT title, dm_key FROM ot_conversations WHERE id = ?", m.conversation_id);
       // A public-homepage thread (visitor + creator's agent) addresses the agent directly.
       const homepage = String(conv.dm_key ?? "").startsWith("agent:");
-      const mentioned = homepage || mentions.includes(String(m.my_agent).toLowerCase()) || mentions.includes(String(m.my_agent_name).toLowerCase());
-      if (!mentioned && !m.my_auto) continue;
+      const agentRef = String(m.my_agent).toLowerCase();
+      const explicit = mentions.some(mention => typeof mention === "string" && mention.startsWith("/agent/"));
+      const mentioned = homepage || (explicit
+        ? mentions.includes(agentMentionKey(me.ownerId, String(m.my_agent)))
+        : mentions.includes(agentRef) || mentions.includes(String(m.my_agent_name).toLowerCase()));
+      if (!mentioned && (!m.my_auto || m.seq <= m.auto_after_seq)) continue;
       const context = ot.all<any>("SELECT * FROM (SELECT * FROM ot_messages WHERE conversation_id = ? AND seq <= ? ORDER BY seq DESC LIMIT 12) ORDER BY seq", m.conversation_id, m.seq);
       items.push({ conversation_id: m.conversation_id, conversation_title: conv.title, agent_ref: m.my_agent, agent_name: m.my_agent_name, mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: context.map((c) => messageView(ot, c)) });
-      if (items.length >= limit) break;
     }
     return { cursor, items };
   });
@@ -356,6 +553,13 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const conv = memberOf(ot, params(req).id, me.ownerId);
       const agent = ot.get<any>("SELECT * FROM ot_conversation_agents WHERE conversation_id = ? AND agent_ref = ? AND owner_id = ?", conv.id, ref, me.ownerId);
       assert(agent, 404, "agent_not_found", "that agent of yours is not in this group");
+      if (mode === "auto") {
+        assert(agent.auto_reply, 409, "auto_reply_disabled", "automatic replies are disabled for this agent");
+        if (b.reply_to) {
+          const trigger = ot.get<any>("SELECT seq FROM ot_messages WHERE id=? AND conversation_id=?", String(b.reply_to), conv.id);
+          assert(trigger && trigger.seq > agent.auto_reply_after_seq, 409, "auto_reply_disabled", "message predates automatic replies");
+        }
+      }
       const since = ot.now() - HOUR;
       const used = ot.get<any>("SELECT COUNT(*) AS n FROM ot_messages WHERE conversation_id = ? AND author_kind = 'agent' AND reply_mode = ? AND created_at > ?", conv.id, mode, since).n;
       assert(used < (mode === "auto" ? AUTO_PER_HOUR : MENTION_PER_HOUR), 429, "agent_reply_limit", mode === "auto" ? "automatic agent replies are limited to 3 per hour in a group" : "agent reply limit reached");

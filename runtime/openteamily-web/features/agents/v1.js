@@ -34,20 +34,23 @@ const publicMessage = (row, workspaceId, agentId) => {
 export function agentsV1({ endpoints, log }) {
   const call = (name, payload) => endpoints[name](payload)
   const routes = [
-    { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages/${HEX}/artifact$`), handle: wrap(async () => { throw new FeatureError(503, 'unavailable', 'Saving a message to the works library is not in this DS-Bot yet') }) },
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages/${HEX}/artifact$`), handle: wrap(async (req, workspaceId, id, conversationId, messageId) => {
+      if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only POST is supported')
+      const body = await req.json()
+      const {status, artifact} = await call('saveMessage', {workspace_id: workspaceId, id,
+        conversation_id: conversationId, message_id: messageId, title: body.title})
+      return {status, body: {artifact}}
+    }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
       if (req.method !== 'POST') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
       const body = await req.json()
-      const result = await call('send', { workspace_id: workspaceId, id, conversation_id: conversationId, text: body.body ?? body.text, reply_language: body.reply_language })
+      const result = await call('send', { workspace_id: workspaceId, id, conversation_id: conversationId,
+        text: body.body ?? body.text, reply_language: body.reply_language, return_failed: true })
       return { status: 201, body: { message: publicMessage(result.message, workspaceId, id), reply: publicMessage(result.reply, workspaceId, id) } }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
       if (req.method !== 'GET') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
-      const { agent } = await call('get', { workspace_id: workspaceId, id })
-      const listed = await call('conversations', { workspace_id: workspaceId, id })
-      const conversation = listed.items.find((row) => row.id === conversationId)
-      if (!conversation) throw new FeatureError(404, 'not_found', 'Conversation not found')
-      const { items } = await call('messages', { workspace_id: workspaceId, id, conversation_id: conversationId })
+      const { agent, conversation, items } = await call('openConversation', { workspace_id: workspaceId, id, conversation_id: conversationId })
       return { status: 200, body: { conversation: publicConversation(conversation, workspaceId, id), agent: publicAgent(agent), items: items.map((row) => publicMessage(row, workspaceId, id)) } }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations$`), handle: wrap(async (req, workspaceId, id) => {
@@ -78,7 +81,13 @@ export function agentsV1({ endpoints, log }) {
         const cursor = req.query.get('cursor') || ''
         const limit = Math.min(Math.max(Number(req.query.get('limit') || 20), 1), 100)
         const sliced = rows.filter((row) => row.id > cursor).slice(0, limit + 1)
-        return { status: 200, body: { items: sliced.slice(0, limit).map(publicAgent), cursor: sliced.length > limit ? sliced[limit - 1].id : null } }
+        const items = sliced.slice(0, limit).map(publicAgent)
+        const body = { items, cursor: sliced.length > limit ? sliced[limit - 1].id : null }
+        if (req.query.get('include') === 'conversations') {
+          const directory = await call('conversationSummaries', { workspace_id: workspaceId, agent_ids: items.map(item => item.id) })
+          body.conversations = directory.items
+        }
+        return { status: 200, body }
       }
       if (!id && req.method === 'POST') {
         const body = await req.json()

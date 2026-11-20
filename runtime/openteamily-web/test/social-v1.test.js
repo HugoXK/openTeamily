@@ -36,6 +36,7 @@ function fakeSocial() {
     const ok = (status, data) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } })
     if (path === '/v1/ot/profile' && init.method === 'PUT') return ok(200, { ...me, platform_user_id: body.platform_user_id || me.platform_user_id })
     if (path === '/v1/ot/me') return ok(200, me)
+    if (path === '/v1/ot/workspaces') return ok(200, { workspaces: [team] })
     if (path === '/v1/ot/teams/by-workspace/' + WS) return ok(200, team)
     if (path === '/v1/ot/teams/ott_1/members' && init.method === 'GET') {
       return ok(200, { role: 'owner', members: [
@@ -47,7 +48,7 @@ function fakeSocial() {
       return ok(201, { code: 'invite-code-once', invite: { id: 'oti_1', team_id: 'ott_1', role: 'member', expires_at: 1_700_086_400_000, max_uses: 10, use_count: 0, revoked: false, frozen: false, requires_approval: false, created_at: 1_700_000_000_000 } })
     }
     if (path === '/v1/ot/invites/accept') return ok(200, { status: 'pending', team_id: 'ott_1', request_id: 'otjr_1' })
-    if (path === '/v1/ot/directory') return ok(200, { teams: [{ id: 'ott_1', workspace_id: WS, name: 'Studio', summary: 's', member_count: 2, membership: null }] })
+    if (path === '/v1/ot/directory' || path.startsWith('/v1/ot/directory?')) return ok(200, { teams: [{ id: 'ott_1', workspace_id: WS, name: 'Studio', summary: 's', member_count: 2, membership: null }] })
     if (path === '/v1/ot/conversations' && init.method === 'GET') {
       return ok(200, { conversations: [{ id: 'otc_1', kind: 'dm', title: 'Bea', members: [{ handle: 'bea.home', display_name: 'Bea', owner_id: 'own_bea' }, { handle: 'ann.home', display_name: 'Ann', owner_id: 'own_ann', platform_user_id: 'b'.repeat(32) }], unread: 1, read_seq: 2, updated_at: 1_700_000_200_000, last_message: { body: 'hi', retracted: false } }] })
     }
@@ -64,10 +65,13 @@ function fakeSocial() {
   return { fetch, calls }
 }
 
-function setup() {
+function setup(binding = null) {
   const social = fakeSocial()
   setSharedBotSocial(createBotSocial({ server: SERVER, credentialsPath: creds(), fetch: social.fetch }))
-  const host = { dataDir: '/nonexistent' }
+  const host = { dataDir: '/nonexistent', call: async (endpoint) => {
+    assert.equal(endpoint, 'agents/personal-binding')
+    return binding
+  } }
   return { social, host }
 }
 
@@ -121,7 +125,7 @@ test('discover v1 maps a work feed into the page card shape', async () => {
   assert.equal(feed.body.items[0].own_work, true)
 })
 
-test('auth and workspace list paths are not claimed by the C v1 handlers', async () => {
+test('auth and single workspace paths stay outside the C v1 handlers', async () => {
   const { host } = setup()
   const missed = await members(host).endpoints.v1({ method: 'GET', path: '/v1/auth/session' })
   assert.equal(missed.status, 404)
@@ -129,6 +133,27 @@ test('auth and workspace list paths are not claimed by the C v1 handlers', async
   const workspaces = await teams(host).endpoints.v1({ method: 'GET', path: `/v1/workspaces/${WS}` })
   assert.equal(workspaces.status, 404)
   assert.equal(workspaces.body.error.code, 'not_moved')
+})
+
+test('workspace list includes the local personal binding alongside Social workspaces', async () => {
+  const wid = 'c'.repeat(32)
+  const { social, host } = setup({ workspace_id: wid, agent_id: 'd'.repeat(32) })
+  const endpoint = teams(host).endpoints.v1
+  const first = await endpoint({ method: 'GET', path: '/v1/workspaces?limit=1' })
+  assert.equal(first.status, 200)
+  assert.equal(first.body.cursor, wid)
+  assert.deepEqual(first.body.items.map(row => [row.id, row.kind, row.owner_id]), [[wid, 'personal', 'b'.repeat(32)]])
+  const second = await endpoint({ method: 'GET', path: '/v1/workspaces?limit=1&cursor=' + wid })
+  assert.equal(second.body.cursor, null)
+  assert.deepEqual(second.body.items.map(row => [row.id, row.name]), [[WS, 'Studio']])
+  assert.ok(social.calls.every(call => call.method === 'GET'))
+})
+
+test('workspace list keeps the Social row when it already maps the personal workspace', async () => {
+  const { host } = setup({ workspace_id: WS, agent_id: 'd'.repeat(32) })
+  const result = await teams(host).endpoints.v1({ method: 'GET', path: '/v1/workspaces' })
+  assert.equal(result.status, 200)
+  assert.deepEqual(result.body.items.map(row => [row.id, row.name, row.kind]), [[WS, 'Studio', 'workspace']])
 })
 
 

@@ -14,7 +14,9 @@ from . import discover
 
 class SettingsPage:
     ASSETS = {
+        '/login': ('home', 'index.html', 'text/html; charset=utf-8'),
         '/register': ('register', 'index.html', 'text/html; charset=utf-8'),
+        '/register/': ('register', 'index.html', 'text/html; charset=utf-8'),
         '/register/app.mjs': ('register', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/register/app.css': ('register', 'app.css', 'text/css; charset=utf-8'),
         '/settings': ('settings', 'index.html', 'text/html; charset=utf-8'),
@@ -61,6 +63,8 @@ class SettingsPage:
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/voice.mjs': ('chat', 'voice.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/mentions.mjs': ('chat', 'mentions.mjs', 'text/javascript; charset=utf-8'),
         '/chat/dsbot.mjs': ('chat', 'dsbot.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.css': ('chat', 'app.css', 'text/css; charset=utf-8'),
         '/messenger': ('messenger', 'index.html', 'text/html; charset=utf-8'),
@@ -71,6 +75,7 @@ class SettingsPage:
         '/discover/app.css': ('discover', 'app.css', 'text/css; charset=utf-8'),
         '/meetings': ('meetings', 'index.html', 'text/html; charset=utf-8'),
         '/meetings/app.mjs': ('meetings', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/meetings/audio.mjs': ('meetings', 'audio.mjs', 'text/javascript; charset=utf-8'),
         '/meetings/app.css': ('meetings', 'app.css', 'text/css; charset=utf-8'),
         '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/edit': ('profile', 'index.html', 'text/html; charset=utf-8'),
@@ -218,10 +223,13 @@ class SettingsPage:
                                                  ('Content-Length', '9')])
                 return [] if env.get('REQUEST_METHOD') == 'HEAD' else [b'Not found']
             return self.api(env, start_response)
+        audio_page = path in ('/chat', '/chat/', '/meetings')
+        csp = self.CSP + "; media-src 'self' blob:" if audio_page else self.CSP
+        microphone = '(self)' if audio_page else '()'
         headers = [('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff'),
-                   ('Content-Security-Policy', self.CSP), ('Referrer-Policy', 'no-referrer'),
+                   ('Content-Security-Policy', csp), ('Referrer-Policy', 'no-referrer'),
                    ('Cross-Origin-Resource-Policy', 'same-origin'),
-                   ('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')]
+                   ('Permissions-Policy', f'camera=(), microphone={microphone}, geolocation=()')]
         content_type = 'text/plain; charset=utf-8'
         status, data = '404 Not Found', b'Not found'
         origin = self.api.config.origin
