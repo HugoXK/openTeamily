@@ -21,6 +21,16 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/search/resources?kind=links`, ORIGIN).feature, 'search');
   assert.equal(movedTarget('/v1/auth/session', ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations`, ORIGIN), null);
+  assert.equal(movedTarget('/v1/settings', ORIGIN).feature, 'settings');
+  assert.equal(movedTarget('/v1/notification-prefs', ORIGIN).feature, 'settings');
+  assert.equal(movedTarget('/v1/onboarding/look', ORIGIN).feature, 'settings');
+  assert.equal(movedTarget('/v1/onboarding/recommendations', ORIGIN).feature, 'settings');
+  assert.equal(movedTarget('/v1/model-api', ORIGIN).feature, 'model-api');
+  assert.equal(movedTarget(`/v1/composio/connections/${ID}/disconnect`, ORIGIN).feature, 'connectors');
+  assert.equal(movedTarget(`/v1/mcp/servers/${ID}`, ORIGIN).feature, 'connectors');
+  assert.equal(movedTarget('/v1/composio/callback', ORIGIN), null);
+  assert.equal(movedTarget('/v1/skill-secrets', ORIGIN), null);
+  assert.equal(movedTarget('/v1/onboarding/automations', ORIGIN), null);
   assert.equal(movedTarget(`https://evil.example/v1/workspaces/${WS}/meetings`, ORIGIN), null);
 });
 

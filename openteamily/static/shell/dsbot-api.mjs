@@ -16,6 +16,19 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory(?:\/[0-9a-f]{32}(?:\/(?:remove|export|dream(?:\/[0-9a-f]{32})?|versions(?:\/\d{1,8}(?:\/restore)?)?))?)?$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/memory\/(?:profile|graph|(?:actions|links|preferences)(?:\/[0-9a-f]{32}(?:\/remove)?)?)$/, 'memory'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/search\/(?:messages|resources)$/, 'search'],
+  // B4: account settings, onboarding and look live in the user's DS-Bot.
+  // Auth, skill-secrets, runtime connections, workspace lists and the Composio
+  // callback bounce page stay on the platform.
+  [/^\/v1\/settings$/, 'settings'],
+  [/^\/v1\/notification-prefs$/, 'settings'],
+  [/^\/v1\/onboarding(?:\/(?:recommendations|picks|look))?$/, 'settings'],
+  [/^\/v1\/model-api$/, 'model-api'],
+  [/^\/v1\/composio$/, 'connectors'],
+  [/^\/v1\/composio\/key$/, 'connectors'],
+  [/^\/v1\/composio\/toolkits$/, 'connectors'],
+  [/^\/v1\/composio\/connections(?:\/[0-9a-f]{32}(?:\/disconnect)?)?$/, 'connectors'],
+  [/^\/v1\/composio\/approvals(?:\/[0-9a-f]{32})?$/, 'connectors'],
+  [/^\/v1\/mcp\/servers(?:\/[0-9a-f]{32})?$/, 'connectors'],
 ];
 
 export function servedByDsBot(doc = globalThis.document) {

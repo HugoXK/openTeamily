@@ -74,7 +74,7 @@ All of these already exist in the pinned tree and are used by today's runtime im
 * The browser keeps calling legacy `/v1/...` until the page is flipped in `dsbot_routes.json`
   (`moved_pages`); a moved page calls `/b/api/openteamily` instead. Flip a page only once its moved
   calls are covered: a row in `static/shell/dsbot-api.mjs` `MOVED` (generic `<feature>/v1` shim) or a
-  page adapter (chat: `static/chat/dsbot.mjs`). Moved so far: `chat`, `meetings`, `skills`, `memory`. External Agent API: `/v1/gateway/*` is forwarded by the key's instance id (`ota_<instance>_<secret>`) to that owner's DS-Bot (`/api/openteamily/gateway`); the secret is verified only inside that DS-Bot. Automations and agents pages wait on B2's call routing.
+  page adapter (chat: `static/chat/dsbot.mjs`). Moved so far: `chat`, `meetings`, `skills`, `memory`, `settings`, `onboarding`. B4 account settings, notification prefs, onboarding/look, model-api and connectors are routed by `dsbot-api.mjs`. Auth, skill-secrets, Composio callback, `/v1/onboarding/automations` and workspace lists stay on the platform. `/automations/` and `/agents/` wait on B2's call routing.
   platform registry (P); the effective set (account bindings + library) is materialized in DS-Bot via
   `skills/sync` (digest-checked) from `static/shell/dsbot-skills.mjs`, on chat send and on skills changes.
 
