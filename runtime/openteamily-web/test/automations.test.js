@@ -19,13 +19,14 @@ const flush = () => new Promise((r) => setImmediate(r))
 function fixture(turn, at = 1_800_000_000, saveArtifact) {
   const clock = { now: at }
   const calls = []
+  const dbPath = join(mkdtempSync(join(tmpdir(), 'ot-auto-')), 'a.sqlite3')
   const feature = createAutomations({
     personalBinding: async () => ({workspace_id: W}),
     saveArtifact,
-    db: new DatabaseSync(join(mkdtempSync(join(tmpdir(), 'ot-auto-')), 'a.sqlite3')), clock: () => clock.now, log: () => {},
+    db: new DatabaseSync(dbPath), clock: () => clock.now, log: () => {},
     turn: turn ?? (async (args) => { calls.push(args); return { text: 'DS-Bot did it', model: 'm', session_id: 's1', turn_id: 't1', bot_id: 'bot1', model_calls: 1 } }),
   })
-  return { feature, clock, calls, e: feature.endpoints }
+  return { feature, clock, calls, dbPath, e: feature.endpoints }
 }
 
 test('a successful native run saves a durable, idempotent document from its own output', async () => {
@@ -150,6 +151,7 @@ test('a due schedule fires inside DS-Bot once per slot and records the DS-Bot re
   assert.match(calls[0].prompt, /到点提醒我/)
   const { items } = e['automations/runs']({ workspace_id: W, id: automation.id })
   assert.equal(items[0].status, 'succeeded')
+  assert.equal(items[0].trigger, 'scheduled')
   assert.equal(items[0].result.text, 'DS-Bot did it')
   assert.equal(items[0].dispatch.backend, 'ds-bot')
   assert.equal(items[0].dispatch.ds_bot.session_id, 's1')
@@ -170,22 +172,31 @@ test('manual execution queues only the named automation and leaves its scheduled
   const accepted = await e['automations/v1'](req)
   assert.equal(accepted.status, 202)
   assert.equal(accepted.body.run.trigger, 'manual')
+  assert.equal(accepted.body.run.status, 'running')
+  const runsPath = `/v1/workspaces/${W}/automations/${target.id}/runs`
+  const detail = await e['automations/v1']({method: 'GET', path: runsPath + '/' + accepted.body.run.id})
+  assert.equal(detail.body.run.status, 'running')
+  assert.equal((await e['automations/v1']({method: 'GET', path: runsPath + '?status=running'})).body.items[0].id, accepted.body.run.id)
+  assert.deepEqual((await e['automations/v1']({method: 'GET', path: runsPath + '?status=queued'})).body,
+    {items: [], cursor: null, has_pending: true})
   assert.equal((await e['automations/v1'](req)).body.run.id, accepted.body.run.id)
   assert.equal((await e['automations/v1']({...req, idempotency_key: 'x'.repeat(16)})).status, 409)
   assert.equal(calls.length, 1)
   assert.equal(calls[0].conversation, `automation:${target.id}`)
-  finishTurn({text: '完成'})
-  await Promise.all(feature.inflight.values())
   assert.equal(e['automations/runs']({workspace_id: W, id: other.id}).items.length, 0)
   assert.equal(e['automations/get']({workspace_id: W, id: target.id}).automation.enabled, false)
   e['automations/update']({workspace_id: W, id: target.id, revision: 1, changes: {enabled: true}})
+  assert.equal(feature.tick().length, 0, 'the pending manual run holds the automation until it finishes')
+  finishTurn({text: '完成'})
+  await Promise.all(feature.inflight.values())
   assert.equal(feature.tick().length, 1)
+  await flush()
   finishTurn({text: '定时完成'})
   await Promise.all(feature.inflight.values())
   assert.equal(e['automations/runs']({workspace_id: W, id: target.id}).items.length, 2)
 })
 
-test('failed runs are recorded; retry is idempotent; queued runs can be cancelled', async () => {
+test('retry is idempotent and a running turn cannot be cancelled or duplicated', async () => {
   let fail = true
   let release
   const { e, feature } = fixture(async () => {
@@ -201,15 +212,78 @@ test('failed runs are recorded; retry is idempotent; queued runs can be cancelle
   assert.equal(failed.status, 'failed')
   assert.equal(failed.error_code, 'runtime_unavailable')
   fail = false
-  const retried = e['automations/retry']({ workspace_id: W, id: automation.id, run_id: failed.id, idempotency_key: 'x'.repeat(16) })
+  const retry = {workspace_id: W, id: automation.id, run_id: failed.id, idempotency_key: 'x'.repeat(16)}
+  const retried = e['automations/retry'](retry)
   assert.equal(retried.status, 201)
-  assert.equal(e['automations/retry']({ workspace_id: W, id: automation.id, run_id: failed.id, idempotency_key: 'x'.repeat(16) }).run.id, retried.run.id)
+  assert.equal(retried.run.status, 'running')
+  assert.equal(retried.run.trigger, 'retry')
+  assert.equal(e['automations/retry'](retry).run.id, retried.run.id)
+  const anotherRetry = {...retry, idempotency_key: 'y'.repeat(16)}
+  assert.throws(() => e['automations/retry'](anotherRetry), error => error.code === 'automations/already_running')
+  const manual = {workspace_id: W, id: automation.id, idempotency_key: 'm'.repeat(16)}
+  assert.throws(() => e['automations/runNow'](manual), error => error.code === 'automations/already_running')
   await flush()
-  const cancelled = e['automations/cancel']({ workspace_id: W, id: automation.id, run_id: retried.run.id })
-  assert.equal(cancelled.run.status, 'cancelled')
+  const running = {workspace_id: W, id: automation.id, run_id: retried.run.id}
+  assert.equal(e['automations/run'](running).run.status, 'running')
+  assert.equal(e['automations/retry'](retry).run.id, retried.run.id)
+  assert.throws(() => e['automations/cancel'](running), error => error.status === 409)
   release()
   await Promise.all(feature.inflight.values())
-  assert.equal(e['automations/run']({ workspace_id: W, id: automation.id, run_id: retried.run.id }).run.status, 'cancelled', 'late reply keeps the cancel')
+  assert.equal(e['automations/run'](running).run.status, 'succeeded')
+  assert.equal(e['automations/runs'](running).has_pending, false)
+})
+
+test('startup interrupts claimed turns and resumes only previously unclaimed runs', async t => {
+  const {e, feature, dbPath, clock} = fixture()
+  const draft = {workspace_id: W, template_id: 'custom', prompt: 'Respond once', participants: ['alice'],
+    schedule: {kind: 'now', time_zone: 'UTC'}}
+  const {automation: first} = e['automations/create']({...draft, title: 'Interrupted', idempotency_key: 'i'.repeat(16)})
+  const {automation: second} = e['automations/create']({...draft, title: 'Waiting', idempotency_key: 'w'.repeat(16)})
+  const {automation: third} = e['automations/create']({...draft, title: 'Cancelled', idempotency_key: 'c'.repeat(16)})
+  const claimedId = 'c'.repeat(32), queuedId = 'd'.repeat(32), cancelledId = 'e'.repeat(32)
+  const insert = feature.db.prepare(`INSERT INTO ot_automation_runs
+    (id,automation_id,workspace_id,due_at,started,status,dispatch,claimed_at)
+    VALUES(?,?,?,0,?,'queued','{"backend":"ds-bot"}',?)`)
+  insert.run(claimedId, first.id, W, clock.now, clock.now)
+  insert.run(queuedId, second.id, W, clock.now, null)
+  insert.run(cancelledId, third.id, W, clock.now, null)
+  feature.db.close()
+
+  clock.now += 20
+  const calls = []
+  const restored = createAutomations({db: new DatabaseSync(dbPath), clock: () => clock.now,
+    turn: async args => { calls.push(args); return {text: 'Recovered queued run'} }})
+  t.after(() => { restored.stop(); restored.db.close() })
+  const interrupted = restored.ops.run({workspace_id: W, id: first.id, run_id: claimedId}).run
+  assert.equal(interrupted.status, 'failed')
+  assert.equal(interrupted.error_code, 'interrupted')
+  assert.equal(interrupted.finished, clock.now)
+  assert.equal(restored.ops.runs({workspace_id: W, id: first.id}).has_pending, false)
+  assert.equal(restored.ops.runs({workspace_id: W, id: second.id, status: 'queued'}).items[0].id, queuedId)
+  assert.equal(restored.ops.cancel({workspace_id: W, id: third.id, run_id: cancelledId}).run.status, 'cancelled')
+  restored.start()
+  restored.start()
+  await Promise.all(restored.inflight.values())
+  assert.deepEqual(calls.map(item => item.requestId), [`ot-automation:${queuedId}`])
+  assert.equal(restored.ops.run({workspace_id: W, id: second.id, run_id: queuedId}).run.status, 'succeeded')
+})
+
+test('older pending native rows have unknown delivery and become interrupted after migration', t => {
+  const {e, feature, dbPath, clock} = fixture()
+  const {automation} = e['automations/create']({workspace_id: W, title: 'Previous owner runtime', template_id: 'custom',
+    prompt: 'Check once', participants: ['alice'], schedule: {kind: 'now', time_zone: 'UTC'}, idempotency_key: 'r'.repeat(16)})
+  const id = 'f'.repeat(32)
+  feature.db.exec('ALTER TABLE ot_automation_runs DROP COLUMN claimed_at')
+  feature.db.prepare("INSERT INTO ot_automation_runs VALUES(?,?,?,0,?,NULL,'queued',NULL,'{}',NULL)")
+    .run(id, automation.id, W, clock.now)
+  feature.db.close()
+
+  const restored = createAutomations({db: new DatabaseSync(dbPath), clock: () => clock.now,
+    turn: () => assert.fail('old pending work must not be dispatched')})
+  t.after(() => { restored.stop(); restored.db.close() })
+  assert.equal(restored.ops.run({workspace_id: W, id: automation.id, run_id: id}).run.error_code, 'interrupted')
+  restored.start()
+  assert.equal(restored.inflight.size, 0)
 })
 
 test('legacy import is idempotent and never re-fires the already-run slot', () => {
@@ -278,13 +352,26 @@ test('official import bundle marks the current slot skipped and does not re-impo
     schedule: { kind: 'daily', time: '09:00', time_zone: 'UTC' }, participants: [{ username: 'alice' }], enabled: 1, revision: 1, created: 1, updated: 1,
   }]
   const text = JSON.stringify(automations)
+  const history = JSON.stringify([
+    {id: 'd'.repeat(32), automation_id: automations[0].id, workspace_id: W,
+      due_at: at - 86400, started: at - 86400, status: 'succeeded', finished: at - 86399,
+      dispatch: JSON.stringify({backend: 'runtime-connect', result: {text: 'Imported outcome'}})},
+    {id: 'e'.repeat(32), automation_id: automations[0].id, workspace_id: W,
+      due_at: at - 172800, started: at - 172800, status: 'queued'},
+  ])
   const bundle = { format: 'openteamily-dsbot-import', version: 1, feature: 'automations', created: 1,
-    tables: { automations: text }, manifest: { automations: { rows: 1, sha256: sha(text) } } }
+    tables: { automations: text, automation_runs: history },
+    manifest: { automations: { rows: 1, sha256: sha(text) }, automation_runs: { rows: 2, sha256: sha(history) } } }
   const first = await feature.migrate(bundle)
   assert.equal(first.imported, 1)
   assert.equal(e['automations/list']({ workspace_id: W }).items[0].title, '旧报')
   const runs = e['automations/runs']({ workspace_id: W, id: 'c'.repeat(32) })
   assert.ok(runs.items.some((row) => row.status === 'skipped' && row.error_code === 'migrated'))
+  const imported = runs.items.find(row => row.id === 'd'.repeat(32))
+  assert.equal(imported.dispatch.backend, 'legacy')
+  assert.equal(imported.result.text, 'Imported outcome')
+  assert.equal(runs.items.find(row => row.id === 'e'.repeat(32)).status, 'skipped')
+  assert.equal(runs.has_pending, false)
   assert.equal(feature.tick().length, 0)
   assert.equal((await feature.migrate(bundle)).imported, 0)
 })

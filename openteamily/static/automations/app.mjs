@@ -55,12 +55,17 @@ export function runStatusLabel(run) {
   if (!run) return '';
   if (run.status === 'succeeded') return '已完成';
   if (run.status === 'queued' && run.error_code === 'no_agent') return '等待已连接的代理';
-  if (run.status === 'queued') return '运行中';
+  if (run.status === 'queued') return '已排队';
+  if (run.status === 'running') return '运行中';
   if (run.status === 'cancelled') return '已取消';
   if (run.status === 'timeout') return '已超时';
   if (run.status === 'skipped') return '已跳过';
   if (run.status === 'failed') return '失败';
   return run.status || '';
+}
+
+function runActive(run) {
+  return run?.status === 'queued' || run?.status === 'running';
 }
 
 // A run that ended can be asked for again; a queued run is cancelled instead,
@@ -83,6 +88,7 @@ export const RUN_DETAIL_EMPTY = '这次运行没有留下输出';
 const RUN_ERROR_REASONS = Object.freeze({
   cancelled: '这次运行被取消了。',
   timeout: '这次运行超时，没有在时限内完成。',
+  interrupted: '运行环境重启，本次运行已中断。可以重新运行。',
   no_agent: '当前没有已连接的代理，运行还在排队。',
   provider_error: '模型提供方这次没有返回结果。',
   model_unconfigured: '这个运行时缺少模型 API 配置。',
@@ -112,12 +118,18 @@ export function runDetailFields(run) {
   const code = typeof run.error_code === 'string' ? run.error_code : '';
   const reason = runErrorReason(run);
   if (code) fields.push({label: '状态码', value: code});
-  if (reason) fields.push({label: '失败原因', value: reason});
+  if (reason) fields.push({label: runActive(run) ? '说明' : '失败原因', value: reason});
   const result = run.result || {};
   if (typeof result.model === 'string' && result.model) fields.push({label: '模型', value: result.model});
   if (typeof result.source === 'string' && result.source) fields.push({label: '来源', value: result.source});
+  const trigger = {manual: '手动运行', scheduled: '定时触发', retry: '重新运行'}[run.trigger];
+  if (typeof trigger === 'string') fields.push({label: '触发方式', value: trigger});
   const dispatch = run.dispatch || {};
-  if (typeof dispatch.backend === 'string' && dispatch.backend) fields.push({label: '执行位置', value: dispatch.backend});
+  if (typeof dispatch.backend === 'string' && dispatch.backend) {
+    const location = dispatch.backend === 'ds-bot' ? '个人 DS-Bot'
+      : dispatch.backend === 'legacy' ? '旧版平台' : dispatch.backend;
+    fields.push({label: '执行位置', value: location});
+  }
   if (typeof dispatch.task_id === 'string' && dispatch.task_id) fields.push({label: '任务', value: dispatch.task_id});
   return fields;
 }
@@ -434,6 +446,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const backButton = document.getElementById('cancel-editor');
   const manualRunNote = document.getElementById('manual-run-note');
   const manualRunStatus = document.getElementById('manual-run-status');
+  const viewWatchedRun = document.getElementById('view-watched-run');
+  const historyError = document.getElementById('run-history-error');
   const linkRetry = document.getElementById('automation-link-retry');
   const sourcePanel = document.getElementById('meeting-action-source');
   const tabs = document.querySelectorAll('.tabs [data-category]');
@@ -451,14 +465,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let listRequest = 0;
   let recentRuns = [];
   let runCursors = [''];
+  let pendingRunCursors = null;
   let nextRunCursor = '';
   let activeRun = false;
   let editorRequest = 0;
-  let watchedRun = '';
+  let runIntent = 0;
+  let runFingerprint = '';
   const savedRunResults = new Map();
   const savingRunResults = new Set();
-  const manualKeys = new Map();
-  const manualPending = new Set();
+  const runSubmissions = new Map();
+  const watchedRuns = new Map();
+  const cancellingRuns = new Set();
   const view = document.defaultView;
   const readSearch = () => (view && view.location && view.location.search) || '';
   let runFilter = runFilterFromSearch(readSearch());
@@ -502,12 +519,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     status.textContent = text;
   }
 
-  async function request(method, path, body, extraHeaders) {
+  async function request(method, path, body, extraHeaders, signal) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie)};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (extraHeaders) Object.assign(headers, extraHeaders);
     const response = await fetcher(path, {
-      method, headers, credentials: 'same-origin',
+      method, headers, credentials: 'same-origin', signal,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     let parsed = {};
@@ -517,6 +534,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function workspaceId() {
     return workspaceSelect.value;
+  }
+
+  const viewerId = () => currentUser?.id || currentUser?.username;
+
+  function runScope() {
+    const workspace = workspaceId(), automation = current?.id, viewer = viewerId();
+    return {workspace, automation, viewer, editor: editorRequest, key: JSON.stringify([viewer, workspace, automation])};
+  }
+
+  function currentRunScope(target) {
+    return !form.hidden && !mainPanel.hidden && target.viewer === viewerId() && target.editor === editorRequest &&
+      target.workspace === workspaceId() && target.automation === current?.id;
+  }
+
+  const runPath = ({workspace, automation}) => `/v1/workspaces/${workspace}/automations/${automation}`;
+
+  async function runRequestWithTimeout(method, path, body, headers) {
+    const signal = globalThis.AbortSignal?.timeout?.(12000);
+    return request(method, path, body, headers, signal).catch(() => ({status: 0, body: {}}));
   }
 
   let pendingConfirm = null;
@@ -582,6 +618,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function resetRunPages() {
     runCursors = [''];
+    pendingRunCursors = null;
     nextRunCursor = '';
     if (runPages) runPages.hidden = true;
   }
@@ -593,7 +630,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function showRunHistory() {
-    runPanel?.scrollIntoView({block: 'start'});
+    const anchor = manualRunStatus?.textContent && manualRunStatus.scrollIntoView ? manualRunStatus : runPanel;
+    anchor?.scrollIntoView?.({block: 'start'});
     runHeading?.focus({preventScroll: true});
   }
 
@@ -643,15 +681,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!list || !panel) return;
     recentRuns = items;
     panel.hidden = false;
-    list.textContent = '';
     const visible = items.filter(item => matchesRunFilter(item, runFilter));
     const filtering = runFilter !== 'all';
     empty.hidden = items.length > 0 || filtering;
     const filterEmpty = document.getElementById('run-filter-empty');
     if (filterEmpty) filterEmpty.hidden = !(filtering && visible.length === 0);
+    const target = runScope();
+    const submission = runSubmissions.get(target.key);
+    const hasRetry = visible.some(retryAllowed);
+    const fingerprint = JSON.stringify([target.editor, runFilter, visible, hasRetry && activeRun,
+      hasRetry && submission?.state, hasRetry && submission?.source,
+      visible.map(({id}) => [savedRunResults.get(id), savingRunResults.has(id), cancellingRuns.has(`${target.key}/${id}`)])]);
+    if (runFingerprint === fingerprint) return;
+    runFingerprint = fingerprint;
+    const focused = document.activeElement;
+    const focusRow = focused?.closest?.('[data-run-id]');
+    const restore = focusRow && list.contains(focusRow);
+    const focusedControl = focused?.dataset?.runControl;
+    if (pendingConfirm?.trigger.dataset.runControl === 'cancel') closeConfirm({restoreFocus: false});
+    list.textContent = '';
+    let nextFocus = restore ? runHeading : null;
     for (const item of visible) {
       const row = document.createElement('li');
       row.className = 'run-row';
+      row.dataset.runId = item.id;
       const head = document.createElement('div');
       head.className = 'run-head';
       // The whole head is the toggle, so one click opens exactly one run.
@@ -659,6 +712,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const toggle = document.createElement('button');
       toggle.type = 'button';
       toggle.className = 'run-toggle';
+      toggle.dataset.runControl = 'toggle';
+      if (restore && focusRow.dataset.runId === item.id) nextFocus = toggle;
       const open = expandedRuns.has(item.id);
       toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
       const when = document.createElement('strong');
@@ -689,13 +744,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       } else {
         const note = document.createElement('p');
         note.className = 'note';
-        note.textContent = item.status === 'queued' ? '正在等待本次结果…' : RUN_DETAIL_EMPTY;
+        note.textContent = runActive(item) ? '正在等待本次结果…' : RUN_DETAIL_EMPTY;
         detail.appendChild(note);
       }
       if (item.status === 'succeeded' && runResultText(item).trim() && current?.id) {
-        const target = {workspace: workspaceId(), automation: current.id};
         const artifact = savedRunResults.get(item.id);
         const action = document.createElement(artifact ? 'a' : 'button');
+        action.dataset.runControl = 'artifact';
+        if (restore && focusRow.dataset.runId === item.id && focusedControl === 'artifact') nextFocus = action;
         if (artifact) {
           action.href = spaceHref(target.workspace, artifact);
           action.className = 'run-work-link';
@@ -726,16 +782,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (item.status === 'queued' && current && current.id) {
         const cancel = document.createElement('button');
         cancel.type = 'button';
-        cancel.textContent = '取消这次运行';
+        cancel.dataset.runControl = 'cancel';
+        cancel.disabled = cancellingRuns.has(`${target.key}/${item.id}`);
+        cancel.textContent = cancel.disabled ? '正在取消…' : '取消这次运行';
+        if (restore && focusRow.dataset.runId === item.id && focusedControl === 'cancel' && !cancel.disabled) nextFocus = cancel;
         cancel.addEventListener('click', () => {
-          // The question is bound to the run it names: switching workspace or
-          // automation later cannot retarget the request built from this snapshot.
-          const target = {workspace: workspaceId(), automation: current.id, run: item.id};
           openConfirm({
             parent: head,
             trigger: cancel,
             prompt: cancellationPrompt(item),
-            action: () => cancelRun(target),
+            action: () => cancelRun({...target, run: item.id}),
           });
         });
         head.appendChild(cancel);
@@ -743,54 +799,107 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (retryAllowed(item) && current && current.id) {
         const retry = document.createElement('button');
         retry.type = 'button';
-        retry.textContent = '重新运行';
-        retry.addEventListener('click', () => {
-          // Bound to this run snapshot: retrying after switching automation
-          // cannot retarget someone else's run.
-          retryRun({workspace: workspaceId(), automation: current.id, run: item.id});
-        });
+        retry.dataset.runControl = 'retry';
+        const rechecking = submission?.state === 'uncertain' && submission.source === item.id;
+        retry.disabled = !rechecking && Boolean(activeRun || submission);
+        retry.textContent = rechecking ? '确认并重试' : '重新运行';
+        if (restore && focusRow.dataset.runId === item.id && focusedControl === 'retry' && !retry.disabled) nextFocus = retry;
+        retry.addEventListener('click', () => submitRun(target, item.id));
         head.appendChild(retry);
       }
       row.appendChild(head);
       row.appendChild(detail);
       list.appendChild(row);
     }
+    nextFocus?.focus({preventScroll: true});
   }
 
   async function cancelRun(target) {
     if (!target || !target.workspace || !target.automation || !target.run) return;
-    const result = await request('POST', `/v1/workspaces/${target.workspace}/automations/${target.automation}/runs/${target.run}/cancel`, {});
+    const key = `${target.key}/${target.run}`;
+    if (cancellingRuns.has(key)) return;
+    cancellingRuns.add(key);
+    if (currentRunScope(target)) renderRuns(recentRuns);
+    const result = await runRequestWithTimeout('POST', `${runPath(target)}/runs/${target.run}/cancel`, {});
+    cancellingRuns.delete(key);
+    if (!currentRunScope(target)) return;
     if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '取消失败。'));
-      return;
+      show('error', result.status === 409 ? '运行状态已改变，无法取消。'
+        : messageFor(result.body.error, '暂时无法确认已取消，正在更新运行状态。'));
+    } else {
+      const item = result.body.run;
+      if (watchMatches(item, target) && watchedRuns.get(target.key)?.id === item.id) watchedRuns.set(target.key, item);
+      show('ok', '已取消。');
     }
-    show('ok', '已取消。');
     await loadRuns();
   }
 
-  // A double click has to reuse one idempotency key, otherwise the server
-  // queues the automation twice. The key is dropped once a retry lands, so a
-  // deliberate later retry of the same run is a new attempt.
-  const retryKeys = new Map();
-
-  function retryKeyFor(runId) {
-    if (!retryKeys.has(runId)) retryKeys.set(runId, idempotencyKey());
-    return retryKeys.get(runId);
+  function watchMatches(item, target) {
+    return Boolean(item?.id && (!item.workspace_id || item.workspace_id === target.workspace) &&
+      (!item.automation_id || item.automation_id === target.automation));
   }
 
-  async function retryRun(target) {
-    if (!target || !target.workspace || !target.automation || !target.run) return;
-    const result = await request(
-      'POST',
-      `/v1/workspaces/${target.workspace}/automations/${target.automation}/runs/${target.run}/retry`,
-      {}, {'Idempotency-Key': retryKeyFor(target.run)},
-    );
-    if (result.status !== 200 && result.status !== 201) {
-      show('error', messageFor(result.body.error, '重新运行失败。'));
+  function syncRunControls() {
+    const target = runScope();
+    const submission = runSubmissions.get(target.key);
+    const watched = watchedRuns.get(target.key);
+    const uncertain = submission?.state === 'uncertain';
+    const pending = submission?.state === 'pending';
+    runButton.disabled = pending || (activeRun && !uncertain);
+    runButton.textContent = pending ? '正在提交…' : uncertain ? '确认并重试' : activeRun ? '已有运行' : '运行一次';
+    const label = pending ? '正在提交本次运行…' : uncertain ? '暂时无法确认是否提交成功，可以重试。' : runStatusLabel(watched);
+    if (manualRunStatus) {
+      manualRunStatus.dataset.state = pending ? 'pending' : uncertain ? 'uncertain' : watched?.status || '';
+      if (manualRunStatus.textContent !== label) manualRunStatus.textContent = label;
+    }
+    if (viewWatchedRun) {
+      viewWatchedRun.hidden = !watched || uncertain || recentRuns.some(item => item.id === watched.id && matchesRunFilter(item, runFilter));
+    }
+  }
+
+  async function submitRun(target, source) {
+    if (!target.workspace || !target.automation || !currentRunScope(target)) return;
+    let submission = runSubmissions.get(target.key);
+    if (submission ? submission.state !== 'uncertain' || submission.source !== source : activeRun) return;
+    if (!submission) submission = {source, idempotency: idempotencyKey()};
+    submission.state = 'pending';
+    runSubmissions.set(target.key, submission);
+    const intent = runIntent;
+    show('', '');
+    syncRunControls();
+    if (!runPanel?.hidden) renderRuns(recentRuns);
+    const action = source ? `/runs/${source}/retry` : '/run';
+    const result = await runRequestWithTimeout('POST', runPath(target) + action, {}, {'Idempotency-Key': submission.idempotency});
+    if (runSubmissions.get(target.key) !== submission) return;
+    const accepted = result.status === 200 || result.status === (source ? 201 : 202);
+    const item = result.body.run;
+    const confirmed = accepted && watchMatches(item, target);
+    const uncertain = !confirmed && (accepted || result.status === 0 || result.status === 408 || result.status >= 500);
+    if (uncertain) submission.state = 'uncertain';
+    else runSubmissions.delete(target.key);
+    if (confirmed) watchedRuns.set(target.key, item);
+    if (!currentRunScope(target)) return;
+    if (!confirmed) {
+      if (!uncertain) show('error', messageFor(result.body.error, source ? '重新运行失败。' : '无法启动这条自动化。'));
+      syncRunControls();
+      if (!runPanel?.hidden) renderRuns(recentRuns);
+      await loadRuns();
       return;
     }
-    retryKeys.delete(target.run);
-    show('ok', '已重新排队。');
+    const onLatest = (pendingRunCursors || runCursors).length === 1 && runFilter === 'all';
+    if (!source && intent === runIntent) {
+      runFilter = 'all';
+      resetRunPages();
+      syncRunFilters();
+      pushRunFilter(runFilter);
+    }
+    activeRun = runActive(item);
+    expandedRuns.add(item.id);
+    if ((pendingRunCursors || runCursors).length === 1 && runFilter === 'all') {
+      renderRuns([item, ...(onLatest ? recentRuns.filter(run => run.id !== item.id) : [])].slice(0, 20));
+    }
+    syncRunControls();
+    if (!source && intent === runIntent) showRunHistory();
     await loadRuns();
   }
 
@@ -802,40 +911,52 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }, pending ? 3000 : 12000);
   }
 
-  async function loadRuns({cursors = runCursors, focus = false} = {}) {
+  async function loadRuns({cursors = pendingRunCursors || runCursors, focus = false} = {}) {
     stopRunPoll();
     const panel = document.getElementById('run-panel');
     if (!panel) return;
-    if (!current || !current.id || !workspaceId()) {
+    if (!current?.id || !workspaceId() || form.hidden || mainPanel.hidden) {
       panel.hidden = true;
       return;
     }
-    const workspace = workspaceId(), automation = current.id;
+    const target = runScope();
     const seq = ++runRequest;
+    pendingRunCursors = cursors;
     const wanted = runFilter === 'all' ? '' : `&status=${runFilter}`;
     const cursor = cursors.at(-1);
     setRunPageControls(true);
-    const listed = await request('GET', `/v1/workspaces/${workspace}/automations/${automation}/runs?limit=20${wanted}${cursor ? '&cursor=' + cursor : ''}`)
-      .catch(() => ({status: 0, body: {}}));
-    if (seq !== runRequest || workspaceId() !== workspace || current?.id !== automation || form.hidden) return;
-    if (listed.status !== 200) {
+    const path = `${runPath(target)}/runs`;
+    const listed = await runRequestWithTimeout('GET', `${path}?limit=20${wanted}${cursor ? '&cursor=' + cursor : ''}`);
+    const stillCurrent = () => seq === runRequest && currentRunScope(target);
+    if (!stillCurrent()) return;
+    pendingRunCursors = null;
+    const ok = listed.status === 200 && Array.isArray(listed.body.items);
+    const items = ok ? listed.body.items : [];
+    if (ok) {
+      runCursors = cursors;
+      nextRunCursor = /^[0-9a-f]{32}$/.test(listed.body.cursor || '') ? listed.body.cursor : '';
+      activeRun = typeof listed.body.has_pending === 'boolean' ? listed.body.has_pending : items.some(runActive);
       setRunPageControls();
-      show('error', messageFor(listed.body.error, '无法读取运行记录。'));
-      scheduleRunPoll(activeRun);
-      return;
+      renderRuns(items);
+      if (focus) showRunHistory();
+    } else {
+      setRunPageControls();
+      panel.hidden = false;
     }
-    const items = listed.body.items || [];
-    runCursors = cursors;
-    nextRunCursor = /^[0-9a-f]{32}$/.test(listed.body.cursor || '') ? listed.body.cursor : '';
-    setRunPageControls();
-    renderRuns(items);
-    const watched = watchedRun && items.find(item => item.id === watchedRun);
-    if (watched && manualRunStatus) manualRunStatus.textContent = runStatusLabel(watched);
-    if (focus) showRunHistory();
-    activeRun = listed.body.has_pending === true || items.some(item => item.status === 'queued');
-    runButton.disabled = activeRun || manualPending.has(automation);
-    runButton.textContent = activeRun ? '运行中…' : '运行一次';
-    scheduleRunPoll(activeRun);
+    if (historyError) historyError.hidden = ok;
+    syncRunControls();
+    const watched = watchedRuns.get(target.key);
+    let updated = watched && items.find(item => item.id === watched.id && watchMatches(item, target));
+    if (!updated && runActive(watched)) {
+      const exact = await runRequestWithTimeout('GET', `${path}/${encodeURIComponent(watched.id)}`);
+      if (!stillCurrent()) return;
+      if (watchedRuns.get(target.key) === watched && exact.status === 200 && exact.body.run?.id === watched.id && watchMatches(exact.body.run, target)) {
+        updated = exact.body.run;
+      }
+    }
+    if (updated && watchedRuns.get(target.key) === watched) watchedRuns.set(target.key, updated);
+    syncRunControls();
+    scheduleRunPoll(activeRun || runActive(watchedRuns.get(target.key)) || runSubmissions.get(target.key)?.state === 'pending');
   }
 
   async function renderProviders() {
@@ -931,8 +1052,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     draftSave = null;
     recentRuns = [];
     activeRun = false;
-    watchedRun = '';
-    if (manualRunStatus) manualRunStatus.textContent = '';
+    runFingerprint = '';
+    document.getElementById('run-list').textContent = '';
+    document.getElementById('run-empty').hidden = true;
+    document.getElementById('run-filter-empty').hidden = true;
+    if (runPanel) runPanel.hidden = true;
+    if (historyError) historyError.hidden = true;
     resetRunPages();
     if (runHistoryButton) runHistoryButton.hidden = !item?.id;
     stopRunPoll();
@@ -947,8 +1072,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (heading) heading.textContent = item?.id ? item.title : source ? '创建会议跟进' : '新建自动化';
     document.getElementById('remove-automation').hidden = !item || !item.id;
     runButton.hidden = !item?.id;
-    runButton.disabled = Boolean(item?.id && manualPending.has(item.id));
-    runButton.textContent = '运行一次';
+    syncRunControls();
     renderManualRunNote();
     loadRuns();
     if (source && heading) heading.focus();
@@ -1079,6 +1203,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const session = await request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
     if (seq !== loadRequest) return;
     if (session.status === 401) {
+      currentUser = null;
+      runSubmissions.clear();
+      watchedRuns.clear();
+      stopRunPoll();
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       show('', '');
@@ -1089,7 +1217,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(session.body.error, '无法读取会话。'));
       return;
     }
+    const previousViewer = viewerId();
     currentUser = session.body.user;
+    if (previousViewer && previousViewer !== viewerId()) {
+      editorRequest += 1;
+      runSubmissions.clear();
+      watchedRuns.clear();
+      stopRunPoll();
+    }
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
@@ -1152,6 +1287,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     clearEditorLink();
     closeConfirm({restoreFocus: false});
     discardMeetingDraft();
+    current = null;
+    form.hidden = true;
+    listPanel.hidden = false;
+    mainPanel.classList.remove('is-editing');
+    if (runPanel) runPanel.hidden = true;
+    stopRunPoll();
     loadList();
   });
   linkRetry?.addEventListener('click', () => load());
@@ -1161,17 +1302,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else showRunHistory();
   });
   runNewer?.addEventListener('click', () => {
+    runIntent += 1;
     if (runCursors.length > 1) void loadRuns({cursors: runCursors.slice(0, -1), focus: true});
   });
   runOlder?.addEventListener('click', () => {
+    runIntent += 1;
     if (nextRunCursor) void loadRuns({cursors: [...runCursors, nextRunCursor], focus: true});
   });
+  viewWatchedRun?.addEventListener('click', () => {
+    const watched = watchedRuns.get(runScope().key);
+    if (!watched) return;
+    runIntent += 1;
+    expandedRuns.add(watched.id);
+    runFilter = 'all';
+    resetRunPages();
+    syncRunFilters();
+    pushRunFilter(runFilter);
+    void loadRuns({focus: true});
+  });
+  document.getElementById('run-history-retry')?.addEventListener('click', () => void loadRuns());
   syncRunFilters();
   for (const [filter, id] of Object.entries(RUN_FILTER_BUTTONS)) {
     const button = document.getElementById(id);
     if (!button) continue;
     button.addEventListener('click', async () => {
       if (filter === runFilter) return;
+      runIntent += 1;
       runFilter = filter;
       resetRunPages();
       syncRunFilters();
@@ -1183,6 +1339,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     view.addEventListener('popstate', () => {
       const wanted = runFilterFromSearch(readSearch());
       if (wanted === runFilter) return;
+      runIntent += 1;
       runFilter = wanted;
       resetRunPages();
       syncRunFilters();
@@ -1312,45 +1469,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadRuns();
   });
 
-  runButton.addEventListener('click', async () => {
-    const workspace = workspaceId(), automation = current?.id;
-    if (!workspace || !automation || runButton.disabled) return;
-    const isCurrent = () => workspaceId() === workspace && current?.id === automation && !form.hidden;
-    if (!manualKeys.has(automation)) manualKeys.set(automation, idempotencyKey());
-    manualPending.add(automation);
-    runButton.disabled = true;
-    runButton.textContent = '正在提交…';
-    try {
-      const result = await request('POST', `/v1/workspaces/${workspace}/automations/${automation}/run`,
-        {}, {'Idempotency-Key': manualKeys.get(automation)});
-      if (result.status !== 200 && result.status !== 202) {
-        if (isCurrent()) show('error', messageFor(result.body.error, '无法启动这条自动化。'));
-        return;
-      }
-      manualKeys.delete(automation);
-      if (!isCurrent()) return;
-      const onLatest = runCursors.length === 1 && runFilter === 'all';
-      runFilter = 'all';
-      resetRunPages();
-      syncRunFilters();
-      pushRunFilter(runFilter);
-      activeRun = result.body.run.status === 'queued';
-      watchedRun = result.body.run.id;
-      expandedRuns.add(watchedRun);
-      if (manualRunStatus) manualRunStatus.textContent = runStatusLabel(result.body.run);
-      renderRuns([result.body.run, ...(onLatest ? recentRuns.filter(run => run.id !== result.body.run.id) : [])].slice(0, 20));
-      show('ok', '已提交，结果会出现在运行记录中。');
-      showRunHistory();
-    } catch {
-      if (isCurrent()) show('error', '暂时无法确认是否提交成功，可以重试。');
-    } finally {
-      manualPending.delete(automation);
-      if (isCurrent()) {
-        runButton.disabled = activeRun;
-        runButton.textContent = runButton.disabled ? '运行中…' : '运行一次';
-        await loadRuns();
-      }
-    }
+  runButton.addEventListener('click', () => {
+    if (runButton.disabled) return;
+    const target = runScope();
+    return submitRun(target, runSubmissions.get(target.key)?.source);
   });
 
   const removeButton = document.getElementById('remove-automation');
@@ -1397,6 +1519,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     discardMeetingDraft();
     current = null;
     savedRunResults.clear();
+    runSubmissions.clear();
+    watchedRuns.clear();
     stopRunPoll();
     await load();
   });

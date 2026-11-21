@@ -173,10 +173,13 @@
         <button type="button" id="tick-automation" hidden>运行一次</button>
         <button type="button" id="remove-automation" hidden>删除</button>
       </div>
+      <div class="manual-run-feedback">
+        <p id="manual-run-status" class="note" role="status"></p>
+        <button type="button" id="view-watched-run" class="secondary" aria-controls="run-panel" hidden>查看本次运行</button>
+      </div>
     </form>
     <section id="run-panel" hidden>
       <h2 id="run-heading" tabindex="-1">运行记录</h2>
-      <p id="manual-run-status" class="note" role="status" aria-live="polite"></p>
       <div class="run-history-tools">
         <nav class="run-filters" aria-label="运行状态">
           <button type="button" id="run-filter-all" data-run-filter="all" aria-current="true">全部</button>
@@ -187,6 +190,10 @@
           <button type="button" id="run-newer">较新记录</button>
           <button type="button" id="run-older">更早记录</button>
         </nav>
+      </div>
+      <div id="run-history-error" hidden>
+        <p class="note" role="status">无法更新运行记录。</p>
+        <button type="button" id="run-history-retry" class="secondary">重新加载</button>
       </div>
       <ul id="run-list"></ul>
       <p id="run-empty" class="empty-state" hidden>还没有运行记录。</p>

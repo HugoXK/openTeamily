@@ -79,6 +79,8 @@ test('readEditor collects tag fields', () => {
 test('runStatusLabel and runResultText describe durable run rows', () => {
   assert.equal(runStatusLabel({status: 'succeeded'}), '已完成');
   assert.equal(runStatusLabel({status: 'queued', error_code: 'no_agent'}), '等待已连接的代理');
+  assert.equal(runStatusLabel({status: 'queued'}), '已排队');
+  assert.equal(runStatusLabel({status: 'running'}), '运行中');
   assert.equal(runStatusLabel({status: 'timeout'}), '已超时');
   assert.equal(runResultText({result: {text: 'brief from fake provider'}}), 'brief from fake provider');
   assert.equal(runResultText({result: {}}), '');
@@ -973,9 +975,12 @@ function runRowButtons(elements, label) {
   return found;
 }
 
-async function mountRuns({runs = RETRY_RUNS, retry = 'ok'} = {}) {
-  const restorePolling = holdRunPolling();
+async function mountRuns({runs = RETRY_RUNS.filter(item => item.status !== 'queued'), retry = 'ok', dispatch, schedulePoll} = {}) {
+  const restorePolling = holdRunPolling(schedulePoll);
   const {doc, elements} = fakeDocument();
+  doc.defaultView = {location: {search: ''}, history: {pushState(state, title, url) {
+    doc.defaultView.location.search = new URL(url, 'https://test.local').search;
+  }}};
   const calls = [];
   const posts = [];
   let listed = runs.slice();
@@ -989,11 +994,16 @@ async function mountRuns({runs = RETRY_RUNS, retry = 'ok'} = {}) {
     if (path === '/v1/workspaces/ws1/automations?category=mine') {
       return {status: 200, json: async () => ({items: [AUTOMATION]})};
     }
-    if (method === 'GET' && /^\/v1\/workspaces\/ws1\/automations\/a1\/runs\?limit=20$/.test(path)) {
-      return {status: 200, json: async () => ({items: listed})};
+    if (method === 'GET' && /^\/v1\/workspaces\/ws1\/automations\/a1\/runs\?/.test(path)) {
+      const filter = new URL(path, 'https://test.local').searchParams.get('status') || 'all';
+      return respond({items: listed.filter(item => matchesRunFilter(item, filter)),
+        has_pending: listed.some(item => ['queued', 'running'].includes(item.status))});
     }
-    if (method === 'POST' && /^\/v1\/workspaces\/ws1\/automations\/a1\/runs\/[^/]+\/retry$/.test(path)) {
+    const exact = method === 'GET' && path.match(/^\/v1\/workspaces\/ws1\/automations\/a1\/runs\/([^/]+)$/);
+    if (exact) return respond({run: listed.find(item => item.id === exact[1])});
+    if (method === 'POST' && /^\/v1\/workspaces\/ws1\/automations\/a1\/(run|runs\/[^/]+\/retry)$/.test(path)) {
       posts.push({path, headers: options.headers || {}, body: options.body});
+      if (dispatch) return dispatch({posts, list: rows => { listed = [...rows, ...runs]; }});
       if (retry === 'ok') {
         const fresh = {id: 'r9', status: 'queued', error_code: 'no_agent', due_at: 1795086000, started: 1795086000, finished: null};
         listed = [fresh, ...listed];
@@ -1009,6 +1019,7 @@ async function mountRuns({runs = RETRY_RUNS, retry = 'ok'} = {}) {
   await openFirst(elements);
   return {
     elements, calls, posts,
+    list(rows) { listed = [...rows, ...runs]; },
     restore() {
       if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
       restorePolling();
@@ -1045,24 +1056,84 @@ test('点「重新运行」带幂等键请求 /retry，成功后列表出现一�
     assert.match(posts[0].headers['Idempotency-Key'] || '', /^[A-Za-z0-9_-]{16,64}$/,
       'the request needs an idempotency key or a double click queues the automation twice');
     const rows = elements.get('run-list').children;
-    assert.equal(rows.length, 5, 'the reloaded list now carries the new queued run');
+    assert.equal(rows.length, 4, 'the reloaded list now carries the new queued run');
     assert.match(rows[0].textContent, /等待已连接的代理|运行中/, 'the new run is queued, not a finished failure');
-    assert.match(elements.get('status').textContent, /重新排队/);
+    assert.equal(elements.get('manual-run-status').textContent, '等待已连接的代理');
+    assert.equal(elements.get('status').textContent, '');
   } finally {
     restore();
   }
 });
 
-test('连点两次用同一把幂等键，不会排两次队', async () => {
+test('a double click on retry sends one request', async () => {
   const {elements, posts, restore} = await mountRuns();
   try {
     const [button] = runRowButtons(elements, '重新运行');
     const handler = button.handlers.click[0];
     await Promise.all([handler(), handler()]);
     await flush();
-    assert.equal(posts.length, 2, 'both clicks reach the server');
-    assert.equal(posts[0].headers['Idempotency-Key'], posts[1].headers['Idempotency-Key'],
-      'two clicks on the same run must reuse one key, otherwise the server queues two runs');
+    assert.equal(posts.length, 1);
+  } finally {
+    restore();
+  }
+});
+
+for (const command of ['manual', 'retry']) {
+  test(`an interrupted ${command} response can be checked with the same key while its run is active`, async () => {
+    const running = {id: 'r9', status: 'running'};
+    const {elements, calls, posts, restore} = await mountRuns({
+      dispatch({posts, list}) {
+        list([running]);
+        if (posts.length === 1) throw new TypeError('response lost');
+        return respond({run: running});
+      },
+    });
+    try {
+      const button = command === 'retry' ? runRowButtons(elements, '重新运行')[0] : elements.get('tick-automation');
+      await button.handlers.click[0]();
+      const runControl = elements.get('tick-automation');
+      assert.equal(runControl.textContent, '确认并重试');
+      assert.equal(runControl.disabled, false);
+      assert.equal(elements.get('manual-run-status').dataset.state, 'uncertain');
+      assert.equal(runRowButtons(elements, '取消这次运行').length, 0, 'running work can no longer be cancelled');
+      await runControl.handlers.click[0]();
+      assert.equal(posts.length, 2);
+      assert.deepEqual(posts[0], posts[1], 'the same route, body and idempotency key are replayed');
+      assert.equal(runControl.disabled, true);
+      assert.equal(elements.get('manual-run-status').textContent, '运行中');
+      assert.equal(calls.filter(call => call.endsWith('/runs/r9')).length, 0, 'a visible run needs no extra request');
+    } finally {
+      restore();
+    }
+  });
+}
+
+test('a filtered watcher tracks the exact run and retains identical rows across a poll', async () => {
+  const timers = new Map();
+  let timer = 0;
+  const queued = {id: 'r9', status: 'queued'};
+  const {elements, calls, list, restore} = await mountRuns({
+    dispatch({list}) { list([queued]); return respond({run: queued}, 202); },
+    schedulePoll(callback) { timers.set(++timer, callback); return timer; },
+  });
+  try {
+    await elements.get('tick-automation').handlers.click[0]();
+    assert.equal(elements.get('manual-run-status').textContent, '已排队');
+    list([{...queued, status: 'running'}]);
+    await elements.get('run-filter-succeeded').handlers.click[0]();
+    const row = elements.get('run-list').children[0];
+    assert.equal(elements.get('manual-run-status').textContent, '运行中');
+    assert.equal(calls.filter(call => call.endsWith('/runs/r9')).length, 1);
+    list([{...queued, status: 'failed', error_code: 'interrupted'}]);
+    timers.get(timer)();
+    await flush();
+    assert.equal(elements.get('manual-run-status').textContent, '失败');
+    assert.equal(elements.get('manual-run-status').dataset.state, 'failed');
+    assert.equal(elements.get('run-filter-succeeded').getAttribute('aria-current'), 'true');
+    assert.equal(elements.get('run-list').children[0], row, 'unchanged history rows survive polling');
+    assert.equal(elements.get('view-watched-run').hidden, false);
+    assert.equal(elements.get('tick-automation').disabled, false);
+    assert.equal(calls.filter(call => call.endsWith('/runs/r9')).length, 2);
   } finally {
     restore();
   }
@@ -1112,4 +1183,14 @@ test('a succeeded run expands to its summary and the model that wrote it', () =>
     {label: '摘要', value: '今天的简报'},
     {label: '模型', value: 'deepseek-v4'},
   ]);
+});
+
+test('recorded trigger and execution location distinguish manual, scheduled and retried runs', () => {
+  assert.deepEqual(runDetailFields({trigger: 'manual', dispatch: {backend: 'ds-bot'}}), [
+    {label: '触发方式', value: '手动运行'}, {label: '执行位置', value: '个人 DS-Bot'},
+  ]);
+  assert.deepEqual(runDetailFields({trigger: 'scheduled', dispatch: {backend: 'legacy'}}), [
+    {label: '触发方式', value: '定时触发'}, {label: '执行位置', value: '旧版平台'},
+  ]);
+  assert.deepEqual(runDetailFields({trigger: 'retry'}), [{label: '触发方式', value: '重新运行'}]);
 });
