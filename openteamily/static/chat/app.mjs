@@ -996,11 +996,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     actions.append(retry, discard);
     if (reply) bubble.append(quoteBlock(reply));
     bubble.append(body);
+    const previews = [];
+    const urls = document.defaultView?.URL;
     for (const file of files) {
-      bubble.append(renderChatFile(document, {title: file.name, mime: file.type, bytes: file.size}, {pending: true}));
+      const path = file.type?.startsWith('image/') && urls?.createObjectURL ? urls.createObjectURL(file) : '';
+      if (path) previews.push(path);
+      bubble.append(renderChatFile(document, {title:file.name,mime:file.type,bytes:file.size,path}, {pending:true}));
     }
     bubble.append(status, actions);
-    const job = {key, message, files, bubble, status, actions, retry, failed: false,
+    const job = {key, message, files, previews, bubble, status, actions, retry, failed: false,
       state: queue.active ? '等待发送…' : '正在发送…'};
     retry.addEventListener('click', () => {
       if (!job.failed || job.retry.disabled) return;
@@ -1019,7 +1023,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function removeSendJob(queue, job) {
     queue.jobs = queue.jobs.filter(item => item !== job);
     job.bubble.remove();
+    for (const url of job.previews) document.defaultView.URL.revokeObjectURL(url);
     if (!queue.jobs.length && !queue.active && pendingSends.get(queue.scope) === queue) pendingSends.delete(queue.scope);
+  }
+
+  function clearPendingSends() {
+    for (const queue of pendingSends.values()) {
+      for (const job of queue.jobs) removeSendJob(queue,job);
+    }
+    pendingSends.clear();
   }
 
   function pendingMessageKeys() {
@@ -3406,7 +3418,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (servedByDsbot) workspaceEvents.start(null);
       autoTranslation.open(null);
       attachmentSender?.reset();
-      pendingSends.clear();
+      clearPendingSends();
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
@@ -3427,7 +3439,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (currentUser && currentUser.id !== session.body.user.id) {
       attachmentSender?.reset();
-      pendingSends.clear();
+      clearPendingSends();
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();

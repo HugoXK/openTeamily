@@ -41,14 +41,14 @@ export function apply(ctx, config = {}) {
     // Services for @openteamily/web features (chat, skills): native DS-Bot turns in
     // this user's own runtime, serialized with management tasks by bridge.exclusive.
     const chatTurn = (key, text, requestId) => bridge.exclusive(async () => {
-      await bridge.setup()
+      await bridge.prepareModel()
       await bridge.selectConversation(key)
       return runTurn(rt, ctx, bridge.botId, text, requestId)
     })
     const mainBot = async () => { await bridge.setup(); return bridge.botId }
     const attachmentStore = () => ctx.get?.('attachments')
     const nativeTurn = (botId, sessionId, text, requestId, options = {}) => bridge.exclusive(async () => {
-      await bridge.setup()
+      await bridge.prepareModel()
       if (!rt.botOf(botId)) throw new Error('Mapped native Bot no longer exists')
       await rt.switchPart(botId, sessionId)
       await rt.applyModel(rt.botOf(botId), { force: true })
