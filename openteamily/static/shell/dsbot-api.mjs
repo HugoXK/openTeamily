@@ -39,6 +39,7 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/images(?:\/[0-9a-f]{32})?$/, 'images'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/videos(?:\/[0-9a-f]{32})?$/, 'videos'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/music(?:\/[0-9a-f]{32})?$/, 'music'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/websites(?:\/[0-9a-f]{32})?$/, 'websites'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/models-3d(?:\/[0-9a-f]{32})?$/, 'model3d'],
   [/^\/v1\/composio$/, 'connectors'],
   [/^\/v1\/composio\/key$/, 'connectors'],

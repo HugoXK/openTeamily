@@ -4,7 +4,7 @@ import { AGENT_FILE_ACCEPT, mountChatFiles, renderChatFile, sendPrivateAttachmen
 import { mountGroupTranslation } from './translation.mjs';
 import { mountChatCalls } from './calls.mjs';
 import { mountImageCreator } from './image-create.mjs';
-import { mountModel3dCreator, mountMusicCreator, mountVideoCreator } from './video-create.mjs';
+import { mountModel3dCreator, mountMusicCreator, mountVideoCreator, mountWebsiteCreator } from './video-create.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { stageMeetingFromChat } from '../shell/meeting-link.mjs';
@@ -4734,6 +4734,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const videoCreator = mountVideoCreator(document, mediaOptions('video'));
   const musicCreator = mountMusicCreator(document, mediaOptions('music'));
   const model3dCreator = mountModel3dCreator(document, mediaOptions('model3d'));
+  const websiteCreator = mountWebsiteCreator(document, mediaOptions('website'));
   const attachInput = document.getElementById('chat-attachment');
   const defaultAccept = attachInput ? attachInput.getAttribute('accept') || '' : '';
   function syncPlusState() {
@@ -4742,6 +4743,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     videoCreator.sync();
     musicCreator.sync();
     model3dCreator.sync();
+    websiteCreator.sync();
     const social = currentSource === 'social' && Boolean(currentConversation);
     const shareable = social && !currentConversation.public_agent && currentConversation.direct?.open !== false;
     const workspace = workspaceId();

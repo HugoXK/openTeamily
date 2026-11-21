@@ -307,6 +307,25 @@ test('generated GLB can be viewed, downloaded and attached to chat above the usu
 })
 
 
+test('generated website is saved as an editable artifact and can be recovered by job ID', async () => {
+  const bot = await boot()
+  const generate = bot.features.table['artifacts/generatedWebsite']
+  const request = {workspace_id: WS, job_id: 'b'.repeat(32)}
+  const internal = {internal: true}
+  const html = '<!doctype html><title>Demo</title><button>Count</button>'
+  await assert.rejects(generate({...request, title: 'Demo', body: html}, {}), {status: 404})
+  assert.equal(await generate(request, internal), null)
+  const saved = await generate({...request, title: 'Demo', body: html}, internal)
+  assert.equal((await generate(request, internal)).id, saved.id)
+  assert.equal((await generate({...request, title: 'Retry', body: html}, internal)).id, saved.id)
+  const detail = await bot.call('artifacts', 'GET', base('/' + saved.id))
+  assert.equal(detail.status, 200)
+  assert.equal(detail.body.artifact.kind, 'website')
+  assert.equal(detail.body.artifact.title, 'Demo')
+  assert.equal(detail.body.artifact.body, html)
+  assert.equal(detail.body.artifact.revision, 1)
+})
+
 test('website iframe renders only the selected saved revision with an opaque script sandbox', async () => {
   const bot = await boot()
   const html = '<!doctype html><title>Demo</title><button>Count</button><script>document.title = "Active"</script>'
