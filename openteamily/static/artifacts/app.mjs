@@ -1,5 +1,4 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
-import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
 // A workspace-only link opens its catalog; a saved-result link also opens the record.
 export function artifactTargetFromSearch(search) {
   const params = new URLSearchParams(search || '');
@@ -13,8 +12,6 @@ export function artifactTargetFromSearch(search) {
   return artifact ? {workspace, artifact} : {workspace};
 }
 
-import { bindDocumentEditor } from '../shell/rich-editor.mjs';
-import { mountSpreadsheet } from './spreadsheet.mjs';
 import { mountArtifactNotifications } from './notifications.mjs';
 import {
   artifactKindLabel as kindLabel, renderThumb,
@@ -805,25 +802,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (add) add.disabled = dashboardState.widgets.length >= 20;
   }
 
-  const richDocument = bindDocumentEditor(document, form);
-  const spreadsheet = mountSpreadsheet(document, {
-    async onDraft(prompt) {
-      const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/spreadsheet/draft`, {prompt});
-      if (result.status !== 200 || !result.body.spreadsheet) {
-        throw new Error(messageFor(result.body.error, '无法生成表格草稿。'));
-      }
-      return result.body;
-    },
-    onTitle(title) {
-      if (!form.elements.title.value.trim()) form.elements.title.value = title;
-    },
+  function lazyEditor(initialize) {
+    let pending;
+    let instance;
+    return {
+      get instance() { return instance; },
+      prepare() {
+        pending ??= initialize().then(tool => {
+          instance = tool;
+        }).catch(error => {
+          pending = undefined;
+          throw error;
+        });
+        return pending;
+      },
+    };
+  }
+
+  const richDocument = lazyEditor(async () => {
+    const { bindDocumentEditor } = await import('../shell/rich-editor.mjs');
+    return bindDocumentEditor(document, form);
+  });
+  const spreadsheet = lazyEditor(async () => {
+    const { mountSpreadsheet } = await import('./spreadsheet.mjs');
+    return mountSpreadsheet(document, {
+      async onDraft(prompt) {
+        const result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/spreadsheet/draft`, {prompt});
+        if (result.status !== 200 || !result.body.spreadsheet) {
+          throw new Error(messageFor(result.body.error, '无法生成表格草稿。'));
+        }
+        return result.body;
+      },
+      onTitle(title) {
+        if (!form.elements.title.value.trim()) form.elements.title.value = title;
+      },
+    });
   });
   const sendSpreadsheet = document.getElementById('send-saved-spreadsheet');
   const downloadSpreadsheet = document.getElementById('download-spreadsheet');
   const model3dPanel = document.getElementById('media-model3d');
   const model3dDownload = document.getElementById('media-model3d-download');
-  const model3dPreview = bindModel3dPreview(document.getElementById('media-model3d-toggle'),
-    document.getElementById('media-model3d-preview'), document.getElementById('media-model3d-status'));
+  const model3dPreview = lazyEditor(async () => {
+    const { bindModel3dPreview } = await import('../shell/model3d-preview.mjs');
+    return bindModel3dPreview(document.getElementById('media-model3d-toggle'),
+      document.getElementById('media-model3d-preview'), document.getElementById('media-model3d-status'));
+  });
+
+  function editorTools(item) {
+    if (item?.kind === 'document') return richDocument;
+    if (item?.kind === 'spreadsheet') return spreadsheet;
+    if (isModel3d(item)) return model3dPreview;
+    return null;
+  }
 
   const websitePreview = document.getElementById('website-preview');
   const websiteControls = document.getElementById('website-preview-controls');
@@ -874,7 +904,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     form.elements.title.value = item && item.title ? item.title : '';
     form.elements.body.value = item && typeof item.body === 'string' ? item.body : '';
     const kind = (item && item.kind) || draftKind;
-    richDocument.load(form.elements.body.value, kind === 'document');
+    richDocument.instance?.load(form.elements.body.value, kind === 'document');
     updateEditorMeta(item, kind);
     document.getElementById('body-label').hidden = kind !== 'website';
     document.getElementById('media-editor').hidden = kind !== 'media';
@@ -886,7 +916,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     for (const button of [sendSpreadsheet, downloadSpreadsheet]) {
       if (button) button.hidden = kind !== 'spreadsheet' || !item?.id;
     }
-    if (kind === 'spreadsheet') spreadsheet.load(item?.spreadsheet, item?.id, !item?.id);
+    if (kind === 'spreadsheet') spreadsheet.instance.load(item?.spreadsheet, item?.id, !item?.id);
     for (const button of [sendSlides, downloadSlides]) {
       if (button) button.hidden = kind !== 'slides' || !item?.id;
     }
@@ -943,7 +973,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         mediaMeta.textContent = '选择一张图片或一段音视频，大小不超过 2 MB。';
       }
     }
-    model3dPreview.setSource(model3dSource);
+    model3dPreview.instance?.setSource(model3dSource);
     if (kind === 'whiteboard') {
       boardState = item && item.board ? item.board : {schema: 'openteamily.whiteboard.v1', width: 800, height: 600, strokes: []};
       drawBoard();
@@ -1678,7 +1708,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         media.load?.();
       }
     }
-    model3dPreview.setSource('');
+    model3dPreview.instance?.setSource('');
     setWebsitePreview();
     form.hidden = true;
     form.inert = false;
@@ -1717,6 +1747,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     if (main) main.scrollTop = 0;
     if (item?.id) {
       editorLoading.hidden = false;
+      // The catalog can identify the editor before the exact record arrives.
+      void editorTools(item)?.prepare().catch(() => {});
       const seen = await request('GET', `/v1/workspaces/${workspace}/artifacts/${item.id}`, undefined, undefined, selection.controller.signal)
         .catch(() => ({status: 0, body: {}}));
       if (!activeEditor(selection)) return;
@@ -1728,6 +1760,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
         return;
       }
       item = seen.body.artifact;
+    }
+    const tools = editorTools(item);
+    if (tools && !tools.instance) {
+      // Chat-linked creation captures the draft during the new button's click.
+      if (!item?.id) current = item;
+      editorLoading.hidden = false;
+      try {
+        await tools.prepare();
+      } catch {
+        if (!activeEditor(selection)) return;
+        hideEditor();
+        showCatalog();
+        show('error', '无法加载编辑器，请刷新页面后重试。');
+        return;
+      }
+      if (!activeEditor(selection)) return;
     }
     current = item;
     fillEditor(current);
@@ -1974,7 +2022,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     document.getElementById('retry-artifact-list').hidden = !retry;
   }
 
-  async function loadList({reuse = false, background = false, signal} = {}) {
+  async function loadList({reuse = false, background = false, signal, initial} = {}) {
     if (catalogKind === 'meetings') {
       if (background) return 'defer';
       listStatus();
@@ -2001,7 +2049,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       listStatus(loading.message);
       if (!listPanel.hidden && (!sameCatalog || !allItems.length)) showCatalog();
     }
-    const listed = await request('GET', `/v1/workspaces/${workspace}/artifacts${query}`, undefined, undefined, signal)
+    const listed = initial && !query ? {status: 200, body: initial} :
+      await request('GET', `/v1/workspaces/${workspace}/artifacts${query}`, undefined, undefined, signal)
       .catch(() => ({status: 0, body: {}}));
     if (catalog !== loading || workspaceId() !== workspace || currentUser !== loading.account) return 'defer';
     if (background && (signal?.aborted || listPanel.hidden || catalogKind === 'meetings' || openItemMenu ||
@@ -2052,7 +2101,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const seq = ++workspaceLoad;
     activity.setScope('');
     notifications.setWorkspace('');
-    const session = await request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const location = document.defaultView?.location;
+    const requested = artifactTargetFromSearch(location?.search);
+    const fragment = new URLSearchParams((location?.hash || '').slice(1));
+    const newKind = newKindFromSearch(location?.search);
+    const linkedWorkspace = requested?.workspace || (catalogKind === 'meetings' || newKind ? fragment.get('workspace') : '');
+    const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const initialCatalog = servedByDsBot(document) && catalogKind !== 'meetings' && !newKind &&
+      !requested?.artifact && !requested?.invalid && !listQuery(search.value)
+      ? request('GET', '/v1/workspaces?scope=personal&include=artifacts' +
+          (linkedWorkspace ? '&workspace=' + linkedWorkspace : '')).catch(() => null)
+      : null;
+    const session = await sessionRequest;
     if (seq !== workspaceLoad) return;
     if (session.status === 401) {
       hideEditor();
@@ -2076,11 +2136,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = currentUser.username;
-    const requested = artifactTargetFromSearch(document.defaultView?.location?.search);
-    const fragment = new URLSearchParams((document.defaultView?.location?.hash || '').slice(1));
-    const newKind = newKindFromSearch(document.defaultView?.location?.search);
-    const linkedWorkspace = requested?.workspace || (catalogKind === 'meetings' || newKind ? fragment.get('workspace') : '');
-    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100');
+    const personalRequest = initialCatalog?.then(result => {
+      const items = result?.body?.items;
+      if (result?.status !== 200 || !Array.isArray(items) || items.length !== 1) return null;
+      const owner = items[0]?.owner_id;
+      const viewer = result.body.viewer_username;
+      if ((!owner && !viewer) || (owner && owner !== session.body.user.id) ||
+          (viewer && viewer !== session.body.user.username)) return null;
+      return result;
+    });
+    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100', personalRequest);
     if (linkedWorkspace && !space.body.items?.some(item => item.id === linkedWorkspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) space = shared;
@@ -2151,7 +2216,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       view.history?.replaceState(null, '', view.location.pathname + (rest ? '?' + rest : '') + view.location.hash);
       return;
     }
-    await loadList();
+    const initial = workspaces.length === 1 && workspaces[0].id === workspaceId() &&
+      Array.isArray(space.body.catalog?.items) ? space.body.catalog : undefined;
+    await loadList({initial});
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -2462,7 +2529,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const selection = editor;
-    if (!activeEditor(selection) || !current || selection.saving) return;
+    if (!activeEditor(selection) || !current || form.hidden || selection.saving) return;
     if (websiteInteractive) renderWebsitePreview();
     selection.saving = true;
     setSaving(true);
@@ -2473,7 +2540,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     }
     const inputTitle = form.elements.title.value;
     const title = inputTitle.trim();
-    richDocument.flush();
+    richDocument.instance?.flush();
     const body = form.elements.body.value;
     const kind = (current && current.kind) || draftKind;
     if (!title) {
@@ -2516,7 +2583,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       }
     } else if (kind === 'spreadsheet') {
       form.inert = true;
-      const workbook = spreadsheet.value();
+      const workbook = spreadsheet.instance.value();
       if (current?.id) {
         result = await request('POST', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}`,
                                {revision: current.revision, changes: {title, spreadsheet: workbook}});

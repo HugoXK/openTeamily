@@ -120,6 +120,37 @@ test('artifact data stays in this volume; another DS-Bot never sees it', async (
   assert.equal((await other.call('artifacts', 'GET', base())).body.items.length, 0)
 })
 
+test('Space catalog paginates through Unicode title matches and keeps scoped previews and favorites', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  async function create(title, workspace = WS) {
+    const result = await call('POST', base('', workspace), { title, body: '# 草稿\n目录预览', kind: 'document' }, key())
+    assert.equal(result.status, 201)
+    return result.body.artifact.id
+  }
+  const ids = await Promise.all(['Äpfel 案例', '普通案例', 'ÄPFEL 摘要', '又一个 äpfel 草图'].map((title) => create(title)))
+  await create('ÄPFEL 其他空间', 'b'.repeat(32))
+  await call('POST', base(`/${ids[2]}/favorite`), { enabled: true })
+  const expected = [ids[0], ids[2], ids[3]].sort()
+  const allFirst = (await call('GET', base() + '?limit=2')).body
+  assert.deepEqual(allFirst.items.map((item) => item.id), ids.slice().sort().slice(0, 2))
+  assert.equal(allFirst.cursor, allFirst.items[1].id)
+  const searchPath = base() + '?limit=2&q=' + encodeURIComponent(' ÄPFEL ')
+  const first = (await call('GET', searchPath)).body
+  assert.deepEqual(first.items.map((item) => item.id), expected.slice(0, 2))
+  assert.equal(first.cursor, expected[1])
+  const last = (await call('GET', searchPath + '&cursor=' + first.cursor)).body
+  assert.deepEqual(last.items.map((item) => item.id), expected.slice(2))
+  assert.equal(last.cursor, null)
+  for (const item of [...first.items, ...last.items]) {
+    assert.equal(item.body, undefined)
+    assert.equal(item.preview.heading, '草稿')
+    assert.equal(item.favorited, item.id === ids[2])
+  }
+  assert.equal(first.activity_version, allFirst.activity_version)
+  assert.equal(last.activity_version, allFirst.activity_version)
+})
+
 test('Space activity tracks saved revisions and favorites only in this owner and workspace', async () => {
   const bot = await boot()
   const another = await boot()
@@ -260,6 +291,13 @@ test('native workbook versions preserve distinct worksheets and Excel treats uns
   assert.equal((await call('POST',base(route),{revision:1,changes:{spreadsheet:updated}})).body.artifact.revision,2)
   const stale = await call('POST',base(route),{revision:1,changes:{spreadsheet}})
   assert.equal(stale.status,409)
+  const history = await call('GET',base(route+'/versions'))
+  assert.equal(history.status,200)
+  assert.deepEqual(history.body.items.map(({revision,kind}) => [revision,kind]), [[2,'spreadsheet'],[1,'spreadsheet']])
+  for (const revision of history.body.items) {
+    assert.equal(revision.created_by,artifact.created_by)
+    assert.equal(revision.spreadsheet,undefined)
+  }
   const historical = await call('GET',base(route+'/versions/1/export'))
   assert.equal(historical.status,200)
   assert.match(historical.download.content_type,/spreadsheetml/)

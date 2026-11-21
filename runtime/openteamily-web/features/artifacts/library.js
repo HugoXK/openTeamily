@@ -27,23 +27,37 @@ export function usernames(store) {
   return (id) => map.get(id) ?? fallback
 }
 
-const named = (store, row) => {
-  if (!row) return null
-  const user = usernames(store)
-  return { ...row, created_by_username: user(row.created_by), updated_by_username: user(row.updated_by) }
-}
+const named = (row, user) => ({
+  ...row, created_by_username: user(row.created_by), updated_by_username: user(row.updated_by),
+})
 
 export const canEdit = (role, userId, row) => role === 'owner' || role === 'admin' || row.created_by === userId
 
 export function load(store, workspaceId, id) {
-  return named(store, store.get(ROW_SELECT + 'WHERE a.id=? AND a.workspace_id=?', id, workspaceId))
+  const row = store.get(ROW_SELECT + 'WHERE a.id=? AND a.workspace_id=?', id, workspaceId)
+  return row && named(row, usernames(store))
+}
+
+function searchPage(store, workspaceId, cursor, limit, needle) {
+  const ids = []
+  const candidates = store.all('SELECT id, title FROM artifacts WHERE workspace_id=? AND id>? ORDER BY id', workspaceId, cursor)
+  for (const { id, title } of candidates) {
+    if (!title.toLocaleLowerCase('en-US').includes(needle)) continue
+    ids.push(id)
+    if (ids.length >= limit) break
+  }
+  if (!ids.length) return []
+  const placeholders = ids.map(() => '?').join(',')
+  return store.all(ROW_SELECT + `WHERE a.workspace_id=? AND a.id IN (${placeholders}) ORDER BY a.id`, workspaceId, ...ids)
 }
 
 export function listing(store, workspaceId, cursor, limit, needle = '') {
-  let rows = store.all(ROW_SELECT + 'WHERE a.workspace_id=? ORDER BY a.id', workspaceId).map((row) => named(store, row))
-  if (needle) rows = rows.filter((row) => row.title.toLocaleLowerCase('en-US').includes(needle))
-  if (cursor) rows = rows.filter((row) => row.id > cursor)
-  return rows.slice(0, limit)
+  const rows = needle
+    ? searchPage(store, workspaceId, cursor || '', limit, needle)
+    : store.all(ROW_SELECT + 'WHERE a.workspace_id=? AND a.id>? ORDER BY a.id LIMIT ?', workspaceId, cursor || '', limit)
+  if (!rows.length) return rows
+  const user = usernames(store)
+  return rows.map((row) => named(row, user))
 }
 
 export function view(row, includeBody = true, { favorited } = {}) {
@@ -137,8 +151,7 @@ export function uniqueTitle(store, workspaceId, title, suffix) {
   return fallback
 }
 
-export function versionView(row, includeBody = true, store) {
-  const user = store ? usernames(store) : (id) => id
+export function versionView(row, includeBody = true, user = (id) => id) {
   let kind = row.kind
   const data = { revision: row.revision, title: row.title, kind, created: row.created, created_by: row.created_by_username ?? user(row.created_by) }
   if (kind === 'media') {

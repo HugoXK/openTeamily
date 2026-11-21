@@ -5,7 +5,7 @@ import { digest, FeatureError, pagination, refuse, requireBodyKeys, validLongTex
 import {
   canEdit, content, createArtifact, createMedia, createShare, exportResult, HEX32, listShares, listing,
   load, mediaDigests, parseExportFormat, recordVersion, replaceMedia, restoreArtifact, revokeShare, shareView,
-  unlinkMedia, updateArtifact, view, versionView,
+  unlinkMedia, updateArtifact, usernames, view, versionView,
 } from './library.js'
 import { decodeUpload } from './media.js'
 import { WEBSITE_HTML, websitePreviewRevision } from '../../lib/website-preview.js'
@@ -140,8 +140,11 @@ export async function history(req, workspaceId, artifactId, version, exporting) 
   recordVersion(req.store, row)
   if (req.method !== 'GET' || (req.queryString && !exporting)) refuse(400, 'invalid', 'Invalid artifact request')
   if (!version) {
-    const items = req.store.all('SELECT * FROM artifact_versions WHERE artifact_id=? ORDER BY revision DESC', row.id)
-      .map((item) => versionView(item, false, req.store))
+    const user = usernames(req.store)
+    const items = req.store.all(`SELECT revision, title, kind, created, created_by, mime, byte_count, filename,
+      CASE WHEN kind='document' THEN body ELSE '' END AS body
+      FROM artifact_versions WHERE artifact_id=? ORDER BY revision DESC`, row.id)
+      .map((item) => versionView(item, false, user))
     return { body: { items } }
   }
   const revision = Number(version)
@@ -149,7 +152,7 @@ export async function history(req, workspaceId, artifactId, version, exporting) 
   const snapshot = req.store.get('SELECT * FROM artifact_versions WHERE artifact_id=? AND revision=?', row.id, revision)
   if (!snapshot) refuse(404, 'not_found', 'Version not found')
   if (exporting) return exportResult(snapshot, context.featureDir, workspaceId, true, parseExportFormat(req.query))
-  return { body: { version: versionView(snapshot, true, req.store) } }
+  return { body: { version: versionView(snapshot, true, usernames(req.store)) } }
 }
 
 export async function shares(req, workspaceId, artifactId, shareId, revoking) {
