@@ -2243,7 +2243,7 @@ test('website creation preserves the chat draft, recovers a saved job, and tears
   const calls = [];
   let job = null;
   let finishPreview;
-  mountWebsiteCreator(doc, {
+  const creator = mountWebsiteCreator(doc, {
     context: () => ({workspace, scope: 'chat-1', sendLabel: '发送到会话'}),
     key: () => 'website-request',
     onOpen() {},
@@ -2257,11 +2257,11 @@ test('website creation preserves the chat draft, recovers a saved job, and tears
       if (path === artifactPath) return new Promise(resolve => { finishPreview = resolve; });
       throw new Error('unexpected ' + path);
     },
-  }).sync();
+  });
+  creator.sync();
 
-  const trigger = el('composer-website-create');
   el('chat-body').value = '未发送的聊天草稿';
-  await fire(trigger, 'click');
+  await creator.open();
   assert.equal(prompt.value, el('chat-body').value);
   assert.equal(widget('manual').href, '/space?new=website#workspace=' + workspace);
   prompt.value = '  产品展示网站  ';
@@ -2273,7 +2273,7 @@ test('website creation preserves the chat draft, recovers a saved job, and tears
   });
   await dialog.close();
   job = {...job, state: 'succeeded', artifact_id: artifact};
-  await fire(trigger, 'click');
+  await creator.open();
   assert.match(widget('status').textContent, /私密保存/);
   assert.equal(widget('space').href, `/space?workspace=${workspace}&artifact=${artifact}`);
   assert.equal(widget('result').hidden, false);
@@ -2817,6 +2817,7 @@ const linkSocialOlder = 'otm_' + '9'.repeat(26);
 const linkSocialLatest = 'otm_' + 'A'.repeat(26);
 const linkNativeDirectory = '/agents?limit=100&include=conversations';
 const linkSocialDirectory = '/social/conversations?limit=100';
+const linkPersonalStartup = '/v1/workspaces?scope=personal&include=chat&workspace=';
 const linkBase = workspace => '/v1/workspaces/' + workspace;
 const linkNativePath = `/agents/${linkAgent}/conversations/${linkThread}`;
 const linkNativeLatest = linkNativePath + '?limit=50';
@@ -2892,6 +2893,81 @@ function linkedChatFixture(hash, {visibility = 'visible'} = {}) {
   const selected = () => sessionRows(el).find(row => row?.getAttribute('aria-current') === 'true')?.dataset.conversation;
   return {doc, el, fetcher, routes, calls, scrolls, navigate, messages, selected, agent, nativeThread, nativeRows, restore};
 }
+
+function linkedChatSnapshot(fixture, owner = alice) {
+  return json(200, {
+    items: [{id: linkWork, kind: 'personal', name: 'Personal', owner_id: owner}],
+    personal_agent_id: linkAgent,
+    chat: {items: [fixture.agent], conversations: [fixture.nativeThread]},
+  });
+}
+
+for (const target of ['linked', 'bare agent']) {
+  test(`a verified native personal snapshot opens the ${target} conversation before shared lists return`, async () => {
+    const scope = linkBase(linkWork);
+    const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}`
+      + (target === 'linked' ? `&conversation=${linkThread}` : ''));
+    const auth = Promise.withResolvers();
+    const workspaces = Promise.withResolvers();
+    const social = Promise.withResolvers();
+    fixture.routes.set('/v1/auth/session', () => auth.promise);
+    fixture.routes.set(linkPersonalStartup + linkWork, () => linkedChatSnapshot(fixture));
+    fixture.routes.set('/v1/workspaces?limit=100', () => workspaces.promise);
+    fixture.routes.set(scope + linkSocialDirectory, () => social.promise);
+    try {
+      const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
+      await settle();
+      assert.ok(fixture.calls.some(call => call.path === linkPersonalStartup + linkWork && call.method === 'GET'));
+      assert.equal(fixture.calls.some(call => call.path.startsWith(scope + '/')), false);
+      assert.equal(fixture.el('workspace').value, '');
+      auth.resolve(json(200, {user: {id: alice, username: 'alice'}}));
+      await settle();
+      assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+      assert.equal(fixture.selected(), linkThread);
+      assert.equal(fixture.el('workspace').value, linkWork);
+      assert.equal(fixture.el('workspace').children.length, 1);
+      assert.ok(fixture.calls.some(call => call.path === '/v1/workspaces?limit=100'));
+      assert.ok(fixture.calls.some(call => call.path === scope + linkSocialDirectory));
+      assert.equal(fixture.calls.some(call => call.path === scope + linkNativeDirectory), false);
+      assert.equal(fixture.calls.some(call => call.path === '/v1/personal-agent'), false);
+      workspaces.resolve(json(200, {items: [{id: linkTeam, kind: 'team', name: 'Team'}]}));
+      social.resolve(json(200, {items: []}));
+      await loading;
+      await settle();
+      assert.equal(fixture.el('workspace').value, linkWork);
+      assert.deepEqual(fixture.el('workspace').children.map(item => item.value), [linkWork, linkTeam]);
+      assert.equal(fixture.calls.filter(call => call.path === scope + linkNativeLatest).length, 1);
+    } finally {
+      auth.resolve(json(401, {}));
+      workspaces.resolve(json(503, {}));
+      social.resolve(json(503, {}));
+      fixture.restore();
+    }
+  });
+}
+
+test('a native startup snapshot from another owner cannot authorize a private conversation', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const workspaces = Promise.withResolvers();
+  fixture.routes.set(linkPersonalStartup + linkWork, () => linkedChatSnapshot(fixture, bob));
+  fixture.routes.set('/v1/workspaces?limit=100', () => workspaces.promise);
+  try {
+    const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    assert.equal(fixture.calls.some(call => call.path.startsWith(scope + '/')), false);
+    assert.deepEqual(fixture.messages(), []);
+    assert.ok(fixture.calls.some(call => call.path === '/v1/personal-agent' && call.method === 'GET'));
+    workspaces.resolve(json(200, {items: [{id: linkWork, name: 'Personal', kind: 'personal'}]}));
+    await loading;
+    await settle();
+    assert.ok(fixture.calls.some(call => call.path === scope + linkNativeDirectory));
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+  } finally {
+    workspaces.resolve(json(503, {}));
+    fixture.restore();
+  }
+});
 
 test('a cold native Chat boot provisions the personal workspace and ignores the earlier directory snapshot', async () => {
   const scope = linkBase(linkWork);

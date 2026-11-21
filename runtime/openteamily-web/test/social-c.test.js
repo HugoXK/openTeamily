@@ -80,6 +80,50 @@ test('personal workspace can include its native catalog and never reads a linked
   assert.deepEqual(gateway.body.catalog, catalog)
 })
 
+test('the Chat snapshot reads only the local owner’s workspace and directory', async t => {
+  const workspace = 'a'.repeat(32)
+  const agent = 'b'.repeat(32)
+  const owner = 'c'.repeat(32)
+  const previousOwner = process.env.OPENTEAMILY_OWNER_USER_ID
+  process.env.OPENTEAMILY_OWNER_USER_ID = owner
+  t.after(() => {
+    if (previousOwner === undefined) delete process.env.OPENTEAMILY_OWNER_USER_ID
+    else process.env.OPENTEAMILY_OWNER_USER_ID = previousOwner
+  })
+  const directory = { items: [{id: agent}], conversations: [{id: 'd'.repeat(32), agent_id: agent}], cursor: null }
+  const reads = []
+  let available = true
+  const endpoint = teams({ call: async (endpoint, payload) => {
+    if (endpoint === 'agents/personal-binding') return { workspace_id: workspace, agent_id: agent }
+    assert.equal(endpoint, 'agents/v1')
+    reads.push(payload)
+    if (!available) throw new Error('unavailable')
+    return {status: 200, body: directory}
+  } }).endpoints.v1
+  const get = (where = '', call) => endpoint({method: 'GET', path: '/v1/workspaces?scope=personal&include=chat' + where}, call)
+  const result = await get('&workspace=' + workspace)
+  assert.equal(result.status, 200)
+  assert.equal(result.body.items[0].owner_id, owner)
+  assert.equal(result.body.personal_agent_id, agent)
+  assert.deepEqual(result.body.chat, directory)
+  assert.deepEqual(reads, [{method: 'GET', path: `/v1/workspaces/${workspace}/agents?limit=100&include=conversations`}])
+  const other = await get('&workspace=' + 'e'.repeat(32))
+  assert.equal(other.body.personal_agent_id, agent)
+  assert.equal(other.body.chat, undefined)
+  assert.equal(reads.length, 1)
+  available = false
+  assert.equal((await get()).body.personal_agent_id, agent)
+  assert.equal((await get()).body.chat, undefined)
+  available = true
+  delete process.env.OPENTEAMILY_OWNER_USER_ID
+  assert.equal((await get()).body.personal_agent_id, undefined)
+  assert.equal((await get()).body.chat, undefined)
+  const request = {headers: new Headers({'x-ot-owner-username': 'personal-test'})}
+  const fromGateway = await get('', {request})
+  assert.equal(fromGateway.body.viewer_username, 'personal-test')
+  assert.deepEqual(fromGateway.body.chat, directory)
+})
+
 test('requests carry the saved connector token to exactly the configured server', async () => {
   const f = fakeFetch(() => ({ handle: 'ann.home', display_name: 'Ann' }))
   const bs = createBotSocial({ server: SERVER + '/', credentialsPath: creds(), fetch: f.fetch })

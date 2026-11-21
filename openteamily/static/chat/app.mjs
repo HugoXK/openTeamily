@@ -1,16 +1,14 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { mountAgentMentions } from './mentions.mjs';
-import { AGENT_FILE_ACCEPT, chatFileDownload, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
+import { AGENT_FILE_ACCEPT, chatFileDownload, deferModule, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
-import { mountChatCalls } from './calls.mjs';
-import { mountImageCreator } from './image-create.mjs';
-import { mountModel3dCreator, mountMusicCreator, mountVideoCreator, mountWebsiteCreator } from './video-create.mjs';
 import { mountChatActivity } from './activity.mjs';
-import { stageMeetingFromChat } from '../shell/meeting-link.mjs';
+import { meetingCodeFromHash, stageMeetingFromChat } from '../shell/meeting-link.mjs';
 import { workNotificationSummary, workNotificationTarget } from '../shell/work-notification.mjs';
 import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
+import { startChatReads, takeChatReads } from './startup.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -758,10 +756,58 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation && !currentConversation.public_agent ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
   const autoTranslation = mountGroupTranslation(document,{request});
-  const chatCalls = mountChatCalls(document, {request, context: () => {
+  const callContext = () => {
     if (!servedByDsbot || currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
     return {wid: workspaceId(), cid: currentConversation.id, title: conversationLabel(currentConversation, currentUser?.id)};
-  }});
+  };
+  const loadCalls = deferModule('./calls.mjs');
+  let calls;
+  let meetingOpening = 0;
+  async function initializeCalls() {
+    if (calls) return calls;
+    const {mountChatCalls} = await loadCalls();
+    if (!calls) {
+      calls = mountChatCalls(document, {request, context: callContext});
+      calls.sync();
+    }
+    return calls;
+  }
+  const chatCalls = {
+    sync() {
+      if (calls) calls.sync();
+      else if (callContext()) void initializeCalls().catch(() => {});
+    },
+    async resumeMeeting() {
+      const hash = location.hash;
+      const owner = currentUser;
+      try {
+        const controller = calls ?? await initializeCalls();
+        if (owner === currentUser && hash === location.hash) controller.resumeMeeting();
+      } catch {
+        if (owner === currentUser && hash === location.hash) {
+          show('error', uiLabel('暂时无法打开会议，请刷新后重试。', 'Couldn’t open the meeting. Reload and try again.'));
+        }
+      }
+    },
+    async openMeeting(action) {
+      const opening = ++meetingOpening;
+      if (calls) return calls.openMeeting(action);
+      const owner = currentUser;
+      if (!owner) return;
+      const loading = uiLabel('正在打开会议…', 'Opening meeting…');
+      show('loading', loading);
+      try {
+        const controller = await initializeCalls();
+        if (owner !== currentUser || opening !== meetingOpening) return;
+        if (status.textContent === loading) show('', '');
+        controller.openMeeting(action);
+      } catch {
+        if (owner === currentUser && opening === meetingOpening && status.textContent === loading) {
+          show('error', uiLabel('暂时无法打开会议，请再试一次。', 'Couldn’t open the meeting. Try again.'));
+        }
+      }
+    },
+  };
   const agentMentions = mountAgentMentions(document, () => {
     if (currentSource !== 'social' || currentConversation?.kind !== 'group' || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
     return {scope: `${workspaceId()}/${currentConversation.id}`, agents: currentConversation.agent_members || []};
@@ -3030,7 +3076,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
   let membersStatus = '', artifactsStatus = '';
-  async function loadSessions(link) {
+  async function loadSessions(link, {nativeDirectory, onPrivate} = {}) {
     const sequence = ++sessionsRequest;
     const user = currentUser;
     loadNotifications();
@@ -3067,14 +3113,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!artifactsStatus) artifacts = result.body.items || [];
       if (['all', 'artifacts', 'documents', 'media'].includes(searchTab)) refreshDirectorySearch();
     });
-    const [listed, social] = await Promise.all([
-      read('/agents?limit=100&include=conversations'),
-      read('/social/conversations?limit=100'),
-    ]);
+    // Group conversations can wait on Bot Social. An owned local directory
+    // can already paint and open an explicitly selected private agent.
+    const socialRequest = read('/social/conversations?limit=100');
+    const listed = nativeDirectory ? {status: 200, body: nativeDirectory}
+      : await read('/agents?limit=100&include=conversations');
     if (!current()) return;
     const nextAgents = listed.status === 200 ? listed.body.items || [] : [];
     let rows = listed.body.conversations;
-    let partial = listed.status !== 200 || social.status !== 200;
+    let partial = listed.status !== 200;
     if (!Array.isArray(rows)) {
       // A tab served by a previous runtime image may still return only the agent list.
       const results = await Promise.all(nextAgents.map(async agent => ({
@@ -3086,20 +3133,33 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       partial ||= results.some(({response}) => response.status !== 200);
     }
     agents = nextAgents;
-    socialConversations = social.status === 200 ? social.body.items || [] : [];
-    const receipt = link?.readReceipt;
-    if (receipt) {
-      const row = (receipt.source === 'social' ? socialConversations : rows).find(item => item.id === receipt.id);
+    function applyReceipt(source, directory) {
+      const receipt = link?.readReceipt;
+      if (receipt?.source !== source) return;
+      const row = directory.find(item => item.id === receipt.id);
       const covered = Number.isSafeInteger(receipt.seq) && Number.isSafeInteger(row?.last_seq)
         ? row.last_seq <= receipt.seq
         : Number.isFinite(row?.updated) && Number.isFinite(receipt.updated) && row.updated <= receipt.updated;
       if (covered) row.unread_count = Math.min(Number(row.unread_count) || 0, receipt.count);
     }
     const agentById = new Map(agents.map(agent => [agent.id, agent]));
-    sessions = mergeSessions(rows.flatMap(row => {
+    const privateRows = rows.flatMap(row => {
       const agent = agentById.get(row.agent_id);
       return agent ? [{...row, agent}] : [];
-    }), socialConversations, currentUser && currentUser.id);
+    });
+    if (isLocalPersonal && privateRows.length) {
+      applyReceipt('agent', privateRows);
+      sessions = mergeSessions(privateRows, socialConversations, user.id);
+      renderSessions();
+    }
+    if (isLocalPersonal && listed.status === 200) onPrivate?.();
+    const social = await socialRequest;
+    if (!current()) return;
+    partial ||= social.status !== 200;
+    socialConversations = social.status === 200 ? social.body.items || [] : [];
+    applyReceipt('social', socialConversations);
+    applyReceipt('agent', privateRows);
+    sessions = mergeSessions(privateRows, socialConversations, user.id);
     setSessionsStatus(partial ? '部分对话加载失败，请重试。' : '');
     renderSessions();
     if (!document.getElementById('compose-dialog').hidden && composeMode === 'group') renderMemberChoices(false, true);
@@ -4179,7 +4239,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  async function openLinkedConversation(start, loadCurrent, parallelDirectory) {
+  async function openLinkedConversation(start, loadCurrent, parallelDirectory, nativeDirectory) {
     const owner = currentUser;
     const workspace = workspaceId();
     const link = {current: () => startupLink === link && link.open === socialOpen
@@ -4193,7 +4253,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       ? openSocialConversation(start.social, {acknowledge: !start.message, link})
       : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link});
     link.open = socialOpen;
-    if (parallelDirectory) link.directory = loadSessions(link);
+    if (parallelDirectory) link.directory = loadSessions(link, {nativeDirectory});
     try {
       if (!await opened || !link.current()) return;
       if (message) {
@@ -4213,6 +4273,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   let loadRequest = 0;
+
+  function ownedChatStartup(result, user) {
+    const body = result?.body;
+    const space = body?.items?.length === 1 ? body.items[0] : null;
+    if (result?.status !== 200 || space?.kind !== 'personal'
+      || !/^[0-9a-f]{32}$/.test(space.id) || !/^[0-9a-f]{32}$/.test(body.personal_agent_id)) return null;
+    const viewer = body.viewer_username;
+    if ((!space.owner_id && !viewer) || (space.owner_id && space.owner_id !== user.id)
+      || (viewer && viewer !== user.username)) return null;
+    const directory = body.chat;
+    return {space, agentId: body.personal_agent_id,
+      directory: Array.isArray(directory?.items) && Array.isArray(directory?.conversations) ? directory : null};
+  }
+
+  function fillChatWorkspaces(items, preferred, personal) {
+    workspaces = items;
+    workspaceSelect.replaceChildren();
+    for (const space of items) {
+      const option = document.createElement('option');
+      option.value = space.id;
+      option.textContent = space.name;
+      workspaceSelect.append(option);
+    }
+    workspaceSelect.value = (items.find(space => space.id === preferred)
+      || items.find(space => space.id === personal) || items[0])?.id || '';
+  }
 
   function loadChatSettings(owner) {
     if (chatSettings?.owner === owner) return;
@@ -4254,10 +4340,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const hash = location.hash;
     const pathname = location.pathname;
     const banner = document.getElementById('onboarding-banner');
+    const start = hashParams(hash);
+    const publicIntent = publicAgentIntentFromHash(hash);
     let navigation = socialOpen;
     const loadCurrent = () => sequence === loadRequest && location.hash === hash && location.pathname === pathname;
     const bootCurrent = () => loadCurrent() && socialOpen === navigation;
-    const session = await request('GET', '/v1/auth/session');
+    const read = (path, signal) => request('GET', path, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
+    const {sessionRequest, localRequest} = takeChatReads(document)
+      || startChatReads(read, start.workspace, servedByDsbot && !publicIntent);
+    const session = await sessionRequest;
     if (!bootCurrent()) return;
     if (session.status !== 200 || !session.body?.user?.id) {
       if (banner) banner.hidden = true;
@@ -4316,42 +4407,47 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (sequence !== loadRequest || currentUser !== owner || location.pathname !== pathname || onboarding.status !== 200) return;
       banner.hidden = Boolean(onboarding.body.progress?.completed ?? onboarding.body.onboarding?.completed);
     }).catch(() => {});
-    const publicIntent = publicAgentIntentFromHash(hash);
     if (publicIntent) show('loading', publicIntent.quickStart === undefined ? '正在打开公开智能体…' : '正在准备快捷开场…');
     loginPanel.hidden = true;
     mainPanel.hidden = false;
-    if (servedByDsbot) chatCalls.resumeMeeting();
+    if (servedByDsbot && meetingCodeFromHash(hash)) await chatCalls.resumeMeeting();
     document.getElementById('session-pane').hidden = false;
     document.body.classList.add('chat-open');
     setSessionsOpen(true);
     document.getElementById('whoami').textContent = currentUser.username;
     if (!sessions.length) setSessionsStatus('正在加载对话…');
-    const listWorkspaces = () => request('GET', '/v1/workspaces?limit=100');
-    const personalAndWorkspaces = (async () => {
-      if (servedByDsbot) {
-        const personalRequest = request('GET', '/v1/personal-agent').catch(() => null);
-        const workspaceRequest = listWorkspaces().catch(() => null);
-        const personal = await personalRequest;
-        const existing = personal?.body?.personal_agent;
-        if (personal?.status === 200 && existing?.agent?.id && existing.workspace?.id) {
-          const listed = await workspaceRequest;
-          if (listed?.status === 200 && listed.body?.items?.some(space => space.id === existing.workspace.id)) {
-            return {personal, listed};
-          }
-        }
-        if (!bootCurrent()) return {};
-      }
-      // A first-time account can receive a new workspace during initialization.
-      const personal = await request('POST', '/v1/personal-agent');
-      const listed = await listWorkspaces();
-      return {personal, listed};
-    })();
-    const {personal, listed} = await personalAndWorkspaces;
+    const listWorkspaces = () => read('/v1/workspaces?limit=100');
+    const sharedRequest = servedByDsbot ? listWorkspaces() : null;
+    const local = ownedChatStartup(await localRequest, owner);
     if (!bootCurrent()) return;
 
-    const personalEntity = [200, 201].includes(personal.status) ? personal.body.personal_agent : null;
+    const openLocal = local && (!start.workspace || start.workspace === local.space.id);
+    let personalEntity = local ? {workspace: local.space, agent: {id: local.agentId}} : null;
+    let listed;
+    if (openLocal) {
+      listed = {status: 200, body: {items: [local.space]}};
+    } else if (local) {
+      listed = await sharedRequest;
+    } else {
+      if (servedByDsbot) {
+        const personal = await read('/v1/personal-agent');
+        personalEntity = personal.status === 200 ? personal.body.personal_agent : null;
+        if (personalEntity?.agent?.id && personalEntity.workspace?.id) {
+          listed = await sharedRequest;
+          if (listed.status !== 200 || !listed.body?.items?.some(space => space.id === personalEntity.workspace.id)) listed = null;
+        }
+      }
+      if (!bootCurrent()) return;
+      if (!listed) {
+        // A first-time account can receive a new workspace during initialization.
+        const personal = await request('POST', '/v1/personal-agent').catch(() => ({status: 0, body: {}}));
+        personalEntity = [200, 201].includes(personal.status) ? personal.body.personal_agent : null;
+        listed = await listWorkspaces();
+      }
+    }
+    if (!bootCurrent()) return;
     const personalWorkspace = personalEntity?.workspace?.id || '';
-    personalAgentId = personalEntity && personalEntity.agent ? personalEntity.agent.id : '';
+    personalAgentId = personalEntity?.agent?.id || '';
     personalLook = personalEntity ? chatSettings?.look || personalEntity.look || null : null;
     if (listed.status !== 200 || (publicIntent && !listed.body.items?.length)) {
       setSessionsStatus('无法加载工作区，请重试。');
@@ -4360,19 +4456,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       return;
     }
-    workspaces = listed.body.items || [];
-    const start = hashParams(hash);
     const hasLink = start.social || (start.agent && start.conversation);
     const wanted = start.workspace || personalWorkspace || workspaceSelect.value;
-    workspaceSelect.replaceChildren();
-    for (const space of workspaces) {
-      const option = document.createElement('option');
-      option.value = space.id;
-      option.textContent = space.name;
-      workspaceSelect.append(option);
-    }
-    workspaceSelect.value = (workspaces.find(space => space.id === wanted)
-      || workspaces.find(space => space.id === personalWorkspace) || workspaces[0])?.id || '';
+    fillChatWorkspaces(listed.body.items || [], wanted, personalWorkspace);
+    if (openLocal) void sharedRequest.then(shared => {
+      if (shared.status !== 200 || sequence !== loadRequest || currentUser !== owner || location.pathname !== pathname) return;
+      const sharedItems = shared.body.items || [];
+      const choices = sharedItems.some(space => space.id === personalWorkspace) ? sharedItems : [local.space, ...sharedItems];
+      fillChatWorkspaces(choices, workspaceId(), personalWorkspace);
+    });
     if (!workspaces.length) {
       setSessionsStatus('');
       document.getElementById('conversations-empty').hidden = false;
@@ -4396,19 +4488,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (hasLink && start.workspace) {
-      await openLinkedConversation(start, loadCurrent, true);
+      await openLinkedConversation(start, loadCurrent, true, openLocal ? local.directory : null);
       return;
     }
-    await loadSessions();
+    const openStartingAgent = async () => {
+      const first = sessions.find(row => row.source === 'agent' && row.agent_id === start.agent);
+      if (first) await openAgentConversation(start.agent, first.id);
+      else openEmptyAgentChat(start.agent);
+    };
+    let openingAgent;
+    await loadSessions(undefined, {
+      nativeDirectory: openLocal ? local.directory : null,
+      onPrivate: !hasLink && start.agent ? () => {
+        if (bootCurrent()) openingAgent = openStartingAgent();
+      } : null,
+    });
+    if (openingAgent) {
+      await openingAgent;
+      return;
+    }
     if (!bootCurrent()) return;
     if (hasLink) {
       await openLinkedConversation(start, loadCurrent, false);
       return;
     }
     if (start.agent) {
-      const first = sessions.find(row => row.source === 'agent' && row.agent_id === start.agent);
-      if (first) await openAgentConversation(start.agent, first.id);
-      else openEmptyAgentChat(start.agent);
+      await openStartingAgent();
     } else if (sessions.length && !narrowScreen()) {
       const first = sessions[0];
       if (first.source === 'social') await openSocialConversation(first.id);
@@ -5694,29 +5799,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   const plus = document.querySelector('details.composer-plus');
-  const imageCreator = mountImageCreator(document,{
-    request, key:() => idempotencyKey('chat-image-'),
-    context() {
-      if (!servedByDsbot || !currentUser || !workspaceId()) return null;
-      if (currentSource === 'agent' && currentAgent) {
-        return {workspace:workspaceId(),scope:sendScope(),private:true,attachLabel:'添加到输入框'};
-      }
-      if (currentSource === 'social' && currentConversation && !currentConversation.public_agent && !sendClosed()) {
-        return {workspace:workspaceId(),scope:sendScope(),private:false,
-          attachLabel:currentConversation.kind === 'group' ? '发送到群聊' : '发送到会话'};
-      }
-      return null;
-    },
-    attach: (file,scope) => Boolean(attachmentSender?.addFiles?.([file],scope)),
-    onOpen() { if (plus) plus.open = false; },
-    notify: show,
-  });
+  const creatorStatus = document.getElementById('composer-create-status');
+  const loadImageCreator = deferModule('./image-create.mjs');
+  const loadMediaCreators = deferModule('./video-create.mjs');
+  let creatorAttempt = null;
   const mediaContext = () => {
     const workspace = workspaceId();
-    if (!servedByDsbot || !currentUser || !workspace) return null;
+    if (!servedByDsbot || !currentUser || !workspace || sendClosed()) return null;
     if (currentSource === 'agent' && currentAgent) return {workspace, scope: sendScope()};
-    if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || sendClosed()) return null;
+    if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent) return null;
     return {workspace, scope: sendScope(), sendLabel: currentConversation.kind === 'group' ? '发送到群聊' : '发送到会话'};
+  };
+  const imageOptions = {
+    request, key: () => idempotencyKey('chat-image-'),
+    context() {
+      const target = mediaContext();
+      return target && {...target, private: !target.sendLabel, attachLabel: target.sendLabel || '添加到输入框'};
+    },
+    attach: (file, scope) => Boolean(attachmentSender?.addFiles?.([file], scope)),
+    onOpen() { if (plus) plus.open = false; },
+    notify: show,
   };
   const mediaOptions = type => ({
     request, context: mediaContext, key: () => idempotencyKey('chat-' + type + '-'),
@@ -5734,19 +5836,64 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     onOpen() { if (plus) plus.open = false; },
     notify: show,
   });
-  const videoCreator = mountVideoCreator(document, mediaOptions('video'));
-  const musicCreator = mountMusicCreator(document, mediaOptions('music'));
-  const model3dCreator = mountModel3dCreator(document, mediaOptions('model3d'));
-  const websiteCreator = mountWebsiteCreator(document, mediaOptions('website'));
+  function creatorFeedback(text = '') {
+    creatorStatus.textContent = text;
+    creatorStatus.hidden = !text;
+  }
+
+  function clearCreatorAttempt() {
+    creatorAttempt?.trigger.removeAttribute('aria-busy');
+    creatorAttempt = null;
+    creatorFeedback();
+  }
+
+  const creators = [
+    ['image', loadImageCreator, 'mountImageCreator', imageOptions],
+    ['video', loadMediaCreators, 'mountVideoCreator'],
+    ['music', loadMediaCreators, 'mountMusicCreator'],
+    ['model3d', loadMediaCreators, 'mountModel3dCreator'],
+    ['website', loadMediaCreators, 'mountWebsiteCreator'],
+  ].map(([kind, load, mountCreator, options = mediaOptions(kind)]) => {
+    const trigger = document.getElementById('composer-' + kind + '-create');
+    let controller;
+    trigger.addEventListener('click', async () => {
+      const target = options.context();
+      if (!target || creatorAttempt?.trigger === trigger) return;
+      clearCreatorAttempt();
+      const text = document.getElementById('chat-body').value.trim();
+      if (controller) {
+        await controller.open(text);
+        return;
+      }
+      const attempt = creatorAttempt = {trigger, scope: target.scope};
+      trigger.setAttribute('aria-busy', 'true');
+      creatorFeedback(uiLabel('正在打开创建工具…', 'Opening creation tool…'));
+      try {
+        const module = await load();
+        if (creatorAttempt !== attempt || options.context()?.scope !== attempt.scope || (plus && !plus.open)) return;
+        controller = module[mountCreator](document, options);
+      } catch {
+        if (creatorAttempt === attempt) {
+          clearCreatorAttempt();
+          creatorFeedback(uiLabel('无法打开创建工具，请再试一次。', 'Couldn’t open the creation tool. Try again.'));
+        }
+        return;
+      } finally {
+        if (creatorAttempt === attempt) clearCreatorAttempt();
+      }
+      await controller.open(text);
+    });
+    return {sync() {
+      if (controller) controller.sync();
+      else trigger.disabled = !options.context();
+    }};
+  });
   const attachInput = document.getElementById('chat-attachment');
   const defaultAccept = attachInput ? attachInput.getAttribute('accept') || '' : '';
   function syncPlusState() {
     syncMemoryRecall();
-    imageCreator.sync();
-    videoCreator.sync();
-    musicCreator.sync();
-    model3dCreator.sync();
-    websiteCreator.sync();
+    if (creatorAttempt && mediaContext()?.scope !== creatorAttempt.scope) clearCreatorAttempt();
+    for (const creator of creators) creator.sync();
     const social = currentSource === 'social' && Boolean(currentConversation);
     const shareable = social && !currentConversation.public_agent && currentConversation.direct?.open !== false;
     const workspace = workspaceId();
@@ -5768,7 +5915,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (hint) hint.hidden = available;
     attachmentSender?.render();
   }
-  if (plus) plus.addEventListener('toggle', () => { if (plus.open) syncPlusState(); });
+  if (plus) plus.addEventListener('toggle', () => {
+    if (plus.open) syncPlusState();
+    else clearCreatorAttempt();
+  });
   for (const button of document.querySelectorAll('[data-plus-attach]')) {
     button.addEventListener('click', () => {
       if (!attachInput || button.disabled) return;

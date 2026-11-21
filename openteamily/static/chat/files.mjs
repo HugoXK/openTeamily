@@ -1,5 +1,17 @@
-import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
 import { artifactVersionLabel } from '../shell/thumb.mjs';
+
+export function deferModule(path) {
+  let promise;
+  let failures = 0;
+  // A failed module URL can stay cached in the document. Retry with a new URL.
+  return () => promise ??= import(failures ? path + '?retry=' + failures : path).catch(error => {
+    failures += 1;
+    promise = null;
+    throw error;
+  });
+}
+
+const loadModelPreview = deferModule('../shell/model3d-preview.mjs');
 
 export const MAX_CHAT_FILE_BYTES = 8 * 1024 * 1024;
 export const AGENT_FILE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,.pdf,.txt,.md,.csv,.tsv,.json,.docx,.xlsx,.pptx';
@@ -85,14 +97,37 @@ export function renderChatFile(document, attachment, {pending = false} = {}) {
     const button = document.createElement('button');
     button.className = 'chat-file-model3d-toggle';
     button.type = 'button';
+    button.textContent = '预览 3D 模型';
+    button.setAttribute('aria-expanded', 'false');
     const status = document.createElement('p');
     status.className = 'model3d-preview-status';
     status.setAttribute('role', 'status');
     const preview = document.createElement('div');
     preview.className = 'chat-file-model3d-preview model3d-preview-frame';
+    preview.hidden = true;
     details.append(button);
     card.append(status, preview);
-    bindModel3dPreview(button, preview, status).setSource(attachment.path);
+    let loading = false;
+    async function initializePreview() {
+      if (loading) return;
+      loading = true;
+      button.setAttribute('aria-busy', 'true');
+      status.textContent = '正在加载模型预览…';
+      try {
+        const {bindModel3dPreview} = await loadModelPreview();
+        if (!card.isConnected) return;
+        button.removeEventListener('click', initializePreview);
+        const viewer = bindModel3dPreview(button, preview, status);
+        viewer.setSource(attachment.path);
+        void viewer.toggle();
+      } catch {
+        status.textContent = '无法打开预览，可重试或下载 GLB 文件。';
+      } finally {
+        loading = false;
+        button.removeAttribute('aria-busy');
+      }
+    }
+    button.addEventListener('click', initializePreview);
   }
   return card;
 }

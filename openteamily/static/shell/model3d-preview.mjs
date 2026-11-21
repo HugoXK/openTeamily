@@ -1,6 +1,6 @@
 // The renderer and model download are only needed after the viewer is opened.
 export function bindModel3dPreview(button, container, status, {onReady} = {}) {
-  if (!button || !container || !status) return {setSource() {}};
+  if (!button || !container || !status) return {toggle() {}, setSource() {}};
 
   const document = container.ownerDocument;
   let source = '';
@@ -17,7 +17,7 @@ export function bindModel3dPreview(button, container, status, {onReady} = {}) {
     status.textContent = '';
   }
 
-  button.addEventListener('click', async () => {
+  async function toggle() {
     if (preview) {
       close();
       return;
@@ -57,9 +57,11 @@ export function bindModel3dPreview(button, container, status, {onReady} = {}) {
       return;
     }
     onReady?.();
-  });
+  }
+  button.addEventListener('click', toggle);
 
   return {
+    toggle,
     setSource(url) {
       if (source === url) return;
       close();
