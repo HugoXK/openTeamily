@@ -222,6 +222,13 @@ nav a[aria-current="page"] {
   margin: 0;
 }
 
+#status .public-agent-action {
+  display: inline-block;
+  margin-inline-start: .65rem;
+  font-size: inherit;
+}
+#status a.public-agent-action { color: inherit; text-decoration: underline; }
+
 #status:empty {
   display: none;
 }

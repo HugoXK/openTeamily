@@ -199,6 +199,7 @@ function rethrow(error) {
     call_ended: 'call_ended',
     meeting_ended: 'meeting_ended',
     public_chat_closed: 'public_chat_closed',
+    quick_start_changed: 'quick_start_changed',
     reply_unavailable: 'reply_unavailable',
   })[code] || (status === 404 ? 'not_found' : status === 403 ? 'forbidden' : status === 409 ? 'conflict' : status === 410 ? 'not_found' : status === 429 ? 'quota' : code || 'internal')
   throw new Fault(status === 410 ? 404 : status, mapped, error?.message || 'Bot Social request failed')
@@ -1039,6 +1040,10 @@ function remixInstructions(row) {
   } catch { return '' }
 }
 
+function publishesQuickStarts(row) {
+  try { return Array.isArray(JSON.parse(row?.snapshot || 'null')?.quick_starts) } catch { return false }
+}
+
 function remixTemplate(row) {
   const template = { name: row.title, summary: row.summary || '', category: agentCategories.includes(row.category) ? row.category : null,
     instructions: remixInstructions(row) }
@@ -1099,11 +1104,20 @@ function discoverRoutes(host) {
     },
     {
       method: 'POST', path: /^\/v1\/discover\/agents\/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])\/start$/,
-      async handle({ match }) {
+      async handle({ match, body }) {
         return wrap(async () => {
+          const input = body === undefined ? {} : body
+          if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Fault(400, 'invalid', '无效的访客聊天请求。')
+          const quick = Object.keys(input).length > 0
+          if (quick && (Object.keys(input).length !== 2 || !Number.isInteger(input.quick_start)
+            || input.quick_start < 0 || input.quick_start > 4
+            || typeof input.quick_start_version !== 'string' || !/^[a-f0-9]{64}$/.test(input.quick_start_version))) {
+            throw new Fault(400, 'invalid', '请选择有效的快捷开场。')
+          }
           const binding = await host.call('agents/personal-binding', {})
           if (!HEX.test(binding?.workspace_id || '')) throw new Fault(409, 'no_personal_workspace', '请先打开个人工作区。')
-          const result = await client(host).post(`/v1/ot/discover/${seg(match[1], 'slug')}/start`)
+          const request = quick ? {quick_start: input.quick_start, quick_start_version: input.quick_start_version} : {}
+          const result = await client(host).post(`/v1/ot/discover/${seg(match[1], 'slug')}/start`, request)
           return [200, { ...result, workspace_id: binding.workspace_id }]
         })
       },
@@ -1164,7 +1178,8 @@ function discoverRoutes(host) {
           const row = (mine.listings || []).find((l) => l.kind === 'agent' && l.ref === match[2] && l.listed)
           const listing = row ? await bs.get('/v1/ot/discover/' + seg(row.slug, 'slug')) : null
           return [200, { discover: listing?.listed
-            ? { listed: true, slug: row.slug, category: row.category, chat_enabled: row.chat_enabled === true, copy_instructions: Boolean(remixInstructions(listing)), updated: unix(row.updated_at) }
+            ? { listed: true, slug: row.slug, category: row.category, chat_enabled: row.chat_enabled === true, copy_instructions: Boolean(remixInstructions(listing)),
+              publish_quick_starts: publishesQuickStarts(listing), updated: unix(row.updated_at) }
             : { listed: false } }]
         })
       },
@@ -1179,14 +1194,22 @@ function discoverRoutes(host) {
           if (body?.revision !== undefined && body.revision !== agent.revision) {
             throw new Fault(409, 'agent_changed', '智能体已更新，请刷新后重新预览。')
           }
+          if (body?.publish_quick_starts !== undefined && typeof body.publish_quick_starts !== 'boolean') {
+            throw new Fault(400, 'invalid', '请选择是否公开快捷开场。')
+          }
           const instructions = body?.copy_instructions === true ? agent.instructions : ''
-          const snapshot = instructions ? JSON.stringify({ version: 1, instructions }) : undefined
+          const shareStarts = body?.publish_quick_starts === true
+          const snapshot = instructions || shareStarts ? JSON.stringify({
+            version: 1, ...(instructions ? {instructions} : {}),
+            ...(shareStarts ? {quick_starts: (agent.quick_starts || []).slice(0, 5)} : {}),
+          }) : undefined
           const data = await bs.put('/v1/ot/listings', {
             kind: 'agent', ref: agent.id, slug: body?.slug, title: agent.name, summary: agent.summary,
             category: agent.category, snapshot, chat_enabled: body?.chat_enabled,
           })
           return [200, { discover: { listed: true, slug: data.slug, category: data.category,
-            chat_enabled: data.chat_enabled === true, copy_instructions: Boolean(instructions), updated: unix(data.updated_at) } }]
+            chat_enabled: data.chat_enabled === true, copy_instructions: Boolean(instructions),
+            publish_quick_starts: shareStarts, updated: unix(data.updated_at) } }]
         })
       },
     },

@@ -37,7 +37,7 @@ export function agentDiscoverPairs(agents, statuses) {
   return (agents || []).map((agent, index) => ({
     agent,
     discover: (statuses || [])[index] || {listed: false},
-  }));
+  })).filter(({agent, discover}) => !(agent.archived || agent.native_deleted) || discover.listed);
 }
 
 export function catalogQuery(text = '', cursor = '', category = 'all', creator = '') {
@@ -313,6 +313,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   let activeTeamQuery = '';
   const joiningTeams = new Set();
   const agentsView = isAgentsCatalog(location);
+  const manageParams = new URLSearchParams(location?.search || '');
+  const manageWorkspace = manageParams.get('workspace');
+  const manageAgent = manageParams.get('agent');
   const teamsView = isTeamsCatalog(location);
   const catalogView = agentsView || teamsView;
   const initialFeed = catalogView
@@ -958,19 +961,21 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       title.textContent = agent.name;
       const state = document.createElement('span');
       state.className = 'state';
-      state.textContent = discover.listed ? '已发布' : '未发布';
+      const archived = Boolean(agent.archived || agent.native_deleted);
+      state.textContent = archived ? '已归档 · 仍公开' : discover.listed ? '已发布' : '未发布';
       const input = document.createElement('input');
       input.type = 'text';
       input.maxLength = 30;
       input.placeholder = '公开地址';
       input.setAttribute('aria-label', agent.name + ' 的公开地址');
       input.value = discover.slug || '';
+      input.disabled = archived;
       const options = document.createElement('div');
       options.className = 'catalog-publish-options';
       const label = document.createElement('label');
       const allow = document.createElement('input');
       allow.type = 'checkbox';
-      allow.disabled = !agent.instructions;
+      allow.disabled = archived || !agent.instructions;
       allow.checked = Boolean(agent.instructions && discover.copy_instructions);
       const preview = document.createElement('pre');
       preview.textContent = agent.instructions || '';
@@ -981,31 +986,56 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       const publicChat = document.createElement('input');
       publicChat.type = 'checkbox';
       publicChat.checked = discover.chat_enabled === true;
+      publicChat.disabled = archived;
       chatLabel.append(publicChat, document.createTextNode('允许访客聊天'));
       const chatNote = document.createElement('p');
       chatNote.className = 'note';
       chatNote.textContent = '自动回复使用已发布的简介、指令和当前对话。你可以查看访客的对话。';
       chatNote.hidden = !publicChat.checked;
       publicChat.addEventListener('change', () => { chatNote.hidden = !publicChat.checked; });
-      options.append(label, preview, chatLabel, chatNote);
+      const quickLabel = document.createElement('label');
+      const quickStarts = document.createElement('input');
+      quickStarts.type = 'checkbox';
+      quickStarts.disabled = archived || !agent.quick_starts?.length;
+      quickStarts.checked = !quickStarts.disabled && discover.publish_quick_starts === true;
+      quickLabel.append(quickStarts, document.createTextNode('公开快捷开场'));
+      const quickNote = document.createElement('p');
+      quickNote.className = 'note';
+      quickNote.textContent = archived ? '取消发布后，访客将无法打开公开主页。'
+        : quickStarts.disabled ? '先在智能体编辑页添加开场。'
+          : '开场会显示在公开主页。访客选择后，可编辑再发送。';
+      options.append(label, preview, chatLabel, chatNote, quickLabel, quickNote);
       const publish = document.createElement('button');
       publish.type = 'button';
+      publish.hidden = archived;
       publish.textContent = discover.listed ? '更新发布' : '发布';
       publish.addEventListener('click', async () => {
+        if (archived || publish.disabled) return;
         if (!validSlug(input.value.trim())) {
           show('error', 'slug 需为 3–30 个字符的小写字母、数字或连字符。');
           return;
         }
-        const result = await request(
-          'POST', `/v1/workspaces/${workspaceSelect.value}/agents/${agent.id}/discover`,
-          {slug: input.value.trim(), revision: agent.revision, copy_instructions: allow.checked, chat_enabled: publicChat.checked});
-        if (result.status !== 201 && result.status !== 200) {
-          show('error', messageFor(result.body.error, '无法收录。'));
-          return;
+        publish.disabled = true;
+        revoke.disabled = true;
+        publish.textContent = '正在发布…';
+        try {
+          const result = await request(
+            'POST', `/v1/workspaces/${workspaceSelect.value}/agents/${agent.id}/discover`,
+            {slug: input.value.trim(), revision: agent.revision, copy_instructions: allow.checked,
+              chat_enabled: publicChat.checked, publish_quick_starts: quickStarts.checked});
+          if (result.status !== 201 && result.status !== 200) {
+            show('error', messageFor(result.body.error, '无法发布。'));
+            return;
+          }
+          show('ok', '已发布。');
+          await Promise.all([loadCatalog(), loadManage()]);
+        } catch {
+          show('error', '连接中断，请重试发布。');
+        } finally {
+          publish.disabled = false;
+          revoke.disabled = !discover.listed;
+          publish.textContent = discover.listed ? '更新发布' : '发布';
         }
-        show('ok', '已发布。');
-        await loadCatalog();
-        await loadManage();
       });
       const revoke = document.createElement('button');
       revoke.type = 'button';
@@ -1023,6 +1053,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         await loadManage();
       });
       li.append(title, state, input, publish, revoke, options);
+      if (discover.listed && validSlug(discover.slug)) {
+        const homepage = document.createElement('a');
+        homepage.href = '/a/' + discover.slug;
+        homepage.textContent = '打开公开主页';
+        options.append(homepage);
+      }
       list.append(li);
     }
   }
@@ -1034,17 +1070,28 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       renderManage([]);
       return;
     }
-    const listed = await request('GET', `/v1/workspaces/${id}/agents?limit=100`);
+    const path = `/v1/workspaces/${id}/agents?limit=100&include_archived=1`;
+    const listed = await request('GET', path);
     if (seq !== manageRequest) return;
     if (listed.status !== 200) {
       renderManage([]);
       return;
     }
-    const agents = listed.body.items || [];
+    const agents = [...(listed.body.items || [])];
+    if (/^[0-9a-f]{32}$/.test(listed.body.cursor || '')) {
+      const more = await request('GET', path + '&cursor=' + listed.body.cursor);
+      if (seq !== manageRequest) return;
+      if (more.status === 200) agents.push(...(more.body.items || []));
+    }
     const statuses = await Promise.all(agents.map(agent =>
       request('GET', `/v1/workspaces/${id}/agents/${agent.id}/discover`)
         .then(result => (result.status === 200 ? result.body.discover : {listed: false}))));
-    if (seq === manageRequest) renderManage(agentDiscoverPairs(agents, statuses));
+    if (seq === manageRequest) {
+      const pairs = agentDiscoverPairs(agents, statuses);
+      const index = id === manageWorkspace ? pairs.findIndex(({agent}) => agent.id === manageAgent) : -1;
+      if (index > 0) pairs.unshift(...pairs.splice(index, 1));
+      renderManage(pairs);
+    }
   }
 
   async function load() {
@@ -1078,8 +1125,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         option.textContent = space.name;
         workspaceSelect.append(option);
       }
+      if (workspaces.some(space => space.id === manageWorkspace)) workspaceSelect.value = manageWorkspace;
       syncRemixWorkspaces();
-      if (document.getElementById('catalog-manage').open) void loadManage();
+      const manage = document.getElementById('catalog-manage');
+      if (manage.open) void loadManage();
+      else if (location?.hash === '#catalog-manage') manage.open = true;
     }
     show('', '');
     if (teamsView) await loadTeams();

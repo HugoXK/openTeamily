@@ -730,7 +730,7 @@ class App:
             return None
         self.lifecycle.expire_with(db)
         row = db.execute(
-            'SELECT * FROM instances WHERE id=? AND workspace_id=?',
+            'SELECT * FROM instances WHERE id=? AND workspace_id=? AND retired_at IS NULL',
             (instance_id, workspace_id),
         ).fetchone()
         return None if row is None else self.lifecycle.snapshot(row)

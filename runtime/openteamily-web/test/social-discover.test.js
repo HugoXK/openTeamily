@@ -41,6 +41,7 @@ test('catalog publication is explicit and remix copies the previewed release in 
   const agent = {
     id: agentId, name: 'Writer', summary: 'Draft assistance', category: 'design',
     instructions: 'Released writing instructions', revision: 5, memory: 'PRIVATE MEMORY',
+    quick_starts: ['Preview this plan'],
   }
   let row
   const created = []
@@ -51,6 +52,11 @@ test('catalog publication is explicit and remix copies the previewed release in 
       return Response.json(row)
     }
     if (path === '/v1/ot/discover/writer') return Response.json(row)
+    if (path === '/v1/ot/listings/mine') return Response.json({listings:[row]})
+    if (path === '/v1/ot/discover/writer/start') {
+      assert.deepEqual(JSON.parse(init.body), {quick_start:0, quick_start_version:'a'.repeat(64)})
+      return Response.json({conversation_id:'test-thread', draft_text:'Preview this plan'})
+    }
     if (path === '/v1/ot/discover?kind=agent&q=Draft&creator=alice.home&category=design') {
       return Response.json({ items: [{ ...row, creator: {handle: 'alice.home', display_name: 'Alice'} }] })
     }
@@ -76,6 +82,16 @@ test('catalog publication is explicit and remix copies the previewed release in 
   assert.equal((await call('POST', publish, { slug: 'writer' })).status, 200)
   assert.equal(row.snapshot, undefined)
   assert.equal((await call('GET', remix)).body.template.instructions, '')
+  const publicStart = '/v1/discover/agents/writer/start'
+  const quick = {quick_start:0, quick_start_version:'a'.repeat(64)}
+  assert.equal((await call('POST', publicStart, {...quick, body:'Forged'})).status, 400)
+  assert.deepEqual((await call('POST', publicStart, quick)).body,
+    {conversation_id:'test-thread', draft_text:'Preview this plan', workspace_id:workspaceId})
+  assert.equal((await call('POST', publish, {slug:'writer', publish_quick_starts:'yes'})).status, 400)
+  assert.equal((await call('POST', publish, {slug:'writer', publish_quick_starts:true})).body.discover.publish_quick_starts,true)
+  assert.deepEqual(JSON.parse(row.snapshot), {version:1, quick_starts:agent.quick_starts})
+  assert.equal((await call('GET', publish)).body.discover.publish_quick_starts,true)
+
   assert.equal((await call('POST', publish, { slug: 'writer', revision: 5, copy_instructions: true })).status, 200)
   assert.equal(row.category, 'design')
   assert.doesNotMatch(JSON.stringify(row), /PRIVATE MEMORY/)

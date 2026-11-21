@@ -234,3 +234,50 @@ test('native workbook versions preserve distinct worksheets and Excel treats uns
   const preview = await call('GET',base(route+'/preview'))
   assert.match(preview.text,/<td>12\.50<\/td>/)
 })
+
+test('generated MP4 above the ordinary media upload limit can be viewed, exported and sent', async () => {
+  const bot = await boot()
+  const resolve = bot.features.table['artifacts/generatedVideo']
+  const job_id = '7'.repeat(32)
+  const payload = {workspace_id: WS, job_id}
+  const video = Buffer.alloc(2 * 1024 * 1024 + 20)
+  video.write('ftypisom', 4)
+  await assert.rejects(resolve({...payload, title: '未授权', data: video}, {}), error => error.status === 404)
+  await assert.rejects(resolve({...payload, title: '格式错误', data: PNG}, {internal: true}), error => error.status === 400)
+  const saved = await resolve({...payload, title: '生成视频', data: video}, {internal: true})
+  assert.equal((await resolve(payload, {internal: true})).id, saved.id)
+  const content = await bot.call('artifacts', 'GET', base('/' + saved.id + '/file'))
+  assert.equal(content.download.inline, true)
+  assert.equal(content.download.content_type, 'video/mp4')
+  assert.deepEqual(Buffer.from(content.download.data, 'base64'), video)
+  const exported = await bot.call('artifacts', 'GET', base('/' + saved.id + '/export'))
+  assert.equal(exported.download.data, content.download.data)
+  const share = await bot.features.table['artifacts/chatAttachment']({
+    workspace_id: WS, artifact_id: saved.id, revision: 1,
+  }, {internal: true})
+  assert.equal(share.attachment.mime, 'video/mp4')
+  assert.equal(share.attachment.data, content.download.data)
+})
+
+test('generated MP3 is saved once and keeps the original bytes for playback and sharing', async () => {
+  const bot = await boot()
+  const resolve = bot.features.table['artifacts/generatedMusic']
+  const payload = {workspace_id: WS, job_id: '8'.repeat(32)}
+  const music = Buffer.alloc(576)
+  music.set([0xff, 0xfa, 0xb4, 0x04])
+  await assert.rejects(resolve({...payload, title: '未授权', data: music}, {}), error => error.status === 404)
+  await assert.rejects(resolve({...payload, title: '格式错误', data: PNG}, {internal: true}), error => error.status === 400)
+  const {id} = await resolve({...payload, title: '生成音乐', data: music}, {internal: true})
+  assert.equal((await resolve(payload, {internal: true})).id, id)
+  assert.equal((await resolve({...payload, title: '重复音乐', data: music}, {internal: true})).id, id)
+  const content = await bot.call('artifacts', 'GET', base('/' + id + '/file'))
+  assert.equal(content.download.inline, true)
+  assert.equal(content.download.content_type, 'audio/mpeg')
+  assert.deepEqual(Buffer.from(content.download.data, 'base64'), music)
+  const share = await bot.features.table['artifacts/chatAttachment']({
+    workspace_id: WS, artifact_id: id, revision: 1,
+  }, {internal: true})
+  assert.equal(share.attachment.mime, 'audio/mpeg')
+  assert.match(share.attachment.title, /\.mp3$/)
+  assert.equal(share.attachment.data, content.download.data)
+})

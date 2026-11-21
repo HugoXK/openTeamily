@@ -82,6 +82,7 @@ test("public listing pages need no token and hide unlisted works", async () => {
   const html = await fetch(`${S.base}/w/essay-${tag}`);
   assert.equal(html.status, 200);
   assert.match(html.headers.get("content-type") || "", /text\/html/);
+  assert.equal(html.headers.get("cache-control"), "public, max-age=60");
   const page = await html.text();
   assert.match(page, /Public essay/);
   assert.equal(page.includes("<script>"), false, "snapshot is escaped");
@@ -114,6 +115,9 @@ test("published chats stay paired, use the publisher inbox, and stop receiving r
   const snapshot = JSON.stringify({version:1,instructions:"Public prompt"});
   await publisher.ok("PUT", "/v1/ot/listings", {...listing, snapshot, chat_enabled:true});
   const first = await visitor.ok("POST", start);
+  assert.ok((await publisher.ok("GET", "/v1/ot/notifications")).notifications.some(
+    (item: any) => item.kind === "discover.conversation_started" && item.data.conversation_id === first.conversation_id,
+  ));
   assert.equal((await visitor.ok("POST", start)).conversation_id, first.conversation_id);
   assert.notEqual((await other.ok("POST", start)).conversation_id, first.conversation_id);
   const thread = "/v1/ot/conversations/" + first.conversation_id;
@@ -139,4 +143,74 @@ test("published chats stay paired, use the publisher inbox, and stop receiving r
   await publisher.ok("PUT", "/v1/ot/listings", {...listing, snapshot, chat_enabled:true});
   assert.equal((await publisher.call("POST", thread + "/agent-messages", {...response,reply_to:waiting.id})).status, 409);
   assert.equal((await visitor.ok("GET", thread + "/messages")).messages.length, 3);
+});
+
+test("public quick-start opens one private thread and drafts the current published choice without sending", async () => {
+  const publisher = await home(S.base, "quick-start-publisher");
+  const visitor = await home(S.base, "quick-start-visitor");
+  const stranger = await home(S.base, "quick-start-stranger");
+  const slug = "published-quick-start";
+  const listing = {kind:"agent", ref:"quick_bot", slug, title:"Quick agent", chat_enabled:true};
+  const path = "/v1/ot/discover/" + slug + "/start";
+  const page = async () => {
+    const response = await fetch(S.base + "/a/" + slug);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    return response.text();
+  };
+  const snapshot = JSON.stringify({quick_starts:["请介绍 <产品>", "列出计划"]});
+  const release = await publisher.ok("PUT", "/v1/ot/listings", {...listing, snapshot});
+  const rendered = await page();
+  assert.match(rendered, /请介绍 &lt;产品&gt;/);
+  assert.match(rendered, /href="\/(?:chat|login)#public-agent=published-quick-start"/);
+  assert.doesNotMatch(rendered, /请介绍 <产品>/);
+  const version = /quick-start=0&amp;quick-start-version=([a-f0-9]{64})/.exec(rendered)?.[1];
+  assert.ok(version);
+  const viaJson = await fetch(S.base + "/a/" + slug, {headers:{accept:"application/json"}});
+  assert.equal(viaJson.headers.get("cache-control"), "no-store");
+  assert.equal((await fetch(S.base + "/v1/ot/public/listings/" + slug)).headers.get("cache-control"), "no-store");
+  const request = {quick_start:0, quick_start_version:version};
+  assert.equal((await fetch(S.base + path, {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(request)})).status, 401);
+  assert.equal((await publisher.call("POST", path, request)).status, 400);
+  assert.equal((await visitor.call("POST", path, {...request, body:"forged text"})).status, 400);
+  assert.equal((await visitor.call("POST", path, {...request, quick_start:4})).status, 409);
+
+  const first = await visitor.ok("POST", path, request);
+  assert.equal(first.created, true);
+  assert.equal(first.draft_text, "请介绍 <产品>");
+  const again = await visitor.ok("POST", path, {...request, quick_start:1});
+  assert.equal(again.created, false);
+  assert.equal(again.conversation_id, first.conversation_id);
+  assert.equal(again.draft_text, "列出计划");
+  const thread = "/v1/ot/conversations/" + first.conversation_id;
+  assert.equal((await visitor.ok("POST", path)).draft_text, undefined);
+  assert.equal((await stranger.call("GET", thread + "/messages")).status, 404);
+  assert.deepEqual((await visitor.ok("GET", thread + "/messages")).messages, []);
+  assert.deepEqual((await publisher.ok("GET", "/v1/ot/agent-inbox")).items, []);
+  assert.equal((await publisher.ok("GET", "/v1/ot/notifications")).notifications.some(
+    (item: any) => item.kind === "discover.conversation_started" && item.data.conversation_id === first.conversation_id,
+  ), false);
+  const sent = await visitor.ok("POST", thread + "/messages", {body:first.draft_text});
+  const original = (await publisher.ok("GET", "/v1/ot/agent-inbox")).items.find((item: any) => item.message.id === sent.id);
+  assert.equal(original.mode, "public");
+  assert.equal(original.agent_ref, listing.ref);
+  assert.deepEqual((await visitor.ok("GET", "/v1/ot/agent-inbox")).items, []);
+
+  const nextSnapshot = JSON.stringify({quick_starts:["更新后的开场"]});
+  await publisher.ok("PUT", "/v1/ot/listings", {...listing, snapshot:nextSnapshot});
+  const stale = await visitor.call("POST", path, request);
+  assert.equal(stale.status, 409);
+  assert.equal(stale.data.error.code, "quick_start_changed");
+  const freshVersion = /quick-start=0&amp;quick-start-version=([a-f0-9]{64})/.exec(await page())?.[1];
+  assert.ok(freshVersion && version !== freshVersion);
+  assert.equal((await visitor.ok("POST", path, {...request, quick_start_version:freshVersion})).draft_text, "更新后的开场");
+  assert.equal((await visitor.ok("GET", thread + "/messages")).messages.length, 1);
+
+  await publisher.ok("PUT", "/v1/ot/listings", {...listing, snapshot:nextSnapshot, chat_enabled:false});
+  assert.doesNotMatch(await page(), /quick-start-version/);
+  assert.equal((await visitor.call("POST", path, {...request, quick_start_version:freshVersion})).status, 409);
+  await publisher.ok("DELETE", "/v1/ot/listings/" + release.id);
+  const unpublished = await fetch(S.base + "/a/" + slug);
+  assert.equal(unpublished.status, 404);
+  assert.equal(unpublished.headers.get("cache-control"), "no-store");
+  assert.equal((await visitor.call("POST", path, request)).status, 404);
 });
