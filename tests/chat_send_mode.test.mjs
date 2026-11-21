@@ -37,7 +37,7 @@ test('the composer offers the three modes and no disabled placeholder', () => {
   for (const value of ['auto', 'instant', 'agentic']) {
     assert.match(html, new RegExp(`<option value="${value}">`));
   }
-  assert.ok(app.includes("socialSendPayload(text, modeSelect ? modeSelect.value : 'auto')"));
+  assert.ok(app.includes("socialSendPayload(field.value, modeSelect ? modeSelect.value : 'auto')"));
   assert.ok(app.includes("restoreComposerMode(currentConversation.id)"));
 });
 
