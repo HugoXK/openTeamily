@@ -12,12 +12,18 @@ import { wrap } from '../../lib/c/legacy-v1.js'
 // messenger.added, messenger.call, discover.published,
 // discover.conversation_started, follow.new, team.run_shared, team.join_request,
 // team.member_joined, team.membership_changed, team.removed, team.join_decided).
-// Only `messenger.mention` is a mention; nothing there is a task-completion or
-// artifact notice, so those two filters are forward-looking and change no visible
-// row today. `discover.published` and `follow.new` are follow notices ("someone
-// you follow published"), not work notices — hiding them under 作品通知 would drop
-// rows the user never asked to mute. A kind absent from this map is never hidden.
-const NOTIFY_CATEGORY = { 'messenger.mention': 'mentions' }
+// Only `messenger.mention` is a mention; none of them is a task-completion or
+// artifact notice, so both of those filters are forward-looking and change no
+// visible row today. `discover.published` and `follow.new` are follow notices
+// ("someone you follow published"), not work notices — hiding them under 作品通知
+// would drop rows the user never asked to mute. A kind absent from this map is
+// never hidden, so a new Bot Social kind shows up unless someone maps it here.
+const NOTIFY_CATEGORY = {
+  'messenger.mention': 'mentions',
+  // No producer writes this kind yet; the artifacts feature already names it
+  // (features/artifacts/library.js), so the switch is wired for the day it ships.
+  artifact: 'artifacts',
+}
 
 // The listing body for the inbox: Bot Social rows projected to the shape the
 // Bot Social page reads, minus the categories the user switched off. A hidden row
