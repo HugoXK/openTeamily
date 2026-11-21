@@ -976,6 +976,11 @@ html[data-theme-resolved="dark"] .feed-grid > article > div{ gap: .125rem; paddi
 }
 .feed-filters button, .catalog-filters button { height: 2.125rem; padding-inline: .65rem; }
 .feed-filters button[aria-current="true"], .catalog-filters [aria-pressed="true"] { padding-inline: .65rem; }
+.feed-filters #feed-creator-filter {
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+  font-weight: 650;
+}
 html[data-theme-resolved="dark"] :is(.feed-toolbar, .feed-filters) {
   border: 0;
   background: transparent;

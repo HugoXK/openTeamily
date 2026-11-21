@@ -551,6 +551,12 @@ test("work detail follows the filtered feed across page boundaries and timestamp
   assert.equal(unmatched.work.slug, "nav-unfollowed");
   assert.equal(unmatched.previous, null);
   assert.equal(unmatched.next, null);
+  const authorFilter = "creator=" + encodeURIComponent(author.handle) + "&work_kind=document&q=trail%20sketch";
+  const scoped = await viewer.ok("GET", `${base}?kind=work&${authorFilter}`);
+  assert.deepEqual(scoped.items.map(slim), visible);
+  const fromAuthorProfile = await viewer.ok("GET", detailPath(visible[1].slug, "?" + authorFilter));
+  assert.deepEqual(fromAuthorProfile.previous, visible[0]);
+  assert.deepEqual(fromAuthorProfile.next, visible[2]);
   await viewer.ok("POST", `/v1/ot/listings/${oldest.id}/collect`, {});
   const collected = await viewer.ok("GET", detailPath(oldest.slug, "?tab=collected"));
   assert.equal(collected.work.collected, true);

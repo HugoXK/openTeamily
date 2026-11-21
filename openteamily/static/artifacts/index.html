@@ -75,7 +75,7 @@
             <button type="button" id="mobile-editor-version" aria-controls="version-panel" hidden>版本与导出</button>
             <button type="button" id="mobile-editor-share" aria-controls="share-panel" hidden>只读分享</button>
             <button type="button" id="mobile-editor-discover" aria-controls="discover-panel" hidden>公开到发现页</button>
-            <button type="button" id="mobile-editor-reconnect">重连实时更新</button>
+            <button type="button" id="mobile-editor-reconnect">检查更新</button>
             <button type="button" id="mobile-editor-delete" class="danger" hidden>删除作品</button>
           </div>
         </details>
@@ -104,8 +104,8 @@
           <select id="workspace"></select>
         </div>
         <div class="workspace-recovery">
-          <span id="workspace-events-status" class="note" role="status" aria-live="polite">实时更新未连接</span>
-          <button type="button" id="workspace-events-retry">重连更新</button>
+          <span id="workspace-events-status" class="note" role="status"></span>
+          <button type="button" id="workspace-events-retry">检查更新</button>
         </div>
       </div>
       <div class="filter-wrap">
@@ -294,6 +294,10 @@
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <label for="editor-title">标题 <textarea id="editor-title" name="title" rows="1" maxlength="80" required autocomplete="off" enterkeyhint="done" placeholder="输入标题"></textarea></label>
       <p id="editor-meta" class="note"></p>
+      <div id="artifact-live-update" hidden>
+        <p id="artifact-live-message" role="status"></p>
+        <button type="button" id="artifact-live-load">读取服务器版本</button>
+      </div>
       <section id="document-editor" hidden aria-label="文档编辑器">
         <div class="document-toolbar" role="toolbar" aria-label="文档格式">
           <button type="button" data-doc-format="undo" aria-label="撤销">↶</button>
@@ -409,7 +413,6 @@
         <p id="website-preview-status" class="note" role="status" hidden></p>
       </div>
       <iframe id="website-preview" title="网站预览" sandbox referrerpolicy="no-referrer" hidden></iframe>
-      <p id="artifact-live-update" class="note" hidden>服务器作品版本已变化；本地草稿不会自动覆盖。<button type="button" id="artifact-live-load">读取服务器版本（需确认覆盖草稿）</button></p>
       <details id="version-panel" class="artifact-editor-panel" hidden>
         <summary>版本与导出</summary>
         <p class="note">每次保存会留下一版，可以导出或恢复到某一版。恢复会生成新的修订，不会改写历史。</p>

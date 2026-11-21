@@ -120,6 +120,55 @@ test('artifact data stays in this volume; another DS-Bot never sees it', async (
   assert.equal((await other.call('artifacts', 'GET', base())).body.items.length, 0)
 })
 
+test('Space activity tracks saved revisions and favorites only in this owner and workspace', async () => {
+  const bot = await boot()
+  const another = await boot()
+  const secondWorkspace = 'b'.repeat(32)
+  const call = (...args) => bot.call('artifacts', ...args)
+  const activity = async (id, workspace = WS) => {
+    const result = await call('GET', base('/activity', workspace) + (id ? '?artifact=' + id : ''))
+    assert.equal(result.status, 200)
+    assert.match(result.body.version, /^[a-f0-9]{64}$/)
+    return result.body
+  }
+  const before = await activity()
+  assert.deepEqual(Object.keys(before), ['version'])
+  const otherScope = await activity(null, secondWorkspace)
+  assert.notEqual(otherScope.version, before.version)
+
+  const created = await call('POST', base(), {title: 'Private work', body: 'Unexposed draft'}, key())
+  assert.equal(created.status, 201)
+  const id = created.body.artifact.id
+  const createdActivity = await activity(id)
+  assert.deepEqual(Object.keys(createdActivity), ['version', 'revision'])
+  assert.equal(createdActivity.revision, 1)
+  assert.notEqual(createdActivity.version, before.version)
+  const filtered = await call('GET', base() + '?q=empty&limit=1')
+  assert.equal(filtered.body.items.length, 0)
+  assert.equal(filtered.body.activity_version, createdActivity.version)
+  assert.deepEqual(await activity(id, secondWorkspace), {version: otherScope.version, revision: null})
+
+  const foreign = await another.call('artifacts', 'GET', base('/activity') + '?artifact=' + id)
+  assert.deepEqual(foreign.body, {version: before.version, revision: null})
+  await call('POST', base('/' + id), {revision: 1, changes: {title: 'Edited'}})
+  const edited = await activity(id)
+  assert.equal(edited.revision, 2)
+  assert.notEqual(edited.version, createdActivity.version)
+
+  await call('POST', base(`/${id}/favorite`), {enabled: true})
+  const favorite = await activity(id)
+  assert.equal(favorite.revision, edited.revision)
+  assert.notEqual(favorite.version, edited.version)
+  await call('POST', base(`/${id}/favorite`), {enabled: true})
+  assert.deepEqual(await activity(id), favorite)
+  await call('POST', base(`/${id}/remove`), {})
+  assert.deepEqual(await activity(id), {version: before.version, revision: null})
+  for (const query of ['?foo=bar', '?artifact=bad', '?artifact=' + id + '&artifact=' + id]) {
+    assert.equal((await call('GET', base('/activity') + query)).status, 400)
+  }
+  assert.equal((await call('POST', base('/activity'), {})).status, 400)
+})
+
 test('chat and automation sources attach on create and are idempotent by source', async () => {
   const bot = await boot()
   const payload = {

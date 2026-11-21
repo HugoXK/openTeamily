@@ -8,6 +8,7 @@ import unittest
 
 from openteamily import dsbot_gateway as gw
 from openteamily import lifecycle
+from openteamily.app import App, Config
 from openteamily.lifecycle import ManagerAuth, ManagerIdentity
 from openteamily.security import digest
 from openteamily.store import Store
@@ -224,6 +225,25 @@ class GatewayTest(unittest.TestCase):
             self.assertEqual(gw.moved_api(path), feature, path)
         self.assertEqual(gw.moved_api('/v1/teams'), 'teams')
         self.assertEqual(gw.moved_api('/v1/workspaces'), 'teams')
+
+    def test_space_activity_is_owner_routed_and_the_old_stream_is_gone(self):
+        uri = '/v1/workspaces/' + 'a' * 32 + '/artifacts/activity?artifact=' + 'b' * 32
+        for owner, iid in [('a' * 32, '1' * 32), ('b' * 32, '2' * 32)]:
+            status, headers = self.call(self.tokens[owner], uri=uri)
+            self.assertEqual(status, 204)
+            self.assertEqual(headers['X-OT-Instance'], iid)
+            self.assertIn('feature=artifacts', headers['X-OT-Upstream-Path'])
+            self.assertIn('%2Fartifacts%2Factivity', headers['X-OT-Upstream-Path'])
+        self.assertEqual(self.call(uri=uri)[0], 401)
+
+        app = App(self.store, Config(ORIGIN))
+        received = {}
+        body = b''.join(app({'HTTP_HOST': 'openteamily.example', 'REQUEST_METHOD': 'GET',
+                            'PATH_INFO': '/v1/workspaces/' + 'a' * 32 + '/events'},
+                           lambda status, headers: received.update(status=status, headers=dict(headers))))
+        self.assertTrue(received['status'].startswith('410 '))
+        self.assertEqual(received['headers']['Content-Type'], 'application/json; charset=utf-8')
+        self.assertEqual(json.loads(body)['error']['code'], 'retired')
 
     def test_record_upstream_validation(self):
         with self.store.transaction() as db:
@@ -449,10 +469,29 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(headers['X-OT-Instance'], '1' * 32)
         self.assertIn('feature=automations', headers['X-OT-Upstream-Path'])
 
+    def test_profile_page_and_social_activity_use_owners_runtime(self):
+        routes = gw.load_routes()
+        for path, encoded in (('/profile', '%2Fprofile'), ('/profile/edit/', '%2Fprofile%2Fedit'),
+                              ('/profile/app.mjs', '%2Fprofile%2Fapp.mjs')):
+            self.assertEqual(gw.target_for(path, routes), '/api/openteamily/page?path=' + encoded)
+        for path in ('/v1/profile', '/v1/profile/avatar', '/p/alice'):
+            self.assertIsNone(gw.target_for(path, routes))
+        path = '/v1/profile/social?view=liked'
+        self.assertEqual(self.call(uri=path)[0], 401)
+        for user, expected in (('a', '1'), ('b', '2')):
+            status, headers = self.call(self.tokens[user * 32], uri=path)
+            self.assertEqual(status, 204)
+            self.assertEqual(headers['X-OT-Instance'], expected * 32)
+            self.assertIn('feature=discover', headers['X-OT-Upstream-Path'])
+        self.assertEqual(gw.moved_api('/v1/profile/follow-work'), 'discover')
+
     def test_nginx_forwards_moved_v1_apis_except_platform_exceptions(self):
         conf = gw.nginx_config(gw.load_routes(), '127.0.0.1:8080', 8081, key='k' * 40)
         self.assertIn('location = /v1/settings { return 418; }', conf)
         self.assertIn('location = /space { return 418; }', conf)
+        self.assertIn('location = /profile { return 418; }', conf)
+        self.assertIn('location = /v1/profile/social { return 418; }', conf)
+        self.assertIn('location = /v1/profile/follow-work { return 418; }', conf)
         self.assertEqual(conf.count('location = /v1/onboarding/automations'), 1)
         self.assertIn('location = /v1/onboarding/automations { return 418; }', conf)
         self.assertIn('location = /v1/composio/callback', conf)

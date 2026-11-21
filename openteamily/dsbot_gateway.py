@@ -64,7 +64,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/notifications(?:/read)?$'), 'social'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/members(?:/[A-Za-z0-9._-]{1,80}(?:/(?:remove|suspend|unsuspend))?)?$'), 'members'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/invites(?:/[A-Za-z0-9._-]{1,80}/(?:revoke|freeze|unfreeze))?$'), 'invites'),
-    (re.compile(r'^/v1/invites/accept$'), 'invites'),
+    (re.compile(r'^/v1/invites/(?:accept|preview)$'), 'invites'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/join-requests(?:/[A-Za-z0-9._-]{1,80}/(?:approve|reject))?$'), 'invites'),
     (re.compile(r'^/v1/join-requests$'), 'invites'),
     (re.compile(r'^/v1/skills/(?:scopes|readiness|runs)$'), 'skills'),
@@ -76,6 +76,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/directory$'), 'teams'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/social/conversations(?:/[A-Za-z0-9._-]{1,80}(?:/[A-Za-z0-9._/-]{1,120})?)?$'), 'messenger'),
     (re.compile(r'^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end)$'), 'messenger'),
+    (re.compile(r'^/v1/profile/(?:social|follow-work)$'), 'discover'),
     (re.compile(r'^/v1/discover/(?:agents|works|me/works)$'), 'discover'),
     (re.compile(r'^/v1/discover/agents/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/start$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
@@ -92,7 +93,7 @@ MOVED_APIS = (
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/actions/draft(?:/save)?$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/(?:candidates(?:/[0-9a-f]{32})?|profile(?:/dream)?|graph|(?:actions|links|preferences)(?:/[0-9a-f]{32}(?:/remove)?)?)$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$'), 'search'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:spreadsheet|slides)/draft$'), 'artifacts'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|(?:spreadsheet|slides)/draft)$'), 'artifacts'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$'), 'artifacts'),
     (re.compile(r'^/v1/settings$'), 'settings'),
     (re.compile(r'^/v1/notification-prefs$'), 'settings'),
@@ -120,6 +121,7 @@ MOVED_API_LOCATIONS = (
     'location = /v1/team-templates { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:team-templates|notifications)(?:/|$) { return 418; }',
     'location = /v1/invites/accept { return 418; }',
+    'location = /v1/invites/preview { return 418; }',
     'location = /v1/join-requests { return 418; }',
     'location ~ ^/v1/skills/(?:scopes|readiness|runs)$ { return 418; }',
     'location ^~ /v1/runtime/ { return 418; }',
@@ -130,6 +132,8 @@ MOVED_API_LOCATIONS = (
     'location = /v1/team-directory { return 418; }',
     'location ^~ /v1/team-directory/ { return 418; }',
     'location ~ ^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end)$ { return 418; }',
+    'location = /v1/profile/social { return 418; }',
+    'location = /v1/profile/follow-work { return 418; }',
     'location ^~ /v1/discover/ { return 418; }',
     'location ~ ^/v1/contacts(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:members|invites|join-requests|directory|social)(?:/|$) { return 418; }',
@@ -154,7 +158,7 @@ MOVED_API_LOCATIONS = (
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:draft|speech|transcribe|share-recipients|shared(?:/[0-9a-f]{32}(?:/revoke)?)?|[0-9a-f]{32}(?:/(?:remove|export|shares))?))?$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/memory(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$ { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:spreadsheet|slides)/draft$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|(?:spreadsheet|slides)/draft)$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }',
 )
 
@@ -222,6 +226,8 @@ def target_for(uri, routes):
         return '/api/openteamily/legacy?feature=' + quote(feature, safe='') + '&path=' + quote(path, safe='') + (('&query=' + quote(query, safe='')) if query else '')
     if path == '/space' and 'artifacts' in routes['moved_pages']:
         path = '/artifacts'
+    if path == '/profile/edit/' and 'profile' in routes['moved_pages']:
+        path = '/profile/edit'
     first = path.split('/')[1] if path != '/' else 'home'
     if first in routes['moved_pages']:
         return PAGE_ROUTE + '?path=' + quote(path, safe='')

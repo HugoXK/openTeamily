@@ -5,7 +5,6 @@ import { mountGroupTranslation } from './translation.mjs';
 import { mountChatCalls } from './calls.mjs';
 import { mountImageCreator } from './image-create.mjs';
 import { mountModel3dCreator, mountMusicCreator, mountVideoCreator, mountWebsiteCreator } from './video-create.mjs';
-import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { stageMeetingFromChat } from '../shell/meeting-link.mjs';
 import { mountPublicDraft } from './public-draft.mjs';
@@ -2836,15 +2835,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   const liveBanner = document.getElementById('conversation-live-update');
-  const workspaceEvents = servedByDsbot
-    ? mountChatActivity(document, {request, update: applySocialActivity})
-    : mountWorkspaceEvents(document, {onInvalidate: async event => {
-        if (event.workspace !== workspaceId() || document.visibilityState === 'hidden') return;
-        if (event.changed.includes('notifications')) void chatCalls.refresh();
-        await loadSessions();
-        if (event.workspace === workspaceId() && !event.initial && event.changed.includes('social')
-          && currentSource === 'social' && currentConversation && liveBanner) liveBanner.hidden = false;
-      }});
+  const workspaceEvents = servedByDsbot ? mountChatActivity(document, {request, update: applySocialActivity}) : null;
 
   function viewingSocialMessages() {
     return !narrowScreen() || !document.body.classList.contains('sessions-open');
@@ -2902,7 +2893,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     loadNotifications();
     loadDueReminders();
     const id = workspaceId();
-    if (servedByDsbot && id !== sessionsWorkspace) workspaceEvents.start(null);
+    if (id !== sessionsWorkspace) workspaceEvents?.start(null);
     if (id !== sessionsWorkspace || user !== sessionsUser || !id) {
       setSessionsStatus('正在加载对话…');
       sessionsWorkspace = id; sessionsUser = user;
@@ -2971,7 +2962,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!document.getElementById('compose-dialog').hidden && composeMode === 'group') renderMemberChoices(false, true);
     if (['all', 'agents', 'groups'].includes(searchTab)) refreshDirectorySearch();
     // Start activity checks after the initial directory commits.
-    workspaceEvents.start(id);
+    workspaceEvents?.start(id);
   }
 
   function memberRow(name, note, kind) {
@@ -4081,7 +4072,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       currentAgent = null;
       renderAgentQuickStarts();
       resetNotifications();
-      if (servedByDsbot) workspaceEvents.start(null);
+      workspaceEvents?.start(null);
       autoTranslation.open(null);
       attachmentSender?.reset();
       clearPendingSends();

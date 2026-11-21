@@ -1201,6 +1201,21 @@ body.app-workspace #document-rich:focus-visible { outline: none; }
 #main-panel.is-meetings #workspace-events-status,
 #main-panel.is-meetings #workspace-events-retry { display: none; }
 
+#workspace-events-status:empty { display: none; }
+#artifact-live-update:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  padding: .5rem .75rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .625rem;
+  background: var(--ot-surface-2);
+}
+#artifact-live-message { margin: 0; }
+#artifact-live-load { min-height: 2.75rem; }
+
 #main-panel.is-meetings #artifact-list {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

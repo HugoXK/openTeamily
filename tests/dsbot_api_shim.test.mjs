@@ -78,6 +78,11 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
 
 
 test('members, team, messenger and discover /v1 routes go to the C features', () => {
+  assert.deepEqual(movedTarget('/v1/profile/social?view=following', ORIGIN), {
+    feature: 'discover', path: '/v1/profile/social?view=following',
+  });
+  assert.equal(movedTarget('/v1/profile', ORIGIN), null);
+  assert.equal(movedTarget('/v1/profile/avatar', ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/${ID}/remove`, ORIGIN).feature, 'members');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/members/ann.home/suspend`, ORIGIN).feature, 'members');
@@ -109,6 +114,12 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
 test('the envelope carries method, path, body and idempotency key only', () => {
   const env = envelope({ feature: 'meetings', path: '/v1/x' }, 'post', { 'Idempotency-Key': 'k'.repeat(20), 'X-CSRF-Token': 't' }, '{"title":"周会"}');
   assert.deepEqual(env, { endpoint: 'meetings/v1', payload: { method: 'POST', path: '/v1/x', idempotency_key: 'k'.repeat(20), body: { title: '周会' } } });
+});
+
+test('Space activity stays in the owner artifact feature and does not reuse management streaming', () => {
+  const activity = `/v1/workspaces/${WS}/artifacts/activity?artifact=${ID}`;
+  assert.deepEqual(movedTarget(activity, ORIGIN), {feature: 'artifacts', path: activity});
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/events`, ORIGIN), null);
 });
 
 test('answers become ordinary responses, downloads keep their name', async () => {

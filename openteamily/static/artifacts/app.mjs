@@ -1,5 +1,4 @@
 import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
-import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
 // Authorized saved-result links select a real workspace and fetch the actual editor record.
 export function artifactTargetFromSearch(search) {
@@ -297,7 +296,84 @@ function agentConversations(directory, {includeArchived = false} = {}) {
   });
 }
 
-export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
+const validActivityVersion = value => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+
+export function createArtifactActivity({read, apply, report, visible,
+  setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout, interval = 8000}) {
+  let scope = '', version = '', timer, controller, failures = 0;
+
+  function pause() {
+    clearTimer(timer);
+    timer = undefined;
+    controller?.abort();
+    controller = undefined;
+  }
+
+  function schedule(delay) {
+    if (!scope || !visible()) return;
+    clearTimer(timer);
+    timer = setTimer(() => void check(), delay);
+    timer?.unref?.();
+  }
+
+  async function check() {
+    if (!scope || !visible() || controller) return;
+    clearTimer(timer);
+    const workspace = scope;
+    const active = new AbortController();
+    controller = active;
+    const current = () => controller === active && workspace === scope && visible();
+    const timeout = setTimer(() => active.abort(), 6000);
+    timeout?.unref?.();
+    try {
+      const snapshot = await read(workspace, active.signal);
+      if (!current()) return;
+      if (active.signal.aborted || !validActivityVersion(snapshot?.version)) throw new Error('Invalid activity version');
+      const applied = await apply(snapshot, {
+        workspace, changed: version !== snapshot.version, signal: active.signal,
+      });
+      if (!current()) return;
+      if (applied === false) throw new Error('Could not apply activity update');
+      if (applied !== 'defer') version = validActivityVersion(applied) ? applied : snapshot.version;
+      failures = 0;
+      report('ready');
+    } catch {
+      if (!current()) return;
+      failures += 1;
+      report('error');
+    } finally {
+      clearTimer(timeout);
+      if (controller === active) {
+        controller = undefined;
+        schedule(Math.min(45000, interval * 2 ** Math.min(failures, 3)));
+      }
+    }
+  }
+
+  return {
+    setScope(workspace) {
+      if (scope === workspace) return;
+      pause();
+      scope = workspace;
+      version = '';
+      failures = 0;
+      report('idle');
+      schedule(interval);
+    },
+    seed(workspace, baseline) {
+      if (scope !== workspace || version || !validActivityVersion(baseline)) return;
+      version = baseline;
+      report('ready');
+    },
+    resume() {
+      if (!visible()) pause();
+      else void check();
+    },
+    check,
+  };
+}
+
+export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), activityTimers} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
@@ -338,6 +414,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let meetingLoading = false;
   let meetingRequest = 0;
   let meetingSharedCursor = '';
+  let bookmarkRevision = 0;
+  const pendingBookmarks = new Set();
   // A delete question is bound to the workspace and artifact it was asked about;
   // leaving that workspace retires it instead of letting the answer land elsewhere.
   let pendingDeleteCancel = null;
@@ -1098,7 +1176,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return rows;
   }
 
-  function renderCatalog() {
+  function renderCatalog({preserve = false} = {}) {
     const username = currentUser && currentUser.username;
     const items = visibleArtifacts(allItems, {
       kind: catalogKind, scope: catalogScope, username,
@@ -1106,7 +1184,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
     if (catalogKind === 'meetings') renderMeetings();
     else {
-      renderList(items);
+      renderList(items, {preserve});
       const meetingsErrorBox = document.getElementById('meetings-error');
       if (meetingsErrorBox) meetingsErrorBox.hidden = true;
       const moreMeetings = document.getElementById('more-shared-meetings');
@@ -1404,33 +1482,63 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return wrap;
   }
 
-  function renderList(items) {
+  const renderedArtifactRows = new WeakMap();
+
+  function renderList(items, {preserve = false} = {}) {
     const workspace = workspaceId();
     const account = currentUser;
     const inScope = () => !!account && currentUser === account && workspaceId() === workspace;
     const onOpen = item => inScope() && openEditor(item, {workspace});
     const list = document.getElementById('artifact-list');
     const empty = document.getElementById('list-empty');
-    list.textContent = '';
-    closeItemMenu();
+    const previousRows = preserve ? [...list.children] : [];
+    const byId = new Map(previousRows.filter(row => row.dataset.artifactId).map(row => [row.dataset.artifactId, row]));
+    const scroller = preserve ? [list.closest?.('.artifact-main'), listPanel, main].find(node => Number(node?.scrollTop) > 0) : null;
+    const active = preserve ? document.activeElement : null;
+    const focusedRow = active?.closest?.('.artifact-item');
+    const viewport = scroller?.getBoundingClientRect();
+    const focusedBounds = viewport && focusedRow?.getBoundingClientRect();
+    const anchor = !viewport ? null
+      : focusedBounds && focusedBounds.bottom > viewport.top && focusedBounds.top < viewport.bottom
+        ? focusedRow
+        : previousRows.find(row => row.dataset.artifactId && row.getBoundingClientRect().bottom > viewport.top);
+    const anchorTop = anchor?.getBoundingClientRect().top;
+    const focusSelector = active?.matches?.('.artifact-bookmark') ? '.artifact-bookmark'
+      : active?.matches?.('.link') ? '.link' : '.artifact-more';
+    if (!preserve) {
+      list.textContent = '';
+      closeItemMenu();
+    }
     applyArtifactLayout(list, catalogLayout);
     if (empty) empty.hidden = items.length > 0;
+    const nextRows = [];
     if (items.length) {
-      const head = document.createElement('li');
-      head.className = 'artifact-list-head';
-      head.setAttribute('aria-hidden', 'true');
-      for (const label of ['名称', '来源', '创建时间', '最近动态']) {
-        const cell = document.createElement('span');
-        cell.textContent = label;
-        head.append(cell);
+      let head = previousRows.find(row => row.classList.contains('artifact-list-head'));
+      if (!head) {
+        head = document.createElement('li');
+        head.className = 'artifact-list-head';
+        head.setAttribute('aria-hidden', 'true');
+        for (const label of ['名称', '来源', '创建时间', '最近动态']) {
+          const cell = document.createElement('span');
+          cell.textContent = label;
+          head.append(cell);
+        }
       }
-      list.appendChild(head);
+      nextRows.push(head);
     }
     for (const item of items) {
+      const prior = byId.get(item.id);
+      const rendered = prior && renderedArtifactRows.get(prior);
+      if (rendered === item) {
+        nextRows.push(prior);
+        continue;
+      }
       const path = `/v1/workspaces/${workspace}/artifacts/${item.id}`;
       const row = document.createElement('li');
       row.className = 'artifact-item';
+      row.dataset.artifactId = item.id;
       row.dataset.kind = item.kind || '';
+      renderedArtifactRows.set(row, item);
       const open = document.createElement('button');
       open.type = 'button';
       open.className = 'link';
@@ -1475,7 +1583,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       bookmark.setAttribute('aria-pressed', String(!!item.favorited));
       bookmark.addEventListener('click', async event => {
         event.stopPropagation();
-        if (!inScope()) return;
+        if (!inScope() || pendingBookmarks.has(path)) return;
+        pendingBookmarks.add(path);
+        bookmarkRevision += 1;
         bookmark.disabled = true;
         try {
           const result = await request('POST', path + '/favorite', {enabled: !item.favorited});
@@ -1485,7 +1595,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           if (!listPanel.hidden) renderCatalog();
         } catch {
           if (inScope()) show('error', '网络错误，收藏未保存。');
-        } finally { bookmark.disabled = false; }
+        } finally {
+          pendingBookmarks.delete(path);
+          bookmarkRevision += 1;
+          bookmark.disabled = false;
+        }
       });
       bookmark.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10v16l-5-3-5 3V4Z"/></svg>';
       row.appendChild(bookmark);
@@ -1496,7 +1610,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       updated.className = 'artifact-updated';
       updated.textContent = item.updated ? '编辑于 ' + artifactTime(item.updated) : '';
       row.append(created, updated, itemMenu(item, onOpen, inScope, path));
-      list.appendChild(row);
+      nextRows.push(row);
+    }
+    if (!preserve) {
+      for (const row of nextRows) list.appendChild(row);
+      return;
+    }
+    const keep = new Set(nextRows);
+    for (const row of previousRows) if (!keep.has(row)) row.remove();
+    nextRows.forEach((row, index) => {
+      if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
+    });
+    if (focusedRow && !list.contains(active)) {
+      const replacement = nextRows.find(row => row.dataset.artifactId === focusedRow.dataset.artifactId);
+      (replacement?.querySelector(focusSelector) || search)?.focus({preventScroll: true});
+    } else if (focusedRow && document.activeElement !== active) {
+      active.focus({preventScroll: true});
+    }
+    if (anchor) {
+      const replacement = nextRows.find(row => row.dataset.artifactId === anchor.dataset.artifactId);
+      if (replacement) scroller.scrollTop += replacement.getBoundingClientRect().top - anchorTop;
     }
   }
 
@@ -1558,9 +1691,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('discover-slug').value = current?.id ? suggestedDiscoverSlug(current.title) : '';
   }
 
-  function showCatalog() {
+  function showCatalog({preserve = false} = {}) {
     renderFilterChoices();
-    renderCatalog();
+    renderCatalog({preserve});
   }
 
   async function openEditor(item, {workspace = workspaceId(), notice} = {}) {
@@ -1745,33 +1878,83 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
-  const workspaceEvents = mountWorkspaceEvents(document, {onInvalidate: async event => {
-    if (event.workspace !== workspaceId() || !event.changed.includes('artifacts')) return;
-    void loadList();
-    const selection = editor;
-    if (!activeEditor(selection) || !current?.id) return;
-    const result = await request('GET', editorPath(selection), undefined, undefined, selection.controller.signal)
-      .catch(() => ({status: 0}));
-    if (!activeEditor(selection)) return;
-    const banner = document.getElementById('artifact-live-update');
-    banner.hidden = result.status === 200 && result.body.artifact.revision === current.revision;
-  }});
+  const activityStatus = document.getElementById('workspace-events-status');
+  const activityRetry = document.getElementById('workspace-events-retry');
+  const activity = createArtifactActivity({
+    ...activityTimers,
+    visible: () => document.visibilityState !== 'hidden',
+    report(state) {
+      if (!activityStatus) return;
+      const message = {
+        ready: '自动更新已开启',
+        error: '自动更新暂不可用，可手动检查。',
+        idle: '',
+      }[state];
+      if (activityStatus.textContent !== message) activityStatus.textContent = message;
+    },
+    async read(workspace, signal) {
+      const account = currentUser;
+      const selection = activeEditor(editor) && current?.id ? editor : null;
+      const artifact = selection ? current.id : '';
+      const result = await request('GET', `/v1/workspaces/${workspace}/artifacts/activity${artifact ? '?artifact=' + artifact : ''}`,
+        undefined, undefined, signal);
+      if (result.status !== 200) return null;
+      const {version, revision} = result.body;
+      if (artifact && revision !== null && !(Number.isSafeInteger(revision) && revision > 0)) return null;
+      return {version, revision, selection, artifact, account};
+    },
+    async apply(snapshot, {workspace, changed, signal}) {
+      if (workspace !== workspaceId() || snapshot.account !== currentUser || catalogKind === 'meetings') return 'defer';
+      if (!listPanel.hidden) {
+        if (!changed || catalog?.activityVersion === snapshot.version) return snapshot.version;
+        if (pendingBookmarks.size || openItemMenu || document.getElementById('filter-button')?.getAttribute('aria-expanded') === 'true' ||
+            catalog?.state === 'loading') return 'defer';
+        return loadList({background: true, signal});
+      }
+      if (catalog?.state === 'ready' && catalog.activityVersion !== snapshot.version) catalog.state = 'stale';
+      if (!activeEditor(snapshot.selection) || snapshot.artifact !== current?.id || snapshot.selection.saving) return snapshot.version;
+      const banner = document.getElementById('artifact-live-update');
+      const message = document.getElementById('artifact-live-message');
+      const readLatest = document.getElementById('artifact-live-load');
+      const missing = snapshot.revision === null;
+      banner.hidden = !missing && snapshot.revision === current.revision;
+      if (readLatest) readLatest.hidden = missing;
+      const text = missing ? '这件作品已无法访问。此处仍保留你的草稿。' : '作品有新版本。你可以继续编辑，或读取服务器版本。';
+      if (message && message.textContent !== text) message.textContent = text;
+      return snapshot.version;
+    },
+  });
+  document.addEventListener?.('visibilitychange', activity.resume);
+  activityRetry?.addEventListener('click', activity.check);
+
   document.getElementById('artifact-live-load')?.addEventListener('click', async () => {
     const selection = editor;
-    if (!activeEditor(selection) || !current?.id ||
+    const artifact = current?.id;
+    if (!activeEditor(selection) || !artifact || selection.saving ||
         !globalThis.confirm?.('读取服务器版本将覆盖编辑器内未保存的草稿。请先复制草稿。继续？')) return;
-    const result = await request('GET', editorPath(selection), undefined, undefined, selection.controller.signal)
-      .catch(() => ({status: 0}));
-    if (!activeEditor(selection)) return;
-    if (result.status !== 200) {
-      show('error', '服务器作品不可读取，可能已删除或访问已撤销；保留本地草稿。');
-      return;
-    }
-    current = result.body.artifact;
-    fillEditor(current);
-    document.getElementById('artifact-live-update').hidden = true;
-    for (const [name, panel] of editorPanels) {
-      if (panel.open) void panelLoads[name]();
+    const button = document.getElementById('artifact-live-load');
+    if (button.disabled) return;
+    button.disabled = true;
+    form.inert = true;
+    try {
+      const signal = AbortSignal.any([selection.controller.signal, AbortSignal.timeout(6000)]);
+      const result = await request('GET', editorPath(selection), undefined, undefined, signal)
+        .catch(() => ({status: 0, body: {}}));
+      if (!activeEditor(selection) || current?.id !== artifact) return;
+      if (result.status !== 200 || result.body.artifact?.id !== artifact ||
+          (result.body.artifact.workspace_id && result.body.artifact.workspace_id !== selection.workspace)) {
+        show('error', '服务器作品暂不可读取，已保留你的草稿。');
+        return;
+      }
+      current = result.body.artifact;
+      fillEditor(current);
+      document.getElementById('artifact-live-update').hidden = true;
+      for (const [name, panel] of editorPanels) {
+        if (panel.open) void panelLoads[name]();
+      }
+    } finally {
+      if (activeEditor(selection)) form.inert = false;
+      button.disabled = false;
     }
   });
 
@@ -1781,32 +1964,44 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('retry-artifact-list').hidden = !retry;
   }
 
-  async function loadList({reuse = false} = {}) {
+  async function loadList({reuse = false, background = false, signal} = {}) {
     if (catalogKind === 'meetings') {
+      if (background) return 'defer';
       listStatus();
-      workspaceEvents.start('');
+      activity.setScope('');
       await loadMeetings();
       return;
     }
     const workspace = workspaceId();
     if (!workspace || !currentUser) return;
-    workspaceEvents.start(workspace);
+    activity.setScope(workspace);
     const query = listQuery(search.value);
     const sameCatalog = catalog?.workspace === workspace && catalog.account === currentUser;
-    if (reuse && sameCatalog && catalog.query === query) {
+    if (reuse && sameCatalog && catalog.query === query && catalog.state !== 'stale') {
       listStatus(catalog.message, catalog.state === 'error');
       if (!listPanel.hidden) showCatalog();
       return;
     }
+    const before = catalog;
+    const bookmarkBefore = bookmarkRevision;
     if (!sameCatalog) allItems = [];
     const loading = {workspace, account: currentUser, query, state: 'loading', message: '正在加载资料…'};
     catalog = loading;
-    listStatus(loading.message);
-    if (!listPanel.hidden && (!sameCatalog || !allItems.length)) showCatalog();
-    const listed = await request('GET', `/v1/workspaces/${workspace}/artifacts${query}`)
+    if (!background) {
+      listStatus(loading.message);
+      if (!listPanel.hidden && (!sameCatalog || !allItems.length)) showCatalog();
+    }
+    const listed = await request('GET', `/v1/workspaces/${workspace}/artifacts${query}`, undefined, undefined, signal)
       .catch(() => ({status: 0, body: {}}));
-    if (catalog !== loading || workspaceId() !== workspace || currentUser !== loading.account) return;
+    if (catalog !== loading || workspaceId() !== workspace || currentUser !== loading.account) return 'defer';
+    if (background && (signal?.aborted || listPanel.hidden || catalogKind === 'meetings' || openItemMenu ||
+        bookmarkBefore !== bookmarkRevision ||
+        document.getElementById('filter-button')?.getAttribute('aria-expanded') === 'true')) {
+      catalog = before;
+      return signal?.aborted ? false : 'defer';
+    }
     if (listed.status !== 200) {
+      if (background) { catalog = before; return false; }
       loading.state = 'error';
       loading.message = messageFor(listed.body.error, '无法读取作品库。');
       if (catalogKind !== 'meetings') listStatus(loading.message, true);
@@ -1814,9 +2009,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     loading.state = 'ready';
     loading.message = '';
-    allItems = listed.body.items || [];
+    loading.activityVersion = listed.body.activity_version;
+    activity.seed(workspace, loading.activityVersion);
+    const items = listed.body.items || [];
+    if (background && sameCatalog) {
+      const previous = new Map(allItems.map(item => [item.id, item]));
+      allItems = items.map(item => {
+        const prior = previous.get(item.id);
+        return prior && JSON.stringify(prior) === JSON.stringify(item) ? prior : item;
+      });
+    } else {
+      allItems = items;
+    }
     if (catalogKind !== 'meetings') listStatus();
-    if (!listPanel.hidden && catalogKind !== 'meetings') showCatalog();
+    if (!listPanel.hidden && catalogKind !== 'meetings') showCatalog({preserve: background});
+    return loading.activityVersion;
   }
 
   function fillWorkspaces(items, selected) {
@@ -1832,6 +2039,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   async function load() {
     const seq = ++workspaceLoad;
+    activity.setScope('');
     const session = await request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
     if (seq !== workspaceLoad) return;
     if (session.status === 401) {
@@ -1840,7 +2048,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       catalog = null;
       allItems = [];
       listStatus();
-      workspaceEvents.start('');
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       show('', '');
@@ -2370,6 +2577,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       (inputTitle !== form.elements.title.value || body !== form.elements.body.value);
     if (newerDraft) updateEditorMeta(current, kind);
     else fillEditor(current);
+    document.getElementById('artifact-live-update').hidden = true;
     updateMobileActions();
     document.getElementById('remove-artifact').hidden = false;
     if (isNew) resetEditorPanels();
@@ -2973,7 +3181,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     allItems = [];
     meetingItems = [];
     meetingLoadedFor = '';
-    workspaceEvents.start('');
+    activity.setScope('');
     mainPanel.hidden = true;
     await load();
   });

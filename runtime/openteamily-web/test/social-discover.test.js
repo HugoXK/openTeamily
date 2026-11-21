@@ -10,6 +10,43 @@ import { createDispatch } from '../src/dispatch.js'
 
 const SERVER = 'https://social.example.test'
 
+test('profile social sends only actor-scoped queries and explicit follow requests', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-profile-social-'))
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({token:'profile-fixture',server:SERVER}), {mode:0o600})
+  const calls = []
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath,fetch:async (url, init) => {
+    assert.equal(init.headers.authorization,'Bearer profile-fixture')
+    calls.push({url:url.slice(SERVER.length), method:init.method, body:init.body && JSON.parse(init.body)})
+    if (init.method === 'GET') return Response.json({items:[],next_cursor:null})
+    return Response.json(url.endsWith('/notifications') ? {enabled:false} : {following:false})
+  }}))
+  const route = discover({dataDir:dir}).endpoints.v1
+  const path = '/v1/profile/social'
+  assert.deepEqual(await route({method:'GET',path:path+'?view=followers&q=Ann%20Lee&limit=20',owner_id:'forged'}), {
+    status:200,body:{items:[],next_cursor:null},
+  })
+  assert.equal((await route({method:'GET',path:path+'?view=liked&owner_id=other'})).status,400)
+  assert.equal((await route({method:'GET',path:path+'?view=liked&view=following'})).status,400)
+  assert.equal((await route({method:'POST',path,body:{handle:'ann.home',on:true,owner_id:'other'}})).status,400)
+  assert.equal((await route({method:'POST',path,body:{handle:'ann.home',on:'false'}})).status,400)
+  assert.deepEqual(await route({method:'POST',path,body:{handle:'ann.home',on:false}}), {
+    status:200,body:{following:false},
+  })
+  const notices = '/v1/profile/follow-work'
+  assert.equal((await route({method:'GET',path:notices+'?view=liked'})).status,400)
+  assert.equal((await route({method:'GET',path:notices+'?cursor=abc'})).status,200)
+  assert.deepEqual(await route({method:'POST',path:notices,body:{handle:'ann.home',enabled:false}}), {
+    status:200,body:{enabled:false},
+  })
+  assert.deepEqual(calls,[
+    {url:'/v1/ot/profile/social?view=followers&q=Ann+Lee&limit=20',method:'GET',body:undefined},
+    {url:'/v1/ot/follows',method:'POST',body:{handle:'ann.home',on:false}},
+    {url:'/v1/ot/profile/social?view=work-notices&cursor=abc',method:'GET',body:undefined},
+    {url:'/v1/ot/follows/notifications',method:'POST',body:{handle:'ann.home',enabled:false}},
+  ])
+})
+
 test('native Discover feeds and work detail bind the viewer to the trusted request account', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ot-discover-viewer-'))
   const credentialsPath = join(dir, 'connector.json')
