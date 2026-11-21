@@ -274,12 +274,24 @@
         <span id="group-info-avatar" class="group-info-avatar" aria-hidden="true"></span>
         <h2 id="group-info-title"><span data-ui-text="chat.group.info">群信息</span></h2>
         <p id="group-info-count" class="group-info-count"></p>
+        <button type="button" id="group-management-rename" class="group-info-link" aria-haspopup="dialog" data-ui-text="chat.group.rename" hidden>编辑群名</button>
       </div>
       <button type="button" id="group-info-search" class="group-info-row group-info-search" aria-label="搜索聊天记录" data-ui-label="chat.search.history" data-ui-text="chat.search.history">搜索聊天记录</button>
       <button type="button" id="group-memory-open" class="group-info-row" aria-haspopup="dialog" hidden data-ui-text="chat.group.memory">群记忆</button>
       <section class="group-info-card" aria-labelledby="group-info-notice-heading">
         <div class="group-info-card-head"><h3 id="group-info-notice-heading" data-ui-text="chat.group.announcement">群公告</h3><button type="button" class="group-info-link" id="group-announcement-open" data-ui-text="chat.group.view_edit">查看 / 编辑</button></div>
         <p class="group-info-sub" id="group-announcement-preview"><span data-ui-text="chat.group.loading_announcement">正在读取公告…</span></p>
+      </section>
+      <section class="group-info-card" aria-label="成员" data-ui-label="chat.group.members">
+        <div class="group-info-tabs" role="tablist">
+          <button type="button" role="tab" id="group-info-tab-agents" aria-selected="true" aria-controls="group-info-agents"></button>
+          <button type="button" role="tab" id="group-info-tab-people" aria-selected="false" aria-controls="group-info-people"></button>
+        </div>
+        <p id="group-agent-auto-reply-note" class="note" data-ui-text="chat.group.auto_reply_help">可为自己的智能体开启自动回复。新群消息可能触发回复，每个群每小时最多自动回复 3 次。</p>
+        <p id="group-agent-auto-reply-status" class="note" role="status" hidden></p>
+        <ul id="group-info-agents" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-agents"></ul>
+        <button type="button" class="group-info-link" id="group-info-invite" hidden aria-haspopup="dialog" data-ui-text="chat.group.add_members">添加成员</button>
+        <ul id="group-info-people" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-people" hidden></ul>
       </section>
       <section class="group-info-card group-info-list" aria-label="通话" data-ui-label="chat.call.call">
         <button type="button" class="group-info-row" id="group-call-video" data-ui-text="chat.call.video">视频通话</button>
@@ -297,18 +309,31 @@
         <div class="group-info-toggle-row"><span><strong data-ui-text="chat.group.mute">消息免打扰</strong><small data-ui-text="chat.group.mute_help">保留未读消息，静音此会话。</small></span><button type="button" id="group-info-mute" role="switch" aria-checked="false" class="group-info-switch" aria-label="消息免打扰" data-ui-label="chat.group.mute"></button></div>
         <div class="group-info-toggle-row"><span><strong data-ui-text="chat.group.pin">置顶聊天</strong></span><button type="button" role="switch" aria-checked="false" id="group-info-pin" class="group-info-switch" aria-label="置顶聊天" data-ui-label="chat.group.pin"></button></div>
       </section>
-      <section class="group-info-card" aria-label="成员" data-ui-label="chat.group.members">
-        <div class="group-info-tabs" role="tablist">
-          <button type="button" role="tab" id="group-info-tab-agents" aria-selected="true" aria-controls="group-info-agents"></button>
-          <button type="button" role="tab" id="group-info-tab-people" aria-selected="false" aria-controls="group-info-people"></button>
-        </div>
-        <p id="group-agent-auto-reply-note" class="note" data-ui-text="chat.group.auto_reply_help">可为自己的智能体开启自动回复。新群消息可能触发回复，每个群每小时最多自动回复 3 次。</p>
-        <p id="group-agent-auto-reply-status" class="note" role="status" hidden></p>
-        <ul id="group-info-agents" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-agents"></ul>
-        <button type="button" class="group-info-link" id="group-info-invite" hidden aria-haspopup="dialog" data-ui-text="chat.group.add_members">添加成员</button>
-        <ul id="group-info-people" class="group-info-members" role="tabpanel" aria-labelledby="group-info-tab-people" hidden></ul>
-      </section>
+      <div id="group-management-footer" class="group-info-card" hidden>
+        <button type="button" id="group-management-leave" class="group-info-row" aria-haspopup="dialog" data-ui-text="chat.group.leave">退出群聊</button>
+      </div>
     </aside>
+    <dialog id="group-management-dialog" aria-labelledby="group-management-heading" aria-describedby="group-management-description">
+      <form id="group-management-form" novalidate>
+        <h2 id="group-management-heading"></h2>
+        <p id="group-management-description"></p>
+        <label id="group-management-name-row" hidden>
+          <span data-ui-text="chat.group.name">群组名称</span>
+          <input id="group-management-name" maxlength="80" autocomplete="off" required>
+        </label>
+        <div id="group-management-member-actions" hidden>
+          <button type="button" id="group-management-transfer" data-ui-text="chat.group.transfer">转让群主</button>
+          <button type="button" id="group-management-remove" data-ui-text="chat.group.remove_member">移除成员</button>
+        </div>
+        <p id="group-management-status" role="status"></p>
+        <div class="group-management-actions">
+          <button type="button" id="group-management-cancel" data-ui-text="chat.cancel">取消</button>
+          <button type="button" id="group-management-choose-owner" data-ui-text="chat.group.choose_owner" hidden>选择新群主</button>
+          <button type="button" id="group-management-refresh" data-ui-text="chat.group.refresh_management" hidden>刷新群信息</button>
+          <button type="submit" id="group-management-confirm" hidden></button>
+        </div>
+      </form>
+    </dialog>
     <aside id="chat-call-incoming" class="chat-strip" hidden>
       <span id="chat-call-incoming-label"></span>
       <button type="button" id="chat-call-join" data-ui-text="chat.call.join">加入通话</button>

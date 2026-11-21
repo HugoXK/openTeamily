@@ -349,7 +349,10 @@ export function mountChatFiles(document, {context, ownerId, csrfToken, createKey
     input.value = '';
     addFiles(picked);
   });
-  return {render,draftFiles,clearDraft,addFiles, moveDraft(from,to) {
+  return {render,draftFiles,clearDraft,addFiles, forget(scope) {
+    clearDraft(scope);
+    for (const job of jobs) if (job.destination.scope === scope) remove(job);
+  }, moveDraft(from,to) {
     const saved = drafts.get(from);
     if (saved) {
       drafts.set(to,saved);

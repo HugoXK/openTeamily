@@ -16,6 +16,10 @@ import {
   CHAT_FILE_BODY_LIMIT, CHAT_FILES_SCHEMA, attachmentView, chatFileView, decodeChatFile, migrateChatFiles, readAttachment,
   saveAttachment, type ChatFileMetadata,
 } from "./chat-files.js";
+import {
+  GROUP_MANAGEMENT_SCHEMA, changeGroup, groupManagementRequest, groupManagementView, groupOwner, managedGroup,
+  registerGroupManagement, type Group,
+} from "./group-management.js";
 
 export const MESSENGER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_group_announcements (
@@ -26,8 +30,10 @@ CREATE TABLE IF NOT EXISTS ot_conversations (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('dm','group')), title TEXT NOT NULL DEFAULT '',
   team_id TEXT, dm_key TEXT UNIQUE, created_by TEXT NOT NULL, last_seq INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, account_group INTEGER NOT NULL DEFAULT 0,
-  activity_revision INTEGER NOT NULL DEFAULT 0
+  activity_revision INTEGER NOT NULL DEFAULT 0, group_owner_id TEXT, group_revision INTEGER NOT NULL DEFAULT 0,
+  group_archived_at INTEGER
 );
+${GROUP_MANAGEMENT_SCHEMA}
 CREATE TABLE IF NOT EXISTS ot_group_requests (
   owner_id TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
   conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE,
@@ -219,7 +225,10 @@ function requireOrdinaryGroup(conv: any) {
 }
 
 function memberOf(ot: OtContext, convId: string, ownerId: string) {
-  const conv = ot.get<any>("SELECT c.* FROM ot_conversations c JOIN ot_conversation_members m ON m.conversation_id = c.id WHERE c.id = ? AND m.owner_id = ?", convId, ownerId);
+  const conv = ot.get<any>(`SELECT c.* FROM ot_conversations c JOIN ot_conversation_members m ON m.conversation_id=c.id
+    WHERE c.id=? AND m.owner_id=? AND c.group_archived_at IS NULL
+      AND (c.team_id IS NULL OR EXISTS (SELECT 1 FROM ot_team_members active
+        WHERE active.team_id=c.team_id AND active.owner_id=m.owner_id AND active.suspended=0))`, convId, ownerId);
   assert(conv && publicParticipant(ot, conv, ownerId), 404, "conversation_not_found", "no such conversation");
   return conv;
 }
@@ -243,7 +252,7 @@ function activeMemories(ot: OtContext, cid: string) {
 function groupMemoryView(ot: OtContext, row: any, group: any, viewer: string) {
   return {id:row.id,title:row.title,body:row.body,source_message_id:row.source_message_id,
     author:ot.profileView(row.author_id).display_name,created_at:row.created_at,
-    can_remove:row.author_id===viewer || group.created_by===viewer};
+    can_remove:row.author_id===viewer || groupOwner(group)===viewer};
 }
 
 function messageMemories(ot: OtContext, m: any) {
@@ -373,7 +382,7 @@ function registerReplyJobInvalidation(ot: OtContext) {
   }
 }
 
-function conversationView(ot: OtContext, c: any, viewer: string) {
+function conversationView(ot: OtContext, c: any, viewer: string, includeManagement = false) {
   const published = publicListing(ot, c);
   const members = ot.all<any>("SELECT owner_id, read_seq, pinned, muted FROM ot_conversation_members WHERE conversation_id = ? ORDER BY created_at", c.id).filter(m => publicParticipant(ot, c, m.owner_id));
   const mine = members.find((m) => m.owner_id === viewer);
@@ -381,6 +390,7 @@ function conversationView(ot: OtContext, c: any, viewer: string) {
   const peer = c.kind === "dm" ? members.find((m) => m.owner_id !== viewer) : undefined;
   const open = !!(published?.listed && published.chat_enabled);
   const directOpen = Boolean(peer && ordinaryDirect(c) && directReachable(ot, viewer, peer.owner_id));
+  const management = includeManagement ? groupManagementView(ot, c, viewer) : undefined;
   const pending = open && !!ot.get(`SELECT 1 FROM ot_messages m
     WHERE m.conversation_id=? AND m.rowseq>? AND m.author_id=? AND m.author_kind='member' AND m.retracted=0
       AND m.created_at>? AND NOT EXISTS (
@@ -391,6 +401,7 @@ function conversationView(ot: OtContext, c: any, viewer: string) {
     ...(fixedPublicThread(c) ? {public_agent: {open, pending, publisher: published ? ot.profileView(published.owner_id).display_name : ""}} : {}),
     ...(ordinaryDirect(c) ? {direct: {open: directOpen}} : {}),
     ...(c.account_group === 1 ? {account_group: true} : {}),
+    ...(management ? {group_management:management} : {}),
     id: c.id, kind: c.kind, title: c.kind === "dm" ? (peer ? ot.profileView(peer.owner_id).display_name : c.title) : c.title,
     team_id: c.team_id, members: members.map((m) => ot.profileView(m.owner_id)),
     agents: ot.all<any>("SELECT agent_ref, owner_id, name, auto_reply FROM ot_conversation_agents WHERE conversation_id = ?", c.id).map((a) => ({ agent_ref: a.agent_ref, name: a.name, auto_reply: !!a.auto_reply, owner: ot.profileView(a.owner_id), mine: a.owner_id === viewer })),
@@ -482,6 +493,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   const conversationCols = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_conversations)").map(col => col.name));
   if (!conversationCols.has("account_group")) ot.run("ALTER TABLE ot_conversations ADD COLUMN account_group INTEGER NOT NULL DEFAULT 0");
   if (!conversationCols.has("activity_revision")) ot.run("ALTER TABLE ot_conversations ADD COLUMN activity_revision INTEGER NOT NULL DEFAULT 0");
+  registerGroupManagement(ot, conversationCols);
   const messageCols = new Set(ot.all<any>("PRAGMA table_info(ot_messages)").map(c => c.name));
   if (!messageCols.has("revision")) ot.run("ALTER TABLE ot_messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
   if (!messageCols.has("forwarded_author")) ot.run("ALTER TABLE ot_messages ADD COLUMN forwarded_author TEXT");
@@ -554,7 +566,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       if (key) ot.run("INSERT INTO ot_group_requests VALUES (?,?,?,?)", me.ownerId, key, fingerprint, id);
       return {conv:memberOf(ot, id, me.ownerId), created:true};
     });
-    return reply.status(result.created ? 201 : 200).send(conversationView(ot, result.conv, me.ownerId));
+    return reply.status(result.created ? 201 : 200).send(conversationView(ot, result.conv, me.ownerId, true));
   });
 
   app.get("/v1/ot/conversations", async (req) => {
@@ -576,7 +588,10 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     }
     const rows = ot.all<any>(`SELECT c.*, m.read_seq, m.pinned, m.muted FROM ot_conversations c
       JOIN ot_conversation_members m ON m.conversation_id=c.id
-      WHERE m.owner_id=?${filter} ORDER BY m.pinned DESC,c.updated_at DESC,c.id LIMIT 200`, ...args)
+      WHERE m.owner_id=? AND c.group_archived_at IS NULL
+        AND (c.team_id IS NULL OR EXISTS (SELECT 1 FROM ot_team_members active
+          WHERE active.team_id=c.team_id AND active.owner_id=m.owner_id AND active.suspended=0))
+        ${filter} ORDER BY m.pinned DESC,c.updated_at DESC,c.id LIMIT 200`, ...args)
       .filter(c => publicParticipant(ot, c, me.ownerId));
     if (view === "activity") {
       const items = rows.map(c => {
@@ -595,22 +610,50 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   });
   app.get("/v1/ot/conversations/:id", async (req) => {
     const me = ot.me(req);
-    return conversationView(ot, memberOf(ot, params(req).id, me.ownerId), me.ownerId);
+    return conversationView(ot, memberOf(ot, params(req).id, me.ownerId), me.ownerId, true);
+  });
+  app.post("/v1/ot/conversations/:id/management", {bodyLimit: 2048}, async (req) => {
+    const me = ot.me(req);
+    const {id} = params(req);
+    const {change,revision,workspace,fingerprint} = groupManagementRequest(body(req));
+    return ot.tx(() => {
+      const team = workspace ? workspaceTeam(ot,workspace,me.ownerId) : null;
+      const group = ot.get<Group>("SELECT * FROM ot_conversations WHERE id=?",id);
+      assert(group && managedGroup(group) && (team ? group.team_id === team.id : !group.team_id && group.account_group === 1),
+        404,"conversation_not_found","no such conversation");
+      const previous = ot.get<{fingerprint: string}>(`SELECT fingerprint FROM ot_group_management_receipts
+        WHERE conversation_id=? AND owner_id=? AND revision=?`,id,me.ownerId,revision);
+      if (previous?.fingerprint === fingerprint && change.action === "leave") return {left:true,conversation_id:id};
+
+      const accessible = memberOf(ot,id,me.ownerId);
+      if (previous) {
+        assert(previous.fingerprint === fingerprint, 409,"group_management_conflict","群聊设置已更新，请刷新后再试。");
+        return {conversation:conversationView(ot, accessible, me.ownerId, true)};
+      }
+      assert(accessible.group_revision === revision, 409,"group_management_conflict","群聊设置已更新，请刷新后再试。");
+      if (changeGroup(ot,accessible,me.ownerId,change)) {
+        ot.run("INSERT INTO ot_group_management_receipts VALUES (?,?,?,?)",id,me.ownerId,revision,fingerprint);
+      }
+      if (change.action === "leave") return {left:true,conversation_id:id};
+      return {conversation:conversationView(ot, memberOf(ot,id,me.ownerId), me.ownerId, true)};
+    });
   });
   app.patch("/v1/ot/conversations/:id", async (req) => {
     const me = ot.me(req);
-    const conv = memberOf(ot, params(req).id, me.ownerId);
     const b = body(req);
-    if (b.title !== undefined) {
-      requireOrdinaryGroup(conv);
-      assert(conv.kind === "group", 400, "invalid_request", "only groups have a title");
-      ot.run("UPDATE ot_conversations SET title = ?, updated_at = ? WHERE id = ?", text(b.title, "title", { min: 1, max: 80 }), ot.now(), conv.id);
-    }
-    for (const k of ["pinned", "muted"]) if (b[k] !== undefined) {
-      assert(typeof b[k] === "boolean", 400, "invalid_request", `${k} must be true or false`);
-      ot.run(`UPDATE ot_conversation_members SET ${k} = ? WHERE conversation_id = ? AND owner_id = ?`, b[k] ? 1 : 0, conv.id, me.ownerId);
-    }
-    return conversationView(ot, ot.get("SELECT * FROM ot_conversations WHERE id = ?", conv.id), me.ownerId);
+    return ot.tx(() => {
+      const conv = memberOf(ot, params(req).id, me.ownerId);
+      if (b.title !== undefined) {
+        requireOrdinaryGroup(conv);
+        assert(conv.kind === "group", 400, "invalid_request", "only groups have a title");
+        changeGroup(ot,conv,me.ownerId,{action:"rename",title:text(b.title,"title",{min:1,max:80})});
+      }
+      for (const k of ["pinned", "muted"]) if (b[k] !== undefined) {
+        assert(typeof b[k] === "boolean", 400, "invalid_request", `${k} must be true or false`);
+        ot.run(`UPDATE ot_conversation_members SET ${k} = ? WHERE conversation_id = ? AND owner_id = ?`, b[k] ? 1 : 0, conv.id, me.ownerId);
+      }
+      return conversationView(ot, memberOf(ot,conv.id,me.ownerId), me.ownerId, true);
+    });
   });
   app.post("/v1/ot/conversations/:id/members", async (req) => {
     const me = ot.me(req);
@@ -643,24 +686,22 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
           ...(teamId ? { team_id: teamId } : {}) });
       }
     });
-    return conversationView(ot, conv, me.ownerId);
+    return conversationView(ot, memberOf(ot,conv.id,me.ownerId), me.ownerId, true);
   });
   app.delete("/v1/ot/conversations/:id/members/:handle", async (req) => {
     const me = ot.me(req);
-    const conv = memberOf(ot, params(req).id, me.ownerId);
-    requireOrdinaryGroup(conv);
-    assert(conv.kind === "group", 400, "invalid_request", "a direct message has no members to remove");
-    const o = ot.ownerByHandle(params(req).handle);
-    assert(o === me.ownerId || conv.created_by === me.ownerId, 403, "forbidden", "only the group creator removes others");
     ot.tx(() => {
-      ot.run("DELETE FROM ot_conversation_members WHERE conversation_id = ? AND owner_id = ?", conv.id, o);
-      ot.run("DELETE FROM ot_conversation_agents WHERE conversation_id = ? AND owner_id = ?", conv.id, o);
+      const conv = memberOf(ot, params(req).id, me.ownerId);
+      requireOrdinaryGroup(conv);
+      assert(conv.kind === "group", 400, "invalid_request", "a direct message has no members to remove");
+      const target = ot.ownerByHandle(params(req).handle);
+      changeGroup(ot,conv,me.ownerId,target === me.ownerId ? {action:"leave"} : {action:"remove",member_id:target});
     });
     return { removed: true };
   });
 
   const announcement = (cid: string) => ot.get<any>("SELECT * FROM ot_group_announcements WHERE conversation_id=?", cid) ?? { body: "", revision: 0 };
-  const canAnnounce = (conv: any, owner: string) => conv.account_group === 1 ? conv.created_by === owner
+  const canAnnounce = (conv: any, owner: string) => conv.account_group === 1 ? groupOwner(conv) === owner
     : !!conv.team_id && !!ot.get("SELECT 1 FROM ot_team_members WHERE team_id=? AND owner_id=? AND role IN ('owner','admin') AND suspended=0", conv.team_id, owner);
   app.get("/v1/ot/conversations/:id/announcement", async req => {
     const me = ot.me(req), conv = memberOf(ot, params(req).id, me.ownerId);
@@ -1315,7 +1356,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const viewer = ot.me(req).ownerId;
     const conv = requireMemoryGroup(ot,params(req).id,viewer);
     const row = ot.get<any>("SELECT * FROM ot_group_memories WHERE conversation_id=? AND id=?",conv.id,params(req).memory);
-    assert(row && (row.author_id===viewer || conv.created_by===viewer),404,"not_found","无法移除这条群记忆。");
+    assert(row && (row.author_id===viewer || groupOwner(conv)===viewer),404,"not_found","无法移除这条群记忆。");
     ot.run("UPDATE ot_group_memories SET removed=1 WHERE id=?",row.id);
     return {removed:true};
   });

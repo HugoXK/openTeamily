@@ -72,6 +72,142 @@ test("groups: members, mentions notify, creator removes, members leave", async (
   assert.equal((await A.ok("GET", `/v1/ot/conversations/${g.id}`)).members.length, 1);
 });
 
+test("personal group ownership changes are revisioned and a replay cannot remove a renewed membership", async () => {
+  const [owner,next,reader] = await Promise.all([
+    home(S.base,"manage-personal-owner"), home(S.base,"manage-personal-successor"), home(S.base,"manage-personal-reader"),
+  ]);
+  for (const contact of [next,reader]) {
+    const request = await owner.ok("POST","/v1/ot/contacts",{handle:contact.handle});
+    await contact.ok("POST","/v1/ot/contacts/"+request.id,{action:"accept"});
+  }
+  const group = await owner.ok("POST","/v1/ot/conversations",{
+    kind:"group",account_group:true,title:"Personal planning",members:[next.handle,reader.handle],
+  });
+  const path = "/v1/ot/conversations/"+group.id;
+  const management = path+"/management";
+  const nextId = group.members.find((member: any) => member.handle === next.handle).owner_id;
+  const readerId = group.members.find((member: any) => member.handle === reader.handle).owner_id;
+  const actor = group.group_management.owner_id;
+  const firstRevision = group.group_management.revision;
+  const leave = {action:"leave",revision:firstRevision,direct:true};
+  assert.equal(group.group_management.leave_requires_transfer,true);
+  assert.equal(group.group_management.can_leave,false);
+  const refused = await owner.call("POST",management,leave);
+  assert.equal(refused.status,409);
+  assert.equal(refused.data.error.code,"group_owner_transfer_required");
+  assert.equal((await owner.call("DELETE",path+"/members/"+owner.handle)).status,409);
+  assert.equal((await reader.call("PATCH",path,{title:"Cannot edit"})).status,403);
+  assert.equal((await reader.call("POST",management,{action:"rename",title:"Cannot edit",revision:firstRevision,direct:true})).status,403);
+
+  const source = await reader.ok("POST",path+"/messages",{body:"Retained note"});
+  assert.equal((await owner.ok("GET",path)).group_management.revision,firstRevision);
+  const rename = {action:"rename",title:"Renamed planning",revision:firstRevision,direct:true};
+  const renamed = (await owner.ok("POST",management,rename)).conversation;
+  assert.equal(renamed.title,"Renamed planning");
+  assert.equal((await owner.ok("POST",management,rename)).conversation.group_management.revision,renamed.group_management.revision);
+  const stale = await owner.call("POST",management,{...rename,title:"Overlapping update"});
+  assert.equal(stale.status,409);
+  assert.equal(stale.data.error.code,"group_management_conflict");
+  const transfer = {action:"transfer",member_id:nextId,revision:renamed.group_management.revision,direct:true};
+  const transferred = (await owner.ok("POST",management,transfer)).conversation;
+  assert.equal(transferred.group_management.owner_id,nextId);
+  assert.equal(transferred.group_management.can_rename,false);
+  assert.notEqual(transferred.activity_version,renamed.activity_version);
+  assert.equal((await owner.ok("POST",management,transfer)).conversation.group_management.owner_id,nextId);
+  assert.equal((await owner.call("DELETE",path+"/members/"+reader.handle)).status,403);
+  assert.equal((await owner.call("POST",path+"/announcement",{body:"Former owner",revision:0})).status,403);
+  await next.ok("POST",path+"/announcement",{body:"Updated by group owner",revision:0});
+
+  const leavePayload = {...leave,revision:transferred.group_management.revision};
+  const departed = {left:true,conversation_id:group.id};
+  assert.deepEqual(await owner.ok("POST",management,leavePayload),departed);
+  assert.equal((await owner.call("GET",path)).status,404);
+  assert.deepEqual(await owner.ok("POST",management,leavePayload),departed);
+  assert.equal((await reader.call("POST",management,leavePayload)).status,409);
+  await next.ok("POST",path+"/members",{handle:owner.handle});
+  assert.deepEqual(await owner.ok("POST",management,leavePayload),departed);
+  const rejoined = await owner.ok("GET",path);
+  assert.ok(rejoined.members.some((member: any) => member.owner_id === actor));
+  assert.ok((await next.ok("GET",path+"/messages")).messages.some((message: any) => message.id === source.id));
+  const distance = await next.ok("POST",management,{action:"remove",member_id:readerId,revision:rejoined.group_management.revision,direct:true});
+  assert.ok(!distance.conversation.members.some((member: any) => member.owner_id === readerId));
+  assert.equal((await reader.call("GET",path+"/messages")).status,404);
+});
+
+test("team group recovery and removal respect active scope, revoke call peers and retain history", async () => {
+  const [teamOwner,creator,admin,reader] = await Promise.all([
+    home(S.base,"manage-team-owner"), home(S.base,"manage-team-creator"),
+    home(S.base,"manage-team-admin"), home(S.base,"manage-team-reader"),
+  ]);
+  const team = await teamOf(teamOwner,creator,admin,reader);
+  const otherTeam = await teamOf(teamOwner,admin);
+  await teamOwner.ok("PATCH",`/v1/ot/teams/${team.id}/members/${admin.handle}`,{role:"admin"});
+  const {workspaces} = await admin.ok("GET","/v1/ot/workspaces");
+  const workspace = workspaces.find((row: any) => row.id === team.id).workspace_id;
+  const wrongWorkspace = workspaces.find((row: any) => row.id === otherTeam.id).workspace_id;
+  const group = await creator.ok("POST","/v1/ot/conversations",{
+    kind:"group",team_id:team.id,title:"Recoverable review",members:[admin.handle,reader.handle],
+  });
+  const path = "/v1/ot/conversations/"+group.id, management = path+"/management";
+  const adminId = group.members.find((member: any) => member.handle === admin.handle).owner_id;
+  const readerId = group.members.find((member: any) => member.handle === reader.handle).owner_id;
+  const creatorId = group.group_management.owner_id;
+  const transfer = {action:"transfer",workspace,member_id:adminId,revision:group.group_management.revision};
+  assert.equal((await admin.call("POST",management,transfer)).status,403);
+  assert.equal((await teamOwner.call("POST",management,transfer)).status,404);
+  assert.equal((await admin.call("POST",management,{...transfer,workspace:wrongWorkspace})).status,404);
+  const membership = `/v1/ot/teams/${team.id}/members/${creator.handle}`;
+  await teamOwner.ok("PATCH",membership,{suspended:true});
+  assert.equal((await creator.call("GET",path)).status,404);
+  assert.equal((await creator.call("GET",path+"/messages")).status,404);
+  assert.equal((await creator.call("PATCH",path,{title:"Suspend bypass"})).status,404);
+  const orphan = await admin.ok("GET",path);
+  assert.equal(orphan.group_management.owner_inactive,true);
+  assert.equal(orphan.group_management.can_rename,false);
+  assert.equal(orphan.group_management.can_transfer,true);
+  assert.ok(!orphan.group_management.active_member_ids.includes(creatorId));
+  const recover = {...transfer,revision:orphan.group_management.revision};
+  assert.equal((await admin.call("POST",management,{...recover,member_id:creatorId})).data.error.code,"member_not_found");
+  const restored = (await admin.ok("POST",management,recover)).conversation;
+  assert.equal(restored.group_management.owner_inactive,false);
+  assert.equal(restored.group_management.owner_id,adminId);
+  assert.equal(restored.group_management.can_rename,true);
+
+  const call = path+"/call";
+  const firstPeer = "management-admin-peer", secondPeer = "management-reader-peer";
+  await reader.ok("PATCH",path,{muted:true,pinned:true});
+  await reader.ok("PUT",path+"/agents/reader-helper",{name:"Reader helper"});
+  const message = await admin.ok("POST",path+"/messages",{body:"@reader-helper Preserve this note"});
+  const job = message.reply_jobs[0].id;
+  const live = await admin.ok("POST",call+"/join",{kind:"video",start:true,peer_id:firstPeer});
+  await reader.ok("POST",call+"/join",{kind:"video",peer_id:secondPeer});
+  await admin.ok("POST",call+"/signal",{call_id:live.call.id,peer_id:firstPeer,to:secondPeer,client_key:"management-signal-key",
+    description:{type:"offer",sdp:"v=0\r\n"}});
+  const removal = {action:"remove",workspace,member_id:readerId,revision:restored.group_management.revision};
+  const removed = (await admin.ok("POST",management,removal)).conversation;
+  assert.ok(!removed.members.some((member: any) => member.owner_id === readerId));
+  assert.equal(removed.agents.length,0);
+  assert.deepEqual((await admin.ok("GET",call)).call.peers.map((peer: any) => peer.id),[firstPeer]);
+  assert.equal((await reader.call("POST",call+"/poll",{call_id:live.call.id,peer_id:secondPeer})).status,404);
+  assert.equal((await reader.call("POST",management,{action:"leave",workspace,revision:removed.group_management.revision})).status,404);
+  assert.equal(S.platform.db.prepare<[string], {count: number}>("SELECT COUNT(*) AS count FROM ot_call_signals WHERE call_id=?").get(live.call.id)?.count,0);
+  assert.equal(S.platform.db.prepare<[string], {status: string}>("SELECT status FROM ot_agent_reply_jobs WHERE id=?").get(job)?.status,"failed");
+  assert.deepEqual((await admin.ok("POST",management,removal)).conversation.members,removed.members);
+
+  const leave = {action:"leave",workspace,revision:removed.group_management.revision};
+  const receipt = {left:true,conversation_id:group.id};
+  assert.equal(removed.group_management.can_leave,true);
+  assert.deepEqual(await admin.ok("POST",management,leave),receipt);
+  assert.deepEqual(await admin.ok("POST",management,leave),receipt);
+  assert.equal((await admin.call("GET",path+"/messages")).status,404);
+  assert.equal((await admin.call("GET",call)).status,404);
+  assert.equal((await admin.ok("GET","/v1/ot/call-records/"+live.call.id)).record.ended_at !== null,true);
+  await teamOwner.ok("PATCH",membership,{suspended:false});
+  assert.equal((await creator.call("GET",path)).status,404);
+  assert.equal(S.platform.db.prepare<[string], {body: string}>("SELECT body FROM ot_messages WHERE id=?").get(message.id)?.body,message.body);
+  assert.ok(S.platform.db.prepare<[string], {group_archived_at: number}>("SELECT group_archived_at FROM ot_conversations WHERE id=?").get(group.id)?.group_archived_at);
+});
+
 test("groups add multiple teammates atomically and notify each new member once", async () => {
   const owner = await home(S.base, "batch-owner");
   const first = await home(S.base, "batch-first");

@@ -11,32 +11,59 @@ export function nativeGroupClient(host, raw) {
     const { rt } = s
     if (installed.has(rt)) return installed.get(rt)
     const roomFor = id => rt.roomOf(id)?.openteamily?.conversation_id
+    const snapshots = new Map()
+    const pendingSave = new Set()
+    const left = new Map()
+    const groupRoom = cid => Object.values(rt.state.rooms).find(room => room.openteamily?.conversation_id === cid)
+    const mapped = (conversation, room) => ({...conversation, native_room_id:room.id, native_session_id:room.id})
     const syncOne = async conversation => {
       if (conversation?.kind !== 'group' || conversation.public_agent) return conversation
-      let room = Object.values(rt.state.rooms).find(r => r.openteamily?.conversation_id === conversation.id)
-      if (!room) {
-        const id = await rt.createSession(conversation.title || 'OpenTeamily group')
-        room = { id, name: conversation.title || 'OpenTeamily group', named: true, members: [], mode: 'admin', admin: null, createdAt: Date.now(), createdBy: null,
-          origin: 'openteamily', openteamily: { conversation_id: conversation.id, team_id: conversation.team_id } }
-        rt.state.rooms[id] = room
+      const title = conversation.title || 'OpenTeamily group'
+      const revision = conversation.group_management?.revision
+      if (left.has(conversation.id)) {
+        if (!Number.isSafeInteger(revision) || revision <= left.get(conversation.id)) return conversation
+        left.delete(conversation.id)
       }
+      const ownedAgents = (conversation.agents || []).filter(agent => agent.mine)
+      const participants = (conversation.members || []).map(m => ({ id: m.owner_id, handle: m.handle, kind: 'human', remote: true, name: m.display_name || m.handle, platform_user_id: m.platform_user_id }))
+      const signature = JSON.stringify([title, conversation.team_id, revision, conversation.activity_version,
+        participants, ownedAgents.map(agent => agent.agent_ref)])
+      let room = groupRoom(conversation.id)
+      if (room && (snapshots.get(conversation.id) === signature ||
+          (Number.isSafeInteger(revision) && revision < room.openteamily.management_revision))) return mapped(conversation, room)
       const locals = []
-      for (const agent of conversation.agents || []) {
-        if (!agent.mine) continue
-        const { agent: mapped } = await host.call('agents/byId', { id: agent.agent_ref })
-        if (!mapped.native_deleted && mapped.native_bot_id) locals.push(mapped.native_bot_id)
+      for (const agent of ownedAgents) {
+        const { agent: mappedAgent } = await host.call('agents/byId', { id: agent.agent_ref })
+        if (!mappedAgent.native_deleted && mappedAgent.native_bot_id) locals.push(mappedAgent.native_bot_id)
       }
-      room.name = conversation.title || 'OpenTeamily group'
-      room.members = locals
-      room.remoteParticipants = (conversation.members || []).map(m => ({ id: m.owner_id, handle: m.handle, kind: 'human', remote: true, name: m.display_name || m.handle, platform_user_id: m.platform_user_id }))
-      room.openteamily.team_id = conversation.team_id
       const announcement = await raw.get('/v1/ot/conversations/'+encodeURIComponent(conversation.id)+'/announcement')
-      room.notice = announcement.announcement.body
-      await rt.save()
-      return { ...conversation, native_room_id: room.id, native_session_id: room.id }
+      const state = {name:title, members:locals, remoteParticipants:participants, notice:announcement.announcement.body}
+      let created = false
+      if (!room) {
+        const id = await rt.createSession(title)
+        room = { id, named: true, mode: 'admin', admin: null, createdAt: Date.now(), createdBy: null,
+          origin: 'openteamily', openteamily: { conversation_id: conversation.id } }
+        rt.state.rooms[id] = room
+        created = true
+      }
+      const changed = created || Object.keys(state).some(key => JSON.stringify(room[key]) !== JSON.stringify(state[key])) ||
+        room.openteamily.team_id !== conversation.team_id || room.openteamily.management_revision !== revision
+      if (changed) {
+        Object.assign(room, state)
+        room.openteamily.team_id = conversation.team_id
+        room.openteamily.management_revision = revision
+        pendingSave.add(conversation.id)
+      }
+      if (pendingSave.has(conversation.id)) {
+        await rt.save()
+        pendingSave.delete(conversation.id)
+      }
+      snapshots.set(conversation.id, signature)
+      return mapped(conversation, room)
     }
     let queue = Promise.resolve()
-    const sync = conversation => { const next = queue.then(() => syncOne(conversation)); queue = next.catch(() => {}); return next }
+    const ordered = task => { const next = queue.then(task); queue = next.catch(() => {}); return next }
+    const sync = conversation => ordered(() => syncOne(conversation))
     const originalMobile = rt.mobileEndpoint.bind(rt)
     rt.mobileEndpoint = async (endpoint, p) => {
       const cid = endpoint === 'room-chat' && roomFor(p?.roomId)
@@ -103,10 +130,23 @@ export function nativeGroupClient(host, raw) {
     const originalDelete = rt.deleteRoom.bind(rt)
     rt.deleteRoom = async id => {
       const cid = roomFor(id)
-      if (cid) { const me = await raw.get('/v1/ot/me'); await raw.del('/v1/ot/conversations/' + encodeURIComponent(cid) + '/members/' + encodeURIComponent(me.handle)) }
+      if (cid) {
+        const me = await raw.get('/v1/ot/me')
+        await raw.del('/v1/ot/conversations/' + encodeURIComponent(cid) + '/members/' + encodeURIComponent(me.handle))
+        snapshots.delete(cid)
+      }
       return originalDelete(id)
     }
-    const api = { sync }
+    const archive = (cid, revision) => {
+      if (Number.isSafeInteger(revision)) left.set(cid, Math.max(revision, left.get(cid) ?? -1))
+      return ordered(async () => {
+        const room = groupRoom(cid)
+        if (room && !(room.openteamily.management_revision > revision)) await originalDelete(room.id)
+        snapshots.delete(cid)
+        pendingSave.delete(cid)
+      })
+    }
+    const api = { sync, archive }
     installed.set(rt, api)
     return api
   }
@@ -116,6 +156,15 @@ export function nativeGroupClient(host, raw) {
     if (!path.startsWith('/v1/ot/conversations')) return result
     const api = await install()
     if (!api) return result
+    if (path.endsWith('/management')) {
+      if (result?.left === true && result.conversation_id) {
+        void api.archive(result.conversation_id, body?.revision).catch(() => host.log?.('Native group archive will need to be retried.'))
+      } else if (result?.conversation?.kind === 'group') {
+        try { return {...result,conversation:await api.sync(result.conversation)} }
+        catch { host.log?.('Native group projection will retry when opened.') }
+      }
+      return result
+    }
     if (Array.isArray(result?.conversations)) return { ...result, conversations: await Promise.all(result.conversations.map(api.sync)) }
     if (result?.kind === 'group' && result.id) return api.sync(result)
     return result

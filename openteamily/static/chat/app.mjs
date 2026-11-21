@@ -792,6 +792,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let pinReceipt = 0;
   let sessionTransition = null;
   let currentSource = 'agent';
+  const loadGroupManagement = deferModule('./group-management.mjs');
+  let groupManagement;
+  let lastGroupInfo = '';
+  const groupManagementReceipts = new Map();
   const loadStickers = deferModule('./stickers.mjs');
   let stickerPicker;
   const stickerSaves = new Map();
@@ -1339,6 +1343,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     privateReplyRetries.clear();
     privateThreadWrites.clear();
     privateThreadReceipts.clear();
+    groupManagementReceipts.clear();
     closePrivateThreadDialogs();
     resetStickerSurface();
   }
@@ -3585,6 +3590,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!currentUser || wid !== workspaceId() || wid !== sessionsWorkspace) return;
     const cid = currentSource === 'social' && currentConversation?.id;
     const next = items.find(row => row.id === cid);
+    if (cid && !next && currentConversation.group_management &&
+        (items.length < 200 || socialConversations.some(row => row.id === cid))) {
+      const allowed = await refreshGroupManagement({...groupManagementContext(),conversationId:cid});
+      if (!allowed && currentSource !== 'social') return;
+    }
     if (next && viewingSocialMessages() && socialHistory?.cid === cid
       && next.activity_version !== currentConversation.activity_version && !pendingSends.get(sendScope())?.active) {
       if (readingSocialContext()) {
@@ -3606,7 +3616,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const readPinReceipt = pinReceipt;
     const result = await request('GET', `${socialBase()}?limit=100`);
     if (sequence !== sessionsRequest || user !== currentUser || wid !== workspaceId() || result.status !== 200) return;
-    const changed = (result.body.items || []).map(row => mergePinRead(row, user.id, wid, readPinReceipt));
+    const changed = (result.body.items || []).map(row => mergeGroupRead(
+      mergePinRead(row, user.id, wid, readPinReceipt), user.id, wid)).filter(Boolean);
     const incoming = changed.some(row => !listed.has(row.id) || row.last_seq > listed.get(row.id).last_seq);
     socialConversations = changed;
     sessions = sortSessions([...sessions.filter(row => row.source === 'agent'), ...mergeSessions([], changed, user.id)]);
@@ -3719,7 +3730,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!current()) return;
     partial ||= social.status !== 200;
     socialConversations = social.status === 200
-      ? (social.body.items || []).map(row => mergePinRead(row, user.id, id, readPinReceipt))
+      ? (social.body.items || []).map(row => mergeGroupRead(
+        mergePinRead(row, user.id, id, readPinReceipt), user.id, id)).filter(Boolean)
       : [];
     applyReceipt('social', socialConversations);
     const finalPrivateRows = privateRows();
@@ -3750,6 +3762,112 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     text.append(strong, small);
     row.append(avatar, text);
     return row;
+  }
+
+  function groupManagementContext() {
+    return servedByDsbot && currentUser && currentSource === 'social' && currentConversation?.group_management
+      ? {owner:currentUser.id, workspace:workspaceId(), conversation:currentConversation} : null;
+  }
+
+  const groupReceiptKey = (owner, workspace, id) => JSON.stringify([owner,workspace,id]);
+  const groupWorkspaceMatches = target => target.owner === currentUser?.id && target.workspace === workspaceId();
+  const groupMatches = target => groupWorkspaceMatches(target) && currentSource === 'social'
+    && currentConversation?.id === target.conversationId;
+
+  function mergeGroupRead(row, owner, workspace) {
+    if (!row?.group_management) return row;
+    const key = groupReceiptKey(owner, workspace, row.id);
+    const receipt = groupManagementReceipts.get(key);
+    if (!receipt) return row;
+    if (receipt.revision > row.group_management.revision || (receipt.left && receipt.revision === row.group_management.revision)) {
+      return receipt.left ? null : {...row,...receipt.fields};
+    }
+    if (receipt.revision < row.group_management.revision) groupManagementReceipts.delete(key);
+    return row;
+  }
+
+  function reportGroupChange(conversation, target) {
+    if (!groupWorkspaceMatches(target) || conversation.id !== target.conversationId ||
+        conversation.workspace_id !== target.workspace || !Number.isSafeInteger(conversation.group_management?.revision)) return;
+    const key = groupReceiptKey(target.owner,target.workspace,conversation.id);
+    const fields = Object.fromEntries(['title','members','agent_members','group_management','updated'].map(name => [name,conversation[name]]));
+    const revision = conversation.group_management.revision;
+    if (revision < (groupManagementReceipts.get(key)?.revision ?? -1)) return;
+    groupManagementReceipts.set(key,{revision,fields});
+    socialConversations = socialConversations.map(row => row.id === conversation.id ? {...row,...fields} : row);
+    sessions = sortSessions([...sessions.filter(row => row.source === 'agent'), ...mergeSessions([], socialConversations, target.owner)]);
+    renderSessions();
+    if (!groupMatches(target) || currentConversation.group_management.revision > revision) return;
+    Object.assign(currentConversation, fields);
+    applyChatIdentity(document, conversationLabel(currentConversation,currentUser.id), currentConversation);
+    setChatSubtitle(groupInfoCounts(currentConversation).text);
+    setGroupInfo(currentConversation);
+  }
+
+  function forgetGroup(target, revoked = false) {
+    if (!groupWorkspaceMatches(target)) return;
+    const id = target.conversationId;
+    groupManagementReceipts.set(groupReceiptKey(target.owner,target.workspace,id), {
+      left:true, revision:target.conversation.group_management.revision,
+    });
+    socialConversations = socialConversations.filter(row => row.id !== id);
+    sessions = sessions.filter(row => row.source !== 'social' || row.id !== id);
+    if (groupMatches(target)) {
+      const exactScope = sendScope();
+      const pending = pendingSends.get(exactScope);
+      if (pending) {
+        for (const job of pending.jobs.slice()) removeSendJob(pending,job);
+        pendingSends.delete(exactScope);
+      }
+      replyDrafts.delete(exactScope);
+      attachmentSender?.forget?.(exactScope);
+      voiceRecorder.clear();
+      lastSocialItems = [];
+      clearChatScope();
+      setGroupInfo(null);
+      setSocialHeaderTools(false);
+      for (const dialogId of ['announcement-dialog','message-assist-dialog']) {
+        const dialog = document.getElementById(dialogId);
+        if (dialog?.open) dialog.close();
+      }
+      writeHash({workspace:target.workspace});
+      setSessionsOpen(true);
+      const list = document.getElementById('conversation-list');
+      list.tabIndex = -1;
+      list.focus({preventScroll:true});
+      show(revoked ? 'error' : 'ok', revoked ? uiLabel('你已无法访问此群聊。','You no longer have access to this group.')
+        : uiLabel('已退出群聊。','You left the group.'));
+    }
+    renderSessions();
+  }
+
+  async function refreshGroupManagement(target) {
+    if (!target || !groupMatches(target)) return false;
+    const path = `/v1/workspaces/${target.workspace}/social/conversations/${target.conversationId}/management`;
+    const result = await request('GET', path).catch(() => ({status:0,body:{}}));
+    if (!groupMatches(target)) return false;
+    if ([403,404].includes(result.status)) {
+      forgetGroup(target,true);
+      return false;
+    }
+    if (result.status !== 200 || result.body?.conversation?.id !== target.conversationId) return false;
+    reportGroupChange(result.body.conversation,target);
+    return true;
+  }
+
+  async function initializeGroupManagement() {
+    if (groupManagement) return;
+    const target = groupManagementContext();
+    if (!target) return;
+    const {mountGroupManagement} = await loadGroupManagement();
+    if (groupManagement || !groupMatches({...target,conversationId:target.conversation.id}) ||
+        document.getElementById('group-info-panel').hidden) return;
+    groupManagement = mountGroupManagement(document, {
+      request, context:groupManagementContext, notify:show,
+      onChanged:reportGroupChange, onLeft:forgetGroup,
+      onRefresh:refreshGroupManagement,
+    });
+    setGroupInfo(currentConversation);
   }
 
   function setGroupInfoTab(which) {
@@ -3930,6 +4048,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function setGroupInfo(conversation) {
     if (!conversation) autoTranslation.open(null);
     syncConversationPin(conversation);
+    groupManagement?.sync();
     const toggle = document.getElementById('group-info-toggle');
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
@@ -3955,8 +4074,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentList.replaceChildren(...(conversation.agent_members || []).map(agent => renderGroupAgent(conversation, agent)));
     if (!agentList.children.length) agentList.append(memberRow('还没有智能体', '创建群聊时可以加入工作区智能体', 'empty'));
     const peopleList = document.getElementById('group-info-people');
-    peopleList.replaceChildren(...(conversation.members || []).map(member =>
-      memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你' : (conversation.account_group ? '群成员' : '工作区成员'), 'person')));
+    peopleList.replaceChildren(...(conversation.members || []).map(member => {
+      const row = memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你'
+        : (conversation.account_group ? '群成员' : '工作区成员'), 'person');
+      return groupManagement?.decorateMember(row, member) ?? row;
+    }));
   }
 
   function setGroupInfoOpen(open) {
@@ -3965,6 +4087,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!toggle || !panel) return;
     panel.hidden = !open;
     toggle.setAttribute('aria-expanded', String(open));
+    if (open) {
+      const group = groupManagementContext()?.conversation;
+      if (group && group.id !== lastGroupInfo) {
+        lastGroupInfo = group.id;
+        setGroupInfoTab(group.agent_members?.length ? 'agents' : 'people');
+      }
+      void initializeGroupManagement().catch(() => {});
+    }
   }
 
   function showPublicChatState(state) {
@@ -4202,15 +4332,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
     if (result.status !== 200) {
       if (refresh) {
+        const target = groupManagementContext();
+        if (target?.conversation.id === conversationId && [403,404].includes(result.status)) {
+          forgetGroup({...target,conversationId}, true);
+          return false;
+        }
         scheduleSocialPoll(currentConversation);
         return false;
       }
-      show('error', messageFor(result.body.error, '无法打开会话。'));
+      show('error', [403,404].includes(result.status) ? uiLabel('无法打开此会话。','This conversation could not be opened.')
+        : messageFor(result.body?.error, '无法打开会话。'));
       if (currentSource === 'agent' && !syncReplyProgress() && lastAgentItems.some(waitingAgentReply)) schedulePoll();
       if (currentSource === 'social') { syncGroupReplyProgress(); scheduleSocialPoll(currentConversation); }
       return false;
     }
-    const updated = mergePinRead(result.body.conversation, owner?.id, wid, readPinReceipt);
+    const updated = mergeGroupRead(mergePinRead(result.body.conversation, owner?.id, wid, readPinReceipt), owner?.id, wid);
     if (updated?.id !== conversationId || (link && updated.workspace_id && updated.workspace_id !== wid)) {
       if (link) show('error', '无法打开会话。');
       return false;
@@ -5473,6 +5609,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentConversation = null;
     syncConversationPin(null);
     currentSource = 'agent';
+    lastGroupInfo = '';
+    groupManagement?.sync();
     renderAgentQuickStarts();
     publicDraft.enter(sendScope());
     syncCaptureButton();
@@ -5803,7 +5941,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
     groupPin?.addEventListener('click', toggleConversationPin);
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && !document.getElementById('group-info-panel').hidden) setGroupInfoOpen(false);
+      if (event.key === 'Escape' && !document.getElementById('group-management-dialog')?.open &&
+          !document.getElementById('group-info-panel').hidden) setGroupInfoOpen(false);
     });
   }
   let searchScrollSnapshot = null;
