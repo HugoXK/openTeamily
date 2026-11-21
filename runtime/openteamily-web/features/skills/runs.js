@@ -12,7 +12,7 @@ const SKILL = /^[a-z][a-z0-9-]{0,63}$/
 const TASK = /^[0-9a-f]{32}$/
 const MAX_RUNS = 50
 
-export function skillRunsV1(host, { boundName, userSkillName }) {
+export function skillRunsV1(host, { userSkillName }) {
   const file = () => join(host.featureDir(), 'skill-runs.json')
   const load = () => { try { return JSON.parse(readFileSync(file(), 'utf8')).runs ?? [] } catch { return [] } }
   const save = (runs) => {
@@ -26,7 +26,7 @@ export function skillRunsV1(host, { boundName, userSkillName }) {
     const s = services()
     if (!s || typeof s.mainBot !== 'function') return false
     const caps = s.rt.botOf(await s.mainBot())?.capabilities ?? []
-    return caps.includes(boundName(skillId)) || caps.includes(userSkillName(skillId))
+    return caps.includes(userSkillName(skillId))
   }
   const readiness = async (scope) => {
     const s = services()

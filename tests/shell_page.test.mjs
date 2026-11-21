@@ -156,7 +156,7 @@ test('ensureOnboardingMenuItem does nothing when the account menu is missing', (
   assert.equal(ensureOnboardingMenuItem({getElementById() { return null; }}), null);
 });
 
-test('ensureOnboardingMenuItem inserts 工作背景 before help, after 创建团队', () => {
+test('ensureOnboardingMenuItem inserts 新手引导 before help, after 创建团队', () => {
   const {doc, menu} = accountMenu([
     {href: '/profile', text: '查看我的资料'},
     {href: '/team', text: '创建团队'},
@@ -168,7 +168,7 @@ test('ensureOnboardingMenuItem inserts 工作背景 before help, after 创建团
   assert.equal(link.getAttribute('role'), 'menuitem');
   assert.equal(link.textContent, ONBOARDING_MENU_LABEL);
   assert.match(link.getAttribute('title'), /新手引导/);
-  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', '工作背景', 'account-sub', '所有设置']);
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', '新手引导', 'account-sub', '所有设置']);
 });
 
 test('ensureOnboardingMenuItem moves an existing link into the recorded slot and does not duplicate it', () => {
@@ -184,19 +184,19 @@ test('ensureOnboardingMenuItem moves an existing link into the recorded slot and
   const matches = menu.children.filter((node) => node.getAttribute && node.getAttribute('href') === '/onboarding');
   assert.equal(matches.length, 1);
   assert.equal(matches[0], again);
-  assert.equal(again.textContent, '工作背景');
-  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', '工作背景', 'account-sub', '所有设置']);
+  assert.equal(again.textContent, '新手引导');
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', '新手引导', 'account-sub', '所有设置']);
 });
 
 test('ensureChannelsAndConnectorsMenuItems does nothing when the account menu is missing', () => {
   assert.equal(ensureChannelsAndConnectorsMenuItems({getElementById() { return null; }}), null);
 });
 
-test('ensureChannelsAndConnectorsMenuItems inserts Agent 渠道 and 应用连接器 after 创建团队 and before 工作背景', () => {
+test('ensureChannelsAndConnectorsMenuItems inserts Agent 渠道 and 应用连接器 after 创建团队 and before 新手引导', () => {
   const {doc, menu} = accountMenu([
     {href: '/profile', text: '查看我的资料'},
     {href: '/team', text: '创建团队'},
-    {href: '/onboarding', text: '工作背景'},
+    {href: '/onboarding', text: '新手引导'},
     {kind: 'sub'},
     {href: '/settings', text: '所有设置'},
   ]);
@@ -208,8 +208,8 @@ test('ensureChannelsAndConnectorsMenuItems inserts Agent 渠道 and 应用连接
   assert.equal(items.connectors.getAttribute('href'), CONNECTORS_MENU_HREF);
   assert.equal(items.connectors.getAttribute('role'), 'menuitem');
   assert.equal(items.connectors.textContent, CONNECTORS_MENU_LABEL);
-  assert.match(items.connectors.getAttribute('title'), /仍未接通/);
-  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '工作背景', 'account-sub', '所有设置']);
+  assert.equal(items.connectors.getAttribute('title'), '管理应用连接器');
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '新手引导', 'account-sub', '所有设置']);
 });
 
 test('ensureChannelsAndConnectorsMenuItems moves existing links into the recorded slot and does not duplicate them', () => {
@@ -231,10 +231,10 @@ test('ensureChannelsAndConnectorsMenuItems moves existing links into the recorde
   assert.equal(channelLinks[0], again.channels);
   assert.equal(connectorLinks[0], again.connectors);
   assert.equal(first.channels, again.channels);
-  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '工作背景', 'account-sub', '所有设置']);
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '新手引导', 'account-sub', '所有设置']);
 });
 
-test('calling both menu helpers without an existing 工作背景 link keeps the recorded order', () => {
+test('calling both menu helpers without an existing 新手引导 link keeps the recorded order', () => {
   const {doc, menu} = accountMenu([
     {href: '/profile', text: '查看我的资料'},
     {href: '/team', text: '创建团队'},
@@ -243,7 +243,7 @@ test('calling both menu helpers without an existing 工作背景 link keeps the 
   ]);
   ensureOnboardingMenuItem(doc);
   ensureChannelsAndConnectorsMenuItems(doc);
-  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '工作背景', 'account-sub', '所有设置']);
+  assert.deepEqual(labels(menu), ['查看我的资料', '创建团队', 'Agent 渠道', '应用连接器', '新手引导', 'account-sub', '所有设置']);
 });
 
 

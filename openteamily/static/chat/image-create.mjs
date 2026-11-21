@@ -4,7 +4,7 @@ const activeJob = job => job?.state === 'queued' || job?.state === 'running';
 export function mountImageCreator(document,{request,context,key,attach,onOpen,notify}) {
   const trigger = document.getElementById('composer-image-create');
   const dialog = document.getElementById('image-create-dialog');
-  if (!trigger || !dialog) return {sync() {}};
+  if (!trigger || !dialog) return {open() {}, sync() {}};
   const view = document.defaultView;
   const element = key => document.getElementById('image-create-' + key);
   const form = element('form');
@@ -89,7 +89,7 @@ export function mountImageCreator(document,{request,context,key,attach,onOpen,no
     render(draft,response.body.job);
   }
 
-  trigger.addEventListener('click',async () => {
+  async function open(text = document.getElementById('chat-body').value.trim()) {
     const where = context();
     if (!where || dialog.open) return;
     const draft = session = {...where,path:`/v1/workspaces/${where.workspace}/images`};
@@ -97,7 +97,7 @@ export function mountImageCreator(document,{request,context,key,attach,onOpen,no
     clearPreview();
     submit.disabled = true;
     settings.hidden = true;
-    form.elements.prompt.value = document.getElementById('chat-body').value.trim();
+    form.elements.prompt.value = text;
     form.elements.shape.value = 'square';
     form.elements.prompt.disabled = form.elements.shape.disabled = false;
     attachButton.textContent = draft.attachLabel;
@@ -115,7 +115,7 @@ export function mountImageCreator(document,{request,context,key,attach,onOpen,no
       form.elements.shape.value = response.body.job?.shape || 'square';
     }
     render(draft,response.body.job);
-  });
+  }
 
   form.addEventListener('submit',async event => {
     event.preventDefault();
@@ -160,7 +160,7 @@ export function mountImageCreator(document,{request,context,key,attach,onOpen,no
     clearPreview();
   });
 
-  return {sync() {
+  return {open, sync() {
     trigger.disabled = !context();
     if (dialog.open && session && !current(session)) dialog.close();
   }};

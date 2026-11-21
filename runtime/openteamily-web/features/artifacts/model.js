@@ -1,5 +1,6 @@
 // Artifact model (legacy openteamily/artifacts.py): constants, validation,
 // public views and text-only thumbnails, executed inside the user's DS-Bot.
+import { GLB_MIME } from '../../lib/glb.js'
 import {decodeWorkbook} from './workbook.js'
 import { CONTROL, digest, validLongText } from '../../featurekit/http.js'
 
@@ -7,6 +8,7 @@ export const KINDS = ['document', 'website', 'whiteboard', 'media']
 export const TITLE_MAX = 80
 export const BODY_MAX = 8000
 export const MAX_MEDIA_BYTES = 2 * 1024 * 1024
+export const MAX_GENERATED_VIDEO_BYTES = 8 * 1024 * 1024
 export const BOARD_JSON_MAX = 65536
 export const MAX_STROKES = 200
 export const MAX_POINTS = 400
@@ -19,7 +21,7 @@ export const PREFIX_LEN = 8
 export const SAFE_FILENAME = /^[A-Za-z0-9._-]{1,80}$/
 export const STROKE_ID = /^[A-Za-z0-9_-]{8,32}$/
 export const COLOR = /^#[0-9A-Fa-f]{6}$/
-export const MEDIA_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'video/mp4', 'video/webm'])
+export const MEDIA_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'video/mp4', 'video/webm', GLB_MIME])
 export const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 export const emptyBoard = () => ({ schema: 'openteamily.whiteboard.v1', width: 800, height: 600, strokes: [] })
 export const SLIDES_SCHEMA = 'openteamily.slides.v1'
@@ -42,14 +44,7 @@ export const validTitle = (v) => typeof v === 'string' && v.trim().length >= 1 &
 export const validBody = (v) => validLongText(v, BODY_MAX)
 export const titleHash = (title) => digest(casefold(title.trim()))
 
-// Row = artifacts.* plus the joined columns the legacy ROW_SELECT produced.
-export const ROW_SELECT = `SELECT a.*, m.render AS render, s.source_kind AS source_kind, s.source_id AS source_id,
- s.automation_id AS automation_id, s.automation_title AS automation_title, s.task_kind AS task_kind,
- md.mime AS media_mime, md.byte_count AS media_bytes, md.sha256 AS media_sha256, md.filename AS media_filename,
- b.board AS board_json, cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id,
- cs.agent_id AS chat_agent_id, cs.conversation_title AS chat_conversation_title,
- sl.deck AS slides_json, d.dashboard AS dashboard_json, x.workbook AS spreadsheet_json
- FROM artifacts a
+export const ROW_JOINS = ` FROM artifacts a
  LEFT JOIN artifact_meta m ON m.artifact_id=a.id
  LEFT JOIN artifact_sources s ON s.artifact_id=a.id
  LEFT JOIN artifact_media md ON md.artifact_id=a.id
@@ -58,6 +53,14 @@ export const ROW_SELECT = `SELECT a.*, m.render AS render, s.source_kind AS sour
  LEFT JOIN artifact_slides sl ON sl.artifact_id=a.id
  LEFT JOIN artifact_dashboards d ON d.artifact_id=a.id
  LEFT JOIN artifact_spreadsheets x ON x.artifact_id=a.id `
+
+// Row = artifacts.* plus the saved kinds, sources and previews.
+export const ROW_SELECT = `SELECT a.*, m.render AS render, s.source_kind AS source_kind, s.source_id AS source_id,
+ s.automation_id AS automation_id, s.automation_title AS automation_title, s.task_kind AS task_kind,
+ md.mime AS media_mime, md.byte_count AS media_bytes, md.sha256 AS media_sha256, md.filename AS media_filename,
+ b.board AS board_json, cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id,
+ cs.agent_id AS chat_agent_id, cs.conversation_title AS chat_conversation_title,
+ sl.deck AS slides_json, d.dashboard AS dashboard_json, x.workbook AS spreadsheet_json` + ROW_JOINS
 
 export function publicKind(row) {
   if (row.media_mime) return 'media'

@@ -3,8 +3,9 @@
 // page is rendered by the dedicated Bot Social from a published snapshot.
 import { createHash, randomBytes } from 'node:crypto'
 import { digest, HEX32, newId, nowSeconds, refuse, stableJson } from '../../featurekit/http.js'
+import { GLB_MIME } from '../../lib/glb.js'
 import {
-  emptyBoard, emptyDashboard, emptySlides, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_SELECT, SHARE_CSP, sourceView,
+  emptyBoard, emptyDashboard, emptySlides, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_JOINS, ROW_SELECT, SHARE_CSP, sourceView,
   TITLE_MAX, titleHash, TOKEN, validBody, validTitle,
 } from './model.js'
 import { attachMedia, mediaDigests, readMediaBytes, unlinkMedia, writeMedia } from './media.js'
@@ -27,16 +28,15 @@ export function usernames(store) {
   return (id) => map.get(id) ?? fallback
 }
 
-const named = (store, row) => {
-  if (!row) return null
-  const user = usernames(store)
-  return { ...row, created_by_username: user(row.created_by), updated_by_username: user(row.updated_by) }
-}
+const named = (row, user) => ({
+  ...row, created_by_username: user(row.created_by), updated_by_username: user(row.updated_by),
+})
 
 export const canEdit = (role, userId, row) => role === 'owner' || role === 'admin' || row.created_by === userId
 
 export function load(store, workspaceId, id) {
-  return named(store, store.get(ROW_SELECT + 'WHERE a.id=? AND a.workspace_id=?', id, workspaceId))
+  const row = store.get(ROW_SELECT + 'WHERE a.id=? AND a.workspace_id=?', id, workspaceId)
+  return row && named(row, usernames(store))
 }
 
 // Searchable prose of a text artifact. A document row normally holds plain
@@ -70,11 +70,86 @@ function matchesSearch(row, needle) {
   return searchableBody(row.body).toLocaleLowerCase('en-US').includes(needle)
 }
 
-export function listing(store, workspaceId, cursor, limit, needle = '') {
-  let rows = store.all(ROW_SELECT + 'WHERE a.workspace_id=? ORDER BY a.id', workspaceId).map((row) => named(store, row))
-  if (needle) rows = rows.filter((row) => matchesSearch(row, needle))
-  if (cursor) rows = rows.filter((row) => row.id > cursor)
-  return rows.slice(0, limit)
+function matchesFileTypes(row, kind, types) {
+  if (types.has('messages') && row.chat_message_id) return true
+  if (kind === 'document' && row.chat_message_id) return false
+  if (kind !== 'media') return types.has(kind)
+  if (row.media_mime === GLB_MIME) return types.has('model3d')
+  return types.has(row.media_mime.split('/', 1)[0])
+}
+
+function filteredPage(store, { boundary, bindings, order, metadata }, limit, filters, user) {
+  const { needle, scope, kind, owner, ownerUsername, favorites, types, creators, sessions } = filters
+  const columns = metadata
+    ? `SELECT a.id, a.title, a.created_by, u.username, u.is_owner, m.render, md.mime AS media_mime,
+       b.board <> '' AS board_json, sl.deck <> '' AS slides_json, d.dashboard <> '' AS dashboard_json,
+       x.workbook <> '' AS spreadsheet_json, s.source_kind, cs.message_id AS chat_message_id, cs.conversation_id${needle ? ', a.body' : ''}
+       ${ROW_JOINS} LEFT JOIN ot_users u ON u.id=a.created_by `
+    : 'SELECT a.id, a.title FROM artifacts a '
+  const candidates = store.all(columns + boundary + order, ...bindings)
+  const ids = []
+  for (const row of candidates) {
+    if (needle && !matchesSearch(row, needle)) continue
+    if (scope === 'favorites' && !favorites.has(row.id)) continue
+    if (scope === 'mine' && row.created_by !== owner && !row.is_owner &&
+        (!ownerUsername || row.username !== ownerUsername)) continue
+    if (scope === 'memory' && (row.chat_message_id || row.source_kind !== 'agent_task')) continue
+    const artifactKind = kind !== 'all' || types.size ? publicKind(row) : null
+    if (kind === 'messages' ? !row.chat_message_id : kind !== 'all' && artifactKind !== kind) continue
+    if (types.size && !matchesFileTypes(row, artifactKind, types)) continue
+    if (creators.size && !creators.has(user(row.created_by))) continue
+    if (sessions.size && !sessions.has(row.conversation_id)) continue
+    ids.push(row.id)
+    if (ids.length >= limit) break
+  }
+  if (!ids.length) return []
+  const placeholders = ids.map(() => '?').join(',')
+  return store.all(ROW_SELECT + `WHERE a.workspace_id=? AND a.id IN (${placeholders})` + order, bindings[0], ...ids)
+}
+
+export function listing(store, workspaceId, cursor, limit, filters) {
+  let boundary = 'WHERE a.workspace_id=?'
+  const bindings = [workspaceId]
+  const order = filters.recent ? ' ORDER BY a.updated DESC, a.id' : ' ORDER BY a.id'
+  if (cursor && filters.recent) {
+    const anchor = store.get('SELECT updated FROM artifacts WHERE workspace_id=? AND id=?', workspaceId, cursor)
+    if (!anchor) return []
+    boundary += ' AND (a.updated<? OR (a.updated=? AND a.id>?))'
+    bindings.push(anchor.updated, anchor.updated, cursor)
+  } else if (cursor) {
+    boundary += ' AND a.id>?'
+    bindings.push(cursor)
+  }
+  if (filters.since !== null) {
+    boundary += ' AND a.updated>=?'
+    bindings.push(filters.since)
+  }
+  if (filters.before !== null) {
+    boundary += ' AND a.updated<?'
+    bindings.push(filters.before)
+  }
+  const metadata = !!filters.needle || filters.scope !== 'all' || filters.kind !== 'all' ||
+    filters.types.size || filters.creators.size || filters.sessions.size
+  const names = filters.creators.size ? usernames(store) : null
+  const rows = filters.needle || metadata
+    ? filteredPage(store, {boundary, bindings, order, metadata}, limit, filters, names)
+    : store.all(ROW_SELECT + boundary + order + ' LIMIT ?', ...bindings, limit)
+  if (!rows.length) return rows
+  const user = names || usernames(store)
+  return rows.map((row) => named(row, user))
+}
+
+export function catalogFacets(store, workspaceId) {
+  const user = usernames(store)
+  const authors = store.all('SELECT DISTINCT created_by FROM artifacts WHERE workspace_id=?', workspaceId)
+  const creators = [...new Set(authors.map(row => user(row.created_by)))].sort()
+  const sources = store.all(`SELECT cs.conversation_id, cs.conversation_title FROM artifact_chat_sources cs
+    JOIN artifacts a ON a.id=cs.artifact_id WHERE a.workspace_id=? ORDER BY a.updated DESC, a.id`, workspaceId)
+  const sessions = new Map()
+  for (const { conversation_id: id, conversation_title: title } of sources) {
+    if (id && !sessions.has(id)) sessions.set(id, {id, label: title?.trim() || '对话'})
+  }
+  return { creators, sessions: [...sessions.values()] }
 }
 
 export function view(row, includeBody = true, { favorited } = {}) {
@@ -168,8 +243,7 @@ export function uniqueTitle(store, workspaceId, title, suffix) {
   return fallback
 }
 
-export function versionView(row, includeBody = true, store) {
-  const user = store ? usernames(store) : (id) => id
+export function versionView(row, includeBody = true, user = (id) => id) {
   let kind = row.kind
   const data = { revision: row.revision, title: row.title, kind, created: row.created, created_by: row.created_by_username ?? user(row.created_by) }
   if (kind === 'media') {
@@ -235,7 +309,7 @@ function existingSource(store, workspaceId, source) {
   return null
 }
 
-export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = false} = {}) {
+export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = false, reuseSource = false} = {}) {
   const { store, owner, featureDir } = ctx
   if (typeof workspaceId !== 'string' || !HEX32.test(workspaceId)) refuse(400, 'invalid', 'Provide a workspace_id')
   const title = input.title
@@ -271,8 +345,8 @@ export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = 
   return store.transaction(() => {
     const source = input.source
     const already = existingSource(store, workspaceId, source)
-    // A saved chat message is a snapshot. Subsequent edits and title changes do not replace it.
-    if (already && reuseChatSource) return { status: 200, body: { artifact: view(already) } }
+    // Saved source snapshots survive later edits and title changes.
+    if (already && (reuseChatSource || reuseSource)) return { status: 200, body: { artifact: view(already) } }
     const prior = store.get('SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
     if (prior) {
       const row = load(store, workspaceId, prior.id)
@@ -512,7 +586,7 @@ export function exportBytes(row, featureDir, workspaceId, fromVersion = false) {
     const digestHex = fromVersion ? row.sha256 : row.media_sha256
     const filename = fromVersion ? row.filename : row.media_filename
     const expected = fromVersion ? row.byte_count : row.media_bytes
-    const payload = readMediaBytes(featureDir, workspaceId, digestHex, expected)
+    const payload = readMediaBytes(featureDir, workspaceId, digestHex, expected, mime)
     return { payload, contentType: mime, filename: exportFilename(title, kind, revision, filename), headers: exportHeaders(mime, exportFilename(title, kind, revision, filename)) }
   }
   let structuredKind = null, structured = null
@@ -616,10 +690,10 @@ export function content(row, featureDir, { preview: asPreview = false } = {}) {
   const kind = publicKind(row)
   if (kind === 'media' && !asPreview) {
     try {
-      const payload = readMediaBytes(featureDir, row.workspace_id, row.media_sha256, row.media_bytes)
+      const payload = readMediaBytes(featureDir, row.workspace_id, row.media_sha256, row.media_bytes, row.media_mime)
       const name = cleanFilename(row.media_filename || 'file')
       return {
-        status: 200, raw: payload,
+        status: 200, raw: payload, inline: true,
         headers: {
           'content-type': row.media_mime,
           'content-security-policy': "default-src 'none'; sandbox; frame-ancestors 'self'; object-src 'none'",
