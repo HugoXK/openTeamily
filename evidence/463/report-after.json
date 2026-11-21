@@ -1,0 +1,1451 @@
+{
+  "slug": "ev463after",
+  "reuse": {
+    "theme": "dsh-client-ui-theme — token names only: the page maps --dsw-alias-* (shellTokens in themes.js) and resolves our dark arm to documentElement.dataset.themeResolved=dark; body[data-ds-dark-theme] is set by the dsh host, absent in these standalone pages (fact darkAttr), so no parallel palette is invented",
+    "viewports": "none — dsh ships no px breakpoint constant (only prefers-reduced-motion/transparency); 1440x900 + 390x844 are the owner rule, kept as-is",
+    "hmr": "none — not needed for static before/after shots"
+  },
+  "generated_at": "2026-11-21T17:58:10.173Z",
+  "sides": [
+    {
+      "name": "after",
+      "url": "http://127.0.0.1:8752"
+    }
+  ],
+  "images": [
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__chat__mode-auto.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "mode-auto",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 45400
+      },
+      "sha256": "fdaf63b05df7449389e60bbab691fb2c51009222ad5d8f72fa4c4398495fb9eb",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 235
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:46 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:47 ⋯ 林然 好，我在这边看着。 11/22 01:48 ⋯ 我 这条按 Auto 模式发送。 11/22 01:56 ⋯ + 记忆",
+        "textLength": 235,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__chat__mode-instant.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "mode-instant",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 51527
+      },
+      "sha256": "1354231576016a2c3d87f308de9ee8d17dd40487a4ae3e9087f9c04ddbc19b49",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 283
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:46 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:47 ⋯ 林然 好，我在这边看着。 11/22 01:48 ⋯ 我 这条按 Auto 模式发送。 11/22 01:56 ⋯ 我 · ",
+        "textLength": 283,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__chat__mode-agentic.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "mode-agentic",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 52414
+      },
+      "sha256": "cee5c03150b86966352682c1f5b464d898df24073712726421b751e73e63534a",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 331
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:46 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:47 ⋯ 林然 好，我在这边看着。 11/22 01:48 ⋯ 我 这条按 Auto 模式发送。 11/22 01:56 ⋯ 我 · ",
+        "textLength": 331,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__chat__mode-auto.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "mode-auto",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 76907
+      },
+      "sha256": "7ecc407e7f2422662fb851e35e996f56f8c594ab1a55cbd0e126b9ed496ece48",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 235
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:46 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:47 ⋯ 林然 好，我在这边看着。 11/22 01:48 ⋯ 我 这条按 Auto 模式发送。 11/22 01:56 ⋯ + 记忆",
+        "textLength": 235,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__chat__mode-instant.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "mode-instant",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 88341
+      },
+      "sha256": "ac696470f8d52adaa1fda04c4b633aa80ac30e58db63a60f1e2e979717af0d4e",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 283
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:46 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:47 ⋯ 林然 好，我在这边看着。 11/22 01:48 ⋯ 我 这条按 Auto 模式发送。 11/22 01:56 ⋯ 我 · ",
+        "textLength": 283,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__chat__mode-agentic.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "mode-agentic",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 93496
+      },
+      "sha256": "3cee35fb23d07574ff9edf4dbb2738fe9a2d7a92c7eb29ab50373105c0246eed",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 331
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:46 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:47 ⋯ 林然 好，我在这边看着。 11/22 01:48 ⋯ 我 这条按 Auto 模式发送。 11/22 01:56 ⋯ 我 · ",
+        "textLength": 331,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__chat__mode-auto.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "mode-auto",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 45400
+      },
+      "sha256": "fdaf63b05df7449389e60bbab691fb2c51009222ad5d8f72fa4c4398495fb9eb",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 235
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:46 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:47 ⋯ 林然 好，我在这边看着。 11/22 01:48 ⋯ 我 这条按 Auto 模式发送。 11/22 01:56 ⋯ + 记忆",
+        "textLength": 235,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__chat__mode-instant.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "mode-instant",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 51527
+      },
+      "sha256": "1354231576016a2c3d87f308de9ee8d17dd40487a4ae3e9087f9c04ddbc19b49",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 283
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:46 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:47 ⋯ 林然 好，我在这边看着。 11/22 01:48 ⋯ 我 这条按 Auto 模式发送。 11/22 01:56 ⋯ 我 · ",
+        "textLength": 283,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__chat__mode-agentic.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "mode-agentic",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 52414
+      },
+      "sha256": "cee5c03150b86966352682c1f5b464d898df24073712726421b751e73e63534a",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 331
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:46 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:47 ⋯ 林然 好，我在这边看着。 11/22 01:48 ⋯ 我 这条按 Auto 模式发送。 11/22 01:56 ⋯ 我 · ",
+        "textLength": 331,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__chat__mode-auto.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "mode-auto",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 76907
+      },
+      "sha256": "7ecc407e7f2422662fb851e35e996f56f8c594ab1a55cbd0e126b9ed496ece48",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 235
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:46 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:47 ⋯ 林然 好，我在这边看着。 11/22 01:48 ⋯ 我 这条按 Auto 模式发送。 11/22 01:56 ⋯ + 记忆",
+        "textLength": 235,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__chat__mode-instant.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "mode-instant",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 88341
+      },
+      "sha256": "ac696470f8d52adaa1fda04c4b633aa80ac30e58db63a60f1e2e979717af0d4e",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 283
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:46 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:47 ⋯ 林然 好，我在这边看着。 11/22 01:48 ⋯ 我 这条按 Auto 模式发送。 11/22 01:56 ⋯ 我 · ",
+        "textLength": 283,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__chat__mode-agentic.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "mode-agentic",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 93496
+      },
+      "sha256": "3cee35fb23d07574ff9edf4dbb2738fe9a2d7a92c7eb29ab50373105c0246eed",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 331
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:46 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:47 ⋯ 林然 好，我在这边看着。 11/22 01:48 ⋯ 我 这条按 Auto 模式发送。 11/22 01:56 ⋯ 我 · ",
+        "textLength": 331,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__768x1024__chat__mode-auto.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "mode-auto",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 71009
+      },
+      "sha256": "e710c268fa94727faf9a8dd47f229301b0f7f513d87065113b6c93070e50068c",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 295
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:47 +😊 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:48 +😊 ⋯ 林然 好，我在这边看",
+        "textLength": 295,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__768x1024__chat__mode-instant.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "mode-instant",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 77734
+      },
+      "sha256": "e6100a62d86deeb30b1c1f08b87da4aebfd395fbdd11a7b3a3f62b27d39d4111",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 347
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:47 +😊 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:48 +😊 ⋯ 林然 好，我在这边看",
+        "textLength": 347,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__768x1024__chat__mode-agentic.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "mode-agentic",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 78785
+      },
+      "sha256": "ecfed504c3d326139018f059e31f7c69e4dd16b32accdaa0c01470bc1f29fc84",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 399
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:47 +😊 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:48 +😊 ⋯ 林然 好，我在这边看",
+        "textLength": 399,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__768x1024__chat__mode-auto.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "mode-auto",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 110588
+      },
+      "sha256": "e32fab34b8ecc00c64b8a1de9544589bf149b145854c90d9d380b2a0661043fe",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 295
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:47 +😊 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:48 +😊 ⋯ 林然 好，我在这边看",
+        "textLength": 295,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__768x1024__chat__mode-instant.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "mode-instant",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 123887
+      },
+      "sha256": "2798231f865ad97d4080649341676c7bcdcf493031f93459b209b2874c440fea",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 347
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:47 +😊 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:48 +😊 ⋯ 林然 好，我在这边看",
+        "textLength": 347,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__768x1024__chat__mode-agentic.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "mode-agentic",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 132356
+      },
+      "sha256": "b3c0f793700d7be4845087f7e240f13821ded6bbbfdf5c06a796afb1ff11220a",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 399
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:47 +😊 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:48 +😊 ⋯ 林然 好，我在这边看",
+        "textLength": 399,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__768x1024__chat__mode-auto.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "mode-auto",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 71009
+      },
+      "sha256": "e710c268fa94727faf9a8dd47f229301b0f7f513d87065113b6c93070e50068c",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 295
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:47 +😊 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:48 +😊 ⋯ 林然 好，我在这边看",
+        "textLength": 295,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__768x1024__chat__mode-instant.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "mode-instant",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 77734
+      },
+      "sha256": "e6100a62d86deeb30b1c1f08b87da4aebfd395fbdd11a7b3a3f62b27d39d4111",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 347
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:47 +😊 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:48 +😊 ⋯ 林然 好，我在这边看",
+        "textLength": 347,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__768x1024__chat__mode-agentic.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "mode-agentic",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 78785
+      },
+      "sha256": "ecfed504c3d326139018f059e31f7c69e4dd16b32accdaa0c01470bc1f29fc84",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 399
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:47 +😊 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:48 +😊 ⋯ 林然 好，我在这边看",
+        "textLength": 399,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__768x1024__chat__mode-auto.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "mode-auto",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 110591
+      },
+      "sha256": "c1f02b13af040bb882cee76dbe3fb19ef66f13320d59fc26ab7f915869394a2a",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 295
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:47 +😊 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:48 +😊 ⋯ 林然 好，我在这边看",
+        "textLength": 295,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__768x1024__chat__mode-instant.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "mode-instant",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 123887
+      },
+      "sha256": "2798231f865ad97d4080649341676c7bcdcf493031f93459b209b2874c440fea",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 347
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:47 +😊 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:48 +😊 ⋯ 林然 好，我在这边看",
+        "textLength": 347,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__768x1024__chat__mode-agentic.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "mode-agentic",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 132356
+      },
+      "sha256": "b3c0f793700d7be4845087f7e240f13821ded6bbbfdf5c06a796afb1ff11220a",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 399
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 群内智能体 林然 早上好，评审稿已经放进作品里了。 11/22 01:47 +😊 ⋯ 我 收到，我把发送模式跑一遍。 11/22 01:48 +😊 ⋯ 林然 好，我在这边看",
+        "textLength": 399,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__chat__mode-auto.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "mode-auto",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 96719
+      },
+      "sha256": "ad11937d455c7df19df6e95f81fc5a25e5d94b4961825fc7bbf1ebeb09b5b255",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 374
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 搜索 + 工作区 产品团队 正在重新连接… 重连 qa463a 对话 · 1 产 产品评审 群聊 · 2 人 01:49 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 邀请成员 多选 置顶会话 成员 群内智能体 林然 早上",
+        "textLength": 374,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__chat__mode-instant.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "mode-instant",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 97387
+      },
+      "sha256": "2843791dcfd2962d485b98470d3ff5f35522c08d007ffb7060b3861aa0f2658d",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 426
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 搜索 + 工作区 产品团队 正在重新连接… 重连 qa463a 对话 · 1 产 产品评审 群聊 · 2 人 01:49 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 邀请成员 多选 置顶会话 成员 群内智能体 林然 早上",
+        "textLength": 426,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__chat__mode-agentic.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "mode-agentic",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 98343
+      },
+      "sha256": "3b70d1367a333cc2b879d90288f9b07105fc7a250e601f170c2d8f561222bb52",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 478
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 搜索 + 工作区 产品团队 正在重新连接… 重连 qa463a 对话 · 1 产 产品评审 群聊 · 2 人 01:49 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 邀请成员 多选 置顶会话 成员 群内智能体 林然 早上",
+        "textLength": 478,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__chat__mode-auto.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "mode-auto",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 143906
+      },
+      "sha256": "aff4c961e116570a723915defa73bbb1739c34bfe721e8c7f4572fed4ff8eb21",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 374
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 搜索 + 工作区 产品团队 正在重新连接… 重连 qa463a 对话 · 1 产 产品评审 群聊 · 2 人 01:49 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 邀请成员 多选 置顶会话 成员 群内智能体 林然 早上",
+        "textLength": 374,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__chat__mode-instant.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "mode-instant",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 152257
+      },
+      "sha256": "097ca1b354451e03bdfaab80ba6efe66a474817003f690c6eee9ee5c170ad9b8",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 426
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 搜索 + 工作区 产品团队 正在重新连接… 重连 qa463a 对话 · 1 产 产品评审 群聊 · 2 人 01:49 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 邀请成员 多选 置顶会话 成员 群内智能体 林然 早上",
+        "textLength": 426,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__chat__mode-agentic.png",
+      "route": "/chat",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "mode-agentic",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 156031
+      },
+      "sha256": "417404b0492c1fe15bfb2119b878e50e5b374641400aafd25cfff700e0f05aad",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 478
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 搜索 + 工作区 产品团队 正在重新连接… 重连 qa463a 对话 · 1 产 产品评审 群聊 · 2 人 01:49 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 邀请成员 多选 置顶会话 成员 群内智能体 林然 早上",
+        "textLength": 478,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__chat__mode-auto.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "mode-auto",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 96689
+      },
+      "sha256": "6063ed3c287b0e8ef661b29b148a463126271baf602014b5dcf1d35d5182f487",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 374
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 搜索 + 工作区 产品团队 正在重新连接… 重连 qa463a 对话 · 1 产 产品评审 群聊 · 2 人 01:49 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 邀请成员 多选 置顶会话 成员 群内智能体 林然 早上",
+        "textLength": 374,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__chat__mode-instant.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "mode-instant",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 97426
+      },
+      "sha256": "3ae5edb22c7b46645e2ec7857c20206c0c01854b7d07af8c70c4eb8c54d60bbd",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 426
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 搜索 + 工作区 产品团队 正在重新连接… 重连 qa463a 对话 · 1 产 产品评审 群聊 · 2 人 01:49 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 邀请成员 多选 置顶会话 成员 群内智能体 林然 早上",
+        "textLength": 426,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__chat__mode-agentic.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "mode-agentic",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 98489
+      },
+      "sha256": "73672f329d8f47eff5631c62f87cdbc020f47cf849de8cc6a0af51982e68919c",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 478
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 搜索 + 工作区 产品团队 正在重新连接… 重连 qa463a 对话 · 1 产 产品评审 群聊 · 2 人 01:49 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 邀请成员 多选 置顶会话 成员 群内智能体 林然 早上",
+        "textLength": 478,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__chat__mode-auto.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "mode-auto",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 143958
+      },
+      "sha256": "b58999c62145dfc6315c518e64168dc6a3c365a4dd38ccb3879515d55ba40304",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 374
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 搜索 + 工作区 产品团队 正在重新连接… 重连 qa463a 对话 · 1 产 产品评审 群聊 · 2 人 01:50 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 邀请成员 多选 置顶会话 成员 群内智能体 林然 早上",
+        "textLength": 374,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__chat__mode-instant.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "mode-instant",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 152220
+      },
+      "sha256": "5056542b2bb8b5ab148e8560ccc8ad41a26ab4908a934e463fb81bf5d7f306a1",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 426
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 搜索 + 工作区 产品团队 正在重新连接… 重连 qa463a 对话 · 1 产 产品评审 群聊 · 2 人 01:50 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 邀请成员 多选 置顶会话 成员 群内智能体 林然 早上",
+        "textLength": 426,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__chat__mode-agentic.png",
+      "route": "/chat",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "mode-agentic",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 156032
+      },
+      "sha256": "569b19503f1a8ddde33dccfedb54e150c3c46d19dcfe7c601298f56710a90aa6",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 478
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 搜索 + 工作区 产品团队 正在重新连接… 重连 qa463a 对话 · 1 产 产品评审 群聊 · 2 人 01:50 已发送。 Q 林 产品评审 2 位成员 · 2 位真人 · 0 位智能体 群信息 邀请成员 多选 置顶会话 成员 群内智能体 林然 早上",
+        "textLength": 478,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Refused to apply inline style because it violates the following Content Security Policy directive: \"style-src 'self'\". Either the 'unsafe-inline' keyword, a hash ('sha256-CSr5A7IS9dRw3Uo7TFEY+Os1KKjUjndCqZWzkW4uTaY='), or a nonce ('nonce-...') is required to enable inline execution. Note that hashes do not apply to event handlers, style attributes and javascript: navigations unless the 'unsafe-hashes' keyword is present.\n",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection.",
+        "error: EventSource's response has a MIME type (\"application/json\") that is not \"text/event-stream\". Aborting the connection."
+      ]
+    }
+  ],
+  "failures": []
+}
