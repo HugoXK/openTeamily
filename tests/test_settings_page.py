@@ -172,13 +172,19 @@ class SettingsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('GET', '/settings/../settings.py')['status'], 404)
         self.assertEqual(self.raw.call('GET', '/settings/missing')['status'], 404)
 
-    def test_wrapper_still_exposes_the_settings_api(self):
-        response = self.client.call('GET', '/v1/settings')
-        self.assertEqual(response['status'], 200)
-        self.assertEqual(response['body']['settings']['revision'], 0)
-        saved = self.client.call('POST', '/v1/settings', {'revision': 0, 'changes': {'appearance': 'dark'}})
-        self.assertEqual(saved['status'], 200)
-        self.assertEqual(saved['body']['settings']['values']['appearance'], 'dark')
+    def test_discover_page_accepts_supported_filtered_links(self):
+        for kind in ('document', 'whiteboard', 'dashboard', 'spreadsheet'):
+            with self.subTest(kind=kind):
+                query = f'feed=collected&kind={kind}&q=quarterly&creator=author.home&work=public-preview'
+                self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 200)
+        for query in ('kind=unknown', 'creator=../author', 'creator=original&creator=second', 'sort=popular&creator=author.home'):
+            with self.subTest(query=query):
+                self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 400)
+
+    def test_platform_settings_api_stays_retired_without_disabling_login(self):
+        self.assertEqual(self.client.call('GET', '/v1/settings')['status'], 410)
+        update = self.client.call('POST', '/v1/settings', {'revision': 0, 'changes': {'appearance': 'dark'}})
+        self.assertEqual(update['status'], 410)
         login = Client(self.app, peer='127.0.0.2')
         again = login.call('POST', '/v1/auth/login', {'username': 'alice', 'password': PASSWORD})
         self.assertEqual(again['status'], 200)
@@ -207,7 +213,7 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('id="whoami"', html)
         self.assertIn('href="/members"', html)
         self.assertIn('技能配置', html)
-        self.assertIn('不用积分', html)
+        self.assertIn('无需填写个人 API 密钥', html)
         self.assertNotIn('id="settings-usage-card"', html)
         self.assertNotIn('id="settings-upgrade"', html)
         self.assertNotIn('id="group-creator"', html)
@@ -231,15 +237,14 @@ class SettingsPageTests(unittest.TestCase):
         self.assertIn('href="#model-api"', html)
         self.assertIn('href="/settings/skill-configuration"', html)
         self.assertIn('href="/settings/connectors"', html)
-        self.assertIn('href="/runtimes"', html)
+        self.assertNotIn('href="/runtimes"', html)
         language = html.find('href="/settings/language"')
         channels = html.find('href="/settings/channels"')
         agent_api = html.find('href="/settings/agent-access"')
         model_api = html.find('href="#model-api"')
         skills = html.find('href="/settings/skill-configuration"')
         connectors = html.find('href="/settings/connectors"')
-        runtimes = html.find('href="/runtimes"')
-        self.assertTrue(-1 < language < channels < agent_api < model_api < skills < connectors < runtimes)
+        self.assertTrue(-1 < language < channels < agent_api < model_api < skills < connectors)
         self.assertIn('href="/settings/appearance"', html)
         self.assertIn('href="/settings/shortcuts"', html)
         self.assertIn('href="/settings/message-folding"', html)

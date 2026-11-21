@@ -5,9 +5,7 @@
 // Shared workspaces are Bot Social teams. The private workspace can also be
 // listed from the personal-agent binding in this user's runtime.
 import { createHash } from 'node:crypto'
-import {workbookText} from '../../features/artifacts/workbook.js'
-import {textLines} from '../../features/artifacts/model.js'
-import {sanitizeHtml} from '../../features/artifacts/render.js'
+import {structuredArtifactText} from '../../features/artifacts/catalog-search.js'
 import { CATEGORIES as agentCategories, LIMITS as agentLimits } from '../../features/agents/index.js'
 import { compatHandler } from '../b4/compat.js'
 import { Fault } from '../b4/http.js'
@@ -18,6 +16,8 @@ import { GLB_MIME } from '../glb.js'
 const HEX = /^[0-9a-f]{32}$/
 const PLATFORM_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/
 const PUBLIC_LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/
+const LATEST_WORK_CURSOR = /^l\.(0|[1-9][0-9]{0,15})\.otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}\.[a-f0-9]{24}$/
+const DISCOVER_WORK_QUERY_LIMIT = 1024
 const DISCOVER_WORK = '/v1/discover/works/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])'
 const WORK_COMMENT = 'otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}'
 const COMMENT_KEY = /^[A-Za-z0-9_-]{16,64}$/
@@ -150,8 +150,17 @@ function messageItem(row, me, env, workspaceId) {
   }
 }
 
+function workMatch(match) {
+  if (!match || !['title', 'summary', 'body', 'creator'].includes(match.kind)
+    || typeof match.text !== 'string' || match.text.length > 160
+    || !Number.isInteger(match.start) || !Number.isInteger(match.end)
+    || match.start < 0 || match.end <= match.start || match.end > match.text.length) return null
+  return {kind: match.kind, text: match.text, start: match.start, end: match.end}
+}
+
 function workItem(row) {
   const kind = row.work_kind || (row.kind === 'work' ? 'document' : row.kind)
+  const match = workMatch(row.match)
   return {
     slug: row.slug,
     title: row.title,
@@ -167,6 +176,7 @@ function workItem(row) {
     following: !!row.following,
     own_work: !!row.own,
     comment_count: row.comment_count ?? 0,
+    ...(match ? {match} : {}),
     ...(kind === 'website' ? {site_available: row.site_available === true} : {}),
   }
 }
@@ -1173,17 +1183,24 @@ function discoverRoutes(host) {
     }
     const popular = sort === 'popular'
     const cursor = q.get('cursor')
+    if (q.getAll('cursor').length > 1) throw new Fault(400, 'invalid', '无效的发现分页。')
     if (popular && (kind !== 'work' || (cursor !== null && !/^[A-Za-z0-9_-]{32}\.[1-9][0-9]{0,2}$/.test(cursor)))) {
       throw new Fault(400, 'invalid', '无效的热门作品请求。')
     }
-    const pagination = popular ? {sort, cursor} : {before: cursor}
+    const keyset = kind === 'work' && !popular && (cursor === null || cursor.startsWith('l.'))
+    const position = cursor && keyset ? LATEST_WORK_CURSOR.exec(cursor) : null
+    if (cursor !== null && !popular && (keyset ? !position || !Number.isSafeInteger(Number(position[1])) : !/^[0-9]{1,16}$/.test(cursor))) {
+      throw new Fault(400, 'invalid', '无效的发现分页。')
+    }
+    const pagination = popular ? {sort, cursor} : keyset ? {pagination: 'keyset', cursor} : {before: cursor}
     const data = await bs.get('/v1/ot/discover' + qs({
       kind, tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'),
       creator: q.get('creator'), category: q.get('category'),
       ...pagination, limit: q.get('limit'),
     }))
     const items = (data.items || []).map((row) => (kind === 'agent' ? agentItem(row) : workItem(row)))
-    return [200, {items, cursor: (popular ? data.next_cursor : data.next_before) ?? null, ...platformViewer(call)}]
+    const next = popular || keyset ? data.next_cursor : data.next_before
+    return [200, {items, cursor: next ?? null, ...platformViewer(call)}]
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
   const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path } : { listed: false })
@@ -1239,10 +1256,9 @@ function discoverRoutes(host) {
           const prior = await workListing(bs, match[2])
           const isModel = artifact.kind === 'media' && artifact.media?.mime === GLB_MIME
           const kind = isModel ? 'model3d' :
-            ['document', 'website', 'whiteboard', 'media', 'slides', 'dashboard'].includes(artifact.kind) ? artifact.kind : 'document'
+            ['document', 'website', 'whiteboard', 'media', 'slides', 'dashboard', 'spreadsheet'].includes(artifact.kind) ? artifact.kind : 'document'
           const siteHtml = kind === 'website' && typeof artifact.body === 'string' && artifact.body.trim() ? artifact.body : null
-          const snapshot = artifact.kind === 'spreadsheet' && artifact.spreadsheet ? workbookText(artifact.spreadsheet) : String(artifact.body || '')
-          const summary = siteHtml ? textLines(sanitizeHtml(siteHtml), true).join('\n') : snapshot
+          const snapshot = siteHtml ? '' : kind === 'document' ? String(artifact.body || '') : [...structuredArtifactText(artifact)].join('\n')
           let modelData
           if (isModel) {
             const result = await host.call('artifacts/chatAttachment', {
@@ -1255,8 +1271,8 @@ function discoverRoutes(host) {
           }
           const data = await bs.put('/v1/ot/listings', {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
-            summary: summary.slice(0, 300), work_kind: kind,
-            ...(siteHtml ? {site_html: siteHtml} : {snapshot: snapshot.slice(0, 200000)}),
+            work_kind: kind,
+            ...(siteHtml ? {site_html: siteHtml} : {summary: snapshot.slice(0, 300), snapshot: snapshot.slice(0, 200000)}),
             ...(isModel ? {model_data: modelData} : {}),
           })
           return [prior ? 200 : 201, { discover: workMeta(data) }]
@@ -1328,10 +1344,11 @@ function discoverRoutes(host) {
       },
     })),
     { method: 'GET', path: /^\/v1\/discover\/agents$/, handle: feed('agent') },
-    { method: 'GET', path: /^\/v1\/discover\/works$/, handle: feed('work') },
-    { method: 'GET', path: /^\/v1\/discover\/me\/works$/, handle: feed('work') },
+    { method: 'GET', path: /^\/v1\/discover\/works$/, queryLimit: DISCOVER_WORK_QUERY_LIMIT, handle: feed('work') },
+    { method: 'GET', path: /^\/v1\/discover\/me\/works$/, queryLimit: DISCOVER_WORK_QUERY_LIMIT, handle: feed('work') },
     {
       method: 'GET', path: new RegExp(`^${DISCOVER_WORK}$`),
+      queryLimit: DISCOVER_WORK_QUERY_LIMIT,
       async handle({ match, query }, call) {
         return wrap(async () => {
           const q = parseQuery(query)

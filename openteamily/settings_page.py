@@ -227,16 +227,19 @@ class SettingsPage:
                     return False
                 if key == 'sort' and value != 'popular':
                     return False
-                if key == 'kind' and value not in ('website', 'image', 'audio', 'slides', 'video', 'model3d'):
+                if key == 'kind' and value not in ('document', 'website', 'whiteboard', 'image', 'audio', 'slides',
+                                                       'video', 'dashboard', 'spreadsheet', 'model3d'):
+                    return False
+                if key == 'creator' and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{1,79}', value):
                     return False
                 if key == 'q':
                     if len(value) > 80 or any(ord(ch) < 32 for ch in value):
                         return False
-                elif key not in ('feed', 'kind', 'sort', 'work', 'comments', 'share'):
+                elif key not in ('feed', 'kind', 'sort', 'creator', 'work', 'comments', 'share'):
                     return False
             panels = seen.intersection({'comments', 'share'})
             return (bool(seen)
-                    and not ('sort' in seen and seen.intersection({'feed', 'kind'}))
+                    and not ('sort' in seen and seen.intersection({'feed', 'kind', 'creator'}))
                     and len(panels) <= 1
                     and (not panels or 'work' in seen))
         if path == '/agents':

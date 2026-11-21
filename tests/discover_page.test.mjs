@@ -42,7 +42,7 @@ test('isTeamsCatalog only matches the recorded tab=agents&section=groups query',
 });
 
 test('available feed categories have a consistent order', () => {
-  assert.deepEqual(FEED_CATEGORIES, ['网页', '图片', '音乐', '幻灯片', '视频', '3D 作品']);
+  assert.deepEqual(FEED_CATEGORIES, ['网页', '文档', '图片', '音乐', '幻灯片', '视频', '3D 作品', '白板', '看板', '电子表格']);
 });
 
 test('feed all-filter shows the recorded 全部 label and keeps an empty canvas', () => {
@@ -752,6 +752,9 @@ test('feed selection round-trips through the URL search', async () => {
   assert.deepEqual(feedStateFromSearch(undefined), {tab: 'activity', kind: '', sort: 'latest', query: ''});
   assert.deepEqual(feedStateFromSearch('?sort=popular&q=cat'), {tab: 'activity', kind: '', sort: 'popular', query: 'cat'});
   assert.deepEqual(feedStateFromSearch('?kind=model3d'), {tab: 'activity', kind: 'model3d', sort: 'latest', query: ''});
+  for (const kind of ['document', 'whiteboard', 'dashboard', 'spreadsheet']) {
+    assert.equal(feedStateFromSearch('?kind=' + kind).kind, kind);
+  }
   assert.equal(feedSearchText(feedStateFromSearch('?sort=popular&q=cat')), '?sort=popular&q=cat');
   assert.equal(feedSearchText({tab: 'following', kind: 'video', query: 'cat'}),
     '?feed=following&kind=video&q=cat');
@@ -961,6 +964,133 @@ test('work covers use real same-origin published media, not invented screenshots
   assert.equal(fallback.src, undefined);
   const badge = website.children.find(node => node.className === 'kind');
   assert.equal(badge.textContent, '网页');
+});
+
+test('search excerpts highlight validated UTF-16 ranges using literal content', () => {
+  const doc = fakeDocument();
+  const prefix = '🚀 <script>';
+  const title = '标题';
+  const hit = '<img src=x>';
+  const text = prefix + hit + '</script>';
+  const item = detailFixture({title, match: {kind: 'body', text, start: prefix.length, end: prefix.length + hit.length}});
+  const card = renderFeedCard(doc, item);
+  const [before, mark, after] = classHits(card, 'feed-search-excerpt')[0].children;
+  assert.equal(before, prefix);
+  assert.equal(mark.tagName, 'mark');
+  assert.equal(mark.textContent, hit);
+  assert.equal(after, '</script>');
+  assert.equal(card.children[2].textContent, title);
+  const titleCard = renderFeedCard(doc, {...item, match: {kind: 'title', text: title, start: 1, end: 2}});
+  assert.equal(titleCard.children[2].children[1].textContent, '题');
+  assert.equal(classHits(titleCard, 'feed-search-excerpt').length, 0);
+  const bad = renderFeedCard(doc, {...item, match: {...item.match, end: text.length + 1}});
+  assert.equal(classHits(bad, 'feed-search-excerpt').length, 0);
+});
+
+test('the search debounces an IME commit, aborts an older query, retries the active filter, then clears on Escape', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const calls = [], visits = [];
+  const slow = Promise.withResolvers();
+  const started = Promise.withResolvers();
+  const location = {search: '?kind=document', pathname: '/discover'};
+  let retry = false;
+  await mount(doc, {
+    location,
+    history: {pushState(_state, _title, url) {visits.push(url);}},
+    async fetcher(path, {signal} = {}) {
+      if (path === '/v1/auth/session') return commentResponse({}, 401);
+      if (path.endsWith('/preview')) return commentResponse({preview: null});
+      const params = new URL(path, 'https://example.test').searchParams;
+      calls.push({params, signal});
+      if (params.get('q') === '中文') {
+        started.resolve();
+        return slow.promise;
+      }
+      if (params.get('q') === '最新' && !retry) {
+        retry = true;
+        return commentResponse({}, 503);
+      }
+      return commentResponse({items: [detailFixture({title: params.get('q') || '目录'})]});
+    },
+  });
+  const el = id => doc.getElementById(id);
+  const input = el('feed-query');
+  input.handlers.compositionstart();
+  input.value = '中';
+  input.handlers.input();
+  assert.equal(el('feed-clear').hidden, false);
+  assert.equal(calls.length, 1);
+  input.value = '中文';
+  input.handlers.compositionend();
+  assert.equal(calls.length, 1, 'composition waits for the debounce');
+  await started.promise;
+  assert.equal(calls.at(-1).params.get('q'), '中文');
+  const old = calls.at(-1);
+  input.value = '最新';
+  await el('feed-search').handlers.submit({preventDefault() {}});
+  assert.equal(old.signal.aborted, true);
+  assert.match(el('feed-error').textContent, /无法加载/);
+  assert.equal(el('feed-retry').hidden, false);
+  await el('feed-retry').handlers.click();
+  assert.equal(el('feed-retry').hidden, true);
+  assert.equal(calls.at(-1).params.get('q'), '最新');
+  assert.equal(calls.at(-1).params.get('kind'), 'document');
+  slow.resolve(commentResponse({items: [detailFixture({title: '过期结果'})]}));
+  await flush();
+  assert.equal(el('feed-grid').children[0].children[0].children[2].textContent, '最新');
+  assert.match(el('feed-count').textContent, /1 件匹配作品/);
+  await input.handlers.keydown({key: 'Escape', preventDefault() {}});
+  assert.equal(el('feed-clear').hidden, true);
+  assert.equal(input.value, '');
+  assert.equal(visits.at(-1), '/discover?kind=document');
+  assert.equal(calls.at(-1).params.has('q'), false);
+});
+
+test('Back after changing a filter rereads fresh cursors to restore the previous depth, position and card focus', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const createElement = doc.createElement;
+  doc.createElement = tag => {
+    const element = createElement(tag);
+    element.focus = () => { doc.activeElement = element; };
+    return element;
+  };
+  const location = {pathname: '/discover', search: '?q=layout'};
+  const calls = [], handlers = {};
+  let firstPages = 0;
+  await mount(doc, {
+    location,
+    window: {addEventListener(type, handler) {handlers[type] = handler;}},
+    history: {pushState(_state, _title, url) {location.search = new URL(url, 'https://example.test').search;}},
+    async fetcher(path) {
+      if (path === '/v1/auth/session') return commentResponse({}, 401);
+      if (path.endsWith('/preview')) return commentResponse({preview: null});
+      const params = new URL(path, 'https://example.test').searchParams;
+      calls.push(params);
+      if (params.has('kind')) return commentResponse({items: []});
+      if (params.has('cursor')) return commentResponse({items: [detailFixture({slug: 'second-page'})]});
+      return commentResponse({items: [detailFixture({slug: 'first-page'})], cursor: 'page-' + ++firstPages});
+    },
+  });
+  const el = id => doc.getElementById(id);
+  await el('feed-more').handlers.click();
+  const second = el('feed-grid').children[1];
+  const original = second.children[0];
+  original.closest = selector => selector === '.feed-entry' ? second : null;
+  original.focus();
+  el('main').scrollTop = 550;
+  await el('feed-kind-dashboard').handlers.click();
+  assert.equal(location.search, '?kind=dashboard&q=layout');
+  assert.equal(el('main').scrollTop, 0);
+  location.search = '?q=layout';
+  await handlers.popstate();
+  assert.equal(calls.at(-1).get('cursor'), 'page-2');
+  assert.equal(el('feed-grid').children.length, 2);
+  const restored = el('feed-grid').children[1].children[0];
+  assert.notEqual(restored, original);
+  assert.equal(doc.activeElement, restored);
+  assert.equal(el('main').scrollTop, 550);
 });
 
 test('feed cover patterns are stable for a title and stay in 0-7', () => {

@@ -492,6 +492,21 @@ a.catalog-create:hover { background: var(--ot-accent-hover); color: var(--ot-on-
   display: grid; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--ot-muted); box-shadow: none;
 }
 #feed-search .search-submit:hover, #catalog-search .search-submit:hover { color: var(--ot-ink); background: transparent; }
+#feed-clear {
+  flex: 0 0 2rem;
+  height: 2rem;
+  min-height: 0;
+  margin: 0 .1875rem 0 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ot-muted);
+  box-shadow: none;
+}
+#feed-clear:hover { color: var(--ot-ink); background: var(--ot-bg-accent); }
 #feed-query, #catalog-query {
   flex: 1 1 auto; width: auto; min-width: 0; max-width: none; height: 100%; padding: 0 .75rem 0 .125rem;
   border: 0; background: transparent; box-shadow: none; font-size: .8125rem; color: var(--ot-ink); outline: none;
@@ -578,6 +593,21 @@ html[data-theme-resolved="dark"] .feed-card .kind { background: var(--ot-surface
 .feed-grid > article > div > button:hover { background: var(--ot-bg-accent); color: var(--ot-ink); }
 #feed-count { font-size: .75rem; margin: .75rem 0 .25rem; }
 #feed-panel .note { font-size: .75rem; color: var(--ot-muted); margin: .25rem 0; }
+.feed-search-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--ot-muted);
+  font-size: .8125rem;
+  line-height: 1.45;
+  margin: 0;
+}
+.feed-card mark { padding: 0 .0625rem; border-radius: .125rem; background: var(--ot-accent-soft); color: var(--ot-ink); }
+.feed-feedback { display: flex; flex-wrap: wrap; align-items: center; column-gap: .75rem; }
+#feed-error { margin: .375rem 0; font-size: .8125rem; color: var(--ot-ink); }
+#feed-retry { min-height: 2.25rem; margin: .25rem 0; }
 @media (max-width: 45rem) {
   .feed-toolbar, .catalog-toolbar { flex-wrap: wrap; }
   #feed-search, #catalog-search { flex: 1 1 100%; max-width: none; height: 2.75rem; }
@@ -1110,6 +1140,7 @@ html[data-theme-resolved="dark"] .feed-grid > .feed-entry > .feed-card-actions {
   #discover-tabs { margin-bottom: .5rem; }
   .feed-toolbar { display: grid; grid-template-columns: minmax(0, 1fr); gap: .375rem; }
   #feed-search { height: 2.625rem; }
+  #feed-clear { flex-basis: 2.375rem; height: 2.375rem; margin-right: .125rem; }
   .feed-tabs button { flex: 1 1 0; min-height: 2.25rem; }
   .feed-filters { margin-bottom: .5rem; }
   #catalog-search { flex: 1 1 0; }

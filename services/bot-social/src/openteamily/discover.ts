@@ -10,6 +10,7 @@ import { DEFAULT_ATTACHMENT_LIMITS } from "../attachments.js";
 import { CHAT_FILE_BODY_LIMIT, decodeChatFile } from "./chat-files.js";
 import { body, handleKey, hashCode, intParam, one, OtContext, optText, params, query, text } from "./core.js";
 import { WORK_COMMENTS_SCHEMA, registerWorkComments, workCommentCount, workCommentsPage } from "./work-comments.js";
+import { WORK_SEARCH_SCHEMA, publicWorkText, registerWorkSearch, saveWorkSearch, workBodyCondition, workSearchMatch, workSearchQuery } from "./discover-work-search.js";
 
 export const DISCOVER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_listings (
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS ot_listing_sites (
   listing_id TEXT PRIMARY KEY REFERENCES ot_listings(id) ON DELETE CASCADE,
   html TEXT NOT NULL
 );
+${WORK_SEARCH_SCHEMA}
 CREATE TABLE IF NOT EXISTS ot_likes (listing_id TEXT NOT NULL REFERENCES ot_listings(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (listing_id, owner_id));
 CREATE TABLE IF NOT EXISTS ot_collections (listing_id TEXT NOT NULL REFERENCES ot_listings(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (listing_id, owner_id));
 CREATE TABLE IF NOT EXISTS ot_follows (follower_id TEXT NOT NULL, creator_id TEXT NOT NULL, created_at INTEGER NOT NULL,
@@ -47,9 +49,10 @@ ${WORK_COMMENTS_SCHEMA}
 `;
 
 export const CATEGORIES = ["content-creation", "customer-support", "data-analysis", "design", "education", "engineering", "finance", "it-security", "investment", "legal", "life", "marketing", "operations", "product", "recruiting", "research", "sales"];
-export const WORK_KINDS = ["document", "website", "whiteboard", "media", "image", "audio", "video", "slides", "dashboard", "model3d"];
+export const WORK_KINDS = ["document", "website", "whiteboard", "media", "image", "audio", "video", "slides", "dashboard", "model3d", "spreadsheet"];
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
+const LATEST_WORK_CURSOR = /^l\.(0|[1-9][0-9]{0,15})\.(otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26})\.([a-f0-9]{24})$/;
 const RESERVED = new Set(["settings", "team", "members", "v1", "discover", "agents", "chat", "messenger", "space", "artifacts", "memory", "automations", "runtimes", "profile", "download", "install", "shell", "share", "a", "d", "api", "login", "logout", "search", "w", "works", "feed"]);
 const REF = /^[A-Za-z0-9._:-]{1,80}$/;
 const SNAPSHOT_MAX = 200_000;
@@ -352,7 +355,8 @@ function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: st
   const category = one(input.category, "category");
   const workKind = one(input.work_kind, "work_kind");
   const creator = one(input.creator, "creator");
-  const search = (one(input.q, "q") ?? "").trim().toLowerCase().slice(0, 60);
+  const term = one(input.q, "q") ?? "";
+  const workSearch = kind === "work" ? workSearchQuery(term) : "";
   assert(sort === "latest" || sort === "popular", 400, "invalid_request", "unknown discover sort");
   assert(sort !== "popular" || (kind === "work" && tab === "all"), 400, "invalid_request", "popularity sorting applies to the all works feed");
 
@@ -379,11 +383,34 @@ function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: st
   } else {
     assert(tab === "all", 400, "invalid_request", "tab must be all, following or collected");
   }
-  if (search) {
-    conditions.push("(instr(lower(l.title), ?) > 0 OR instr(lower(l.summary), ?) > 0 OR instr(p.handle, ?) > 0 OR instr(lower(p.display_name), ?) > 0)");
-    args.push(search, search, search, search);
+  if (workSearch) {
+    const body = workBodyCondition(workSearch);
+    conditions.push(`(instr(ot_work_search_fold(l.title), ?) > 0
+      OR (instr(ot_work_search_fold(l.summary), ?) > 0 AND (l.work_kind IS NOT 'website'
+        OR NOT EXISTS (SELECT 1 FROM ot_listing_sites s WHERE s.listing_id = l.id)))
+      OR instr(ot_work_search_fold(p.handle), ?) > 0
+      OR instr(ot_work_search_fold(p.display_name), ?) > 0
+      OR ${body.sql})`);
+    args.push(workSearch, workSearch, workSearch, workSearch, body.term);
+  } else if (kind !== "work") {
+    const search = term.trim().toLowerCase().slice(0, 60);
+    if (search) {
+      conditions.push("(instr(lower(l.title), ?) > 0 OR instr(lower(l.summary), ?) > 0 OR instr(p.handle, ?) > 0 OR instr(lower(p.display_name), ?) > 0)");
+      args.push(search, search, search, search);
+    }
   }
-  return {sort, where: conditions.join(" AND "), args};
+  return {kind, sort, where: conditions.join(" AND "), args, workSearch};
+}
+
+function discoverCard(ot: OtContext, row: any, viewer: string, search: string) {
+  const card = listingView(ot, row, viewer);
+  if (!search) return card;
+  const match = workSearchMatch("title", card.title, search)
+    ?? (card.site_available ? undefined : workSearchMatch("summary", card.summary, search))
+    ?? workSearchMatch("creator", card.creator.display_name, search)
+    ?? workSearchMatch("creator", card.creator.handle, search)
+    ?? workSearchMatch("body", ot.get<{body: string}>("SELECT body FROM ot_discover_work_search WHERE listing_id = ?", row.id)?.body ?? null, search);
+  return match ? {...card, match} : card;
 }
 
 function chronologicalWorkNeighbors(ot: OtContext, work: WorkAnchor, scope: FeedScope) {
@@ -430,7 +457,7 @@ function popularWorks(ot: OtContext) {
   type Ranking = { context: string; keys: string; expires: number };
   const rankings = new Map<string, Ranking>();
 
-  return (where: string, args: unknown[], viewer: string, limit: number, cursor: string | undefined) => {
+  return ({where, args, workSearch}: ReturnType<typeof discoverScope>, viewer: string, limit: number, cursor: string | undefined) => {
     const context = hashCode(JSON.stringify([viewer, where, args]));
     const now = ot.now();
     let token: string;
@@ -466,7 +493,7 @@ function popularWorks(ot: OtContext) {
       }
       rankings.set(token, ranking);
     }
-    return { items: rows.slice(0, limit).map(row => listingView(ot, row, viewer)),
+    return { items: rows.slice(0, limit).map(row => discoverCard(ot, row, viewer, workSearch)),
       next_cursor: next ? `${token}.${next.position}` : null };
   };
 }
@@ -548,6 +575,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   if (!followColumns.some(column => column.name === "work_notices")) {
     ot.run("ALTER TABLE ot_follows ADD COLUMN work_notices INTEGER NOT NULL DEFAULT 1 CHECK (work_notices IN (0, 1))");
   }
+  registerWorkSearch(ot);
 
   app.put("/v1/ot/listings", {
     bodyLimit: CHAT_FILE_BODY_LIMIT,
@@ -558,7 +586,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     assert(b.kind === "agent" || b.kind === "work", 400, "invalid_request", "kind must be agent or work");
     assert(typeof b.ref === "string" && REF.test(b.ref), 400, "invalid_request", "ref is invalid");
     const title = text(b.title, "title", { min: 1, max: 80 });
-    const summary = optText(b.summary, "summary", { max: 500, multiline: true }) ?? "";
+    const suppliedSummary = optText(b.summary, "summary", { max: 500, multiline: true });
     const category = b.category == null || b.category === "" ? null : String(b.category);
     assert(category === null || CATEGORIES.includes(category), 400, "invalid_request", "unknown category");
     const workKind = b.kind === "work" ? String(b.work_kind ?? "document") : null;
@@ -573,6 +601,9 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     }
     const snapshot = site !== undefined || b.snapshot == null
       ? null : text(b.snapshot, "snapshot", { max: SNAPSHOT_MAX, multiline: true });
+    const searchableBody = workKind === null ? null : publicWorkText(workKind, snapshot, site ?? null);
+    const summary = suppliedSummary
+      ?? (site === undefined ? "" : (searchableBody ?? "").slice(0, 300).replace(/[\uD800-\uDBFF]$/u, ""));
     const existing = ot.get<any>("SELECT * FROM ot_listings WHERE owner_id = ? AND kind = ? AND ref = ?", me.ownerId, b.kind, b.ref);
     assert(b.chat_enabled === undefined || (b.kind === "agent" && typeof b.chat_enabled === "boolean"),
       400, "invalid_request", "chat_enabled must be a boolean on an agent listing");
@@ -608,6 +639,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       } else if (existing?.work_kind === "website") {
         ot.run("DELETE FROM ot_listing_sites WHERE listing_id = ?", id);
       }
+      if (searchableBody !== null) saveWorkSearch(ot, id, searchableBody);
       if (!existing || !existing.listed) {
         const followers = ot.all<{follower_id: string}>("SELECT follower_id FROM ot_follows WHERE creator_id = ? AND (? <> 'work' OR work_notices = 1) LIMIT 5000",
           me.ownerId, b.kind);
@@ -627,6 +659,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       assert(r.changes === 1, 404, "listing_not_found", "no such listing of yours");
       ot.run("DELETE FROM ot_listing_models WHERE listing_id = ?", id);
       ot.run("DELETE FROM ot_listing_sites WHERE listing_id = ?", id);
+      ot.run("DELETE FROM ot_discover_work_search WHERE listing_id = ?", id);
     });
     return { unlisted: true };
   });
@@ -638,24 +671,42 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   app.get("/v1/ot/discover", async (req) => {
     const me = ot.me(req);
     const q = query(req);
-    const {sort, where, args} = discoverScope(ot, q, me.ownerId);
+    const scope = discoverScope(ot, q, me.ownerId);
+    const {kind, sort, where, args, workSearch} = scope;
     const cursor = one(q.cursor, "cursor");
-    const limit = intParam(q.limit, "limit", 30, 100);
+    const pagination = one(q.pagination, "pagination");
+    const limit = Math.max(1, intParam(q.limit, "limit", 30, 100));
     if (sort === "popular") {
-      assert(q.before === undefined, 400, "invalid_request", "the popular feed uses a popularity cursor");
-      return popular(where, args, me.ownerId, Math.max(1, limit), cursor);
+      assert(q.before === undefined && pagination === undefined, 400, "invalid_request", "the popular feed uses a popularity cursor");
+      return popular(scope, me.ownerId, limit, cursor);
     }
-    assert(cursor === undefined, 400, "invalid_request", "the latest feed uses the before cursor");
-    const before = intParam(q.before, "before", 0);
-    const boundary = before ? " AND l.updated_at < ?" : "";
+    const keyset = pagination === "keyset" && kind === "work";
+    assert(pagination === undefined || keyset, 400, "invalid_request", "keyset pagination applies to the latest works feed");
+    assert(cursor === undefined || (keyset && q.before === undefined), 400, "invalid_request", "invalid latest works pagination");
+    const before = intParam(q.before, "before", 0, Number.MAX_SAFE_INTEGER);
+    const boundary: unknown[] = before ? [before] : [];
+    let condition = before ? " AND l.updated_at < ?" : "";
+    const scopeKey = keyset ? hashCode(JSON.stringify([me.ownerId, where, args])).slice(0, 24) : "";
+    if (cursor !== undefined) {
+      const match = LATEST_WORK_CURSOR.exec(cursor);
+      assert(match && Number.isSafeInteger(Number(match[1])), 400, "invalid_request", "invalid latest works cursor");
+      assert(match[3] === scopeKey, 400, "invalid_request", "cursor belongs to another feed");
+      boundary.push(Number(match[1]), match[2]);
+      condition = " AND (l.updated_at, l.id) < (?, ?)";
+    }
     const rows = ot.all<any>(`SELECT ${LISTING_CARD_COLUMNS} FROM ot_listings l LEFT JOIN ot_profiles p ON p.owner_id = l.owner_id
-      WHERE ${where}${boundary} ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`, ...args, ...(before ? [before] : []), limit);
-    return { items: rows.map((l) => listingView(ot, l, me.ownerId)), next_before: rows.length === limit ? rows[rows.length - 1].updated_at : null };
+      WHERE ${where}${condition} ORDER BY l.updated_at DESC, l.id DESC LIMIT ?`, ...args, ...boundary, limit + Number(keyset));
+    const cards = rows.slice(0, limit).map(row => discoverCard(ot, row, me.ownerId, workSearch));
+    const last = rows[limit - 1] as WorkAnchor | undefined;
+    const nextBefore = last?.updated_at ?? null;
+    return keyset
+      ? {items: cards, next_cursor: rows.length > limit && last ? `l.${last.updated_at}.${last.id}.${scopeKey}` : null}
+      : {items: cards, next_before: nextBefore};
   });
   app.get("/v1/ot/discover/:slug/detail", async (req, reply) => {
     const me = ot.me(req);
     const q = query(req);
-    assert(Object.keys(q).every(key => ["tab", "sort", "work_kind", "q", "creator"].includes(key)),
+    assert(Object.keys(q).every(key => ["tab", "sort", "category", "work_kind", "q", "creator"].includes(key)),
       400, "invalid_request", "unknown work detail filter");
     const scope = discoverScope(ot, {...q, kind: "work"}, me.ownerId);
     const slug = params(req).slug;

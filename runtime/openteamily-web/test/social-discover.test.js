@@ -286,6 +286,78 @@ test('native Discover forwards popularity cursors separately and publishes only 
   assert.equal(saved.body.discover.listed, true)
 })
 
+test('native Discover passes the full work query and scoped cursor while returning only bounded match fields', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-cd-content-'))
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({token: 'fixture', server: SERVER}), {mode: 0o600})
+  const position = 'l.1761111000000.otl_' + 'A'.repeat(26) + '.' + '9'.repeat(24)
+  const query = '公开方案'.repeat(20)
+  const calls = []
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath, fetch: async (url) => {
+    const target = new URL(url)
+    assert.equal(target.pathname, '/v1/ot/discover')
+    calls.push(Object.fromEntries(target.searchParams))
+    const panel = {slug: 'work-panel', title: '公开看板', kind: 'work', work_kind: 'dashboard'}
+    const text = '内容中的检索结果'
+    return Response.json({items: [
+      {...panel, match: {kind: 'body', text, start: 4, end: 6, snapshot: 'out of contract'}},
+      {...panel, slug: 'bad-offsets', match: {kind: 'body', text, start: 4, end: text.length + 1}},
+    ], next_cursor: target.searchParams.has('cursor') ? null : position, next_before: 155})
+  }}))
+  const call = discover({dataDir: dir}).endpoints.v1
+  const path = '/v1/discover/me/works?' + new URLSearchParams({q: query, tab: 'following', kind: 'dashboard', limit: '12'})
+  const view = {request: new Request(SERVER, {headers: {'x-ot-owner-username': 'reader.qa'}})}
+  const first = await call({method: 'GET', path}, view)
+  assert.equal(first.status, 200)
+  assert.equal(first.body.cursor, position)
+  assert.equal(first.body.viewer_username, 'reader.qa')
+  assert.deepEqual(first.body.items[0].match, {kind: 'body', text: '内容中的检索结果', start: 4, end: 6})
+  assert.equal(first.body.items[1].match, undefined)
+  assert.equal((await call({method: 'GET', path: path + '&cursor=' + position})).body.cursor, null)
+  assert.equal((await call({method: 'GET', path: path + '&cursor=l.invalid'})).status, 400)
+  assert.deepEqual(calls, [
+    {kind: 'work', tab: 'following', q: query, work_kind: 'dashboard', pagination: 'keyset', limit: '12'},
+    {kind: 'work', tab: 'following', q: query, work_kind: 'dashboard', pagination: 'keyset', cursor: position, limit: '12'},
+  ])
+})
+
+test('publishing native works sends only saved display content to the public catalog', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-discover-published-text-'))
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({token: 'fixture', server: SERVER}), {mode: 0o600})
+  const siteHtml = '<main><h1>可见 &amp; 导览</h1><p hidden>hidden</p><script>private()</script></main>'
+  const works = [
+    [{kind: 'whiteboard', board: {strokes: [{type: 'path', meta: 'internal'}, {type: 'text', text: '白板标注'}]}}, '白板标注'],
+    [{kind: 'slides', slides: {slides: [{title: '月度计划', bullets: ['第一目标'], notes: 'speaker notes'}]}}, '月度计划 第一目标'],
+    [{kind: 'dashboard', dashboard: {widgets: [{type: 'table', title: '概览', columns: ['阶段'], rows: [['验收']], source: 'internal'}]}}, '概览 阶段 验收'],
+    [{kind: 'spreadsheet', spreadsheet: {sheets: [{name: '季度', rows: [['销量', '80']]}]}}, '季度\n销量\t80'],
+    [{kind: 'website', body: siteHtml}],
+  ]
+  const puts = []
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath, fetch: async (url, init) => {
+    if (url.endsWith('/mine')) return Response.json({listings: []})
+    assert.equal(init.method, 'PUT')
+    const data = JSON.parse(init.body)
+    puts.push(data)
+    return Response.json({...data, listed: true})
+  }}))
+  const workspace = 'c'.repeat(32)
+  const artifact = '9'.repeat(32)
+  for (const [saved, summary] of works) {
+    const call = discover({dataDir: dir, async call(endpoint, request) {
+      assert.equal(endpoint, 'artifacts/v1')
+      assert.equal(request.path, `/v1/workspaces/${workspace}/artifacts/${artifact}`)
+      return {body: {artifact: {...saved, title: '对外发布', source: {title: 'private original'}}}}
+    }}).endpoints.v1
+    const result = await call({method: 'POST', path: `/v1/workspaces/${workspace}/artifacts/${artifact}/discover`, body: {slug: 'public-work'}})
+    assert.equal(result.status, 201)
+    assert.deepEqual(puts.at(-1), {
+      kind: 'work', ref: artifact, slug: 'public-work', title: '对外发布', work_kind: saved.kind,
+      ...(saved.kind === 'website' ? {site_html: siteHtml} : {summary, snapshot: summary}),
+    })
+  }
+})
+
 test('native work detail and comment routes forward the personal connector and return public projections', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ot-cd-comments-'))
   const credentialsPath = join(dir, 'connector.json')
@@ -375,7 +447,7 @@ test('native website publication copies the authorized saved HTML and exposes on
   assert.equal(publish.status, 201)
   assert.deepEqual(records.find(([method]) => method === 'PUT')?.[2], {
     kind: 'work', ref: artifact, slug: 'local-counter', title: '本地计数器',
-    summary: '本地计数器\n点按增加数值。', work_kind: 'website', site_html: html,
+    work_kind: 'website', site_html: html,
   })
   const detail = await run({method: 'GET', path: '/v1/discover/works/local-counter'})
   assert.equal(detail.body.work.site_available, true)
