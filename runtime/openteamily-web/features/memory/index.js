@@ -18,6 +18,6 @@ export default defineFeature({
   search,
   endpoints: ({ store, owner }) => ({
     async pages(payload) { return allPages(store, payload) },
-    async personal() { return personal(store, actor({ store, owner })) },
+    async personal(payload) { return personal(store, actor({ store, owner }), payload) },
   }),
 })

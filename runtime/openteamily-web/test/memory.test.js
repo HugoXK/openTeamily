@@ -54,18 +54,22 @@ test('做梦 proposes a duplicate-paragraph merge in DS-Bot; only accept writes 
   assert.equal(accepted.body.page.revision, 2)
 })
 
-test('memory/pages gives chat recall this owner\'s pages in-process', async () => {
+test('memory/pages gives chat recall pages only from the selected workspace in this DS-Bot', async () => {
   const bot = await boot()
   await bot.call('memory', 'POST', base(), { title: '口味', body: '不吃辣。' }, key())
-  const viaApi = await bot.endpoint('memory/pages', {})
+  const otherWorkspace = 'e'.repeat(32)
+  await bot.call('memory', 'POST', base('', otherWorkspace), { title: '备忘', body: '只在另一工作区' }, key())
+  const viaApi = await bot.endpoint('memory/pages', {workspace_id:WS})
   assert.equal(viaApi.ok, true)
   assert.equal(viaApi.value.length, 1)
   assert.deepEqual(Object.keys(viaApi.value[0]).sort(), ['body', 'id', 'revision', 'title', 'updated', 'workspace_id'])
   assert.equal(viaApi.value[0].title, '口味')
   const search = await bot.endpoint('memory/search', { q: '不吃辣' })
   assert.equal(search.value.items[0].kind, 'memory')
+  assert.equal((await bot.endpoint('memory/pages', {})).ok, false)
+  assert.equal((await bot.endpoint('memory/pages', {workspace_id:otherWorkspace})).value[0].title,'备忘')
   const other = await boot()
-  assert.deepEqual((await other.endpoint('memory/pages', {})).value, [], 'another DS-Bot has none of these pages')
+  assert.deepEqual((await other.endpoint('memory/pages', {workspace_id:WS})).value, [], 'another DS-Bot has none of these pages')
 })
 
 test('one test account\'s legacy memory (with history) imports into its DS-Bot only', async () => {
@@ -83,7 +87,7 @@ test('one test account\'s legacy memory (with history) imports into its DS-Bot o
   assert.deepEqual(page.body.page.topics, ['客户'])
   const history = await bot.call('memory', 'GET', base(`/${expect.memory.page_id}/versions`, wid))
   assert.deepEqual(history.body.items.map((item) => item.revision), [1])
-  const titles = (await bot.endpoint('memory/pages', {})).value.map((item) => item.title)
+  const titles = (await bot.endpoint('memory/pages', {workspace_id:wid})).value.map((item) => item.title)
   assert.deepEqual(titles, [expect.memory.title])
   const edited = await bot.call('memory', 'POST', base('/' + expect.memory.page_id, wid), { revision: 2, changes: { body: '改成周四发。' } })
   assert.equal(edited.body.page.updated_by, 'alice', 'new edits are attributed to the imported owner')

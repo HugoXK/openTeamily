@@ -33,6 +33,7 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
   const page = {...scope, id:'c'.repeat(32), revision:2, title:'Launch plan', body:'The launch is on Friday in Hangzhou.'}
   const foreignPage = {...page, workspace_id:'b'.repeat(32), id:'f'.repeat(32), body:'Private other-workspace launch note.'}
   const recallRequests = []
+  const personalRequests = []
   const prompts = []
   const events = new Map()
   const bots = {main:{id:'main',name:'Main',capabilities:[]}}
@@ -57,12 +58,17 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
   const db = new DatabaseSync(':memory:')
   try {
     let profile = {name:'Ada',instructions:'Answer briefly.',recall:'all'}
+    let personalization = {...scope, profile:{communication:'Use concise bullets.'}, preferences:['Use metric units.']}
     const {endpoints} = createAgents({db,host:{
       runtime:async () => runtime,
       async call(endpoint, payload) {
         if (endpoint === 'memory/pages') {
           recallRequests.push(payload)
           return [page,foreignPage]
+        }
+        if (endpoint === 'memory/personal') {
+          personalRequests.push(payload)
+          return personalization
         }
         if (endpoint === 'personal/get') return profile
         assert.equal(endpoint,'skills/materialForScope')
@@ -81,16 +87,25 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
     assert.deepEqual(first.body.reply.memory_refs,[{...scope,id:page.id,revision:2,title:page.title}])
     assert.equal(first.body.message.client_key,'workspace-recall-fixture')
     assert.match(prompts[0],/Friday in Hangzhou/)
+    assert.match(prompts[0],/Use concise bullets.*\nPreference: "Use metric units/)
+    assert.equal(first.body.reply.memory_profile_workspace,wid)
+    assert.deepEqual(personalRequests,[scope])
     assert.doesNotMatch(prompts[0],/other-workspace/)
     assert.deepEqual(recallRequests,[scope])
-    assert.deepEqual((await endpoints.v1({method:'GET',path})).body.items[1].memory_refs,first.body.reply.memory_refs)
+    const reopened = (await endpoints.v1({method:'GET',path})).body.items[1]
+    assert.deepEqual(reopened.memory_refs,first.body.reply.memory_refs)
+    assert.equal(reopened.memory_profile_workspace,wid)
+    assert.doesNotMatch(JSON.stringify(reopened),/concise bullets|metric units/)
 
     assert.equal((await endpoints.v1({method:'POST',path,body:{memory_recall:false}})).body.memory_recall,false)
     assert.equal((await create({title:'Plans'})).body.conversation.memory_recall,false)
     assert.equal((await send('workspace-recall-fixture')).body.reply.id,first.body.reply.id)
-    assert.equal((await send('workspace-recall-disabled')).body.reply.memory_refs,undefined)
-    assert.doesNotMatch(prompts[1],/Reference notes/)
+    const disabled = (await send('workspace-recall-disabled')).body.reply
+    assert.equal(disabled.memory_refs,undefined)
+    assert.equal(disabled.memory_profile_workspace,undefined)
+    assert.doesNotMatch(prompts[1],/Reference notes|concise bullets|metric units/)
     assert.equal(recallRequests.length,1)
+    assert.equal(personalRequests.length,1)
 
     await endpoints['adopt-personal-chat']({...scope,id:agent.id,conversations:[]},false)
     profile = {...profile,recall:'off'}
@@ -98,14 +113,19 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
     assert.equal(conversation.memory_recall,false)
     const personal = base + '/' + conversation.id
     await endpoints.v1({method:'POST',path:personal,body:{memory_recall:true}})
+    personalization = {...personalization,workspace_id:foreignPage.workspace_id,preferences:['Other workspace preference.']}
     const on = await endpoints.v1({method:'POST',path:personal+'/messages',body:{body:'launch'},idempotency_key:'personal-recall-fixture'})
     assert.deepEqual(on.body.reply.memory_refs,first.body.reply.memory_refs)
     assert.match(prompts[2],/Answer briefly/)
+    assert.doesNotMatch(prompts[2],/Other workspace preference/)
+    assert.equal(on.body.reply.memory_profile_workspace,undefined)
     assert.deepEqual(recallRequests,[scope,scope])
+    assert.deepEqual(personalRequests,[scope,scope])
 
     await endpoints.turn({agent_id:agent.id,key:'social:shared-room',text:'launch'})
-    assert.doesNotMatch(prompts[3],/Friday in Hangzhou|Answer briefly/)
+    assert.doesNotMatch(prompts[3],/Friday in Hangzhou|Answer briefly|Private workspace personalization/)
     assert.deepEqual(recallRequests,[scope,scope])
+    assert.deepEqual(personalRequests,[scope,scope])
   } finally { db.close() }
 })
 

@@ -2,7 +2,7 @@
 // and preferences (legacy app.py memory_action/link/graph/profile/preference),
 // executed inside the user's DS-Bot.
 import { CONTROL, digest, idempotencyKey, newId, pagination, refuse, requireBodyKeys, stableJson, validLongText } from '../../featurekit/http.js'
-import { actor, casefold, loadPage, pagesView, usernames, validTitle } from './common.js'
+import { actor, casefold, loadPage, pagesView, recallWorkspace, usernames, validTitle } from './common.js'
 
 const W = '([0-9a-f]{32})'
 const re = (source) => new RegExp(source.replace(/\//g, '\\/'))
@@ -186,20 +186,28 @@ function graphRoute(req, ws) {
 }
 
 // ---- profile and preferences (personal to this DS-Bot's owner) ----
+function readProfile(store, ws, user) {
+  const row = store.get('SELECT professional, work_style, communication, revision, updated FROM memory_profiles WHERE workspace_id=? AND user_id=?', ws, user)
+  return row ? { ...row } : { professional: '', work_style: '', communication: '', revision: 0, updated: null }
+}
+
 async function profile(req, ws) {
+  const store = req.store
   const user = actor(req)
-  const row = req.store.get('SELECT professional, work_style, communication, revision, updated FROM memory_profiles WHERE workspace_id=? AND user_id=?', ws, user)
-  const current = row ? { ...row } : { professional: '', work_style: '', communication: '', revision: 0, updated: null }
-  if (req.method === 'GET' && !req.queryString) return { body: { profile: current } }
+  if (req.method === 'GET' && !req.queryString) return { body: { profile: readProfile(store, ws, user) } }
   if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid profile request')
   const fields = ['professional', 'work_style', 'communication']
   const body = requireBodyKeys(await req.json(), ['revision', ...fields])
-  if (!Number.isInteger(body.revision) || body.revision !== current.revision) refuse(409, 'conflict', 'Profile changed; reload and retry')
   if (fields.some((k) => typeof body[k] !== 'string' || body[k].length > LIMITS.PROFILE_MAX || body[k].includes('\x00'))) refuse(400, 'invalid', 'Provide profile sections up to 10000 characters each')
-  req.store.run(`INSERT INTO memory_profiles VALUES(?,?,?,?,?,?,?) ON CONFLICT(workspace_id,user_id) DO UPDATE SET professional=excluded.professional,
-    work_style=excluded.work_style, communication=excluded.communication, revision=excluded.revision, updated=excluded.updated`,
-  ws, user, body.professional, body.work_style, body.communication, current.revision + 1, req.now)
-  return { body: { profile: { professional: body.professional, work_style: body.work_style, communication: body.communication, revision: current.revision + 1, updated: req.now } } }
+  return store.transaction(() => {
+    const current = readProfile(store, ws, user)
+    if (!Number.isInteger(body.revision) || body.revision !== current.revision) refuse(409, 'conflict', 'Profile changed; reload and retry')
+    const revision = current.revision + 1
+    store.run(`INSERT INTO memory_profiles VALUES(?,?,?,?,?,?,?) ON CONFLICT(workspace_id,user_id) DO UPDATE SET professional=excluded.professional,
+      work_style=excluded.work_style, communication=excluded.communication, revision=excluded.revision, updated=excluded.updated`,
+      ws, user, body.professional, body.work_style, body.communication, revision, req.now)
+    return { body: { profile: { professional: body.professional, work_style: body.work_style, communication: body.communication, revision, updated: req.now } } }
+  })
 }
 
 const preferenceView = (row) => ({ id: row.id, text: row.text, created: row.created })
@@ -254,8 +262,9 @@ export const routes = [
 ]
 
 // Preferences + profile as plain text for the owner's DS-Bot turns (chat may call memory/profile).
-export function personal(store, owner) {
-  const prefs = store.all('SELECT text FROM memory_preferences WHERE user_id=? ORDER BY position, id LIMIT 50', owner).map((row) => row.text)
-  const prof = store.get('SELECT professional, work_style, communication FROM memory_profiles WHERE user_id=? ORDER BY updated DESC LIMIT 1', owner)
-  return { preferences: prefs, profile: prof ?? { professional: '', work_style: '', communication: '' } }
+export function personal(store, owner, payload) {
+  const workspace = recallWorkspace(payload)
+  const preferences = store.all('SELECT text FROM memory_preferences WHERE workspace_id=? AND user_id=? ORDER BY position DESC, id DESC LIMIT ?',
+    workspace, owner, LIMITS.preferences).map(row => row.text)
+  return { workspace_id:workspace, preferences, profile:readProfile(store, workspace, owner) }
 }

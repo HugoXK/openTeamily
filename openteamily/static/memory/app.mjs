@@ -551,11 +551,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function syncPageUrl() {
+  function syncViewUrl() {
     const view = document.defaultView;
-    if (!view || !view.history || !view.history.replaceState) return;
-    const path = (view.location && view.location.pathname) || '/memory';
-    view.history.replaceState({}, '', path + queryForMemoryPage(currentView));
+    const params = new URLSearchParams(queryForMemoryPage(currentView));
+    const id = workspaceId();
+    if (/^[0-9a-f]{32}$/.test(id)) params.set('workspace', id);
+    const query = params.toString();
+    view?.history?.replaceState?.({}, '', (view.location?.pathname || '/memory') + (query ? '?' + query : ''));
   }
 
   let profileRevision = null;
@@ -564,15 +566,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     profileRevision = null;
     const token = ++profileRequest, wid = workspaceId();
     const save = document.getElementById('save-memory-profile'); if (save) save.disabled = true;
+    const fields = ['professional', 'work_style', 'communication'];
+    for (const field of fields) {
+      const input = document.getElementById('profile-' + field);
+      if (input) input.value = '';
+    }
     if (!wid) return;
-    const result = await request('GET', `/v1/workspaces/${wid}/memory/profile`);
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/profile`).catch(() => ({status:0, body:{}}));
     if (token !== profileRequest || workspaceId() !== wid) return;
     const status = document.getElementById('memory-profile-status');
-    if (result.status !== 200) { if (status) status.textContent = '无法读取画像。'; return; }
+    if (result.status !== 200 || !result.body.profile) {
+      if (status) status.textContent = '无法读取画像。';
+      return;
+    }
     const profile = result.body.profile;
     profileRevision = profile.revision;
     if (save) save.disabled = false;
-    for (const field of ['professional', 'work_style', 'communication']) {
+    for (const field of fields) {
       const input = document.getElementById('profile-' + field); if (input) input.value = profile[field];
     }
     if (status) status.textContent = '';
@@ -600,7 +610,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (button.getAttribute('data-view') === currentView) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     }
-    if (sync) syncPageUrl();
+    if (sync) syncViewUrl();
   }
 
   function unusedTitle(base) {
@@ -901,11 +911,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }).catch(() => {});
     const linked = new URLSearchParams(document.defaultView?.location?.search || '');
     const workspace = linked.get('workspace'), pageId = linked.get('page');
-    const deepLink = /^[0-9a-f]{32}$/.test(workspace || '') && /^[0-9a-f]{32}$/.test(pageId || '');
+    const scopedLink = /^[0-9a-f]{32}$/.test(workspace || '');
+    const deepLink = scopedLink && /^[0-9a-f]{32}$/.test(pageId || '');
     const linkedRevision = linked.get('revision');
     const revision = /^[1-9][0-9]{0,7}$/.test(linkedRevision || '') ? Number(linkedRevision) : undefined;
     let {initial, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces');
-    if (deepLink && !initial.body.items?.some(item => item.id === workspace) && supplemental) {
+    if (scopedLink && !initial.body.items?.some(item => item.id === workspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) initial = shared;
       supplemental = null;
@@ -913,17 +924,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (seq !== sessionRequest) return;
     const workspaces = initial.status === 200 ? (initial.body.items || []) : [];
     fillWorkspaces(workspaces);
-    if (deepLink && workspaces.some(item => item.id === workspace)) workspaceSelect.value = workspace;
+    const missingWorkspace = scopedLink && !workspaces.some(item => item.id === workspace);
+    if (scopedLink && !missingWorkspace) workspaceSelect.value = workspace;
+    if (missingWorkspace) currentView = 'overview';
     if (initial.status !== 200) show('error', '无法读取工作区，请刷新重试。');
     void supplemental?.then(result => {
       if (seq === sessionRequest && result.status === 200) fillWorkspaces(result.body.items);
     });
-    const directory = loadWorkspace();
-    if (deepLink && workspaceId() === workspace) {
+    const openingPage = deepLink && !missingWorkspace;
+    const directory = loadWorkspace({syncView: !openingPage && !missingWorkspace});
+    if (openingPage) {
       await Promise.all([directory, openPage(pageId, revision)]);
     } else {
       await directory;
-      if (deepLink && seq === sessionRequest) show('error', '无法打开此工作区的记忆页。');
+      if (missingWorkspace && seq === sessionRequest) show('error', '无法打开此工作区的记忆。');
     }
   }
 
@@ -949,7 +963,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  async function loadWorkspace() {
+  async function loadWorkspace({syncView = true} = {}) {
     closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     const seq = ++workspaceRequest;
@@ -960,7 +974,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editor.hidden = true;
     if (actionEditor) actionEditor.hidden = true;
     listPanel.hidden = false;
-    showView(currentView);
+    showView(currentView, {sync:syncView});
     if (!id) {
       pageChoices = [];
       renderDirectory();
@@ -1462,15 +1476,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const profileForm = document.getElementById('memory-profile-form');
   if (profileForm) profileForm.addEventListener('submit', async event => {
     event.preventDefault();
-    if (profileRevision === null) return;
+    const save = document.getElementById('save-memory-profile');
+    if (profileRevision === null || save?.disabled) return;
     const wid = workspaceId();
+    const token = profileRequest;
+    const isCurrent = () => wid === workspaceId() && token === profileRequest;
     const payload = {revision: profileRevision};
     for (const field of ['professional', 'work_style', 'communication']) payload[field] = document.getElementById('profile-' + field).value;
     const status = document.getElementById('memory-profile-status');
-    const result = await request('POST', `/v1/workspaces/${wid}/memory/profile`, payload);
-    if (workspaceId() !== wid) return;
-    if (result.status !== 200) { status.textContent = result.status === 409 ? '画像已在别处更新，请重新打开后重试。' : '画像未保存。'; return; }
-    profileRevision = result.body.profile.revision; status.textContent = '画像已保存。';
+    if (save) save.disabled = true;
+    status.textContent = '正在保存…';
+    try {
+      const result = await request('POST', `/v1/workspaces/${wid}/memory/profile`, payload);
+      if (!isCurrent()) return;
+      if (result.status !== 200 || !result.body.profile) {
+        status.textContent = result.status === 409 ? '画像已在别处更新，请重新打开后重试。' : '画像未保存，请重试。';
+        return;
+      }
+      profileRevision = result.body.profile.revision;
+      status.textContent = '画像已保存。';
+    } catch {
+      if (isCurrent()) status.textContent = '画像未保存，请重试。';
+    } finally {
+      if (save && isCurrent()) save.disabled = false;
+    }
   });
   // 「偏好」 lives in the 我的资料 view. Rows come from and go back to the
   // workspace store per user, so a reload or a new conversation reads the same
@@ -1592,9 +1621,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     invalidateMemoryProfile();
     const historyFocus = {restoreFocus: false};
     closePageHistory(historyFocus);
+    const input = document.getElementById('preference-input');
+    if (input) input.value = '';
     await loadWorkspace();
-    if (currentView === 'profile') await loadMemoryProfile();
-    if (currentView === 'profile') await loadPreferences();
   });
   document.getElementById('search').addEventListener('input', () => renderDirectory());
   document.getElementById('search').addEventListener('keydown', (event) => {

@@ -33,6 +33,7 @@ const publicMessage = (row, workspaceId, agentId) => {
     ...(attachments.length ? {attachments} : {}),
     ...(meta?.clientKey ? {client_key:meta.clientKey} : {}),
     ...(meta?.memory_refs?.length ? {memory_refs: meta.memory_refs} : {}),
+    ...(meta?.memory_profile_workspace === workspaceId ? {memory_profile_workspace: workspaceId} : {}),
     id: row.id, conversation_id: row.conversation_id, workspace_id: workspaceId, agent_id: agentId, role: row.role,
     body: row.text ?? row.body ?? '', status, created: row.created, updated: row.updated ?? row.created,
     task_id: null, error_code: meta?.error ? String(meta.error).replace(/^agents\//, '') : row.error_code ?? null, agent_revision: null,

@@ -1,5 +1,5 @@
 // Shared memory helpers: who the actor is, usernames, snippets, topics.
-import { CONTROL, digest, validLongText } from '../../featurekit/http.js'
+import { CONTROL, digest, refuse, validLongText } from '../../featurekit/http.js'
 
 export const TITLE_MAX = 80
 export const BODY_MAX = 8000
@@ -8,6 +8,12 @@ export const TOPIC_MAX = 40
 export const TOPICS_PER_PAGE = 8
 export const MAX_PAGES = 100
 export const casefold = (value) => String(value).toLocaleLowerCase('en-US')
+
+export function recallWorkspace(payload) {
+  const id = payload?.workspace_id
+  if (typeof id !== 'string' || !/^[0-9a-f]{32}$/.test(id)) refuse(400, 'invalid', 'Workspace ID required')
+  return id
+}
 
 export function snippet(body) {
   const text = String(body ?? '').split(/\s+/).filter(Boolean).join(' ')

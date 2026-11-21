@@ -1246,22 +1246,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function memorySources(item) {
-    if (item.role !== 'assistant' || item.status !== 'succeeded' || !Array.isArray(item.memory_refs)) return null;
+    if (item.role !== 'assistant' || item.status !== 'succeeded') return null;
     const wid = workspaceId();
-    const refs = item.memory_refs.filter(ref => ref?.workspace_id === wid && /^[0-9a-f]{32}$/.test(ref.id));
-    if (!refs?.length) return null;
+    const refs = Array.isArray(item.memory_refs)
+      ? item.memory_refs.filter(ref => ref?.workspace_id === wid && /^[0-9a-f]{32}$/.test(ref.id)) : [];
+    const links = refs.map(ref => {
+      const params = new URLSearchParams({workspace:wid, page:ref.id});
+      if (Number.isSafeInteger(ref.revision) && ref.revision > 0) params.set('revision', String(ref.revision));
+      return [params, ref.title || '记忆页'];
+    });
+    if (item.memory_profile_workspace === wid) {
+      links.push([new URLSearchParams({workspace:wid, page:'profile'}), '我的资料与偏好']);
+    }
+    if (!links.length) return null;
     const sources = document.createElement('details');
     sources.className = 'reply-memory-sources';
     const summary = document.createElement('summary');
-    summary.textContent = `参考记忆 · ${refs.length}`;
+    summary.textContent = `参考记忆 · ${links.length}`;
     const list = document.createElement('ol');
-    for (const ref of refs) {
+    for (const [params, title] of links) {
       const row = document.createElement('li');
       const link = document.createElement('a');
-      const params = new URLSearchParams({workspace:wid, page:ref.id});
-      if (Number.isSafeInteger(ref.revision) && ref.revision > 0) params.set('revision', String(ref.revision));
       link.href = '/memory?' + params.toString();
-      link.textContent = ref.title || '记忆页';
+      link.textContent = title;
       row.append(link);
       list.append(row);
     }

@@ -3,7 +3,7 @@
 // paragraph consolidation, all executed inside the user's DS-Bot.
 import { digest, idempotencyKey, newId, pagination, refuse, requireBodyKeys, stableJson } from '../../featurekit/http.js'
 import {
-  MAX_PAGES, TITLE_MAX, actor, casefold, loadPage, normalizeTopics, pageView, pagesView, replaceTopics, snippet,
+  MAX_PAGES, TITLE_MAX, actor, casefold, loadPage, normalizeTopics, pageView, pagesView, recallWorkspace, replaceTopics, snippet,
   titleHash, topicsFor, usernames, validBody, validTitle,
 } from './common.js'
 
@@ -252,13 +252,9 @@ export const routes = [
   { pattern: new RegExp(`^/v1/workspaces/${W}/memory(?:/${W}(?:/(remove))?)?$`.replace(/\//g, '\\/')), handle: dispatch },
 ]
 
-// For chat recall (#378 via B1): this owner's pages as [{id, revision, title, body}].
 export function allPages(store, payload) {
-  const workspaceId = typeof payload?.workspace_id === 'string' && /^[0-9a-f]{32}$/.test(payload.workspace_id) ? payload.workspace_id : null
-  const rows = workspaceId
-    ? store.all('SELECT id, workspace_id, revision, title, body, updated FROM memory_pages WHERE workspace_id=? ORDER BY updated DESC, id LIMIT 500', workspaceId)
-    : store.all('SELECT id, workspace_id, revision, title, body, updated FROM memory_pages ORDER BY updated DESC, id LIMIT 500')
-  return rows.map((row) => ({ id: row.id, workspace_id: row.workspace_id, revision: row.revision, title: row.title, body: row.body, updated: row.updated }))
+  const workspace = recallWorkspace(payload)
+  return store.all('SELECT id, workspace_id, revision, title, body, updated FROM memory_pages WHERE workspace_id=? ORDER BY updated DESC, id LIMIT 500', workspace)
 }
 
 export function search(store, needle, limit) {
