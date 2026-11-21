@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import custom_mcp, skill_packages, agents, artifacts, bot_social, composio, connected_tools, conversations, meetings, members, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, runtime_connect, skill_secrets, social, team_templates, teams, skill_installs
+from . import skill_packages, agents, artifacts, bot_social, composio, conversations, meetings, members, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, skill_secrets, social, team_templates, teams, skill_installs
 
 
 
@@ -107,9 +107,6 @@ class App:
             raise ValueError("Invalid operator model HTTP policy")
         self.model_http_policy = model_http_policy or ModelHttpPolicy()
         self.store, self.config, self.clock = store, config, clock
-        # Tests inject a fake Composio HTTP transport; production uses urllib.
-        self.composio_transport = composio_transport
-        self.mcp_transport = mcp_transport
         self.lifecycle, self.manager_auth = lifecycle, manager_auth
         from . import runtime_autoprovision
         if auto_provision is not None and not isinstance(auto_provision, runtime_autoprovision.AutoProvisionPolicy):

@@ -82,6 +82,17 @@ export default defineFeature({
       const result = createArtifact(ctx, workspace, {kind: 'document', title, body, source}, key, {reuseChatSource: true})
       return {status: result.status, artifact: result.body.artifact}
     },
+    async saveAutomationRun(input, call) {
+      if (!call?.internal) refuse(403, 'forbidden', 'Save results from their automation run')
+      const { workspace_id: workspace, automation_id, automation_title, run_id, body } = input ?? {}
+      if (![workspace, automation_id, run_id].every(id => typeof id === 'string' && HEX32.test(id)) || !validTitle(automation_title)) {
+        refuse(400, 'invalid', 'Invalid automation result')
+      }
+      const source = {kind: 'automation_run', id: run_id, automation_id, automation_title}
+      const title = uniqueTitle(ctx.store, workspace, `${automation_title} · 运行结果`, run_id)
+      const result = createArtifact(ctx, workspace, {kind: 'document', title, body, source}, 'automation-run-' + run_id, {reuseSource: true})
+      return {status: result.status, artifact: result.body.artifact}
+    },
     async chatAttachment(input, call) {
       if (!call?.internal) refuse(403, 'forbidden', 'Send saved works from an authenticated conversation')
       const {workspace_id: workspace, artifact_id: id, revision} = input ?? {}

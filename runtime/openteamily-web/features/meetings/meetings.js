@@ -206,7 +206,9 @@ async function dispatch(req, workspaceId, meetingId, removing) {
     req.store.run('DELETE FROM meetings WHERE id=?', row.id)
     return { body: { removed: view(row, false) } }
   }
-  if (req.method === 'GET' && !req.queryString) return { body: { meeting: view(row) } }
+  if (req.method === 'GET' && !req.queryString) return { body: {
+    meeting: view(row), ...(req.ownerUsername ? {viewer_username:req.ownerUsername} : {}),
+  } }
   if (req.method === 'POST' && !req.queryString) return update(req, row)
   refuse(400, 'invalid', 'Invalid meeting request')
 }
