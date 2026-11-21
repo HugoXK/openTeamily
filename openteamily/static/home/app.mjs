@@ -1,6 +1,7 @@
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/public-agent-link.mjs';
 import { publicWorkIntentFromHash } from '../shell/public-work-link.mjs';
+import { teamInviteFromHash, teamInviteHash } from '../shell/team-invite-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { csrfCookie, waitForRuntime } from './runtime-readiness.mjs';
@@ -331,7 +332,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         const hash = view.location?.pathname === '/login' ? view.location.hash : '';
         const intent = publicAgentIntentFromHash(hash);
         const work = publicWorkIntentFromHash(hash);
-        const continuation = intent ? publicAgentContinuation(intent) : work?.continuation;
+        const continuation = teamInviteHash(teamInviteFromHash(hash)) ||
+          (intent ? publicAgentContinuation(intent) : work?.continuation);
         const register = loginPanel.querySelector?.('.login-register-button');
         if (register && continuation) register.href = '/register' + continuation;
         show(document, '', '');
@@ -355,9 +357,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       try { view.sessionStorage.removeItem(pendingKey); } catch {}
       if (view.location?.pathname === '/login') {
         const hash = view.location.hash;
+        const invite = teamInviteFromHash(hash);
         const intent = publicAgentIntentFromHash(hash);
         const work = publicWorkIntentFromHash(hash);
-        if (intent) {
+        if (invite) {
+          if (await initializePersonalAgent() && view.location.hash === hash) {
+            view.location.replace('/members' + teamInviteHash(invite));
+          }
+        } else if (intent) {
           await continuePublicActivity({
             target: '/chat' + publicAgentContinuation(intent), backPath: '/a/' + intent.slug,
             loadingText: '正在打开公开智能体…', errorText: '聊天尚未准备好。', retryId: 'public-agent-login-retry',

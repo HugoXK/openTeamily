@@ -2766,25 +2766,34 @@ for (const phase of ['directory', 'fanout']) for (const target of ['ws-1','ws-2'
 }
 
 
-test('initial SSE cannot supersede an uncommitted session directory and lose a conversation deep link',async()=>{
- const {doc,el}=fakeChatDocument(chatHtml()),restore=installChatGlobals();const saved=globalThis.EventSource;
- const sources=[];let release,first=true;
- class Source{constructor(){this.handlers={};sources.push(this)}addEventListener(n,fn){this.handlers[n]=fn}close(){}}
- globalThis.EventSource=Source;globalThis.location.hash='#workspace=ws-1&agent=agent-1&conversation=conv-1';
- const fallback=chatFetcher().fetcher;
- const fetcher=async(path,options)=>{
-  if(path.endsWith('/agents?limit=100&include=conversations')){if(first){first=false;return await new Promise(resolve=>{release=()=>resolve(json(200,{items:[{id:'agent-1',name:'Deep link agent'}]}));});}return json(200,{items:[{id:'agent-1',name:'Deep link agent'}]});}
-  if(path.endsWith('/agents/agent-1/conversations?limit=100'))return json(200,{items:[{id:'conv-1',title:'Stored conversation'}]});
-  if(path.endsWith('/agents/agent-1/conversations/conv-1'))return json(200,{conversation:{id:'conv-1',title:'Stored conversation'},items:[{id:'m-1',role:'assistant',body:'Stored actual response',status:'succeeded'}]});
-  return fallback(path,options);
- };
- try{
-  mount(doc,{fetcher});await settle();assert.equal(typeof release,'function');assert.equal(sources.length,0,'subscribe only after the initial directory commits');
-  release();await settle();assert.equal(sources.length,1);
-  sources[0].handlers.invalidate({data:JSON.stringify({version:'f'.repeat(64),domains:{social:'a'.repeat(64),artifacts:'b'.repeat(64),notifications:'c'.repeat(64)}})});
-  await settle();assert.match(el('chat-title').textContent,/Deep link agent/);assert.ok(el('message-list').children.length>0,'initial snapshot refresh retains the deep-linked history');
- }finally{if(saved===undefined)delete globalThis.EventSource;else globalThis.EventSource=saved;restore();}
+test('native Bot Social activity starts after the directory commits and preserves linked history', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const directory = Promise.withResolvers();
+  const activity = scope + '/social/conversations?view=activity';
+  fixture.routes.set(scope + linkSocialDirectory, () => directory.promise);
+  fixture.routes.set(activity, () => json(200, {version: 'current', items: []}));
+  try {
+    const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    t.mock.timers.tick(2100);
+    await settle();
+    assert.equal(fixture.calls.some(call => call.path === activity), false);
+    directory.resolve(json(200, {items: []}));
+    await loading;
+    await settle();
+    t.mock.timers.tick(2000);
+    await settle();
+    assert.equal(fixture.calls.some(call => call.path === activity), true);
+    assert.equal(fixture.calls.some(call => call.path.endsWith('/events')), false);
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+  } finally {
+    directory.resolve(json(200, {items: []}));
+    fixture.restore();
+  }
 });
+
 
 const linkWork = '1'.repeat(32);
 const linkTeam = '2'.repeat(32);

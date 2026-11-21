@@ -19,6 +19,7 @@ from .dsbot_gateway import moved_api, owner_runtime_readiness  # noqa: E402
 
 # Central execution routes removed in the DS-Bot architecture (thin 410 for old clients).
 GONE_PATHS = frozenset({'/v1/agent-homepages/start', '/v1/runtime-keys', '/v1/runtime/connections', '/v1/runtime/tasks'})
+GONE_WORKSPACE_EVENTS = re.compile(r'/v1/workspaces/[0-9a-f]{32}/events')
 
 class APIError(Exception):
     def __init__(self, status, code, message):
@@ -115,8 +116,6 @@ class App:
         self.auto_provision = auto_provision or runtime_autoprovision.AutoProvisionPolicy()
         self.operator_admin = operator_admin
         self.oidc_registry = oidc_registry
-        from .events import Limits
-        self.event_limits = Limits()
 
     def __call__(self, env, start_response):
         headers = [('Cache-Control', 'no-store'),
@@ -136,15 +135,6 @@ class App:
             status, body = 500, {'error': {'code': 'internal', 'message': 'Internal service error'}}
         if not any(key.lower() == 'content-security-policy' for key, _value in headers):
             headers.append(('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'"))
-        from .events import EventStream
-        if isinstance(body,EventStream):
-            headers.insert(0,('Content-Type','text/event-stream; charset=utf-8'))
-            headers.append(('X-Accel-Buffering','no'))
-            try:
-                start_response('200 OK',headers)
-            except BaseException:
-                body.close();raise
-            return body
         if isinstance(body, (bytes, bytearray)):
             data = bytes(body)
             if not any(key.lower() == 'content-type' for key, _value in headers):
@@ -562,6 +552,8 @@ class App:
                 with self.store.transaction() as db:
                     return self.save_bot_social(db, now, None, self.body(env, ['revision', 'changes']), scope='platform')
             refuse(404, 'not_found', 'Route not found')
+        if GONE_WORKSPACE_EVENTS.fullmatch(path):
+            refuse(410, 'retired', 'Workspace event streams have been retired')
         if path.startswith(('/v1/agent/', '/v1/gateway/')) or path in GONE_PATHS or moved_api(path):
             # Execution moved to each user's DS-Bot; public pages to Bot Social. Old clients get 410.
             refuse(410, 'moved_to_dsbot', 'This route now runs on your own DS-Bot')
@@ -646,25 +638,6 @@ class App:
                         refuse(403, 'forbidden', 'Not allowed to change Bot Social settings')
                     return self.save_bot_social(db, now, workspace, self.body(env, ['revision', 'changes']))
                 refuse(400, 'invalid', 'Invalid Bot Social request')
-            stream_match=re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})/events',path)
-            if stream_match:
-                if method!='GET' or query:
-                    refuse(400,'invalid','Events require GET without query parameters')
-                from .events import EventStream, StreamLimit, snapshot
-                last_id=env.get('HTTP_LAST_EVENT_ID','')
-                if last_id and not re.fullmatch(r'[0-9a-f]{64}',last_id):
-                    refuse(400,'invalid','Invalid Last-Event-ID')
-                wid=stream_match[1]
-                if members.load(db,wid,session['user_id']) is None:
-                    refuse(404,'not_found','Workspace not found')
-                # The initial snapshot is authenticated before headers are committed.
-                reader=lambda: snapshot(self,env,wid)
-                initial=reader()
-                try:
-                    stream=EventStream(self.event_limits,session['user_id'],reader,initial,last_id)
-                except StreamLimit as exc:
-                    refuse(429,'stream_limit',str(exc))
-                return 200,stream,[]
             match = re.fullmatch(r'/v1/workspaces/([0-9a-f]{32})(/instances)?', path)
             if match:
                 row = members.load(db, match[1], session['user_id'])

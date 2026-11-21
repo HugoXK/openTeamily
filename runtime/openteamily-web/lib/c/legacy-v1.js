@@ -360,6 +360,24 @@ function invitesRoutes(host) {
       },
     },
     {
+      method: 'POST', path: /^\/v1\/invites\/preview$/,
+      async handle({ body }) {
+        return wrap(async () => {
+          const token = body?.token
+          if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(token)) {
+            throw new Fault(400, 'invalid_invite', '邀请链接格式不正确。')
+          }
+          const data = await client(host).post('/v1/ot/invites/preview', { code: token })
+          if (!data.usable) throw new Fault(410, 'invite_unavailable', '这条邀请已失效。')
+          return [200, { invitation: {
+            team_name: String(data.team?.name || '').slice(0, 80),
+            role: data.role === 'admin' ? 'admin' : 'member',
+            requires_approval: data.requires_approval === true,
+          } }]
+        })
+      },
+    },
+    {
       method: 'POST', path: /^\/v1\/invites\/accept$/,
       async handle({ body }) {
         return wrap(async () => {
@@ -369,7 +387,9 @@ function invitesRoutes(host) {
             return [202, { join_request: { id: data.request_id, status: 'pending', team_id: data.team_id } }]
           }
           if (data.status === 'suspended') throw new Fault(403, 'forbidden', 'Your membership in this workspace is suspended')
-          return [200, { workspace: { id: data.workspace_id || data.team_id }, member: { role: 'member' } }]
+          return [200, { workspace: { id: data.workspace_id || data.team_id }, member: {
+            role: ['owner', 'admin'].includes(data.role) ? data.role : 'member',
+          } }]
         })
       },
     },

@@ -111,6 +111,12 @@ test('the envelope carries method, path, body and idempotency key only', () => {
   assert.deepEqual(env, { endpoint: 'meetings/v1', payload: { method: 'POST', path: '/v1/x', idempotency_key: 'k'.repeat(20), body: { title: '周会' } } });
 });
 
+test('Space activity stays in the owner artifact feature and does not reuse management streaming', () => {
+  const activity = `/v1/workspaces/${WS}/artifacts/activity?artifact=${ID}`;
+  assert.deepEqual(movedTarget(activity, ORIGIN), {feature: 'artifacts', path: activity});
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/events`, ORIGIN), null);
+});
+
 test('answers become ordinary responses, downloads keep their name', async () => {
   const json = toResponse({ status: 409, body: { error: { code: 'conflict' } } });
   assert.equal(json.status, 409);

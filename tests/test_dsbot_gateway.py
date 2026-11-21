@@ -8,6 +8,7 @@ import unittest
 
 from openteamily import dsbot_gateway as gw
 from openteamily import lifecycle
+from openteamily.app import App, Config
 from openteamily.lifecycle import ManagerAuth, ManagerIdentity
 from openteamily.security import digest
 from openteamily.store import Store
@@ -224,6 +225,25 @@ class GatewayTest(unittest.TestCase):
             self.assertEqual(gw.moved_api(path), feature, path)
         self.assertEqual(gw.moved_api('/v1/teams'), 'teams')
         self.assertEqual(gw.moved_api('/v1/workspaces'), 'teams')
+
+    def test_space_activity_is_owner_routed_and_the_old_stream_is_gone(self):
+        uri = '/v1/workspaces/' + 'a' * 32 + '/artifacts/activity?artifact=' + 'b' * 32
+        for owner, iid in [('a' * 32, '1' * 32), ('b' * 32, '2' * 32)]:
+            status, headers = self.call(self.tokens[owner], uri=uri)
+            self.assertEqual(status, 204)
+            self.assertEqual(headers['X-OT-Instance'], iid)
+            self.assertIn('feature=artifacts', headers['X-OT-Upstream-Path'])
+            self.assertIn('%2Fartifacts%2Factivity', headers['X-OT-Upstream-Path'])
+        self.assertEqual(self.call(uri=uri)[0], 401)
+
+        app = App(self.store, Config(ORIGIN))
+        received = {}
+        body = b''.join(app({'HTTP_HOST': 'openteamily.example', 'REQUEST_METHOD': 'GET',
+                            'PATH_INFO': '/v1/workspaces/' + 'a' * 32 + '/events'},
+                           lambda status, headers: received.update(status=status, headers=dict(headers))))
+        self.assertTrue(received['status'].startswith('410 '))
+        self.assertEqual(received['headers']['Content-Type'], 'application/json; charset=utf-8')
+        self.assertEqual(json.loads(body)['error']['code'], 'retired')
 
     def test_record_upstream_validation(self):
         with self.store.transaction() as db:

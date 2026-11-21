@@ -10,6 +10,7 @@ import {
   csrfCookie, listQuery, visibleArtifacts, artifactMatchesType,
   artifactMatchesModified, viewFromSearch, queryForView, FILE_TYPE_LABELS,
   sessionFilterChoices, applyDirectoryCollapsed, artifactDeletePrompt, mount,
+  createArtifactActivity,
   meetingRows, meetingActionLabel, meetingTimeLabel, meetingsForScope,
 } from '../openteamily/static/artifacts/app.mjs';
 
@@ -22,6 +23,87 @@ test('csrfCookie reads host-bound and development cookie names only', () => {
 test('listQuery encodes search and omits empty q', () => {
   assert.equal(listQuery(''), '');
   assert.equal(listQuery('  brief '), '?q=brief');
+});
+
+function activityFixture(options = {}) {
+  const delays = new Map();
+  const reports = [];
+  const commits = [];
+  let visible = true;
+  const activity = createArtifactActivity({
+    visible: () => visible,
+    report: state => reports.push(state),
+    read: async () => ({version: 'a'.repeat(64)}),
+    apply: async (snapshot, context) => { commits.push({snapshot, ...context}); },
+    ...options,
+    setTimer(callback, delay) {
+      const key = Symbol('activity timer');
+      delays.set(key, {callback, delay});
+      return key;
+    },
+    clearTimer: key => delays.delete(key),
+  });
+  return {activity, delays, reports, commits, setVisible: value => { visible = value; }};
+}
+
+test('Space activity seeds the list version and suppresses hidden-tab requests', async () => {
+  const {activity, delays, commits, reports, setVisible} = activityFixture();
+  activity.setScope('workspace-one');
+  activity.seed('workspace-one', 'a'.repeat(64));
+  assert.deepEqual([...delays.values()].map(timer => timer.delay), [8000]);
+  await activity.check();
+  assert.equal(commits[0].changed, false);
+  setVisible(false);
+  activity.resume();
+  await activity.check();
+  assert.equal(commits.length, 1);
+  assert.equal(delays.size, 0);
+  setVisible(true);
+  await activity.check();
+  assert.equal(commits.length, 2);
+  assert.equal(reports.at(-1), 'ready');
+  activity.setScope('');
+  assert.equal(delays.size, 0);
+});
+
+test('Space activity fences late replies and retries deferred or temporarily invalid snapshots', async () => {
+  const stale = Promise.withResolvers();
+  const calls = [];
+  const commits = [];
+  const currentVersion = 'b'.repeat(64);
+  let mode = 'defer';
+  const {activity, delays, reports} = activityFixture({
+    read(workspace, signal) {
+      calls.push({workspace, signal});
+      if (workspace === 'old') return stale.promise;
+      return Promise.resolve({version: mode === 'broken' ? null : currentVersion});
+    },
+    async apply(snapshot, context) {
+      commits.push({version: snapshot.version, workspace: context.workspace, changed: context.changed});
+      return mode === 'defer' ? 'defer' : undefined;
+    },
+  });
+  activity.setScope('old');
+  const oldResult = activity.check();
+  await activity.check();
+  assert.equal(calls.length, 1, 'coalesce overlapping reads');
+  activity.setScope('new');
+  assert.equal(calls[0].signal.aborted, true);
+  activity.seed('new', 'a'.repeat(64));
+  await activity.check();
+  stale.resolve({version: 'c'.repeat(64)});
+  await oldResult;
+  assert.deepEqual(commits.map(item => item.workspace), ['new']);
+  mode = 'broken';
+  await activity.check();
+  assert.equal(reports.at(-1), 'error');
+  assert.deepEqual([...delays.values()].map(timer => timer.delay), [16000]);
+  mode = 'apply';
+  await activity.check();
+  await activity.check();
+  assert.deepEqual(commits.map(item => item.changed), [true, true, false]);
+  assert.equal(reports.at(-1), 'ready');
+  activity.setScope('');
 });
 
 test('visibleArtifacts filters by kind, saved messages and creator', () => {

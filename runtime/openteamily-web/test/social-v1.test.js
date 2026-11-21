@@ -52,6 +52,8 @@ function fakeSocial() {
       return ok(409, { error: { code, message: code } })
     }
     if (path === '/v1/ot/invites/accept') return ok(200, { status: 'pending', team_id: 'ott_1', request_id: 'otjr_1' })
+    if (path === '/v1/ot/invites/preview') return ok(200, { usable: body.code !== 'expired-invite-code',
+      team: { id: 'ott_1', name: 'Studio', owner: me, summary: 'Private team summary' }, role: 'member', requires_approval: true })
     if (path === '/v1/ot/directory' || path.startsWith('/v1/ot/directory?')) return ok(200, { teams: [{ id: 'ott_1', workspace_id: WS, name: 'Studio', summary: 's', member_count: 2, membership: null }] })
     if (path === '/v1/ot/conversations?scope=member&team_id=ott_1' && init.method === 'GET') {
       return ok(200, { conversations: [{ id: 'otc_1', kind: 'dm', title: 'Bea', members: [{ handle: 'bea.home', display_name: 'Bea', owner_id: 'own_bea' }, { handle: 'ann.home', display_name: 'Ann', owner_id: 'own_ann', platform_user_id: 'b'.repeat(32) }], unread: 1, read_seq: 2, updated_at: 1_700_000_200_000, last_message: { body: 'hi', retracted: false } }] })
@@ -106,6 +108,19 @@ test('invite create returns the one-time token; accept maps a pending request to
   const accepted = await invites(host).endpoints.v1({ method: 'POST', path: '/v1/invites/accept', body: { token: 'invite-code-once' } })
   assert.equal(accepted.status, 202)
   assert.equal(accepted.body.join_request.status, 'pending')
+})
+
+test('invite preview uses the signed-in connector and exposes only the name and join requirements', async () => {
+  const { host, social } = setup()
+  const endpoint = invites(host).endpoints.v1
+  const preview = token => endpoint({ method: 'POST', path: '/v1/invites/preview', body: { token } })
+  assert.deepEqual((await preview('another-invite-code')).body, {
+    invitation: { team_name: 'Studio', role: 'member', requires_approval: true },
+  })
+  assert.equal((await preview('expired-invite-code')).status, 410)
+  assert.equal((await preview('https://external.test/')).status, 400)
+  assert.equal(social.calls.filter(row => row.path === '/v1/ot/invites/preview').length, 2)
+  assert.ok(!social.calls.some(row => row.path === '/v1/ot/invites/accept'))
 })
 
 test('group invite sends one batch for the currently scoped workspace', async () => {
