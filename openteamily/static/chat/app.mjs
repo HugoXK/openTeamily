@@ -1,9 +1,22 @@
-import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
+import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
+import { mountAgentMentions } from './mentions.mjs';
+import { AGENT_FILE_ACCEPT, chatFileDownload, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
+import { mountGroupTranslation } from './translation.mjs';
+import { mountChatCalls } from './calls.mjs';
+import { mountImageCreator } from './image-create.mjs';
+import { mountModel3dCreator, mountMusicCreator, mountVideoCreator, mountWebsiteCreator } from './video-create.mjs';
+import { mountChatActivity } from './activity.mjs';
+import { stageMeetingFromChat } from '../shell/meeting-link.mjs';
+import { workNotificationSummary, workNotificationTarget } from '../shell/work-notification.mjs';
+import { mountPublicDraft } from './public-draft.mjs';
+import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
+import { dsbotServed } from './dsbot.mjs';
+import { agentSavePath, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
 
 export const SEARCH_TABS = [
   ['all', '全部'],
@@ -44,19 +57,23 @@ export function mergeSessions(agentRows, socialRows, currentUserId) {
       id: row.id,
       unread_count: Number(row.unread_count) || 0,
       pinned: Boolean(row.pinned),
-      kind: row.kind,
+      muted: Boolean(row.muted),
+      kind: row.public_agent ? 'public' : row.kind,
       members: row.members,
       title: conversationLabel(row, currentUserId),
-      preview: sessionPreview(row, row.kind === 'group'
+      preview: sessionPreview(row, row.public_agent ? '公开智能体' : row.kind === 'group'
         ? '群聊 · ' + ((row.members || []).length) + ' 人'
         : '单聊 · ' + ((row.members || []).length) + ' 人'),
       updated: row.updated || 0,
     });
   }
-  sessions.sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || (right.updated || 0) - (left.updated || 0));
-  return sessions;
+  return sortSessions(sessions);
 }
 
+
+function sortSessions(sessions) {
+  return sessions.sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)) || (right.updated || 0) - (left.updated || 0));
+}
 
 export function shouldSendOnShortcut(event, sendShortcut = 'enter') {
   if (!event || event.key !== 'Enter') return false;
@@ -84,27 +101,6 @@ export function messageSearchQuery(query, conversationId = '', cursor = '') {
   return params.toString();
 }
 
-export function homepageStartIndex(search) {
-  const source = search === undefined
-    ? ((typeof location !== 'undefined' && location.search) || '')
-    : search;
-  const params = new URLSearchParams(String(source).startsWith('?') ? String(source).slice(1) : source);
-  const raw = params.get('start');
-  if (!/^(0|[1-4])$/.test(raw || '')) return null;
-  return Number(raw);
-}
-
-export function stripHomepageStartQuery(pathname, search, hash) {
-  const params = new URLSearchParams(String(search || '').replace(/^\?/, ''));
-  if (!params.has('start')) {
-    return {changed: false, href: (pathname || '') + (search || '') + (hash || '')};
-  }
-  params.delete('start');
-  const next = params.toString();
-  const href = (pathname || '') + (next ? '?' + next : '') + (hash || '');
-  return {changed: true, href};
-}
-
 function searchHitKey(hit) {
   return [hit.kind || '', hit.conversationId || '', hit.messageId || hit.id || '', hit.preview || '']
     .join('\u0000');
@@ -118,6 +114,7 @@ export function searchHitFromItem(item) {
     title: item.title || '消息',
     preview: item.snippet || '',
     conversationId: item.conversation_id,
+    agentId: item.agent_id || '',
     kind: item.kind,
   };
 }
@@ -138,7 +135,7 @@ export function mergeSearchHits(existing, incoming) {
 // rows already shown and appends the next page, so a failed or repeated page
 // never drops what the user is already reading.
 export function createMessageSearch(loadPage) {
-  const state = {hits: [], cursor: '', loading: false, error: ''};
+  const state = {hits: [], cursor: '', loading: false, error: '', warning: ''};
   let generation = 0;
   let pending = null;
   let activeKey = '';
@@ -149,7 +146,7 @@ export function createMessageSearch(loadPage) {
       generation += 1;
       activeKey = '';
       pending = null;
-      Object.assign(state, {hits: [], cursor: '', error: '', loading: false});
+      Object.assign(state, {hits: [], cursor: '', error: '', warning: '', loading: false});
       return state;
     }
     // A tab switch during the same search must await the existing request,
@@ -161,6 +158,7 @@ export function createMessageSearch(loadPage) {
     if (!append) {
       state.hits = [];
       state.cursor = '';
+      state.warning = '';
     }
     state.loading = true;
     pending = (async () => {
@@ -171,6 +169,7 @@ export function createMessageSearch(loadPage) {
         state.hits = mergeSearchHits(append ? state.hits : [], incoming);
         state.cursor = (page && page.cursor) || '';
         state.error = '';
+        state.warning = (page && page.warning) || '';
       } catch (failure) {
         if (token !== generation) return state;
         state.error = (failure && failure.message) || '无法搜索消息。';
@@ -218,10 +217,10 @@ export function filterMemberChoices(members, currentUserId, query) {
 export function groupPickerChoices(members, currentUserId, agents = []) {
   return [
     ...memberChoices(members, currentUserId).map(member => ({
-      id: member.user_id, kind: 'human', label: member.username + ' · 成员',
+      id: member.user_id, kind: 'human', label: member.username + (member.contact ? ' · 联系人' : ' · 成员'),
     })),
     ...agents.filter(agent => !agent.archived).map(agent => ({
-      id: agent.id, kind: 'agent', label: agent.name + ' · AI 智能体（自动回复未接通）',
+      id: agent.id, kind: 'agent', label: agent.name + ' · AI 智能体',
     })),
   ];
 }
@@ -313,13 +312,31 @@ export function groupInfoCounts(conversation) {
 export function groupAgentSummary(conversation) {
   const list = conversation && conversation.agent_members || [];
   return list.length ? '群内智能体：' + list.map(agent => agent.name).join('、')
-    + '。可明确请求一次回复。未接通：群内自动回复、@Agent 和任务委派。' : '';
+    + '。可明确请求一次回复，或在群信息中为自己的智能体开启自动回复。' : '';
+}
+
+// Personal-runtime states from server-side auto-provisioning (operator opt-in).
+export const RUNTIME_WAIT_ERRORS = {
+  runtime_starting: '你的专属运行时正在创建或启动，就绪后会自动回复',
+  runtime_capacity: '平台专属运行时名额已满，请联系管理员扩容，或连接你自己的运行时',
+  runtime_unavailable: '你的专属运行时创建或启动失败，请联系管理员处理',
+};
+
+export function sendNotice(reply) {
+  const code = reply && reply.error_code;
+  if (code === 'model-unconfigured') return {kind: 'error', text: '消息已保存。配置模型 API 后，智能体才能回复。'};
+  if (code === 'no_agent') return {kind: 'error', text: '消息已保存，正在等待已连接的运行时。'};
+  if (code === 'runtime_starting') return {kind: 'ok', text: '消息已保存。' + RUNTIME_WAIT_ERRORS[code] + '。'};
+  if (RUNTIME_WAIT_ERRORS[code]) return {kind: 'error', text: '消息已保存。' + RUNTIME_WAIT_ERRORS[code] + '。'};
+  if (reply?.status === 'failed') return {kind: 'error', text: '消息已保存，智能体回复失败。'};
+  return {kind: 'ok', text: '已发送。', announceOnly: true};
 }
 
 export function groupReplyStatus(reply) {
   const labels = {queued: '等待执行', running: '执行中', succeeded: '已完成', failed: '失败', cancelled: '已取消'};
   const errors = {no_agent: '没有可用运行时连接', quota: '运行时任务容量已满', timeout: '执行超时',
-    runtime_failed: '运行时执行失败', empty_reply: '运行时未返回正文', task_missing: '运行时任务丢失', cancelled: '已取消'};
+    runtime_failed: '运行时执行失败', empty_reply: '运行时未返回正文', task_missing: '运行时任务丢失', cancelled: '已取消',
+    ...RUNTIME_WAIT_ERRORS};
   return (labels[reply.status] || '未知状态') + (reply.error_code ? '：' + (errors[reply.error_code] || '请求失败') : '');
 }
 
@@ -330,7 +347,8 @@ export function composeCreateEnabled(options) {
   if (mode === 'contact') return selectedCount === 1;
   if (mode === 'group' && groupMode === 'team') return options.templateSelected === true;
   if (mode === 'group') return groupMode === 'custom'
-    && selectedCount <= 49 && Number(options.selectedHumanCount ?? selectedCount) >= 1;
+    && selectedCount <= 49 && Number(options.selectedAgentCount || 0) <= 10
+    && (options.personal ? selectedCount > 0 : Number(options.selectedHumanCount ?? selectedCount) >= 1);
   return false;
 }
 
@@ -347,16 +365,19 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
-function hashParams() {
-  const text = (location.hash || '').replace(/^#/, '');
+function hashParams(hash = location.hash) {
+  const text = (hash || '').replace(/^#/, '');
   const params = new URLSearchParams(text);
   return {
     workspace: params.get('workspace') || '',
     agent: params.get('agent') || '',
     conversation: params.get('conversation') || '',
+    message: params.get('message') || '',
     social: params.get('social') || '',
   };
 }
+
+const chatPathId = value => /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}$/.test(value || '');
 
 function writeHash(values) {
   const params = new URLSearchParams();
@@ -364,6 +385,7 @@ function writeHash(values) {
   if (values.agent) params.set('agent', values.agent);
   if (values.social) params.set('social', values.social);
   if (values.conversation) params.set('conversation', values.conversation);
+  if (values.message) params.set('message', values.message);
   const next = params.toString();
   const hash = next ? '#' + next : '';
   if (location.hash !== hash) history.replaceState(null, '', location.pathname + hash);
@@ -380,11 +402,11 @@ function formatTime(value) {
 }
 
 export function sessionDisplayGroup(item) {
-  return item.pinned ? '置顶' : (item.kind === 'group' ? '群聊' : '直聊');
+  return item.pinned ? '置顶' : item.kind === 'public' ? '公开智能体' : item.kind === 'group' ? '群聊' : '直聊';
 }
 
 export function groupSessionsForDisplay(items) {
-  return ['置顶', '直聊', '群聊'].flatMap(group => items.filter(item => sessionDisplayGroup(item) === group));
+  return ['置顶', '直聊', '公开智能体', '群聊'].flatMap(group => items.filter(item => sessionDisplayGroup(item) === group));
 }
 
 export function formatSessionTime(value, now = Date.now()) {
@@ -488,7 +510,7 @@ export function reactionToggle(reactions, emoji) {
 }
 
 export function forwardTargets(conversations, currentId) {
-  return (conversations || []).filter(item => item.id !== currentId)
+  return (conversations || []).filter(item => item.id !== currentId && !item.public_agent && item.direct?.open !== false)
     .map(item => ({id: item.id, label: (item.kind === 'dm' ? '单聊 · ' : '群聊 · ') + (item.title || '会话')}));
 }
 
@@ -503,9 +525,29 @@ export function notificationBadgeText(count) {
 }
 
 export function notificationSummary(item) {
-  if (item.kind === 'follow_work') {
+  const workSummary = workNotificationSummary(item);
+  if (workSummary) return workSummary;
+  if (item.kind === 'discover.published') {
     const author = item.actor_username || '你关注的作者';
-    return item.title ? `${author} 发布了新作品「${item.title}」` : '你关注的作者发布了新作品';
+    const type = item.listing_kind === 'agent' ? '智能体' : '作品';
+    return `${author} 发布了新${type}` + (item.title ? `「${item.title}」` : '');
+  }
+  if (item.kind === 'meeting.shared') {
+    const organizer = item.organizer || '会议组织者';
+    return `${organizer} 分享了纪要` + (item.title ? `「${item.title}」` : '');
+  }
+  if (item.kind === 'messenger.mention') {
+    const author = item.by?.display_name || item.by?.handle || '成员';
+    return `${author} 提及了你`;
+  }
+  if (item.kind === 'messenger.added') {
+    const author = item.by?.display_name || item.by?.handle || '成员';
+    return `${author} 将你加入「${item.title || '群聊'}」`;
+  }
+  if (item.kind === 'messenger.call') {
+    const author = item.by?.display_name || item.by?.handle || '成员';
+    const kind = item.call_kind === 'video' ? '视频通话' : '语音通话';
+    return item.title ? `${author} 在「${item.title}」发起了${kind}` : `${author} 发起了${kind}`;
   }
   const where = item.conversation_kind === 'dm' ? '单聊' : (item.conversation_title || '群聊');
   if (item.kind === 'automation_reminder') {
@@ -520,6 +562,82 @@ export function notificationSummary(item) {
 
 // A reminder is not a separate store: it is a one-shot automation created from the
 // message, and its due time is listed as a derived notification.
+
+function zoneClock(ts, zone) {
+  try {
+    const format = new Intl.DateTimeFormat('en-US', {
+      timeZone: zone, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+    const parts = {};
+    for (const part of format.formatToParts(new Date(ts))) {
+      if (part.type !== 'literal') parts[part.type] = Number(part.value);
+    }
+    if (!Number.isFinite(parts.year)) return null;
+    return {...parts, hour: parts.hour % 24};
+  } catch {
+    return null;
+  }
+}
+
+export function zonedInstant(dateText, timeText, zone) {
+  const [year, month, day] = String(dateText || '').split('-').map(Number);
+  const [hour, minute] = String(timeText || '').split(':').map(Number);
+  if (![year, month, day, hour, minute].every(Number.isFinite)) return null;
+  const guess = Date.UTC(year, month - 1, day, hour, minute);
+  const first = zoneClock(guess, zone);
+  if (!first) return null;
+  const offset = Date.UTC(first.year, first.month - 1, first.day, first.hour, first.minute, first.second) - guess;
+  const settled = zoneClock(guess - offset, zone);
+  const finalOffset = settled
+    ? Date.UTC(settled.year, settled.month - 1, settled.day, settled.hour, settled.minute, settled.second) - (guess - offset)
+    : offset;
+  return guess - finalOffset;
+}
+
+export function zoneDayKey(ts, zone) {
+  const clock = zoneClock(ts, zone);
+  if (!clock) return '';
+  return `${clock.year}-${String(clock.month).padStart(2, '0')}-${String(clock.day).padStart(2, '0')}`;
+}
+
+// One-shot automations that already came due, shown in the chat sidebar.
+// Participants may be {user_id, username} (legacy) or {username} (DS-Bot plugin).
+export function dueReminders(items, user, now = Date.now()) {
+  const userId = user && typeof user === 'object' ? user.id : user;
+  const username = user && typeof user === 'object' ? user.username : undefined;
+  const today = [];
+  const older = [];
+  for (const item of items || []) {
+    if (!item || item.enabled === false || item.enabled === 0) continue;
+    const schedule = item.schedule || {};
+    if (schedule.kind !== 'once' || !schedule.date || !schedule.time || !schedule.time_zone) continue;
+    const mine = (item.participants || []).some(person => person && (
+      (userId && person.user_id === userId)
+      || (username && person.username === username)
+      || (!person.user_id && person.username && (person.username === userId || person.username === username))
+    ));
+    if (!mine) continue;
+    const due = zonedInstant(schedule.date, schedule.time, schedule.time_zone);
+    if (due === null || due > now) continue;
+    const row = {id: item.id, title: item.title || '', due, schedule};
+    if (zoneDayKey(due, schedule.time_zone) === zoneDayKey(now, schedule.time_zone)) today.push(row);
+    else older.push(row);
+  }
+  today.sort((left, right) => right.due - left.due);
+  older.sort((left, right) => right.due - left.due);
+  return {today, older};
+}
+
+export function reminderDueLabel(item, now = Date.now()) {
+  const zone = (item.schedule && item.schedule.time_zone) || 'UTC';
+  const clock = zoneClock(item.due, zone);
+  const time = clock ? `${String(clock.hour).padStart(2, '0')}:${String(clock.minute).padStart(2, '0')}` : (item.schedule && item.schedule.time) || '';
+  if (zoneDayKey(item.due, zone) === zoneDayKey(now, zone)) return `今天 ${time} 到点`;
+  return `${String((item.schedule && item.schedule.date) || '').slice(5)} ${time} 到点`;
+}
+
 export const REMINDER_CHOICES = [['remind-1h', 'later'], ['remind-tomorrow', 'tomorrow']];
 
 function zonedParts(moment, timeZone) {
@@ -587,11 +705,40 @@ export function reminderNotice(status, body = {}) {
   return '没能设成提醒，请稍后再试。';
 }
 
-export function notificationTarget(item) {
-  return item && item.kind === 'automation_reminder' ? '/automations' : null;
+const NOTIFICATION_ID = /^[0-9a-f]{32}$/;
+const NOTIFICATION_SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
+const MEETING_NOTIFICATION_PATH = /^\/meetings#workspace=([0-9a-f]{32})&shared=([0-9a-f]{32})$/;
+const LINKED_NOTIFICATION_KINDS = new Set(['meeting.shared', 'discover.published', 'follow_work', 'artifact.shared', 'automation_reminder']);
+
+export function notificationTarget(item, workspace) {
+  if (item?.kind === 'automation_reminder') return '/automations';
+  if (item?.kind === 'meeting.shared') {
+    const path = typeof item.path === 'string' ? MEETING_NOTIFICATION_PATH.exec(item.path) : null;
+    const share = item.share_id ?? path?.[2];
+    if (!NOTIFICATION_ID.test(workspace || '') || !NOTIFICATION_ID.test(share || '')
+      || (item.workspace_id != null && item.workspace_id !== workspace)) return null;
+    const target = '/meetings#' + new URLSearchParams({workspace, shared: share});
+    return item.path == null || item.path === target ? target : null;
+  }
+  if (item?.kind !== 'discover.published' || item.listing_kind !== 'agent') {
+    return workNotificationTarget(item, workspace);
+  }
+  const prefix = '/a/';
+  const slug = item.slug ?? (typeof item.path === 'string' && item.path.startsWith(prefix) ? item.path.slice(prefix.length) : '');
+  if (typeof slug !== 'string' || !NOTIFICATION_SLUG.test(slug)) return null;
+  const target = prefix + slug;
+  return item.path == null || item.path === target ? target : null;
+}
+
+async function waitForLinkedNotificationRead(read) {
+  let timer;
+  const timeout = new Promise(resolve => { timer = globalThis.setTimeout(resolve, 500); });
+  try { return await Promise.race([read, timeout]); }
+  finally { globalThis.clearTimeout(timer); }
 }
 
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
+  const uiLabel = (zh, en) => document.documentElement?.lang === 'en' ? en : zh;
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
@@ -605,10 +752,89 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let sessions = [];
   let currentAgent = null;
   let personalAgentId = '';
+  const servedByDsbot = dsbotServed(document);
   let personalLook = null;
   let currentConversation = null;
-  const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
+  const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation && !currentConversation.public_agent ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
+  const autoTranslation = mountGroupTranslation(document,{request});
+  const chatCalls = mountChatCalls(document, {request, context: () => {
+    if (!servedByDsbot || currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
+    return {wid: workspaceId(), cid: currentConversation.id, title: conversationLabel(currentConversation, currentUser?.id)};
+  }});
+  const agentMentions = mountAgentMentions(document, () => {
+    if (currentSource !== 'social' || currentConversation?.kind !== 'group' || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
+    return {scope: `${workspaceId()}/${currentConversation.id}`, agents: currentConversation.agent_members || []};
+  });
+  function voiceContext() {
+    if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
+    const wid = workspaceId();
+    const cid = currentConversation.id;
+    return {wid, cid, scope: `${wid}/${cid}`};
+  }
+  const voiceRecorder = mountVoiceRecorder(document, {
+    context: voiceContext,
+    createKey: () => idempotencyKey('voice-'),
+    async send(destination, voice, key) {
+      const {wid, cid, scope} = destination;
+      const draftScope = sendScope();
+      const reply = replyDrafts.get(draftScope);
+      const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${cid}/messages`,
+        {voice, ...(reply ? {reply_to: reply.message_id} : {})}, {'Idempotency-Key': key});
+      if (![200, 201].includes(result.status) || !result.body?.message?.voice) {
+        throw new Error(messageFor(result.body?.error, '语音发送失败，请重试。'));
+      }
+      consumeReplyDraft(draftScope, reply);
+      if (voiceContext()?.scope === scope) {
+        await openSocialConversation(cid);
+        show('ok', '语音已发送。', {announceOnly: true});
+      }
+    },
+  });
+  const voiceUrls = new Set();
+  function clearVoicePlayers() {
+    for (const url of voiceUrls) URL.revokeObjectURL(url);
+    voiceUrls.clear();
+  }
+  globalThis.addEventListener?.('pagehide', clearVoicePlayers);
+
+  function voicePlayer(item) {
+    const player = document.createElement('section');
+    player.className = 'voice-message';
+    const play = document.createElement('button');
+    play.type = 'button';
+    play.textContent = '播放语音';
+    const destination = voiceContext();
+    if (!destination) return player;
+    play.addEventListener('click', async () => {
+      if (play.disabled || voiceContext()?.scope !== destination.scope) return;
+      play.disabled = true;
+      play.textContent = '正在加载…';
+      try {
+        const path = `/v1/workspaces/${destination.wid}/social/conversations/${destination.cid}/messages/${item.id}/voice`;
+        const result = await request('GET', path);
+        if (result.status !== 200) throw new Error('Voice unavailable');
+        if (voiceContext()?.scope !== destination.scope || player.isConnected === false) return;
+        const url = URL.createObjectURL(decodeVoice(result.body));
+        voiceUrls.add(url);
+        const audio = document.createElement('audio');
+        audio.src = url;
+        audio.controls = true;
+        audio.preload = 'metadata';
+        audio.setAttribute('aria-label', '语音消息');
+        player.replaceChildren(audio);
+        audio.focus();
+        audio.play().catch(() => {});
+      } catch {
+        play.textContent = '重试播放语音';
+        play.disabled = false;
+        show('error', '无法播放语音，请重试。');
+      }
+    });
+    player.append(play);
+    return player;
+  }
+
   let pollTimer = 0;
   let searchTab = 'all';
   let searchConversation = '';
@@ -617,23 +843,334 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let groupMode = 'custom';
   let groupReplyAttempt = null;
   let groupReplyBusy = false;
+  let groupReplyFormScope = '';
   let searchSeq = 0;
   let resourceCursor = '';
   let resourceItems = [];
   let sendShortcut = 'enter';
   let chatLanguage = 'auto';
   let chatPreferences = {message_folding:'standard', document_cards:false, link_previews:true};
+  let attachmentSender;
+  const pendingSends = new Map();
+  const agentReplyViews = new Map();
+  let replyWatch = null;
+  const sendScope = (conversation = currentConversation?.id) =>
+    JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
+  const publicDraft = mountPublicDraft(document);
+  const starterPanel = document.getElementById('agent-quick-starts');
+  const starterList = document.getElementById('agent-quick-starts-list');
+  const starterStatus = document.getElementById('agent-quick-starts-status');
+  const starterComposer = document.getElementById('chat-body');
+  let starterView = null;
+  let starterRefresh = null;
+  starterComposer.addEventListener('input', () => setAgentStarterStatus(''));
 
-  function show(kind, text) {
+  const memoryRecall = document.getElementById('agent-memory-recall');
+  const memoryDrafts = new Map();
+  const memoryWrites = new Map();
+  const recallMode = scope => currentConversation?.memory_scope ?? memoryDrafts.get(scope)
+    ?? ((currentConversation?.memory_recall ?? currentAgent?.memory_recall_default ?? true) ? 'workspace' : 'off');
+
+  function syncMemoryRecall(scope = sendScope()) {
+    if (!memoryRecall) return;
+    const visible = servedByDsbot && currentSource === 'agent' && Boolean(currentAgent);
+    memoryRecall.hidden = !visible;
+    if (!visible) return;
+    memoryRecall.value = memoryWrites.get(scope) ?? recallMode(scope);
+    memoryRecall.disabled = memoryWrites.has(scope) || Boolean(pendingSends.get(scope)?.jobs.some(job => !job.failed));
+  }
+
+  memoryRecall?.addEventListener('change', async () => {
+    if (memoryRecall.hidden || memoryRecall.disabled) return;
+    const scope = sendScope();
+    const mode = memoryRecall.value;
+    if (!currentConversation) {
+      memoryDrafts.set(scope,mode);
+      syncMemoryRecall(scope);
+      return;
+    }
+    const path = `${agentBase()}/conversations/${currentConversation.id}`;
+    memoryWrites.set(scope,mode);
+    renderPendingSend();
+    try {
+      const result = await request('POST',path,{memory_scope:mode});
+      if (sendScope() !== scope) return;
+      if (result.status !== 200 || result.body.memory_scope !== mode) throw new Error();
+      currentConversation.memory_scope = mode;
+      currentConversation.memory_recall = result.body.memory_recall;
+      show('ok', mode === 'off' ? '已关闭后续消息的记忆检索。' : mode === 'workspace'
+        ? '后续消息将参考本工作区的记忆。' : '后续消息将参考可访问工作区里的记忆和行动项。', {announceOnly:true});
+    } catch {
+      if (sendScope() === scope) show('error','记忆范围未保存，请重试。');
+    } finally {
+      memoryWrites.delete(scope);
+      if (sendScope() === scope) renderPendingSend();
+    }
+  });
+
+  const replyDrafts = new Map();
+  const replyPanel = document.getElementById('chat-reply-preview');
+  const replyDraftTitle = document.getElementById('chat-reply-author');
+  const replyDraftBody = document.getElementById('chat-reply-excerpt');
+
+  function renderReplyDraft() {
+    if (!replyPanel) return;
+    const reply = currentSource === 'social' && replyDrafts.get(sendScope());
+    replyPanel.hidden = !reply;
+    const title = reply ? '回复 ' + reply.author : '';
+    const excerpt = reply ? reply.excerpt : '';
+    if (replyDraftTitle.textContent !== title) replyDraftTitle.textContent = title;
+    if (replyDraftBody.textContent !== excerpt) replyDraftBody.textContent = excerpt;
+  }
+
+  function composeReply(item, author) {
+    if (currentSource !== 'social' || item.retracted) return;
+    const excerpt = String(item.body || item.attachment?.title || (item.voice ? '语音消息' : '消息'))
+      .replace(/\s+/g, ' ').trim().slice(0, 120);
+    replyDrafts.set(sendScope(), {message_id: item.id, author, excerpt, available: true});
+    renderReplyDraft();
+    document.getElementById('chat-body').focus();
+  }
+
+  function consumeReplyDraft(scope, reply) {
+    if (reply && replyDrafts.get(scope) === reply) {
+      replyDrafts.delete(scope);
+      if (sendScope() === scope) renderReplyDraft();
+    }
+  }
+
+  document.getElementById('chat-reply-cancel')?.addEventListener('click', () => {
+    consumeReplyDraft(sendScope(), replyDrafts.get(sendScope()));
+    document.getElementById('chat-body').focus();
+  });
+
+  function quoteBlock(reply, interactive = false) {
+    const canJump = interactive && reply.available;
+    const element = document.createElement(canJump ? 'button' : 'div');
+    element.className = 'message-quote';
+    if (!reply.available) {
+      element.textContent = '原消息不可查看';
+      return element;
+    }
+    const name = document.createElement('strong');
+    const excerpt = document.createElement('span');
+    name.textContent = reply.author;
+    excerpt.textContent = reply.excerpt;
+    element.append(name, excerpt);
+    if (canJump) {
+      element.type = 'button';
+      element.setAttribute('aria-label', '查看 ' + reply.author + ' 的原消息');
+      element.addEventListener('click', async () => {
+        const scope = sendScope();
+        if (await jumpToMessage(reply.message_id, null) === false && sendScope() === scope) {
+          show('error', '原消息已不可查看。');
+        }
+      });
+    }
+    return element;
+  }
+
+  function show(kind, text, {announceOnly = false} = {}) {
     status.dataset.kind = kind;
+    status.dataset.announceOnly = String(announceOnly);
     status.textContent = text;
   }
 
-  async function request(method, path, body, extra) {
+  function sendClosed() {
+    return currentSource === 'social'
+      && (currentConversation?.public_agent?.open === false || currentConversation?.direct?.open === false);
+  }
+
+  function setAgentStarterStatus(message) {
+    if (starterStatus.hidden && !message) return;
+    starterStatus.textContent = message;
+    starterStatus.hidden = !message;
+  }
+
+  function nativeStarterAgent(agent) {
+    return servedByDsbot && currentUser?.id && currentSource === 'agent' && agent?.id
+      && agent.id === currentAgent?.id && agent.workspace_id === workspaceId() && agent.served_by === 'ds-bot';
+  }
+
+  function renderAgentQuickStarts(agent) {
+    const eligible = nativeStarterAgent(agent) && !agent.archived && !agent.native_deleted
+      && !currentConversation?.archived && currentConversation?.open !== false;
+    const values = eligible && Array.isArray(agent.quick_starts)
+      ? agent.quick_starts.slice(0, 5).flatMap(value =>
+        typeof value === 'string' && value.trim() && value.trim().length <= 80 ? [value.trim()] : [])
+      : [];
+    const scope = sendScope();
+    const key = values.length ? JSON.stringify([scope, values]) : '';
+    if (key === (starterView?.key ?? '')) return;
+    const view = values.length ? {key, scope} : null;
+    starterView = view;
+    starterPanel.hidden = !view;
+    setAgentStarterStatus('');
+    const buttons = values.map(text => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = text;
+      button.title = text;
+      button.addEventListener('click', () => {
+        if (starterView !== view || view.scope !== sendScope() || mainPanel.hidden || starterComposer.disabled) return;
+        const original = starterComposer.value;
+        const next = original && original !== text ? original + '\n\n' + text : text;
+        const limit = starterComposer.maxLength > 0 ? starterComposer.maxLength : 4000;
+        if (next.length > limit) {
+          setAgentStarterStatus('输入框里的草稿已保留。缩短后可添加这条开场。');
+          return;
+        }
+        starterComposer.value = next;
+        starterComposer.dispatchEvent(new Event('input', {bubbles: true}));
+        starterComposer.focus({preventScroll: true});
+        starterComposer.setSelectionRange?.(next.length, next.length);
+      });
+      return button;
+    });
+    starterList.replaceChildren(...buttons);
+    starterList.scrollLeft = 0;
+  }
+
+  async function refreshAgentQuickStarts() {
+    if (!nativeStarterAgent(currentAgent) || mainPanel.hidden || !viewingSocialMessages()) return;
+    const scope = sendScope();
+    const open = socialOpen;
+    if (starterRefresh?.scope === scope && starterRefresh.open === open) return;
+    const next = {scope, open};
+    starterRefresh = next;
+    const result = await request('GET', agentBase()).catch(() => ({status: 0}));
+    if (starterRefresh !== next) return;
+    starterRefresh = null;
+    if (open !== socialOpen || scope !== sendScope() || document.visibilityState === 'hidden') return;
+    const agent = result.body?.agent;
+    if (result.status === 200 && nativeStarterAgent(agent)) {
+      currentAgent = agent;
+      renderAgentQuickStarts(currentAgent);
+    } else if ([200, 403, 404, 410].includes(result.status)) {
+      currentAgent = {...currentAgent, quick_starts: []};
+      renderAgentQuickStarts();
+    }
+  }
+
+  function renderPendingSend() {
+    const list = document.getElementById('message-list');
+    const scope = sendScope();
+    const queue = pendingSends.get(scope);
+    document.getElementById('chat-send').disabled = sendClosed() || memoryWrites.has(scope);
+    syncMemoryRecall(scope);
+    const replying = queue?.replying;
+    if (replying && !replying.replyView) {
+      replying.replyView = makeAgentMessage({role: 'assistant', status: 'queued', client_key: replying.key}).replyView;
+      if (replying.replyView) replying.replyView.bubble.dataset.sendPending = 'reply';
+    }
+    const replyBubble = replying?.replyView?.bubble;
+    const bubbles = new Set((queue?.jobs || []).map(job => job.bubble));
+    if (replyBubble) bubbles.add(replyBubble);
+    for (const child of Array.from(list.children)) {
+      if (child.dataset.sendPending && !bubbles.has(child)) child.remove();
+      bubbles.delete(child);
+    }
+    for (const job of queue?.jobs || []) {
+      paintSendJob(job);
+      if (bubbles.has(job.bubble)) list.append(job.bubble);
+      if (job === replying && bubbles.has(replyBubble)) {
+        const children = Array.from(list.children);
+        const next = children[children.indexOf(job.bubble) + 1];
+        if (next) list.insertBefore(replyBubble, next);
+        else list.append(replyBubble);
+      }
+    }
+    if (currentSource === 'agent' && currentAgent) {
+      const pending = Boolean(replying) || lastAgentItems.some(waitingAgentReply);
+      setChatSubtitle(pending ? uiLabel('正在回复…', 'Replying…') : uiLabel('AI 智能体 · 经运行时回复', 'AI agent · DS-Bot'), pending);
+    }
+    const empty = document.getElementById('chat-empty');
+    empty.dataset.agent = String(currentSource === 'agent' && Boolean(currentAgent));
+    empty.hidden = list.children.length > 0;
+  }
+
+  function paintSendJob(job) {
+    if (job.status.textContent !== job.state) job.status.textContent = job.state;
+    job.status.hidden = Boolean(job.replyView);
+    job.bubble.dataset.sendPending = job.failed ? 'failed' : 'pending';
+    job.actions.hidden = !job.failed;
+    job.retry.disabled = sendClosed() || memoryWrites.has(sendScope());
+  }
+
+  function makeSendJob(queue, message, files, reply) {
+    const key = idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-');
+    const bubble = document.createElement('li');
+    bubble.className = queue.social ? 'mine' : 'user';
+    const body = document.createElement('div');
+    body.className = 'body';
+    renderMessageBody(document, body, message.body || '', chatPreferences);
+    body.hidden = !message.body;
+    const status = document.createElement('p');
+    status.className = 'send-feedback';
+    status.setAttribute('role', 'status');
+    const actions = document.createElement('div');
+    actions.className = 'send-actions';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = '重试';
+    const discard = document.createElement('button');
+    discard.type = 'button';
+    discard.textContent = '移除';
+    actions.append(retry, discard);
+    if (reply) bubble.append(quoteBlock(reply));
+    bubble.append(body);
+    const previews = [];
+    const urls = document.defaultView?.URL;
+    for (const file of files) {
+      const path = file.type?.startsWith('image/') && urls?.createObjectURL ? urls.createObjectURL(file) : '';
+      if (path) previews.push(path);
+      bubble.append(renderChatFile(document, {title:file.name,mime:file.type,bytes:file.size,path}, {pending:true}));
+    }
+    bubble.append(status, actions);
+    const job = {key, message, files, previews, bubble, status, actions, retry, failed: false,
+      state: queue.active ? '等待发送…' : '正在发送…'};
+    retry.addEventListener('click', () => {
+      if (!job.failed || job.retry.disabled) return;
+      job.failed = false;
+      job.state = '等待发送…';
+      paintSendJob(job);
+      void drainSends(queue);
+    });
+    discard.addEventListener('click', () => {
+      removeSendJob(queue, job);
+      renderPendingSend();
+    });
+    return job;
+  }
+
+  function removeSendJob(queue, job) {
+    queue.jobs = queue.jobs.filter(item => item !== job);
+    job.bubble.remove();
+    job.replyView?.bubble.remove();
+    for (const url of job.previews) document.defaultView.URL.revokeObjectURL(url);
+    if (!queue.jobs.length && !queue.active && pendingSends.get(queue.scope) === queue) pendingSends.delete(queue.scope);
+  }
+
+  function clearPendingSends() {
+    stopReplyProgress();
+    stopGroupReplyProgress();
+    stopPolling();
+    for (const queue of pendingSends.values()) {
+      for (const job of queue.jobs) removeSendJob(queue,job);
+    }
+    pendingSends.clear();
+  }
+
+  function pendingMessageKeys() {
+    return new Set((pendingSends.get(sendScope())?.jobs || []).map(job => job.key));
+  }
+
+  async function request(method, path, body, extra, signal, {keepalive = false} = {}) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie), ...(extra || {})};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const response = await fetcher(path, {
-      method, headers, credentials: 'same-origin',
+      method, headers, credentials: 'same-origin', signal,
+      ...(keepalive ? {keepalive} : {}),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     let parsed = {};
@@ -643,6 +1180,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function workspaceId() {
     return workspaceSelect.value;
+  }
+
+  function inPersonalWorkspace() {
+    return servedByDsbot && workspaces.some(space => space.id === workspaceId() && space.kind === 'personal');
+  }
+
+  function contactMembers(result) {
+    return (result.body?.items || []).filter(row => row.status === 'accepted' && row.peer?.handle)
+      .map(row => ({user_id:row.peer.handle, handle:row.peer.handle, username:row.peer.display_name || row.peer.handle, contact:true}));
   }
 
   function agentBase() {
@@ -659,13 +1205,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       `/v1/workspaces/${workspaceId()}/search/messages?${messageSearchQuery(query, conversationId, cursor)}`,
     );
     if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法搜索消息。'));
-    return {items: result.body.items || [], cursor: result.body.cursor || ''};
+    return result.body;
   });
 
   function renderGroupReplyAction(requests) {
     const panel = document.getElementById('group-agent-action');
     const isGroup = currentSource === 'social' && currentConversation
-      && currentConversation.kind === 'group';
+      && currentConversation.kind === 'group' && !currentConversation.public_agent;
     panel.hidden = !isGroup;
     if (!isGroup) return;
     const saved = currentConversation.agent_members || [];
@@ -681,13 +1227,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.textContent = '移除';
-      remove.dataset.removeAgent = agent.agent_id;
-      li.append(name, remove);
+      remove.dataset.removeAgent = agent.id || agent.agent_id;
+      li.append(name);
+      if (agent.mine !== false) li.append(remove);
       chips.append(li);
     }
     const add = document.getElementById('group-agent-add');
     add.replaceChildren();
-    const joined = new Set(saved.map(agent => agent.agent_id));
+    const joined = new Set(saved.filter(agent => agent.mine !== false).map(agent => agent.id || agent.agent_id));
     const available = agents.filter(agent => !agent.archived && !joined.has(agent.id));
     for (const agent of available) {
       const option = document.createElement('option');
@@ -698,15 +1245,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     add.disabled = !available.length;
     document.getElementById('group-agent-add-submit').disabled = !available.length;
     const holder = document.getElementById('group-agent-choices');
+    const scope = sendScope();
+    const checked = new Set();
+    if (groupReplyFormScope === scope) {
+      for (const label of holder.children) {
+        const box = label.children[0];
+        if (box?.checked) checked.add(box.value);
+      }
+    } else {
+      groupReplyFormScope = scope;
+      document.getElementById('group-agent-prompt').value = '';
+    }
     holder.replaceChildren();
-    for (const agent of saved.filter(item => !item.archived)) {
+    for (const agent of saved.filter(item => !item.archived && item.mine !== false)) {
       const label = document.createElement('label');
       const box = document.createElement('input');
       box.type = 'checkbox';
       box.name = 'group-agent';
-      box.value = agent.agent_id;
-      box.disabled = active.has(agent.agent_id);
-      label.append(box, document.createTextNode(agent.name + (active.has(agent.agent_id) ? '（回复中）' : '')));
+      box.value = agent.id || agent.agent_id;
+      box.disabled = active.has(box.value);
+      box.checked = !box.disabled && checked.has(box.value);
+      label.append(box, document.createTextNode(agent.name + (box.disabled ? '（回复中）' : '')));
       holder.append(label);
     }
     const list = document.getElementById('group-agent-requests');
@@ -733,8 +1292,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function setSessionsOpen(open) {
-    if (open) document.body.classList.add('sessions-open');
-    else document.body.classList.remove('sessions-open');
+    if (open) {
+      document.body.classList.add('sessions-open');
+      if (narrowScreen()) stopGroupReplyProgress();
+    } else document.body.classList.remove('sessions-open');
   }
 
   function narrowScreen() {
@@ -742,19 +1303,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && globalThis.matchMedia('(max-width: 900px)').matches;
   }
 
+  let sessionsStatus = '';
+
+  function setSessionsStatus(text) {
+    sessionsStatus = text;
+    const notice = document.getElementById('conversations-status');
+    if (notice) {
+      notice.textContent = text;
+      notice.hidden = !text;
+    }
+    if (text) document.getElementById('conversations-empty').hidden = true;
+  }
+
+  let markingConversationsRead = false;
+
   function renderSessions() {
     const list = document.getElementById('conversation-list');
     list.replaceChildren();
-    document.getElementById('conversation-heading').textContent = '对话 · ' + sessions.length;
-    document.getElementById('conversations-empty').hidden = sessions.length > 0;
     const filterNode = document.getElementById('session-filter-value');
     const filter = (filterNode && filterNode.value) || 'all';
     const visible = sessions.filter(item => filter === 'all'
+      || (filter === 'agent' && item.source === 'agent')
+      || (filter === 'personal' && item.source === 'agent' && item.agent_id === personalAgentId)
       || (filter === 'pinned' && item.pinned)
       || (filter === 'unread' && item.unread_count > 0)
       || (filter === 'read' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
-    document.getElementById('conversations-empty').hidden = visible.length > 0;
+    document.getElementById('conversation-heading').textContent = uiLabel('对话 · ', 'Conversations · ') + visible.length;
+    const empty = document.getElementById('conversations-empty');
+    empty.hidden = Boolean(sessionsStatus) || visible.length > 0;
+    if (!empty.hidden) empty.textContent = filter === 'all'
+      ? '还没有对话。用右上角的 + 新建群组或前往智能体目录。' : '当前筛选下没有对话。';
+    const readAll = document.getElementById('conversations-read-all');
+    if (readAll) {
+      readAll.hidden = !sessions.some(item => item.source === 'social' && item.unread_count > 0);
+      readAll.disabled = markingConversationsRead;
+    }
     let lastGroup = '';
     for (const session of groupSessionsForDisplay(visible)) {
       const li = document.createElement('li');
@@ -789,11 +1373,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       time.textContent = formatSessionTime(session.updated);
       time.title = formatTime(session.updated);
       button.append(avatar, copy, time);
+      if (session.muted) button.classList.add('is-muted');
       if (session.unread_count > 0) {
         const unread = document.createElement('span');
         unread.className = 'unread-badge';
         unread.textContent = String(session.unread_count);
-        unread.setAttribute('aria-label', session.unread_count + ' 条未读消息');
+        unread.setAttribute('aria-label', session.unread_count + uiLabel(' 条未读消息', ' unread'));
         time.append(unread);
       }
 
@@ -801,7 +1386,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (group !== lastGroup) {
         li.className = 'session-divider'; li.dataset.section = group; lastGroup = group;
       }
-      button.setAttribute('aria-label', group + '：' + session.title);
+      button.setAttribute('aria-label', group + '：' + session.title + (session.muted ? '，免打扰' : ''));
       li.append(button);
       list.append(li);
     }
@@ -815,49 +1400,328 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (busy) line.dataset.busy = '1'; else delete line.dataset.busy;
   }
 
-  function renderAgentMessages(items) {
+  function memorySources(item) {
+    if (item.role !== 'assistant' || item.status !== 'succeeded') return null;
+    const wid = workspaceId();
+    const refs = Array.isArray(item.memory_refs) ? item.memory_refs : [];
+    const links = [];
+    for (const ref of refs) {
+      if (!/^[0-9a-f]{32}$/.test(ref?.id || '') || !/^[0-9a-f]{32}$/.test(ref.workspace_id || '')) continue;
+      const workspace = workspaces.find(entry => entry.id === ref.workspace_id);
+      if (ref.workspace_id !== wid && !workspace) continue;
+      const params = new URLSearchParams({workspace:ref.workspace_id,page:ref.id});
+      let title = ref.title || '记忆页';
+      if (ref.kind === 'action') {
+        params.set('page','todos');
+        params.set('action',ref.id);
+        title = '行动 · ' + title;
+      } else if (Number.isSafeInteger(ref.revision) && ref.revision > 0) params.set('revision',String(ref.revision));
+      if (ref.workspace_id !== wid && workspace?.name) title += ' · ' + workspace.name;
+      links.push([params,title]);
+    }
+    if (item.memory_profile_workspace === wid) {
+      links.push([new URLSearchParams({workspace:wid, page:'profile'}), '我的资料与偏好']);
+    }
+    if (!links.length) return null;
+    const sources = document.createElement('details');
+    sources.className = 'reply-memory-sources';
+    const summary = document.createElement('summary');
+    summary.textContent = `参考记忆 · ${links.length}`;
+    const list = document.createElement('ol');
+    for (const [params, title] of links) {
+      const row = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = '/memory?' + params.toString();
+      link.textContent = title;
+      row.append(link);
+      list.append(row);
+    }
+    sources.append(summary, list);
+    return sources;
+  }
+
+  let lastAgentItems = [];
+  const captureButton = document.getElementById('history-capture-open');
+  const captureDialog = document.getElementById('history-capture-dialog');
+  const captureList = document.getElementById('history-capture-list');
+  const captureQuery = document.getElementById('history-capture-query');
+  const captureMore = document.getElementById('history-capture-more');
+  const captureSubmit = document.getElementById('history-capture-submit');
+  const captureStatus = document.getElementById('history-capture-status');
+  const captureInbox = document.getElementById('history-capture-inbox');
+  let captureDraft = null;
+
+  function syncCaptureButton() {
+    if (!captureButton) return;
+    captureButton.hidden = !servedByDsbot || currentSource !== 'agent' || !currentConversation
+      || !lastAgentItems.some(item => item.role === 'user' && item.body?.trim() && /^[0-9a-f]{32}$/.test(item.id));
+  }
+
+  function syncCaptureSelection() {
+    const count = captureDraft.selected.size;
+    for (const choice of captureDraft.visible) choice.disabled = captureDraft.busy || (!choice.checked && count >= 12);
+    captureSubmit.disabled = !count || captureDraft.busy;
+    captureSubmit.textContent = captureDraft.busy ? '正在加入队列…' : count ? `提炼 ${count} 条消息` : '提炼所选消息';
+  }
+
+  function renderCaptureChoices() {
+    if (!captureDraft) return;
+    const query = captureQuery.value.trim().toLocaleLowerCase();
+    const rows = captureDraft.items.filter(item => item.body.toLocaleLowerCase().includes(query));
+    captureDraft.visible = [];
+    captureList.replaceChildren();
+    for (const item of rows.slice(0,captureDraft.limit)) {
+      const label = document.createElement('label');
+      const choice = document.createElement('input');
+      choice.type = 'checkbox';
+      choice.checked = captureDraft.selected.has(item.id);
+      choice.addEventListener('change', () => {
+        if (choice.checked) captureDraft.selected.add(item.id);
+        else captureDraft.selected.delete(item.id);
+        syncCaptureSelection();
+      });
+      const excerpt = document.createElement('span');
+      excerpt.textContent = item.body.length > 280 ? item.body.slice(0,280) + '…' : item.body;
+      label.append(choice,excerpt);
+      captureList.append(label);
+      captureDraft.visible.push(choice);
+    }
+    if (!rows.length) {
+      const empty = document.createElement('p');
+      empty.className = 'note';
+      empty.textContent = '没有找到匹配的消息。';
+      captureList.append(empty);
+    }
+    captureMore.hidden = rows.length <= captureDraft.limit;
+    syncCaptureSelection();
+  }
+
+  captureButton?.addEventListener('click', () => {
+    if (captureButton.hidden || !captureDialog) return;
+    const items = lastAgentItems.filter(item => item.role === 'user' && item.body?.trim() && /^[0-9a-f]{32}$/.test(item.id)).reverse();
+    if (!items.length) return;
+    captureDraft = {scope:sendScope(),items,selected:new Set(),limit:24,busy:false};
+    captureQuery.value = '';
+    captureStatus.textContent = '';
+    captureInbox.href = '/memory?' + new URLSearchParams({workspace:workspaceId(),page:'candidates'});
+    captureInbox.hidden = true;
+    document.getElementById('chat-more')?.setAttribute('aria-expanded','false');
+    renderCaptureChoices();
+    captureDialog.showModal();
+    captureQuery.focus();
+  });
+  captureQuery?.addEventListener('input', () => {
+    if (!captureDraft) return;
+    captureDraft.limit = 24;
+    renderCaptureChoices();
+  });
+  captureMore?.addEventListener('click', () => {
+    if (!captureDraft) return;
+    captureDraft.limit += 24;
+    renderCaptureChoices();
+  });
+  document.getElementById('history-capture-close')?.addEventListener('click', () => captureDialog.close());
+  captureDialog?.addEventListener('close', () => {
+    captureDraft = null;
+    document.getElementById('chat-more')?.focus();
+  });
+  document.getElementById('history-capture-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const draft = captureDraft;
+    if (!draft || draft.busy || !draft.selected.size || sendScope() !== draft.scope) return;
+    draft.busy = true;
+    syncCaptureSelection();
+    captureStatus.textContent = '';
+    const path = `${agentBase()}/conversations/${currentConversation.id}/memory/capture`;
+    try {
+      const result = await request('POST',path,{message_ids:[...draft.selected]});
+      if (captureDraft !== draft || sendScope() !== draft.scope) return;
+      if (result.status !== 202) {
+        captureStatus.textContent = messageFor(result.body.error,'无法提炼所选消息，请重试。');
+        return;
+      }
+      const {queued,skipped,full} = result.body;
+      captureStatus.textContent = [
+        queued ? `${queued} 条已加入后台提炼。` : '',
+        skipped ? `${skipped} 条已有处理记录。` : '',
+        full ? `队列已满，${full} 条可稍后重试。` : '',
+      ].filter(Boolean).join(' ');
+      captureInbox.hidden = !(queued || skipped);
+      if (!full) draft.selected.clear();
+      renderCaptureChoices();
+    } catch {
+      if (captureDraft === draft) captureStatus.textContent = '无法提炼所选消息，请重试。';
+    } finally {
+      if (captureDraft === draft) { draft.busy = false; syncCaptureSelection(); }
+    }
+  });
+
+  function waitingAgentReply(item) {
+    return item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
+  }
+
+  function messageScrollerAtBottom(scroller) {
+    return scroller.scrollHeight - scroller.scrollTop - (scroller.clientHeight || 0) < 48;
+  }
+
+  function makeAgentMessage(item) {
+    const bubble = document.createElement('li');
+    if (item.id) bubble.dataset.messageId = item.id;
+    bubble.className = item.role === 'user' ? 'user' : 'assistant';
+    const role = document.createElement('p');
+    role.className = 'role';
+    role.textContent = item.role === 'user' ? uiLabel('你', 'You') : (currentAgent?.name || uiLabel('智能体', 'Agent'));
+    const body = document.createElement('div');
+    const waiting = waitingAgentReply(item);
+    const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
+    const partial = waiting && servedByDsbot && item.client_key;
+    body.className = 'body' + (partial ? ' reply-preview' : waiting ? ' pending' : failed ? ' failed' : '');
+    if (partial) {
+      bubble.dataset.replyProgress = item.client_key;
+      body.setAttribute('aria-live', 'off');
+      body.hidden = true;
+    } else if (failed && item.error_code === 'model-unconfigured') {
+      body.textContent = uiLabel('这个智能体还没有可用模型。', 'This agent has no model configured.');
+      const configure = document.createElement('a');
+      configure.className = 'chat-model-settings';
+      configure.href = '/settings#model-api';
+      configure.textContent = uiLabel('配置模型 API', 'Configure model API');
+      body.append(configure);
+    } else {
+      renderMessageBody(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences);
+      if (item.attachments?.length && !item.body) body.hidden = true;
+    }
+    if (waiting || failed) bubble.dataset.state = waiting ? item.status : 'failed';
+    bubble.append(role);
+    let replyView;
+    if (waiting) {
+      const heading = document.createElement('p');
+      heading.className = 'reply-state';
+      heading.textContent = item.status === 'running' ? '正在生成回复' : '正在准备回复';
+      bubble.append(heading);
+      if (partial) replyView = {bubble, heading, body};
+    }
+    bubble.append(body);
+    for (const attachment of item.attachments || []) bubble.append(renderChatFile(document, attachment));
+    const sources = memorySources(item);
+    if (sources) bubble.append(sources);
+    if (item.role === 'assistant' && saveableAgentMessage(item)) {
+      bubble.append(saveMessageButton(item, currentAgent.id));
+    }
+    return {bubble, replyView};
+  }
+
+  function renderAgentMessages(items, {followLatest = true, anchor} = {}) {
+    const scroller = document.getElementById('message-scroller');
+    const top = anchor?.top ?? scroller.scrollTop;
+    const follow = anchor?.follow ?? (followLatest || messageScrollerAtBottom(scroller));
     const list = document.getElementById('message-list');
     list.replaceChildren();
-    document.getElementById('chat-empty').hidden = (items || []).length > 0;
-    let pending = false;
-    for (const item of items || []) {
-      const li = document.createElement('li');
-      li.dataset.messageId = item.id;
-      li.className = item.role === 'user' ? 'user' : 'assistant';
-      const role = document.createElement('p');
-      role.className = 'role';
-      role.textContent = item.role === 'user' ? '你' : ((currentAgent && currentAgent.name) || '智能体');
-      const body = document.createElement('div');
-      const waiting = item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
-      const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
-      body.className = 'body ' + (waiting ? 'pending' : (failed ? 'failed' : ''));
-      renderMessageBody(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences);
-      if (waiting || failed) li.dataset.state = waiting ? item.status : 'failed';
-      if (waiting) {
-        const heading = document.createElement('p');
-        heading.className = 'reply-state';
-        heading.textContent = item.status === 'running' ? '正在生成回复' : '正在准备回复';
-        li.append(role, heading, body);
-      } else {
-        li.append(role, body);
-      }
-      if (item.role === 'assistant' && item.status === 'succeeded' && item.body) {
-        const save = document.createElement('button');
-        save.type = 'button';
-        save.dataset.save = item.id;
-        save.textContent = '保存到作品库';
-        li.append(save);
-      }
-      list.append(li);
-      if (waiting) pending = true;
+    agentReplyViews.clear();
+    lastAgentItems = items || [];
+    syncCaptureButton();
+    const pendingKeys = pendingMessageKeys();
+    for (const item of lastAgentItems) {
+      if (pendingKeys.has(item.client_key)) continue;
+      const {bubble, replyView} = makeAgentMessage(item);
+      if (replyView) agentReplyViews.set(item.client_key, replyView);
+      list.append(bubble);
     }
-    setChatSubtitle(pending ? '正在回复…' : 'AI 智能体 · 经运行时回复', pending);
+    renderPendingSend();
+    const tracking = syncReplyProgress();
+    attachmentSender?.render();
+    scroller.scrollTop = follow ? scroller.scrollHeight : top;
+    return lastAgentItems.some(waitingAgentReply) && !tracking;
+  }
+
+  function stopReplyProgress() {
+    const watch = replyWatch;
+    if (!watch) return;
+    replyWatch = null;
+    globalThis.clearTimeout(watch.timer);
+    globalThis.clearTimeout(watch.timeout);
+    watch.controller?.abort();
+  }
+
+  function isCurrentReply(watch) {
+    return replyWatch === watch && sendScope() === watch.scope && canWatchReply();
+  }
+
+  function canWatchReply() {
+    return document.visibilityState !== 'hidden'
+      && !(narrowScreen() && document.body.classList.contains('sessions-open'));
+  }
+
+  function paintReplyProgress(view, snapshot) {
+    const state = snapshot.state === 'running' ? 'running' : 'queued';
+    if (view.bubble.dataset.state !== state) {
+      view.bubble.dataset.state = state;
+      view.heading.textContent = state === 'running' ? '正在生成回复' : '正在准备回复';
+    }
+    if (typeof snapshot.text !== 'string' || view.body.textContent === snapshot.text) return;
     const scroller = document.getElementById('message-scroller');
-    scroller.scrollTop = scroller.scrollHeight;
-    return pending;
+    const follow = messageScrollerAtBottom(scroller);
+    view.body.textContent = snapshot.text;
+    view.body.hidden = !snapshot.text;
+    if (follow) scroller.scrollTop = scroller.scrollHeight;
+  }
+
+  function scheduleReplyProgress(watch, delay = 400) {
+    if (!isCurrentReply(watch)) return;
+    watch.timer = globalThis.setTimeout(() => void pollReplyProgress(watch), delay);
+  }
+
+  async function pollReplyProgress(watch) {
+    if (!isCurrentReply(watch)) return;
+    const controller = watch.controller = new AbortController();
+    watch.timeout = globalThis.setTimeout(() => controller.abort(), 5000);
+    const result = await request('GET', watch.path, undefined, undefined, controller.signal).catch(() => null);
+    globalThis.clearTimeout(watch.timeout);
+    watch.controller = null;
+    if (!isCurrentReply(watch)) return;
+    const snapshot = result?.status === 200 ? result.body : null;
+    if (snapshot?.state === 'pending' || snapshot?.state === 'running') {
+      watch.failures = 0;
+      watch.snapshot = snapshot;
+      paintReplyProgress(watch.view, snapshot);
+      scheduleReplyProgress(watch);
+      return;
+    }
+    const terminal = snapshot?.state === 'succeeded' || snapshot?.state === 'failed';
+    if (terminal && watch.posting) return;
+    watch.failures += 1;
+    if (terminal || (!watch.posting && watch.failures >= 4)) {
+      await openAgentConversation(currentAgent.id, currentConversation.id, {refresh: true});
+      scheduleReplyProgress(watch, 1500);
+      return;
+    }
+    scheduleReplyProgress(watch, watch.failures < 3 ? 400 : 1200);
+  }
+
+  function syncReplyProgress() {
+    const scope = sendScope();
+    const job = pendingSends.get(scope)?.replying;
+    const [key, view] = job ? [job.key, job.replyView] : (agentReplyViews.entries().next().value || []);
+    if (!servedByDsbot || currentSource !== 'agent' || !currentConversation || !canWatchReply() || !view) {
+      stopReplyProgress();
+      return false;
+    }
+    if (replyWatch?.scope === scope && replyWatch.key === key) {
+      replyWatch.view = view;
+      replyWatch.posting = Boolean(job);
+      if (replyWatch.snapshot) paintReplyProgress(view, replyWatch.snapshot);
+      return true;
+    }
+    stopReplyProgress();
+    const path = `${agentBase()}/conversations/${currentConversation.id}/reply-progress?${new URLSearchParams({key})}`;
+    replyWatch = {scope, key, view, path, posting: Boolean(job), failures: 0};
+    scheduleReplyProgress(replyWatch);
+    return true;
   }
 
   let selecting = false;
+  let forwardBusy = false;
+  let forwardAttempt = null;
   const selectedMessages = new Set();
   let pinnedIds = new Set();
 
@@ -867,7 +1731,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     bar.hidden = !selecting;
     document.getElementById('forward-count').textContent = forwardCountLabel(selectedMessages.size);
     const target = document.getElementById('forward-target');
-    document.getElementById('forward-submit').disabled = !(selectedMessages.size && target.value);
+    document.getElementById('forward-submit').disabled = forwardBusy || !(selectedMessages.size && target.value);
+    const capture = document.getElementById('selection-group-capture');
+    if (capture) {
+      capture.hidden = !servedByDsbot || currentSource !== 'social' || currentConversation?.kind !== 'group' || Boolean(currentConversation.public_agent);
+      capture.disabled = !selectedMessages.size;
+    }
+    for (const id of ['selection-memory', 'selection-meeting']) {
+      const action = document.getElementById(id);
+      if (action) action.disabled = !selectedMessages.size;
+    }
     const toggle = document.getElementById('multi-select-toggle');
     if (toggle) { toggle.setAttribute('aria-pressed', selecting ? 'true' : 'false'); toggle.textContent = selecting ? '退出多选' : '多选'; }
   }
@@ -897,8 +1770,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     section.hidden = !(list && list.length);
     holder.replaceChildren(...(list || []).map(item => {
       const li = document.createElement('li');
-      li.textContent = item.excerpt;
-      li.title = '由 ' + item.pinned_by_username + ' 置顶';
+      li.dataset.pinnedMessage = item.message_id;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = item.excerpt || '查看置顶消息';
+      if (item.pinned_by_username) button.title = '由 ' + item.pinned_by_username + ' 置顶';
+      button.addEventListener('click', () => jumpToMessage(item.message_id));
+      li.append(button);
       return li;
     }));
   }
@@ -913,7 +1791,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       box.checked = selectedMessages.has(item.id);
       box.setAttribute('aria-label', '选择这条消息');
       box.addEventListener('change', () => {
-        if (box.checked) selectedMessages.add(item.id); else selectedMessages.delete(item.id);
+        if (box.checked && selectedMessages.size >= 20) {
+          box.checked = false;
+          show('error', '一次最多转发 20 条消息。');
+        } else if (box.checked) {
+          selectedMessages.add(item.id);
+        } else {
+          selectedMessages.delete(item.id);
+        }
         syncForwardBar();
       });
       label.append(box, document.createTextNode('选择'));
@@ -1001,7 +1886,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function openMessageMenu(item, li, mine, x, y) {
     const menu = document.getElementById('message-context-menu');
     if (!menu) return;
-    messageMenuTarget = {item, li, mine};
+    const scroller = document.getElementById('message-scroller');
+    messageMenuTarget = {item, li, mine, scrollTop: scroller?.scrollTop};
     const reactions = document.getElementById('message-menu-reactions');
     reactions.replaceChildren(...MESSAGE_REACTIONS.map(emoji => {
       const button = document.createElement('button');
@@ -1014,11 +1900,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }));
     const pin = menu.querySelector('[data-menu="pin"]');
     pin.textContent = pinnedIds.has(item.id) ? '取消置顶' : '置顶';
+    menu.querySelector('[data-menu="reply"]').hidden = currentConversation?.public_agent?.open === false
+      || currentConversation?.direct?.open === false;
     menu.querySelector('[data-menu="retract"]').hidden = !mine;
-    menu.querySelector('[data-menu="delete"]').hidden = !mine;
     const edit = menu.querySelector('[data-menu="edit"]');
     if (edit) edit.hidden = !mine;
     menu.querySelector('[data-menu="forward"]').disabled = forwardTargets(socialConversations, currentConversation && currentConversation.id).length === 0;
+    const publicThread = Boolean(currentConversation?.public_agent);
+    for (const action of ['translate', 'ask', 'forward', 'select']) {
+      menu.querySelector(`[data-menu="${action}"]`).hidden = publicThread;
+    }
+    menu.querySelector('[data-menu="save"]').hidden = publicThread || !saveableSocialMessage(item);
     menu.hidden = false;
     const width = menu.offsetWidth || 200, height = menu.offsetHeight || 360;
     const left = Math.max(8, Math.min(x, globalThis.innerWidth - width - 8));
@@ -1026,7 +1918,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     menu.style.setProperty('left', left + 'px');
     menu.style.setProperty('top', top + 'px');
     const first = menu.querySelector('button:not(:disabled)');
-    if (first) first.focus();
+    if (first) first.focus({preventScroll: true});
   }
 
   const messageMenu = document.getElementById('message-context-menu');
@@ -1041,12 +1933,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const choice = li.querySelector(`.reaction-picker button[aria-label="回应 ${button.dataset.emoji}"]`);
         if (choice) choice.click();
       } else if (action === 'reply') {
-        const input = document.getElementById('chat-body');
-        const author = (li.querySelector('.role') || {}).textContent || '';
-        const excerpt = String(item.body || '').replace(/\s+/g, ' ').slice(0, 80);
-        input.value = `> ${author}：${excerpt}\n` + input.value;
-        input.dispatchEvent(new Event('input', {bubbles: true}));
-        input.focus();
+        const author = li.querySelector('.role')?.textContent || '成员';
+        composeReply(item, author);
       } else if (action === 'translate' || action === 'ask') {
         messageUtilities.open(item, action);
       } else if (action === 'save') {
@@ -1069,15 +1957,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const retract = Array.from(li.querySelectorAll(':scope > button')).find(node => node.textContent === '撤回');
         if (retract) retract.click();
       } else if (action === 'delete') {
-        const cid = currentConversation.id;
-        const result = await request('DELETE', `${socialBase()}/${cid}/messages/${item.id}`);
+        const wid = workspaceId(), cid = currentConversation.id;
+        const result = await request('DELETE', `${socialBase()}/${cid}/messages/${item.id}`)
+          .catch(() => ({status: 0, body: {}}));
+        if (wid !== workspaceId() || currentSource !== 'social' || currentConversation?.id !== cid) return;
         if (result.status !== 204) {
-          show('error', messageFor(result.body.error, '消息未删除，请重试。'));
+          show('error', messageFor(result.body.error, '消息未从你的会话删除，请重试。'));
           return;
         }
-        if (!currentConversation || currentConversation.id !== cid) return;
-        renderSocialMessages(lastSocialItems.filter(row => row.id !== item.id));
-        await loadSessions();
+        socialOpen++;
+        const visible = lastSocialItems.filter(row => row.id !== item.id).map(row =>
+          row.reply_preview?.message_id === item.id
+            ? {...row, reply_preview: {message_id: item.id, available: false}}
+            : row);
+        renderSocialMessages(visible, {refresh:true});
+        const pin = document.querySelector?.(`#pinned-message-list [data-pinned-message="${item.id}"]`);
+        pin?.remove();
+        pinnedIds.delete(item.id);
+        if (!pinnedIds.size) document.getElementById('pinned-messages').hidden = true;
+        show('ok', '已从你的会话删除。', {announceOnly:true});
+        void loadSessions();
       }
     });
     document.addEventListener('click', event => {
@@ -1086,7 +1985,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.addEventListener('keydown', event => { if (event.key === 'Escape' && !messageMenu.hidden) closeMessageMenu(); });
     globalThis.addEventListener('resize', closeMessageMenu);
     const scroller = document.getElementById('message-scroller');
-    if (scroller) scroller.addEventListener('scroll', closeMessageMenu, {passive: true});
+    if (scroller) scroller.addEventListener('scroll', () => {
+      if (messageMenuTarget && scroller.scrollTop !== messageMenuTarget.scrollTop) closeMessageMenu();
+    }, {passive: true});
   }
 
   let saveMessageTarget = null;
@@ -1111,44 +2012,449 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       reminderNotice(result.status, result.body));
   }
 
-  function openSaveMessage(item) {
-    saveMessageTarget = {item, workspace: workspaceId(), conversation: currentConversation.id};
-    document.getElementById('save-message-title').value = String(item.body || '').replace(/\s+/g, ' ').trim().slice(0, 60) || '消息记录';
+  function openSaveMessage(item, agentId) {
+    if (!currentConversation) return;
+    const workspace = workspaceId(), conversation = currentConversation.id;
+    const path = agentId ? agentSavePath(workspace, agentId, conversation, item.id)
+      : socialSavePath(workspace, conversation, item.id);
+    saveMessageTarget = {workspace, path, revision: agentId ? null : item.revision || 1};
+    document.getElementById('save-message-title').value = defaultSaveTitle(item.body);
     document.getElementById('save-message-error').hidden = true;
     saveMessageDialog.showModal();
     document.getElementById('save-message-title').focus();
   }
+
+  function saveMessageButton(item, agentId) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.save = item.id;
+    button.textContent = uiLabel('保存到资料空间', 'Save to Space');
+    button.addEventListener('click', () => openSaveMessage(item, agentId));
+    return button;
+  }
+  saveMessageDialog?.addEventListener('close', () => { saveMessageTarget = null; });
   const saveMessageCancel = document.getElementById('save-message-cancel');
   if (saveMessageCancel) saveMessageCancel.addEventListener('click', () => { saveMessageDialog.close(); saveMessageTarget = null; });
   const saveMessageForm = document.getElementById('save-message-form');
   if (saveMessageForm) saveMessageForm.addEventListener('submit', async event => {
     event.preventDefault();
     if (!saveMessageTarget) return;
-    const {item, workspace, conversation} = saveMessageTarget;
+    const target = saveMessageTarget;
     const button = document.getElementById('save-message-submit');
     const error = document.getElementById('save-message-error');
     if (button.disabled) return;
     button.disabled = true; error.hidden = true;
     try {
-      const result = await request('POST', `/v1/workspaces/${workspace}/social/conversations/${conversation}/messages/${item.id}/save`,
-        {title: document.getElementById('save-message-title').value, revision: item.revision || 1});
+      const body = {title: document.getElementById('save-message-title').value.trim()};
+      if (target.revision !== null) body.revision = target.revision;
+      const result = await request('POST', target.path, body);
+      if (saveMessageTarget !== target || workspaceId() !== target.workspace) return;
       if (result.status !== 200 && result.status !== 201) {
         error.textContent = messageFor(result.body.error, '消息未保存，请重新打开消息后重试。'); error.hidden = false; return;
       }
       saveMessageDialog.close(); saveMessageTarget = null;
-      show('ok', result.status === 201 ? `已保存到工作区资料空间：${result.body.artifact.title}` : `已存在工作区资料空间中（未同步后续编辑）：${result.body.artifact.title}`);
-    } catch { error.textContent = '网络错误，无法确认保存结果。可以重试，不会产生重复副本。'; error.hidden = false; }
+      const artifact = result.body.artifact;
+      show('ok', result.status === 201 ? '已保存到资料空间。' : '资料空间里已有这条消息的副本。');
+      if (artifact?.id) {
+        const link = document.createElement('a');
+        link.href = spaceHref(target.workspace, artifact.id);
+        link.textContent = '打开文档';
+        status.append(document.createTextNode(' '), link);
+      }
+    } catch {
+      if (saveMessageTarget !== target) return;
+      error.textContent = '无法确认保存结果，请重试。';
+      error.hidden = false;
+    }
     finally { button.disabled = false; }
   });
 
+  let socialHistory = null;
+  let socialOpen = 0;
+  let historyJump = 0;
+  let groupReplyWatch = null;
+  const groupReplyViews = new Map();
+  const olderMessages = document.getElementById('chat-load-older');
+  const latestMessages = document.getElementById('chat-back-to-latest');
+  const historyNotice = document.getElementById('chat-history-status');
+
+  function setSocialHistory(state) {
+    socialHistory = state;
+    if (!state || state.readingHistory) stopGroupReplyProgress();
+    if (!state) groupReplyViews.clear();
+    if (historyNotice) historyNotice.textContent = '';
+    updateHistoryControls();
+  }
+
+  function updateHistoryControls() {
+    if (olderMessages) {
+      olderMessages.hidden = !socialHistory?.cursor;
+      olderMessages.disabled = Boolean(socialHistory?.loading);
+    }
+    if (latestMessages) latestMessages.hidden = !socialHistory?.readingHistory;
+  }
+
+  async function historyPage(state, query) {
+    const result = await request('GET', `/v1/workspaces/${state.wid}/social/conversations/${state.cid}/messages?${query}`);
+    return socialHistory === state && currentSource === 'social' && workspaceId() === state.wid
+      && currentConversation?.id === state.cid ? result : null;
+  }
+
+  olderMessages?.addEventListener('click', async () => {
+    const state = socialHistory;
+    if (!state?.cursor || state.loading) return;
+    state.loading = true;
+    syncGroupReplyProgress();
+    updateHistoryControls();
+    if (historyNotice) historyNotice.textContent = '';
+    try {
+      const query = new URLSearchParams({before: String(state.cursor), limit: '50'});
+      const result = await historyPage(state, query);
+      if (!result) return;
+      if (result.status !== 200) throw new Error('History unavailable');
+      const existing = new Set(lastSocialItems.map(item => item.id));
+      const older = (result.body.items || []).filter(item => !existing.has(item.id));
+      state.cursor = result.body.cursor ?? null;
+      state.readingHistory = true;
+      if (older.length) renderSocialMessages([...older, ...lastSocialItems], {keepScroll: true});
+      if (historyNotice) historyNotice.textContent = older.length ? `已加载 ${older.length} 条旧消息。` : '没有更早的消息。';
+    } catch {
+      if (socialHistory === state && historyNotice) historyNotice.textContent = '旧消息加载失败，请重试。';
+    } finally {
+      state.loading = false;
+      updateHistoryControls();
+      syncGroupReplyProgress();
+    }
+  });
+  latestMessages?.addEventListener('click', () => {
+    if (currentSource === 'social' && currentConversation) openSocialConversation(currentConversation.id);
+  });
+
   let lastSocialItems = [];
-  function renderSocialMessages(items) {
+  function waitingGroupReply(job) {
+    return job.status === 'queued' || job.status === 'running';
+  }
+
+  function hasPendingReplies(items = lastSocialItems) {
+    return items?.some(item => item.reply_jobs?.some(waitingGroupReply));
+  }
+
+  function canWatchGroupReplies() {
+    return servedByDsbot && currentSource === 'social' && currentConversation?.kind === 'group'
+      && !currentConversation.public_agent && socialHistory?.cid === currentConversation.id
+      && !socialHistory.readingHistory && !socialHistory.loading
+      && canWatchReply() && groupReplyViews.size > 0;
+  }
+
+  function paintGroupReplyProgress(items) {
+    const changes = [];
+    for (const [id, view] of groupReplyViews) {
+      const snapshot = items.get(id);
+      const text = snapshot && snapshot.message_id === view.messageId && snapshot.attempt === view.attempt
+        && typeof snapshot.text === 'string' ? snapshot.text : '';
+      if (view.preview.textContent !== text) changes.push({view, text});
+    }
+    if (!changes.length) return;
+    const scroller = document.getElementById('message-scroller');
+    const top = scroller.scrollTop;
+    const follow = messageScrollerAtBottom(scroller);
+    for (const {view, text} of changes) {
+      view.preview.textContent = text;
+      view.preview.hidden = !text;
+      const state = text ? 'running' : view.job.status;
+      view.row.dataset.state = state;
+      view.note.textContent = view.job.agent_name + GROUP_REPLY_LABELS[state];
+    }
+    scroller.scrollTop = follow ? scroller.scrollHeight : top;
+  }
+
+  function stopGroupReplyProgress() {
+    const watch = groupReplyWatch;
+    if (!watch) return;
+    groupReplyWatch = null;
+    globalThis.clearTimeout(watch.timer);
+    globalThis.clearTimeout(watch.timeout);
+    watch.controller?.abort();
+    paintGroupReplyProgress(new Map());
+  }
+
+  function currentGroupReplyWatch(watch) {
+    return watch && groupReplyWatch === watch && sendScope() === watch.scope && canWatchGroupReplies();
+  }
+
+  function scheduleGroupReplyProgress(watch, delay = 500) {
+    if (!currentGroupReplyWatch(watch)) return;
+    watch.timer = globalThis.setTimeout(() => void pollGroupReplyProgress(watch), delay);
+  }
+
+  async function pollGroupReplyProgress(watch) {
+    if (!currentGroupReplyWatch(watch)) {
+      if (groupReplyWatch === watch) stopGroupReplyProgress();
+      return;
+    }
+    const controller = watch.controller = new AbortController();
+    watch.timeout = globalThis.setTimeout(() => controller.abort(), 5000);
+    const result = await request('GET', watch.path, undefined, undefined, controller.signal).catch(() => null);
+    globalThis.clearTimeout(watch.timeout);
+    watch.controller = null;
+    if (!currentGroupReplyWatch(watch)) {
+      if (groupReplyWatch === watch) stopGroupReplyProgress();
+      return;
+    }
+    if (result?.status === 200 && Array.isArray(result.body.items)) {
+      const items = new Map(result.body.items.filter(item => item?.id).map(item => [item.id, item]));
+      const settled = [...watch.items.values()].some(snapshot => {
+        const view = groupReplyViews.get(snapshot.id);
+        return view && view.messageId === snapshot.message_id && view.attempt === snapshot.attempt
+          && items.get(snapshot.id)?.attempt !== snapshot.attempt;
+      });
+      watch.items = items;
+      if (watch.degraded) stopPolling();
+      watch.degraded = false;
+      paintGroupReplyProgress(items);
+      if (settled) {
+        if (readingSocialContext()) {
+          if (liveBanner) liveBanner.hidden = false;
+        } else if (!pollTimer) schedulePoll(1200);
+      }
+      scheduleGroupReplyProgress(watch);
+    } else if ([401, 403, 404].includes(result?.status)) {
+      stopGroupReplyProgress();
+      if (!pollTimer) scheduleSocialPoll(currentConversation);
+    } else {
+      watch.degraded = true;
+      if (!pollTimer) scheduleSocialPoll(currentConversation);
+      scheduleGroupReplyProgress(watch, 1500);
+    }
+  }
+
+  function syncGroupReplyProgress() {
+    if (!canWatchGroupReplies()) {
+      stopGroupReplyProgress();
+      return;
+    }
+    const scope = sendScope();
+    if (groupReplyWatch?.scope === scope) {
+      paintGroupReplyProgress(groupReplyWatch.items);
+      return;
+    }
+    stopGroupReplyProgress();
+    groupReplyWatch = {
+      scope, path: `${socialBase()}/${currentConversation.id}/reply-progress`, items: new Map(),
+    };
+    scheduleGroupReplyProgress(groupReplyWatch);
+  }
+
+  const GROUP_REPLY_LABELS = {queued: ' · 等待回复', running: ' · 正在回复', failed: ' · 回复失败'};
+  function renderReplyJobs(item) {
+    const rows = document.createElement('div');
+    rows.className = 'group-reply-jobs';
+    for (const job of item.reply_jobs || []) {
+      if (job.status === 'replied') continue;
+      const row = document.createElement('div');
+      row.className = 'group-reply-job';
+      row.dataset.state = job.status;
+      row.dataset.replyJobId = job.id;
+      if (Number.isSafeInteger(job.attempt)) row.dataset.replyAttempt = String(job.attempt);
+      const note = document.createElement('span');
+      note.textContent = job.agent_name + (GROUP_REPLY_LABELS[job.status] || '');
+      row.append(note);
+      if (servedByDsbot && waitingGroupReply(job) && Number.isSafeInteger(job.attempt) && job.attempt > 0) {
+        const preview = document.createElement('div');
+        preview.className = 'group-reply-preview';
+        preview.hidden = true;
+        preview.setAttribute('aria-live', 'off');
+        groupReplyViews.set(job.id, {messageId: item.id, attempt: job.attempt, job, row, note, preview});
+        row.append(preview);
+      }
+      if (job.can_retry) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = '重试';
+        button.setAttribute('aria-label', '重试 ' + job.agent_name);
+        button.addEventListener('click', async () => {
+          const cid = currentConversation.id;
+          const wid = workspaceId();
+          button.disabled = true;
+          button.textContent = '重试中…';
+          const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/agent-retry`, {job_id: job.id})
+            .catch(() => ({status: 0, body: {}}));
+          if (workspaceId() !== wid || currentSource !== 'social' || currentConversation?.id !== cid) return;
+          if (result.status === 200) {
+            // A response from a poll started before the click may still be in flight.
+            socialOpen++;
+            const list = document.getElementById('message-list');
+            const message = lastSocialItems.find(current => current.id === item.id);
+            if (message) {
+              for (const previous of message.reply_jobs || []) groupReplyViews.delete(previous.id);
+              message.reply_jobs = result.body.reply_jobs;
+              const target = [...list.children].find(element => element.dataset.messageId === item.id);
+              const jobs = target?.querySelector('.group-reply-jobs');
+              if (jobs) jobs.replaceWith(renderReplyJobs(message));
+              syncGroupReplyProgress();
+            }
+            if (!socialHistory?.readingHistory) scheduleSocialPoll(currentConversation);
+            show('ok', '已重新请求 ' + job.agent_name + ' 回复。', {announceOnly: true});
+          } else {
+            button.disabled = false;
+            button.textContent = '重试';
+            show('error', messageFor(result.body.error, '暂时无法重试，请稍后再试。'));
+          }
+        });
+        row.append(button);
+      }
+      rows.append(row);
+    }
+    return rows;
+  }
+
+  const groupMemoryDialog = document.getElementById('group-memory-dialog');
+  const groupMemoryStatus = document.getElementById('group-memory-status');
+  const groupMemoryList = document.getElementById('group-memory-list');
+  const groupMemoryAuto = document.getElementById('group-memory-auto');
+  const groupMemoryAutoStatus = document.getElementById('group-memory-auto-status');
+  let groupMemoryView = null;
+
+  function groupMemoryButton(label, action) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', action);
+    return button;
+  }
+
+  const groupMemoryActive = view => groupMemoryDialog?.open && groupMemoryView === view && sendScope() === view.scope;
+  groupMemoryAuto?.addEventListener('click', async () => {
+    const view = groupMemoryView;
+    if (!groupMemoryActive(view) || typeof view.autoCapture !== 'boolean') return;
+    const enabled = !view.autoCapture;
+    groupMemoryAuto.setAttribute('aria-checked', String(enabled));
+    groupMemoryAuto.disabled = true;
+    groupMemoryAutoStatus.textContent = '';
+    const result = await request('POST', `${view.path}/auto-capture`,{enabled})
+      .catch(() => ({status:0,body:{}}));
+    if (!groupMemoryActive(view)) return;
+    if (result.status === 200) view.autoCapture = result.body.enabled === true;
+    else groupMemoryAutoStatus.textContent = messageFor(result.body.error,'设置保存失败，请重试。');
+    groupMemoryAuto.setAttribute('aria-checked', String(view.autoCapture));
+    groupMemoryAuto.disabled = false;
+  });
+
+  async function openGroupMemory(highlight) {
+    if (!servedByDsbot || currentSource !== 'social' ||
+        currentConversation?.kind !== 'group' || currentConversation.public_agent) return;
+    const view = {scope:sendScope(), path:`${socialBase()}/${currentConversation.id}/shared-memory`};
+    groupMemoryView = view;
+    const active = () => groupMemoryActive(view);
+    groupMemoryAuto.disabled = true;
+    groupMemoryAuto.setAttribute('aria-checked','false');
+    groupMemoryAutoStatus.textContent = '';
+    document.getElementById('group-memory-inbox').href = '/memory?'+new URLSearchParams({workspace:workspaceId(),page:'candidates'});
+    groupMemoryList.replaceChildren();
+    groupMemoryStatus.textContent = '正在读取群记忆…';
+    if (!groupMemoryDialog.open) groupMemoryDialog.showModal();
+    const result = await request('GET', view.path).catch(() => ({status:0,body:{}}));
+    if (!active()) return;
+    if (result.status !== 200) {
+      groupMemoryStatus.textContent = messageFor(result.body.error,'群记忆加载失败，请重试。');
+      return;
+    }
+    view.autoCapture = result.body.auto_capture === true;
+    groupMemoryAuto.setAttribute('aria-checked',String(view.autoCapture));
+    groupMemoryAuto.disabled = false;
+    const items = result.body.items || [];
+    const selected = items.find(item => item.id === highlight);
+    groupMemoryStatus.textContent = highlight && !selected ? '这条群记忆已失效或被移除。'
+      : items.length ? '' : '还没有共享的记忆。';
+    const rows = items.map(item => {
+      const row = document.createElement('li');
+      const title = document.createElement('h3');
+      title.textContent = item.title;
+      const body = document.createElement('p');
+      body.className = 'group-memory-body';
+      body.textContent = item.body;
+      const author = document.createElement('p');
+      author.className = 'note';
+      author.textContent = item.author;
+      const actions = document.createElement('div');
+      actions.className = 'group-memory-actions';
+      const source = groupMemoryButton('查看原消息', async () => {
+        groupMemoryDialog.close();
+        setGroupInfoOpen(false);
+        if (await jumpToMessage(item.source_message_id, null) === false && sendScope() === view.scope) {
+          show('error', '这条原消息已无法查看。');
+        }
+      });
+      actions.append(source);
+      if (item.can_remove) {
+        const remove = groupMemoryButton('移除', () => {
+          const confirm = groupMemoryButton('确认移除', async () => {
+            confirm.disabled = cancel.disabled = true;
+            const result = await request('POST', `${view.path}/${encodeURIComponent(item.id)}/remove`, {})
+              .catch(() => ({status:0,body:{}}));
+            if (!active()) return;
+            if (result.status === 200) await openGroupMemory();
+            else {
+              confirm.disabled = cancel.disabled = false;
+              groupMemoryStatus.textContent = messageFor(result.body.error,'移除失败，请重试。');
+            }
+          });
+          const cancel = groupMemoryButton('取消', () => {
+            actions.replaceChildren(source, remove);
+            remove.focus();
+          });
+          actions.replaceChildren(source, confirm, cancel);
+          confirm.focus();
+        });
+        actions.append(remove);
+      }
+      row.append(title, author, body, actions);
+      return row;
+    });
+    groupMemoryList.replaceChildren(...rows);
+    if (selected) {
+      const row = rows[items.indexOf(selected)];
+      row.tabIndex = -1;
+      row.focus();
+    }
+  }
+
+  function renderGroupMemoryRefs(refs) {
+    const block = document.createElement('div');
+    block.className = 'group-memory-refs';
+    const label = document.createElement('span');
+    label.textContent = '参考群记忆';
+    block.append(label, ...refs.map(ref => groupMemoryButton(ref.title, () => openGroupMemory(ref.id))));
+    return block;
+  }
+
+  function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory), refresh = false} = {}) {
+    const translateRoom = currentConversation?.kind === 'group' || (currentConversation?.kind === 'dm' && chatPreferences.auto_translate === true);
+    autoTranslation.open(servedByDsbot && currentUser && translateRoom && !currentConversation?.public_agent
+      ? {user:currentUser.id,wid:workspaceId(),cid:currentConversation.id}
+      : null);
+    autoTranslation.clearRows();
+    const scroller = document.getElementById('message-scroller');
+    const oldHeight = scroller.scrollHeight;
+    const oldTop = scroller.scrollTop;
+    const wasAtLatest = oldHeight - oldTop - scroller.clientHeight < 48;
+    clearVoicePlayers();
     lastSocialItems = items || [];
     const list = document.getElementById('message-list');
+    // Keep an open model attached to its original message when a sync rebuilds the list.
+    const models = new Map();
+    const focusedModelControl = document.activeElement?.closest('.chat-file-model3d') ? document.activeElement : null;
+    for (const row of list.children) {
+      const model = Array.from(row.children).find(child => child.dataset.model3dSource);
+      if (model) models.set(row.dataset.messageId, model);
+    }
     list.replaceChildren();
+    groupReplyViews.clear();
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
     const people = currentConversation && currentConversation.members || members;
+    const pendingKeys = pendingMessageKeys();
     for (const item of items || []) {
+      if (pendingKeys.has(item.client_key)) continue;
       const li = document.createElement('li');
       li.dataset.messageId = item.id;
       const mine = item.user_id === (currentUser && currentUser.id);
@@ -1156,10 +2462,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const role = document.createElement('p');
       role.className = 'role';
       const member = people.find(entry => entry.user_id === item.user_id);
-      role.textContent = item.role === 'agent' ? (item.agent_name + ' · AI 智能体 · 运行时回复')
-        : (mine ? '我' : ((member && member.username) || '成员'));
+      role.textContent = item.role === 'agent' ? (item.agent_name + uiLabel(' · AI 智能体 · 运行时回复', ' · AI agent · DS-Bot'))
+        : (mine ? uiLabel('我', 'Me') : ((member && member.username) || uiLabel('成员', 'Member')));
       const body = document.createElement('div');
       body.className = 'body';
+      if (item.attachment?.bytes !== undefined && item.body === item.attachment.title) body.hidden = true;
       renderMessageBody(document, body, item.retracted ? '此消息已撤回' : (item.body || ''), chatPreferences);
       if (item.forwarded_from && !item.retracted) {
         body.dataset.forwarded = '1';
@@ -1169,8 +2476,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const time = document.createElement('p');
       time.className = 'time';
       time.textContent = formatTime(item.created);
-      li.append(role, body, time);
-      if (item.attachment && !item.retracted) {
+      li.append(role);
+      if (!item.retracted && item.reply_preview) li.append(quoteBlock(item.reply_preview, true));
+      li.append(body, time);
+      if (!item.retracted && item.reply_jobs?.length) li.insertBefore(renderReplyJobs(item), time);
+      if (!item.retracted && item.group_memory_refs?.length) li.insertBefore(renderGroupMemoryRefs(item.group_memory_refs), time);
+      if (!mine) autoTranslation.add(item,li,body);
+      if (item.voice && !item.retracted) li.insertBefore(voicePlayer(item), time);
+      if (item.attachment?.bytes !== undefined && !item.retracted) {
+        const model = models.get(item.id);
+        const reuse = item.attachment.mime === 'model/gltf-binary'
+          && model?.dataset.model3dSource === item.attachment.path;
+        li.insertBefore(reuse ? model : renderChatFile(document, item.attachment), time);
+      } else if (item.attachment && !item.retracted) {
         const card = document.createElement('article');
         card.className = 'stream-artifact';
         const copy = document.createElement('span');
@@ -1252,7 +2570,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         });
         li.append(edit, retract, controls);
       }
-      if (item.role !== 'agent' && !item.retracted) li.append(messageTools(item));
+      if (item.role === 'agent' && !item.retracted && currentConversation?.public_agent?.open !== false
+        && currentConversation?.direct?.open !== false) {
+        const reply = document.createElement('button');
+        reply.type = 'button';
+        reply.textContent = '回复';
+        reply.setAttribute('aria-label', '回复 ' + item.agent_name);
+        reply.addEventListener('click', () => composeReply(item, item.agent_name || '智能体'));
+        li.append(reply);
+      }
+      if (item.role === 'agent' && !currentConversation?.public_agent && saveableSocialMessage(item)) li.append(saveMessageButton(item));
+      if (!item.retracted && (item.role !== 'agent' || selecting)) li.append(messageTools(item));
       if (item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
       if (item.role !== 'agent' && !item.retracted) {
         const more = document.createElement('button');
@@ -1275,8 +2603,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       list.append(li);
     }
-    const scroller = document.getElementById('message-scroller');
-    scroller.scrollTop = scroller.scrollHeight;
+    if (focusedModelControl?.isConnected) focusedModelControl.focus({preventScroll: true});
+    renderPendingSend();
+    syncGroupReplyProgress();
+    attachmentSender?.render();
+    if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
+    else scroller.scrollTop = refresh && !wasAtLatest ? oldTop : scroller.scrollHeight;
     return false;
   }
 
@@ -1286,68 +2618,157 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.getElementById('group-agent-action').hidden = true;
     }
     const link = document.getElementById('open-agent-dir');
+    link.hidden = Boolean(session?.public_agent);
     if (session && session.source === 'social') {
       link.href = '/members';
-      link.textContent = '成员';
+      link.textContent = uiLabel('成员', 'Members');
     } else {
       link.href = '/agents';
-      link.textContent = '资料';
+      link.textContent = uiLabel('资料', 'Resources');
     }
   }
 
   let notificationSeq = 0;
-  function renderNotifications(body) {
+  let notificationEpoch = 0;
+  let notificationSnapshot = null;
+  const notificationReads = new Set();
+  const notificationKind = document.getElementById('notifications-kind');
+  const notificationUnread = document.getElementById('notifications-unread');
+  const notificationNotice = document.getElementById('notifications-status');
+  const notificationScope = () => ({workspace: workspaceId(), owner: currentUser?.id, epoch: notificationEpoch});
+  const currentNotificationScope = scope =>
+    Boolean(scope?.owner && scope.owner === currentUser?.id && scope.workspace === workspaceId() && scope.epoch === notificationEpoch);
+
+  function setNotificationStatus(text = '') {
+    if (!notificationNotice) return;
+    notificationNotice.textContent = text;
+    notificationNotice.hidden = !text;
+    if (text) {
+      const empty = document.getElementById('notifications-empty');
+      if (empty) empty.hidden = true;
+    }
+  }
+
+  function resetNotifications() {
+    notificationEpoch += 1;
+    notificationSnapshot = null;
+    setNotificationsOpen(false);
+    renderNotifications({items: [], unread_count: 0}, notificationScope());
+  }
+
+  function applyNotificationRead(scope, result, id) {
+    if (!currentNotificationScope(scope) || !notificationSnapshot) return;
+    notificationSeq += 1;
+    const body = notificationSnapshot.body;
+    notificationSnapshot.body = {
+      ...body,
+      unread_count: result.body?.unread_count ?? body.unread_count,
+      items: (body.items || []).map(item => !id || item.id === id ? {...item, read: true} : item),
+    };
+    renderNotifications(notificationSnapshot.body, scope);
+  }
+
+  function renderNotifications(body, scope) {
     const badge = document.getElementById('notification-count');
     const toggle = document.getElementById('notifications-toggle');
     const text = notificationBadgeText(body.unread_count);
     if (badge) { badge.textContent = text; badge.hidden = !text; }
-    if (toggle) toggle.setAttribute('aria-label', text ? `通知，${body.unread_count} 条未读提及` : '通知');
+    if (toggle) toggle.setAttribute('aria-label', text ? uiLabel(`通知，${body.unread_count} 条未读`, `Notifications, ${body.unread_count} unread`) : uiLabel('通知', 'Notifications'));
     const list = document.getElementById('notification-list');
     if (!list) return;
-    const items = body.items || [];
+    const mentionsOnly = notificationKind?.value === 'mention';
+    const items = (body.items || []).filter(item => (!mentionsOnly || item.kind === 'mention' || item.kind === 'messenger.mention')
+      && (!notificationUnread?.checked || !item.read));
     list.replaceChildren(...items.map(item => {
       const li = document.createElement('li');
-      const link = item.kind === 'follow_work' && item.path;
-      const button = document.createElement(link ? 'a' : 'button');
-      if (link) button.href = item.path;
-      else button.type = 'button';
+      const target = notificationTarget(item, scope.workspace);
+      const button = document.createElement(target ? 'a' : 'button');
+      const invalidLink = LINKED_NOTIFICATION_KINDS.has(item.kind) && !target;
+      if (target) button.href = target;
+      else {
+        button.type = 'button';
+        if (invalidLink) { button.disabled = true; button.title = '通知目标不可用'; }
+      }
       button.className = 'notification-item' + (item.read ? '' : ' is-unread');
       button.dataset.notification = item.id;
+      button.dataset.notificationKind = item.kind;
+      const readKey = `${scope.epoch}:${item.id}`;
+      if (notificationReads.has(readKey)) button.setAttribute('aria-busy', 'true');
       const summary = document.createElement('strong'); summary.textContent = notificationSummary(item);
       const excerpt = document.createElement('span'); excerpt.className = 'notification-excerpt'; excerpt.textContent = item.excerpt;
       const time = document.createElement('time'); time.textContent = formatSessionTime(item.created);
       button.append(summary, excerpt, time);
-      button.addEventListener('click', async () => {
-        const wid = workspaceId();
-        if (link) {
-          if (!item.read) request('POST', `/v1/workspaces/${wid}/notifications/read`, {notification_id: item.id});
-          setNotificationsOpen(false);
-          return;
+      button.addEventListener('click', async event => {
+        if (target) event.preventDefault();
+        if (invalidLink || !currentNotificationScope(scope) || notificationReads.has(readKey)) return;
+        setNotificationStatus();
+        if (!item.read) {
+          notificationReads.add(readKey);
+          button.setAttribute('aria-busy', 'true');
+          const read = request('POST', `/v1/workspaces/${scope.workspace}/notifications/read`,
+            {notification_id: item.id}, undefined, AbortSignal.timeout(5000), {keepalive: Boolean(target)})
+            .catch(() => ({status: 0, body: {}}))
+            .then(result => {
+              notificationReads.delete(readKey);
+              button.removeAttribute('aria-busy');
+              if (result.status === 200) applyNotificationRead(scope, result, item.id);
+              return result;
+            });
+          const result = target ? await waitForLinkedNotificationRead(read) : await read;
+          if (!currentNotificationScope(scope)) return;
+          if (result && result.status !== 200
+            && ((result.status !== 0 && result.status < 500) || (!target && !item.conversation_id))) {
+            setNotificationStatus('无法标记这条通知为已读，请重新打开通知后重试。');
+            if (notificationSnapshot) renderNotifications(notificationSnapshot.body, scope);
+            return;
+          }
         }
-        if (!item.read) await request('POST', `/v1/workspaces/${wid}/notifications/read`, {notification_id: item.id});
-        if (workspaceId() !== wid) return;
         setNotificationsOpen(false);
-        const target = notificationTarget(item);
         if (target) { globalThis.location.assign(target); return; }
-        await openSocialConversation(item.conversation_id);
+        if (item.conversation_id) {
+          const opened = await openSocialConversation(item.conversation_id, {acknowledge: !item.message_id});
+          if (opened && item.message_id && currentSource === 'social' && currentConversation?.id === item.conversation_id) {
+            await jumpToMessage(item.message_id, status);
+          }
+        }
         await loadNotifications();
       });
       li.append(button);
       return li;
     }));
-    const empty = document.getElementById('notifications-empty'); if (empty) empty.hidden = items.length > 0;
+    const empty = document.getElementById('notifications-empty');
+    if (empty) {
+      empty.hidden = items.length > 0 || Boolean(notificationNotice && !notificationNotice.hidden);
+      empty.textContent = mentionsOnly
+        ? (notificationUnread?.checked ? '暂无未读提及。' : '暂无提及。')
+        : (notificationUnread?.checked ? '暂无未读通知。' : '暂无通知。');
+    }
     const all = document.getElementById('notifications-read-all'); if (all) all.disabled = !(body.unread_count > 0);
   }
 
-  async function loadNotifications() {
-    const wid = workspaceId();
-    if (!wid) return;
+  async function loadNotifications({interactive = false} = {}) {
+    const scope = notificationScope();
+    if (!scope.workspace || !scope.owner) return;
     const token = ++notificationSeq;
-    let result;
-    // Notifications are auxiliary: a failed fetch must never break the session list.
-    try { result = await request('GET', `/v1/workspaces/${wid}/notifications`); } catch { return; }
-    if (token !== notificationSeq || workspaceId() !== wid || result.status !== 200) return;
-    renderNotifications(result.body);
+    const unreadOnly = Boolean(notificationUnread?.checked);
+    if (interactive) {
+      setNotificationStatus('正在加载通知…');
+      const old = notificationSnapshot;
+      const items = old && (!old.unreadOnly || unreadOnly) ? old.body.items : [];
+      renderNotifications({items, unread_count: old?.body.unread_count || 0}, scope);
+    }
+    const announce = interactive || notificationNotice?.textContent === '正在加载通知…';
+    const suffix = unreadOnly ? '?filter=unread' : '';
+    const result = await request('GET', `/v1/workspaces/${scope.workspace}/notifications${suffix}`)
+      .catch(() => ({status: 0, body: {}}));
+    if (token !== notificationSeq || !currentNotificationScope(scope) || unreadOnly !== Boolean(notificationUnread?.checked)) return;
+    if (result.status !== 200) {
+      if (announce) setNotificationStatus('无法加载通知。关闭后可重新打开。');
+      return;
+    }
+    if (announce) setNotificationStatus();
+    notificationSnapshot = {body: result.body, scope, unreadOnly};
+    renderNotifications(result.body, scope);
   }
 
   // Live-ish delivery: poll the inbox while the tab is visible. No server push.
@@ -1356,8 +2777,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const handle = globalThis.setInterval(() => {
       if (document.visibilityState === 'hidden' || !currentUser) return;
       loadNotifications();
+      loadDueReminders();
     }, NOTIFICATION_POLL_MS);
     if (handle && typeof handle.unref === 'function') handle.unref();
+  }
+
+
+  let dueSeq = 0;
+
+  function renderDueReminders(state) {
+    const panel = document.getElementById('due-reminders');
+    const heading = document.getElementById('due-reminders-heading');
+    const note = document.getElementById('due-reminders-note');
+    const list = document.getElementById('due-reminders-list');
+    if (!panel || !heading || !note || !list) return;
+    const model = state || {};
+    const today = model.today || [];
+    const older = model.older || [];
+    const failed = Boolean(model.failed);
+    panel.hidden = !failed && today.length + older.length === 0;
+    heading.textContent = failed ? '今天到点的提醒' : `今天到点的提醒 ${today.length} 条`;
+    note.hidden = !failed && older.length === 0;
+    note.textContent = failed ? '读不到到点的提醒。'
+      : (older.length ? `另有 ${older.length} 条更早到点的提醒。` : '');
+    if (failed) { list.replaceChildren(); return; }
+    list.replaceChildren(...[...today, ...older].map(item => {
+      const row = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = '/automations';
+      link.textContent = item.title || '提醒';
+      const when = document.createElement('span');
+      when.className = 'note';
+      when.textContent = reminderDueLabel(item, Date.now());
+      link.append(when);
+      row.append(link);
+      return row;
+    }));
+  }
+
+  async function loadDueReminders() {
+    const wid = workspaceId();
+    if (!wid || !currentUser) return;
+    const token = ++dueSeq;
+    let result;
+    try { result = await request('GET', `/v1/workspaces/${wid}/automations`); } catch { result = {status: 0, body: {}}; }
+    if (token !== dueSeq || workspaceId() !== wid) return;
+    if (result.status !== 200) { renderDueReminders({failed: true}); return; }
+    renderDueReminders(dueReminders(result.body.items || [], currentUser, Date.now()));
   }
 
   function setNotificationsOpen(open) {
@@ -1365,65 +2831,138 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const toggle = document.getElementById('notifications-toggle');
     if (panel) panel.hidden = !open;
     if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (!open) setNotificationStatus();
   }
 
-  const workspaceEvents=mountWorkspaceEvents(document,{onInvalidate:async(event)=>{
-    if(event.workspace!==workspaceId()||document.visibilityState==='hidden')return;
-    await loadSessions();
-    if(event.workspace!==workspaceId())return;
-    if(!event.initial&&event.changed.includes('social')&&currentSource==='social'&&currentConversation){
-      const banner=document.getElementById('conversation-live-update');if(banner)banner.hidden=false;
+  const liveBanner = document.getElementById('conversation-live-update');
+  const workspaceEvents = servedByDsbot ? mountChatActivity(document, {request, update: applySocialActivity}) : null;
+
+  function viewingSocialMessages() {
+    return !narrowScreen() || !document.body.classList.contains('sessions-open');
+  }
+
+  function readingSocialContext() {
+    const scroller = document.getElementById('message-scroller');
+    return socialHistory?.readingHistory || socialHistory?.loading || selecting
+      || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 48
+      || document.activeElement?.closest?.('.message-edit-controls')
+      || [...(scroller.querySelectorAll?.('audio') || [])].some(audio => !audio.paused);
+  }
+
+  async function applySocialActivity(wid, items) {
+    if (!currentUser || wid !== workspaceId() || wid !== sessionsWorkspace) return;
+    const cid = currentSource === 'social' && currentConversation?.id;
+    const next = items.find(row => row.id === cid);
+    if (next && viewingSocialMessages() && socialHistory?.cid === cid
+      && next.activity_version !== currentConversation.activity_version && !pendingSends.get(sendScope())?.active) {
+      if (readingSocialContext()) {
+        if (liveBanner) liveBanner.hidden = false;
+      } else {
+        await openSocialConversation(cid, {refresh: true});
+      }
     }
-  }});
-  document.getElementById('conversation-live-load')?.addEventListener('click',async()=>{
-    if(currentSource==='social'&&currentConversation)await openSocialConversation(currentConversation.id);
-    const banner=document.getElementById('conversation-live-update');if(banner)banner.hidden=true;
+    if (!currentUser || wid !== workspaceId() || wid !== sessionsWorkspace || document.visibilityState === 'hidden') return;
+    const listed = new Map(socialConversations.map(row => [row.id, row]));
+    const directoryChanged = items.length !== listed.size || items.some(row => {
+      const old = listed.get(row.id);
+      return !old || old.activity_version !== row.activity_version || old.unread_count !== row.unread_count
+        || old.pinned !== row.pinned || old.muted !== row.muted;
+    });
+    if (!directoryChanged) return;
+    const sequence = sessionsRequest;
+    const user = currentUser;
+    const result = await request('GET', `${socialBase()}?limit=100`);
+    if (sequence !== sessionsRequest || user !== currentUser || wid !== workspaceId() || result.status !== 200) return;
+    const changed = result.body.items || [];
+    const incoming = changed.some(row => !listed.has(row.id) || row.last_seq > listed.get(row.id).last_seq);
+    socialConversations = changed;
+    sessions = sortSessions([...sessions.filter(row => row.source === 'agent'), ...mergeSessions([], changed, user.id)]);
+    renderSessions();
+    if (incoming || !document.getElementById('notifications-panel')?.hidden) void loadNotifications();
+    if (['all', 'groups'].includes(searchTab)) refreshDirectorySearch();
+  }
+
+  document.getElementById('conversation-live-load')?.addEventListener('click', async () => {
+    if (currentSource === 'social' && currentConversation) await openSocialConversation(currentConversation.id);
   });
   let sessionsRequest = 0, sessionsWorkspace = null, sessionsUser = null;
-  async function loadSessions() {
+  let membersStatus = '', artifactsStatus = '';
+  async function loadSessions(link) {
     const sequence = ++sessionsRequest;
     const user = currentUser;
     loadNotifications();
+    loadDueReminders();
     const id = workspaceId();
+    if (id !== sessionsWorkspace) workspaceEvents?.start(null);
     if (id !== sessionsWorkspace || user !== sessionsUser || !id) {
+      setSessionsStatus('正在加载对话…');
       sessionsWorkspace = id; sessionsUser = user;
       sessions = []; agents = []; members = []; artifacts = []; socialConversations = [];
+      membersStatus = artifactsStatus = 'loading';
       renderSessions();
     }
     if (!id) return;
+    const isLocalPersonal = inPersonalWorkspace();
     const current = () => sequence === sessionsRequest && id === workspaceId() && user === currentUser;
-    const [listed, social, people, works] = await Promise.all([
-      request('GET', `/v1/workspaces/${id}/agents?limit=100`),
-      request('GET', `/v1/workspaces/${id}/social/conversations?limit=100`),
-      request('GET', `/v1/workspaces/${id}/members`),
-      request('GET', `/v1/workspaces/${id}/artifacts?limit=100`),
+    const path = `/v1/workspaces/${id}`;
+    const read = suffix => request('GET', path + suffix).catch(() => ({status: 0, body: {}}));
+    if (isLocalPersonal) {
+      const picking = !document.getElementById('compose-dialog').hidden && composeMode === 'group';
+      if (picking || (isSearchOpen() && ['all','contacts'].includes(searchTab))) void loadPersonalContacts();
+    } else {
+      void read('/members').then(result => {
+        if (!current()) return;
+        membersStatus = result.status === 200 ? '' : 'failed';
+        if (!membersStatus) members = result.body.items || [];
+        if (!document.getElementById('compose-dialog').hidden) renderMemberChoices(composeMode === 'contact', true);
+        if (['all', 'contacts'].includes(searchTab)) refreshDirectorySearch();
+      });
+    }
+    void read('/artifacts?limit=100').then(result => {
+      if (!current()) return;
+      artifactsStatus = result.status === 200 ? '' : 'failed';
+      if (!artifactsStatus) artifacts = result.body.items || [];
+      if (['all', 'artifacts', 'documents', 'media'].includes(searchTab)) refreshDirectorySearch();
+    });
+    const [listed, social] = await Promise.all([
+      read('/agents?limit=100&include=conversations'),
+      read('/social/conversations?limit=100'),
     ]);
     if (!current()) return;
-    if (listed.status !== 200) {
-      show('error', messageFor(listed.body.error, '无法加载智能体目录。'));
-      return;
+    const nextAgents = listed.status === 200 ? listed.body.items || [] : [];
+    let rows = listed.body.conversations;
+    let partial = listed.status !== 200 || social.status !== 200;
+    if (!Array.isArray(rows)) {
+      // A tab served by a previous runtime image may still return only the agent list.
+      const results = await Promise.all(nextAgents.map(async agent => ({
+        agent, response: await read(`/agents/${agent.id}/conversations?limit=100`),
+      })));
+      if (!current()) return;
+      rows = results.flatMap(({agent, response}) => response.status === 200
+        ? (response.body.items || []).map(row => ({...row, agent_id: agent.id})) : []);
+      partial ||= results.some(({response}) => response.status !== 200);
     }
-    const nextAgents = listed.body.items || [];
-    const results = await Promise.all(nextAgents.map(agent =>
-      request('GET', `/v1/workspaces/${id}/agents/${agent.id}/conversations?limit=100`)
-        .then(result => ({agent, result}))));
-    if (!current()) return;
     agents = nextAgents;
-    members = people.status === 200 ? people.body.items || [] : [];
-    artifacts = works.status === 200 ? works.body.items || [] : [];
     socialConversations = social.status === 200 ? social.body.items || [] : [];
-    const agentRows = [];
-    for (const {agent, result} of results) {
-      if (result.status !== 200) continue;
-      for (const row of result.body.items || []) {
-        agentRows.push({...row, agent});
-      }
+    const receipt = link?.readReceipt;
+    if (receipt) {
+      const row = (receipt.source === 'social' ? socialConversations : rows).find(item => item.id === receipt.id);
+      const covered = Number.isSafeInteger(receipt.seq) && Number.isSafeInteger(row?.last_seq)
+        ? row.last_seq <= receipt.seq
+        : Number.isFinite(row?.updated) && Number.isFinite(receipt.updated) && row.updated <= receipt.updated;
+      if (covered) row.unread_count = Math.min(Number(row.unread_count) || 0, receipt.count);
     }
-    sessions = mergeSessions(agentRows, socialConversations, currentUser && currentUser.id);
+    const agentById = new Map(agents.map(agent => [agent.id, agent]));
+    sessions = mergeSessions(rows.flatMap(row => {
+      const agent = agentById.get(row.agent_id);
+      return agent ? [{...row, agent}] : [];
+    }), socialConversations, currentUser && currentUser.id);
+    setSessionsStatus(partial ? '部分对话加载失败，请重试。' : '');
     renderSessions();
-    // The first SSE snapshot may immediately refresh; do not invalidate the
-    // initial directory before deep-link resolution has a committed snapshot.
-    workspaceEvents.start(id);
+    if (!document.getElementById('compose-dialog').hidden && composeMode === 'group') renderMemberChoices(false, true);
+    if (['all', 'agents', 'groups'].includes(searchTab)) refreshDirectorySearch();
+    // Start activity checks after the initial directory commits.
+    workspaceEvents?.start(id);
   }
 
   function memberRow(name, note, kind) {
@@ -1450,14 +2989,185 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     agentsTab.setAttribute('aria-selected', String(which === 'agents'));
     peopleTab.setAttribute('aria-selected', String(which === 'people'));
     document.getElementById('group-info-agents').hidden = which !== 'agents';
+    const autoNote = document.getElementById('group-agent-auto-reply-note');
+    if (autoNote) autoNote.hidden = which !== 'agents';
     document.getElementById('group-info-people').hidden = which !== 'people';
+    document.getElementById('group-info-invite').hidden = which !== 'people';
+  }
+
+  const groupInvite = document.getElementById('group-invite-dialog');
+  const groupInviteQuery = document.getElementById('group-invite-query');
+  const groupInviteChoices = document.getElementById('group-invite-choices');
+  const groupInviteStatus = document.getElementById('group-invite-status');
+  const groupInviteSubmit = document.getElementById('group-invite-submit');
+  let inviteTarget = null;
+  let invitingMembers = false;
+
+  const inviteMatches = (target) => target && target.workspace === workspaceId() &&
+    currentSource === 'social' && currentConversation?.id === target.conversation;
+  const selectedInviteMembers = () => [...groupInviteChoices.querySelectorAll('input:checked')].map(box => box.value);
+
+  function syncGroupInviteSubmit(count = selectedInviteMembers().length) {
+    groupInviteSubmit.disabled = invitingMembers || count < 1 || count > 50;
+  }
+
+  function syncGroupInvite() {
+    const needle = groupInviteQuery.value.trim().toLocaleLowerCase();
+    let visible = 0;
+    for (const choice of groupInviteChoices.children) {
+      choice.hidden = !choice.textContent.toLocaleLowerCase().includes(needle);
+      if (!choice.hidden) visible++;
+    }
+    const count = selectedInviteMembers().length;
+    syncGroupInviteSubmit(count);
+    if (groupInviteChoices.children.length) {
+      groupInviteStatus.textContent = count > 50 ? '一次最多添加 50 位成员。'
+        : !visible ? '没有匹配的成员。'
+        : count ? `已选 ${count} 位成员` : '';
+    }
+  }
+
+  async function openGroupInvite() {
+    const conversation = currentConversation;
+    if (currentSource !== 'social' || conversation?.kind !== 'group' || groupInvite.open) return;
+    const target = {workspace: workspaceId(), conversation: conversation.id};
+    inviteTarget = target;
+    groupInviteQuery.value = '';
+    groupInviteChoices.replaceChildren();
+    groupInviteSubmit.disabled = true;
+    const personal = Boolean(conversation.account_group);
+    const roster = personal ? '联系人' : '工作区成员';
+    groupInviteStatus.textContent = '正在加载' + roster + '…';
+    document.getElementById('group-invite-context').textContent = conversationLabel(conversation, currentUser?.id);
+    groupInvite.showModal();
+    groupInviteQuery.focus();
+    const result = await request('GET', personal ? '/v1/contacts' : `/v1/workspaces/${target.workspace}/members`).catch(() => ({status: 0}));
+    if (inviteTarget !== target || !inviteMatches(target) || !groupInvite.open) return;
+    if (result.status !== 200) {
+      groupInviteStatus.textContent = '无法加载' + roster + '，请重新打开后再试。';
+      return;
+    }
+    const joined = new Set((currentConversation.members || []).map(member => personal ? member.handle : member.user_id));
+    const candidates = memberChoices(personal ? contactMembers(result) : result.body.items, currentUser?.id)
+      .filter(member => member.user_id && !member.suspended && !joined.has(member.user_id));
+    for (const member of candidates) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.value = member.handle || member.user_id;
+      label.append(box, document.createTextNode(member.username || box.value));
+      groupInviteChoices.append(label);
+    }
+    groupInviteStatus.textContent = candidates.length ? '' : '没有可添加的' + roster + '。';
+    syncGroupInvite();
+  }
+
+  document.getElementById('chat-group-invite').addEventListener('click', openGroupInvite);
+  document.getElementById('group-info-invite').addEventListener('click', openGroupInvite);
+  document.getElementById('group-invite-cancel').addEventListener('click', () => groupInvite.close());
+  groupInvite.addEventListener('close', () => { if (!groupInvite.open) inviteTarget = null; });
+  groupInvite.addEventListener('cancel', event => { if (invitingMembers) event.preventDefault(); });
+  groupInviteQuery.addEventListener('input', syncGroupInvite);
+  groupInviteChoices.addEventListener('change', syncGroupInvite);
+  document.getElementById('group-invite-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const target = inviteTarget;
+    const memberIds = selectedInviteMembers();
+    if (invitingMembers || !inviteMatches(target) || !memberIds.length || memberIds.length > 50) return;
+    invitingMembers = true;
+    const cancel = document.getElementById('group-invite-cancel');
+    cancel.disabled = true;
+    groupInviteSubmit.disabled = true;
+    groupInviteSubmit.textContent = '添加中…';
+    try {
+      const path = `/v1/workspaces/${target.workspace}/social/conversations/${target.conversation}/members`;
+      const result = await request('POST', path, {member_ids: memberIds});
+      if (!inviteMatches(target) || inviteTarget !== target) return;
+      if (result.status !== 200 || result.body.conversation?.id !== target.conversation) {
+        groupInviteStatus.textContent = result.status === 403 ? '所选成员的权限有变化，请重新打开后再试。'
+          : result.status === 404 ? '群聊或工作区成员有变化，请刷新后再试。' : '无法添加成员，请重试。';
+        return;
+      }
+      currentConversation = result.body.conversation;
+      const title = conversationLabel(currentConversation, currentUser?.id);
+      applyChatIdentity(document, title, currentConversation);
+      setChatSubtitle(groupInfoCounts(currentConversation).text);
+      setGroupInfo(currentConversation);
+      groupInvite.close();
+      show('ok', '群成员已更新。');
+    } catch {
+      if (inviteMatches(target) && inviteTarget === target) groupInviteStatus.textContent = '暂时无法确认添加结果，可以重试。';
+    } finally {
+      invitingMembers = false;
+      cancel.disabled = false;
+      groupInviteSubmit.textContent = '添加';
+      syncGroupInviteSubmit();
+    }
+  });
+
+  const pendingAutoReplies = new Set();
+
+  function renderGroupAgent(conversation, agent) {
+    const mode = agent.auto_reply ? '自动回复已开启' : '自动回复已关闭';
+    const row = memberRow(agent.name, agent.archived ? '已归档' : mode, 'agent');
+    if (!agent.mine || agent.archived) return row;
+    const wid = workspaceId();
+    const key = `${wid}/${conversation.id}/${agent.id}`;
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'group-info-switch';
+    toggle.setAttribute('role', 'switch');
+    toggle.setAttribute('aria-label', `${agent.name}的自动回复`);
+    toggle.setAttribute('aria-checked', String(Boolean(agent.auto_reply)));
+    toggle.setAttribute('aria-describedby', 'group-agent-auto-reply-note');
+    toggle.disabled = pendingAutoReplies.has(key);
+    toggle.addEventListener('click', async () => {
+      if (workspaceId() !== wid || currentConversation?.id !== conversation.id || pendingAutoReplies.has(key)) return;
+      const notice = document.getElementById('group-agent-auto-reply-status');
+      const activeConversation = currentConversation;
+      const enabled = toggle.getAttribute('aria-checked') !== 'true';
+      pendingAutoReplies.add(key);
+      toggle.disabled = true;
+      if (notice) notice.hidden = true;
+      try {
+        const path = `/v1/workspaces/${wid}/social/conversations/${conversation.id}/agents/${encodeURIComponent(agent.id)}/auto-reply`;
+        const result = await request('POST', path, {auto_reply: enabled});
+        if (workspaceId() !== wid || currentConversation?.id !== conversation.id) return;
+        if (result.status !== 200 || result.body.auto_reply !== enabled) throw new Error('Automatic replies were not updated');
+        const currentAgent = currentConversation.agent_members?.find(item => item.id === agent.id && item.mine);
+        if (currentAgent) currentAgent.auto_reply = enabled;
+        if (currentConversation === activeConversation && currentAgent === agent) {
+          toggle.setAttribute('aria-checked', String(enabled));
+          const description = row.children[1]?.children[1];
+          if (description) description.textContent = enabled ? '自动回复已开启' : '自动回复已关闭';
+        }
+      } catch {
+        if (notice && workspaceId() === wid && currentConversation?.id === conversation.id) {
+          notice.textContent = '自动回复设置保存失败，请重试。';
+          notice.hidden = false;
+        }
+      } finally {
+        pendingAutoReplies.delete(key);
+        toggle.disabled = false;
+        if (workspaceId() === wid && currentConversation?.id === conversation.id && currentConversation !== activeConversation) {
+          setGroupInfo(currentConversation);
+        }
+      }
+    });
+    row.append(toggle);
+    return row;
   }
 
   function setGroupInfo(conversation) {
+    if (!conversation) autoTranslation.open(null);
     const toggle = document.getElementById('group-info-toggle');
     const panel = document.getElementById('group-info-panel');
     if (!toggle || !panel) return;
-    const group = Boolean(conversation && conversation.kind === 'group');
+    const group = Boolean(conversation && conversation.kind === 'group' && !conversation.public_agent);
+    if (groupInvite.open && (!group || !inviteMatches(inviteTarget))) groupInvite.close();
+    if (groupMemoryDialog?.open && (!group || groupMemoryView?.scope !== sendScope())) groupMemoryDialog.close();
+    const memoryOpen = document.getElementById('group-memory-open');
+    if (memoryOpen) memoryOpen.hidden = !group || !servedByDsbot;
     toggle.hidden = !group;
     if (!group) {
       panel.hidden = true;
@@ -1472,12 +3182,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('group-info-tab-agents').textContent = `智能体 (${counts.agents})`;
     document.getElementById('group-info-tab-people').textContent = `成员 (${counts.people})`;
     const agentList = document.getElementById('group-info-agents');
-    agentList.replaceChildren(...(conversation.agent_members || []).map(agent =>
-      memberRow(agent.name, agent.archived ? '已归档' : '可明确请求一次回复', 'agent')));
+    agentList.replaceChildren(...(conversation.agent_members || []).map(agent => renderGroupAgent(conversation, agent)));
     if (!agentList.children.length) agentList.append(memberRow('还没有智能体', '创建群聊时可以加入工作区智能体', 'empty'));
     const peopleList = document.getElementById('group-info-people');
     peopleList.replaceChildren(...(conversation.members || []).map(member =>
-      memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你' : '工作区成员', 'person')));
+      memberRow(member.username, currentUser && member.user_id === currentUser.id ? '你' : (conversation.account_group ? '群成员' : '工作区成员'), 'person')));
     const pinned = sessions.some(item => item.source === 'social' && item.id === conversation.id && item.pinned);
     document.getElementById('group-info-pin').setAttribute('aria-checked', String(pinned));
   }
@@ -1490,123 +3199,335 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     toggle.setAttribute('aria-expanded', String(open));
   }
 
+  function showPublicChatState(state) {
+    const notice = document.getElementById('public-chat-status');
+    const directClosed = currentSource === 'social' && currentConversation?.direct?.open === false;
+    if (notice) {
+      notice.textContent = state?.open === false ? '发布者已关闭访客聊天。'
+        : directClosed ? '联系人关系已解除，仍可查看历史消息。'
+          : state?.pending ? '正在等待智能体回复…' : '';
+      notice.hidden = !notice.textContent;
+    }
+    document.getElementById('chat-body').disabled = state?.open === false || directClosed;
+    document.getElementById('chat-send').disabled = state?.open === false || directClosed;
+  }
+
   function setSocialHeaderTools(social) {
+    if (social && captureButton) captureButton.hidden = true;
     const invite = document.getElementById('chat-invite');
-    const unavailable = document.getElementById('chat-invite-unavailable');
+    const publicChat = social ? currentConversation?.public_agent : null;
+    showPublicChatState(publicChat);
+    const group = social && currentConversation?.kind === 'group' && !publicChat;
+    document.getElementById('chat-group-invite').hidden = !group;
     const multi = document.getElementById('multi-select-toggle');
-    if (invite) invite.hidden = !social;
-    if (unavailable) unavailable.hidden = social;
-    if (multi) multi.hidden = !social;
-    if (!social) {
+    if (invite) invite.hidden = !social || group || Boolean(publicChat);
+    if (multi) multi.hidden = !social || Boolean(publicChat);
+    if (!social || group || publicChat) {
+      const panel = document.getElementById('chat-invite-panel');
+      if (panel) panel.hidden = true;
+      invite?.setAttribute('aria-expanded', 'false');
+    }
+    if (!social || publicChat) {
       selecting = false; selectedMessages.clear(); syncForwardBar();
-      renderPinned([]);
-      const panel = document.getElementById('chat-invite-panel'); if (panel) panel.hidden = true;
+      if (!social) renderPinned([]);
     }
   }
 
-  async function openAgentConversation(agentId, conversationId) {
+  function openEmptyAgentChat(agentId) {
+    const agent = agents.find(item => item.id === agentId);
+    if (!agent) return;
+    cancelStartupLink();
+    stopReplyProgress();
+    socialOpen += 1;
+    currentConversation = null;
+    currentAgent = agent;
+    currentSource = 'agent';
+    closeInChatSearch({restoreScroll: false, focus: false});
+    publicDraft.enter(sendScope());
+    stopPolling();
+    setSocialHistory(null);
+    autoTranslation.open(null);
+    agentMentions.clear();
+    voiceRecorder.clear();
+    voiceRecorder.refresh();
+    clearVoicePlayers();
+    chatCalls.sync();
+    setSocialHeaderTools(false);
+    setGroupInfo(null);
+    renderReplyDraft();
+    if (liveBanner) liveBanner.hidden = true;
+    document.getElementById('social-agent-members').hidden = true;
+    document.getElementById('pin-conversation').hidden = true;
+    setDirectoryLink({source:'agent'});
+    applyChatIdentity(document, agent.name, null, agent.id === personalAgentId ? personalLook : null);
+    writeHash({workspace:workspaceId(), agent:agentId});
+    setSessionsOpen(false);
+    renderAgentMessages([]);
+    renderAgentQuickStarts(agent);
+    syncPlusState();
+  }
+
+  let startupLink = null;
+  const openingStartupLink = () => startupLink?.open === socialOpen && startupLink.current();
+
+  function cancelStartupLink() {
+    if (!startupLink) return;
+    startupLink = null;
+    if (status.dataset.kind === 'loading' && status.textContent === '正在打开对话…') show('', '');
+  }
+
+  async function openAgentConversation(agentId, conversationId, {refresh = false, link} = {}) {
+    if (refresh && openingStartupLink()) return false;
+    if (!refresh) {
+      if (!link) cancelStartupLink();
+      renderAgentQuickStarts();
+      stopReplyProgress();
+      stopGroupReplyProgress();
+      stopPolling();
+    }
+    const open = ++socialOpen;
+    const wid = workspaceId();
+    const owner = currentUser;
+    const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner;
+    const stillOpen = () => sameScope() && (!link || link.current());
+    const result = await request('GET', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${conversationId}`)
+      .catch(() => ({status: 0, body: {}}));
+    if (!stillOpen()) return false;
+    if (result.status !== 200) {
+      if (refresh && [403, 404, 410].includes(result.status)) renderAgentQuickStarts();
+      if (!refresh) {
+        show('error', messageFor(result.body.error, '无法打开对话。'));
+        syncReplyProgress();
+        syncGroupReplyProgress();
+      }
+      return false;
+    }
+    const detailAgent = result.body.agent?.id === agentId ? result.body.agent : null;
+    // Older private detail payloads can omit the agent projection. Reuse the
+    // directory request already in flight without fetching history twice.
+    if (!detailAgent && !agents.some(item => item.id === agentId) && link?.directory) {
+      await link.directory;
+      if (!stillOpen()) return false;
+    }
+    const listedAgent = agents.find(item => item.id === agentId);
+    const agent = servedByDsbot ? detailAgent || listedAgent : listedAgent || detailAgent;
+    const conversation = result.body.conversation;
+    if (!agent || conversation?.id !== conversationId || (link && (
+      (agent.workspace_id && agent.workspace_id !== wid) || (conversation.workspace_id && conversation.workspace_id !== wid)
+      || (conversation.agent_id && conversation.agent_id !== agentId)))) {
+      if (link) show('error', '无法打开对话。');
+      return false;
+    }
+    setSocialHistory(null);
+    agentMentions.clear();
+    voiceRecorder.clear();
+    clearVoicePlayers();
     setSocialHeaderTools(false);
     setGroupInfo(null);
     const pin = document.getElementById('pin-conversation');
     if (pin) pin.hidden = true;
-    const agent = agents.find(item => item.id === agentId);
-    if (!agent) {
-      show('error', '找不到这个智能体。');
-      return;
-    }
-    currentAgent = agent;
+    syncMuteButton();
     currentSource = 'agent';
+    currentAgent = agent;
+    renderReplyDraft();
+    if (liveBanner) liveBanner.hidden = true;
+    chatCalls.sync();
+    voiceRecorder.refresh();
     document.getElementById('social-agent-members').hidden = true;
-    applyChatIdentity(document, agent.name);
     setDirectoryLink({source: 'agent'});
-    const result = await request('GET', `/v1/workspaces/${workspaceId()}/agents/${agentId}/conversations/${conversationId}`);
-    if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法打开对话。'));
-      return;
+    syncPlusState();
+    applyChatIdentity(document, agent.name);
+    if (currentConversation?.id !== conversation.id) {
+      const autoReplyNotice = document.getElementById('group-agent-auto-reply-status');
+      if (autoReplyNotice) autoReplyNotice.hidden = true;
+      closeInChatSearch({restoreScroll: false, focus: false});
     }
-    if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
-      const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
-      const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
-    }
-    currentConversation = result.body.conversation;
-    writeHash({workspace: workspaceId(), agent: agentId, conversation: conversationId});
+    currentConversation = conversation;
+    publicDraft.enter(sendScope());
+    renderAgentQuickStarts(detailAgent);
+    if (!link) writeHash({workspace: wid, agent: agentId, conversation: conversationId});
     setSessionsOpen(false);
-    const pending = renderAgentMessages(result.body.items);
+    const pending = renderAgentMessages(result.body.items, {followLatest: !refresh});
     const finished = (result.body.items || []).filter(item => item.role === 'assistant' && item.status === 'succeeded');
     if (currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
-      const wid = workspaceId(), cid = conversationId;
-      const acknowledged = await request('POST', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${cid}/read`,
-        {message_id: finished[finished.length - 1].id});
-      if (acknowledged.status === 200 && workspaceId() === wid) {
-        const session = sessions.find(item => item.source === 'agent' && item.id === cid);
-        if (session) session.unread_count = acknowledged.body.unread_count;
-      }
+      const read = request('POST', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${conversationId}/read`,
+        {message_id: finished[finished.length - 1].id}).then(acknowledged => {
+        if (!sameScope() || acknowledged.status !== 200) return;
+        applyOpenedRead('agent', conversation, acknowledged.body.unread_count, link);
+      }).catch(() => {});
+      if (!link) await read;
     }
+    if (!stillOpen()) return false;
     renderSessions();
     if (pending) schedulePoll();
     else stopPolling();
+    return stillOpen();
   }
 
-  async function openSocialConversation(conversationId) {
+  async function openSocialConversation(conversationId, {acknowledge = true, refresh = false, publicStartCurrent, link} = {}) {
+    if (refresh && openingStartupLink()) return false;
+    if (!refresh && !link) cancelStartupLink();
+    stopReplyProgress();
+    renderAgentQuickStarts();
+    const open = ++socialOpen;
+    const wid = workspaceId();
+    const owner = currentUser;
+    if (currentSource !== 'social' || currentConversation?.id !== conversationId) {
+      setSocialHistory(null);
+      voiceRecorder.clear();
+    }
     currentAgent = null;
     currentSource = 'social';
     stopPolling();
-    const result = await request('GET', `${socialBase()}/${conversationId}`);
+    const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner && currentSource === 'social';
+    const stillOpen = () => sameScope() && (!link || link.current());
+    const result = await request('GET', `${socialBase()}/${conversationId}`).catch(() => ({status: 0, body: {}}));
+    if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
     if (result.status !== 200) {
+      if (refresh) {
+        scheduleSocialPoll(currentConversation);
+        return false;
+      }
       show('error', messageFor(result.body.error, '无法打开会话。'));
-      return;
+      return false;
     }
-    if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
-      const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
-      const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
+    const updated = result.body.conversation;
+    if (updated?.id !== conversationId || (link && updated.workspace_id && updated.workspace_id !== wid)) {
+      if (link) show('error', '无法打开会话。');
+      return false;
     }
-    currentConversation = result.body.conversation;
+    if (publicStartCurrent && (!updated.public_agent || updated.public_agent.open === false)) return false;
+    if (refresh && servedByDsbot && (!viewingSocialMessages() || readingSocialContext() || pendingSends.get(sendScope())?.active)) {
+      if (viewingSocialMessages() && liveBanner && updated.activity_version !== currentConversation?.activity_version) liveBanner.hidden = false;
+      scheduleSocialPoll(currentConversation);
+      return false;
+    }
+    if (refresh && currentConversation?.id === updated.id
+      && JSON.stringify(currentConversation) === JSON.stringify(updated)
+      && JSON.stringify(lastSocialItems) === JSON.stringify(result.body.items)) {
+      scheduleSocialPoll(updated);
+      return true;
+    }
+    if (!currentConversation || currentConversation.id !== updated.id) {
+      closeInChatSearch({restoreScroll: false, focus: false});
+    }
+    currentConversation = updated;
+    publicDraft.enter(sendScope(), Boolean(updated.public_agent));
+    renderReplyDraft();
+    if (liveBanner) liveBanner.hidden = true;
+    setSocialHistory({wid, cid: conversationId, cursor: result.body.cursor ?? null});
+    chatCalls.sync();
+    agentMentions.refresh();
+    voiceRecorder.refresh();
     setSessionsOpen(false);
     const pin = document.getElementById('pin-conversation');
-    if (pin) { pin.hidden = false; pin.textContent = sessions.find(item => item.id === conversationId && item.pinned) ? '取消置顶' : '置顶会话'; }
+    syncMuteButton(currentConversation);
+    if (pin) { pin.hidden = false; pin.textContent = socialPinned(updated) ? '取消置顶' : '置顶会话'; }
     const agentNote = document.getElementById('social-agent-members');
     agentNote.textContent = groupAgentSummary(currentConversation);
-    agentNote.hidden = !agentNote.textContent;
+    agentNote.hidden = Boolean(currentConversation.public_agent) || !agentNote.textContent;
     applyChatIdentity(document, conversationLabel(
       currentConversation, currentUser && currentUser.id), currentConversation);
-    setDirectoryLink({source: 'social'});
-    writeHash({workspace: workspaceId(), social: conversationId});
+    setDirectoryLink({source: 'social', public_agent: currentConversation.public_agent});
+    if (!link) writeHash({workspace: wid, social: conversationId});
     if (selecting && (!lastSocialItems.length || lastSocialItems[0].conversation_id !== conversationId)) {
       selecting = false; selectedMessages.clear(); syncForwardBar();
     }
     renderPinned(result.body.pinned_messages || []);
     setSocialHeaderTools(true);
+    syncPlusState();
     setGroupInfo(currentConversation);
     messageUtilities.refreshAnnouncement();
-    setChatSubtitle(currentConversation.kind === 'group' ? groupInfoCounts(currentConversation).text
-      : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
-    renderSocialMessages(result.body.items);
+    const publicChat = currentConversation.public_agent;
+    setChatSubtitle(publicChat ? '公开智能体 · 发布者可查看此对话'
+      : currentConversation.kind === 'group' ? groupInfoCounts(currentConversation).text
+        : '单聊 · ' + ((currentConversation.members || []).length) + ' 人');
+    renderSocialMessages(result.body.items, {refresh});
     renderGroupReplyAction(result.body.agent_replies || []);
     // Acknowledge only the last message actually rendered, not messages that
     // arrived after this snapshot, and never consume unread in a hidden tab.
     const shown = result.body.items || [];
-    if (currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
-      const acknowledged = await request('POST', `${socialBase()}/${conversationId}/read`,
-        {message_id: shown[shown.length - 1].id});
-      if (acknowledged.status === 200) {
-        const session = sessions.find(item => item.source === 'social' && item.id === conversationId);
-        if (session) session.unread_count = acknowledged.body.unread_count;
-      }
+    if (acknowledge && currentConversation.unread_count > 0 && shown.length && document.visibilityState !== 'hidden') {
+      const last = shown[shown.length - 1];
+      const cursor = Number.isSafeInteger(last.seq) ? {seq:last.seq} : {message_id:last.id};
+      const read = request('POST', `${socialBase()}/${conversationId}/read`, cursor).then(acknowledged => {
+        if (!sameScope() || acknowledged.status !== 200) return;
+        applyOpenedRead('social', updated, acknowledged.body.unread_count, link, cursor.seq);
+      }).catch(() => {});
+      if (!link) await read;
     }
+    if (!stillOpen()) return false;
     renderSessions();
+    scheduleSocialPoll(currentConversation);
     if ((result.body.agent_replies || []).some(item => ['queued', 'running'].includes(item.status))) schedulePoll();
+    return true;
   }
 
-  function schedulePoll() {
-    stopPolling();
-    pollTimer = globalThis.setTimeout(() => {
-      if (currentConversation && currentAgent && currentSource === 'agent') {
-        openAgentConversation(currentAgent.id, currentConversation.id);
-      } else if (currentConversation && currentSource === 'social') {
-        openSocialConversation(currentConversation.id);
-      }
-    }, 2000);
+  function applyOpenedRead(source, conversation, unread, link, seq) {
+    if (!Number.isSafeInteger(unread) || unread < 0) return;
+    conversation.unread_count = unread;
+    const listed = source === 'social' && socialConversations.find(item => item.id === conversation.id);
+    if (!(Number.isSafeInteger(seq) && listed?.last_seq > seq)) {
+      const session = sessions.find(item => item.source === source && item.id === conversation.id);
+      if (session) session.unread_count = unread;
+      if (listed) listed.unread_count = unread;
+    }
+    if (link) {
+      link.readReceipt = {source, id:conversation.id, count:unread, updated:conversation.updated, seq};
+      renderSessions();
+    }
   }
+
+  function socialPinned(conversation) {
+    const row = sessions.find(item => item.source === 'social' && item.id === conversation.id);
+    return Boolean(row?.pinned ?? conversation.pinned);
+  }
+
+  function scheduleSocialPoll(conversation) {
+    if (hasPendingReplies() || conversation?.public_agent?.pending) {
+      if (currentGroupReplyWatch(groupReplyWatch) && !groupReplyWatch.degraded) return;
+      schedulePoll(servedByDsbot ? 8000 : 1800);
+    } else if (!servedByDsbot && pollsAccountThread(conversation)) {
+      schedulePoll(8000);
+    }
+  }
+
+  function pollsAccountThread(conversation) {
+    return Boolean(conversation?.public_agent?.open || conversation?.direct?.open || conversation?.account_group);
+  }
+
+  function schedulePoll(delay = 2000) {
+    stopPolling();
+    if (currentSource === 'agent' && !canWatchReply()) return;
+    pollTimer = globalThis.setTimeout(() => {
+      pollTimer = 0;
+      if (currentConversation && currentAgent && currentSource === 'agent' && canWatchReply()) {
+        openAgentConversation(currentAgent.id, currentConversation.id, {refresh: true});
+      } else if (currentConversation && currentSource === 'social' && !socialHistory?.readingHistory) {
+        if (document.visibilityState !== 'hidden' && viewingSocialMessages() && (!servedByDsbot || !readingSocialContext())) {
+          openSocialConversation(currentConversation.id, {refresh: true});
+        } else if (servedByDsbot && viewingSocialMessages()) {
+          scheduleSocialPoll(currentConversation);
+        }
+      }
+    }, delay);
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    if (currentSource === 'agent') {
+      if (document.visibilityState === 'visible') void refreshAgentQuickStarts();
+      if (!canWatchReply()) stopPolling();
+      if (!syncReplyProgress() && currentConversation && lastAgentItems.some(waitingAgentReply)) schedulePoll();
+      return;
+    }
+    syncGroupReplyProgress();
+    if (document.visibilityState !== 'visible' || currentSource !== 'social' || !currentConversation
+      || pollTimer || socialHistory?.readingHistory || !viewingSocialMessages()) return;
+    if (servedByDsbot) scheduleSocialPoll(currentConversation);
+    else if (pollsAccountThread(currentConversation) || hasPendingReplies()) {
+      void openSocialConversation(currentConversation.id, {refresh: true});
+    }
+  });
 
   function closeComposeMenu() {
     const menu = document.getElementById('compose-menu');
@@ -1619,11 +3540,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return document.querySelectorAll('#member-choices input:checked').length;
   }
 
+  let composing = false;
+  let composeAttempt = null;
   function syncComposeCreate() {
     const button = document.getElementById('compose-dialog-submit');
-    button.disabled = !composeCreateEnabled({
+    button.disabled = composing || !composeCreateEnabled({
       composeMode,
       groupMode,
+      personal: inPersonalWorkspace(),
+      selectedAgentCount: document.querySelectorAll('#member-choices input[name="agent-member"]:checked').length,
       selectedCount: selectedMemberCount(),
       selectedHumanCount: document.querySelectorAll('#member-choices input[name="member"]:checked').length,
       templateSelected: document.querySelectorAll('#team-template-choices input:checked').length === 1,
@@ -1643,7 +3568,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const empty = document.getElementById('compose-members-empty');
     if (!labels.length) {
       empty.hidden = false;
-      empty.textContent = '没有可邀请的工作区成员。';
+      const roster = inPersonalWorkspace() ? '联系人' : '工作区成员';
+      empty.textContent = membersStatus === 'loading' ? '正在加载' + roster + '…'
+        : (membersStatus === 'failed' ? '无法加载' + roster + '。' : '没有可邀请的' + roster + '。');
     } else if (!visible) {
       empty.hidden = false;
       empty.textContent = '没有匹配的成员。';
@@ -1708,8 +3635,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncSelectedCount();
   }
 
-  function renderMemberChoices(single) {
+  function renderMemberChoices(single, preserveSelection = false) {
     const holder = document.getElementById('member-choices');
+    const selected = preserveSelection
+      ? new Set([...document.querySelectorAll('#member-choices input:checked')].map(box => box.name + ':' + box.value))
+      : new Set();
     holder.replaceChildren();
     const choices = groupPickerChoices(members, currentUser && currentUser.id, single ? [] : agents);
     for (const member of choices) {
@@ -1718,6 +3648,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       box.type = single ? 'radio' : 'checkbox';
       box.name = member.kind === 'agent' ? 'agent-member' : 'member';
       box.value = member.id;
+      box.checked = selected.has(box.name + ':' + box.value);
       const text = document.createElement('span');
       text.className = 'choice-label';
       text.textContent = member.label;
@@ -1728,13 +3659,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncSelectedCount();
   }
 
+  let contactsRead = 0;
+  async function loadPersonalContacts() {
+    const version = ++contactsRead;
+    const wid = workspaceId();
+    const user = currentUser;
+    membersStatus = 'loading';
+    const result = await request('GET', '/v1/contacts').catch(() => ({status:0}));
+    if (version !== contactsRead || wid !== workspaceId() || user !== currentUser || !inPersonalWorkspace()) return;
+    membersStatus = result.status === 200 ? '' : 'failed';
+    if (!membersStatus) members = contactMembers(result);
+    if (!document.getElementById('compose-dialog').hidden) renderMemberChoices(false, true);
+    refreshDirectorySearch();
+  }
+
   function openComposeDialog(mode) {
     closeComposeMenu();
     composeMode = mode;
     const dialog = document.getElementById('compose-dialog');
     dialog.hidden = false;
     const isGroup = mode === 'group';
-    document.getElementById('compose-dialog-title').textContent = isGroup ? '新建群组' : '添加联系人';
+    document.getElementById('compose-dialog-title').textContent = isGroup ? '新建群组' : '工作区私聊';
     document.getElementById('compose-members-legend').textContent = isGroup ? '成员' : '选择一位成员，开始单聊';
     document.getElementById('compose-intro').hidden = !isGroup;
     document.getElementById('compose-mode-switch').hidden = !isGroup;
@@ -1745,6 +3690,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!isGroup) document.getElementById('compose-title').value = '';
     document.getElementById('compose-member-search').value = '';
     setGroupMode('custom');
+    if (isGroup && inPersonalWorkspace()) void loadPersonalContacts();
     renderMemberChoices(mode === 'contact');
   }
 
@@ -1770,11 +3716,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     // there, or the panel is laid out inside a display:none parent.
     if (narrowScreen()) setSessionsOpen(true);
     if (tab) setSearchTab(tab);
+    if (inPersonalWorkspace() && ['all', 'contacts'].includes(searchTab)) void loadPersonalContacts();
     renderSearch();
+  }
+
+  function refreshDirectorySearch() {
+    if (isSearchOpen() && !messageSearch.state.loading) void renderSearch({reuseMessages: true});
   }
 
   function closeSearchPanel() {
     searchSeq++;
+    void messageSearch.load('');
     searchConversation = '';
     document.getElementById('search-panel').hidden = true;
     document.getElementById('search-close').hidden = true;
@@ -1835,7 +3787,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       type: 'contact',
       id: member.user_id,
       title: member.username,
-      preview: '工作区成员',
+      preview: member.contact ? '联系人' : '工作区成员',
+      ...(member.contact ? {href:'/contacts'} : {}),
     }));
   }
 
@@ -1862,12 +3815,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const results = document.getElementById('search-results');
     const empty = document.getElementById('search-empty');
     const note = document.getElementById('search-source-note');
+    const paged = searchTab === 'messages' || searchTab === 'all';
     results.replaceChildren();
     empty.hidden = true;
     note.hidden = Boolean(query) && !searchConversation;
     note.textContent = searchConversation
       ? '仅搜索当前对话：' + searchConversationTitle
-      : '以下是当前工作区里已有的内容，不是站外推荐。';
+      : '搜索当前工作区。';
     const seq = ++searchSeq;
 
     if (searchTab === 'files' || searchTab === 'links') {
@@ -1893,7 +3847,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
 
     let messageItems = [];
-    if ((searchTab === 'messages' || searchTab === 'all') && query) {
+    if (paged && query) {
       if (!reuseMessages) await messageSearch.load(query, searchConversation);
       if (seq !== searchSeq) return;
       const state = messageSearch.state;
@@ -1902,6 +3856,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         empty.textContent = state.error;
         applySearchMore(document.getElementById('search-more'), {cursor: '', loading: false});
         return;
+      }
+      if (state.warning) {
+        note.hidden = false;
+        note.textContent = state.warning;
       }
       messageItems = state.hits;
     }
@@ -1938,21 +3896,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (item.type === 'agent') {
           const first = sessions.find(row => row.source === 'agent' && row.agent_id === item.id);
           if (first) await openAgentConversation(item.id, first.id);
-          else {
-            currentAgent = agents.find(entry => entry.id === item.id) || null;
-            currentConversation = null;
-            currentSource = 'agent';
-            if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
-              currentAgent.id === personalAgentId ? personalLook : null);
-            document.getElementById('chat-empty').hidden = false;
-            document.getElementById('message-list').replaceChildren();
-            writeHash({workspace: workspaceId(), agent: item.id});
-          }
+          else openEmptyAgentChat(item.id);
         } else if (item.type === 'social' || item.kind === 'social') {
-          await openSocialConversation(item.conversationId || item.id);
+          const opened = await openSocialConversation(item.conversationId || item.id, {acknowledge: !item.messageId});
+          if (opened && item.messageId && currentConversation?.id === item.conversationId) {
+            await jumpToMessage(item.messageId, status);
+          }
         } else if (item.type === 'agent-message' || item.kind === 'agent') {
           const session = sessions.find(row => row.source === 'agent' && row.id === item.conversationId);
-          if (session) await openAgentConversation(session.agent_id, session.id);
+          const agentId = item.agentId || session?.agent_id;
+          if (agentId && await openAgentConversation(agentId, item.conversationId)
+            && item.messageId && currentConversation?.id === item.conversationId) {
+            await jumpToMessage(item.messageId, status);
+          }
         } else if (item.type === 'contact') {
           openComposeDialog('contact');
           const box = document.querySelector(`#member-choices input[value="${item.id}"]`);
@@ -1962,9 +3918,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (!total) {
       empty.hidden = false;
-      empty.textContent = query ? '当前工作区里没有匹配的结果。' : '当前工作区里还没有可列出的内容。';
+      const directoryStatus = searchTab === 'contacts' ? membersStatus
+        : (['artifacts', 'documents', 'media'].includes(searchTab) ? artifactsStatus : '');
+      if (directoryStatus === 'loading') empty.textContent = '正在加载…';
+      else if (directoryStatus === 'failed') empty.textContent = '无法加载搜索范围。';
+      else if (!query) empty.textContent = '当前工作区里还没有可列出的内容。';
+      else if (paged && messageSearch.state.warning) empty.textContent = '可搜索的内容里没有匹配结果。';
+      else empty.textContent = '当前工作区里没有匹配的结果。';
     }
-    const paged = searchTab === 'messages' || searchTab === 'all';
     if (paged && query && messageSearch.state.error) {
       empty.hidden = false;
       empty.textContent = messageSearch.state.error;
@@ -1975,36 +3936,157 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     );
   }
 
-  async function startHomepageConversation(index) {
-    const result = await request('POST', '/v1/agent-homepages/start', {quick_start: index}, {
-      'Idempotency-Key': idempotencyKey('home-start-'),
-    });
-    if (result.status !== 200 && result.status !== 201) {
-      show('error', messageFor(
-        result.body && result.body.error,
-        result.status === 401
-          ? '请先登录，再从公开主页发起对话。'
-          : '无法从公开主页发起对话。只有工作区成员可以，且需要先打开该公开主页。',
-      ));
-      return false;
+  let launchAttempt = null;
+
+  function publicStartError(intent, message, retry) {
+    show('error', message);
+    if (retry) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.id = 'public-agent-retry';
+      button.className = 'public-agent-action';
+      button.textContent = '重试';
+      button.addEventListener('click', retry);
+      status.append(button);
     }
-    const conversation = result.body && result.body.conversation;
-    if (!conversation || !conversation.id || !conversation.agent_id || !conversation.workspace_id) {
-      show('error', '无法从公开主页发起对话。');
-      return false;
-    }
-    if ([...workspaceSelect.options].some(option => option.value === conversation.workspace_id)) {
-      workspaceSelect.value = conversation.workspace_id;
-    }
-    await loadSessions();
-    await openAgentConversation(conversation.agent_id, conversation.id);
-    return true;
+    const link = document.createElement('a');
+    link.href = '/a/' + intent.slug;
+    link.className = 'public-agent-action';
+    link.textContent = '返回公开主页';
+    status.append(link);
   }
 
+  async function startPublicConversation(intent) {
+    const continuation = publicAgentContinuation(intent);
+    const owner = currentUser?.id;
+    if (!owner || !continuation || publicAgentContinuation(publicAgentIntentFromHash(location.hash)) !== continuation) return;
+    const scope = owner + continuation;
+    if (launchAttempt?.scope === scope && launchAttempt.busy) return;
+    const opening = intent.draft && publicAgentOpening(document.defaultView, intent);
+    if (intent.draft && !opening) {
+      publicStartError(intent, '找不到首页草稿或草稿已过期，请返回公开主页。');
+      return;
+    }
+    const quick = intent.quickStart !== undefined;
+    const attempt = {scope, busy: true};
+    launchAttempt = attempt;
+    let completed = false;
+    const retry = () => startPublicConversation(intent);
+    const active = () => launchAttempt === attempt && currentUser?.id === owner
+      && publicAgentContinuation(publicAgentIntentFromHash(location.hash)) === continuation;
+    const previousOpen = socialOpen;
+    show('loading', quick ? '正在准备快捷开场…' : '正在打开公开智能体…');
+    try {
+      const payload = opening ? {listing_id: opening.listingId}
+        : quick ? {quick_start: intent.quickStart, quick_start_version: intent.version} : {};
+      const result = await request('POST', '/v1/discover/agents/' + intent.slug + '/start', payload);
+      if (!active() || socialOpen !== previousOpen) return;
+      const {workspace_id, conversation_id, draft_text} = result.body || {};
+      if (![200, 201].includes(result.status) || !/^[A-Za-z0-9._-]{1,80}$/.test(conversation_id || '')
+          || !workspaces.some(space => space.id === workspace_id) || (quick && (typeof draft_text !== 'string' || !draft_text.trim() || draft_text.length > 80))) {
+        const canRetry = result.status === 429 || result.status >= 500 || result.status === 0;
+        publicStartError(intent, messageFor(result.body?.error, '无法打开公开智能体。'), canRetry ? retry : null);
+        return;
+      }
+      workspaceSelect.value = workspace_id;
+      if (await openSocialConversation(conversation_id, {acknowledge: false, publicStartCurrent: active})) {
+        completed = true;
+        const current = launchAttempt === attempt && currentUser?.id === owner && currentSource === 'social'
+          && currentConversation?.id === conversation_id && workspaceId() === workspace_id;
+        if (!current) return;
+        if (opening) {
+          const available = publicAgentOpening(document.defaultView, intent);
+          const filled = available?.listingId === opening.listingId && publicDraft.fillOpening(available.text);
+          if (filled) {
+            consumePublicAgentOpening(document.defaultView, intent);
+            if (filled === 'filled') show('ok', '首页草稿已填入输入框，可编辑后发送。', {announceOnly: true});
+            else show('', '');
+          } else {
+            publicStartError(intent, '无法恢复首页草稿，请返回公开主页。');
+          }
+        } else if (quick && publicDraft.fill(draft_text)) {
+          show('ok', '开场已填入输入框，可编辑后发送。', {announceOnly: true});
+        } else {
+          show('', '');
+        }
+        void loadSessions();
+      } else if (active()) {
+        publicStartError(intent, '暂时无法加载对话。', retry);
+      }
+    } catch {
+      if (active()) publicStartError(intent, '连接中断，请重试。', retry);
+    } finally {
+      attempt.busy = false;
+      if (completed && launchAttempt === attempt) launchAttempt = null;
+    }
+  }
+
+  async function openLinkedConversation(start, loadCurrent, parallelDirectory) {
+    const owner = currentUser;
+    const workspace = workspaceId();
+    const link = {current: () => startupLink === link && link.open === socialOpen
+      && currentUser === owner && workspaceId() === workspace && loadCurrent()};
+    startupLink = link;
+    show('loading', '正在打开对话…');
+    const opened = start.social
+      ? openSocialConversation(start.social, {acknowledge: !start.message, link})
+      : openAgentConversation(start.agent, start.conversation, {link});
+    link.open = socialOpen;
+    if (parallelDirectory) link.directory = loadSessions(link);
+    try {
+      if (!await opened || !link.current()) return;
+      const message = start.social
+        ? (chatPathId(start.message) ? start.message : '')
+        : (/^[0-9a-f]{32}$/.test(start.message) ? start.message : '');
+      if (message) {
+        const moved = await jumpToMessage(message, null, link.current);
+        if (!link.current()) return;
+        if (!moved) {
+          show('error', '找不到这条来源消息。');
+          return;
+        }
+      }
+      writeHash(start.social ? {workspace, social:start.social, message}
+        : {workspace, agent:start.agent, conversation:start.conversation, message});
+      show('', '');
+    } finally {
+      if (startupLink === link) startupLink = null;
+    }
+  }
+
+  let loadRequest = 0;
+
   async function load() {
+    const sequence = ++loadRequest;
+    const hash = location.hash;
+    const pathname = location.pathname;
+    const banner = document.getElementById('onboarding-banner');
+    let navigation = socialOpen;
+    const loadCurrent = () => sequence === loadRequest && location.hash === hash && location.pathname === pathname;
+    const bootCurrent = () => loadCurrent() && socialOpen === navigation;
     const session = await request('GET', '/v1/auth/session');
-    if (session.status !== 200) {
+    if (!bootCurrent()) return;
+    if (session.status !== 200 || !session.body?.user?.id) {
+      if (banner) banner.hidden = true;
       currentUser = null;
+      currentAgent = null;
+      renderAgentQuickStarts();
+      resetNotifications();
+      workspaceEvents?.start(null);
+      autoTranslation.open(null);
+      attachmentSender?.reset();
+      clearPendingSends();
+      memoryDrafts.clear();
+      memoryWrites.clear();
+      replyDrafts.clear();
+      publicDraft.clear();
+      renderReplyDraft();
+      currentConversation = null;
+      chatCalls.sync();
+      socialOpen += 1;
+      setSocialHistory(null);
+      voiceRecorder.refresh();
+      clearVoicePlayers();
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       document.getElementById('session-pane').hidden = true;
@@ -2013,29 +4095,68 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('', '');
       return;
     }
-    currentUser = session.body.user;
+    if (currentUser && currentUser.id !== session.body.user.id) {
+      currentAgent = null;
+      currentConversation = null;
+      socialOpen += 1;
+      navigation = socialOpen;
+      renderAgentQuickStarts();
+      resetNotifications();
+      attachmentSender?.reset();
+      clearPendingSends();
+      memoryDrafts.clear();
+      memoryWrites.clear();
+      replyDrafts.clear();
+      publicDraft.clear();
+      renderReplyDraft();
+    }
+    const owner = session.body.user;
+    if (currentUser?.id !== owner.id && banner) banner.hidden = true;
+    currentUser = owner;
+    if (banner) void request('GET', '/v1/onboarding').then(onboarding => {
+      if (sequence !== loadRequest || currentUser !== owner || location.pathname !== pathname || onboarding.status !== 200) return;
+      banner.hidden = Boolean(onboarding.body.onboarding?.completed);
+    }).catch(() => {});
+    const publicIntent = publicAgentIntentFromHash(hash);
+    if (publicIntent) show('loading', publicIntent.quickStart === undefined ? '正在打开公开智能体…' : '正在准备快捷开场…');
     loginPanel.hidden = true;
     mainPanel.hidden = false;
+    if (servedByDsbot) chatCalls.resumeMeeting();
     document.getElementById('session-pane').hidden = false;
     document.body.classList.add('chat-open');
     setSessionsOpen(true);
     document.getElementById('whoami').textContent = currentUser.username;
-    const onboarding = await request('GET', '/v1/onboarding');
-    const banner = document.getElementById('onboarding-banner');
-    if (banner && onboarding.status === 200) {
-      banner.hidden = Boolean(onboarding.body.onboarding && onboarding.body.onboarding.completed);
-    }
-
-    const personal = await request('POST', '/v1/personal-agent');
-    const personalWorkspace = personal.status === 200 && personal.body.personal_agent
-      ? personal.body.personal_agent.workspace.id : '';
-    const personalEntity = personal.status === 200 ? personal.body.personal_agent : null;
-    personalAgentId = personalEntity && personalEntity.agent ? personalEntity.agent.id : '';
-    personalLook = personalEntity ? personalEntity.look || null : null;
-    const [listed, settings] = await Promise.all([
-      request('GET', '/v1/workspaces?limit=100'),
+    if (!sessions.length) setSessionsStatus('正在加载对话…');
+    const listWorkspaces = () => request('GET', '/v1/workspaces?limit=100');
+    const personalAndWorkspaces = (async () => {
+      if (servedByDsbot) {
+        const personalRequest = request('GET', '/v1/personal-agent').catch(() => null);
+        const workspaceRequest = listWorkspaces().catch(() => null);
+        const personal = await personalRequest;
+        const existing = personal?.body?.personal_agent;
+        if (personal?.status === 200 && existing?.agent?.id && existing.workspace?.id) {
+          const listed = await workspaceRequest;
+          if (listed?.status === 200 && listed.body?.items?.some(space => space.id === existing.workspace.id)) {
+            return {personal, listed};
+          }
+        }
+        if (!bootCurrent()) return {};
+      }
+      // A first-time account can receive a new workspace during initialization.
+      const personal = await request('POST', '/v1/personal-agent');
+      const listed = await listWorkspaces();
+      return {personal, listed};
+    })();
+    const [{personal, listed}, settings] = await Promise.all([
+      personalAndWorkspaces,
       request('GET', '/v1/settings'),
     ]);
+    if (!bootCurrent()) return;
+
+    const personalEntity = [200, 201].includes(personal.status) ? personal.body.personal_agent : null;
+    const personalWorkspace = personalEntity?.workspace?.id || '';
+    personalAgentId = personalEntity && personalEntity.agent ? personalEntity.agent.id : '';
+    personalLook = personalEntity ? personalEntity.look || null : null;
     if (settings.status === 200 && settings.body?.settings?.values) chatPreferences = settings.body.settings.values;
     const stored = settings.status === 200 && settings.body && settings.body.settings
       && settings.body.settings.values && settings.body.settings.values.send_shortcut;
@@ -2044,8 +4165,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       && settings.body.settings.values && settings.body.settings.values.chat_language;
     chatLanguage = typeof storedLanguage === 'string' ? storedLanguage : 'auto';
     document.getElementById('chat-body').dataset.sendShortcut = sendShortcut;
-    workspaces = listed.status === 200 ? (listed.body.items || []) : [];
-    const wanted = hashParams().workspace || personalWorkspace || workspaceSelect.value;
+    if (listed.status !== 200 || (publicIntent && !listed.body.items?.length)) {
+      setSessionsStatus('无法加载工作区，请重试。');
+      if (publicIntent && publicAgentContinuation(publicAgentIntentFromHash(location.hash)) === publicAgentContinuation(publicIntent)) {
+        publicStartError(publicIntent, '暂时无法加载工作区。', () => void load());
+      }
+      return;
+    }
+    workspaces = listed.body.items || [];
+    const start = hashParams(hash);
+    const hasLink = start.social || (start.agent && start.conversation);
+    const wanted = start.workspace || personalWorkspace || workspaceSelect.value;
     workspaceSelect.replaceChildren();
     for (const space of workspaces) {
       const option = document.createElement('option');
@@ -2053,42 +4183,44 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       option.textContent = space.name;
       workspaceSelect.append(option);
     }
-    if (wanted && [...workspaceSelect.options].some(option => option.value === wanted)) {
-      workspaceSelect.value = wanted;
-    }
+    workspaceSelect.value = (workspaces.find(space => space.id === wanted)
+      || workspaces.find(space => space.id === personalWorkspace) || workspaces[0])?.id || '';
     if (!workspaces.length) {
+      setSessionsStatus('');
       document.getElementById('conversations-empty').hidden = false;
       document.getElementById('chat-empty').hidden = false;
-      show('', '');
+      if (hasLink && start.workspace) show('error', '无法访问此会话所在的工作区。');
+      else show('', '');
+      return;
+    }
+    if (publicIntent) {
+      await startPublicConversation(publicIntent);
+      return;
+    }
+    if (hasLink && start.workspace && workspaceId() !== start.workspace) {
+      show('error', '无法访问此会话所在的工作区。');
+      void loadSessions();
+      return;
+    }
+    if (hasLink && !(start.social ? chatPathId(start.social) : chatPathId(start.agent) && chatPathId(start.conversation))) {
+      show('error', '此对话链接无效。');
+      void loadSessions();
+      return;
+    }
+    if (hasLink && start.workspace) {
+      await openLinkedConversation(start, loadCurrent, true);
       return;
     }
     await loadSessions();
-    const homepageStart = homepageStartIndex();
-    if (homepageStart !== null) {
-      const started = await startHomepageConversation(homepageStart);
-      const stripped = stripHomepageStartQuery(location.pathname, location.search, location.hash);
-      if (stripped.changed) history.replaceState(null, '', stripped.href);
-      if (started) {
-        show('', '');
-        return;
-      }
+    if (!bootCurrent()) return;
+    if (hasLink) {
+      await openLinkedConversation(start, loadCurrent, false);
+      return;
     }
-    const start = hashParams();
-    if (start.social) {
-      await openSocialConversation(start.social);
-    } else if (start.agent && start.conversation) {
-      await openAgentConversation(start.agent, start.conversation);
-    } else if (start.agent) {
+    if (start.agent) {
       const first = sessions.find(row => row.source === 'agent' && row.agent_id === start.agent);
       if (first) await openAgentConversation(start.agent, first.id);
-      else {
-        currentAgent = agents.find(item => item.id === start.agent) || null;
-        currentSource = 'agent';
-        if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
-          currentAgent.id === personalAgentId ? personalLook : null);
-        document.getElementById('chat-empty').hidden = false;
-        writeHash({workspace: workspaceId(), agent: start.agent});
-      }
+      else openEmptyAgentChat(start.agent);
     } else if (sessions.length && !narrowScreen()) {
       const first = sessions[0];
       if (first.source === 'social') await openSocialConversation(first.id);
@@ -2110,6 +4242,140 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
+  function selectedTranscript() {
+    const people = currentConversation?.members || [];
+    return lastSocialItems.filter(item => selectedMessages.has(item.id) && !item.retracted).map(item => {
+      const author = item.agent_name || people.find(person => person.user_id === item.user_id)?.username || '成员';
+      const body = item.body?.trim() || item.attachment?.title || (item.voice ? '语音消息' : '');
+      return body ? `${author}：${body}` : '';
+    }).filter(Boolean).join('\n\n');
+  }
+
+  document.getElementById('selection-meeting')?.addEventListener('click', () => {
+    const transcript = selectedTranscript(), workspace = workspaceId();
+    if (!workspace || !currentUser || !transcript) return;
+    if (transcript.length > 40000) {
+      show('error', '所选消息超过会议正文上限，请减少选择。');
+      return;
+    }
+    const title = (conversationLabel(currentConversation, currentUser.id) + ' · 会议纪要').slice(0, 120);
+    try {
+      const href = stageMeetingFromChat(document.defaultView.sessionStorage, {owner:currentUser.id, workspace, transcript, title});
+      document.defaultView.location.assign(href);
+    } catch {
+      show('error', '无法打开会议草稿，请重试。');
+    }
+  });
+
+  const groupCaptureDialog = document.getElementById('group-capture-dialog');
+  const groupCaptureStatus = document.getElementById('group-capture-status');
+  const groupCaptureSubmit = document.getElementById('group-capture-submit');
+  const groupCaptureInbox = document.getElementById('group-capture-inbox');
+  let groupCapture = null;
+  document.getElementById('selection-group-capture')?.addEventListener('click', () => {
+    if (currentSource !== 'social' || currentConversation?.kind !== 'group' || currentConversation.public_agent) return;
+    const matching = lastSocialItems.filter(item => selectedMessages.has(item.id));
+    if (!matching.length || matching.length !== selectedMessages.size || matching.length > 12
+        || matching.some(item => item.role === 'agent' || item.retracted || item.voice || item.attachment || !item.body?.trim())) {
+      show('error','请选择当前记录中 1 到 12 条群成员发出的文字消息。');
+      return;
+    }
+    const workspace = workspaceId();
+    groupCapture = {scope:sendScope(), ids:matching.map(item => item.id),
+      path:`${socialBase()}/${currentConversation.id}/memory/capture`,busy:false};
+    groupCaptureStatus.textContent = '';
+    groupCaptureSubmit.disabled = false;
+    groupCaptureInbox.hidden = true;
+    groupCaptureInbox.href = '/memory?' + new URLSearchParams({workspace,page:'candidates'});
+    document.getElementById('group-capture-review').textContent =
+      `已选 ${matching.length} 条群聊文字消息，将由你的 DS-Bot 在后台生成待核对建议。`;
+    groupCaptureDialog.showModal();
+  });
+  document.getElementById('group-capture-close')?.addEventListener('click', () => groupCaptureDialog.close());
+  groupCaptureDialog?.addEventListener('close', () => {groupCapture = null;});
+  document.getElementById('group-capture-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const draft = groupCapture;
+    if (!draft || draft.busy || sendScope() !== draft.scope) return;
+    draft.busy = groupCaptureSubmit.disabled = true;
+    groupCaptureStatus.textContent = '正在核对群聊消息…';
+    let done = false;
+    try {
+      const result = await request('POST',draft.path,{message_ids:draft.ids});
+      if (groupCapture !== draft || sendScope() !== draft.scope) return;
+      if (result.status !== 202) {
+        groupCaptureStatus.textContent = messageFor(result.body.error,'无法提炼所选消息，请重试。');
+        return;
+      }
+      const {queued,skipped,full} = result.body;
+      groupCaptureStatus.textContent = [
+        queued ? `${queued} 条已加入后台提炼。` : '',
+        skipped ? `${skipped} 条已有处理记录。` : '',
+        full ? `队列已满，${full} 条可稍后重试。` : '',
+      ].filter(Boolean).join(' ');
+      groupCaptureInbox.hidden = !(queued || skipped);
+      done = !full;
+      if (done) setSelecting(false);
+    } catch {
+      if (groupCapture === draft) groupCaptureStatus.textContent = '无法提炼所选消息，请重试。';
+    } finally {
+      if (groupCapture === draft) { draft.busy = false; groupCaptureSubmit.disabled = done; }
+    }
+  });
+
+  const memoryDialog = document.getElementById('selection-memory-dialog');
+  const memoryForm = document.getElementById('selection-memory-form');
+  const memoryError = document.getElementById('selection-memory-error');
+  let memoryDraft = null;
+  const openMemory = document.getElementById('selection-memory');
+  openMemory?.addEventListener('click', () => {
+    const transcript = selectedTranscript();
+    if (!transcript || !currentUser || !workspaceId()) return;
+    if (transcript.length > 8000) {
+      show('error', '所选消息超过记忆正文上限，请减少选择。');
+      return;
+    }
+    memoryDraft = {owner:currentUser.id, workspace:workspaceId(), scope:sendScope(), attempt:null, pending:false};
+    memoryForm.elements.title.value = (conversationLabel(currentConversation, currentUser.id) + ' · 聊天记录').slice(0, 80);
+    memoryForm.elements.body.value = transcript;
+    memoryError.textContent = '';
+    memoryDialog.showModal();
+    memoryForm.elements.title.focus();
+  });
+  memoryDialog?.addEventListener('close', () => {memoryDraft = null;});
+  document.getElementById('selection-memory-cancel')?.addEventListener('click', () => memoryDialog.close());
+  memoryForm?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const draft = memoryDraft;
+    if (!draft || draft.pending || draft.owner !== currentUser?.id || draft.workspace !== workspaceId()) return;
+    const payload = {title:memoryForm.elements.title.value.trim(), body:memoryForm.elements.body.value};
+    const signature = JSON.stringify(payload);
+    if (draft.attempt?.signature !== signature) draft.attempt = {signature, key:idempotencyKey('chat-memory-')};
+    const submit = document.getElementById('selection-memory-submit');
+    draft.pending = submit.disabled = true;
+    memoryError.textContent = '';
+    try {
+      const result = await request('POST', `/v1/workspaces/${draft.workspace}/memory`, payload, {'Idempotency-Key':draft.attempt.key});
+      if (draft !== memoryDraft || draft.owner !== currentUser?.id) return;
+      const page = result.body.page;
+      if (![200, 201].includes(result.status) || !page?.id) {
+        memoryError.textContent = messageFor(result.body.error, '保存失败，请重试。');
+        return;
+      }
+      memoryDialog.close();
+      if (sendScope() === draft.scope) setSelecting(false);
+      show('ok', '已保存到记忆。');
+      const link = document.createElement('a');
+      link.href = '/memory?' + new URLSearchParams({workspace:draft.workspace, page:page.id});
+      link.textContent = '打开记忆';
+      status.append(document.createTextNode(' '), link);
+    } catch {
+      if (draft === memoryDraft) memoryError.textContent = '无法确认保存结果，请重试。';
+    } finally {
+      draft.pending = submit.disabled = false;
+    }
+  });
+
   const multiToggle = document.getElementById('multi-select-toggle');
   if (multiToggle) multiToggle.addEventListener('click', () => setSelecting(!selecting));
   const forwardCancel = document.getElementById('forward-cancel');
@@ -2120,18 +4386,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   if (forwardSubmit) forwardSubmit.addEventListener('click', async () => {
     const cid = currentConversation && currentConversation.id, target = forwardTarget.value;
     const ids = lastSocialItems.filter(item => selectedMessages.has(item.id)).map(item => item.id);
-    if (!cid || !target || !ids.length) return;
-    forwardSubmit.disabled = true;
-    const result = await request('POST', `${socialBase()}/${cid}/forward`,
-      {message_ids: ids, target_conversation_id: target}, {'Idempotency-Key': idempotencyKey('forward-')});
-    if (result.status !== 201 && result.status !== 200) {
-      show('error', messageFor(result.body.error, '转发失败。'));
+    if (!cid || !target || !ids.length || forwardBusy) return;
+    const scope = sendScope();
+    const signature = JSON.stringify([scope, target, ids]);
+    if (forwardAttempt?.signature !== signature) forwardAttempt = {signature, key:idempotencyKey('forward-')};
+    forwardBusy = true;
+    syncForwardBar();
+    try {
+      const result = await request('POST', `${socialBase()}/${cid}/forward`,
+        {message_ids: ids, target_conversation_id: target}, {'Idempotency-Key':forwardAttempt.key});
+      if (result.status !== 201 && result.status !== 200) {
+        if (scope === sendScope()) show('error', messageFor(result.body.error, '转发失败，请重试。'));
+        return;
+      }
+      forwardAttempt = null;
+      if (scope === sendScope()) {
+        setSelecting(false);
+        show('ok', `已转发 ${result.body.forwarded ?? ids.length} 条消息。`);
+        await loadSessions();
+      }
+    } catch {
+      if (scope === sendScope()) show('error', '未能确认转发结果，请重试。');
+    } finally {
+      forwardBusy = false;
       syncForwardBar();
-      return;
     }
-    setSelecting(false);
-    show('ok', `已转发 ${ids.length} 条消息。`);
-    await loadSessions();
   });
   const chatInvite = document.getElementById('chat-invite');
   if (chatInvite) chatInvite.addEventListener('click', () => {
@@ -2160,34 +4439,78 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     out.textContent = `邀请令牌只显示一次：${result.body.token}`;
   });
+  notificationKind?.addEventListener('change', () => {
+    if (notificationSnapshot) renderNotifications(notificationSnapshot.body, notificationSnapshot.scope);
+  });
+  notificationUnread?.addEventListener('change', () => loadNotifications({interactive: true}));
   const notificationsToggle = document.getElementById('notifications-toggle');
   if (notificationsToggle) notificationsToggle.addEventListener('click', async () => {
     const panel = document.getElementById('notifications-panel');
     const open = Boolean(panel && panel.hidden);
     setNotificationsOpen(open);
-    if (open) await loadNotifications();
+    if (open) await loadNotifications({interactive: true});
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && !document.getElementById('notifications-panel')?.hidden) {
+      void loadNotifications();
+    }
+  });
+  globalThis.addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    void loadNotifications();
+    void refreshAgentQuickStarts();
   });
   const readAll = document.getElementById('notifications-read-all');
   if (readAll) readAll.addEventListener('click', async () => {
-    const wid = workspaceId();
+    const scope = notificationScope();
+    if (!scope.owner || !scope.workspace || readAll.disabled) return;
     readAll.disabled = true;
-    const result = await request('POST', `/v1/workspaces/${wid}/notifications/read`, {all: true});
-    if (result.status !== 200) { show('error', '无法标记通知为已读。'); readAll.disabled = false; return; }
+    const result = await request('POST', `/v1/workspaces/${scope.workspace}/notifications/read`,
+      {all: true}, undefined, AbortSignal.timeout(5000)).catch(() => ({status: 0, body: {}}));
+    if (!currentNotificationScope(scope)) return;
+    if (result.status !== 200) {
+      setNotificationStatus('无法标记通知为已读。');
+      readAll.disabled = false;
+      return;
+    }
+    applyNotificationRead(scope, result);
     await loadNotifications();
   });
-  workspaceSelect.addEventListener('change', async () => {
+  function clearChatScope() {
+    cancelStartupLink();
+    stopReplyProgress();
+    stopGroupReplyProgress();
+    socialOpen += 1;
+    setSocialHistory(null);
+    if (liveBanner) liveBanner.hidden = true;
+    resetNotifications();
+    agentMentions.clear();
     currentAgent = null;
     currentConversation = null;
     currentSource = 'agent';
+    renderAgentQuickStarts();
+    publicDraft.enter(sendScope());
+    syncCaptureButton();
+    chatCalls.sync();
+    voiceRecorder.refresh();
+    clearVoicePlayers();
     stopPolling();
     closeSearchPanel();
     closeComposeDialog();
-    const inChatPanel = document.getElementById('conversation-search-panel'); if (inChatPanel) inChatPanel.hidden = true;
-    writeHash({workspace: workspaceId()});
+    closeInChatSearch({restoreScroll: false, focus: false});
     applyChatIdentity(document, '聊天');
+    showPublicChatState(null);
+    renderReplyDraft();
     document.getElementById('message-list').replaceChildren();
     document.getElementById('chat-empty').hidden = false;
+    renderPendingSend();
     setDirectoryLink({source: 'agent'});
+    syncPlusState();
+  }
+
+  workspaceSelect.addEventListener('change', async () => {
+    clearChatScope();
+    writeHash({workspace: workspaceId()});
     await loadSessions();
   });
 
@@ -2199,46 +4522,70 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else renderSearch();
   });
   const inChatSearch = createMessageSearch(async (query, conversationId, cursor) => {
+    if (currentSource === 'social') {
+      const params = new URLSearchParams({q: query, limit: '20'});
+      if (cursor) params.set('before', cursor);
+      const result = await request('GET', `${socialBase()}/${conversationId}/messages?${params}`);
+      if (result.status !== 200) throw new Error('无法搜索当前会话。');
+      return {
+        items: (result.body.items || []).map(item => {
+          const body = String(item.body || '');
+          const index = body.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+          const start = Math.max(0, index - 48);
+          return {
+            kind: 'social', conversation_id: conversationId, message_id: item.id, created: item.created,
+            snippet: (start > 0 ? '…' : '') + body.slice(start, start + 160) + (body.length > start + 160 ? '…' : ''),
+          };
+        }),
+        cursor: result.body.cursor,
+      };
+    }
     const result = await request('GET', `/v1/workspaces/${workspaceId()}/search/messages?${messageSearchQuery(query, conversationId, cursor)}`);
     if (result.status !== 200) throw new Error('无法搜索当前会话。');
     return result.body;
   });
-  async function searchCurrentConversation(append = false) {
-    const conversation = currentConversation;
-    const query = (document.getElementById('conversation-search-query').value || '').trim();
-    if (!conversation || !query) return;
-    const wid = workspaceId();
-    const state = await inChatSearch.load(query, conversation.id, {append});
-    if (workspaceId() !== wid || !currentConversation || currentConversation.id !== conversation.id) return;
-    const list = document.getElementById('conversation-search-results'); list.replaceChildren();
-    for (const hit of state.hits) {
-      list.append(searchHitRow(hit, (document.getElementById('conversation-search-query').value || '').trim()));
-    }
-    document.getElementById('conversation-search-status').textContent = state.error || (state.hits.length ? '已显示 ' + state.hits.length + ' 条消息' : '没有找到匹配的消息。试试其他关键词。');
-    document.getElementById('conversation-search-more').hidden = !state.cursor;
-  }
-  // One jump-and-highlight action for both message hits and attachment hits: a
-  // search result never opens a second view, it scrolls the real message back in.
-  function jumpToMessage(messageId) {
+  async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status'), isCurrent = () => true) {
+    if (!isCurrent()) return false;
     const list = document.getElementById('message-list');
-    const target = Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
+    const findTarget = () => Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
+    let target = findTarget();
+    const jump = ++historyJump;
+    const state = socialHistory;
+    if (!target && currentSource === 'social' && state) {
+      try {
+        const query = new URLSearchParams({around: messageId, limit: '50'});
+        const result = await historyPage(state, query);
+        if (!result || jump !== historyJump || !isCurrent()) return false;
+        if (result.status === 200 && result.body.items?.some(item => item.id === messageId)) {
+          setSocialHistory({...state, cursor: result.body.cursor ?? null,
+            readingHistory: true, loading: false});
+          searchScrollSnapshot = null;
+          renderSocialMessages(result.body.items, {keepScroll: false});
+          target = findTarget();
+          if (notice) notice.textContent = '';
+        }
+      } catch {
+        if (socialHistory !== state || jump !== historyJump || !isCurrent()) return false;
+      }
+    }
     if (!target) {
-      document.getElementById('conversation-search-status').textContent = '这条消息不在当前已加载的消息窗口里，请加载更多消息后重试。';
-      return;
+      if (notice) notice.textContent = '这条消息不在当前已加载的消息窗口里。';
+      return false;
     }
     target.scrollIntoView?.({block: 'center', behavior: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'});
     target.tabIndex = -1; target.focus?.({preventScroll: true});
     for (const node of Array.from(list.children || [])) delete node.dataset.searchJump;
     target.dataset.searchJump = 'true';
     setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
+    return true;
   }
-  function searchHitRow(hit, query) {
+  function searchHitRow(hit, view) {
     const li = document.createElement('li');
     li.className = 'search-hit';
     li.tabIndex = 0;
     li.setAttribute('role', 'button');
     li.setAttribute('aria-label', '跳到这条消息');
-    const jump = () => jumpToMessage(hit.messageId);
+    const jump = () => jumpToMessage(hit.messageId, inChatStatus, () => currentSearchView(view));
     li.addEventListener('click', jump);
     li.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
@@ -2257,141 +4604,189 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     head.append(name, when);
     const text = document.createElement('span');
     text.className = 'search-hit-text';
-    text.append(...highlightParts(hit.snippet || hit.preview || '', query).map(part => {
+    text.append(...highlightParts(hit.snippet || hit.preview || '', view.query).map(part => {
       if (!part.match) return document.createTextNode(part.text);
       const mark = document.createElement('mark'); mark.textContent = part.text; return mark;
     }));
     li.append(avatar, head, text);
     return li;
   }
-  // The conversation search covers three scopes of the SAME conversation. The
-  // photo and file scopes read the attachment fields the message rows already
-  // carry (social.py MESSAGE_ROWS -> attachment{id,title,kind,revision,path}),
-  // paged through the existing messages endpoint; no second list is invented.
-  const CONVERSATION_SCOPE_NOTES = {
-    messages: '· 搜索当前会话里你有权查看的消息。',
-    photos: '· 只读取当前会话消息里已有的图片附件。',
-    files: '· 只读取当前会话消息里已有的文件附件。',
+  const CONVERSATION_SCOPES = {
+    messages: {placeholder: '搜索当前会话', note: '搜索当前会话中的消息。'},
+    resources: {placeholder: '搜索资料标题', note: '搜索在这个会话中分享的资料。', kind: 'resource', noun: '资料', unit: '份'},
+    photos: {placeholder: '搜索照片文件名', note: '搜索当前会话中的照片。', kind: 'photo', noun: '照片', unit: '张'},
+    files: {placeholder: '搜索文件名', note: '搜索当前会话中的文件。', kind: 'file', noun: '文件', unit: '个'},
   };
-  const ATTACHMENT_PAGE_LIMIT = 100; // the messages endpoint caps limit at 100
-  const ATTACHMENT_MAX_PAGES = 50;
+  const inChatPanel = document.getElementById('conversation-search-panel');
+  const inChatQuery = document.getElementById('conversation-search-query');
+  const inChatResults = document.getElementById('conversation-search-results');
+  const inChatStatus = document.getElementById('conversation-search-status');
+  const inChatMore = document.getElementById('conversation-search-more');
+  const inChatRetry = document.getElementById('conversation-search-retry');
   let conversationScope = 'messages';
+  let searchedChat = '';
+  let inChatView;
+  let searchDelay;
+  const conversationQuery = () => inChatQuery.value.trim();
+  const currentSearchView = view => Boolean(view && inChatView === view && !inChatPanel.hidden
+    && view.chat === sendScope() && view.scope === conversationScope && view.query === conversationQuery());
+
+  function clearConversationSearch() {
+    clearTimeout(searchDelay);
+    inChatView?.controller?.abort();
+    inChatView = null;
+    void inChatSearch.load('');
+    inChatResults.replaceChildren();
+    inChatResults.scrollTop = 0;
+    inChatResults.setAttribute('aria-busy', 'false');
+    inChatStatus.textContent = '';
+    inChatMore.hidden = true;
+    inChatMore.disabled = false;
+    inChatRetry.hidden = true;
+  }
+
   function setConversationScope(tab) {
     conversationScope = tab;
-    for (const name of ['messages', 'photos', 'files']) {
-      const button = document.getElementById('conversation-search-tab-' + name);
-      if (button) button.setAttribute('aria-selected', String(name === tab));
+    for (const name of Object.keys(CONVERSATION_SCOPES)) {
+      document.getElementById('conversation-search-tab-' + name)?.setAttribute('aria-selected', String(name === tab));
     }
-    const note = document.getElementById('conversation-search-scope-note');
-    if (note) note.textContent = CONVERSATION_SCOPE_NOTES[tab] || CONVERSATION_SCOPE_NOTES.messages;
-    const more = document.getElementById('conversation-search-more');
-    if (more) more.hidden = true;
+    const {placeholder, note} = CONVERSATION_SCOPES[tab];
+    inChatQuery.placeholder = placeholder;
+    document.getElementById('conversation-search-query-label').textContent = placeholder;
+    document.getElementById('conversation-search-scope-note').textContent = note;
   }
-  async function conversationAttachments(conversation) {
-    const items = [];
-    let cursor = '';
-    let truncated = false;
-    for (let page = 0; page < ATTACHMENT_MAX_PAGES; page += 1) {
-      const params = new URLSearchParams({limit: String(ATTACHMENT_PAGE_LIMIT)});
-      if (cursor) params.set('cursor', cursor);
-      const result = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages?${params}`);
-      if (result.status !== 200) throw new Error('读不到当前会话的附件。');
-      items.push(...(result.body.items || []));
-      cursor = result.body.cursor || '';
-      if (!cursor) return {items, truncated: false};
-      truncated = true;
-    }
-    return {items, truncated};
-  }
-  function attachmentHitRow(item) {
+
+  function attachmentHitRow(item, view, kind) {
+    const {attachment} = item;
+    const photo = kind === 'photo';
+    const isResource = kind === 'resource';
+    const resource = isResource ? attachment.resource : null;
+    const title = resource?.title || attachment.title || (photo ? '未命名照片' : isResource ? '未命名资料' : '未命名文件');
     const li = document.createElement('li');
-    li.className = 'search-hit';
-    li.tabIndex = 0;
-    li.setAttribute('role', 'button');
-    li.setAttribute('aria-label', '跳到这条消息');
-    const jump = () => jumpToMessage(item.id);
-    li.addEventListener('click', jump);
-    li.addEventListener('keydown', event => {
-      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
+    li.className = 'attachment-search-hit' + (isResource ? ' resource-search-hit' : '');
+    const jump = document.createElement('button');
+    jump.type = 'button';
+    jump.className = 'search-hit attachment-search-jump';
+    jump.setAttribute('aria-label', '跳到原消息，' + title);
+    jump.addEventListener('click', async () => {
+      const located = await jumpToMessage(item.message_id, inChatStatus, () => currentSearchView(view));
+      if (!located || !currentSearchView(view)) return;
+      searchScrollSnapshot = null;
+      if (globalThis.matchMedia?.('(max-width: 700px)').matches) closeInChatSearch({restoreScroll: false, focus: false});
     });
-    const attachment = item.attachment || {};
-    const photo = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
     const avatar = document.createElement('span');
     avatar.className = 'search-hit-avatar';
     avatar.setAttribute('aria-hidden', 'true');
-    avatar.textContent = photo ? '照' : '件';
+    avatar.textContent = photo ? '照' : isResource ? '资' : '件';
     const head = document.createElement('span');
     head.className = 'search-hit-head';
     const name = document.createElement('strong');
-    name.textContent = attachment.title || (photo ? '未命名照片' : '未命名文件');
+    name.textContent = title;
+    name.title = title;
+    head.append(name);
     const when = document.createElement('time');
-    when.textContent = item.created ? formatSessionTime(item.created) : '';
-    head.append(name, when);
-    const text = document.createElement('span');
-    text.className = 'search-hit-text';
-    text.textContent = (photo ? '照片' : '文件') + ' · 点开回到这条消息';
-    li.append(avatar, head, text);
+    when.textContent = formatSessionTime(item.created_at);
+    const version = artifactVersionLabel(resource, attachment.mime);
+    if (version) {
+      const meta = document.createElement('span');
+      meta.className = 'search-hit-text resource-search-meta';
+      const description = document.createElement('span');
+      description.textContent = version;
+      meta.append(description, when);
+      jump.append(avatar, head, meta);
+    } else {
+      when.className = 'search-hit-text';
+      jump.append(avatar, head, when);
+    }
+    li.append(jump);
+    const download = chatFileDownload(document, attachment);
+    if (download) {
+      download.className = 'attachment-search-download';
+      li.append(download);
+    }
     return li;
   }
-  async function searchCurrentAttachments(scope) {
-    const conversation = currentConversation;
-    const list = document.getElementById('conversation-search-results');
-    const status = document.getElementById('conversation-search-status');
-    if (!list || !status) return;
-    list.replaceChildren();
-    if (!conversation) { status.textContent = '请先打开一个会话。'; return; }
-    if (currentSource !== 'social') {
-      status.textContent = '智能体会话的消息数据里没有附件字段，读不到照片和文件。';
-      return;
+
+  async function searchAttachmentPage(view, {kind, noun, unit}) {
+    const conversation = currentConversation.id;
+    const base = currentSource === 'social' ? socialBase() : agentBase() + '/conversations';
+    const params = new URLSearchParams({kind, q: view.query, limit: '20'});
+    if (view.cursor) params.set('cursor', view.cursor);
+    view.controller = new AbortController();
+    const result = await request('GET', `${base}/${conversation}/attachments?${params}`, undefined, undefined, view.controller.signal);
+    if (!currentSearchView(view)) return;
+    if (result.status !== 200) throw new Error('读不到当前会话的附件，请重试。');
+    for (const item of result.body.items || []) {
+      if (!item.message_id || !item.attachment?.id) continue;
+      const id = JSON.stringify([item.message_id, item.attachment.id]);
+      if (view.seen.has(id)) continue;
+      view.seen.add(id);
+      inChatResults.append(attachmentHitRow(item, view, kind));
     }
-    status.textContent = '正在读取当前会话的附件…';
-    const wid = workspaceId();
-    let found;
-    try {
-      found = await conversationAttachments(conversation);
-    } catch (failure) {
-      if (currentConversation && currentConversation.id === conversation.id) {
-        status.textContent = failure.message || '读不到当前会话的附件。';
-      }
-      return;
-    }
-    if (workspaceId() !== wid || !currentConversation || currentConversation.id !== conversation.id) return;
-    if (conversationScope !== scope) return;
-    const photos = scope === 'photos';
-    const hits = found.items.filter(item => {
-      const attachment = item.attachment;
-      if (!attachment) return false;
-      const image = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
-      return photos ? image : !image;
-    });
-    for (const item of hits) list.append(attachmentHitRow(item));
-    if (hits.length) {
-      status.textContent = (photos ? '已显示 ' + hits.length + ' 张照片' : '已显示 ' + hits.length + ' 个文件')
-        + (found.truncated ? ' · 只读取了最近 ' + (ATTACHMENT_PAGE_LIMIT * ATTACHMENT_MAX_PAGES) + ' 条消息' : '');
+    const next = result.body.next_cursor;
+    view.cursor = typeof next === 'string' && next !== view.cursor ? next : '';
+    inChatStatus.textContent = view.seen.size ? `已显示 ${view.seen.size} ${unit}${noun}`
+      : view.query ? `没有找到匹配的${noun}。` : `这个会话里还没有${noun}。`;
+  }
+
+  async function searchCurrentConversation(append = false) {
+    if (!currentConversation || inChatPanel.hidden) return;
+    if (append) {
+      if (!currentSearchView(inChatView) || !inChatView.cursor || inChatView.loading) return;
     } else {
-      status.textContent = photos ? '这个会话里还没有照片。' : '这个会话里还没有文件。';
+      clearConversationSearch();
+      const query = conversationQuery();
+      if (conversationScope === 'messages' && !query) return;
+      inChatView = {chat: sendScope(), scope: conversationScope, query, cursor: '', seen: new Set()};
+    }
+    const view = inChatView;
+    const scope = CONVERSATION_SCOPES[view.scope];
+    const noun = scope.noun || '消息';
+    view.loading = true;
+    inChatResults.setAttribute('aria-busy', 'true');
+    inChatStatus.textContent = append ? '正在加载更多…' : `正在搜索${noun}…`;
+    inChatMore.disabled = true;
+    inChatRetry.hidden = true;
+    try {
+      if (scope.kind) {
+        await searchAttachmentPage(view, scope);
+      } else {
+        const state = await inChatSearch.load(view.query, currentConversation.id, {append});
+        if (!currentSearchView(view)) return;
+        if (state.error) throw new Error(state.error);
+        inChatResults.replaceChildren(...state.hits.map(hit => searchHitRow(hit, view)));
+        view.cursor = state.cursor;
+        inChatStatus.textContent = state.hits.length ? `已显示 ${state.hits.length} 条消息` : '没有找到匹配的消息。试试其他关键词。';
+      }
+      if (currentSearchView(view)) inChatMore.hidden = !view.cursor;
+    } catch {
+      if (!currentSearchView(view)) return;
+      inChatStatus.textContent = append ? '无法加载更多，请重试。' : `无法搜索${noun}，请重试。`;
+      view.retryAppend = append;
+      inChatMore.hidden = true;
+      inChatRetry.hidden = false;
+    } finally {
+      if (currentSearchView(view)) {
+        view.loading = false;
+        view.controller = null;
+        inChatMore.disabled = false;
+        inChatResults.setAttribute('aria-busy', 'false');
+      }
     }
   }
-  for (const scope of ['messages', 'photos', 'files']) {
-    const button = document.getElementById('conversation-search-tab-' + scope);
-    if (!button) continue;
-    button.addEventListener('click', async () => {
+
+  for (const scope of Object.keys(CONVERSATION_SCOPES)) {
+    document.getElementById('conversation-search-tab-' + scope)?.addEventListener('click', () => {
+      if (scope === conversationScope) return;
       setConversationScope(scope);
-      const list = document.getElementById('conversation-search-results');
-      if (scope === 'messages') {
-        const query = (document.getElementById('conversation-search-query').value || '').trim();
-        if (query) await searchCurrentConversation();
-        else { if (list) list.replaceChildren(); document.getElementById('conversation-search-status').textContent = ''; }
-        return;
-      }
-      await searchCurrentAttachments(scope);
+      return searchCurrentConversation();
     });
   }
   const groupInfoToggle = document.getElementById('group-info-toggle');
   if (groupInfoToggle) {
     groupInfoToggle.addEventListener('click', () => {
       const open = groupInfoToggle.getAttribute('aria-expanded') !== 'true';
-      if (open) document.getElementById('conversation-search-panel').hidden = true;
+      if (open) closeInChatSearch({restoreScroll: false, focus: false});
       setGroupInfoOpen(open);
     });
     document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
@@ -2399,6 +4794,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       setGroupInfoOpen(false);
       document.getElementById('conversation-search-open').click();
     });
+    document.getElementById('group-memory-open')?.addEventListener('click', () => openGroupMemory());
     document.getElementById('group-info-tab-agents').addEventListener('click', () => setGroupInfoTab('agents'));
     document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
     document.getElementById('group-info-pin').addEventListener('click', async () => {
@@ -2419,77 +4815,204 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   let searchScrollSnapshot = null;
   const inChatOpen = document.getElementById('conversation-search-open');
-  if (inChatOpen) inChatOpen.addEventListener('click', () => {
+  inChatOpen?.addEventListener('click', () => {
     if (!currentConversation) { show('error', '请先打开一个会话。'); return; }
     setGroupInfoOpen(false);
-    if (document.getElementById('conversation-search-panel').hidden) {
-      searchScrollSnapshot = {conversation: currentConversation.id, top: document.getElementById('message-scroller').scrollTop};
+    if (!inChatPanel.hidden) { inChatQuery.focus(); return; }
+    const chat = sendScope();
+    if (searchedChat !== chat) {
+      searchedChat = chat;
+      inChatQuery.value = '';
+      setConversationScope('messages');
     }
-    document.getElementById('conversation-search-panel').hidden = false;
-    const field = document.getElementById('conversation-search-query'); if (field) field.focus();
+    searchScrollSnapshot = {chat, top: document.getElementById('message-scroller').scrollTop};
+    inChatPanel.hidden = false;
+    inChatQuery.focus();
+    return searchCurrentConversation();
   });
-  const inChatClose = document.getElementById('conversation-search-close');
-  function closeInChatSearch() {
-    document.getElementById('conversation-search-panel').hidden = true;
-    if (searchScrollSnapshot && currentConversation && currentConversation.id === searchScrollSnapshot.conversation) {
+  function closeInChatSearch({restoreScroll = true, focus = true} = {}) {
+    inChatPanel.hidden = true;
+    clearConversationSearch();
+    if (restoreScroll && searchScrollSnapshot?.chat === sendScope()) {
       document.getElementById('message-scroller').scrollTop = searchScrollSnapshot.top;
     }
     searchScrollSnapshot = null;
-    if (inChatOpen) inChatOpen.focus();
+    if (focus) {
+      const opener = inChatOpen?.checkVisibility?.() === false ? document.getElementById('chat-more') : inChatOpen;
+      opener?.focus();
+    }
   }
-  if (inChatClose) inChatClose.addEventListener('click', closeInChatSearch);
+  document.getElementById('conversation-search-close')?.addEventListener('click', () => closeInChatSearch());
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !document.getElementById('conversation-search-panel').hidden) closeInChatSearch();
+    if (event.key === 'Escape' && !inChatPanel.hidden) closeInChatSearch();
   });
-  const inChatForm = document.getElementById('conversation-search-form');
-  if (inChatForm) inChatForm.addEventListener('submit', async event => { event.preventDefault(); await searchCurrentConversation(); });
-  const inChatMore = document.getElementById('conversation-search-more');
-  if (inChatMore) inChatMore.addEventListener('click', () => searchCurrentConversation(true));
-  const attachmentInput = document.getElementById('chat-attachment');
-  if (attachmentInput) attachmentInput.addEventListener('change', async () => {
-    const file = attachmentInput.files && attachmentInput.files[0];
-    if (!file || !currentConversation || currentSource !== 'social') { show('error', '请先打开单聊或群聊。'); return; }
-    const wid = workspaceId(), cid = currentConversation.id;
-    attachmentInput.disabled = true;
-    try {
-      const form = new FormData(); form.append('kind', 'media'); form.append('title', file.name); form.append('file', file);
-      const response = await fetcher(`/v1/workspaces/${wid}/artifacts`, {method: 'POST', credentials: 'same-origin',
-        headers: {'X-CSRF-Token': csrfCookie(document.cookie), 'Idempotency-Key': idempotencyKey()}, body: form});
-      const uploaded = await response.json();
-      if (response.status !== 201) throw new Error(messageFor(uploaded.error, '附件未上传。'));
-      const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${cid}/messages`,
-        {body: '', artifact_id: uploaded.artifact.id}, {'Idempotency-Key': idempotencyKey()});
-      if (result.status !== 201 && result.status !== 200) throw new Error('作品已上传，但附件消息未发送；文件仍在工作区作品库。');
-      if (workspaceId() === wid && currentConversation && currentConversation.id === cid) {
-        await loadSessions(); await openSocialConversation(cid);
-      }
-      show('ok', '附件已上传到工作区作品库并发送。');
-    } catch (failure) { show('error', failure.message || '附件未发送。'); }
-    finally { attachmentInput.disabled = false; attachmentInput.value = ''; }
+  document.getElementById('conversation-search-form')?.addEventListener('submit', event => {
+    event.preventDefault();
+    return searchCurrentConversation();
+  });
+  inChatQuery.addEventListener('input', event => {
+    clearConversationSearch();
+    if (!event.isComposing) searchDelay = setTimeout(() => void searchCurrentConversation(), 200);
+  });
+  inChatMore.addEventListener('click', () => searchCurrentConversation(true));
+  inChatRetry.addEventListener('click', () => searchCurrentConversation(inChatView?.retryAppend || false));
+  function renderDeliveredSocialMessage(scope, message) {
+    if (message && scope === sendScope() && !socialHistory?.readingHistory) {
+      const without = lastSocialItems.filter(item => item.id !== message.id);
+      renderSocialMessages([...without, message].sort((a,b) => a.seq - b.seq));
+    }
+    void loadSessions();
+  }
+
+  attachmentSender = mountChatFiles(document, {
+    context: () => {
+      if (!servedByDsbot || !currentUser) return null;
+      if (currentSource === 'agent' && currentAgent) return {scope:sendScope(), private:true, owner:currentUser.id};
+      if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
+      const wid = workspaceId(), cid = currentConversation.id;
+      const scope = sendScope();
+      return {scope, owner:currentUser.id, reply:replyDrafts.get(scope), path:`/v1/workspaces/${wid}/social/conversations/${cid}/messages`};
+    },
+    ownerId: () => currentUser?.id,
+    csrfToken: () => csrfCookie(document.cookie),
+    createKey: () => idempotencyKey('chat-file-'),
+    sent(destination, message) {
+      consumeReplyDraft(destination.scope, destination.reply);
+      renderDeliveredSocialMessage(destination.scope, message);
+    },
   });
   const filterButton = document.getElementById('session-filter');
-  if (filterButton) filterButton.addEventListener('click', () => {
-    const label = document.getElementById('session-filter-label'); if (label) label.hidden = !label.hidden;
-  });
+  const filterLabel = document.getElementById('session-filter-label');
   const filterValue = document.getElementById('session-filter-value');
-  if (filterValue) filterValue.addEventListener('change', renderSessions);
+  function setFilterOpen(open) {
+    if (!filterLabel || !filterButton) return;
+    filterLabel.hidden = !open;
+    filterButton.setAttribute('aria-expanded', String(open));
+    if (open) filterValue?.focus();
+    else filterButton.focus();
+  }
+  filterButton?.addEventListener('click', () => setFilterOpen(Boolean(filterLabel?.hidden)));
+  filterValue?.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setFilterOpen(false);
+    }
+  });
+  filterValue?.addEventListener('change', () => {
+    const name = filterValue.selectedOptions?.[0]?.textContent;
+    if (name) filterButton?.setAttribute('aria-label', uiLabel('会话筛选：', 'Conversation filter: ') + name);
+    setFilterOpen(false);
+    renderSessions();
+  });
+  document.getElementById('conversations-read-all')?.addEventListener('click', async () => {
+    if (markingConversationsRead) return;
+    const wid = workspaceId();
+    const unread = sessions.filter(item => item.source === 'social' && item.unread_count > 0);
+    if (!wid || !unread.length) return;
+    markingConversationsRead = true;
+    renderSessions();
+    try {
+      let updated = 0;
+      // Use the same per-conversation acknowledgement as opening a conversation.
+      // Small batches avoid flooding the user's runtime with simultaneous writes.
+      for (let index = 0; index < unread.length && workspaceId() === wid; index += 6) {
+        const batch = unread.slice(index, index + 6);
+        const results = await Promise.allSettled(batch.map(item =>
+          request('POST', `/v1/workspaces/${wid}/social/conversations/${item.id}/read`, {})));
+        updated += results.filter(result => result.status === 'fulfilled' && result.value.status === 200).length;
+      }
+      if (workspaceId() === wid) {
+        try { await loadSessions(); }
+        catch { show('error', '已提交已读状态，但无法刷新列表。'); return; }
+        if (workspaceId() === wid) show(updated === unread.length ? 'ok' : 'error',
+          updated === unread.length ? '已标记单聊和群聊为已读。' : '部分会话未能标记为已读，请重试。');
+      }
+    } finally {
+      markingConversationsRead = false;
+      renderSessions();
+    }
+  });
+  const muteButton = document.getElementById('mute-conversation');
+  const groupMute = document.getElementById('group-info-mute');
+  let savingMute = false;
+  function syncMuteButton(conversation) {
+    const muted = Boolean(conversation?.muted);
+    if (muteButton) {
+      muteButton.hidden = !conversation || (conversation.kind === 'group' && !conversation.public_agent);
+      muteButton.setAttribute('aria-pressed', String(muted));
+      muteButton.textContent = muted ? '取消免打扰' : '免打扰';
+    }
+    groupMute?.setAttribute('aria-checked', String(muted));
+  }
+  async function toggleMute() {
+    if (currentSource !== 'social' || !currentConversation || savingMute) return;
+    const conversation = currentConversation;
+    const wid = workspaceId();
+    savingMute = true;
+    if (muteButton) muteButton.disabled = true;
+    if (groupMute) groupMute.disabled = true;
+    try {
+      const result = await request('POST', `${socialBase()}/${conversation.id}/preferences`, {muted: !conversation.muted});
+      if (result.status !== 200) throw new Error('Mute preference unavailable');
+      if (workspaceId() !== wid) return;
+      const muted = Boolean(result.body.muted);
+      const row = sessions.find(item => item.source === 'social' && item.id === conversation.id);
+      if (row) row.muted = muted;
+      if (currentSource === 'social' && currentConversation?.id === conversation.id) {
+        currentConversation.muted = muted;
+        syncMuteButton(currentConversation);
+      }
+      renderSessions();
+    } catch {
+      if (workspaceId() === wid) show('error', '免打扰设置保存失败，请重试。');
+    } finally {
+      savingMute = false;
+      if (muteButton) muteButton.disabled = false;
+      if (groupMute) groupMute.disabled = false;
+    }
+  }
+  muteButton?.addEventListener('click', toggleMute);
+  groupMute?.addEventListener('click', toggleMute);
   const pinButton = document.getElementById('pin-conversation');
   if (pinButton) pinButton.addEventListener('click', async () => {
     if (currentSource !== 'social' || !currentConversation) return;
     const id = currentConversation.id;
-    const pinned = Boolean(sessions.find(item => item.id === id && item.pinned));
+    const pinned = socialPinned(currentConversation);
     const result = await request('POST', `${socialBase()}/${id}/preferences`, {pinned: !pinned});
     if (result.status !== 200) { show('error', '置顶未保存。'); return; }
     await loadSessions(); await openSocialConversation(id);
   });
   document.getElementById('search-close').addEventListener('click', closeSearchPanel);
-  document.getElementById('chat-back').addEventListener('click', () => setSessionsOpen(true));
+  document.getElementById('chat-back').addEventListener('click', () => {
+    cancelStartupLink();
+    stopReplyProgress();
+    stopGroupReplyProgress();
+    if (currentSource === 'agent') stopPolling();
+    setSessionsOpen(true);
+    document.getElementById('conversation-list').querySelector('[aria-current="true"]')?.focus();
+  });
+
+  const chatMore = document.getElementById('chat-more');
+  const extraActions = document.getElementById('chat-extra-actions');
+  chatMore?.addEventListener('click', () => {
+    const open = chatMore.getAttribute('aria-expanded') !== 'true';
+    chatMore.setAttribute('aria-expanded', String(open));
+  });
+  document.addEventListener('click', event => {
+    if (chatMore?.getAttribute('aria-expanded') !== 'true' || chatMore.contains(event.target)) return;
+    const inside = extraActions.contains(event.target);
+    if (inside && !event.target.closest('button, a')) return;
+    if (inside && extraActions.contains(document.activeElement)) chatMore.focus();
+    chatMore.setAttribute('aria-expanded', 'false');
+  });
+
   document.getElementById('search-more').addEventListener('click', async () => {
     if (searchTab === 'files' || searchTab === 'links') { if (resourceCursor) await renderSearch({appendResources: true}); return; }
     const query = (document.getElementById('session-search').value || '').trim();
     if (!query || messageSearch.state.loading || !messageSearch.state.cursor) return;
+    const seq = searchSeq;
     await messageSearch.load(query, searchConversation, {append: true});
-    await renderSearch({reuseMessages: true});
+    if (seq === searchSeq) await renderSearch({reuseMessages: true});
   });
   document.getElementById('message-search').addEventListener('click', () => {
     if (!currentConversation) {
@@ -2510,8 +5033,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('conversation-list').addEventListener('click', async event => {
     const button = event.target.closest('button[data-conversation]');
     if (!button) return;
-    if (button.dataset.source === 'social') await openSocialConversation(button.dataset.conversation);
-    else await openAgentConversation(button.dataset.agent, button.dataset.conversation);
+    const opened = button.dataset.source === 'social'
+      ? await openSocialConversation(button.dataset.conversation)
+      : await openAgentConversation(button.dataset.agent, button.dataset.conversation);
+    if (opened && narrowScreen() && !document.body.classList.contains('sessions-open')
+      && document.activeElement === document.body) document.getElementById('chat-title').focus();
   });
 
   document.getElementById('new-conversation').addEventListener('click', event => {
@@ -2519,48 +5045,68 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const menu = document.getElementById('compose-menu');
     const button = document.getElementById('new-conversation');
     const open = menu.hidden;
+    document.getElementById('compose-add-contact').hidden = servedByDsbot
+      && workspaces.some(space => space.id === workspaceId() && space.kind === 'personal');
+    const meetingNotes = document.getElementById('compose-meeting-notes');
+    if (open && meetingNotes) meetingNotes.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), new: '1'});
     menu.hidden = !open;
     button.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
+  for (const [id, action] of [['start-video-meeting', 'create'], ['join-video-meeting', 'join']]) {
+    const button = document.getElementById(id);
+    button.hidden = !servedByDsbot;
+    button.addEventListener('click', () => {
+      closeComposeMenu();
+      document.getElementById('new-conversation').focus();
+      chatCalls.openMeeting(action);
+    });
+  }
   document.getElementById('group-agent-form').addEventListener('submit', async event => {
     event.preventDefault();
-    if (groupReplyBusy || currentSource !== 'social' || !currentConversation) return;
+    if (groupReplyBusy || currentSource !== 'social' || currentConversation?.kind !== 'group'
+      || currentConversation.public_agent) return;
     const cid = currentConversation.id;
+    const scope = sendScope();
     const agentIds = [...document.querySelectorAll('#group-agent-choices input[name="group-agent"]:checked')]
       .map(box => box.value);
-    const prompt = document.getElementById('group-agent-prompt').value;
+    const field = document.getElementById('group-agent-prompt');
+    const prompt = field.value;
     if (!agentIds.length) {
       show('error', '请选择至少一个群内智能体。');
       return;
     }
     if (!prompt.trim()) return;
-    const fingerprint = JSON.stringify([workspaceId(), cid, agentIds.slice().sort(), prompt]);
+    const fingerprint = JSON.stringify([scope, agentIds.slice().sort(), prompt]);
     if (!groupReplyAttempt || groupReplyAttempt.fingerprint !== fingerprint) {
       groupReplyAttempt = {fingerprint, key: idempotencyKey('group-reply-')};
     }
     groupReplyBusy = true;
-    document.getElementById('group-agent-submit').disabled = true;
+    const button = document.getElementById('group-agent-submit');
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = '发送中…';
     try {
       const result = await request('POST', `${socialBase()}/${cid}/agent-replies`,
-        {agent_ids: agentIds, prompt}, {'Idempotency-Key': groupReplyAttempt.key});
-      if (![200, 201].includes(result.status)) {
-        show('error', messageFor(result.body.error, '请求未确认；重试相同内容将复用请求标识。'));
+        {agent_ids: agentIds, prompt}, {'Idempotency-Key': groupReplyAttempt.key})
+        .catch(() => ({status: 0, body: {}}));
+      if (result.status !== 202 || !result.body.message?.id) {
+        if (scope === sendScope()) show('error', messageFor(result.body.error, '发送未确认，请重试。'));
         return;
       }
       groupReplyAttempt = null;
-      if (currentSource === 'social' && currentConversation && currentConversation.id === cid) {
-        await openSocialConversation(cid);
-        const replies = result.body.replies || (result.body.reply ? [result.body.reply] : []);
-        const failed = replies.filter(item => item.status === 'failed').length;
-        show(failed ? 'error' : 'ok', failed
-          ? (replies.length - failed) + ' 个已提交，' + failed + ' 个失败。'
-          : '已请求 ' + replies.length + ' 个智能体回复。');
+      if (scope === sendScope()) {
+        if (field.value === prompt) field.value = '';
+        if (socialHistory?.readingHistory) void openSocialConversation(cid);
+        else {
+          renderDeliveredSocialMessage(scope, result.body.message);
+          scheduleSocialPoll(currentConversation);
+        }
+        show('ok', '已发送到群聊。', {announceOnly: true});
       }
     } finally {
       groupReplyBusy = false;
-      if (currentSource === 'social' && currentConversation && currentConversation.id === cid) {
-        await openSocialConversation(cid);
-      }
+      button.textContent = label;
+      button.disabled = !document.getElementById('group-agent-choices').querySelector('input:not(:disabled)');
     }
   });
 
@@ -2621,107 +5167,221 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   document.getElementById('compose-social-form').addEventListener('submit', async event => {
     event.preventDefault();
-    if (composeMode === 'group' && groupMode === 'team') {
-      const picked = document.querySelectorAll('#team-template-choices input:checked')[0];
-      if (!picked) { show('error', '请选择一个团队模板。'); return; }
-      const wid = workspaceId();
-      const created = await request('POST', `/v1/workspaces/${wid}/team-templates/${picked.value}`, {},
-        {'Idempotency-Key': idempotencyKey('team-')});
-      if (created.status !== 201 && created.status !== 200) {
-        show('error', messageFor(created.body.error, '无法创建智能体团队。'));
+    const submit = document.getElementById('compose-dialog-submit');
+    if (composing || submit.disabled) return;
+    const wid = workspaceId();
+    const template = composeMode === 'group' && groupMode === 'team';
+    const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')].map(box => box.value);
+    const agentIds = [...document.querySelectorAll('#member-choices input[name="agent-member"]:checked')].map(box => box.value);
+    const title = document.getElementById('compose-title').value.trim();
+    const picked = template ? document.querySelector('#team-template-choices input:checked') : null;
+    if (template && !picked) return;
+    const path = template ? `/v1/workspaces/${wid}/team-templates/${picked.value}` : socialBase();
+    const body = template ? {} : composeMode === 'contact'
+      ? {kind:'dm', member_ids:memberIds}
+      : composeGroupPayload(memberIds, title, agentIds);
+    const fingerprint = JSON.stringify([path, body]);
+    if (composeAttempt?.fingerprint !== fingerprint) composeAttempt = {fingerprint, key:idempotencyKey('conv-')};
+    const cancel = document.getElementById('compose-dialog-cancel');
+    composing = true;
+    cancel.disabled = true;
+    submit.textContent = '创建中…';
+    syncComposeCreate();
+    try {
+      const result = await request('POST', path, body, {'Idempotency-Key':composeAttempt.key});
+      if (wid !== workspaceId()) return;
+      if (![200,201].includes(result.status) || !result.body.conversation?.id) {
+        show('error', messageFor(result.body.error, '无法创建会话。'));
         return;
       }
+      composeAttempt = null;
       closeComposeDialog();
-      await loadSessions();
-      await openSocialConversation(created.body.conversation.id);
-      show('ok', '智能体团队已创建。智能体只在你明确请求时回复。');
-      return;
+      if (await openSocialConversation(result.body.conversation.id)) {
+        void loadSessions();
+        show('ok', template ? '智能体团队已创建。' : '会话已创建。');
+      }
+    } catch {
+      show('error', '网络连接失败，所选成员已保留。');
+    } finally {
+      composing = false;
+      cancel.disabled = false;
+      submit.textContent = '创建';
+      syncComposeCreate();
     }
-    const memberIds = [...document.querySelectorAll('#member-choices input[name="member"]:checked')]
-      .map(box => box.value);
-    if (!memberIds.length) {
-      show('error', '至少选择一位成员。');
-      return;
-    }
-    const title = document.getElementById('compose-title').value.trim();
-    if (composeMode === 'contact' && memberIds.length !== 1) {
-      show('error', '请选择一位成员。');
-      return;
-    }
-    const body = composeMode === 'contact'
-      ? {kind: 'dm', member_ids: memberIds.slice(0, 1)}
-      : composeGroupPayload(memberIds, title,
-        [...document.querySelectorAll('#member-choices input[name="agent-member"]:checked')].map(box => box.value));
-    const result = await request('POST', socialBase(), body, {'Idempotency-Key': idempotencyKey('social-')});
-    if (result.status !== 201 && result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法创建会话。'));
-      return;
-    }
-    closeComposeDialog();
-    await loadSessions();
-    await openSocialConversation(result.body.conversation.id);
-    show('ok', '会话已创建。');
   });
 
 
-  async function sendCurrentMessage() {
-    const text = document.getElementById('chat-body').value;
-    if (!text.trim()) {
-      show('error', '请填写消息。');
+  function sendCurrentMessage() {
+    const field = document.getElementById('chat-body');
+    const social = currentSource === 'social';
+    const scope = sendScope();
+    const files = social ? [] : attachmentSender?.draftFiles?.(scope) || [];
+    if (!field.value.trim() && !files.length) return;
+    if (sendClosed() || memoryWrites.has(scope)) return;
+    if (social ? !currentConversation : !currentAgent) {
+      show('error', social ? '请先打开或创建一个会话。' : '请先选择一个智能体。');
       return;
     }
-    if (currentSource === 'social') {
-      if (!validMessage(text)) {
-        show('error', '请输入 1–4000 字符的消息。');
-        return;
-      }
-      if (!currentConversation) {
-        show('error', '请先打开或创建一个会话。');
-        return;
-      }
-      const result = await request('POST', `${socialBase()}/${currentConversation.id}/messages`, {body: text}, {
-        'Idempotency-Key': idempotencyKey('socialmsg-'),
-      });
-      if (result.status !== 201 && result.status !== 200) {
-        show('error', messageFor(result.body.error, '发送失败。'));
-        return;
-      }
-      document.getElementById('chat-body').value = '';
-      await openSocialConversation(currentConversation.id);
-      show('ok', '已发送。');
+    const message = social ? agentMentions.message(field.value) : messagePayload(field.value, chatLanguage);
+    const reply = social ? replyDrafts.get(scope) : undefined;
+    if (reply) message.reply_to = reply.message_id;
+    if (social && !validMessage(message.body)) {
+      show('error', '请输入 1–4000 字符的消息。');
       return;
     }
-    if (!currentAgent) {
-      show('error', '请先选择一个智能体。');
-      return;
+    let queue = pendingSends.get(scope);
+    if (!queue) {
+      queue = {
+        scope, social, owner: currentUser?.id, wid: workspaceId(), agentId: currentAgent?.id,
+        base: social ? socialBase() : `${agentBase()}/conversations`,
+        conversationId: currentConversation?.id, jobs: [], active: false,
+        createKey: currentConversation ? null : idempotencyKey('chat-'),
+        memoryScope: memoryDrafts.get(scope),
+      };
+      pendingSends.set(scope, queue);
     }
-    if (!currentConversation) {
-      const created = await request('POST', `${agentBase()}/conversations`, {title: '新对话'}, {
-        'Idempotency-Key': idempotencyKey('chat-'),
-      });
-      if (created.status !== 201 && created.status !== 200) {
-        show('error', messageFor(created.body.error, '无法创建对话。'));
-        return;
+    queue.jobs.push(makeSendJob(queue, message, files, reply));
+    field.value = '';
+    publicDraft.persist();
+    field.focus({preventScroll: true});
+    if (social) agentMentions.clear();
+    consumeReplyDraft(scope, reply);
+    if (files.length) attachmentSender.clearDraft(scope, files);
+    show('', '');
+    renderPendingSend();
+    const scroller = document.getElementById('message-scroller');
+    scroller.scrollTop = scroller.scrollHeight;
+    void drainSends(queue);
+  }
+
+  async function drainSends(queue) {
+    if (queue.active || pendingSends.get(queue.scope) !== queue) return;
+    queue.active = true;
+    const isCurrent = () => sendScope() === queue.scope;
+    try {
+      for (const job of queue.jobs.slice()) {
+        if (job.failed || !queue.jobs.includes(job)) continue;
+        if (pendingSends.get(queue.scope) !== queue || queue.owner !== currentUser?.id) return;
+        const feedback = state => {
+          job.state = state;
+          if (isCurrent()) paintSendJob(job);
+        };
+        const beginReply = () => {
+          if (!servedByDsbot || queue.social || queue.replying === job) return;
+          queue.replying = job;
+          if (isCurrent()) {
+            const scroller = document.getElementById('message-scroller');
+            const follow = messageScrollerAtBottom(scroller);
+            stopPolling();
+            renderPendingSend();
+            syncReplyProgress();
+            if (follow) scroller.scrollTop = scroller.scrollHeight;
+          }
+        };
+        try {
+          if (!queue.conversationId) {
+            feedback('正在创建对话…');
+            const body = {title: '新对话'};
+            if (queue.memoryScope !== undefined) body.memory_scope = queue.memoryScope;
+            const created = await request('POST', queue.base, body, {'Idempotency-Key': queue.createKey});
+            const conversation = created.body.conversation;
+            if (![200, 201].includes(created.status) || !conversation?.id) {
+              throw new Error(messageFor(created.body.error, '创建对话失败，请重试。'));
+            }
+            if (pendingSends.get(queue.scope) !== queue) return;
+            const previous = queue.scope;
+            const visible = isCurrent();
+            queue.conversationId = conversation.id;
+            queue.scope = JSON.stringify([queue.owner, queue.wid, 'agent', queue.agentId, conversation.id]);
+            pendingSends.delete(previous);
+            memoryDrafts.delete(previous);
+            pendingSends.set(queue.scope, queue);
+            if (visible) {
+              currentConversation = conversation;
+              publicDraft.move(previous, queue.scope);
+              renderAgentQuickStarts(currentAgent);
+              lastAgentItems = [];
+              writeHash({workspace: queue.wid, agent: queue.agentId, conversation: conversation.id});
+              attachmentSender?.moveDraft(previous, queue.scope);
+              renderPendingSend();
+            }
+            void loadSessions();
+          }
+          const path = `${queue.base}/${queue.conversationId}/messages`;
+          const headers = {'Idempotency-Key':job.key};
+          feedback(job.files.length ? '正在上传附件…' : queue.social ? '正在发送…' : '正在等待智能体回复…');
+          let result;
+          let anchor;
+          try {
+            if (job.files.length) {
+              result = await sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
+                {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
+                  feedback(percent < 100 ? `正在上传附件 · ${percent}%` : '附件已上传，正在等待智能体回复…');
+                  if (percent >= 100) beginReply();
+                });
+            } else {
+              const response = request('POST', path, job.message, headers);
+              beginReply();
+              result = await response;
+            }
+          } finally {
+            if (queue.replying === job) {
+              if (isCurrent()) {
+                const scroller = document.getElementById('message-scroller');
+                anchor = {top: scroller.scrollTop, follow: messageScrollerAtBottom(scroller)};
+                if (replyWatch?.key === job.key) stopReplyProgress();
+              }
+              queue.replying = null;
+              job.replyView?.bubble.remove();
+              job.replyView = null;
+            }
+          }
+          if (![200, 201].includes(result.status) || !result.body.message?.id) {
+            const code = result.body.error?.code;
+            if (isCurrent() && code === 'public_chat_closed' && currentConversation?.public_agent) {
+              currentConversation.public_agent = {...currentConversation.public_agent, open: false, pending: false};
+              showPublicChatState(currentConversation.public_agent);
+            }
+            if (isCurrent() && result.status === 403 && currentConversation?.direct) {
+              void openSocialConversation(queue.conversationId, {refresh:true});
+            }
+            throw new Error(result.status === 413 ? '附件合计不能超过 8 MB。'
+              : code === 'attachment_type_blocked' ? '请确认附件的格式与扩展名一致。'
+                : messageFor(result.body.error, '未能确认发送结果，请重试。'));
+          }
+          removeSendJob(queue, job);
+          if (isCurrent()) {
+            const append = (items, ...added) => [...items.filter(item => !added.some(row => row.id === item.id)), ...added];
+            if (queue.social) {
+              if (socialHistory?.readingHistory) void openSocialConversation(queue.conversationId);
+              else renderSocialMessages(append(lastSocialItems, result.body.message).sort((a,b) => a.seq - b.seq), {refresh:true});
+              if (currentConversation.public_agent?.open) {
+                showPublicChatState({open: true, pending: true});
+                schedulePoll(servedByDsbot ? 8000 : 2000);
+              } else scheduleSocialPoll(currentConversation);
+              show('ok', '已发送。', {announceOnly: true});
+            } else {
+              const reply = result.body.reply;
+              if (reply?.id) {
+                if (renderAgentMessages(append(lastAgentItems, result.body.message, reply), {followLatest: false, anchor})) schedulePoll();
+              } else void openAgentConversation(queue.agentId, queue.conversationId, {refresh: true});
+              const notice = sendNotice(reply);
+              show(notice.kind, notice.text, notice);
+            }
+          }
+          if (queue.owner === currentUser?.id) void loadSessions();
+        } catch (error) {
+          job.failed = true;
+          feedback(error instanceof TypeError || !error?.message ? '未能确认发送结果，请重试。' : error.message);
+          if (isCurrent() && !queue.social) syncReplyProgress();
+        }
       }
-      currentConversation = created.body.conversation;
+    } finally {
+      queue.active = false;
+      if (!queue.jobs.length && pendingSends.get(queue.scope) === queue) pendingSends.delete(queue.scope);
+      if (isCurrent()) renderPendingSend();
+      if (queue.jobs.some(job => !job.failed)) void drainSends(queue);
     }
-    const result = await request(
-      'POST',
-      `${agentBase()}/conversations/${currentConversation.id}/messages`,
-      messagePayload(text, chatLanguage),
-      {'Idempotency-Key': idempotencyKey('msg-')},
-    );
-    if (result.status !== 201 && result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法发送。'));
-      return;
-    }
-    document.getElementById('chat-body').value = '';
-    show(result.body.reply && result.body.reply.error_code === 'no_agent' ? 'error' : 'ok',
-         result.body.reply && result.body.reply.error_code === 'no_agent'
-           ? '消息已保存，正在等待已连接的运行时。'
-           : '已发送。');
-    await loadSessions();
-    await openAgentConversation(currentAgent.id, currentConversation.id);
   }
 
   const formatButton = document.getElementById('chat-format');
@@ -2757,30 +5417,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   document.getElementById('chat-body').addEventListener('keydown', event => {
-    if (!shouldSendOnShortcut(event, sendShortcut)) return;
+    if (agentMentions.keydown(event) || !shouldSendOnShortcut(event, sendShortcut)) return;
     event.preventDefault();
-    if (!(document.getElementById('chat-body').value || '').trim()) return;
+    if (!(document.getElementById('chat-body').value || '').trim() && !attachmentSender?.draftFiles?.(sendScope())?.length) return;
     sendCurrentMessage();
   }, true);
 
   document.getElementById('chat-form').addEventListener('submit', event => {
     event.preventDefault();
     sendCurrentMessage();
-  });
-
-  document.getElementById('message-list').addEventListener('click', async event => {
-    const button = event.target.closest('button[data-save]');
-    if (!button || !currentConversation || !currentAgent) return;
-    const result = await request(
-      'POST',
-      `${agentBase()}/conversations/${currentConversation.id}/messages/${button.dataset.save}/artifact`,
-      {},
-    );
-    if (result.status !== 201 && result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法保存到作品库。'));
-      return;
-    }
-    show('ok', '已保存到作品库。');
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
@@ -2800,39 +5445,108 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeComposeMenu();
   });
   document.addEventListener('keydown', event => {
-    if (event.key !== 'Escape') return;
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    if (chatMore?.getAttribute('aria-expanded') === 'true') {
+      chatMore.setAttribute('aria-expanded', 'false');
+      chatMore.focus();
+      return;
+    }
     closeComposeMenu();
     if (isSearchOpen()) closeSearchPanel();
     closeComposeDialog();
   });
 
-  // Composer "+": 上传 / 照片 / 视频 reuse the existing media-attachment upload
-  // (single and group chats only); agent chats show them disabled with a note.
   const plus = document.querySelector('details.composer-plus');
+  const imageCreator = mountImageCreator(document,{
+    request, key:() => idempotencyKey('chat-image-'),
+    context() {
+      if (!servedByDsbot || !currentUser || !workspaceId()) return null;
+      if (currentSource === 'agent' && currentAgent) {
+        return {workspace:workspaceId(),scope:sendScope(),private:true,attachLabel:'添加到输入框'};
+      }
+      if (currentSource === 'social' && currentConversation && !currentConversation.public_agent && !sendClosed()) {
+        return {workspace:workspaceId(),scope:sendScope(),private:false,
+          attachLabel:currentConversation.kind === 'group' ? '发送到群聊' : '发送到会话'};
+      }
+      return null;
+    },
+    attach: (file,scope) => Boolean(attachmentSender?.addFiles?.([file],scope)),
+    onOpen() { if (plus) plus.open = false; },
+    notify: show,
+  });
+  const mediaContext = () => {
+    const workspace = workspaceId();
+    if (!servedByDsbot || !currentUser || !workspace) return null;
+    if (currentSource === 'agent' && currentAgent) return {workspace, scope: sendScope()};
+    if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || sendClosed()) return null;
+    return {workspace, scope: sendScope(), sendLabel: currentConversation.kind === 'group' ? '发送到群聊' : '发送到会话'};
+  };
+  const mediaOptions = type => ({
+    request, context: mediaContext, key: () => idempotencyKey('chat-' + type + '-'),
+    async share(artifact, scope) {
+      if (sendScope() !== scope || currentSource !== 'social' || !currentConversation
+          || currentConversation.public_agent || sendClosed()) return {status: 409, body: {}};
+      const owner = currentUser.id;
+      const result = await request('POST', `${socialBase()}/${currentConversation.id}/messages`,
+        {artifact_id: artifact, artifact_revision: 1}, {'Idempotency-Key': 'share-' + type + '-' + artifact});
+      if ([200, 201].includes(result.status) && currentUser?.id === owner) {
+        renderDeliveredSocialMessage(scope, result.body.message);
+      }
+      return result;
+    },
+    onOpen() { if (plus) plus.open = false; },
+    notify: show,
+  });
+  const videoCreator = mountVideoCreator(document, mediaOptions('video'));
+  const musicCreator = mountMusicCreator(document, mediaOptions('music'));
+  const model3dCreator = mountModel3dCreator(document, mediaOptions('model3d'));
+  const websiteCreator = mountWebsiteCreator(document, mediaOptions('website'));
   const attachInput = document.getElementById('chat-attachment');
   const defaultAccept = attachInput ? attachInput.getAttribute('accept') || '' : '';
   function syncPlusState() {
+    syncMemoryRecall();
+    imageCreator.sync();
+    videoCreator.sync();
+    musicCreator.sync();
+    model3dCreator.sync();
+    websiteCreator.sync();
     const social = currentSource === 'social' && Boolean(currentConversation);
+    const shareable = social && !currentConversation.public_agent && currentConversation.direct?.open !== false;
+    const workspace = workspaceId();
+    const scope = new URLSearchParams();
+    if (workspace) {
+      scope.set('workspace',workspace);
+      if (shareable) scope.set('conversation',currentConversation.id);
+    }
+    for (const link of document.querySelectorAll('[data-create-artifact]')) {
+      link.href = '/space?new=' + link.dataset.createArtifact + (workspace ? '#' + scope : '');
+    }
+    const agent = currentSource === 'agent' && Boolean(currentAgent);
+    const available = servedByDsbot && (shareable || agent);
     for (const button of document.querySelectorAll('[data-plus-attach]')) {
-      button.disabled = !social;
-      if (!button.dataset.title) button.dataset.title = button.title;
-      button.title = social ? button.dataset.title : '未接通：智能体私聊还不能发附件';
+      button.disabled = !available;
+      if (button.dataset.plusAttach === 'video') button.hidden = agent;
     }
     const hint = document.getElementById('plus-attach-hint');
-    if (hint) hint.hidden = social;
+    if (hint) hint.hidden = available;
+    attachmentSender?.render();
   }
   if (plus) plus.addEventListener('toggle', () => { if (plus.open) syncPlusState(); });
   for (const button of document.querySelectorAll('[data-plus-attach]')) {
     button.addEventListener('click', () => {
       if (!attachInput || button.disabled) return;
-      attachInput.setAttribute('accept', plusAttachAccept(button.dataset.plusAttach, defaultAccept));
+      const accept = currentSource === 'agent' ? AGENT_FILE_ACCEPT : defaultAccept;
+      attachInput.setAttribute('accept',plusAttachAccept(button.dataset.plusAttach,accept));
       attachInput.click();
       if (plus) plus.open = false;
     });
   }
   if (attachInput) attachInput.addEventListener('change', () => attachInput.setAttribute('accept', defaultAccept));
 
-  globalThis.addEventListener('hashchange', () => load());
+  globalThis.addEventListener('hashchange', () => {
+    clearChatScope();
+    return load();
+  });
   return load();
 }
 
