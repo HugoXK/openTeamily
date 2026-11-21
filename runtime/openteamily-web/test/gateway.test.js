@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createGatewayDispatch, GATEWAY_PATH } from '../src/dispatch.js'
+import { createV1Endpoint } from '../featurekit/v1.js'
 
 const token = 'ota_' + '1'.repeat(32) + '_' + 'K'.repeat(43)
 const agent = 'a'.repeat(32)
@@ -54,4 +55,28 @@ test('legacy /v1 dispatch returns the Flask-shaped body and status', async () =>
   assert.deepEqual(await ok.json(), { language: 'zh-CN', revision: 3 })
   const missing = await dispatch(new Request('http://127.0.0.1' + LEGACY_PATH + '?feature=unknown&path=' + encodeURIComponent('/v1/settings'), { method: 'GET' }))
   assert.equal(missing.status, 404)
+})
+
+test('native feature downloads honor the query from browser navigation or a shim request', async () => {
+  const path = '/v1/works/export'
+  const endpoint = createV1Endpoint({
+    feature: 'artifacts',
+    routes: [{
+      pattern: /^\/v1\/works\/export$/,
+      handle(req) {
+        const pptx = req.query.get('format') === 'pptx'
+        return {filename: pptx ? 'slides.pptx' : 'slides.html', raw: req.queryString}
+      },
+    }],
+    context: {},
+  })
+  const dispatch = createLegacyDispatch({endpoints: {'artifacts/v1': endpoint}})
+  const url = new URL(LEGACY_PATH, 'http://127.0.0.1')
+  url.search = new URLSearchParams({feature: 'artifacts', path, query: 'format=pptx'})
+  const download = await dispatch(new Request(url))
+  assert.equal(download.status, 200)
+  assert.match(download.headers.get('content-disposition'), /slides\.pptx/)
+  assert.equal(await download.text(), 'format=pptx')
+  const shim = await endpoint({method: 'GET', path: path + '?format=pptx'})
+  assert.equal(shim.download.filename, 'slides.pptx')
 })

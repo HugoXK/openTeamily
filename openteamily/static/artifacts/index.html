@@ -296,15 +296,32 @@
         <audio id="media-audio" controls hidden></audio>
         <video id="media-video" controls hidden></video>
       </div>
-      <div id="slides-editor" hidden>
+      <section id="slides-editor" aria-label="幻灯片编辑器" hidden>
+        <div class="artifact-editor-actions">
+          <button type="button" id="slides-back">返回列表</button>
+          <button type="button" id="download-slides" hidden>下载 PPTX</button>
+          <button type="button" id="send-saved-slides" hidden>发送到聊天</button>
+          <button type="submit" id="slides-save">保存</button>
+        </div>
+        <details id="slide-draft">
+          <summary>让智能体起草</summary>
+          <label for="slide-prompt">幻灯片主题或素材</label>
+          <textarea id="slide-prompt" maxlength="1600" rows="3" placeholder="例如，按下面的项目进度起草一份周会简报"></textarea>
+          <label id="slide-context-option" for="slide-context" hidden>
+            <input id="slide-context" type="checkbox" aria-describedby="slide-context-title"> 参考原会话最近消息
+          </label>
+          <p id="slide-context-title" class="note" hidden></p>
+          <button type="button" id="slide-draft-submit">生成草稿</button>
+        </details>
+        <p id="slide-draft-status" role="status" class="note"></p>
         <div class="slides-toolbar">
           <button type="button" id="add-slide">添加一页</button>
-          <span class="note">最多 30 页；每页最多 10 条要点。</span>
+          <span id="slides-count" class="note"></span>
         </div>
         <ol id="slide-list" class="slide-list"></ol>
-      </div>
+      </section>
       <section id="spreadsheet-editor" aria-label="电子表格编辑器" hidden>
-        <div class="sheet-actions">
+        <div class="artifact-editor-actions">
           <button type="button" id="sheet-back">返回列表</button>
           <button type="button" id="download-spreadsheet" hidden>下载 Excel</button>
           <button type="button" id="send-saved-spreadsheet" hidden>发送到聊天</button>
