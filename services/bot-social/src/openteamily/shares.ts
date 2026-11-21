@@ -4,6 +4,7 @@
 import type { FastifyInstance } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
+import { createHash } from "node:crypto";
 import { body, OtContext, params, text } from "./core.js";
 import { requireMember } from "./teams.js";
 
@@ -15,6 +16,11 @@ CREATE TABLE IF NOT EXISTS ot_shared_runs (
   UNIQUE (team_id, owner_id, run_ref)
 );
 CREATE INDEX IF NOT EXISTS ot_shared_runs_team ON ot_shared_runs(team_id, updated_at);
+CREATE TABLE IF NOT EXISTS ot_public_shares (
+  token_hash TEXT PRIMARY KEY, owner_id TEXT NOT NULL, ref TEXT NOT NULL, title TEXT NOT NULL,
+  kind TEXT NOT NULL, body TEXT NOT NULL, expires_at INTEGER, revoked INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
 `;
 
 const STATUSES = new Set(["running", "succeeded", "failed", "cancelled"]);
@@ -90,5 +96,51 @@ export function registerShares(app: FastifyInstance, ot: OtContext) {
     assert(r.owner_id === me.ownerId, 403, "forbidden", "only the owner can unshare this run");
     ot.run("DELETE FROM ot_shared_runs WHERE id = ?", r.id);
     return { unshared: true };
+  });
+
+  // ---- public read-only artifact shares (replaces the platform's /share/<token> page).
+  // The owner's DS-Bot keeps the share record and publishes a snapshot keyed by
+  // sha256("share:" + token); the token itself never reaches Bot Social.
+  const HASH = /^[0-9a-f]{64}$/;
+  app.put("/v1/ot/public-shares", async (req) => {
+    const me = ot.me(req);
+    const b = body(req);
+    assert(typeof b.token_hash === "string" && HASH.test(b.token_hash), 400, "invalid_request", "token_hash must be 64 hex characters");
+    assert(typeof b.ref === "string" && REF.test(b.ref), 400, "invalid_request", "ref is invalid");
+    const title = text(b.title, "title", { min: 1, max: 200 });
+    const kind = text(b.kind ?? "document", "kind", { min: 1, max: 40 });
+    assert(typeof (b.body ?? "") === "string" && String(b.body ?? "").length <= 200_000, 400, "invalid_request", "body is too large");
+    const expires = b.expires_at == null ? null : Number(b.expires_at);
+    assert(expires === null || Number.isInteger(expires), 400, "invalid_request", "expires_at must be epoch milliseconds");
+    const prior = ot.get<any>("SELECT owner_id FROM ot_public_shares WHERE token_hash = ?", b.token_hash);
+    assert(!prior || prior.owner_id === me.ownerId, 409, "conflict", "share already exists");
+    const now = ot.now();
+    ot.run(`INSERT INTO ot_public_shares(token_hash, owner_id, ref, title, kind, body, expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(token_hash) DO UPDATE SET title = excluded.title, kind = excluded.kind, body = excluded.body, expires_at = excluded.expires_at, revoked = 0, updated_at = excluded.updated_at`,
+      b.token_hash, me.ownerId, b.ref, title, kind, String(b.body ?? ""), expires, now, now);
+    return { published: true };
+  });
+  app.delete("/v1/ot/public-shares/:hash", async (req) => {
+    const me = ot.me(req);
+    const r = ot.run("UPDATE ot_public_shares SET revoked = 1, updated_at = ? WHERE token_hash = ? AND owner_id = ?", ot.now(), String(params(req).hash), me.ownerId);
+    assert(r.changes === 1, 404, "share_not_found", "no such share of yours");
+    return { revoked: true };
+  });
+  app.get("/share/:token", async (req, reply) => {
+    const token = String(params(req).token);
+    const notFound = () => reply.status(404).type("text/html; charset=utf-8").header("Cache-Control", "no-store").send("<!DOCTYPE html><meta charset=utf-8><title>链接不可用</title><p>这个分享链接不存在、已过期或已被撤销。</p>");
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return notFound();
+    const hash = createHash("sha256").update("share:" + token).digest("hex");
+    const row = ot.get<any>("SELECT * FROM ot_public_shares WHERE token_hash = ?", hash);
+    if (!row || row.revoked || (row.expires_at && row.expires_at <= ot.now())) return notFound();
+    const esc = (v: string) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+    reply.header("Content-Type", "text/html; charset=utf-8");
+    reply.header("Cache-Control", "no-store");
+    reply.header("Referrer-Policy", "no-referrer");
+    reply.header("X-Robots-Tag", "noindex");
+    reply.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
+    return reply.send(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(row.title)} · OpenTeamily</title>
+<style>body{font-family:system-ui,sans-serif;max-width:46rem;margin:2rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a}pre{white-space:pre-wrap;font:inherit}.meta{color:#666;font-size:.9rem}</style></head>
+<body><p class="meta">只读分享 · ${esc(ot.profileView(row.owner_id).display_name || "")}</p><h1>${esc(row.title)}</h1><pre>${esc(row.body)}</pre></body></html>`);
   });
 }

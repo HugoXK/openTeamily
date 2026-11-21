@@ -205,7 +205,12 @@ class ManagerClient:
             require(data['runtime_key'] is None, 'runtime_key_shape')
             return None
         doc = data['runtime_key']
-        require(isinstance(doc, dict) and set(doc) == {'origin', 'token', 'hostname'}, 'runtime_key_shape')
+        fields = {'origin', 'token', 'hostname'}
+        require(isinstance(doc, dict) and fields <= set(doc) <= fields | {'agent_bootstrap'}, 'runtime_key_shape')
+        if 'agent_bootstrap' in doc:
+            bootstrap = doc['agent_bootstrap']
+            require(isinstance(bootstrap, dict) and bootstrap.get('feature') == 'agents'
+                    and bootstrap.get('instance_id') == iid, 'runtime_key_shape')
         for key in ('origin', 'token', 'hostname'):
             require(isinstance(doc[key], str) and doc[key], 'runtime_key_shape')
         return doc

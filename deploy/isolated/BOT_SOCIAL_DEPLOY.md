@@ -78,6 +78,62 @@ proxy, ingress or tunnel changes. Recreate edge after web if web is restarted
    Confirm `social/status` is connected on a test account only. Do not message,
    invite, or post as birfied or to real people.
 
+## Local collaboration transport
+
+Same-host runtimes can reach the shared Bot Social API through the edge's Unix
+socket. Public catalog links and the configured Bot Social URL still use the
+public origin.
+
+1. Create `bot-social-transport` inside the compose manager state directory,
+   owned by the edge container's UID (10001 for this deployment), mode 0755.
+   Bind the directory into the edge at `/run/openteamily-social`, writable.
+2. Render the edge with `--bot-social bot-social:8787 --bot-social-socket`.
+   The second listener requires the mounted directory and serves only
+   `/v1/ot/` routes, with operator endpoints blocked.
+3. Set `"bot_social_socket": true` in the private manager registry and recreate
+   the account runtimes with the resulting read-only mount. Keep
+   `OPENTEAMILY_PUBLIC_ORIGIN` set in the runtime image. The plugin uses the
+   socket for that origin's `/social` server and the same per-account connector
+   token. Workspace overrides continue to use their configured servers.
+
+## Voice and video calls
+
+The chat page exchanges WebRTC signaling through the account runtime and Bot
+Social. Conversation membership controls access to each call. Audio and video
+move between browsers, with a relay when configured, and stay out of the
+message store. A call may have up to six participants.
+
+Direct connections work on compatible networks. For calls across restricted
+networks, configure a reachable TURN relay in the Bot Social service:
+
+- `OT_CALL_STUN_URL` optionally supplies one `stun:` URL.
+- `OT_CALL_TURN_URL` supplies the relay URL, such as
+  `turns:turn.example.org:5349?transport=tcp`.
+- `OT_CALL_TURN_SECRET_FILE` points to a read-only mounted secret of at least
+  32 characters, shared with the TURN server's time-limited credential
+  configuration. Bot Social uses it to issue expiring credentials to joined
+  participants.
+
+Verify a call between two different networks when enabling a relay. The chat
+origin must use HTTPS for browser device access.
+
+## Membership migration (operator, after the migrate SHA is live)
+
+Create `/var/lib/openteamily/secrets/openteamily-social-migrate.key` (mode 0600,
+32+ characters). Uncomment the key-file mount in `bot-social.compose.yml` and
+recreate only `bot-social`. Do not put the key in compose, logs, or the
+volume; do not rotate `/data/kms.key` or wipe the Social volume.
+
+Plan first from the `web` container (`--data-dir /data`):
+
+  python -m openteamily.social_membership_migrate plan --data-dir /data
+
+Apply only ready workspaces, preferably one fixture `--workspace` first, to
+`http://bot-social:8787` (host loopback `http://127.0.0.1:18783`) with
+`--key-file`. Re-run is idempotent on the snapshot digest. Stop if `blocked`
+or `conflicts` is unexpected. Test-account proof only; never invite, message,
+or post as birfied or to real people.
+
 Rollback: `docker compose -p openteamily -f ... -f bot-social.compose.yml stop bot-social`
 (or `rm` the overlay and leave the volume). Restore the previous edge nginx
 without `--bot-social`. Clear or leave the platform URL; do not touch FlyBot.

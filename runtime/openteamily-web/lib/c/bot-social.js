@@ -7,12 +7,16 @@
 // @flybot/social's one-call onboarding saved for that server ($DSH_HOME/bot/flybot-social.json,
 // mode 0600). The token is read on use, sent only as a Bearer header to that exact server, and
 // never returned, logged or put in an error message.
-import { readFileSync } from 'node:fs'
+import { nativeGroupClient } from './native-groups.js'
+import { existsSync, readFileSync } from 'node:fs'
+import { request as httpRequest } from 'node:http'
 import { join } from 'node:path'
 
 export const serverKey = (url) => String(url ?? '').trim().replace(/\/+$/, '').toLowerCase()
 
 const fault = (code, message, status) => Object.assign(new Error(message), { code, ...(status ? { status } : {}) })
+const LOCAL_DIR = '/run/openteamily-social'
+const PUBLIC_ORIGIN = process.env.OPENTEAMILY_PUBLIC_ORIGIN?.replace(/\/+$/, '')
 
 async function defaultServer() {
   try {
@@ -25,11 +29,41 @@ function readJson(path) {
   try { return JSON.parse(readFileSync(path, 'utf8')) } catch { return undefined }
 }
 
+function requestOnSocket(socketPath, host, path, { method, headers, body, signal }) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({
+      socketPath, path, method, signal, agent: false, headers: { ...headers, host },
+    }, response => {
+      const status = response.statusCode
+      if (status >= 300 && status < 400) {
+        response.resume()
+        reject(new Error('Unexpected Bot Social redirect'))
+        return
+      }
+      resolve({
+        status,
+        ok: status >= 200 && status < 300,
+        async json() {
+          const chunks = []
+          for await (const chunk of response.setEncoding('utf8')) chunks.push(chunk)
+          return JSON.parse(chunks.join(''))
+        },
+      })
+    })
+    req.once('error', reject)
+    req.end(body)
+  })
+}
+
 /**
  * createBotSocial({ dataDir, server?, credentialsPath?, fetch? })
  * server: string | async () => string; defaults to the manager-delivered config.
  */
-export function createBotSocial({ dataDir, server, credentialsPath, fetch: fetchImpl = globalThis.fetch, timeoutMs = 15_000 } = {}) {
+export function createBotSocial({
+  dataDir, server, credentialsPath, fetch: fetchImpl = globalThis.fetch, timeoutMs = 15_000,
+  localSocket = existsSync(LOCAL_DIR) ? join(LOCAL_DIR, 'bot-social.sock') : null,
+  localServer = PUBLIC_ORIGIN && PUBLIC_ORIGIN + '/social',
+} = {}) {
   const credsPath = credentialsPath ?? join(process.env.DSH_HOME?.trim() || dataDir || '/data', 'bot', 'flybot-social.json')
   const resolveServer = async () => (typeof server === 'function' ? server() : server ?? defaultServer())
 
@@ -43,25 +77,32 @@ export function createBotSocial({ dataDir, server, credentialsPath, fetch: fetch
     return { base: String(base).replace(/\/+$/, ''), token: creds.token, home: creds.home ?? null }
   }
 
-  async function request(method, path, body) {
+  async function request(method, path, body, {signal} = {}) {
     const { base, token } = await connection()
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     timer.unref?.()
     let res
+    let data
     try {
-      res = await fetchImpl(base + path, {
+      const options = {
         method,
         headers: { authorization: `Bearer ${token}`, accept: 'application/json', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller.signal,
+        signal: signal ? AbortSignal.any([controller.signal,signal]) : controller.signal,
         redirect: 'error',
-      })
+      }
+      // The socket belongs to this site's Bot Social. An overridden workspace
+      // server must keep using its own origin and credentials.
+      res = localSocket && base === localServer && path.startsWith('/v1/ot/')
+        ? await requestOnSocket(localSocket, new URL(base).host, path, options)
+        : await fetchImpl(base + path, options)
+      try { data = await res.json() } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error
+      }
     } catch {
       throw fault('social/unreachable', 'Bot Social could not be reached')
     } finally { clearTimeout(timer) }
-    let data
-    try { data = await res.json() } catch { data = undefined }
     if (!res.ok) {
       const code = typeof data?.error?.code === 'string' ? data.error.code.slice(0, 60) : `http_${res.status}`
       const message = typeof data?.error?.message === 'string' ? data.error.message.slice(0, 300) : `Bot Social answered ${res.status}`
@@ -73,7 +114,7 @@ export function createBotSocial({ dataDir, server, credentialsPath, fetch: fetch
   return {
     connection,
     request,
-    get: (path) => request('GET', path),
+    get: (path,options) => request('GET',path,undefined,options),
     post: (path, body = {}) => request('POST', path, body),
     put: (path, body = {}) => request('PUT', path, body),
     patch: (path, body = {}) => request('PATCH', path, body),
@@ -85,6 +126,26 @@ export function createBotSocial({ dataDir, server, credentialsPath, fetch: fetch
         return { connected: true, server: base, home_handle: home?.handle ?? null, handle: me.handle, display_name: me.display_name }
       } catch (error) {
         return { connected: false, reason: error.code ?? 'social/error', message: error.message }
+      }
+    },
+    async identity() {
+      // Non-secret attestation for the platform migrate planner. Never returns a token.
+      try {
+        const { home } = await connection()
+        const me = await request('GET', '/v1/ot/me')
+        const homeId = home?.bot_id || home?.id || null
+        if (!me?.owner_id || !homeId) {
+          return { connected: false, reason: 'identity_unavailable', social_owner_id: me?.owner_id ?? null, home_id: homeId, home_handle: home?.handle ?? null, platform_user_id: me?.platform_user_id ?? null }
+        }
+        return {
+          connected: true,
+          social_owner_id: me.owner_id,
+          home_id: homeId,
+          home_handle: home?.handle ?? me.handle ?? null,
+          platform_user_id: me.platform_user_id ?? null,
+        }
+      } catch (error) {
+        return { connected: false, reason: error.code ?? 'social/error' }
       }
     },
   }
@@ -109,6 +170,6 @@ export function qs(params) {
 let shared
 export function sharedBotSocial(host) {
   shared ??= createBotSocial({ dataDir: host.dataDir })
-  return shared
+  return nativeGroupClient(host, shared)
 }
 export function setSharedBotSocial(client) { shared = client }

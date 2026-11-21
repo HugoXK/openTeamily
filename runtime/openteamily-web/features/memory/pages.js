@@ -1,9 +1,10 @@
+import { rank } from '../chat/recall.js'
 // Memory pages (legacy app.py memory_* + memory.py): page CRUD, bounded
 // revision history with restore, Markdown export and the "做梦" duplicate-
 // paragraph consolidation, all executed inside the user's DS-Bot.
 import { digest, idempotencyKey, newId, pagination, refuse, requireBodyKeys, stableJson } from '../../featurekit/http.js'
 import {
-  MAX_PAGES, TITLE_MAX, actor, casefold, loadPage, normalizeTopics, pageView, pagesView, replaceTopics, snippet,
+  MAX_PAGES, TITLE_MAX, actor, casefold, loadPage, normalizeTopics, pageView, pagesView, recallWorkspace, replaceTopics, snippet,
   titleHash, topicsFor, usernames, validBody, validTitle,
 } from './common.js'
 
@@ -26,32 +27,35 @@ async function list(req, workspaceId) {
   return { body: { items: pagesView(req.store, rows.slice(0, limit)), cursor: rows.length > limit ? rows[limit - 1].id : null } }
 }
 
-async function create(req, workspaceId) {
-  const body = requireBodyKeys(await req.json(), ['title', 'body', 'topics'])
+export function insertPage(req, workspaceId, body, key) {
   const title = body.title
   const content = body.body ?? ''
   const topics = normalizeTopics('topics' in body ? body.topics : [])
   if (!validTitle(title) || !validBody(content) || topics === null) refuse(400, 'invalid', 'Provide a memory page title and body')
   const clean = title.trim()
-  const key = idempotencyKey(req.headers)
   const keyHash = digest('memory:' + key)
   const requestHash = digest(stableJson({ title: clean, body: content, topics }))
   const user = actor(req)
-  return req.store.transaction((store) => {
-    const prior = store.get('SELECT * FROM memory_pages WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
-    if (prior) {
-      if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
-      return { status: 200, body: { page: pageView(store, prior) } }
-    }
-    const hash = titleHash(clean)
-    if (store.get('SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=?', workspaceId, hash)) refuse(409, 'conflict', 'A memory page with this title already exists')
-    if (store.get('SELECT COUNT(*) AS n FROM memory_pages WHERE workspace_id=?', workspaceId).n >= MAX_PAGES) refuse(429, 'quota', 'Memory page capacity reached')
-    const id = newId()
-    store.run('INSERT INTO memory_pages VALUES(?,?,?,?,?,1,?,?,?,?,?,?)', id, workspaceId, clean, hash, content, req.now, req.now, user, user, keyHash, requestHash)
-    replaceTopics(store, workspaceId, id, topics)
-    recordVersion(store, workspaceId, id, 1, clean, content, req.now, user)
-    return { status: 201, body: { page: pageView(store, loadPage(store, workspaceId, id)) } }
-  })
+  const store = req.store
+  const prior = store.get('SELECT * FROM memory_pages WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
+  if (prior) {
+    if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
+    return { status: 200, body: { page: pageView(store, prior) } }
+  }
+  const hash = titleHash(clean)
+  if (store.get('SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=?', workspaceId, hash)) refuse(409, 'conflict', 'A memory page with this title already exists')
+  if (store.get('SELECT COUNT(*) AS n FROM memory_pages WHERE workspace_id=?', workspaceId).n >= MAX_PAGES) refuse(429, 'quota', 'Memory page capacity reached')
+  const id = newId()
+  store.run('INSERT INTO memory_pages VALUES(?,?,?,?,?,1,?,?,?,?,?,?)', id, workspaceId, clean, hash, content, req.now, req.now, user, user, keyHash, requestHash)
+  replaceTopics(store, workspaceId, id, topics)
+  recordVersion(store, workspaceId, id, 1, clean, content, req.now, user)
+  return { status: 201, body: { page: pageView(store, loadPage(store, workspaceId, id)) } }
+}
+
+async function create(req, workspaceId) {
+  const body = requireBodyKeys(await req.json(), ['title', 'body', 'topics'])
+  const key = idempotencyKey(req.headers)
+  return req.store.transaction(() => insertPage(req, workspaceId, body, key))
 }
 
 async function update(req, workspaceId, row) {
@@ -207,42 +211,40 @@ function suggestionView(row) {
 }
 
 async function dream(req, workspaceId, pageId, suggestionId) {
-  const row = loadPage(req.store, workspaceId, pageId)
-  if (!row) refuse(404, 'not_found', 'Memory page not found')
   if (req.method !== 'POST' || req.queryString) refuse(400, 'invalid', 'Invalid memory request')
-  const load = (id) => req.store.get('SELECT * FROM memory_suggestions WHERE id=? AND workspace_id=? AND page_id=?', id, workspaceId, pageId)
-  if (!suggestionId) {
-    requireBodyKeys(await req.json(), [])
-    const [kept, dropped] = duplicateParagraph(row.body)
-    if (kept === null) return { body: { suggestion: null, message: '这一页现在没有可以合并的重复段落，原文未改动。' } }
-    const id = newId()
-    req.store.run('INSERT INTO memory_suggestions VALUES(?,?,?,?,?,?,?,?,?,?)', id, workspaceId, pageId, 'merge_paragraphs',
-      '这一页有 2 段重复的正文，可以合并成 1 段。', stableJson({ dropped: dropped.slice(0, 4000), kept: kept.slice(0, 4000) }), 'open', req.now, null, null)
-    return { body: { suggestion: suggestionView(load(id)) } }
-  }
-  const body = requireBodyKeys(await req.json(), ['action'])
-  if (!['accept', 'ignore'].includes(body.action)) refuse(400, 'invalid', 'Provide accept or ignore')
-  const suggestion = load(suggestionId)
-  if (!suggestion) refuse(404, 'not_found', 'Memory suggestion not found')
-  let applied = null
-  if (suggestion.status === 'open') {
-    applied = req.store.transaction((store) => {
-      let result = null
+  const body = requireBodyKeys(await req.json(), suggestionId ? ['action'] : [])
+  if (suggestionId && !['accept', 'ignore'].includes(body.action)) refuse(400, 'invalid', 'Provide accept or ignore')
+  return req.store.transaction(store => {
+    const row = loadPage(store, workspaceId, pageId)
+    if (!row) refuse(404, 'not_found', 'Memory page not found')
+    const load = id => store.get('SELECT * FROM memory_suggestions WHERE id=? AND workspace_id=? AND page_id=?', id, workspaceId, pageId)
+    if (!suggestionId) {
+      const [kept, dropped] = duplicateParagraph(row.body)
+      if (kept === null) return { body: { suggestion: null, message: '这一页现在没有可以合并的重复段落，原文未改动。' } }
+      const id = newId()
+      store.run('INSERT INTO memory_suggestions VALUES(?,?,?,?,?,?,?,?,?,?)', id, workspaceId, pageId, 'merge_paragraphs',
+        '这一页有 2 段重复的正文，可以合并成 1 段。', stableJson({ dropped, kept, revision:row.revision }), 'open', req.now, null, null)
+      return { body: { suggestion: suggestionView(load(id)) } }
+    }
+    let suggestion = suggestionView(load(suggestionId))
+    if (!suggestion) refuse(404, 'not_found', 'Memory suggestion not found')
+    if (suggestion.status === 'open') {
+      let applied = null
       if (body.action === 'accept') {
-        let payload = {}
-        try { payload = JSON.parse(suggestion.payload) } catch { payload = {} }
-        const after = mergedBody(row.body, payload?.dropped ?? '')
-        if (after === row.body) result = { removed: null, note: '接受时这一页已经没有重复段落，正文未改动。' }
-        else {
-          store.run('UPDATE memory_pages SET body=?, revision=revision+1, updated=?, updated_by=? WHERE id=?', after, req.now, actor(req), row.id)
-          result = { after_length: after.length, before_length: row.body.length, removed: payload.dropped }
-        }
+        if (suggestion.detail.revision !== row.revision) refuse(409, 'conflict', '记忆页已更新，请重新生成整理建议。')
+        const after = mergedBody(row.body, suggestion.detail.dropped)
+        const user = actor(req)
+        recordVersion(store, workspaceId, row.id, row.revision, row.title, row.body, row.updated, row.updated_by)
+        store.run('UPDATE memory_pages SET body=?, revision=revision+1, updated=?, updated_by=? WHERE id=?', after, req.now, user, row.id)
+        recordVersion(store, workspaceId, row.id, row.revision + 1, row.title, after, req.now, user)
+        applied = { after_length: after.length, before_length: row.body.length, removed: suggestion.detail.dropped }
       }
-      store.run('UPDATE memory_suggestions SET status=?, decided=?, applied=? WHERE id=?', body.action === 'accept' ? 'accepted' : 'ignored', req.now, result ? stableJson(result) : null, suggestion.id)
-      return result
-    })
-  }
-  return { body: { suggestion: suggestionView(load(suggestionId)), page: pageView(req.store, loadPage(req.store, workspaceId, pageId)), applied } }
+      store.run('UPDATE memory_suggestions SET status=?, decided=?, applied=? WHERE id=?',
+        body.action === 'accept' ? 'accepted' : 'ignored', req.now, applied ? stableJson(applied) : null, suggestionId)
+      suggestion = suggestionView(load(suggestionId))
+    }
+    return { body: { suggestion, page: pageView(store, loadPage(store, workspaceId, pageId)), applied:suggestion.applied } }
+  })
 }
 
 export const routes = [
@@ -252,17 +254,43 @@ export const routes = [
   { pattern: new RegExp(`^/v1/workspaces/${W}/memory(?:/${W}(?:/(remove))?)?$`.replace(/\//g, '\\/')), handle: dispatch },
 ]
 
-// For chat recall (#378 via B1): this owner's pages as [{id, revision, title, body}].
 export function allPages(store, payload) {
-  const workspaceId = typeof payload?.workspace_id === 'string' && /^[0-9a-f]{32}$/.test(payload.workspace_id) ? payload.workspace_id : null
-  const rows = workspaceId
-    ? store.all('SELECT id, workspace_id, revision, title, body, updated FROM memory_pages WHERE workspace_id=? ORDER BY updated DESC, id LIMIT 500', workspaceId)
-    : store.all('SELECT id, workspace_id, revision, title, body, updated FROM memory_pages ORDER BY updated DESC, id LIMIT 500')
-  return rows.map((row) => ({ id: row.id, workspace_id: row.workspace_id, revision: row.revision, title: row.title, body: row.body, updated: row.updated }))
+  const workspace = recallWorkspace(payload)
+  return store.all('SELECT id, workspace_id, revision, title, body, updated FROM memory_pages WHERE workspace_id=? ORDER BY updated DESC, id LIMIT 500', workspace)
+}
+
+export async function recallAcrossWorkspaces(store, host, payload) {
+  recallWorkspace(payload)
+  const query = payload?.query
+  if (typeof query !== 'string' || query.length > 4000 || !query.trim()) return []
+  const [binding, teams] = await Promise.all([
+    host.call('agents/personal-binding',{}).catch(() => null),
+    host.call('teams/activeWorkspaces',{}).catch(() => []),
+  ])
+  const workspaces = new Map()
+  if (/^[0-9a-f]{32}$/.test(binding?.workspace_id || '')) workspaces.set(binding.workspace_id,'个人工作区')
+  for (const team of teams) {
+    if (/^[0-9a-f]{32}$/.test(team?.id || '')) workspaces.set(team.id,team.name)
+  }
+  if (!workspaces.size) return []
+  const ids = JSON.stringify([...workspaces.keys()])
+  const pages = store.all(`SELECT id,workspace_id,revision,title,body FROM memory_pages
+    WHERE workspace_id IN (SELECT value FROM json_each(?))`,ids)
+  const actions = store.all(`SELECT a.id,a.workspace_id,a.revision,a.title,a.notes,a.status,a.due_at,p.title AS linked_title
+    FROM memory_actions a LEFT JOIN memory_pages p ON p.id=a.memory_page_id AND p.workspace_id=a.workspace_id
+    WHERE a.workspace_id IN (SELECT value FROM json_each(?))`,ids)
+  for (const action of actions) {
+    const due = action.due_at === null ? '' : ' · 截止 ' + new Date(action.due_at*1000).toISOString().slice(0,10)
+    const linked = action.linked_title ? ' · 关联记忆 ' + action.linked_title : ''
+    const facts = '行动项 / Action item · ' + (action.status === 'done' ? '已完成 / done' : '待完成 / open') + due + linked
+    pages.push({...action,kind:'action',facts,body:[action.notes,facts].filter(Boolean).join('\n')})
+  }
+  for (const page of pages) page.workspace_name = workspaces.get(page.workspace_id)
+  return rank(query,pages,{limit:6})
 }
 
 export function search(store, needle, limit) {
   const key = casefold(needle)
   return store.all('SELECT * FROM memory_pages ORDER BY updated DESC, id').filter((row) => casefold(row.title).includes(key) || casefold(row.body).includes(key))
-    .slice(0, limit).map((row) => ({ kind: 'memory', id: row.id, workspace_id: row.workspace_id, title: row.title, snippet: snippet(row.body), updated: row.updated, href: `/memory/?page=${row.id}` }))
+    .slice(0, limit).map((row) => ({ kind: 'memory', id: row.id, workspace_id: row.workspace_id, title: row.title, snippet: snippet(row.body), updated: row.updated, href: `/memory?workspace=${row.workspace_id}&page=${row.id}` }))
 }

@@ -18,23 +18,68 @@ Missing workspace mappings return `409 membership_migration_required`, never an
 empty substitute team. Legacy workspace/member/conversation data is retained;
 no GET creates a team, adds a member, or sends an invitation.
 
-A future trusted, idempotent migration must use a consistent platform snapshot:
+The trusted, idempotent migration is `python -m openteamily.social_membership_migrate`.
+It takes a consistent platform snapshot and manager-attested identities:
 
-* platform account UUID -> its actual isolated runtime -> its provisioned Social
-  owner/home, verified through manager control, NOT matching display names;
-* workspace UUID -> actual platform owner and every membership, role, suspension,
-  timestamps and deletion state; refuse conflicting existing social mappings;
-* old conversation participants/agents, messages, edits, read cursors and IDs;
-  preserve old IDs in an explicit mapping, never replay messages as new sends;
-* pending invites/join requests need explicit token/approval semantics; do not
-  turn pending or revoked membership into active membership;
-* use source-version/digest receipts and transaction-scoped conflict checks.
+* platform account UUID -> that account's isolated runtime -> the Social
+  owner/home already provisioned on that runtime, probed through manager
+  control (`social/identity`). Display names, the first visitor, and a
+  pre-existing Social mapping are not authority;
+* workspace UUID -> actual platform owner and every membership, role,
+  suspension and timestamp; hard-deleted workspaces are absent. Conflicting
+  existing Social mappings are refused, never overwritten;
+* conversation participants, agents, messages, edits, read cursors and IDs
+  are inserted with their recorded ids/sequences/timestamps via
+  `ot_legacy_ids`. History is never replayed as new sends;
+* invite rows copy the original `token_hash` as `code_hash` and keep
+  revoked/frozen/expiry/use counts. Pending or revoked invites do not become
+  active membership. Approved join requests cannot create a member who is
+  missing from the snapshot;
+* receipts are keyed by a canonical SHA-256 digest of `{accounts,workspaces}`.
+  The same digest is idempotent; a conflict rolls back the Social transaction.
 
-This PR does not implement that privileged migration and does not mutate live
-memberships. `GET/POST /v1/workspaces` and `POST /v1/teams` still remain platform
-metadata dependencies; converting/creating a legacy workspace does not magically
-create a linked Social team. Team wizard invite generation requires the verified
-link first. Existing history is preserved centrally, not silently imported.
+`GET/POST /v1/workspaces` and `POST /v1/teams` are served by the user's DS-Bot
+from Bot Social (`/v1/ot/workspaces`): creating a workspace creates its Social
+team with a server-generated `workspace_id`. Unmapped or conflicting workspaces stay
+`409 membership_migration_required` or `membership_migration_conflict`.
+
+### Operator procedure (after this SHA is deployed)
+
+Do not generate or rotate KMS / Social volume keys, and do not wipe
+`/var/lib/openteamily/bot-social`. Create a migrate key file on the host
+(mode 0600, 32+ characters). Mount it into Bot Social only:
+
+  OPENTEAMILY_SOCIAL_MIGRATE_KEY_FILE=/run/secrets/openteamily-social-migrate.key
+
+See `deploy/isolated/bot-social.compose.yml` for the commented volume. Recreate
+only `bot-social` after mounting. The route is disabled (503) until that file
+is present; the process never auto-generates a key.
+
+Every account that a workspace references must already have a healthy running
+runtime whose `social/identity` returns `social_owner_id` and `home_id`. Then,
+from the management process that owns `/data` (inside `web`,
+`--data-dir /data`):
+
+  python -m openteamily.social_membership_migrate plan --data-dir /data
+  python -m openteamily.social_membership_migrate apply --data-dir /data \
+    --social-url http://bot-social:8787 \
+    --key-file /run/secrets/openteamily-social-migrate.key
+
+Use `--workspace <id>` to apply one fixture workspace first. Use
+`--identities-file` only for attestations previously collected through
+manager control; do not build it from usernames. From the host the Social
+loopback is `http://127.0.0.1:18783`. Re-running apply with the same digest
+is a no-op. Inspect `blocked`, `conflicts` and `unresolved` before any
+broader apply. Missing or conflicting state stays 409; this command never
+creates a substitute team.
+
+Proof must use fixture / test accounts only. Do not invite, message, or
+publish as birfied or to real people. After a successful fixture apply,
+two DS-Bots should see the same members, roles and preserved history;
+an outsider stays 404; a revoked invite cannot be accepted; a still-valid
+preserved token hash still works; a leftover central group claim remains
+`409 moved_to_dsbot`; any unmapped workspace remains
+`409 membership_migration_required`.
 
 ## Execution fence
 
@@ -44,8 +89,10 @@ claimed or obtain model access, and reconciliation cannot publish duplicate
 replies. Rows remain for audit; in-flight old runtimes must be stopped/recreated
 at deployment before testing the new inbox. Native group agents use the per-user
 Social inbox and DS-Bot chatTurn, not platform runtime_tasks.
-Unsupported legacy messenger subroutes fail on DS-Bot rather than falling back
-to Flask (including legacy manual agent-reply endpoints not yet ported).
+All legacy messenger subroutes (pin, reactions, edit/retract, delete, save,
+forward, group agents, manual agent replies) are served by `messenger/v1` on
+the DS-Bot. The platform's central group-reply, task queue and scheduler code
+has been deleted; old clients get `410 moved_to_dsbot`.
 
 ## Deploy and proof
 

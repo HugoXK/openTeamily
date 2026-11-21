@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { inflateRawSync } from 'node:zlib'
 import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
 
 const base = (rest = '', ws = WS) => `/v1/workspaces/${ws}/artifacts${rest}`
@@ -145,4 +146,91 @@ test('one test account\'s legacy artifacts import into its DS-Bot only', async (
   assert.equal(listed.body.items.length, 0)
   const other = await boot()
   assert.equal((await other.call('artifacts', 'GET', `/v1/workspaces/${wid}/artifacts/${expect.artifacts.artifact_id}`)).status, 404)
+})
+
+test('chat attachments export the selected saved version and require an internal caller', async () => {
+  const bot = await boot()
+  const created = await bot.call('artifacts','POST',base(),{title:'发给群聊',kind:'document',body:'Saved version one'},key())
+  const artifact = created.body.artifact
+  const input = {workspace_id:WS,artifact_id:artifact.id,revision:1}
+  assert.equal((await bot.endpoint('artifacts/chatAttachment',input)).error.code, 'forbidden')
+  await bot.call('artifacts','POST',base('/'+artifact.id),{revision:1,changes:{body:'Saved version two'}})
+  const resolve = data => bot.features.table['artifacts/chatAttachment'](data,{internal:true})
+  const snapshot = await resolve(input)
+  const historical = await bot.call('artifacts','GET',base('/'+artifact.id+'/versions/1/export?format=docx'))
+  assert.deepEqual(Buffer.from(snapshot.attachment.data,'base64'),Buffer.from(historical.download.data,'base64'))
+  assert.equal(snapshot.body,'发给群聊 · 版本 1')
+  assert.equal(snapshot.attachment.title,'发给群聊-v1.docx')
+  assert.notEqual((await resolve({...input,revision:2})).attachment.data,snapshot.attachment.data)
+  await assert.rejects(resolve({...input,workspace_id:'f'.repeat(32)}),error=>error.status===404)
+  await assert.rejects(resolve({...input,revision:3}),error=>error.status===404)
+  const examples = [
+    [{title:'网页',kind:'website',body:'<h1>标题</h1><script>alert(1)</script>'}, 'txt', /text\/plain/],
+    [{title:'白板',kind:'whiteboard'}, 'json', /application\/json/],
+    [{title:'幻灯片',kind:'slides',slides:{schema:'openteamily.slides.v1',slides:[{title:'开场',bullets:['计划']}]}}, 'pptx', /presentationml/],
+    [{title:'工作表',kind:'dashboard',dashboard:{schema:'openteamily.dashboard.v1',widgets:[{type:'metric',title:'参会人数',value:'3',note:''}]}}, 'xlsx', /spreadsheetml/],
+    [{_multipart:true,fields:{title:'封面图'},files:{file:{filename:'dot.png',content_type:'image/png',data:PNG.toString('base64')}}}, 'png', /image\/png/],
+  ]
+  for (const [payload, suffix, mime] of examples) {
+    const result = await bot.call('artifacts','POST',base(),payload,key())
+    assert.equal(result.status,201,JSON.stringify(result.body))
+    const {attachment} = await resolve({...input,artifact_id:result.body.artifact.id})
+    assert.ok(attachment.title.endsWith('.' + suffix))
+    assert.match(attachment.mime,mime)
+    if (suffix === 'txt') assert.doesNotMatch(Buffer.from(attachment.data,'base64').toString(), /<script>/)
+  }
+})
+
+test('native workbook versions preserve distinct worksheets and Excel treats unsupported formulas as text', async () => {
+  const bot = await boot()
+  const call = (...args) => bot.call('artifacts', ...args)
+  const spreadsheet = {schema:'openteamily.spreadsheet.v1',sheets:[
+    {name:'明细',rows:[['商品','金额'],['笔','12.50'],['胶水','7'],['总计','=sum(B2:B3)']]},
+    {name:'库存',rows:[['编号','备注'],['00123','=HYPERLINK("https://example.test/","link")']]},
+  ]}
+  const payload = {title:'采购清单',kind:'spreadsheet',spreadsheet}
+  const invalid = await call('POST',base(),{
+    ...payload,spreadsheet:{...spreadsheet,sheets:[{name:'Sheet',rows:[]},{name:'sheet',rows:[]}]},
+  },key())
+  assert.equal(invalid.status,400)
+  const created = await call('POST',base(),payload,key())
+  assert.equal(created.status,201,JSON.stringify(created.body))
+  const {artifact} = created.body
+  const route = '/' + artifact.id
+  assert.equal(artifact.kind,'spreadsheet')
+  assert.deepEqual(artifact.spreadsheet,spreadsheet)
+  assert.equal((await call('GET',base())).body.items[0].spreadsheet,undefined)
+  const updated = structuredClone(spreadsheet)
+  updated.sheets[0].rows[1][1] = '15'
+  assert.equal((await call('POST',base(route),{revision:1,changes:{spreadsheet:updated}})).body.artifact.revision,2)
+  const stale = await call('POST',base(route),{revision:1,changes:{spreadsheet}})
+  assert.equal(stale.status,409)
+  const historical = await call('GET',base(route+'/versions/1/export'))
+  assert.equal(historical.status,200)
+  assert.match(historical.download.content_type,/spreadsheetml/)
+  const bytes = Buffer.from(historical.download.data,'base64')
+  const parts = new Map()
+  for (let offset=0; bytes.readUInt32LE(offset) === 0x04034b50;) {
+    const nameAt = offset+30
+    const dataAt = nameAt+bytes.readUInt16LE(offset+26)+bytes.readUInt16LE(offset+28)
+    const next = dataAt+bytes.readUInt32LE(offset+18)
+    parts.set(bytes.toString('utf8',nameAt,dataAt),inflateRawSync(bytes.subarray(dataAt,next)).toString())
+    offset = next
+  }
+  assert.match(parts.get('xl/workbook.xml'),/name="明细".*name="库存"/)
+  assert.match(parts.get('xl/worksheets/sheet1.xml'),/<c r="B2"><v>12\.50<\/v><\/c>/)
+  assert.match(parts.get('xl/worksheets/sheet1.xml'),/<f>SUM\(B2:B3\)<\/f>/)
+  assert.match(parts.get('xl/worksheets/sheet2.xml'),/<t xml:space="preserve">00123<\/t>/)
+  assert.match(parts.get('xl/worksheets/sheet2.xml'),/<t xml:space="preserve">=HYPERLINK/)
+  assert.doesNotMatch(parts.get('xl/worksheets/sheet2.xml'),/<f>/)
+  const attachment = await bot.features.table['artifacts/chatAttachment']({
+    workspace_id:WS,artifact_id:artifact.id,revision:1,
+  },{internal:true})
+  assert.equal(attachment.attachment.title,'采购清单-v1.xlsx')
+  assert.equal(attachment.attachment.data,historical.download.data)
+  const restored = await call('POST',base(route+'/restore'),{revision:2,to:1})
+  assert.equal(restored.body.artifact.revision,3)
+  assert.deepEqual(restored.body.artifact.spreadsheet,spreadsheet)
+  const preview = await call('GET',base(route+'/preview'))
+  assert.match(preview.text,/<td>12\.50<\/td>/)
 })

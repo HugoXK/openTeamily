@@ -1,6 +1,7 @@
 // Rendering and export of artifacts (legacy artifacts.py render_*,
 // sanitize_html, export_*): HTML/SVG generated inside the user's DS-Bot.
 import { BODY_MAX, SAFE_FILENAME, emptyBoard, emptyDashboard, emptySlides, publicKind, unescapeHtml } from './model.js'
+import {decodeWorkbook,emptyWorkbook} from './workbook.js'
 import { decodeBoard, decodeDashboard, decodeSlides } from './structured.js'
 
 export const escapeText = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -190,10 +191,22 @@ export function renderMediaPage(row) {
     + '<body><article><h1>' + heading + '</h1><p>' + escapeText(row.media_filename || 'file') + ' · ' + escapeText(row.media_mime || '') + '</p></article></body></html>'
 }
 
+function renderWorkbookPage(title,workbook) {
+  const heading = escapeText(title)
+  const sheets = workbook.sheets.map(sheet => {
+    const rows = sheet.rows.map(row => '<tr>'+row.map(cell=>'<td>'+escapeText(cell)+'</td>').join('')+'</tr>').join('')
+    return '<section><h2>'+escapeText(sheet.name)+'</h2><table>'+rows+'</table></section>'
+  }).join('')
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'
+    + heading + '</title><style>body{margin:2rem;font:1rem system-ui}section{overflow:auto}table{border-collapse:collapse}td{border:1px solid #cfd9d4;padding:.4rem .65rem;white-space:pre-wrap}</style></head><body><h1>'
+    + heading + '</h1>' + sheets + '</body></html>'
+}
+
 export function renderPage(row) {
   const kind = publicKind(row)
   if (kind === 'slides') return renderSlidesPage(row.title, decodeSlides(row.slides_json) ?? emptySlides())
   if (kind === 'dashboard') return renderDashboardPage(row.title, decodeDashboard(row.dashboard_json) ?? emptyDashboard())
+  if (kind === 'spreadsheet') return renderWorkbookPage(row.title,decodeWorkbook(row.spreadsheet_json) ?? emptyWorkbook())
   if (kind === 'website') return renderWebsitePage(row.title, row.body)
   if (kind === 'whiteboard') return renderWhiteboardPage(row.title, decodeBoard(row.board_json) ?? emptyBoard())
   if (kind === 'media') return renderMediaPage(row)
