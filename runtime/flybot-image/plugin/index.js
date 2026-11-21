@@ -43,6 +43,7 @@ export function apply(ctx, config = {}) {
     const chatTurn = (key, text, requestId) => bridge.exclusive(async () => {
       await bridge.prepareModel()
       await bridge.selectConversation(key)
+      bridge.requireModel(bridge.botId)
       return runTurn(rt, ctx, bridge.botId, text, requestId)
     })
     const mainBot = async () => { await bridge.setup(); return bridge.botId }
@@ -69,6 +70,7 @@ export function apply(ctx, config = {}) {
         stored.push({title:file.title, mime:original ? file.mime : ref.mediaType || file.mime, bytes:ref.bytes, image:image && !original, ref})
       }
       if (stored.length) options.onStaged?.(stored)
+      bridge.requireModel(botId)
       return runTurn(rt, ctx, botId, text, requestId, undefined, parts, { onProgress: options.onProgress })
     })
     const readNativeAttachment = async file => {

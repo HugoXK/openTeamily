@@ -237,10 +237,19 @@ body.app-workspace > #status[data-announce-only="true"] {
 #chat-back { display: none; }
 
 #message-scroller {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding: 1rem 1.25rem 0.5rem;
+}
+
+#message-scroller > * { flex-shrink: 0; }
+
+/* A short live thread stays near the composer. Overflow and history keep chronological scrolling. */
+#message-scroller:has(> #chat-back-to-latest[hidden]) > #message-list:has(> li) {
+  margin-block-start: auto;
 }
 
 #chat-empty:not([hidden]) { text-align: center; margin: 2.5rem auto; }
@@ -249,6 +258,7 @@ body.app-workspace > #status[data-announce-only="true"] {
   list-style: none;
   margin: 0 auto;
   padding: 0;
+  width: 100%;
   max-width: 46rem;
   display: flex;
   flex-direction: column;
@@ -1178,6 +1188,13 @@ body.app-workspace.chat-open > main { border-radius: 0 .875rem .875rem 0; }
   padding: .625rem .875rem; border: 0; border-radius: 1rem; background: var(--ot-bg-accent);
   max-width: min(36rem, 78%); font-size: .875rem;
 }
+#message-list > li.assistant {
+  align-self: flex-start;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: min(42rem, 84%);
+}
+
 #message-list li.assistant, #message-list li.other { border-top-left-radius: .375rem; background: var(--ot-bg-accent); }
 #message-list li.user, #message-list li.mine { border-top-right-radius: .375rem; background: var(--ot-accent-soft); }
 #message-list li .role { margin: 0 0 .25rem; color: var(--ot-muted); font-size: .75rem; font-weight: 500; }
@@ -1533,10 +1550,13 @@ html[data-theme-resolved="dark"] { --ot-bubble-mine: var(--ot-accent-soft); }
 #message-list li[data-state="queued"] > .body, #message-list li[data-state="running"] > .body,
 #message-list li[data-state="queued"] > p.pending, #message-list li[data-state="running"] > p.pending { font-size: .75rem; }
 #message-list li[data-state="queued"], #message-list li[data-state="running"] {
-  max-width: min(30rem, 88%); padding: .75rem .875rem; border-radius: .875rem; background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line), 0 2px 8px rgba(20, 40, 30, .05);
+  max-width: min(42rem, 88%); padding: .75rem .875rem; border-radius: .875rem; background: var(--ot-surface); box-shadow: 0 0 0 1px var(--ot-line), 0 2px 8px rgba(20, 40, 30, .05);
 }
 #message-list .reply-state { display: flex; align-items: center; gap: .5rem; margin: .125rem 0 .125rem; font-size: .875rem; font-weight: 650; color: var(--ot-ink); }
-#message-list li[data-reply-progress] { width: min(30rem, 88%); box-sizing: border-box; }
+#message-list > li[data-reply-progress]:has(> .reply-preview:not([hidden])) {
+  width: min(37rem, 88%);
+}
+
 #message-list li[data-reply-progress] > .reply-preview { font-size: inherit; overflow-wrap: anywhere; }
 #message-list li[data-state="failed"] > p.failed { padding: .5rem .75rem; border-radius: .625rem; background: #fdf0ef; color: #9b1c13; font-size: .8125rem; }
 html[data-theme-resolved="dark"] #message-list li[data-state="failed"] > p.failed { background: rgba(180, 35, 24, .18); color: #f3b7b1; }
@@ -1931,7 +1951,8 @@ html[data-theme-resolved="dark"] position: absolute; right: .5rem; bottom: -.625
 
 .chat-document-card {display:block;padding:16px;border:1px solid var(--ot-line);border-radius:10px;text-decoration:none;color:var(--ot-ink);background:var(--ot-surface);}
 
-#message-list li > .body { margin: 0; line-height: 1.6; }
+#message-list li > .body { margin: 0; overflow-wrap: anywhere; line-height: 1.6; }
+.chat-model-settings { display: inline-flex; margin-inline-start: .5em; color: var(--ot-accent-hover); text-underline-offset: .2em; }
 .chat-link-card { display: block; margin-top: .5rem; padding: .5rem .65rem; border: 1px solid var(--ot-line); border-radius: .65rem; overflow-wrap: anywhere; color: var(--ot-accent-hover); font-size: .8125rem; }
 
 .composer-emoji-grid { display: grid; grid-template-columns: repeat(6, minmax(2.5rem, 1fr)); gap: .5rem; margin: 1rem 0; }
@@ -2276,6 +2297,7 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   .chat-subtitle { font-size: .6875rem; }
   #message-scroller { padding: .875rem .875rem 1rem; scrollbar-gutter: auto; }
   #message-list li { max-width: 86%; }
+  #message-list > li.assistant { max-width: 90%; }
   #message-list .message-reactions:not(:has(.reaction-chip, .reaction-picker:not([hidden]))) { display: none; }
   #message-list li > .message-more::after { content: ''; position: absolute; inset: -.5rem; }
   #chat-form { padding: .375rem .625rem max(.625rem, env(safe-area-inset-bottom)); }

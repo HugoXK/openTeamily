@@ -37,7 +37,8 @@ async function shared(req, workspace) {
 async function receipt(req, workspace, shareId, revoke) {
   if (req.queryString) refuse(400, 'invalid', '无效的纪要分享请求。')
   if (!revoke && req.method === 'GET') {
-    return {body:await social(req, workspace, 'GET', '/meeting-shares/' + shareId)}
+    const result = await social(req, workspace, 'GET', '/meeting-shares/' + shareId)
+    return {body:{...result, ...(req.ownerUsername ? {viewer_username:req.ownerUsername} : {})}}
   }
   if (revoke && req.method === 'POST') {
     requireBodyKeys(await req.json(), [])

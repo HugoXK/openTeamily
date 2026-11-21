@@ -11,11 +11,11 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import custom_mcp, skill_packages, agents, artifacts, bot_social, composio, connected_tools, conversations, meetings, members, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, runtime_connect, skill_secrets, social, team_templates, teams, skill_installs
+from . import skill_packages, agents, artifacts, bot_social, composio, conversations, meetings, members, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, skill_secrets, social, team_templates, teams, skill_installs
 
 
 
-from .dsbot_gateway import moved_api  # noqa: E402
+from .dsbot_gateway import moved_api, owner_runtime_readiness  # noqa: E402
 
 # Central execution routes removed in the DS-Bot architecture (thin 410 for old clients).
 GONE_PATHS = frozenset({'/v1/agent-homepages/start', '/v1/runtime-keys', '/v1/runtime/connections', '/v1/runtime/tasks'})
@@ -107,9 +107,6 @@ class App:
             raise ValueError("Invalid operator model HTTP policy")
         self.model_http_policy = model_http_policy or ModelHttpPolicy()
         self.store, self.config, self.clock = store, config, clock
-        # Tests inject a fake Composio HTTP transport; production uses urllib.
-        self.composio_transport = composio_transport
-        self.mcp_transport = mcp_transport
         self.lifecycle, self.manager_auth = lifecycle, manager_auth
         from . import runtime_autoprovision
         if auto_provision is not None and not isinstance(auto_provision, runtime_autoprovision.AutoProvisionPolicy):
@@ -580,6 +577,11 @@ class App:
             if method == 'POST':
                 self.csrf_check(env, session)
             return self.runtime_dispatch(env, session['user_id'], method, path, query)
+        if path == '/v1/auth/runtime-readiness' and method == 'GET' and not query:
+            with self.store.connect() as db:
+                session = self.authenticated(db, env, now)
+                state = owner_runtime_readiness(db, session['user_id']) if self.auto_provision.enabled else 'unmanaged'
+            return 200, {'state': state}, []
         with self.store.transaction() as db:
             session = self.authenticated(db, env, now)
             if method in ('POST', 'DELETE'):
@@ -868,6 +870,7 @@ class App:
             provision = self.ensure_personal_runtime(db, session['user_id'], row, now)
             payload['personal_agent']['runtime_provisioning'] = {
                 'state': provision['state'], 'instance_id': provision['instance_id'],
+                'readiness': owner_runtime_readiness(db, session['user_id']),
                 'error_code': runtime_autoprovision.chat_error(
                     db, lambda iid: self.workspace_instance(db, row['workspace_id'], iid), provision)}
         return (201 if created else 200), payload, []
