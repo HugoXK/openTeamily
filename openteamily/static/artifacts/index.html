@@ -66,6 +66,7 @@
   </section>
   <section id="main-panel" hidden>
     <header class="artifacts-top">
+      <button type="button" id="cancel-editor-load">← 返回列表</button>
       <button type="button" id="dir-expand" class="dir-expand" hidden aria-label="展开侧边栏" title="展开侧边栏（收起后的版式未经对照核实）">展开侧边栏</button>
       <h1 class="visually-hidden" id="space-title">作品库</h1>
       <nav class="artifact-scopes" id="artifact-scopes" aria-label="作品范围">
@@ -83,10 +84,16 @@
           <button type="button" data-meeting-scope="all" aria-current="page">全部</button>
         </div>
       </div>
-      <label class="workspace-picker">工作区
-        <select id="workspace"></select>
-      <span id="workspace-events-status" class="note" role="status" aria-live="polite">实时更新未连接</span><button type="button" id="workspace-events-retry">重连更新</button>
-      </label>
+      <div class="workspace-picker">
+        <div class="workspace-selection">
+          <label for="workspace">工作区</label>
+          <select id="workspace"></select>
+        </div>
+        <div class="workspace-recovery">
+          <span id="workspace-events-status" class="note" role="status" aria-live="polite">实时更新未连接</span>
+          <button type="button" id="workspace-events-retry">重连更新</button>
+        </div>
+      </div>
       <div class="filter-wrap">
         <button type="button" id="filter-button" aria-expanded="false" aria-haspopup="dialog" aria-controls="filter-panel">筛选</button>
         <div id="filter-panel" role="dialog" aria-label="筛选" hidden>
@@ -193,6 +200,10 @@
         </nav>
       </aside>
       <section class="artifact-main">
+        <div id="artifact-list-status" hidden>
+          <span id="artifact-list-note" class="note" role="status"></span>
+          <button type="button" id="retry-artifact-list" hidden>重试</button>
+        </div>
         <ul id="artifact-list"></ul>
         <button type="button" id="more-shared-meetings" class="secondary" hidden>加载更多共享纪要</button>
         <div id="list-empty" hidden>
@@ -263,6 +274,9 @@
         </div>
       </section>
     </section>
+    <div id="editor-loading" hidden>
+      <p role="status">正在打开作品…</p>
+    </div>
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <label>标题 <input type="text" name="title" maxlength="80" required autocomplete="off"></label>
       <p id="editor-meta" class="note"></p>
@@ -381,34 +395,36 @@
         <p id="website-preview-status" class="note" role="status" hidden></p>
       </div>
       <iframe id="website-preview" title="网站预览" sandbox referrerpolicy="no-referrer" hidden></iframe>
-      <section id="version-panel" hidden>
-        <h2>版本与导出</h2>
+      <p id="artifact-live-update" class="note" hidden>服务器作品版本已变化；本地草稿不会自动覆盖。<button type="button" id="artifact-live-load">读取服务器版本（需确认覆盖草稿）</button></p>
+      <details id="version-panel" class="artifact-editor-panel" hidden>
+        <summary>版本与导出</summary>
         <p class="note">每次保存会留下一版，可以导出或恢复到某一版。恢复会生成新的修订，不会改写历史。</p>
+        <p id="version-status" class="note" role="status" hidden></p>
         <ul id="version-list"></ul>
         <p id="version-empty" class="note" hidden>还没有历史版本。</p>
         <label for="export-format">当前版本导出格式</label><select id="export-format"><option value="original">原格式</option><option value="docx">Word DOCX（文档）</option><option value="pdf">文本 PDF（文档 / 幻灯片提纲 / 看板数据）</option><option value="xlsx">Excel XLSX（电子表格 / 看板）</option><option value="pptx">PowerPoint PPTX（幻灯片标题与条目）</option></select><p class="note">DOCX 保留文本与标题，非完整 Office 编辑器；PDF 是分页文字，不是页面 / 媒体截图，暂不支持 emoji 等非 BMP 字符。电子表格导出保留支持的公式。PPTX 是实际幻灯片包，含标题与条目，不含宏、媒体或外部链接，也不是渲染缩略图或完整编辑器。历史版本下载仍为其原格式。</p>
-        <p id="artifact-live-update" class="note" hidden>服务器作品版本已变化；本地草稿不会自动覆盖。<button type="button" id="artifact-live-load">读取服务器版本（需确认覆盖草稿）</button></p>
         <button type="button" id="export-artifact">导出当前版本</button>
-      </section>
-      <section id="share-panel" hidden>
-        <h2>只读分享</h2>
+      </details>
+      <details id="share-panel" class="artifact-editor-panel" hidden>
+        <summary>只读分享</summary>
         <p class="note">链接需要点下面的按钮才会生成，撤销后立即失效。不会自动发布。</p>
+        <p id="share-status" class="note" role="status" hidden></p>
         <ul id="share-list"></ul>
         <p id="share-empty" class="note" hidden>还没有分享链接。</p>
         <button type="button" id="create-share">创建只读分享链接</button>
         <p id="share-once" class="note" hidden></p>
-      </section>
-      <section id="discover-panel" hidden>
-        <h2>公开到发现页</h2>
+      </details>
+      <details id="discover-panel" class="artifact-editor-panel" hidden>
+        <summary>公开到发现页</summary>
         <p class="note">发布后会出现在公开发现动态里。任何访问者都能通过公开链接查看作品和下载已发布的 3D 文件。</p>
-        <p id="discover-status" class="note" hidden></p>
+        <p id="discover-status" class="note" role="status" hidden></p>
         <div id="discover-form" class="discover-form" role="group" aria-label="公开到发现页">
           <label for="discover-slug">公开短地址</label>
           <input id="discover-slug" name="slug" maxlength="30" autocomplete="off" spellcheck="false" inputmode="latin">
           <button type="button" id="publish-discover">发布到发现页</button>
           <button type="button" id="revoke-discover" hidden>从发现页撤回</button>
         </div>
-      </section>
+      </details>
       <button type="submit" id="save-artifact">保存</button>
       <button type="button" id="cancel-editor">返回列表</button>
       <button type="button" id="remove-artifact">删除</button>

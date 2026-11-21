@@ -16,6 +16,7 @@ import { sharedBotSocial, seg, qs } from './bot-social.js'
 import { GLB_MIME } from '../glb.js'
 
 const HEX = /^[0-9a-f]{32}$/
+const PLATFORM_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/
 const PUBLIC_LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/
 const DISCOVER_WORK = '/v1/discover/works/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])'
 const WORK_COMMENT = 'otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}'
@@ -1112,7 +1113,7 @@ function workCommentItem(row) {
 
 function discoverRoutes(host) {
   const env = process.env
-  const feed = (kind) => async ({ query }) => wrap(async () => {
+  const feed = (kind) => async ({ query }, call) => wrap(async () => {
     const bs = client(host)
     const q = parseQuery(query)
     const sort = q.get('sort')
@@ -1131,7 +1132,13 @@ function discoverRoutes(host) {
       ...pagination, limit: q.get('limit'),
     }))
     const items = (data.items || []).map((row) => (kind === 'agent' ? agentItem(row) : workItem(row)))
-    return [200, { items, cursor: (popular ? data.next_cursor : data.next_before) ?? null }]
+    const response = { items, cursor: (popular ? data.next_cursor : data.next_before) ?? null }
+    // The platform gateway sets this header from the session that selected this runtime.
+    const viewer = call?.request?.headers?.get('x-ot-owner-username')
+    if (kind === 'work' && typeof viewer === 'string' && PLATFORM_USERNAME.test(viewer)) {
+      response.viewer_username = viewer
+    }
+    return [200, response]
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
   const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path } : { listed: false })

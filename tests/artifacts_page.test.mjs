@@ -960,6 +960,154 @@ test('saved result deep links require an exact authorized workspace and artifact
   for(const query of ['?artifact='+aid,'?workspace='+wid,'?workspace=../private&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&artifact='+aid,'?workspace='+wid+'&artifact='+aid+'&new=document','?workspace='+wid+'&artifact='+aid+'&x=1'])assert.deepEqual(artifactTargetFromSearch(query),{invalid:true});
 });
 
+const linkedWorkspace = 'a'.repeat(32);
+const linkedArtifact = 'b'.repeat(32);
+const linkedCatalog = `/v1/workspaces/${linkedWorkspace}/artifacts`;
+const linkedDetail = linkedCatalog + '/' + linkedArtifact;
+const linkedSearch = `?workspace=${linkedWorkspace}&artifact=${linkedArtifact}`;
+const linkedRecord = {id: linkedArtifact, workspace_id: linkedWorkspace, title: '资料直链', body: '原始内容',
+  kind: 'document', revision: 1, created_by: 'alice'};
+const nextTask = () => new Promise(resolve => setImmediate(resolve));
+
+function deferred() {
+  let finish;
+  return {promise: new Promise(resolve => { finish = resolve; }), finish: value => finish(value)};
+}
+
+function linkFixture(respond, search = linkedSearch) {
+  const page = fakeDocument();
+  page.form.hidden = true;
+  const view = new FakeNode();
+  view.location = {search, hash: '', pathname: '/space'};
+  view.history = {
+    replaceState(_state, _title, relative) {
+      const url = new URL(relative, 'https://example.test');
+      view.location = {search: url.search, hash: url.hash, pathname: url.pathname};
+    },
+  };
+  page.doc.defaultView = view;
+  const calls = [];
+  const fetcher = async (path, options) => {
+    calls.push({path, method: options.method, signal: options.signal, body: options.body});
+    const result = respond(path, options);
+    if (result) return result;
+    if (path === '/v1/auth/session') return reply({body: {user: {id: 'u1', username: 'alice'}}});
+    if (path === '/v1/workspaces?limit=100') {
+      return reply({body: {items: [{id: linkedWorkspace, name: '本工作区'}, {id: 'w2', name: '其他工作区'}]}});
+    }
+    if (path === '/v1/workspaces?scope=personal') return reply({body: {items: []}});
+    if (path === linkedDetail) return reply({body: {artifact: linkedRecord}});
+    throw new Error(path);
+  };
+  return {...page, view, calls, mounted: mount(page.doc, {fetcher})};
+}
+
+test('an authorized direct link opens editable content with the catalog and optional panels held', async () => {
+  const session = deferred();
+  const choices = deferred();
+  const directory = deferred();
+  const versions = deferred();
+  const page = linkFixture(path => ({
+    '/v1/auth/session': session.promise,
+    '/v1/workspaces?limit=100': choices.promise,
+    [linkedCatalog]: directory.promise,
+    [linkedDetail + '/versions']: versions.promise,
+  })[path]);
+  assert.deepEqual(page.calls.map(call => call.path), ['/v1/auth/session']);
+  session.finish(reply({body: {user: {id: 'u1', username: 'alice'}}}));
+  await nextTask();
+  assert.equal(page.calls.some(call => call.path.startsWith(linkedCatalog)), false);
+  choices.finish(reply({body: {items: [{id: linkedWorkspace, name: '本工作区'}]}}));
+  await page.mounted;
+  assert.deepEqual(page.calls.filter(call => call.path.startsWith(linkedCatalog)).map(call => call.path),
+    [linkedDetail, linkedCatalog]);
+  assert.equal(page.elements.get('list-panel').hidden, true);
+  assert.equal(page.form.hidden, false);
+  assert.equal(page.form.elements.body.value, linkedRecord.body);
+  const version = page.elements.get('version-panel');
+  assert.equal(version.open, false);
+  version.open = true;
+  await version.dispatch('toggle');
+  assert.equal(page.calls.at(-1).path, linkedDetail + '/versions');
+  page.form.elements.body.value = '持续写入的草稿';
+  versions.finish(reply({body: {items: [{revision: 1, title: '资料直链'}]}}));
+  await nextTask();
+  assert.equal(page.form.elements.body.value, '持续写入的草稿');
+  assert.equal(page.elements.get('version-list').children[0].children[1].href,
+    linkedDetail + '/versions/1/export');
+  await page.elements.get('cancel-editor').dispatch('click');
+  assert.equal(page.view.location.search, '');
+  assert.equal(page.elements.get('list-panel').hidden, false);
+  assert.equal(page.calls.filter(call => call.path === linkedCatalog).length, 1);
+  directory.finish(reply({body: {items: [linkedRecord]}}));
+  await nextTask();
+  assert.equal(artifactRows(page.elements.get('artifact-list')).length, 1);
+});
+
+test('an unauthorized direct link reports its error while the authorized catalog is pending', async () => {
+  const directory = deferred();
+  const page = linkFixture(path => {
+    if (path === '/v1/workspaces?limit=100') return reply({body: {items: [{id: 'w2', name: '其他工作区'}]}});
+    if (path === '/v1/workspaces/w2/artifacts') return directory.promise;
+  });
+  await page.mounted;
+  assert.equal(page.calls.filter(call => call.path.includes(linkedArtifact)).length, 0);
+  assert.equal(page.form.hidden, true);
+  assert.equal(page.elements.get('status').textContent, '文档链接无效，或你没有访问该工作区的权限。');
+  directory.finish(reply({status: 503}));
+  await nextTask();
+  assert.equal(page.elements.get('retry-artifact-list').hidden, false);
+  assert.equal(page.elements.get('status').textContent, '文档链接无效，或你没有访问该工作区的权限。');
+});
+
+test('late direct detail and catalog replies cannot restore the previous workspace after a switch', async () => {
+  const earlierDetail = deferred();
+  const earlierCatalog = deferred();
+  const page = linkFixture(path => {
+    if (path === linkedDetail) return earlierDetail.promise;
+    if (path === linkedCatalog) return earlierCatalog.promise;
+    if (path === '/v1/workspaces/w2/artifacts') {
+      return reply({body: {items: [{id: 'new', title: '第二个工作区', kind: 'document'}]}});
+    }
+  });
+  await nextTask();
+  const firstDetail = page.calls.find(call => call.path === linkedDetail);
+  const picker = page.elements.get('workspace');
+  picker.value = 'w2';
+  await picker.dispatch('change');
+  await nextTask();
+  assert.equal(firstDetail.signal.aborted, true);
+  earlierDetail.finish(reply({status: 404}));
+  earlierCatalog.finish(reply({status: 503}));
+  await page.mounted;
+  assert.equal(page.calls.some(call => call.path === '/v1/workspaces/w2/artifacts/' + linkedArtifact), false);
+  assert.equal(page.elements.get('status').textContent, '');
+  assert.equal(page.elements.get('artifact-list-status').hidden, true);
+  assert.equal(page.form.hidden, true);
+  assert.equal(artifactRows(page.elements.get('artifact-list'))[0].children[0].textContent, '第二个工作区');
+});
+
+test('an older save cannot replace a new draft after returning from the direct editor', async () => {
+  const save = deferred();
+  const page = linkFixture((path, {method}) => {
+    if (path === linkedDetail && method === 'POST') return save.promise;
+    if (path === linkedCatalog) return reply({body: {items: [linkedRecord]}});
+  });
+  await page.mounted;
+  page.form.elements.body.value = '首次修改';
+  const saving = page.form.dispatch('submit');
+  assert.deepEqual(JSON.parse(page.calls.at(-1).body), {revision: 1, changes: {title: '资料直链', body: '首次修改'}});
+  await page.elements.get('cancel-editor').dispatch('click');
+  await page.elements.get('new-artifact').dispatch('click');
+  page.form.elements.title.value = '另一份新文档';
+  page.form.elements.body.value = '另一份草稿';
+  save.finish(reply({body: {artifact: {...linkedRecord, revision: 2, body: '首次修改'}}}));
+  await saving;
+  assert.equal(page.form.elements.title.value, '另一份新文档');
+  assert.equal(page.form.elements.body.value, '另一份草稿');
+  assert.equal(page.elements.get('save-artifact').disabled, false);
+});
+
 test('website helpers keep titles and escaped stubs bounded and honest', () => {
   assert.equal(websiteTitle('  给产品做介绍站  '), '网站：给产品做介绍站');
   assert.equal(websiteTitle('x'.repeat(80)).startsWith('网站：'), true);

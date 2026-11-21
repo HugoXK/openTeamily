@@ -150,6 +150,7 @@ class Element {
   get childElementCount() { return this.children.length; }
   get options() { return this.children; }
   append(...nodes) { this.children.push(...nodes); }
+  prepend(...nodes) { this.children.unshift(...nodes); }
   showModal() { this.open = true; }
   close() { this.open = false; this.handlers.close?.(); }
   replaceChildren(...nodes) { this.children = nodes; }
@@ -170,6 +171,179 @@ function fakeDocument() {
   };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
+
+test('DS-Bot paints the public catalog before session, then enables the already loaded viewer flags', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  const requests = [];
+  const work = detailFixture({liked: true, collected: true, own_work: true});
+  const loaded = mount(doc, {location: {search: '?sort=popular'}, fetcher(path) {
+    requests.push(path);
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/v1/discover/works?limit=12&sort=popular') {
+      return Promise.resolve(commentResponse({items: [work], viewer_username: 'alice'}));
+    }
+    throw new Error(path);
+  }});
+  const el = id => doc.getElementById(id);
+  await flush();
+  assert.equal(el('main-panel').hidden, false);
+  assert.equal(el('catalog-manage').hidden, true);
+  const [card] = el('feed-grid').children;
+  const [comments] = card.children[1].children;
+  assert.equal(card.children[1].children.length, 1);
+  assert.equal(comments.className, 'feed-comments-toggle');
+  session.resolve(commentResponse({user: {id: 'owner', username: 'alice'}}));
+  await loaded;
+  assert.equal(el('feed-grid').children[0], card, 'session did not remove or rebuild the visible card');
+  const [like, collect, stillComments] = card.children[1].children;
+  assert.equal(like.attributes['aria-pressed'], 'true');
+  assert.equal(collect.attributes['aria-pressed'], 'true');
+  assert.equal(stillComments, comments, 'the owner has no follow control');
+  assert.deepEqual(requests, ['/v1/auth/session', '/v1/discover/works?limit=12&sort=popular']);
+});
+
+test('a guest sees the public works before sign-in resolves and never requests a private tab', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const session = Promise.withResolvers();
+  const requests = [];
+  const loaded = mount(doc, {location: {search: ''}, fetcher(path) {
+    requests.push(path);
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/v1/discover/works?limit=12') return Promise.resolve(commentResponse({items: [detailFixture()]}));
+    throw new Error(path);
+  }});
+  const el = id => doc.getElementById(id);
+  await flush();
+  assert.equal(el('feed-grid').children.length, 1);
+  await el('feed-tab-collected').handlers.click();
+  assert.equal(el('feed-grid').children.length, 0);
+  assert.equal(el('feed-note').textContent, '');
+  session.resolve(commentResponse({}, 401));
+  await loaded;
+  assert.equal(el('login-panel').hidden, false);
+  assert.match(el('feed-note').textContent, /请先登录/);
+  assert.deepEqual(requests, ['/v1/auth/session', '/v1/discover/works?limit=12']);
+});
+
+test('a signed-in private tab supersedes a delayed public response and clears after logout', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const publicFeed = Promise.withResolvers();
+  const session = Promise.withResolvers();
+  const requests = [];
+  let authCount = 0;
+  const loaded = mount(doc, {location: {search: ''}, fetcher(path) {
+    requests.push(path);
+    if (path === '/v1/auth/session') return ++authCount === 1 ? session.promise : Promise.resolve(commentResponse({}, 401));
+    if (path === '/v1/discover/works?limit=12') return publicFeed.promise;
+    if (path === '/v1/discover/me/works?limit=12&tab=following') {
+      return Promise.resolve(commentResponse({items: [detailFixture({slug: 'followed-work', title: 'Followed'})], viewer_username: 'alice'}));
+    }
+    if (path === '/v1/auth/logout') return Promise.resolve(commentResponse({}));
+    throw new Error(path);
+  }});
+  const el = id => doc.getElementById(id);
+  await el('feed-tab-following').handlers.click();
+  assert.deepEqual(requests, ['/v1/auth/session', '/v1/discover/works?limit=12']);
+  session.resolve(commentResponse({user: {id: 'owner', username: 'alice'}}));
+  await loaded;
+  const [row] = el('feed-grid').children;
+  const [oldLike] = row.children[1].children;
+  publicFeed.resolve(commentResponse({items: [detailFixture()]}));
+  await flush();
+  assert.equal(el('feed-grid').children[0], row);
+  await el('logout-form').handlers.submit({preventDefault() {}});
+  await oldLike.handlers.click();
+  assert.equal(el('feed-grid').children.length, 0);
+  assert.match(el('feed-note').textContent, /请先登录/);
+  assert.deepEqual(requests, [
+    '/v1/auth/session', '/v1/discover/works?limit=12', '/v1/discover/me/works?limit=12&tab=following',
+    '/v1/auth/logout', '/v1/auth/session',
+  ]);
+});
+
+test('the platform page keeps public cards visible while signed-in viewer flags are read', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  const session = Promise.withResolvers();
+  const viewerFeed = Promise.withResolvers();
+  const work = detailFixture();
+  const loaded = mount(doc, {location: {search: ''}, fetcher(path) {
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/v1/discover/works?limit=12') return Promise.resolve(commentResponse({items: [work]}));
+    if (path === '/v1/discover/me/works?limit=12&tab=all') return viewerFeed.promise;
+    throw new Error(path);
+  }});
+  const grid = doc.getElementById('feed-grid');
+  await flush();
+  const [publicCard] = grid.children;
+  assert.equal(publicCard.children[1].children.length, 1);
+  session.resolve(commentResponse({user: {id: 'owner', username: 'alice'}}));
+  await flush();
+  assert.equal(grid.children[0], publicCard);
+  assert.equal(publicCard.children[1].children.length, 1);
+  viewerFeed.resolve(commentResponse({items: [{...work, liked: true}]}));
+  await loaded;
+  const [like] = grid.children[0].children[1].children;
+  assert.equal(like.attributes['aria-pressed'], 'true');
+});
+
+test('the signed-in native feed refreshes once when a different account provided the public cards', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  const refresh = Promise.withResolvers();
+  const requests = [];
+  const work = detailFixture({liked: true, own_work: true});
+  const loaded = mount(doc, {location: {search: ''}, fetcher(path) {
+    requests.push(path);
+    if (path === '/v1/auth/session') return session.promise;
+    if (path !== '/v1/discover/works?limit=12') throw new Error(path);
+    return requests.length === 2 ? Promise.resolve(commentResponse({items: [work], viewer_username: 'alice', cursor: 'old-cursor'})) : refresh.promise;
+  }});
+  const grid = doc.getElementById('feed-grid');
+  const more = doc.getElementById('feed-more');
+  await flush();
+  const [publicCard] = grid.children;
+  assert.equal(publicCard.children[1].children.length, 1);
+  assert.equal(more.disabled, true);
+  session.resolve(commentResponse({user: {username: 'bobby'}}));
+  await flush();
+  assert.equal(grid.children[0], publicCard);
+  assert.equal(publicCard.children[1].children.length, 1);
+  assert.equal(more.hidden, true);
+  refresh.resolve(commentResponse({items: [{...work, liked: false, own_work: false}], viewer_username: 'bobby', cursor: 'new-cursor'}));
+  await loaded;
+  const [like, , follow] = grid.children[0].children[1].children;
+  assert.equal(like.attributes['aria-pressed'], 'false');
+  assert.equal(follow.textContent, '关注作者');
+  assert.equal(more.disabled, false);
+  assert.equal(more.hidden, false);
+  assert.deepEqual(requests, ['/v1/auth/session', '/v1/discover/works?limit=12', '/v1/discover/works?limit=12']);
+});
+
+test('the native feed discards private rows with an unproven viewer after a single retry', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const requests = [];
+  await mount(doc, {location: {search: '?feed=collected'}, fetcher: async path => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return commentResponse({user: {username: 'bobby'}});
+    assert.equal(path, '/v1/discover/me/works?limit=12&tab=collected');
+    const viewer_username = requests.length === 2 ? 'alice' : ['bobby'];
+    return commentResponse({items: [detailFixture({title: 'Other account collection'})], viewer_username});
+  }});
+  assert.equal(doc.getElementById('feed-grid').children.length, 0);
+  assert.match(doc.getElementById('feed-error').textContent, /登录状态已变化/);
+  assert.equal(requests.length, 3);
+});
 
 test('anonymous catalog search/clear/paging use public GETs and never publish on browse', async () => {
   const {mount} = await import('../openteamily/static/discover/app.mjs');

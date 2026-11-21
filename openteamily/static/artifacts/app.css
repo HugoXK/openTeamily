@@ -70,6 +70,12 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
   gap: 0.4rem;
 }
 
+.workspace-picker > div {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+}
+
 .artifacts-disclaimer {
   margin: 0 0 0.65rem;
 }
@@ -1387,4 +1393,98 @@ body.app-workspace #spreadsheet-editor #sheet-grid input {
   z-index: 1;
   padding-block: .25rem;
   background: var(--ot-surface);
+}
+
+
+#editor-loading {
+  grid-row: 2;
+  align-self: start;
+  justify-self: center;
+  text-align: center;
+  padding: 1.5rem 1rem;
+}
+
+#artifact-list-status:not([hidden]) {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .5rem 0;
+}
+
+.artifact-editor-panel {
+  border-top: 1px solid var(--ot-line);
+  padding: .625rem 0;
+}
+
+.artifact-editor-panel > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+#cancel-editor-load { display: none; }
+
+#main-panel:has(> :is(#editor-loading, #editor-form):not([hidden])) {
+  > .artifacts-top { grid-column: 1 / -1; }
+
+  > .artifacts-top > :is(#dir-expand, #artifact-scopes, #meetings-chrome, .filter-wrap, #layout-toggle, #artifact-notify),
+  > #layout-note:not([hidden]) { display: none; }
+
+  #cancel-editor-load {
+    display: block;
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 700px) {
+  .artifacts-top { position: relative; }
+  .artifacts-top .filter-wrap { position: static; }
+  #filter-panel {
+    box-sizing: border-box;
+    width: min(20rem, 100%);
+    max-height: min(24rem, 48vh);
+    overflow-y: auto;
+  }
+
+  #main-panel:has(> :is(#editor-loading, #editor-form):not([hidden])) > .artifacts-top {
+    flex-shrink: 0;
+    gap: .125rem .5rem;
+    margin-bottom: .25rem;
+  }
+
+  #main-panel:has(> :is(#editor-loading, #editor-form):not([hidden])) .workspace-picker {
+    display: contents;
+  }
+
+  #main-panel:has(> :is(#editor-loading, #editor-form):not([hidden])) .workspace-selection {
+    margin-inline-start: auto;
+    min-width: 0;
+    gap: .35rem;
+  }
+
+  #main-panel:has(> :is(#editor-loading, #editor-form):not([hidden])) .workspace-selection label {
+    flex-shrink: 0;
+  }
+
+  #main-panel:has(> :is(#editor-loading, #editor-form):not([hidden])) .workspace-selection select {
+    min-width: 0;
+    max-width: min(11rem, 42vw);
+    min-height: 2.5rem;
+  }
+
+  #main-panel:has(> :is(#editor-loading, #editor-form):not([hidden])) .workspace-recovery {
+    flex-basis: 100%;
+    justify-content: space-between;
+    gap: .5rem;
+  }
+
+  #main-panel:has(> :is(#editor-loading, #editor-form):not([hidden])) .workspace-recovery button {
+    flex-shrink: 0;
+    min-height: 2rem;
+    padding: .25rem .55rem;
+    white-space: nowrap;
+  }
+
+  body #main-panel > #editor-form:not([hidden]):not(:has(:is(#spreadsheet-editor, #slides-editor):not([hidden]))) {
+    padding-top: .5rem;
+  }
 }

@@ -1,9 +1,11 @@
 import { AGENT_CATEGORIES, categoryFromSearch, categoryLabel, csrfCookie } from '../agents/app.mjs';
+import { servedByDsBot } from '../shell/dsbot-api.mjs';
 import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
 import { renderThumb, thumbModel } from '../shell/thumb.mjs';
 import { commentsLabel, mountWorkComments } from './comments.mjs';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
+const VIEWER_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/;
 
 export function validSlug(value) {
   return typeof value === 'string' && SLUG.test(value);
@@ -342,7 +344,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
   const workspaceSelect = document.getElementById('workspace');
+  const nativeCatalog = servedByDsBot(document);
   let currentUser = null;
+  let sessionRequest = 0;
+  let sessionPending;
   let workspaceListState = 'loading';
   let catalog = [];
   let cursor = '';
@@ -501,6 +506,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   const feedState = {...initialFeed, items: [], cursor: '', loading: false};
   let feedRequest = 0;
+  let feedViewer;
+  const feedActions = new Map();
   const commentButtons = new Map();
   const workTriggers = new Map();
   const detail = Object.fromEntries([
@@ -601,6 +608,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     setAdjacent(entry, 'next');
     detail.title.focus?.({preventScroll: true});
 
+    if (sessionPending) await sessionPending;
+    if (activeWork !== entry) return;
     const signedIn = Boolean(currentUser);
     const path = signedIn
       ? '/v1/discover/works/' + intent.slug + workDetailQuery(feedState)
@@ -964,6 +973,42 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     workTriggers.set(item.slug, card);
   }
 
+  function matchesFeedViewer(viewer) {
+    return Boolean(currentUser && viewer && (nativeCatalog ? viewer === currentUser.username : viewer === currentUser));
+  }
+
+  function addFeedEngagement(item, actions) {
+    const viewer = currentUser;
+    if (!matchesFeedViewer(feedViewer) || actions.viewer === viewer) return;
+    actions.viewer = viewer;
+    const buttons = [];
+    for (const [action, flag, label] of engagement) {
+      if (action === 'follow' && item.own_work) continue;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = engagementLabel(item, action, flag, label);
+      button.setAttribute('aria-pressed', String(Boolean(item[flag])));
+      const isCurrent = () => viewer === currentUser && feedActions.get(item) === actions;
+      button.addEventListener('click', async () => {
+        if (!isCurrent() || button.disabled) return;
+        button.disabled = true;
+        const result = await request('POST', `/v1/discover/works/${item.slug}/engagement`, {action, enabled: !item[flag]})
+          .catch(() => ({status: 0}));
+        if (!isCurrent()) return;
+        button.disabled = false;
+        if (result.status !== 200) {
+          const error = document.getElementById('feed-error');
+          error.hidden = false;
+          error.textContent = '操作未保存，请重试。';
+          return;
+        }
+        await loadFeed();
+      });
+      buttons.push(button);
+    }
+    actions.element.prepend(...buttons);
+  }
+
   function renderFeed(start = 0) {
     const grid = document.getElementById('feed-grid');
     if (!grid) return;
@@ -972,6 +1017,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       pendingCovers.clear();
       commentButtons.clear();
       workTriggers.clear();
+      feedActions.clear();
       grid.replaceChildren();
     }
     for (const item of feedState.items.slice(start)) {
@@ -982,24 +1028,6 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       entry.className = 'feed-entry';
       entry.append(card);
       const actions = document.createElement('div');
-      for (const [action, flag, label] of currentUser ? engagement : []) {
-        if (action === 'follow' && item.own_work) continue;
-        const button = document.createElement('button'); button.type = 'button';
-        button.textContent = engagementLabel(item, action, flag, label);
-        button.setAttribute('aria-pressed', item[flag] ? 'true' : 'false');
-        button.addEventListener('click', async () => {
-          button.disabled = true;
-          let result;
-          try { result = await request('POST', `/v1/discover/works/${item.slug}/engagement`, {action, enabled: !item[flag]}); }
-          catch { result = {status: 0}; }
-          button.disabled = false;
-          if (result.status !== 200) {
-            const error = document.getElementById('feed-error'); error.hidden = false; error.textContent = '操作未保存，请重试。'; return;
-          }
-          await loadFeed();
-        });
-        actions.append(button);
-      }
       if (validSlug(item.slug)) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -1012,8 +1040,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         });
         actions.append(button);
         commentButtons.set(item.slug, button);
+        const controls = {element: actions, viewer: null};
+        feedActions.set(item, controls);
+        addFeedEngagement(item, controls);
+        entry.append(actions);
       }
-      if (actions.childElementCount) entry.append(actions);
       bindWorkDetail(entry, card, item);
       grid.append(entry);
     }
@@ -1025,34 +1056,41 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     document.getElementById('feed-activity-empty')?.setAttribute('aria-busy', String(feedState.loading));
     const count = document.getElementById('feed-count');
     if (count) {
-      if (feedState.loading) count.textContent = feedState.items.length ? '正在加载更多作品…' : '正在加载作品…';
+      if (feedState.loading && feedState.cursor) count.textContent = '正在加载更多作品…';
+      else if (feedState.loading && !feedState.items.length) count.textContent = '正在加载作品…';
       else count.textContent = feedState.items.length ? '已显示 ' + feedState.items.length + ' 件公开作品' : '';
     }
     const more = document.getElementById('feed-more');
     if (more) {
       more.hidden = !feedState.cursor;
-      more.disabled = feedState.loading;
+      more.disabled = feedState.loading || Boolean(nativeCatalog && sessionPending);
     }
     applyFeedNote();
   }
 
-  async function loadFeed({append = false} = {}) {
+  async function loadFeed({append = false, retainItems = false, retryViewer = true} = {}) {
     if (feedState.loading && append) return;
     const seq = ++feedRequest;
     if (!append) {
-      feedState.items = [];
+      if (!retainItems) feedState.items = [];
       feedState.cursor = '';
+      feedViewer = undefined;
     }
-    feedState.loading = true;
+    const needsViewer = feedState.tab !== 'activity';
+    const waitingForViewer = needsViewer && !currentUser;
+    feedState.loading = !waitingForViewer || Boolean(sessionPending);
     const error = document.getElementById('feed-error');
     if (error) {
       error.hidden = true;
       error.textContent = '';
     }
-    if (append) updateFeedStatus();
+    if (append || retainItems) updateFeedStatus();
     else renderFeed();
-    const privateFeed = currentUser || feedState.tab !== 'activity';
-    const sort = feedState.tab === 'activity' ? feedState.sort : 'latest';
+    if (waitingForViewer) return;
+    // The native all-works route includes the same viewer state as /me/works?tab=all.
+    const viewer = currentUser;
+    const privateFeed = needsViewer || (viewer && !nativeCatalog);
+    const sort = needsViewer ? 'latest' : feedState.sort;
     const params = feedQuery(feedState.query, feedState.cursor, feedState.kind, sort);
     const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
@@ -1073,7 +1111,19 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       updateFeedStatus();
       return;
     }
-    const start = feedState.items.length;
+    const name = result.body?.viewer_username;
+    const nativeViewer = typeof name === 'string' && VIEWER_USERNAME.test(name) ? name : null;
+    const mismatch = nativeCatalog && currentUser && !matchesFeedViewer(nativeViewer);
+    if (mismatch && (needsViewer || append)) {
+      if (retryViewer) return loadFeed({retryViewer: false});
+      if (error) {
+        error.hidden = false;
+        error.textContent = '登录状态已变化，刷新页面后重试。';
+      }
+      updateFeedStatus();
+      return;
+    }
+    const start = append ? feedState.items.length : 0;
     const incoming = catalogItems(result.body);
     if (append) {
       const seen = new Set(feedState.items.map(item => item.slug));
@@ -1085,8 +1135,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     } else {
       feedState.items = incoming;
     }
-    feedState.cursor = result.body.cursor || '';
+    feedViewer = nativeCatalog ? nativeViewer : (privateFeed ? viewer : null);
+    feedState.cursor = mismatch ? '' : result.body?.cursor || '';
     renderFeed(start);
+    if (mismatch && retryViewer) return loadFeed({retainItems: true, retryViewer: false});
   }
 
   function show(kind, text) {
@@ -1356,10 +1408,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   }
 
-  function renderManage(pairs) {
+  function renderManage(pairs, workspace = '') {
     const list = document.getElementById('manage-list');
     list.replaceChildren();
     document.getElementById('manage-empty').hidden = pairs.length > 0;
+    const viewer = currentUser;
+    const canManage = () => Boolean(viewer) && viewer === currentUser && workspaceSelect.value === workspace;
     for (const {agent, discover} of pairs) {
       const li = document.createElement('li');
       li.className = 'manage-row';
@@ -1417,7 +1471,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       publish.hidden = archived;
       publish.textContent = discover.listed ? '更新发布' : '发布';
       publish.addEventListener('click', async () => {
-        if (archived || publish.disabled) return;
+        if (!canManage() || archived || publish.disabled) return;
         if (!validSlug(input.value.trim())) {
           show('error', 'slug 需为 3–30 个字符的小写字母、数字或连字符。');
           return;
@@ -1427,9 +1481,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         publish.textContent = '正在发布…';
         try {
           const result = await request(
-            'POST', `/v1/workspaces/${workspaceSelect.value}/agents/${agent.id}/discover`,
+            'POST', `/v1/workspaces/${workspace}/agents/${agent.id}/discover`,
             {slug: input.value.trim(), revision: agent.revision, copy_instructions: allow.checked,
               chat_enabled: publicChat.checked, publish_quick_starts: quickStarts.checked});
+          if (!canManage()) return;
           if (result.status !== 201 && result.status !== 200) {
             show('error', messageFor(result.body.error, '无法发布。'));
             return;
@@ -1437,7 +1492,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
           show('ok', '已发布。');
           await Promise.all([loadCatalog(), loadManage()]);
         } catch {
-          show('error', '连接中断，请重试发布。');
+          if (canManage()) show('error', '连接中断，请重试发布。');
         } finally {
           publish.disabled = false;
           revoke.disabled = !discover.listed;
@@ -1449,8 +1504,10 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       revoke.textContent = '取消发布';
       revoke.disabled = !discover.listed;
       revoke.addEventListener('click', async () => {
+        if (!canManage() || revoke.disabled) return;
         const result = await request(
-          'POST', `/v1/workspaces/${workspaceSelect.value}/agents/${agent.id}/discover/revoke`, {});
+          'POST', `/v1/workspaces/${workspace}/agents/${agent.id}/discover/revoke`, {});
+        if (!canManage()) return;
         if (result.status !== 200) {
           show('error', messageFor(result.body.error, '无法取消收录。'));
           return;
@@ -1473,7 +1530,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function loadManage() {
     const seq = ++manageRequest;
     const id = workspaceSelect.value;
-    if (!id) {
+    if (!currentUser || !id) {
       renderManage([]);
       return;
     }
@@ -1497,35 +1554,61 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       const pairs = agentDiscoverPairs(agents, statuses);
       const index = id === manageWorkspace ? pairs.findIndex(({agent}) => agent.id === manageAgent) : -1;
       if (index > 0) pairs.unshift(...pairs.splice(index, 1));
-      renderManage(pairs);
+      renderManage(pairs, id);
     }
   }
 
   async function load() {
+    const attempt = ++sessionRequest;
+    currentUser = null;
+    workComments.setActor('');
+    manageRequest++;
+    document.getElementById('catalog-manage').hidden = true;
+    if (agentsView) {
+      workspaceListState = 'loading';
+      workspaceSelect.replaceChildren();
+      renderManage([]);
+    }
+    document.getElementById('whoami').textContent = '';
     showDiscoverView();
-    const sessionLoad = request('GET', '/v1/auth/session');
+    const sessionLoad = request('GET', '/v1/auth/session').catch(() => ({status: 0})).then(session => {
+      if (attempt !== sessionRequest) return;
+      sessionPending = null;
+      currentUser = session.status === 200 ? session.body?.user || null : null;
+      workComments.setActor(currentUser?.id || currentUser?.username || '');
+    });
+    sessionPending = sessionLoad;
+    const feedLoad = catalogView ? null : loadFeed();
+    const initialFeedRequest = feedRequest;
+    const detailIntent = catalogView ? null : workDetailFromSearch(location?.search);
+    const detailLoad = detailIntent ? openWorkDetail(detailIntent) : closeWorkDetail();
+    if (!catalogView) mainPanel.hidden = false;
     const directoryLoad = agentsView ? loadCatalog() : null;
-    const session = await sessionLoad;
-    if (session.status !== 200) {
-      currentUser = null;
-      workComments.setActor('');
-      loginPanel.hidden = false;
-      mainPanel.hidden = false;
-      document.getElementById('catalog-manage').hidden = true;
-      show('', '');
-      if (!catalogView) return loadDiscoverRoute();
+    await sessionLoad;
+    if (attempt !== sessionRequest) return;
+    loginPanel.hidden = Boolean(currentUser);
+    mainPanel.hidden = false;
+    show('', '');
+    if (!catalogView) {
+      if (feedState.tab !== 'activity') return Promise.all([loadFeed(), detailLoad]);
+      if (currentUser && !nativeCatalog) return Promise.all([loadFeed({retainItems: true}), detailLoad]);
+      if (nativeCatalog && currentUser && feedViewer !== undefined) {
+        if (!matchesFeedViewer(feedViewer)) return Promise.all([loadFeed({retainItems: true, retryViewer: false}), detailLoad]);
+        for (const [item, actions] of feedActions) addFeedEngagement(item, actions);
+      }
+      updateFeedStatus();
+      return Promise.all([feedRequest === initialFeedRequest ? feedLoad : null, detailLoad]);
+    }
+    if (!currentUser) {
       if (teamsView) await loadTeams();
       await directoryLoad;
       return;
     }
-    currentUser = session.body.user;
-    workComments.setActor(currentUser.id || currentUser.username);
-    loginPanel.hidden = true;
-    mainPanel.hidden = false;
     document.getElementById('catalog-manage').hidden = !agentsView;
     document.getElementById('whoami').textContent = currentUser.username;
     if (agentsView) {
       const listed = await request('GET', '/v1/workspaces?limit=100');
+      if (attempt !== sessionRequest) return;
       workspaceListState = listed.status === 200 ? 'ready' : 'failed';
       const workspaces = workspaceListState === 'ready' ? (listed.body.items || []) : [];
       workspaceSelect.replaceChildren();
@@ -1541,8 +1624,6 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (manage.open) void loadManage();
       else if (location?.hash === '#catalog-manage') manage.open = true;
     }
-    show('', '');
-    if (!catalogView) return loadDiscoverRoute();
     if (teamsView) await loadTeams();
     await directoryLoad;
   }
@@ -1636,7 +1717,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const feedMore = document.getElementById('feed-more');
   if (feedMore) {
     feedMore.addEventListener('click', () => {
-      if (feedState.cursor && !feedState.loading) loadFeed({append: true});
+      if (!feedMore.disabled && feedState.cursor) loadFeed({append: true});
     });
   }
   for (const tab of ['following', 'activity', 'collected']) {

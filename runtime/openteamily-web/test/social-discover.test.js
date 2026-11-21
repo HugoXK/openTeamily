@@ -6,8 +6,34 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createBotSocial, setSharedBotSocial } from '../lib/c/bot-social.js'
 import discover from '../features/discover/index.js'
+import { createDispatch } from '../src/dispatch.js'
 
 const SERVER = 'https://social.example.test'
+
+test('the legacy native work feed attributes viewer flags to the trusted request account', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-discover-viewer-'))
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({ token: 'ot-fake-token', server: SERVER }), { mode: 0o600 })
+  const fetch = async () => Response.json({items: [], viewer_username: 'service-value'})
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath, fetch}))
+  const dispatch = createDispatch({endpoints: {'discover/v1': discover({dataDir: dir}).endpoints.v1}})
+  async function viewer(path, header) {
+    const response = await dispatch(new Request('http://runtime/api/openteamily', {
+      method: 'POST',
+      headers: header === undefined ? {} : {'x-ot-owner-username': header},
+      body: JSON.stringify({endpoint: 'discover/v1', payload: {method: 'GET', path, viewer_username: 'client-value'}}),
+    }))
+    const {ok, value} = await response.json()
+    assert.equal(ok, true)
+    assert.equal(value.status, 200)
+    return value.body.viewer_username
+  }
+  assert.equal(await viewer('/v1/discover/works?limit=12', 'trusted.viewer'), 'trusted.viewer')
+  assert.equal(await viewer('/v1/discover/me/works?tab=collected', 'trusted.viewer'), 'trusted.viewer')
+  assert.equal(await viewer('/v1/discover/works', 'not a username'), undefined)
+  assert.equal(await viewer('/v1/discover/works'), undefined)
+  assert.equal(await viewer('/v1/discover/agents', 'trusted.viewer'), undefined)
+})
 
 test('discover endpoints publish only the whitelisted projection and browse the shared feed', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ot-cd-'))

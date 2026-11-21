@@ -12,7 +12,7 @@ const error = (status, code, message) => ({ status, body: { error: { code, messa
 
 export function compatHandler(routes) {
   const maxQuery = Math.max(QUERY_LIMIT, ...routes.map(route => route.queryLimit ?? QUERY_LIMIT))
-  return async (payload) => {
+  return async (payload, call) => {
     const method = String(payload?.method ?? '').toUpperCase()
     const rawPath = payload?.path
     const embedded = typeof rawPath === 'string' ? rawPath.indexOf('?') : -1
@@ -32,7 +32,7 @@ export function compatHandler(routes) {
       if (query.length > (route.queryLimit ?? QUERY_LIMIT)) return error(400, 'invalid', 'Invalid compat request')
       if (route.method !== method) continue
       try {
-        const [status, body, download] = await route.handle({ match, query, body: payload.body, method, idempotency_key: payload.idempotency_key })
+        const [status, body, download] = await route.handle({ match, query, body: payload.body, method, idempotency_key: payload.idempotency_key }, call)
         return { status, body, ...(download ? {download} : {}) }
       } catch (caught) {
         if (caught instanceof Fault) {
