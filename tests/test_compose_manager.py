@@ -9,6 +9,7 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -18,7 +19,7 @@ from wsgiref.simple_server import make_server
 import test_runtime as fixtures
 from openteamily.lifecycle import RuntimeFault, RuntimePolicy, ManagerIdentity
 from openteamily.manager.client import ManagerClient
-from openteamily.manager.engine import Registry, Runner, ComposeEngine, manifest, added_secret_binds, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET, compose_bytes
+from openteamily.manager.engine import Registry, Runner, ComposeEngine, manifest, compatible_manifest_upgrade, BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET, SOCIAL_SOCKET_BIND, SOCIAL_SOCKET_SOURCE, SOCIAL_SOCKET_TARGET, compose_bytes
 from openteamily.manager.safety import ManagerError, write_new, replace_private, instance_lock, redact
 from openteamily.manager.worker import ManagerWorker
 from openteamily.manager.__main__ import main
@@ -27,6 +28,36 @@ from openteamily.operator_config import load_manager_auth
 from openteamily.security import digest
 
 IMAGE = 'operator/runtime@sha256:' + 'a' * 64
+
+
+class BotSocialSocketManifestTests(unittest.TestCase):
+    def test_local_bot_social_socket_manifest_upgrade_is_opt_in_and_read_only(self):
+        iid = 'a' * 32
+        entry = {'image': IMAGE, 'healthcheck': None, 'publish_port': None}
+        original = manifest(iid, entry)
+        expected = manifest(iid, entry, bot_social_socket=True)
+        self.assertEqual(compatible_manifest_upgrade(original, expected), {'added': [SOCIAL_SOCKET_TARGET]})
+        self.assertEqual(expected['services']['flybot']['volumes'][-1], SOCIAL_SOCKET_BIND)
+        different_source = deepcopy(expected)
+        different_source['services']['flybot']['volumes'][-1]['source'] = 'different'
+        self.assertIsNone(compatible_manifest_upgrade(original, different_source))
+        config = {
+            'version': 1, 'execution_enabled': False, 'base_url': 'http://127.0.0.1:8080',
+            'server_host': 'account.test', 'manager_id': 'local', 'token': 'fixture', 'docker': '/bin/false',
+            'socket': '/var/run/docker.sock', 'instances': {iid: entry}, 'bot_social_socket': True,
+        }
+        with tempfile.TemporaryDirectory() as data_dir:
+            root = Path(data_dir)
+            path = root / 'manager.json'
+            write_new(path, config)
+            with self.assertRaisesRegex(ManagerError, 'bot_social_socket_directory'):
+                Registry(str(path))
+            socket_dir = root / SOCIAL_SOCKET_SOURCE
+            socket_dir.mkdir(mode=0o755)
+            registry = Registry(str(path))
+            _, stored = registry.entry(iid)
+            self.assertEqual(json.loads(stored.read_text()), expected)
+
 
 def assert_container_readable_secret(test, path):
     info = path.stat()
@@ -674,11 +705,11 @@ class ComposeManagerTests(unittest.TestCase):
     def test_compatible_secret_bind_upgrade_is_detected_and_unrelated_drift_is_not(self):
         expected = manifest(self.iid, self.cfg['instances'][self.iid])
         older = self.old_compose_document()
-        added = added_secret_binds(older, expected)
-        self.assertEqual([item['target'] for item in added], [BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET])
+        self.assertEqual(compatible_manifest_upgrade(older, expected),
+                         {'added': [BOT_SOCIAL_TARGET, RUNTIME_KEY_TARGET]})
         drifted = dict(older)
         drifted['services'] = {'flybot': dict(older['services']['flybot'], image='evil@sha256:' + 'b' * 64)}
-        self.assertIsNone(added_secret_binds(drifted, expected))
+        self.assertIsNone(compatible_manifest_upgrade(drifted, expected))
 
     def test_migrate_manifest_rewrites_compose_and_never_deletes_the_volume(self):
         path = self.write_old_compose()
@@ -774,6 +805,67 @@ class ComposeManagerTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 'manifest_changed')
         self.assertEqual(sentinel.read_text(), 'keep-me')
         self.assertIn('sh', path.read_text())
+
+
+class ComposeMemoryUpgradeTests(unittest.TestCase):
+    def test_memory_upgrade_preserves_volume_and_waits_for_the_next_start(self):
+        temp = tempfile.TemporaryDirectory(prefix='ot-mgr-')
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name).resolve()
+        iid = 'a' * 32
+        docker = root / 'docker-stub'
+        code = (Path(__file__).parent / 'fixtures/docker_stub.py').read_text()
+        docker.write_text('#!' + sys.executable + '\n' + code.split('\n', 1)[1])
+        docker.chmod(0o700)
+        sock = root / 'engine.sock'
+        with socket.socket(socket.AF_UNIX) as server:
+            server.bind(str(sock))
+        entry = {'image': IMAGE, 'healthcheck': None, 'publish_port': None}
+        config = root / 'manager.json'
+        write_new(config, {'version': 1, 'execution_enabled': True,
+                           'base_url': 'http://127.0.0.1:8080', 'server_host': 'management.test',
+                           'manager_id': 'manager-a', 'token': 'unused-fixture-token',
+                           'docker': str(docker), 'socket': str(sock), 'instances': {iid: entry}})
+        registry = Registry(str(config))
+        engine = ComposeEngine(registry, Runner(registry, enabled=True))
+        engine.compose(iid, 'start')
+
+        path = root / ('compose-' + iid + '.json')
+        expected = manifest(iid, entry)
+        legacy = deepcopy(expected)
+        legacy['services']['flybot']['mem_limit'] = '1g'
+        replace_private(path, compose_bytes(legacy))
+        state_path = root / 'stub-engine.json'
+        state = json.loads(state_path.read_text())
+        state['memory_bytes'] = 1024 ** 3
+        state_path.write_text(json.dumps(state))
+
+        preview = registry.preview_manifest(iid)
+        self.assertEqual(preview['status'], 'upgradeable')
+        self.assertEqual(preview['added'], [])
+        self.assertEqual(preview['memory_limit'], {'from': '1g', 'to': '1536m'})
+        self.assertEqual(path.read_bytes(), compose_bytes(legacy))
+        unsupported = deepcopy(legacy)
+        unsupported['services']['flybot']['mem_limit'] = '2g'
+        self.assertIsNone(compatible_manifest_upgrade(unsupported, expected))
+        altered_volume = deepcopy(legacy)
+        altered_volume['services']['flybot']['volumes'][0]['volume'] = {'nocopy': True}
+        self.assertIsNone(compatible_manifest_upgrade(altered_volume, expected))
+
+        engine.compose(iid, 'stop')
+        self.assertEqual(engine.wait(iid, 'stop', timeout=2), {'observed': 'stopped'})
+        self.assertTrue(engine.inspect(iid)['needs_recreate'])
+        self.assertEqual(json.loads(state_path.read_text())['memory_bytes'], 1024 ** 3)
+        self.assertEqual(json.loads(path.read_text())['volumes'], legacy['volumes'])
+
+        engine.compose(iid, 'start-recreate')
+        self.assertEqual(engine.wait(iid, 'start-recreate', timeout=2)['observed'], 'running')
+        current = json.loads(state_path.read_text())
+        self.assertEqual(current['memory_bytes'], 1536 * 1024 ** 2)
+        self.assertEqual(current['sentinel'], state['sentinel'])
+        self.assertIn('--force-recreate', current['last_argv'])
+        self.assertNotIn('-v', current['last_argv'])
+        self.assertFalse(engine.inspect(iid)['needs_recreate'])
 
 
 class ManagerHttpTransportTests(unittest.TestCase):

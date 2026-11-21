@@ -28,6 +28,9 @@ jobs:
       - name: Run web-slot host unit tests (no npm install)
         working-directory: runtime/flybot-web-slots
         run: npm test
+      - name: Run OpenTeamily DS-Bot plugin unit tests (no npm install)
+        working-directory: runtime/openteamily-web
+        run: npm test
 
   image-build-smoke:
     name: Build and smoke under the manager contract
@@ -57,6 +60,7 @@ jobs:
           fi
           docker build -f runtime/flybot-image/Dockerfile \
             --build-arg "DSH_VERSION=${DSH_VERSION}" \
+            --build-context openteamily-static=openteamily/static \
             -t openteamily-flybot:test \
             runtime
       - name: Smoke the image as the compose manager would start it
@@ -67,6 +71,12 @@ jobs:
 
       - name: Prove compose manager starts a digest-pinned image
         run: python3 runtime/flybot-image/test/container-compose-chat.py openteamily-flybot:test
+
+      - name: Prove the platform gateway routes each user only to their own DS-Bot
+        run: python3 runtime/flybot-image/test/container-gateway-isolation.py openteamily-flybot:test
+
+      - name: Prove two users' DS-Bots collaborate through a real Bot Social (team, invite, DM, group, discover)
+        run: python3 runtime/flybot-image/test/container-social-two-dsbots.py openteamily-flybot:test
 
       - name: Inventory licenses in the built image
         run: |
