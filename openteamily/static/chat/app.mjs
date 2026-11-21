@@ -5,6 +5,7 @@ import { mountGroupTranslation } from './translation.mjs';
 import { mountChatCalls } from './calls.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountChatActivity } from './activity.mjs';
+import { stageMeetingFromChat } from '../shell/meeting-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
@@ -1203,6 +1204,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('forward-count').textContent = forwardCountLabel(selectedMessages.size);
     const target = document.getElementById('forward-target');
     document.getElementById('forward-submit').disabled = forwardBusy || !(selectedMessages.size && target.value);
+    for (const id of ['selection-memory', 'selection-meeting']) {
+      const action = document.getElementById(id);
+      if (action) action.disabled = !selectedMessages.size;
+    }
     const toggle = document.getElementById('multi-select-toggle');
     if (toggle) { toggle.setAttribute('aria-pressed', selecting ? 'true' : 'false'); toggle.textContent = selecting ? '退出多选' : '多选'; }
   }
@@ -1780,7 +1785,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         li.append(reply);
       }
       if (item.role === 'agent' && !currentConversation?.public_agent && saveableSocialMessage(item)) li.append(saveMessageButton(item));
-      if (item.role !== 'agent' && !item.retracted) li.append(messageTools(item));
+      if (!item.retracted && (item.role !== 'agent' || selecting)) li.append(messageTools(item));
       if (item.role !== 'agent' && !item.retracted) li.append(reactionBar(item));
       if (item.role !== 'agent' && !item.retracted) {
         const more = document.createElement('button');
@@ -3146,6 +3151,84 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     await load();
+  });
+
+  function selectedTranscript() {
+    const people = currentConversation?.members || [];
+    return lastSocialItems.filter(item => selectedMessages.has(item.id) && !item.retracted).map(item => {
+      const author = item.agent_name || people.find(person => person.user_id === item.user_id)?.username || '成员';
+      const body = item.body?.trim() || item.attachment?.title || (item.voice ? '语音消息' : '');
+      return body ? `${author}：${body}` : '';
+    }).filter(Boolean).join('\n\n');
+  }
+
+  document.getElementById('selection-meeting')?.addEventListener('click', () => {
+    const transcript = selectedTranscript(), workspace = workspaceId();
+    if (!workspace || !currentUser || !transcript) return;
+    if (transcript.length > 40000) {
+      show('error', '所选消息超过会议正文上限，请减少选择。');
+      return;
+    }
+    const title = (conversationLabel(currentConversation, currentUser.id) + ' · 会议纪要').slice(0, 120);
+    try {
+      const href = stageMeetingFromChat(document.defaultView.sessionStorage, {owner:currentUser.id, workspace, transcript, title});
+      document.defaultView.location.assign(href);
+    } catch {
+      show('error', '无法打开会议草稿，请重试。');
+    }
+  });
+
+  const memoryDialog = document.getElementById('selection-memory-dialog');
+  const memoryForm = document.getElementById('selection-memory-form');
+  const memoryError = document.getElementById('selection-memory-error');
+  let memoryDraft = null;
+  const openMemory = document.getElementById('selection-memory');
+  openMemory?.addEventListener('click', () => {
+    const transcript = selectedTranscript();
+    if (!transcript || !currentUser || !workspaceId()) return;
+    if (transcript.length > 8000) {
+      show('error', '所选消息超过记忆正文上限，请减少选择。');
+      return;
+    }
+    memoryDraft = {owner:currentUser.id, workspace:workspaceId(), scope:sendScope(), attempt:null, pending:false};
+    memoryForm.elements.title.value = (conversationLabel(currentConversation, currentUser.id) + ' · 聊天记录').slice(0, 80);
+    memoryForm.elements.body.value = transcript;
+    memoryError.textContent = '';
+    memoryDialog.showModal();
+    memoryForm.elements.title.focus();
+  });
+  memoryDialog?.addEventListener('close', () => {memoryDraft = null;});
+  document.getElementById('selection-memory-cancel')?.addEventListener('click', () => memoryDialog.close());
+  memoryForm?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const draft = memoryDraft;
+    if (!draft || draft.pending || draft.owner !== currentUser?.id || draft.workspace !== workspaceId()) return;
+    const payload = {title:memoryForm.elements.title.value.trim(), body:memoryForm.elements.body.value};
+    const signature = JSON.stringify(payload);
+    if (draft.attempt?.signature !== signature) draft.attempt = {signature, key:idempotencyKey('chat-memory-')};
+    const submit = document.getElementById('selection-memory-submit');
+    draft.pending = submit.disabled = true;
+    memoryError.textContent = '';
+    try {
+      const result = await request('POST', `/v1/workspaces/${draft.workspace}/memory`, payload, {'Idempotency-Key':draft.attempt.key});
+      if (draft !== memoryDraft || draft.owner !== currentUser?.id) return;
+      const page = result.body.page;
+      if (![200, 201].includes(result.status) || !page?.id) {
+        memoryError.textContent = messageFor(result.body.error, '保存失败，请重试。');
+        return;
+      }
+      memoryDialog.close();
+      if (sendScope() === draft.scope) setSelecting(false);
+      show('ok', '已保存到记忆。');
+      const link = document.createElement('a');
+      link.href = '/memory?' + new URLSearchParams({workspace:draft.workspace, page:page.id});
+      link.textContent = '打开记忆';
+      status.append(document.createTextNode(' '), link);
+    } catch {
+      if (draft === memoryDraft) memoryError.textContent = '无法确认保存结果，请重试。';
+    } finally {
+      draft.pending = submit.disabled = false;
+    }
   });
 
   const multiToggle = document.getElementById('multi-select-toggle');

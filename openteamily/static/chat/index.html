@@ -332,12 +332,26 @@
       <p id="chat-invite-result" class="note" role="status"></p>
       <p class="note">令牌只显示一次；对方在「成员」页接受。审批在「成员」页处理。不会发送任何外部消息。</p>
     </section>
-    <section id="forward-bar" class="chat-strip" hidden aria-label="转发所选消息">
+    <section id="forward-bar" class="chat-strip" hidden aria-label="所选消息操作">
       <span id="forward-count">已选 0 条</span>
       <label>转发到 <select id="forward-target"></select></label>
       <button type="button" id="forward-submit" disabled>转发</button>
+      <button type="button" id="selection-memory" disabled>保存到记忆</button>
+      <button type="button" id="selection-meeting" disabled>整理会议纪要</button>
       <button type="button" id="forward-cancel">取消</button>
     </section>
+    <dialog id="selection-memory-dialog" class="chat-save-dialog" aria-labelledby="selection-memory-heading">
+      <form id="selection-memory-form">
+        <h2 id="selection-memory-heading">保存到记忆</h2>
+        <label>标题<input name="title" maxlength="80" required></label>
+        <label>正文<textarea name="body" maxlength="8000" rows="6" required></textarea></label>
+        <p id="selection-memory-error" role="status"></p>
+        <div class="actions">
+          <button type="button" id="selection-memory-cancel">取消</button>
+          <button type="submit" id="selection-memory-submit">确认保存</button>
+        </div>
+      </form>
+    </dialog>
     <dialog id="save-message-dialog" aria-labelledby="save-message-heading">
       <form id="save-message-form">
         <h2 id="save-message-heading">保存到资料空间</h2>

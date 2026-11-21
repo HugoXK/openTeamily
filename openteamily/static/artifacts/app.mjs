@@ -912,95 +912,112 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const sendEmpty = document.getElementById('send-to-chat-empty');
   const sendError = document.getElementById('send-to-chat-error');
   const sendLead = document.getElementById('send-to-chat-lead');
+  const sendConfirm = document.getElementById('send-to-chat-confirm');
+  const sendCancel = document.getElementById('send-to-chat-cancel');
   let sendingArtifact = null;
-  let sendPending = false, sendKeys = new Map();
+
+  function sendStatus(message = '') {
+    if (!sendError) return;
+    sendError.textContent = message;
+    sendError.hidden = !message;
+  }
 
   function closeSendDialog() {
-    if (!sendDialog) return;
+    if (!sendDialog || sendingArtifact?.pending) return;
     sendDialog.hidden = true;
     sendingArtifact = null;
   }
 
   async function openSendDialog(item) {
     if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
-    sendingArtifact = item;
-    sendKeys = new Map();
+    const wid = workspaceId();
+    const state = {item, wid, destination: null, pending: false, keys: new Map()};
+    sendingArtifact = state;
     sendDialog.hidden = false;
-    if (sendLead) sendLead.textContent = '将「' + item.title + '」的已保存版本发送到聊天。接收成员可下载该版本，不会自动发布。选择会话即发送：';
-    if (sendError) { sendError.hidden = true; sendError.textContent = ''; }
-    if (sendList) sendList.textContent = '';
-    if (sendEmpty) {
-      sendEmpty.hidden = false;
-      sendEmpty.textContent = '正在读取会话…';
-    }
-    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations?limit=100`);
-    if (sendingArtifact !== item) return;
+    sendConfirm.disabled = true;
+    const formats = {document:'Word 文档', website:'网页源码（文本）', whiteboard:'白板数据（JSON）',
+      slides:'PowerPoint 文件', dashboard:'Excel 文件', media:'媒体文件'};
+    sendLead.textContent = `「${item.title}」版本 ${item.revision} 将作为${formats[item.kind]}发送。请选择接收会话。`;
+    sendStatus();
+    sendList.replaceChildren();
+    sendEmpty.hidden = false;
+    sendEmpty.textContent = '正在读取会话…';
+    sendCancel?.focus();
+    const listed = await request('GET', `/v1/workspaces/${wid}/social/conversations?limit=100`)
+      .catch(() => ({status:0, body:{}}));
+    if (sendingArtifact !== state || workspaceId() !== wid) return;
     if (listed.status !== 200) {
-      if (sendEmpty) {
-        sendEmpty.hidden = false;
-        sendEmpty.textContent = messageFor(listed.body.error, '无法读取会话列表。');
-      }
+      sendEmpty.textContent = messageFor(listed.body.error, '无法读取会话列表。');
       return;
     }
-    const items = listed.body.items || [];
-    if (sendList) sendList.textContent = '';
-    if (sendEmpty) {
-      sendEmpty.hidden = items.length > 0;
-      sendEmpty.textContent = '这个工作区还没有可发送的群或单聊。';
-    }
+    const items = (listed.body.items || []).filter(item => !item.public_agent && item.direct?.open !== false);
+    sendEmpty.hidden = items.length > 0;
+    sendEmpty.textContent = '这个工作区还没有可发送的群或单聊。';
     for (const conversation of items) {
       const row = document.createElement('li');
       const button = document.createElement('button');
       button.type = 'button';
       button.textContent = conversationLabel(conversation);
-      button.addEventListener('click', () => sendArtifactToConversation(item, conversation));
-      row.appendChild(button);
-      sendList.appendChild(row);
+      button.setAttribute('aria-pressed', 'false');
+      button.addEventListener('click', () => {
+        if (state.pending) return;
+        state.destination = conversation;
+        for (const option of sendList.querySelectorAll('button')) option.setAttribute('aria-pressed', String(option === button));
+        sendConfirm.disabled = false;
+        sendStatus();
+      });
+      row.append(button);
+      sendList.append(row);
     }
   }
 
-  async function sendArtifactToConversation(item, conversation) {
-    if (!workspaceId() || !item || !conversation || !conversation.id) return;
-    if (sendPending) return;
-    sendPending = true;
-    const wid = workspaceId();
-    const key = sendKeys.get(conversation.id) || idempotencyKey();
-    sendKeys.set(conversation.id, key);
+  sendConfirm?.addEventListener('click', async () => {
+    const state = sendingArtifact;
+    if (!state?.destination || state.pending || workspaceId() !== state.wid) return;
+    const {wid, item, destination, keys} = state;
+    const key = keys.get(destination.id) || idempotencyKey();
+    keys.set(destination.id, key);
+    state.pending = true;
+    sendConfirm.disabled = true;
+    sendConfirm.textContent = '正在发送…';
+    if (sendCancel) sendCancel.disabled = true;
+    sendStatus();
     try {
-    const result = await request(
-      'POST',
-      `/v1/workspaces/${wid}/social/conversations/${conversation.id}/messages`,
-      {body: '', artifact_id: item.id, artifact_revision: item.revision},
-      {'Idempotency-Key': key},
-    );
-    if (workspaceId() !== wid || sendingArtifact !== item) return;
-    if (result.status !== 200 && result.status !== 201) {
-      if (sendError) {
-        sendError.hidden = false;
-        sendError.textContent = messageFor(result.body.error, '发送失败。');
+      const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${destination.id}/messages`,
+        {artifact_id: item.id, artifact_revision: item.revision}, {'Idempotency-Key': key});
+      if (sendingArtifact !== state || workspaceId() !== wid) return;
+      if (result.status !== 200 && result.status !== 201) {
+        sendStatus(messageFor(result.body.error, '发送失败，请重试。'));
+        return;
       }
-      show('error', messageFor(result.body.error, '发送到聊天失败。'));
-      return;
+      state.pending = false;
+      closeSendDialog();
+      show('ok', '已发送到「' + conversationLabel(destination) + '」。');
+    } catch {
+      if (sendingArtifact === state && workspaceId() === wid) sendStatus('未能确认发送结果，请选择同一会话重试。');
+    } finally {
+      state.pending = false;
+      if (sendingArtifact === state || !sendingArtifact) {
+        sendConfirm.textContent = '确认发送';
+        sendConfirm.disabled = !sendingArtifact?.destination;
+        if (sendCancel) sendCancel.disabled = false;
+      }
     }
-    closeSendDialog();
-    show('ok', '已发送到「' + conversationLabel(conversation) + '」。');
-    } catch { if (sendError) { sendError.hidden = false; sendError.textContent = '网络错误，发送结果未知。重试同一会话不会重复发送。'; } }
-    finally { sendPending = false; }
-  }
+  });
 
-  if (document.getElementById('send-to-chat-cancel')) {
-    document.getElementById('send-to-chat-cancel').addEventListener('click', closeSendDialog);
-  }
-  if (sendDialog) {
-    sendDialog.addEventListener('click', event => {
-      if (event.target === sendDialog) closeSendDialog();
-    });
-  }
+  sendCancel?.addEventListener('click', closeSendDialog);
+  sendDialog?.addEventListener('click', event => {
+    if (event.target === sendDialog) closeSendDialog();
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !sendDialog?.hidden) closeSendDialog();
+  });
 
   let openItemMenu = null;
   function closeItemMenu() {
     if (!openItemMenu) return;
     openItemMenu.menu.hidden = true;
+    openItemMenu.menu.remove();
     openItemMenu.button.setAttribute('aria-expanded', 'false');
     openItemMenu = null;
   }
@@ -1030,14 +1047,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     send.textContent = '发送到聊天';
     if (canSendArtifactToChat(item)) {
       send.disabled = false;
-      send.title = '把这件媒体作品发到一个群或单聊';
+      send.title = '把此作品的保存版本发到群聊或单聊';
       send.addEventListener('click', () => {
         closeItemMenu();
         openSendDialog(item);
       });
     } else {
       send.disabled = true;
-      send.title = '未接通：社交会话附件目前只接受媒体作品，文档和其他类型还不能发送';
+      send.title = '请先保存作品再发送';
     }
     const rename = document.createElement('button');
     rename.type = 'button';
@@ -1073,11 +1090,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const wasOpen = openItemMenu && openItemMenu.menu === menu;
       closeItemMenu();
       if (wasOpen) return;
+      document.body.appendChild(menu);
       menu.hidden = false;
+      const anchor = button.getBoundingClientRect?.() || {right:0, top:0, bottom:0};
+      const viewport = document.defaultView;
+      const height = viewport?.visualViewport?.height || viewport?.innerHeight || 800;
+      const width = viewport?.visualViewport?.width || viewport?.innerWidth || 400;
+      const top = anchor.bottom + menu.offsetHeight + 8 > height ? anchor.top - menu.offsetHeight - 4 : anchor.bottom + 4;
+      menu.style.top = Math.max(8, top) + 'px';
+      menu.style.left = Math.max(8, Math.min(width - menu.offsetWidth - 8, anchor.right - menu.offsetWidth)) + 'px';
       button.setAttribute('aria-expanded', 'true');
       openItemMenu = {menu, button};
     });
-    wrap.append(button, menu);
+    wrap.append(button);
     return wrap;
   }
 

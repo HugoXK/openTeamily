@@ -898,14 +898,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     void request('GET', '/v1/settings').then(prefs => {
       if (seq === sessionRequest && prefs.status === 200) applyTheme(prefs.body.settings);
     }).catch(() => {});
-    const {initial, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces');
+    const linked = new URLSearchParams(document.defaultView?.location?.search || '');
+    const workspace = linked.get('workspace'), pageId = linked.get('page');
+    const deepLink = /^[0-9a-f]{32}$/.test(workspace || '') && /^[0-9a-f]{32}$/.test(pageId || '');
+    let {initial, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces');
+    if (deepLink && !initial.body.items?.some(item => item.id === workspace) && supplemental) {
+      const shared = await supplemental;
+      if (shared.status === 200) initial = shared;
+      supplemental = null;
+    }
     if (seq !== sessionRequest) return;
-    fillWorkspaces(initial.status === 200 ? (initial.body.items || []) : []);
+    const workspaces = initial.status === 200 ? (initial.body.items || []) : [];
+    fillWorkspaces(workspaces);
+    if (deepLink && workspaces.some(item => item.id === workspace)) workspaceSelect.value = workspace;
     if (initial.status !== 200) show('error', '无法读取工作区，请刷新重试。');
     void supplemental?.then(result => {
       if (seq === sessionRequest && result.status === 200) fillWorkspaces(result.body.items);
     });
-    await loadWorkspace();
+    const directory = loadWorkspace();
+    if (deepLink && workspaceId() === workspace) {
+      await Promise.all([directory, openPage(pageId)]);
+    } else {
+      await directory;
+      if (deepLink && seq === sessionRequest) show('error', '无法打开此工作区的记忆页。');
+    }
   }
 
   async function renderProviders() {
@@ -1231,6 +1247,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
     renderPageLinks();
     syncExportButton();
+    const view = document.defaultView;
+    if (/^[0-9a-f]{32}$/.test(workspaceId()) && /^[0-9a-f]{32}$/.test(page.id)) {
+      view?.history?.replaceState?.({}, '', '/memory?' + new URLSearchParams({workspace:workspaceId(), page:page.id}));
+    }
   }
 
   function rememberPage(page) {

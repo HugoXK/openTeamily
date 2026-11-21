@@ -1,5 +1,6 @@
 import {mountMeetingAudio} from './audio.mjs';
 import {readWorkspaceChoices} from '../shell/dsbot-api.mjs';
+import {takeMeetingFromChat} from '../shell/meeting-link.mjs';
 
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -509,6 +510,18 @@ function mount() {
       await Promise.all([openMeeting(meetingId), loadList({keepEditor: true})]);
     } else if (linked.get('new') === '1') {
       fill(null);
+      if (linked.get('from') === 'chat') {
+        let source;
+        try { source = takeMeetingFromChat(document.defaultView.sessionStorage, session.body.user.id, workspaceId()); } catch {}
+        if (source) {
+          titleInput.value = source.title;
+          transcript.value = source.transcript;
+          updateDraftButton();
+          show('ok', '已填入所选聊天消息。可编辑正文，再生成纪要。');
+        } else {
+          show('error', '无法读取聊天草稿。你可以粘贴会议正文。');
+        }
+      }
       await loadList({keepEditor: true});
     } else {
       await loadList();
