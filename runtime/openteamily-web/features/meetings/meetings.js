@@ -99,27 +99,119 @@ export function view(row, includeBody = true) {
   return data
 }
 
+function meetingTime(startedAt) {
+  const d = new Date(startedAt * 1000)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
+}
+
+function markdownActions(items) {
+  if (!items.length) return ['（没有行动项）']
+  return items.map(item => '- [' + (item.done ? 'x' : ' ') + '] ' + item.text + (item.owner ? '（' + item.owner + '）' : ''))
+}
+
 export function markdown(row) {
   const data = view(row)
-  const d = new Date(data.started_at * 1000)
-  const pad = (n) => String(n).padStart(2, '0')
-  const started = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
   const lines = [
     '# ' + data.title, '',
-    '- 开始时间：' + started,
+    '- 开始时间：' + meetingTime(data.started_at),
     '- 参会人：' + (data.attendees.length ? data.attendees.join('、') : '未填写'),
     '- 行动项：' + data.done_count + '/' + data.action_count + ' 已完成', '',
     '## 摘要', '', data.summary || '（未填写）', '',
     '## 转写 / 正文', '', data.transcript || '（未填写）', '',
-    '## 行动项', '',
+    '## 行动项', '', ...markdownActions(data.action_items),
   ]
-  if (data.action_items.length) {
-    for (const item of data.action_items) lines.push('- [' + (item.done ? 'x' : ' ') + '] ' + item.text + (item.owner ? '（' + item.owner + '）' : ''))
-  } else lines.push('（没有行动项）')
   return lines.join('\n') + '\n'
 }
 
 const load = (store, workspaceId, id) => store.get('SELECT * FROM meetings WHERE id=? AND workspace_id=?', id, workspaceId)
+
+function meetingPage(req, workspaceId) {
+  const { limit, cursor, args } = pagination(req.query, ['q', 'open', 'order'])
+  const query = (args.get('q') ?? '').trim()
+  const open = args.has('open')
+  const recent = args.get('order') === 'recent'
+  if (query.length > 80 || (open && args.get('open') !== '1') ||
+      (args.has('order') && !recent && args.get('order') !== 'id')) refuse(400, 'invalid', '无效的会议筛选条件。')
+
+  const activity = recent ? {activity_version: digest(JSON.stringify(req.store.all(
+    'SELECT id,revision FROM meetings WHERE workspace_id=? ORDER BY id', workspaceId,
+  )))} : {}
+  let boundary = 'WHERE workspace_id=?'
+  const bindings = [workspaceId]
+  if (cursor && recent) {
+    const anchor = req.store.get('SELECT started_at FROM meetings WHERE workspace_id=? AND id=?', workspaceId, cursor)
+    if (!anchor) return { body: { items: [], cursor: null, ...activity } }
+    boundary += ' AND (started_at<? OR (started_at=? AND id>?))'
+    bindings.push(anchor.started_at, anchor.started_at, cursor)
+  } else if (cursor) {
+    boundary += ' AND id>?'
+    bindings.push(cursor)
+  }
+  const order = recent ? ' ORDER BY started_at DESC,id' : ' ORDER BY id'
+  const fields = `id,workspace_id,title,started_at,attendees,action_items,revision,created,updated,created_by,updated_by${query ? ',summary' : ''}`
+  const select = `SELECT ${fields} FROM meetings ` + boundary + order
+  const rows = query || open ? req.store.all(select, ...bindings) : req.store.all(select + ' LIMIT ?', ...bindings, limit + 1)
+  const needle = casefold(query)
+  const page = []
+  for (const row of rows) {
+    const actions = open || needle ? parse(row.action_items) : []
+    if (open && !actions.some(item => !item.done)) continue
+    if (needle && ![row.title, row.summary, ...parse(row.attendees), ...actions.flatMap(item => [item.text, item.owner])]
+      .some(value => casefold(value ?? '').includes(needle))) continue
+    page.push(row)
+    if (page.length > limit) break
+  }
+  return { body: { items: page.slice(0, limit).map(row => view(row, false)),
+    cursor: page.length > limit ? page[limit - 1].id : null, ...activity } }
+}
+
+function savedSnapshot(req, workspaceId, meetingId, revision) {
+  const row = req.store.get(`SELECT id,workspace_id,title,started_at,summary,action_items,revision
+    FROM meetings WHERE workspace_id=? AND id=?`, workspaceId, meetingId)
+  if (!row) refuse(404, 'not_found', '找不到会议记录。')
+  if (revision !== row.revision) refuse(409, 'conflict', '会议已更新，请重新打开最新版本。')
+  return row
+}
+
+function readSavedAction(req, workspaceId, meetingId) {
+  if (req.method !== 'GET') refuse(405, 'method', 'Only GET is supported')
+  const index = req.query.get('index')
+  const revision = req.query.get('revision')
+  if (req.query.size !== 2 || !/^(0|[1-9][0-9]?)$/.test(index ?? '') || Number(index) >= LIMITS.ACTIONS_MAX
+      || !/^[1-9][0-9]*$/.test(revision ?? '') || !Number.isSafeInteger(Number(revision))) {
+    refuse(400, 'invalid', '请选择已保存的行动项。')
+  }
+  const row = savedSnapshot(req, workspaceId, meetingId, Number(revision))
+  const action = parse(row.action_items)[Number(index)]
+  if (!action) refuse(404, 'not_found', '找不到这条行动项。')
+  if (action.done) refuse(409, 'conflict', '这条行动项已完成。')
+  const {id, workspace_id, title} = row
+  return {body: {
+    meeting: {id, workspace_id, title, revision: row.revision},
+    action: {text: action.text, owner: action.owner ?? '', done: false},
+    ...(req.ownerUsername ? {viewer_username: req.ownerUsername} : {}),
+  }}
+}
+
+async function saveMeetingArtifact(req, workspaceId, meetingId) {
+  if (req.method !== 'POST') refuse(405, 'method', 'Only POST is supported')
+  if (req.queryString) refuse(400, 'invalid', 'Queries are not supported')
+  const { revision } = requireBodyKeys(await req.json(), ['revision'])
+  if (!Number.isSafeInteger(revision) || revision < 1) refuse(400, 'invalid', '请选择已保存的纪要版本。')
+  const row = savedSnapshot(req, workspaceId, meetingId, revision)
+  const actions = parse(row.action_items)
+  if (!row.summary.trim() && !actions.length) refuse(400, 'invalid', '请先保存摘要或行动项。')
+  const title = row.title.replace(/\s+/g, ' ').trim()
+  const body = [
+    '# ' + title, '', '- 开始时间：' + meetingTime(row.started_at),
+    '', '## 摘要', '', row.summary || '（未填写）', '', '## 行动项', '', ...markdownActions(actions), '',
+  ].join('\n')
+  const result = await req.host.call('artifacts/saveMeetingNote', {
+    workspace_id: workspaceId, meeting_id: meetingId, revision, title, body,
+  })
+  return {status: result.status, body: {artifact: result.artifact}}
+}
 
 function validateAll({ title, started_at, attendees, transcript, summary, action_items }) {
   if (!validTitle(title) || !validStartedAt(started_at) || !validAttendees(attendees) || !validTranscript(transcript)
@@ -190,11 +282,7 @@ async function update(req, row) {
 
 async function dispatch(req, workspaceId, meetingId, removing) {
   if (!meetingId && !removing) {
-    if (req.method === 'GET') {
-      const { limit, cursor } = pagination(req.query)
-      const rows = req.store.all('SELECT * FROM meetings WHERE workspace_id=? AND id>? ORDER BY id LIMIT ?', workspaceId, cursor, limit + 1)
-      return { body: { items: rows.slice(0, limit).map((row) => view(row, false)), cursor: rows.length > limit ? rows[limit - 1].id : null } }
-    }
+    if (req.method === 'GET') return meetingPage(req, workspaceId)
     if (req.method === 'POST' && !req.queryString) return create(req, workspaceId)
     refuse(400, 'invalid', 'Invalid meeting request')
   }
@@ -239,7 +327,8 @@ export const spec = {
     action_items TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 1), created INTEGER NOT NULL,
     updated INTEGER NOT NULL, created_by TEXT NOT NULL, updated_by TEXT NOT NULL, key_hash TEXT NOT NULL,
     request_hash TEXT NOT NULL, UNIQUE(workspace_id, key_hash), UNIQUE(workspace_id, title_hash));
-    CREATE INDEX IF NOT EXISTS meeting_workspace ON meetings(workspace_id, id);`],
+    CREATE INDEX IF NOT EXISTS meeting_workspace ON meetings(workspace_id, id);`,
+    'CREATE INDEX IF NOT EXISTS meeting_workspace_recent ON meetings(workspace_id, started_at DESC, id)'],
   importTables: { meetings: COLUMNS },
   routes: [
     ...shareRoutes,
@@ -247,6 +336,8 @@ export const spec = {
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/transcribe$/, handle: transcribe },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/draft$/, handle: draftNotes },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/export$/, handle: exportMeeting },
+    { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/action$/, handle: readSavedAction },
+    { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/([0-9a-f]{32})\/artifact$/, handle: saveMeetingArtifact },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings(?:\/([0-9a-f]{32})(?:\/(remove))?)?$/, handle: dispatch },
   ],
   search,

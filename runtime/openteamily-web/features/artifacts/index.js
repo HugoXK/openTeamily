@@ -5,11 +5,11 @@
 // public /share/<token> pages are rendered by Bot Social (snapshot published here).
 import { defineFeature } from '../../featurekit/feature.js'
 import { HEX32, digest, refuse } from '../../featurekit/http.js'
-import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, search, uniqueTitle } from './library.js'
+import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, search, uniqueTitle, view } from './library.js'
 import { IMPORT_TABLES, MIGRATIONS } from './schema.js'
 import { routes } from './routes.js'
 import { importMedia } from './media.js'
-import { emptyBoard, MAX_GENERATED_VIDEO_BYTES, MAX_MEDIA_BYTES, publicKind, validTitle } from './model.js'
+import { emptyBoard, MAX_GENERATED_VIDEO_BYTES, MAX_MEDIA_BYTES, publicKind, TITLE_MAX, validBody, validTitle } from './model.js'
 import { sniffMime } from './render.js'
 import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { exportOffice } from './office.js'
@@ -47,6 +47,21 @@ export default defineFeature({
       const input = payload ?? {}
       const result = createArtifact(ctx, input.workspace_id, input, input.idempotency_key)
       return { artifact: result.body.artifact }
+    },
+    async saveMeetingNote(payload, call) {
+      if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+      const {workspace_id: workspace, meeting_id: id, revision, title, body} = payload ?? {}
+      if (!HEX32.test(workspace ?? '') || !HEX32.test(id ?? '') || !Number.isSafeInteger(revision)
+          || revision < 1 || typeof title !== 'string') refuse(400, 'invalid', '无效的纪要版本。')
+      if (!validBody(body)) refuse(413, 'too_large', '摘要和行动项超出资料空间的文档长度上限，请导出 Markdown。')
+      const key = 'meeting-note-' + id + '-' + revision
+      const saved = ctx.store.get('SELECT id FROM artifacts WHERE workspace_id=? AND key_hash=?', workspace, digest('artifact:' + key))
+      if (saved) return {status: 200, artifact: view(load(ctx.store, workspace, saved.id))}
+      const ending = ' · 纪要 v' + revision
+      const candidate = title.slice(0, TITLE_MAX - ending.length).replace(/[\uD800-\uDBFF]$/, '').trimEnd() + ending
+      const name = uniqueTitle(ctx.store, workspace, candidate, digest(key))
+      const result = createArtifact(ctx, workspace, {title: name, kind: 'document', body}, key)
+      return {status: result.status, artifact: result.body.artifact}
     },
     async generatedImage(input, call) {
       return generatedMedia(ctx, input, call, 'image', 'image/png', 'png', MAX_MEDIA_BYTES)

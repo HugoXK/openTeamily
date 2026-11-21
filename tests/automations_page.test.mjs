@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { automationTargetFromSearch, cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
+import { automationTargetFromSearch, cancellationPrompt, catalogItems, csrfCookie, deletePrompt, draftFromTemplate, listQuery, matchesRunFilter, meetingTargetFromSearch, mount, namesFromList, readEditor, RUN_DETAIL_EMPTY, runDetailFields, runErrorReason, runFilterFromSearch, runFilterSearchText, runResultText, runStatusLabel, scheduleFromForm, scheduleSummary, tabCategory } from '../openteamily/static/automations/app.mjs';
 
 test('csrfCookie reads host-bound and development cookie names only', () => {
   assert.equal(csrfCookie('__Host-ot_csrf=token-a'), 'token-a');
@@ -23,6 +23,20 @@ test('an onboarding link must name exactly one saved automation and its workspac
   assert.equal(automationTargetFromSearch('?template=daily_brief'), null);
   assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=${automation}&automation=${automation}`), {invalid: true});
   assert.deepEqual(automationTargetFromSearch(`?workspace=${workspace}&automation=missing`), {invalid: true});
+});
+
+test('meeting follow-up links carry a bounded action index, exact revision and no content', () => {
+  const workspace = 'a'.repeat(32);
+  const meeting = 'b'.repeat(32);
+  const path = `?workspace=${workspace}&meeting=${meeting}&action=0&revision=3`;
+  assert.deepEqual(meetingTargetFromSearch(path), {workspace, meeting, action: 0, revision: 3});
+  assert.equal(meetingTargetFromSearch('?template=daily_brief'), null);
+  for (const invalid of [
+    path + '&action=2', path + '&prompt=private', path + '&automation=' + meeting,
+    path.replace('action=0', 'action=50'), path.replace('action=0', 'action=-1'), path.replace('action=0', 'action=00'),
+    path.replace('revision=3', 'revision=0'), path.replace('revision=3', 'revision=9007199254740992'),
+    path.replace('meeting=' + meeting, 'meeting=missing'),
+  ]) assert.deepEqual(meetingTargetFromSearch(invalid), {invalid: true});
 });
 
 test('scheduleFromForm and namesFromList map editor fields', () => {
@@ -293,6 +307,141 @@ test('an exact onboarding link opens before unrelated loads and an explicit paus
     restorePolling();
     if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
   }
+});
+
+const SOURCE_WORKSPACE = 'a'.repeat(32);
+const SOURCE_MEETING = 'b'.repeat(32);
+const FOLLOW_UP = 'c'.repeat(32);
+const SOURCE_LINK = `?workspace=${SOURCE_WORKSPACE}&meeting=${SOURCE_MEETING}&action=1&revision=4`;
+const SOURCE_PATH = `/v1/workspaces/${SOURCE_WORKSPACE}/meetings/${SOURCE_MEETING}/action?index=1&revision=4`;
+const SOURCE = {
+  meeting: {id: SOURCE_MEETING, workspace_id: SOURCE_WORKSPACE, title: '交付例会', revision: 4, transcript: '会议私有全文'},
+  action: {text: '列出待核对的交付项', owner: 'Bob', done: false},
+  viewer_username: 'alice',
+};
+const respond = (body, status = 200) => ({status, json: async () => body});
+
+function mountFollowUp(t, {readSource = () => respond(SOURCE), workspaces = [{id: SOURCE_WORKSPACE, name: '个人空间'}]} = {}) {
+  const {doc, elements} = fakeDocument();
+  const view = {location: {search: SOURCE_LINK, pathname: '/automations'}, history: {
+    replaceState(state, title, url) { view.location.search = new URL(url, 'https://test.local').search; },
+  }};
+  doc.defaultView = view;
+  const calls = [];
+  const saved = globalThis.document;
+  const savedFormData = globalThis.FormData;
+  globalThis.document = doc;
+  globalThis.FormData = class {
+    constructor(form) { this.elements = form.elements; }
+    get(name) { return this.elements[name]?.value || ''; }
+    has(name) { return Boolean(this.elements[name]?.checked); }
+  };
+  t.after(() => { globalThis.document = saved; globalThis.FormData = savedFormData; });
+  const mounted = mount(doc, {fetcher: async (target, options) => {
+    const {method, body, headers} = options;
+    calls.push({target, method, body: body && JSON.parse(body), headers});
+    if (target === '/v1/auth/session') return respond({user: {username: 'alice'}});
+    if (target === '/v1/workspaces?scope=personal') return respond({items: workspaces});
+    if (target === '/v1/workspaces?limit=100') return respond({items: workspaces});
+    if (target === '/v1/automation-templates') return respond({items: []});
+    if (target === SOURCE_PATH) return readSource();
+    if (target.endsWith('/automations?category=mine') || target.endsWith('/runs?limit=20')) return respond({items: []});
+    if (target === `/v1/workspaces/${SOURCE_WORKSPACE}/automations` && method === 'POST') {
+      return respond({automation: {...JSON.parse(body), id: FOLLOW_UP, workspace_id: SOURCE_WORKSPACE, revision: 1}}, 201);
+    }
+    throw new Error('unexpected ' + method + ' ' + target);
+  }});
+  return {mounted, view, elements, calls};
+}
+
+test('a reviewed meeting follow-up explicitly saves paused and replaces the draft URL', async t => {
+  const {mounted, elements, calls, view} = mountFollowUp(t);
+  await mounted;
+  const form = elements.get('editor-form');
+  assert.equal(form.hidden, false);
+  assert.equal(elements.get('meeting-action-source').hidden, false);
+  assert.equal(elements.get('meeting-action-source-title').textContent, '交付例会');
+  assert.equal(elements.get('meeting-action-source-text').textContent, '列出待核对的交付项');
+  assert.equal(elements.get('meeting-action-source-owner').textContent, '原负责人：Bob');
+  assert.equal(elements.get('meeting-action-source-link').href, `/meetings#workspace=${SOURCE_WORKSPACE}&meeting=${SOURCE_MEETING}`);
+  assert.equal(form.elements.title.value, '会议跟进：交付例会 · 行动项 2');
+  assert.match(form.elements.prompt.value, /列出待核对的交付项/);
+  assert.doesNotMatch(form.elements.prompt.value, /会议私有全文/);
+  assert.equal(form.elements.enabled.checked, false);
+  assert.equal(form.elements.enabled.disabled, true);
+  assert.equal(elements.get('tick-automation').hidden, true);
+  assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+  form.elements.prompt.value += '\n增加完整性检查。';
+  form.elements.enabled.checked = true;
+  await form.handlers.submit[0]({preventDefault() {}});
+  const writes = calls.filter(({method}) => method === 'POST');
+  assert.equal(calls.filter(({target}) => target === SOURCE_PATH).length, 2);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].target, `/v1/workspaces/${SOURCE_WORKSPACE}/automations`);
+  assert.equal(writes[0].body.enabled, false);
+  assert.deepEqual(writes[0].body.participants, ['alice']);
+  assert.equal(writes[0].body.template_id, 'custom');
+  assert.match(writes[0].body.prompt, /增加完整性检查/);
+  assert.match(writes[0].headers['Idempotency-Key'], /^[a-z0-9_-]{16,64}$/i);
+  assert.equal(elements.get('meeting-action-source').hidden, true);
+  assert.equal(form.elements.enabled.disabled, false);
+  assert.equal(elements.get('tick-automation').hidden, false);
+  assert.equal(view.location.search, `?workspace=${SOURCE_WORKSPACE}&automation=${FOLLOW_UP}`);
+});
+
+test('meeting follow-up blocks a completed action or changed revision before saving', async t => {
+  let reads = 0;
+  const {mounted, elements, calls} = mountFollowUp(t, {readSource: () => ++reads === 1 ? respond(SOURCE) : respond({}, 409)});
+  await mounted;
+  await elements.get('editor-form').handlers.submit[0]({preventDefault() {}});
+  assert.equal(reads, 2);
+  assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+  assert.match(elements.get('status').textContent, /行动项已更新/);
+  assert.equal(elements.get('tick-automation').hidden, true);
+});
+
+test('meeting follow-up never asks for a meeting from an unverified workspace', async t => {
+  const {mounted, elements, calls} = mountFollowUp(t, {workspaces: [{id: 'd'.repeat(32), name: '另一工作区'}]});
+  await mounted;
+  assert.equal(elements.get('editor-form').hidden, true);
+  assert.match(elements.get('status').textContent, /会议行动项链接已不可用/);
+  assert.equal(calls.some(({target}) => target.includes('/meetings/')), false);
+});
+
+test('a meeting response for a different viewer cannot populate the editor', async t => {
+  const {mounted, elements, calls} = mountFollowUp(t, {readSource: () => respond({...SOURCE, viewer_username: 'other'})});
+  await mounted;
+  assert.equal(elements.get('editor-form').hidden, true);
+  assert.equal(elements.get('editor-form').elements.prompt.value, '');
+  assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+});
+
+test('switching workspaces drops a meeting follow-up still loading', async t => {
+  const source = Promise.withResolvers();
+  const different = 'd'.repeat(32);
+  const {mounted, view, elements, calls} = mountFollowUp(t, {readSource: () => source.promise,
+    workspaces: [{id: SOURCE_WORKSPACE, name: '个人空间'}, {id: different, name: '另一工作区'}]});
+  await flush();
+  assert.ok(calls.some(call => call.target === SOURCE_PATH));
+  const workspace = elements.get('workspace');
+  workspace.value = different;
+  workspace.handlers.change[0]();
+  source.resolve(respond(SOURCE));
+  await mounted;
+  assert.equal(elements.get('editor-form').hidden, true);
+  assert.equal(view.location.search, '');
+  assert.equal(calls.filter(({method}) => method === 'POST').length, 0);
+});
+
+test('leaving an opened meeting draft clears its source context', async t => {
+  const {mounted, view, elements} = mountFollowUp(t);
+  await mounted;
+  await elements.get('cancel-editor').handlers.click[0]();
+  assert.equal(elements.get('editor-form').hidden, true);
+  assert.equal(elements.get('editor-form').elements.prompt.value, '');
+  assert.equal(elements.get('editor-form').elements.enabled.disabled, false);
+  assert.equal(elements.get('meeting-action-source-text').textContent, '');
+  assert.equal(view.location.search, '');
 });
 
 test('scheduleSummary writes the editor wording for every recorded schedule kind', () => {

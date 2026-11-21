@@ -97,8 +97,15 @@
       <header class="editor-head">
         <button type="button" id="cancel-editor">‹ 自动化</button>
         <button type="button" id="show-run-history" aria-controls="run-panel" hidden>运行记录</button>
-        <h1 id="editor-heading">新建自动化</h1>
+        <h1 id="editor-heading" tabindex="-1">新建自动化</h1>
       </header>
+      <section id="meeting-action-source" aria-labelledby="meeting-action-source-heading" hidden>
+        <h2 id="meeting-action-source-heading">会议行动项</h2>
+        <p id="meeting-action-source-title"></p>
+        <p id="meeting-action-source-text"></p>
+        <p id="meeting-action-source-owner" class="note" hidden></p>
+        <a id="meeting-action-source-link">查看会议</a>
+      </section>
       <fieldset class="task-details">
         <legend>任务</legend>
         <label>名称 <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="例如：每周整理会议纪要"></label>
