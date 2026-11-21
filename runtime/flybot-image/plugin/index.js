@@ -65,7 +65,7 @@ export function apply(ctx, config = {}) {
         stored.push({title:file.title, mime:ref.mediaType || file.mime, bytes:ref.bytes, image, ref})
       }
       if (stored.length) options.onStaged?.(stored)
-      return runTurn(rt, ctx, botId, text, requestId, undefined, parts)
+      return runTurn(rt, ctx, botId, text, requestId, undefined, parts, { onProgress: options.onProgress })
     })
     const readNativeAttachment = async file => {
       const store = attachmentStore()

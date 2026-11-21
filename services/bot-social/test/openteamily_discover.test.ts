@@ -132,6 +132,10 @@ test("published chats stay paired, use the publisher inbox, and stop receiving r
   assert.notEqual((await other.ok("POST", start)).conversation_id, first.conversation_id);
   const thread = "/v1/ot/conversations/" + first.conversation_id;
   assert.equal((await other.call("GET", thread)).status, 404);
+  for (const participant of [publisher, visitor]) {
+    assert.deepEqual(await participant.ok("GET", thread + "/attachments?kind=file"), {items: [], next_cursor: null});
+  }
+  assert.equal((await other.call("GET", thread + "/attachments?kind=file")).status, 404);
   assert.equal((await visitor.call("POST", thread + "/members", {handle:other.handle})).status, 409);
   assert.equal((await visitor.call("PUT", thread + "/agents/my_agent", {name:"Another agent"})).status, 409);
   const sent = await visitor.ok("POST", thread + "/messages", {body:"A visitor question"});

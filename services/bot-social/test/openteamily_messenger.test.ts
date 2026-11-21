@@ -489,6 +489,160 @@ test("chat files are idempotent and readable only by active members of the corre
   assert.deepEqual(await teammate.ok("GET", filePath(forwardedTo.id, forwarded.id)), file);
 });
 
+test("team reply progress uses both memberships and drops work when access is removed", async () => {
+  const [sender, worker, reader, outsider] = await Promise.all([
+    home(S.base, "team-reply-sender"), home(S.base, "team-reply-worker"),
+    home(S.base, "team-reply-reader"), home(S.base, "team-reply-outsider"),
+  ]);
+  const team = await teamOf(sender, worker, reader, outsider);
+  const otherTeam = await teamOf(reader, sender);
+  const {workspaces} = await reader.ok("GET", "/v1/ot/workspaces");
+  const workspace = workspaces.find((row: any) => row.id === team.id).workspace_id;
+  const otherWorkspace = workspaces.find((row: any) => row.id === otherTeam.id).workspace_id;
+  const group = await sender.ok("POST", "/v1/ot/conversations", {kind: "group", title: "Team reply",
+    team_id: team.id, members: [worker.handle, reader.handle]});
+  const room = `/v1/ot/conversations/${group.id}`;
+  const scoped = `/v1/ot/workspaces/${workspace}/conversations/${group.id}/reply-progress`;
+  const jobRoute = (id: string) => `/v1/ot/agent-reply-jobs/${id}`;
+  const helper = room + "/agents/helper";
+  const createJob = async (body: string) => {
+    const source = await sender.ok("POST", room + "/messages", {body});
+    const id = source.reply_jobs[0].id;
+    await worker.ok("POST", jobRoute(id), {action: "start", attempt: 1, source_revision: source.revision});
+    await worker.ok("POST", jobRoute(id) + "/progress", {attempt: 1, revision: 1, text: "Shared draft"});
+    return {id, source};
+  };
+
+  await worker.ok("PUT", helper, {name: "Helper", auto_reply: true});
+  const {id, source} = await createJob("@helper draft a message");
+  assert.deepEqual(await reader.ok("GET", scoped), {items: [{id, message_id: source.id, attempt: 1, text: "Shared draft"}]});
+  assert.equal((await reader.call("GET", scoped.replace(workspace, otherWorkspace))).status, 404);
+  assert.equal((await outsider.call("GET", scoped)).status, 404);
+  assert.equal((await reader.call("GET", room + "/reply-progress")).status, 404);
+  await reader.ok("POST", `/v1/ot/messages/${source.id}/hide`, {conversation_id: group.id});
+  assert.deepEqual((await reader.ok("GET", scoped)).items, []);
+  assert.equal((await sender.ok("GET", scoped)).items[0].text, "Shared draft");
+
+  const auto = await sender.ok("POST", room + "/messages", {body: "An automatic reply trigger"});
+  const inbox = "/v1/ot/agent-inbox?managed=1";
+  assert.ok((await worker.ok("GET", inbox)).items.some((item: any) => item.message.id === auto.id && item.mode === "auto"));
+  const membership = `/v1/ot/teams/${team.id}/members/${encodeURIComponent(worker.handle)}`;
+  await sender.ok("PATCH", membership, {suspended: true});
+  assert.deepEqual((await sender.ok("GET", scoped)).items, []);
+  assert.equal((await worker.call("GET", scoped)).status, 404);
+  assert.deepEqual((await worker.ok("GET", inbox)).items, []);
+  const untracked = {agent_ref: "helper", reply_to: auto.id, mode: "auto", body: "Old untracked reply"};
+  assert.equal((await worker.call("POST", room + "/agent-messages", untracked)).status, 404);
+  await sender.ok("PATCH", membership, {suspended: false});
+  assert.deepEqual((await sender.ok("GET", scoped)).items, []);
+  assert.equal((await worker.call("POST", jobRoute(id) + "/progress", {attempt: 1, revision: 2, text: "Late"})).status, 409);
+
+  const removed = await createJob("@helper replacement test");
+  await worker.ok("DELETE", helper);
+  await worker.ok("PUT", helper, {name: "Helper"});
+  assert.deepEqual((await sender.ok("GET", scoped)).items, []);
+  assert.equal((await worker.call("POST", jobRoute(removed.id) + "/progress", {attempt: 1, revision: 2, text: "Stale"})).status, 409);
+});
+
+test("editing or retracting an originating message invalidates managed reply progress", async () => {
+  const [worker, sender] = await Promise.all([home(S.base, "revision-worker"), home(S.base, "revision-sender")]);
+  const contact = await worker.ok("POST", "/v1/ot/contacts", {handle: sender.handle});
+  await sender.ok("POST", "/v1/ot/contacts/" + contact.id, {action: "accept"});
+  const group = await worker.ok("POST", "/v1/ot/conversations", {kind: "group", account_group: true,
+    title: "Revised reply", members: [sender.handle], agents: [{agent_ref: "helper", name: "Helper"}]});
+  const room = `/v1/ot/conversations/${group.id}`;
+  const source = await sender.ok("POST", room + "/messages", {body: "@helper initial"});
+  const sourceRoute = `/v1/ot/messages/${source.id}`;
+  const id = source.reply_jobs[0].id;
+  const jobRoute = `/v1/ot/agent-reply-jobs/${id}`;
+  const progress = jobRoute + "/progress";
+  const revised = await sender.ok("PATCH", sourceRoute, {body: "@helper revision two"});
+  assert.equal((await worker.call("POST", jobRoute, {action: "start", attempt: 1, source_revision: source.revision})).status, 409);
+  await worker.ok("POST", jobRoute, {action: "start", attempt: 1, source_revision: revised.revision});
+  await worker.ok("POST", progress, {attempt: 1, revision: 1, text: "Based on second revision"});
+  const next = await sender.ok("PATCH", sourceRoute, {body: "@helper revision three"});
+  assert.deepEqual((await sender.ok("GET", room + "/reply-progress")).items, []);
+  assert.equal((await worker.call("POST", progress, {attempt: 1, revision: 2, text: "Late"})).status, 409);
+  assert.equal((await worker.call("POST", room + "/agent-messages", {
+    agent_ref: "helper", body: "Stale final", reply_to: source.id, job_id: id, attempt: 1,
+  })).status, 409);
+
+  await sender.ok("POST", `${room}/messages/${source.id}/agent-retry`, {job_id: id});
+  await worker.ok("POST", jobRoute, {action: "start", attempt: 2, source_revision: next.revision});
+  await worker.ok("POST", progress, {attempt: 2, revision: 1, text: "Current revision"});
+  await sender.ok("DELETE", sourceRoute);
+  assert.deepEqual((await sender.ok("GET", room + "/reply-progress")).items, []);
+  assert.equal((await worker.call("POST", progress, {attempt: 2, revision: 2, text: "Late"})).status, 409);
+});
+
+test("attachment search is newest-first, case-insensitive and scoped to readable files", async () => {
+  const author = await home(S.base, "search-file-author");
+  const reader = await home(S.base, "search-file-reader");
+  const outsider = await home(S.base, "search-file-outsider");
+  const team = await teamOf(author, reader, outsider);
+  const otherTeam = await teamOf(reader, author);
+  const {workspaces} = await reader.ok("GET", "/v1/ot/workspaces");
+  const workspace = workspaces.find((row: any) => row.id === team.id).workspace_id;
+  const otherWorkspace = workspaces.find((row: any) => row.id === otherTeam.id).workspace_id;
+  const group = await author.ok("POST", "/v1/ot/conversations", {
+    kind: "group", title: "Search these attachments", team_id: team.id, members: [reader.handle],
+    agents: [{agent_ref: "attachment_helper", name: "Attachment helper"}],
+  });
+  const room = `/v1/ot/conversations/${group.id}`;
+  const scoped = `/v1/ot/workspaces/${workspace}/conversations/${group.id}`;
+  const postFile = (title: string) => author.ok("POST", room + "/messages", {
+    workspace, body: "A body with different searchable words",
+    attachment: {title, mime: "text/plain", data: Buffer.from("Draft").toString("base64")},
+  });
+  const older = await postFile("RÉSUMÉ plan.txt");
+  const photo = await author.ok("POST", room + "/messages", {workspace, attachment: {
+    title: "Résumé picture.png", mime: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jh28AAAAASUVORK5CYII=",
+  }});
+  const hidden = await postFile("Résumé personal.txt");
+  const retracted = await postFile("Résumé obsolete.txt");
+  const latest = await postFile("Résumé 100%.txt");
+  await reader.ok("POST", `/v1/ot/messages/${hidden.id}/hide`, {conversation_id: group.id});
+  await author.ok("DELETE", `/v1/ot/messages/${retracted.id}`);
+
+  const files = scoped + "/attachments?kind=file";
+  const term = "&q=" + encodeURIComponent("résumé");
+  const row = (message: any) => ({message_id: message.id, created_at: message.created_at, attachment: message.attachment});
+  const first = await reader.ok("GET", files + term + "&limit=1");
+  assert.deepEqual(first.items, [row(latest)]);
+  assert.equal(typeof first.next_cursor, "string");
+  assert.deepEqual(await reader.ok("GET", files + term + "&limit=1&cursor=" + first.next_cursor), {
+    items: [row(older)], next_cursor: null,
+  });
+  assert.deepEqual(await reader.ok("GET", files + "&q=%25"), {items: [row(latest)], next_cursor: null});
+  assert.deepEqual(await reader.ok("GET", files + "&q=searchable"), {items: [], next_cursor: null});
+  assert.deepEqual(await reader.ok("GET", scoped + "/attachments?kind=photo&q="), {items: [row(photo)], next_cursor: null});
+  assert.deepEqual((await author.ok("GET", files)).items.map((item: any) => item.message_id), [latest.id, hidden.id, older.id]);
+  assert.equal((await reader.ok("GET", `${scoped}/messages/${latest.id}/file`)).title, latest.attachment.title);
+  S.platform.db.prepare("UPDATE ot_message_attachments SET sealed=? WHERE message_id=?").run(Buffer.from("unreadable"), latest.id);
+  assert.deepEqual(await reader.ok("GET", files + "&q=%25"), {items: [row(latest)], next_cursor: null});
+
+  assert.equal((await outsider.call("GET", files)).status, 404);
+  assert.equal((await reader.call("GET", files.replace(workspace, otherWorkspace))).status, 404);
+  assert.equal((await reader.call("GET", room + "/attachments?kind=file")).status, 404);
+  assert.equal((await reader.call("GET", files + "&cursor=bad")).status, 400);
+  assert.equal((await reader.call("GET", files + "&kind=photo")).status, 400);
+  for (const limit of ["0", "51", "1e1"]) assert.equal((await reader.call("GET", files + "&limit=" + limit)).status, 400);
+
+  const dm = await author.ok("POST", "/v1/ot/conversations", {kind: "dm", peer: reader.handle});
+  const direct = `/v1/ot/conversations/${dm.id}`;
+  const dmFile = await author.ok("POST", direct + "/messages", {
+    direct: true, attachment: {title: "DM note.txt", mime: "text/plain", data: Buffer.from("DM").toString("base64")},
+  });
+  assert.deepEqual(await reader.ok("GET", direct + "/attachments?kind=file"), {items: [row(dmFile)], next_cursor: null});
+  const teamDm = `/v1/ot/workspaces/${workspace}/conversations/${dm.id}/attachments?kind=file`;
+  assert.deepEqual(await reader.ok("GET", teamDm), {items: [row(dmFile)], next_cursor: null});
+  assert.equal((await outsider.call("GET", direct + "/attachments?kind=file")).status, 404);
+
+  await author.ok("DELETE", `${room}/members/${reader.handle}`);
+  assert.equal((await reader.call("GET", files)).status, 404);
+});
+
 test("group translation sources require membership, exclude own media and check the exact revision", async () => {
   const reader = await home(S.base, "translation-reader");
   const author = await home(S.base, "translation-author");

@@ -51,7 +51,7 @@ export default function messenger(host) {
       pin: async (p) => bs().post(`${msg(p)}/pin`, { on: p?.on !== false }),
       setAgent: async (p) => bs().put(`${conv(p)}/agents/${seg(p?.agent_ref, 'agent_ref')}`, { name: p?.name, auto_reply: p?.auto_reply === true }),
       removeAgent: async (p) => bs().del(`${conv(p)}/agents/${seg(p?.agent_ref, 'agent_ref')}`),
-      // Runs one agent-inbox pass now (the background loop does the same every 10 s).
+      // An explicit wake can run an inbox pass before the next background poll.
       agentsTick: async () => agentReplier().once(),
     },
   }

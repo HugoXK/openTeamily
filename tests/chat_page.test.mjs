@@ -631,6 +631,263 @@ test('a slow send moves the draft into the conversation and submits only once', 
   } finally { restore(); }
 });
 
+function nativeReplyChat(transport) {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.querySelector = selector => selector === 'meta[name="openteamily-instance"]' ? {} : null;
+  const restore = installChatGlobals();
+  globalThis.location.hash = '#workspace=ws-1&agent=agent-1&conversation=private-1';
+  const {fetcher: fallback} = sessionFetcher();
+  const agent = {id: 'agent-1', name: '助手'};
+  const conversation = {id: 'private-1', agent_id: agent.id, title: '私聊', updated: 40};
+  const path = '/v1/workspaces/ws-1/agents/agent-1/conversations/private-1';
+  const fetcher = (url, opts) => url.endsWith('/agents?limit=100&include=conversations')
+    ? json(200, {items: [agent], conversations: [conversation]})
+    : url.startsWith(path) ? transport(url.slice(path.length), opts, {agent, conversation}) : fallback(url);
+  return {doc, el, restore, fetcher};
+}
+
+test('a native reply streams as plain text without rebuilding history or changing an unsent draft', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const previous = {id: 'earlier', role: 'user', body: '更早的消息'};
+  const snapshots = [null, '正在回答 <img src=x>', '正在回答 <img src=x>\n后续内容'];
+  const progressKeys = [];
+  let historyReads = 0;
+  let finishPost;
+  let requestKey;
+  const {doc, el, restore, fetcher} = nativeReplyChat((path, opts, scope) => {
+    if (!path) {
+      historyReads += 1;
+      return json(200, {...scope, items: [previous]});
+    }
+    if (path === '/messages' && opts.method === 'POST') {
+      requestKey = opts.headers['Idempotency-Key'];
+      return new Promise(resolve => { finishPost = resolve; });
+    }
+    const key = new URL(path, 'https://openteamily.test').searchParams.get('key');
+    progressKeys.push(key);
+    const next = snapshots.shift();
+    return next == null ? json(404, {}) : json(200, {state: 'running', text: next});
+  });
+  try {
+    await mount(doc, {fetcher});
+    const list = el('message-list');
+    const original = list.children[0];
+    const field = el('chat-body');
+    field.value = '回复这个问题';
+    await fire(el('chat-form'), 'submit', {preventDefault() {}});
+    const pending = list.children.at(-1);
+    const preview = pending.children.find(node => node.className.includes('reply-preview'));
+    assert.equal(pending.dataset.replyProgress, requestKey);
+    assert.equal(preview.hidden, true);
+    assert.equal(field.value, '');
+    field.value = '下一条草稿';
+
+    t.mock.timers.tick(400); await settle();
+    assert.equal(preview.hidden, true, '404 during reservation leaves the pending reply intact');
+    t.mock.timers.tick(400); await settle();
+    assert.equal(preview.textContent, '正在回答 <img src=x>');
+    assert.equal(preview.children.length, 0);
+    assert.equal(preview.getAttribute('aria-live'), 'off');
+    assert.equal(list.children[0], original);
+    assert.equal(list.children.at(-1), pending);
+
+    const scroller = el('message-scroller');
+    scroller.clientHeight = 200;
+    scroller.scrollHeight = 1000;
+    scroller.scrollTop = 130;
+    doc.visibilityState = 'hidden';
+    await fire(doc, 'visibilitychange');
+    t.mock.timers.tick(1200); await settle();
+    assert.equal(progressKeys.length, 2);
+    doc.visibilityState = 'visible';
+    await fire(doc, 'visibilitychange');
+    t.mock.timers.tick(400); await settle();
+    assert.match(preview.textContent, /后续内容/);
+    assert.equal(scroller.scrollTop, 130);
+    assert.deepEqual(progressKeys, [requestKey, requestKey, requestKey]);
+
+    finishPost(json(201, {
+      message: {id: 'new-user', role: 'user', body: '回复这个问题', client_key: requestKey},
+      reply: {id: 'new-reply', role: 'assistant', status: 'succeeded', body: '**最终回复**', client_key: requestKey},
+    }));
+    await settle();
+    t.mock.timers.tick(2000); await settle();
+    assert.equal(historyReads, 1, 'live progress and final POST do not re-fetch previous messages');
+    assert.equal(progressKeys.length, 3);
+    assert.deepEqual(list.children.map(node => node.dataset.messageId), ['earlier', 'new-user', 'new-reply']);
+    assert.ok(descendants(list.children.at(-1)).some(node => node.tagName === 'STRONG' && node.textContent === '最终回复'));
+    assert.equal(field.value, '下一条草稿');
+    assert.equal(scroller.scrollTop, 130);
+  } finally { restore(); }
+});
+
+test('an already running native reply resumes in its existing bubble and loads the final history once', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const key = 'msg-reloaded-reply';
+  const user = {id: 'saved-user', role: 'user', body: '等待中的问题', client_key: key};
+  const reply = {id: 'saved-reply', role: 'assistant', status: 'running', client_key: key};
+  let historyReads = 0;
+  let polls = 0;
+  const {doc, el, restore, fetcher} = nativeReplyChat((path, _opts, scope) => {
+    if (!path) {
+      historyReads += 1;
+      const current = polls < 2 ? reply : {...reply, status: 'succeeded', body: '已保存的答复'};
+      return json(200, {...scope, items: [user, current]});
+    }
+    assert.equal(path, '/reply-progress?key=' + key);
+    polls += 1;
+    return json(200, polls === 1 ? {state: 'running', text: '正在继续回复'} : {state: 'succeeded'});
+  });
+  try {
+    await mount(doc, {fetcher});
+    const list = el('message-list');
+    const pending = list.children.at(-1);
+    assert.equal(pending.dataset.messageId, reply.id);
+    t.mock.timers.tick(400); await settle();
+    assert.equal(list.children.at(-1), pending);
+    assert.equal(pending.children.at(-1).textContent, '正在继续回复');
+    t.mock.timers.tick(400); await settle();
+    assert.deepEqual(list.children.map(node => node.dataset.messageId), [user.id, reply.id]);
+    assert.equal(list.children.at(-1).dataset.replyProgress, undefined);
+    assert.ok(descendants(list.children.at(-1)).some(node => node.textContent === '已保存的答复'));
+    t.mock.timers.tick(3000); await settle();
+    assert.equal(historyReads, 2);
+    assert.equal(polls, 2);
+  } finally { restore(); }
+});
+
+function groupReplyChat(transport) {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.querySelector = selector => selector === 'meta[name="openteamily-instance"]' ? {} : null;
+  const restore = installChatGlobals();
+  globalThis.location.hash = '#workspace=ws-1&social=conv-1';
+  const {fetcher: fallback} = sessionFetcher();
+  const base = '/v1/workspaces/ws-1/social/conversations';
+  const conversation = {id: 'conv-1', kind: 'group', title: '测试群', updated: 40,
+    members: [{user_id: alice, username: 'alice'}],
+    agent_members: [{id: 'agent-1', name: '助手一'}, {id: 'agent-2', name: '助手二'}]};
+  const fetcher = (url, opts) => url.startsWith(base + '/conv-1')
+    ? transport(url.slice((base + '/conv-1').length), opts, conversation)
+    : fallback(url);
+  return {doc, el, restore, fetcher};
+}
+
+test('group progress updates only the original job and attempt and clears stale text', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const source = {id: 'source', user_id: alice, body: '请两位协助', created: 1, seq: 1, reply_jobs: [
+    {id: 'job-a', attempt: 2, status: 'queued', agent_name: '助手一'},
+    {id: 'job-b', attempt: 1, status: 'running', agent_name: '助手二'},
+  ]};
+  const flowing = [{id: 'job-a', message_id: 'source', attempt: 2, text: '原样显示 <em>片段</em>'},
+    {id: 'job-b', message_id: 'other-source', attempt: 1, text: '别的消息'}];
+  const batches = [...Array(18).fill(flowing),
+    [{id: 'job-a', message_id: 'source', attempt: 1, text: '过期的尝试'},
+      {id: 'job-b', message_id: 'source', attempt: 1, text: '另一个智能体的新进度'}],
+  ];
+  let historyReads = 0;
+  let progressReads = 0;
+  let pending;
+  let signal;
+  const {doc, el, restore, fetcher} = groupReplyChat((path, opts, conversation) => {
+    if (!path) {
+      historyReads += 1;
+      return json(200, {conversation, items: [source]});
+    }
+    assert.equal(path, '/reply-progress');
+    progressReads += 1;
+    if (batches.length) return json(200, {items: batches.shift()});
+    signal = opts.signal;
+    return new Promise(resolve => { pending = resolve; });
+  });
+  try {
+    await mount(doc, {fetcher});
+    const list = el('message-list');
+    const original = list.children[0];
+    const jobs = descendants(original).filter(node => node.className === 'group-reply-job');
+    const [first, second] = jobs.map(row => row.children.find(node => node.className === 'group-reply-preview'));
+    t.mock.timers.tick(500); await settle();
+    assert.equal(list.children[0], original);
+    assert.equal(first.textContent, '原样显示 <em>片段</em>');
+    assert.equal(first.children.length, 0);
+    assert.equal(first.getAttribute('aria-live'), 'off');
+    assert.equal(second.hidden, true);
+    assert.equal(jobs[0].dataset.state, 'running');
+    for (let index = 0; index < 17; index += 1) {
+      t.mock.timers.tick(500);
+      await settle();
+    }
+    assert.equal(historyReads, 1, 'no legacy transcript poll after 8 seconds of healthy snapshots');
+
+    const scroller = el('message-scroller');
+    scroller.scrollHeight = 1000;
+    scroller.clientHeight = 200;
+    scroller.scrollTop = 120;
+    t.mock.timers.tick(500); await settle();
+    assert.equal(first.hidden, true);
+    assert.equal(second.textContent, '另一个智能体的新进度');
+    assert.equal(scroller.scrollTop, 120);
+    assert.equal(historyReads, 1);
+
+    t.mock.timers.tick(500); await settle();
+    doc.visibilityState = 'hidden';
+    await fire(doc, 'visibilitychange');
+    assert.equal(signal.aborted, true);
+    assert.equal(second.hidden, true);
+    pending(json(200, {items: [{id: 'job-b', message_id: 'source', attempt: 1, text: '迟到的隐藏更新'}]}));
+    t.mock.timers.tick(2000); await settle();
+    assert.equal(progressReads, 20);
+    assert.equal(second.hidden, true);
+  } finally { restore(); }
+});
+
+test('manual group requests preserve a failed draft and append the eventual accepted group message', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const promptText = '请总结这次讨论';
+  const message = {id: 'requested', body: promptText, user_id: alice, created: 1, seq: 1,
+    reply_jobs: [{id: 'manual-job', attempt: 1, agent_name: '助手一', status: 'queued'}]};
+  const sends = [];
+  let historyReads = 0;
+  const {doc, el, restore, fetcher} = groupReplyChat((path, opts, conversation) => {
+    if (!path) {
+      historyReads += 1;
+      return json(200, {conversation, items: []});
+    }
+    if (path === '/agent-replies') {
+      sends.push({body: JSON.parse(opts.body), key: opts.headers['Idempotency-Key']});
+      return sends.length === 1 ? json(503, {}) : json(202, {message});
+    }
+    assert.equal(path, '/reply-progress');
+    return json(200, {items: [{id: 'manual-job', message_id: message.id, attempt: 1, text: '讨论要点'}]});
+  });
+  const querySelectorAll = doc.querySelectorAll;
+  doc.querySelectorAll = selector => selector === '#group-agent-choices input[name="group-agent"]:checked'
+    ? el('group-agent-choices').children.map(label => label.children[0]).filter(box => box.checked)
+    : querySelectorAll(selector);
+  try {
+    await mount(doc, {fetcher});
+    const prompt = el('group-agent-prompt');
+    const selected = el('group-agent-choices').children[0].children[0];
+    selected.checked = true;
+    prompt.value = promptText;
+    const submit = () => fire(el('group-agent-form'), 'submit', {preventDefault() {}});
+    await submit();
+    assert.equal(prompt.value, promptText);
+    assert.equal(selected.checked, true);
+    assert.equal(el('message-list').children.length, 0);
+
+    await submit();
+    assert.equal(prompt.value, '');
+    assert.deepEqual(sends[0].body, {agent_ids: ['agent-1'], prompt: promptText});
+    assert.equal(sends[0].key, sends[1].key);
+    const original = el('message-list').children[0];
+    assert.equal(original.dataset.messageId, message.id);
+    const preview = descendants(original).find(node => node.className === 'group-reply-preview');
+    t.mock.timers.tick(500); await settle();
+    assert.equal(preview.textContent, '讨论要点');
+    assert.equal(historyReads, 1);
+  } finally { restore(); }
+});
+
 test('the first chat opens using the batched directory while people and artifacts are pending', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: fallback, requests} = sessionFetcher();
@@ -1931,17 +2188,33 @@ test('conversation search lists this conversation photos and files from real att
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   const restore = installChatGlobals({narrow: true});
-  const attachment = (id, title, kind, mime) => ({id: id.repeat(32), title, kind, mime, revision: 1,
-    path: '/v1/workspaces/ws-1/artifacts/' + id.repeat(32) + '/file'});
-  const rows = [
-    // Real uploads all land as kind 'media'; the mime is what separates photos.
-    {id: 'm-1', user_id: bob, body: '', created: '2026-01-01T00:00:00Z', attachment: attachment('a', 'pixel.png', 'media', 'image/png')},
-    {id: 'm-2', user_id: bob, body: '', created: '2026-01-01T00:01:00Z', attachment: attachment('b', 'plan.pdf', 'media', 'application/pdf')},
-  ];
+  const base = '/v1/workspaces/ws-1/social/conversations/conv-1';
+  const file = (id, title, mime) => ({message_id: id, created_at: 1767225600, attachment: {
+    id, title, mime, bytes: 200, path: base + '/messages/' + id + '/file',
+  }});
+  const photo = file('m-1', '现场照片.png', 'image/png');
+  const report = file('m-2', '发布计划.pdf', 'application/pdf');
+  const notes = file('m-3', '实施计划.txt', 'text/plain');
+  const calls = [];
+  let retry = true;
   try {
     await mount(doc, {fetcher: async path => {
-      if (path.startsWith('/v1/workspaces/ws-1/social/conversations/conv-1/messages?')) {
-        return json(200, {items: rows, cursor: null});
+      if (path.startsWith(base + '/attachments?')) {
+        const params = new URL(path, 'https://openteamily.test').searchParams;
+        const scope = Object.fromEntries(params);
+        calls.push(scope);
+        if (scope.kind === 'photo') return json(200, {items: [photo], next_cursor: null});
+        if (scope.cursor && retry) {
+          retry = false;
+          return json(500, {});
+        }
+        return json(200, scope.cursor ? {items: [notes], next_cursor: null} : {items: [report], next_cursor: 'page-2'});
+      }
+      if (path.startsWith(base + '/messages?')) {
+        const message = new URL(path, 'https://openteamily.test').searchParams.get('around');
+        assert.ok(message, 'attachment browsing does not scan history pages');
+        const hit = [photo, report, notes].find(row => row.message_id === message);
+        return json(200, {items: [{id: message, user_id: bob, body: '', attachment: hit.attachment}], cursor: null});
       }
       return original(path);
     }});
@@ -1949,39 +2222,79 @@ test('conversation search lists this conversation photos and files from real att
     await fire(el('conversation-search-open'), 'click');
     await fire(el('conversation-search-tab-photos'), 'click');
     assert.equal(el('conversation-search-tab-photos').getAttribute('aria-selected'), 'true');
-    const photos = el('conversation-search-results').children;
-    assert.equal(photos.length, 1, 'only the image attachment is a photo');
-    assert.ok(descendants(photos[0]).some(node => node.textContent === 'pixel.png'));
+    const results = el('conversation-search-results');
+    assert.equal(results.children.length, 1);
+    assert.ok(descendants(results.children[0]).some(node => node.textContent === '现场照片.png'));
+    assert.equal(descendants(results.children[0]).some(node => node.tagName === 'IMG'), false);
     assert.match(el('conversation-search-status').textContent, /已显示 1 张照片/);
-    await fire(photos[0], 'click');
+    await fire(results.children[0].children[0], 'click');
     const jumped = el('message-list').children.find(node => node.dataset.messageId === 'm-1');
     assert.equal(jumped.dataset.searchJump, 'true', 'a photo hit jumps back to its message and highlights it');
+    el('conversation-search-query').value = '计划';
     await fire(el('conversation-search-tab-files'), 'click');
-    const files = el('conversation-search-results').children;
-    assert.equal(files.length, 1, 'the document attachment is a file, not a photo');
-    assert.ok(descendants(files[0]).some(node => node.textContent === 'plan.pdf'));
+    assert.deepEqual(calls, [{kind: 'photo', q: '', limit: '20'}, {kind: 'file', q: '计划', limit: '20'}]);
+    assert.equal(results.children.length, 1);
+    const [jump, download] = results.children[0].children;
+    assert.ok(descendants(jump).some(node => node.textContent === '发布计划.pdf'));
+    assert.equal(download.href, report.attachment.path + '?download=1');
+    assert.equal(download.download, '发布计划.pdf');
     assert.match(el('conversation-search-status').textContent, /已显示 1 个文件/);
-    await fire(files[0], 'click');
+    await fire(el('conversation-search-more'), 'click');
+    assert.equal(results.children.length, 1, 'a failed next page preserves results');
+    assert.equal(el('conversation-search-retry').hidden, false);
+    await fire(el('conversation-search-retry'), 'click');
+    assert.equal(results.children.length, 2);
+    assert.equal(el('conversation-search-more').hidden, true);
+    assert.equal(calls[3].cursor, 'page-2');
+    await fire(jump, 'click');
     const located = el('message-list').children.find(node => node.dataset.messageId === 'm-2');
     assert.equal(located.dataset.searchJump, 'true', 'a file outside the window loads and highlights its message');
   } finally { restore(); }
 });
 
-test('the photos and files tabs say what is missing instead of inventing an empty conversation', async () => {
+test('attachment search ignores stale tabs and queries and gives an explicit retry and empty state', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   const restore = installChatGlobals({narrow: true});
+  const delayed = [];
+  let failed = true;
   try {
-    await mount(doc, {fetcher: async path => {
-      if (path.startsWith('/v1/workspaces/ws-1/social/conversations/conv-1/messages?')) {
-        return json(500, {error: {code: 'internal', message: 'nope'}});
+    await mount(doc, {fetcher: async (path, options) => {
+      if (path.includes('/attachments?')) {
+        const params = new URL(path, 'https://openteamily.test').searchParams;
+        if (params.get('kind') === 'photo' || params.get('q') === 'old') {
+          return new Promise(resolve => delayed.push({resolve, signal: options.signal}));
+        }
+        if (failed) {
+          failed = false;
+          return json(500, {});
+        }
+        return json(200, {items: [], next_cursor: null});
       }
       return original(path);
     }});
     await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
     await fire(el('conversation-search-open'), 'click');
-    await fire(el('conversation-search-tab-photos'), 'click');
-    assert.match(el('conversation-search-status').textContent, /读不到当前会话的附件/);
+    const photos = fire(el('conversation-search-tab-photos'), 'click');
+    await fire(el('conversation-search-tab-files'), 'click');
+    assert.equal(delayed[0].signal.aborted, true);
+    assert.match(el('conversation-search-status').textContent, /无法搜索文件/);
+    delayed[0].resolve(json(200, {items: [], next_cursor: null}));
+    await photos;
+    assert.match(el('conversation-search-status').textContent, /无法搜索文件/);
+    await fire(el('conversation-search-retry'), 'click');
+    assert.match(el('conversation-search-status').textContent, /还没有文件/);
+
+    const submit = () => fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
+    const query = el('conversation-search-query');
+    query.value = 'old';
+    const old = submit();
+    query.value = 'new';
+    await submit();
+    assert.equal(delayed[1].signal.aborted, true);
+    delayed[1].resolve(json(200, {items: [{message_id: 'm', attachment: {id: 'm', title: 'old'}}]}));
+    await old;
+    assert.match(el('conversation-search-status').textContent, /没有找到匹配的文件/);
     assert.equal(el('conversation-search-results').children.length, 0);
   } finally { restore(); }
 });

@@ -310,14 +310,17 @@
       <button type="button" role="menuitem" data-menu="delete" class="message-menu-danger">仅为我删除</button>
     </div>
     <section id="conversation-search-panel" hidden aria-label="会话内搜索">
-      <form id="conversation-search-form"><label><span class="sr-only">搜索当前会话</span><input id="conversation-search-query" type="search" maxlength="80" placeholder="搜索当前会话" autocomplete="off"></label><button type="submit">搜索</button><button type="button" id="conversation-search-close" aria-label="关闭搜索">×</button></form>
+      <form id="conversation-search-form"><label><span id="conversation-search-query-label" class="sr-only">搜索当前会话</span><input id="conversation-search-query" type="search" maxlength="80" placeholder="搜索当前会话" autocomplete="off"></label><button type="submit">搜索</button><button type="button" id="conversation-search-close" aria-label="关闭搜索">×</button></form>
       <div class="search-tabs" role="tablist" aria-label="会话内搜索范围">
         <button type="button" role="tab" id="conversation-search-tab-messages" aria-selected="true">消息</button>
         <button type="button" role="tab" id="conversation-search-tab-photos" aria-selected="false">照片</button>
         <button type="button" role="tab" id="conversation-search-tab-files" aria-selected="false">文件</button>
       </div>
-      <p class="conversation-search-scope">消息 <span id="conversation-search-scope-note" class="conversation-search-scope-note">· 搜索当前会话里你有权查看的消息。</span></p>
-      <p id="conversation-search-status" role="status"></p><ul id="conversation-search-results"></ul><button type="button" id="conversation-search-more" hidden>加载更多</button>
+      <p id="conversation-search-scope-note" class="conversation-search-scope">搜索当前会话中的消息。</p>
+      <p id="conversation-search-status" role="status"></p>
+      <ul id="conversation-search-results"></ul>
+      <button type="button" id="conversation-search-more" hidden>加载更多</button>
+      <button type="button" id="conversation-search-retry" hidden>重试</button>
     </section>
     <p id="conversation-live-update" class="chat-strip" hidden><span role="status">会话有更新</span><button type="button" id="conversation-live-load">查看最新消息</button></p>
     <section id="pinned-messages" class="chat-strip" hidden aria-labelledby="pinned-messages-heading">
@@ -543,7 +546,7 @@
       <summary>群内智能体</summary>
       <h2 class="visually-hidden">群内智能体</h2>
       <p id="social-agent-members" class="group-agent-note" hidden></p>
-      <p class="note">将本次请求发给选中的智能体。回复会出现在群聊里。</p>
+      <p class="note">请求会作为一条消息发送到群聊，并请选中的智能体回复。</p>
       <div id="group-agent-roster">
         <ul id="group-agent-chips" class="agent-chips"></ul>
         <div class="agent-add">
@@ -556,8 +559,8 @@
           <legend>请求哪些智能体回复</legend>
           <div id="group-agent-choices" class="agent-choices"></div>
         </fieldset>
-        <label>本次请求 <textarea id="group-agent-prompt" maxlength="4000" required rows="2"></textarea></label>
-        <button id="group-agent-submit" type="submit">请求回复</button>
+        <label>群消息 <textarea id="group-agent-prompt" maxlength="4000" required rows="2"></textarea></label>
+        <button id="group-agent-submit" type="submit">发送并请求回复</button>
       </form>
       <ul id="group-agent-requests" aria-live="polite"></ul>
       </details>

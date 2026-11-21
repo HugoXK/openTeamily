@@ -35,6 +35,8 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/memory/capture`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/archive`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/messages`, ORIGIN).feature, 'agents');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/attachments?kind=file`, ORIGIN).feature, 'agents');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/reply-progress?key=reply-test-key-123`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys`, ORIGIN).feature, 'agent-api');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys/${ID}/revoke`, ORIGIN).feature, 'agent-api');
   // Cross-user / provision routes stay on the platform.
@@ -85,6 +87,7 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget(`/v1/workspaces/${WS}/directory`, ORIGIN).feature, 'teams');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations?limit=20`, ORIGIN).feature, 'messenger');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations/otc_01/messages`, ORIGIN).feature, 'messenger');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations/otc_01/attachments?kind=photo`, ORIGIN).feature, 'messenger');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations/otc_01/memory/capture`, ORIGIN).feature, 'messenger');
   for (const action of ['create', 'preview', 'join', 'poll', 'signal', 'leave', 'end']) {
     assert.equal(movedTarget('/v1/meeting-calls/' + action, ORIGIN).feature, 'messenger');

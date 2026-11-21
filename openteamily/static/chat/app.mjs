@@ -1,6 +1,6 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { mountAgentMentions } from './mentions.mjs';
-import { AGENT_FILE_ACCEPT, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
+import { AGENT_FILE_ACCEPT, chatFileDownload, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
 import { mountChatCalls } from './calls.mjs';
 import { mountImageCreator } from './image-create.mjs';
@@ -804,6 +804,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let groupMode = 'custom';
   let groupReplyAttempt = null;
   let groupReplyBusy = false;
+  let groupReplyFormScope = '';
   let searchSeq = 0;
   let resourceCursor = '';
   let resourceItems = [];
@@ -812,6 +813,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let chatPreferences = {message_folding:'standard', document_cards:false, link_previews:true};
   let attachmentSender;
   const pendingSends = new Map();
+  const agentReplyViews = new Map();
+  let replyWatch = null;
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
   const publicDraft = mountPublicDraft(document);
@@ -938,7 +941,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const queue = pendingSends.get(scope);
     document.getElementById('chat-send').disabled = sendClosed() || memoryWrites.has(scope);
     syncMemoryRecall(scope);
+    const replying = queue?.replying;
+    if (replying && !replying.replyView) {
+      replying.replyView = makeAgentMessage({role: 'assistant', status: 'queued', client_key: replying.key}).replyView;
+      if (replying.replyView) replying.replyView.bubble.dataset.sendPending = 'reply';
+    }
+    const replyBubble = replying?.replyView?.bubble;
     const bubbles = new Set((queue?.jobs || []).map(job => job.bubble));
+    if (replyBubble) bubbles.add(replyBubble);
     for (const child of Array.from(list.children)) {
       if (child.dataset.sendPending && !bubbles.has(child)) child.remove();
       bubbles.delete(child);
@@ -946,12 +956,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     for (const job of queue?.jobs || []) {
       paintSendJob(job);
       if (bubbles.has(job.bubble)) list.append(job.bubble);
+      if (job === replying && bubbles.has(replyBubble)) {
+        const children = Array.from(list.children);
+        const next = children[children.indexOf(job.bubble) + 1];
+        if (next) list.insertBefore(replyBubble, next);
+        else list.append(replyBubble);
+      }
+    }
+    if (currentSource === 'agent' && currentAgent) {
+      const pending = Boolean(replying) || lastAgentItems.some(waitingAgentReply);
+      setChatSubtitle(pending ? '正在回复…' : 'AI 智能体 · 经运行时回复', pending);
     }
     document.getElementById('chat-empty').hidden = list.children.length > 0;
   }
 
   function paintSendJob(job) {
     if (job.status.textContent !== job.state) job.status.textContent = job.state;
+    job.status.hidden = Boolean(job.replyView);
     job.bubble.dataset.sendPending = job.failed ? 'failed' : 'pending';
     job.actions.hidden = !job.failed;
     job.retry.disabled = sendClosed() || memoryWrites.has(sendScope());
@@ -1006,11 +1027,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function removeSendJob(queue, job) {
     queue.jobs = queue.jobs.filter(item => item !== job);
     job.bubble.remove();
+    job.replyView?.bubble.remove();
     for (const url of job.previews) document.defaultView.URL.revokeObjectURL(url);
     if (!queue.jobs.length && !queue.active && pendingSends.get(queue.scope) === queue) pendingSends.delete(queue.scope);
   }
 
   function clearPendingSends() {
+    stopReplyProgress();
+    stopGroupReplyProgress();
+    stopPolling();
     for (const queue of pendingSends.values()) {
       for (const job of queue.jobs) removeSendJob(queue,job);
     }
@@ -1021,11 +1046,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return new Set((pendingSends.get(sendScope())?.jobs || []).map(job => job.key));
   }
 
-  async function request(method, path, body, extra) {
+  async function request(method, path, body, extra, signal) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie), ...(extra || {})};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const response = await fetcher(path, {
-      method, headers, credentials: 'same-origin',
+      method, headers, credentials: 'same-origin', signal,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     let parsed = {};
@@ -1100,6 +1125,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     add.disabled = !available.length;
     document.getElementById('group-agent-add-submit').disabled = !available.length;
     const holder = document.getElementById('group-agent-choices');
+    const scope = sendScope();
+    const checked = new Set();
+    if (groupReplyFormScope === scope) {
+      for (const label of holder.children) {
+        const box = label.children[0];
+        if (box?.checked) checked.add(box.value);
+      }
+    } else {
+      groupReplyFormScope = scope;
+      document.getElementById('group-agent-prompt').value = '';
+    }
     holder.replaceChildren();
     for (const agent of saved.filter(item => !item.archived && item.mine !== false)) {
       const label = document.createElement('label');
@@ -1108,6 +1144,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       box.name = 'group-agent';
       box.value = agent.id || agent.agent_id;
       box.disabled = active.has(box.value);
+      box.checked = !box.disabled && checked.has(box.value);
       label.append(box, document.createTextNode(agent.name + (box.disabled ? '（回复中）' : '')));
       holder.append(label);
     }
@@ -1135,8 +1172,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function setSessionsOpen(open) {
-    if (open) document.body.classList.add('sessions-open');
-    else document.body.classList.remove('sessions-open');
+    if (open) {
+      document.body.classList.add('sessions-open');
+      if (narrowScreen()) stopGroupReplyProgress();
+    } else document.body.classList.remove('sessions-open');
   }
 
   function narrowScreen() {
@@ -1397,52 +1436,160 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   });
 
-  function renderAgentMessages(items) {
-    const list = document.getElementById('message-list');
-    list.replaceChildren();
-    lastAgentItems = items || [];
-    syncCaptureButton();
-    document.getElementById('chat-empty').hidden = (items || []).length > 0;
-    let pending = false;
-    const pendingKeys = pendingMessageKeys();
-    for (const item of items || []) {
-      if (pendingKeys.has(item.client_key)) continue;
-      const li = document.createElement('li');
-      li.dataset.messageId = item.id;
-      li.className = item.role === 'user' ? 'user' : 'assistant';
-      const role = document.createElement('p');
-      role.className = 'role';
-      role.textContent = item.role === 'user' ? '你' : ((currentAgent && currentAgent.name) || '智能体');
-      const body = document.createElement('div');
-      const waiting = item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
-      const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
-      body.className = 'body ' + (waiting ? 'pending' : (failed ? 'failed' : ''));
+  function waitingAgentReply(item) {
+    return item.role === 'assistant' && (item.status === 'queued' || item.status === 'running');
+  }
+
+  function messageScrollerAtBottom(scroller) {
+    return scroller.scrollHeight - scroller.scrollTop - (scroller.clientHeight || 0) < 48;
+  }
+
+  function makeAgentMessage(item) {
+    const bubble = document.createElement('li');
+    if (item.id) bubble.dataset.messageId = item.id;
+    bubble.className = item.role === 'user' ? 'user' : 'assistant';
+    const role = document.createElement('p');
+    role.className = 'role';
+    role.textContent = item.role === 'user' ? '你' : (currentAgent?.name || '智能体');
+    const body = document.createElement('div');
+    const waiting = waitingAgentReply(item);
+    const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
+    const partial = waiting && servedByDsbot && item.client_key;
+    body.className = 'body' + (partial ? ' reply-preview' : waiting ? ' pending' : failed ? ' failed' : '');
+    if (partial) {
+      bubble.dataset.replyProgress = item.client_key;
+      body.setAttribute('aria-live', 'off');
+      body.hidden = true;
+    } else {
       renderMessageBody(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences);
       if (item.attachments?.length && !item.body) body.hidden = true;
-      if (waiting || failed) li.dataset.state = waiting ? item.status : 'failed';
-      if (waiting) {
-        const heading = document.createElement('p');
-        heading.className = 'reply-state';
-        heading.textContent = item.status === 'running' ? '正在生成回复' : '正在准备回复';
-        li.append(role, heading, body);
-      } else {
-        li.append(role, body);
-      }
-      for (const attachment of item.attachments || []) li.append(renderChatFile(document,attachment));
-      const sources = memorySources(item);
-      if (sources) li.append(sources);
-      if (item.role === 'assistant' && saveableAgentMessage(item)) {
-        li.append(saveMessageButton(item, currentAgent.id));
-      }
-      list.append(li);
-      if (waiting) pending = true;
     }
-    setChatSubtitle(pending ? '正在回复…' : 'AI 智能体 · 经运行时回复', pending);
-    renderPendingSend();
-    attachmentSender?.render();
+    if (waiting || failed) bubble.dataset.state = waiting ? item.status : 'failed';
+    bubble.append(role);
+    let replyView;
+    if (waiting) {
+      const heading = document.createElement('p');
+      heading.className = 'reply-state';
+      heading.textContent = item.status === 'running' ? '正在生成回复' : '正在准备回复';
+      bubble.append(heading);
+      if (partial) replyView = {bubble, heading, body};
+    }
+    bubble.append(body);
+    for (const attachment of item.attachments || []) bubble.append(renderChatFile(document, attachment));
+    const sources = memorySources(item);
+    if (sources) bubble.append(sources);
+    if (item.role === 'assistant' && saveableAgentMessage(item)) {
+      bubble.append(saveMessageButton(item, currentAgent.id));
+    }
+    return {bubble, replyView};
+  }
+
+  function renderAgentMessages(items, {followLatest = true, anchor} = {}) {
     const scroller = document.getElementById('message-scroller');
-    scroller.scrollTop = scroller.scrollHeight;
-    return pending;
+    const top = anchor?.top ?? scroller.scrollTop;
+    const follow = anchor?.follow ?? (followLatest || messageScrollerAtBottom(scroller));
+    const list = document.getElementById('message-list');
+    list.replaceChildren();
+    agentReplyViews.clear();
+    lastAgentItems = items || [];
+    syncCaptureButton();
+    const pendingKeys = pendingMessageKeys();
+    for (const item of lastAgentItems) {
+      if (pendingKeys.has(item.client_key)) continue;
+      const {bubble, replyView} = makeAgentMessage(item);
+      if (replyView) agentReplyViews.set(item.client_key, replyView);
+      list.append(bubble);
+    }
+    renderPendingSend();
+    const tracking = syncReplyProgress();
+    attachmentSender?.render();
+    scroller.scrollTop = follow ? scroller.scrollHeight : top;
+    return lastAgentItems.some(waitingAgentReply) && !tracking;
+  }
+
+  function stopReplyProgress() {
+    const watch = replyWatch;
+    if (!watch) return;
+    replyWatch = null;
+    globalThis.clearTimeout(watch.timer);
+    globalThis.clearTimeout(watch.timeout);
+    watch.controller?.abort();
+  }
+
+  function isCurrentReply(watch) {
+    return replyWatch === watch && sendScope() === watch.scope && canWatchReply();
+  }
+
+  function canWatchReply() {
+    return document.visibilityState !== 'hidden'
+      && !(narrowScreen() && document.body.classList.contains('sessions-open'));
+  }
+
+  function paintReplyProgress(view, snapshot) {
+    const state = snapshot.state === 'running' ? 'running' : 'queued';
+    if (view.bubble.dataset.state !== state) {
+      view.bubble.dataset.state = state;
+      view.heading.textContent = state === 'running' ? '正在生成回复' : '正在准备回复';
+    }
+    if (typeof snapshot.text !== 'string' || view.body.textContent === snapshot.text) return;
+    const scroller = document.getElementById('message-scroller');
+    const follow = messageScrollerAtBottom(scroller);
+    view.body.textContent = snapshot.text;
+    view.body.hidden = !snapshot.text;
+    if (follow) scroller.scrollTop = scroller.scrollHeight;
+  }
+
+  function scheduleReplyProgress(watch, delay = 400) {
+    if (!isCurrentReply(watch)) return;
+    watch.timer = globalThis.setTimeout(() => void pollReplyProgress(watch), delay);
+  }
+
+  async function pollReplyProgress(watch) {
+    if (!isCurrentReply(watch)) return;
+    const controller = watch.controller = new AbortController();
+    watch.timeout = globalThis.setTimeout(() => controller.abort(), 5000);
+    const result = await request('GET', watch.path, undefined, undefined, controller.signal).catch(() => null);
+    globalThis.clearTimeout(watch.timeout);
+    watch.controller = null;
+    if (!isCurrentReply(watch)) return;
+    const snapshot = result?.status === 200 ? result.body : null;
+    if (snapshot?.state === 'pending' || snapshot?.state === 'running') {
+      watch.failures = 0;
+      watch.snapshot = snapshot;
+      paintReplyProgress(watch.view, snapshot);
+      scheduleReplyProgress(watch);
+      return;
+    }
+    const terminal = snapshot?.state === 'succeeded' || snapshot?.state === 'failed';
+    if (terminal && watch.posting) return;
+    watch.failures += 1;
+    if (terminal || (!watch.posting && watch.failures >= 4)) {
+      await openAgentConversation(currentAgent.id, currentConversation.id, {refresh: true});
+      scheduleReplyProgress(watch, 1500);
+      return;
+    }
+    scheduleReplyProgress(watch, watch.failures < 3 ? 400 : 1200);
+  }
+
+  function syncReplyProgress() {
+    const scope = sendScope();
+    const job = pendingSends.get(scope)?.replying;
+    const [key, view] = job ? [job.key, job.replyView] : (agentReplyViews.entries().next().value || []);
+    if (!servedByDsbot || currentSource !== 'agent' || !currentConversation || !canWatchReply() || !view) {
+      stopReplyProgress();
+      return false;
+    }
+    if (replyWatch?.scope === scope && replyWatch.key === key) {
+      replyWatch.view = view;
+      replyWatch.posting = Boolean(job);
+      if (replyWatch.snapshot) paintReplyProgress(view, replyWatch.snapshot);
+      return true;
+    }
+    stopReplyProgress();
+    const path = `${agentBase()}/conversations/${currentConversation.id}/reply-progress?${new URLSearchParams({key})}`;
+    replyWatch = {scope, key, view, path, posting: Boolean(job), failures: 0};
+    scheduleReplyProgress(replyWatch);
+    return true;
   }
 
   let selecting = false;
@@ -1798,12 +1945,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let socialHistory = null;
   let socialOpen = 0;
   let historyJump = 0;
+  let groupReplyWatch = null;
+  const groupReplyViews = new Map();
   const olderMessages = document.getElementById('chat-load-older');
   const latestMessages = document.getElementById('chat-back-to-latest');
   const historyNotice = document.getElementById('chat-history-status');
 
   function setSocialHistory(state) {
     socialHistory = state;
+    if (!state || state.readingHistory) stopGroupReplyProgress();
+    if (!state) groupReplyViews.clear();
     if (historyNotice) historyNotice.textContent = '';
     updateHistoryControls();
   }
@@ -1826,6 +1977,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const state = socialHistory;
     if (!state?.cursor || state.loading) return;
     state.loading = true;
+    syncGroupReplyProgress();
     updateHistoryControls();
     if (historyNotice) historyNotice.textContent = '';
     try {
@@ -1844,6 +1996,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } finally {
       state.loading = false;
       updateHistoryControls();
+      syncGroupReplyProgress();
     }
   });
   latestMessages?.addEventListener('click', () => {
@@ -1851,10 +2004,121 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
 
   let lastSocialItems = [];
-  function hasPendingReplies(items = lastSocialItems) {
-    return items?.some(item => item.reply_jobs?.some(job => job.status === 'queued' || job.status === 'running'));
+  function waitingGroupReply(job) {
+    return job.status === 'queued' || job.status === 'running';
   }
 
+  function hasPendingReplies(items = lastSocialItems) {
+    return items?.some(item => item.reply_jobs?.some(waitingGroupReply));
+  }
+
+  function canWatchGroupReplies() {
+    return servedByDsbot && currentSource === 'social' && currentConversation?.kind === 'group'
+      && !currentConversation.public_agent && socialHistory?.cid === currentConversation.id
+      && !socialHistory.readingHistory && !socialHistory.loading
+      && canWatchReply() && groupReplyViews.size > 0;
+  }
+
+  function paintGroupReplyProgress(items) {
+    const changes = [];
+    for (const [id, view] of groupReplyViews) {
+      const snapshot = items.get(id);
+      const text = snapshot && snapshot.message_id === view.messageId && snapshot.attempt === view.attempt
+        && typeof snapshot.text === 'string' ? snapshot.text : '';
+      if (view.preview.textContent !== text) changes.push({view, text});
+    }
+    if (!changes.length) return;
+    const scroller = document.getElementById('message-scroller');
+    const top = scroller.scrollTop;
+    const follow = messageScrollerAtBottom(scroller);
+    for (const {view, text} of changes) {
+      view.preview.textContent = text;
+      view.preview.hidden = !text;
+      const state = text ? 'running' : view.job.status;
+      view.row.dataset.state = state;
+      view.note.textContent = view.job.agent_name + GROUP_REPLY_LABELS[state];
+    }
+    scroller.scrollTop = follow ? scroller.scrollHeight : top;
+  }
+
+  function stopGroupReplyProgress() {
+    const watch = groupReplyWatch;
+    if (!watch) return;
+    groupReplyWatch = null;
+    globalThis.clearTimeout(watch.timer);
+    globalThis.clearTimeout(watch.timeout);
+    watch.controller?.abort();
+    paintGroupReplyProgress(new Map());
+  }
+
+  function currentGroupReplyWatch(watch) {
+    return watch && groupReplyWatch === watch && sendScope() === watch.scope && canWatchGroupReplies();
+  }
+
+  function scheduleGroupReplyProgress(watch, delay = 500) {
+    if (!currentGroupReplyWatch(watch)) return;
+    watch.timer = globalThis.setTimeout(() => void pollGroupReplyProgress(watch), delay);
+  }
+
+  async function pollGroupReplyProgress(watch) {
+    if (!currentGroupReplyWatch(watch)) {
+      if (groupReplyWatch === watch) stopGroupReplyProgress();
+      return;
+    }
+    const controller = watch.controller = new AbortController();
+    watch.timeout = globalThis.setTimeout(() => controller.abort(), 5000);
+    const result = await request('GET', watch.path, undefined, undefined, controller.signal).catch(() => null);
+    globalThis.clearTimeout(watch.timeout);
+    watch.controller = null;
+    if (!currentGroupReplyWatch(watch)) {
+      if (groupReplyWatch === watch) stopGroupReplyProgress();
+      return;
+    }
+    if (result?.status === 200 && Array.isArray(result.body.items)) {
+      const items = new Map(result.body.items.filter(item => item?.id).map(item => [item.id, item]));
+      const settled = [...watch.items.values()].some(snapshot => {
+        const view = groupReplyViews.get(snapshot.id);
+        return view && view.messageId === snapshot.message_id && view.attempt === snapshot.attempt
+          && items.get(snapshot.id)?.attempt !== snapshot.attempt;
+      });
+      watch.items = items;
+      if (watch.degraded) stopPolling();
+      watch.degraded = false;
+      paintGroupReplyProgress(items);
+      if (settled) {
+        if (readingSocialContext()) {
+          if (liveBanner) liveBanner.hidden = false;
+        } else if (!pollTimer) schedulePoll(1200);
+      }
+      scheduleGroupReplyProgress(watch);
+    } else if ([401, 403, 404].includes(result?.status)) {
+      stopGroupReplyProgress();
+      if (!pollTimer) scheduleSocialPoll(currentConversation);
+    } else {
+      watch.degraded = true;
+      if (!pollTimer) scheduleSocialPoll(currentConversation);
+      scheduleGroupReplyProgress(watch, 1500);
+    }
+  }
+
+  function syncGroupReplyProgress() {
+    if (!canWatchGroupReplies()) {
+      stopGroupReplyProgress();
+      return;
+    }
+    const scope = sendScope();
+    if (groupReplyWatch?.scope === scope) {
+      paintGroupReplyProgress(groupReplyWatch.items);
+      return;
+    }
+    stopGroupReplyProgress();
+    groupReplyWatch = {
+      scope, path: `${socialBase()}/${currentConversation.id}/reply-progress`, items: new Map(),
+    };
+    scheduleGroupReplyProgress(groupReplyWatch);
+  }
+
+  const GROUP_REPLY_LABELS = {queued: ' · 等待回复', running: ' · 正在回复', failed: ' · 回复失败'};
   function renderReplyJobs(item) {
     const rows = document.createElement('div');
     rows.className = 'group-reply-jobs';
@@ -1863,10 +2127,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const row = document.createElement('div');
       row.className = 'group-reply-job';
       row.dataset.state = job.status;
+      row.dataset.replyJobId = job.id;
+      if (Number.isSafeInteger(job.attempt)) row.dataset.replyAttempt = String(job.attempt);
       const note = document.createElement('span');
-      const states = {queued: ' · 等待回复', running: ' · 正在回复', failed: ' · 回复失败'};
-      note.textContent = job.agent_name + (states[job.status] || '');
+      note.textContent = job.agent_name + (GROUP_REPLY_LABELS[job.status] || '');
       row.append(note);
+      if (servedByDsbot && waitingGroupReply(job) && Number.isSafeInteger(job.attempt) && job.attempt > 0) {
+        const preview = document.createElement('div');
+        preview.className = 'group-reply-preview';
+        preview.hidden = true;
+        preview.setAttribute('aria-live', 'off');
+        groupReplyViews.set(job.id, {messageId: item.id, attempt: job.attempt, job, row, note, preview});
+        row.append(preview);
+      }
       if (job.can_retry) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -1886,10 +2159,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             const list = document.getElementById('message-list');
             const message = lastSocialItems.find(current => current.id === item.id);
             if (message) {
+              for (const previous of message.reply_jobs || []) groupReplyViews.delete(previous.id);
               message.reply_jobs = result.body.reply_jobs;
-              const updated = renderReplyJobs(message);
               const target = [...list.children].find(element => element.dataset.messageId === item.id);
-              target?.querySelector('.group-reply-jobs')?.replaceWith(updated);
+              const jobs = target?.querySelector('.group-reply-jobs');
+              if (jobs) jobs.replaceWith(renderReplyJobs(message));
+              syncGroupReplyProgress();
             }
             if (!socialHistory?.readingHistory) scheduleSocialPoll(currentConversation);
             show('ok', '已重新请求 ' + job.agent_name + ' 回复。', {announceOnly: true});
@@ -2047,6 +2322,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (model) models.set(row.dataset.messageId, model);
     }
     list.replaceChildren();
+    groupReplyViews.clear();
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
     const people = currentConversation && currentConversation.members || members;
     const pendingKeys = pendingMessageKeys();
@@ -2202,6 +2478,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (focusedModelControl?.isConnected) focusedModelControl.focus({preventScroll: true});
     renderPendingSend();
+    syncGroupReplyProgress();
     attachmentSender?.render();
     if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
     else scroller.scrollTop = refresh && !wasAtLatest ? oldTop : scroller.scrollHeight;
@@ -2761,10 +3038,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function openEmptyAgentChat(agentId) {
     const agent = agents.find(item => item.id === agentId);
     if (!agent) return;
+    stopReplyProgress();
     socialOpen += 1;
     currentConversation = null;
     currentAgent = agent;
     currentSource = 'agent';
+    closeInChatSearch({restoreScroll: false, focus: false});
     publicDraft.enter(sendScope());
     stopPolling();
     setSocialHistory(null);
@@ -2788,13 +3067,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncPlusState();
   }
 
-  async function openAgentConversation(agentId, conversationId) {
+  async function openAgentConversation(agentId, conversationId, {refresh = false} = {}) {
+    if (!refresh) {
+      stopReplyProgress();
+      stopGroupReplyProgress();
+      stopPolling();
+    }
     const open = ++socialOpen;
     const wid = workspaceId();
-    const result = await request('GET', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${conversationId}`);
+    const result = await request('GET', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${conversationId}`)
+      .catch(() => ({status: 0, body: {}}));
     if (open !== socialOpen || workspaceId() !== wid) return false;
     if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法打开对话。'));
+      if (!refresh) {
+        show('error', messageFor(result.body.error, '无法打开对话。'));
+        syncReplyProgress();
+        syncGroupReplyProgress();
+      }
       return false;
     }
     const agent = agents.find(item => item.id === agentId) || result.body.agent;
@@ -2821,14 +3110,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
       const autoReplyNotice = document.getElementById('group-agent-auto-reply-status');
       if (autoReplyNotice) autoReplyNotice.hidden = true;
-      const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
-      const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
+      closeInChatSearch({restoreScroll: false, focus: false});
     }
     currentConversation = result.body.conversation;
     publicDraft.enter(sendScope());
     writeHash({workspace: workspaceId(), agent: agentId, conversation: conversationId});
     setSessionsOpen(false);
-    const pending = renderAgentMessages(result.body.items);
+    const pending = renderAgentMessages(result.body.items, {followLatest: !refresh});
     const finished = (result.body.items || []).filter(item => item.role === 'assistant' && item.status === 'succeeded');
     if (currentConversation.unread_count > 0 && finished.length && document.visibilityState !== 'hidden') {
       const acknowledged = await request('POST', `/v1/workspaces/${wid}/agents/${agentId}/conversations/${conversationId}/read`,
@@ -2846,9 +3134,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   async function openSocialConversation(conversationId, {acknowledge = true, refresh = false} = {}) {
+    stopReplyProgress();
     const open = ++socialOpen;
     const wid = workspaceId();
-    if (currentConversation?.id !== conversationId) {
+    if (currentSource !== 'social' || currentConversation?.id !== conversationId) {
       setSocialHistory(null);
       voiceRecorder.clear();
     }
@@ -2878,8 +3167,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return true;
     }
     if (!currentConversation || currentConversation.id !== updated.id) {
-      const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
-      const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
+      closeInChatSearch({restoreScroll: false, focus: false});
     }
     currentConversation = updated;
     publicDraft.enter(sendScope(), Boolean(updated.public_agent));
@@ -2940,6 +3228,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function scheduleSocialPoll(conversation) {
     if (hasPendingReplies() || conversation?.public_agent?.pending) {
+      if (currentGroupReplyWatch(groupReplyWatch) && !groupReplyWatch.degraded) return;
       schedulePoll(servedByDsbot ? 8000 : 1800);
     } else if (!servedByDsbot && pollsAccountThread(conversation)) {
       schedulePoll(8000);
@@ -2952,10 +3241,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function schedulePoll(delay = 2000) {
     stopPolling();
+    if (currentSource === 'agent' && !canWatchReply()) return;
     pollTimer = globalThis.setTimeout(() => {
       pollTimer = 0;
-      if (currentConversation && currentAgent && currentSource === 'agent') {
-        openAgentConversation(currentAgent.id, currentConversation.id);
+      if (currentConversation && currentAgent && currentSource === 'agent' && canWatchReply()) {
+        openAgentConversation(currentAgent.id, currentConversation.id, {refresh: true});
       } else if (currentConversation && currentSource === 'social' && !socialHistory?.readingHistory) {
         if (document.visibilityState !== 'hidden' && viewingSocialMessages() && (!servedByDsbot || !readingSocialContext())) {
           openSocialConversation(currentConversation.id, {refresh: true});
@@ -2967,6 +3257,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   document.addEventListener('visibilitychange', () => {
+    if (currentSource === 'agent') {
+      if (!canWatchReply()) stopPolling();
+      if (!syncReplyProgress() && currentConversation && lastAgentItems.some(waitingAgentReply)) schedulePoll();
+      return;
+    }
+    syncGroupReplyProgress();
     if (document.visibilityState !== 'visible' || currentSource !== 'social' || !currentConversation
       || pollTimer || socialHistory?.readingHistory || !viewingSocialMessages()) return;
     if (servedByDsbot) scheduleSocialPoll(currentConversation);
@@ -3814,6 +4110,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadNotifications();
   });
   workspaceSelect.addEventListener('change', async () => {
+    stopReplyProgress();
     socialOpen += 1;
     setSocialHistory(null);
     if (liveBanner) liveBanner.hidden = true;
@@ -3831,7 +4128,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopPolling();
     closeSearchPanel();
     closeComposeDialog();
-    const inChatPanel = document.getElementById('conversation-search-panel'); if (inChatPanel) inChatPanel.hidden = true;
+    closeInChatSearch({restoreScroll: false, focus: false});
     writeHash({workspace: workspaceId()});
     applyChatIdentity(document, '聊天');
     showPublicChatState(null);
@@ -3874,21 +4171,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (result.status !== 200) throw new Error('无法搜索当前会话。');
     return result.body;
   });
-  async function searchCurrentConversation(append = false) {
-    const conversation = currentConversation;
-    const query = (document.getElementById('conversation-search-query').value || '').trim();
-    if (!conversation || !query) return;
-    const wid = workspaceId();
-    const state = await inChatSearch.load(query, conversation.id, {append});
-    if (workspaceId() !== wid || !currentConversation || currentConversation.id !== conversation.id) return;
-    const list = document.getElementById('conversation-search-results'); list.replaceChildren();
-    for (const hit of state.hits) {
-      list.append(searchHitRow(hit, (document.getElementById('conversation-search-query').value || '').trim()));
-    }
-    document.getElementById('conversation-search-status').textContent = state.error || (state.hits.length ? '已显示 ' + state.hits.length + ' 条消息' : '没有找到匹配的消息。试试其他关键词。');
-    document.getElementById('conversation-search-more').hidden = !state.cursor;
-  }
-  async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status')) {
+  async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status'), isCurrent = () => true) {
+    if (!isCurrent()) return false;
     const list = document.getElementById('message-list');
     const findTarget = () => Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
     let target = findTarget();
@@ -3898,7 +4182,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       try {
         const query = new URLSearchParams({around: messageId, limit: '50'});
         const result = await historyPage(state, query);
-        if (!result || jump !== historyJump) return;
+        if (!result || jump !== historyJump || !isCurrent()) return false;
         if (result.status === 200 && result.body.items?.some(item => item.id === messageId)) {
           setSocialHistory({...state, cursor: result.body.cursor ?? null,
             readingHistory: true, loading: false});
@@ -3908,7 +4192,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           if (notice) notice.textContent = '';
         }
       } catch {
-        if (socialHistory !== state || jump !== historyJump) return;
+        if (socialHistory !== state || jump !== historyJump || !isCurrent()) return false;
       }
     }
     if (!target) {
@@ -3922,13 +4206,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
     return true;
   }
-  function searchHitRow(hit, query) {
+  function searchHitRow(hit, view) {
     const li = document.createElement('li');
     li.className = 'search-hit';
     li.tabIndex = 0;
     li.setAttribute('role', 'button');
     li.setAttribute('aria-label', '跳到这条消息');
-    const jump = () => jumpToMessage(hit.messageId);
+    const jump = () => jumpToMessage(hit.messageId, inChatStatus, () => currentSearchView(view));
     li.addEventListener('click', jump);
     li.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
@@ -3947,65 +4231,72 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     head.append(name, when);
     const text = document.createElement('span');
     text.className = 'search-hit-text';
-    text.append(...highlightParts(hit.snippet || hit.preview || '', query).map(part => {
+    text.append(...highlightParts(hit.snippet || hit.preview || '', view.query).map(part => {
       if (!part.match) return document.createTextNode(part.text);
       const mark = document.createElement('mark'); mark.textContent = part.text; return mark;
     }));
     li.append(avatar, head, text);
     return li;
   }
-  // The conversation search covers three scopes of the SAME conversation. The
-  // photo and file scopes read the attachment fields the message rows already
-  // carry (social.py MESSAGE_ROWS -> attachment{id,title,kind,revision,path}),
-  // paged through the existing messages endpoint; no second list is invented.
-  const CONVERSATION_SCOPE_NOTES = {
-    messages: '· 搜索当前会话里你有权查看的消息。',
-    photos: '· 只读取当前会话消息里已有的图片附件。',
-    files: '· 只读取当前会话消息里已有的文件附件。',
+  const CONVERSATION_SCOPES = {
+    messages: {placeholder: '搜索当前会话', note: '搜索当前会话中的消息。'},
+    photos: {placeholder: '搜索照片文件名', note: '搜索当前会话中的照片。', kind: 'photo', noun: '照片', unit: '张'},
+    files: {placeholder: '搜索文件名', note: '搜索当前会话中的文件。', kind: 'file', noun: '文件', unit: '个'},
   };
-  const ATTACHMENT_PAGE_LIMIT = 100; // the messages endpoint caps limit at 100
-  const ATTACHMENT_MAX_PAGES = 50;
+  const inChatPanel = document.getElementById('conversation-search-panel');
+  const inChatQuery = document.getElementById('conversation-search-query');
+  const inChatResults = document.getElementById('conversation-search-results');
+  const inChatStatus = document.getElementById('conversation-search-status');
+  const inChatMore = document.getElementById('conversation-search-more');
+  const inChatRetry = document.getElementById('conversation-search-retry');
   let conversationScope = 'messages';
+  let searchedChat = '';
+  let inChatView;
+  let searchDelay;
+  const conversationQuery = () => inChatQuery.value.trim();
+  const currentSearchView = view => Boolean(view && inChatView === view && !inChatPanel.hidden
+    && view.chat === sendScope() && view.scope === conversationScope && view.query === conversationQuery());
+
+  function clearConversationSearch() {
+    clearTimeout(searchDelay);
+    inChatView?.controller?.abort();
+    inChatView = null;
+    void inChatSearch.load('');
+    inChatResults.replaceChildren();
+    inChatResults.scrollTop = 0;
+    inChatResults.setAttribute('aria-busy', 'false');
+    inChatStatus.textContent = '';
+    inChatMore.hidden = true;
+    inChatMore.disabled = false;
+    inChatRetry.hidden = true;
+  }
+
   function setConversationScope(tab) {
     conversationScope = tab;
-    for (const name of ['messages', 'photos', 'files']) {
-      const button = document.getElementById('conversation-search-tab-' + name);
-      if (button) button.setAttribute('aria-selected', String(name === tab));
+    for (const name of Object.keys(CONVERSATION_SCOPES)) {
+      document.getElementById('conversation-search-tab-' + name)?.setAttribute('aria-selected', String(name === tab));
     }
-    const note = document.getElementById('conversation-search-scope-note');
-    if (note) note.textContent = CONVERSATION_SCOPE_NOTES[tab] || CONVERSATION_SCOPE_NOTES.messages;
-    const more = document.getElementById('conversation-search-more');
-    if (more) more.hidden = true;
+    const {placeholder, note} = CONVERSATION_SCOPES[tab];
+    inChatQuery.placeholder = placeholder;
+    document.getElementById('conversation-search-query-label').textContent = placeholder;
+    document.getElementById('conversation-search-scope-note').textContent = note;
   }
-  async function conversationAttachments(conversation) {
-    const items = [];
-    let cursor = '';
-    let truncated = false;
-    for (let page = 0; page < ATTACHMENT_MAX_PAGES; page += 1) {
-      const params = new URLSearchParams({limit: String(ATTACHMENT_PAGE_LIMIT)});
-      if (cursor) params.set('cursor', cursor);
-      const result = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages?${params}`);
-      if (result.status !== 200) throw new Error('读不到当前会话的附件。');
-      items.push(...(result.body.items || []));
-      cursor = result.body.cursor || '';
-      if (!cursor) return {items, truncated: false};
-      truncated = true;
-    }
-    return {items, truncated};
-  }
-  function attachmentHitRow(item) {
+
+  function attachmentHitRow(item, view, photo) {
+    const {attachment} = item;
+    const title = attachment.title || (photo ? '未命名照片' : '未命名文件');
     const li = document.createElement('li');
-    li.className = 'search-hit';
-    li.tabIndex = 0;
-    li.setAttribute('role', 'button');
-    li.setAttribute('aria-label', '跳到这条消息');
-    const jump = () => jumpToMessage(item.id);
-    li.addEventListener('click', jump);
-    li.addEventListener('keydown', event => {
-      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
+    li.className = 'attachment-search-hit';
+    const jump = document.createElement('button');
+    jump.type = 'button';
+    jump.className = 'search-hit attachment-search-jump';
+    jump.setAttribute('aria-label', '跳到原消息，' + title);
+    jump.addEventListener('click', async () => {
+      const located = await jumpToMessage(item.message_id, inChatStatus, () => currentSearchView(view));
+      if (!located || !currentSearchView(view)) return;
+      searchScrollSnapshot = null;
+      if (globalThis.matchMedia?.('(max-width: 700px)').matches) closeInChatSearch({restoreScroll: false, focus: false});
     });
-    const attachment = item.attachment || {};
-    const photo = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
     const avatar = document.createElement('span');
     avatar.className = 'search-hit-avatar';
     avatar.setAttribute('aria-hidden', 'true');
@@ -4013,75 +4304,102 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const head = document.createElement('span');
     head.className = 'search-hit-head';
     const name = document.createElement('strong');
-    name.textContent = attachment.title || (photo ? '未命名照片' : '未命名文件');
+    name.textContent = title;
+    name.title = title;
+    head.append(name);
     const when = document.createElement('time');
-    when.textContent = item.created ? formatSessionTime(item.created) : '';
-    head.append(name, when);
-    const text = document.createElement('span');
-    text.className = 'search-hit-text';
-    text.textContent = (photo ? '照片' : '文件') + ' · 点开回到这条消息';
-    li.append(avatar, head, text);
+    when.className = 'search-hit-text';
+    when.textContent = formatSessionTime(item.created_at);
+    jump.append(avatar, head, when);
+    li.append(jump);
+    const download = chatFileDownload(document, attachment);
+    if (download) {
+      download.className = 'attachment-search-download';
+      li.append(download);
+    }
     return li;
   }
-  async function searchCurrentAttachments(scope) {
-    const conversation = currentConversation;
-    const list = document.getElementById('conversation-search-results');
-    const status = document.getElementById('conversation-search-status');
-    if (!list || !status) return;
-    list.replaceChildren();
-    if (!conversation) { status.textContent = '请先打开一个会话。'; return; }
-    if (currentSource !== 'social') {
-      status.textContent = '智能体会话的消息数据里没有附件字段，读不到照片和文件。';
-      return;
+
+  async function searchAttachmentPage(view, {kind, noun, unit}) {
+    const conversation = currentConversation.id;
+    const base = currentSource === 'social' ? socialBase() : agentBase() + '/conversations';
+    const params = new URLSearchParams({kind, q: view.query, limit: '20'});
+    if (view.cursor) params.set('cursor', view.cursor);
+    view.controller = new AbortController();
+    const result = await request('GET', `${base}/${conversation}/attachments?${params}`, undefined, undefined, view.controller.signal);
+    if (!currentSearchView(view)) return;
+    if (result.status !== 200) throw new Error('读不到当前会话的附件，请重试。');
+    for (const item of result.body.items || []) {
+      if (!item.message_id || !item.attachment?.id) continue;
+      const id = JSON.stringify([item.message_id, item.attachment.id]);
+      if (view.seen.has(id)) continue;
+      view.seen.add(id);
+      inChatResults.append(attachmentHitRow(item, view, kind === 'photo'));
     }
-    status.textContent = '正在读取当前会话的附件…';
-    const wid = workspaceId();
-    let found;
-    try {
-      found = await conversationAttachments(conversation);
-    } catch (failure) {
-      if (currentConversation && currentConversation.id === conversation.id) {
-        status.textContent = failure.message || '读不到当前会话的附件。';
-      }
-      return;
-    }
-    if (workspaceId() !== wid || !currentConversation || currentConversation.id !== conversation.id) return;
-    if (conversationScope !== scope) return;
-    const photos = scope === 'photos';
-    const hits = found.items.filter(item => {
-      const attachment = item.attachment;
-      if (!attachment) return false;
-      const image = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
-      return photos ? image : !image;
-    });
-    for (const item of hits) list.append(attachmentHitRow(item));
-    if (hits.length) {
-      status.textContent = (photos ? '已显示 ' + hits.length + ' 张照片' : '已显示 ' + hits.length + ' 个文件')
-        + (found.truncated ? ' · 只读取了最近 ' + (ATTACHMENT_PAGE_LIMIT * ATTACHMENT_MAX_PAGES) + ' 条消息' : '');
+    const next = result.body.next_cursor;
+    view.cursor = typeof next === 'string' && next !== view.cursor ? next : '';
+    inChatStatus.textContent = view.seen.size ? `已显示 ${view.seen.size} ${unit}${noun}`
+      : view.query ? `没有找到匹配的${noun}。` : `这个会话里还没有${noun}。`;
+  }
+
+  async function searchCurrentConversation(append = false) {
+    if (!currentConversation || inChatPanel.hidden) return;
+    if (append) {
+      if (!currentSearchView(inChatView) || !inChatView.cursor || inChatView.loading) return;
     } else {
-      status.textContent = photos ? '这个会话里还没有照片。' : '这个会话里还没有文件。';
+      clearConversationSearch();
+      const query = conversationQuery();
+      if (conversationScope === 'messages' && !query) return;
+      inChatView = {chat: sendScope(), scope: conversationScope, query, cursor: '', seen: new Set()};
+    }
+    const view = inChatView;
+    const scope = CONVERSATION_SCOPES[view.scope];
+    const noun = scope.noun || '消息';
+    view.loading = true;
+    inChatResults.setAttribute('aria-busy', 'true');
+    inChatStatus.textContent = append ? '正在加载更多…' : `正在搜索${noun}…`;
+    inChatMore.disabled = true;
+    inChatRetry.hidden = true;
+    try {
+      if (scope.kind) {
+        await searchAttachmentPage(view, scope);
+      } else {
+        const state = await inChatSearch.load(view.query, currentConversation.id, {append});
+        if (!currentSearchView(view)) return;
+        if (state.error) throw new Error(state.error);
+        inChatResults.replaceChildren(...state.hits.map(hit => searchHitRow(hit, view)));
+        view.cursor = state.cursor;
+        inChatStatus.textContent = state.hits.length ? `已显示 ${state.hits.length} 条消息` : '没有找到匹配的消息。试试其他关键词。';
+      }
+      if (currentSearchView(view)) inChatMore.hidden = !view.cursor;
+    } catch {
+      if (!currentSearchView(view)) return;
+      inChatStatus.textContent = append ? '无法加载更多，请重试。' : `无法搜索${noun}，请重试。`;
+      view.retryAppend = append;
+      inChatMore.hidden = true;
+      inChatRetry.hidden = false;
+    } finally {
+      if (currentSearchView(view)) {
+        view.loading = false;
+        view.controller = null;
+        inChatMore.disabled = false;
+        inChatResults.setAttribute('aria-busy', 'false');
+      }
     }
   }
-  for (const scope of ['messages', 'photos', 'files']) {
-    const button = document.getElementById('conversation-search-tab-' + scope);
-    if (!button) continue;
-    button.addEventListener('click', async () => {
+
+  for (const scope of Object.keys(CONVERSATION_SCOPES)) {
+    document.getElementById('conversation-search-tab-' + scope)?.addEventListener('click', () => {
+      if (scope === conversationScope) return;
       setConversationScope(scope);
-      const list = document.getElementById('conversation-search-results');
-      if (scope === 'messages') {
-        const query = (document.getElementById('conversation-search-query').value || '').trim();
-        if (query) await searchCurrentConversation();
-        else { if (list) list.replaceChildren(); document.getElementById('conversation-search-status').textContent = ''; }
-        return;
-      }
-      await searchCurrentAttachments(scope);
+      return searchCurrentConversation();
     });
   }
   const groupInfoToggle = document.getElementById('group-info-toggle');
   if (groupInfoToggle) {
     groupInfoToggle.addEventListener('click', () => {
       const open = groupInfoToggle.getAttribute('aria-expanded') !== 'true';
-      if (open) document.getElementById('conversation-search-panel').hidden = true;
+      if (open) closeInChatSearch({restoreScroll: false, focus: false});
       setGroupInfoOpen(open);
     });
     document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
@@ -4110,32 +4428,47 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   let searchScrollSnapshot = null;
   const inChatOpen = document.getElementById('conversation-search-open');
-  if (inChatOpen) inChatOpen.addEventListener('click', () => {
+  inChatOpen?.addEventListener('click', () => {
     if (!currentConversation) { show('error', '请先打开一个会话。'); return; }
     setGroupInfoOpen(false);
-    if (document.getElementById('conversation-search-panel').hidden) {
-      searchScrollSnapshot = {conversation: currentConversation.id, top: document.getElementById('message-scroller').scrollTop};
+    if (!inChatPanel.hidden) { inChatQuery.focus(); return; }
+    const chat = sendScope();
+    if (searchedChat !== chat) {
+      searchedChat = chat;
+      inChatQuery.value = '';
+      setConversationScope('messages');
     }
-    document.getElementById('conversation-search-panel').hidden = false;
-    const field = document.getElementById('conversation-search-query'); if (field) field.focus();
+    searchScrollSnapshot = {chat, top: document.getElementById('message-scroller').scrollTop};
+    inChatPanel.hidden = false;
+    inChatQuery.focus();
+    return searchCurrentConversation();
   });
-  const inChatClose = document.getElementById('conversation-search-close');
-  function closeInChatSearch() {
-    document.getElementById('conversation-search-panel').hidden = true;
-    if (searchScrollSnapshot && currentConversation && currentConversation.id === searchScrollSnapshot.conversation) {
+  function closeInChatSearch({restoreScroll = true, focus = true} = {}) {
+    inChatPanel.hidden = true;
+    clearConversationSearch();
+    if (restoreScroll && searchScrollSnapshot?.chat === sendScope()) {
       document.getElementById('message-scroller').scrollTop = searchScrollSnapshot.top;
     }
     searchScrollSnapshot = null;
-    if (inChatOpen) inChatOpen.focus();
+    if (focus) {
+      const opener = inChatOpen?.checkVisibility?.() === false ? document.getElementById('chat-more') : inChatOpen;
+      opener?.focus();
+    }
   }
-  if (inChatClose) inChatClose.addEventListener('click', closeInChatSearch);
+  document.getElementById('conversation-search-close')?.addEventListener('click', () => closeInChatSearch());
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !document.getElementById('conversation-search-panel').hidden) closeInChatSearch();
+    if (event.key === 'Escape' && !inChatPanel.hidden) closeInChatSearch();
   });
-  const inChatForm = document.getElementById('conversation-search-form');
-  if (inChatForm) inChatForm.addEventListener('submit', async event => { event.preventDefault(); await searchCurrentConversation(); });
-  const inChatMore = document.getElementById('conversation-search-more');
-  if (inChatMore) inChatMore.addEventListener('click', () => searchCurrentConversation(true));
+  document.getElementById('conversation-search-form')?.addEventListener('submit', event => {
+    event.preventDefault();
+    return searchCurrentConversation();
+  });
+  inChatQuery.addEventListener('input', event => {
+    clearConversationSearch();
+    if (!event.isComposing) searchDelay = setTimeout(() => void searchCurrentConversation(), 200);
+  });
+  inChatMore.addEventListener('click', () => searchCurrentConversation(true));
+  inChatRetry.addEventListener('click', () => searchCurrentConversation(inChatView?.retryAppend || false));
   function renderDeliveredSocialMessage(scope, message) {
     if (message && scope === sendScope() && !socialHistory?.readingHistory) {
       const without = lastSocialItems.filter(item => item.id !== message.id);
@@ -4264,6 +4597,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   document.getElementById('search-close').addEventListener('click', closeSearchPanel);
   document.getElementById('chat-back').addEventListener('click', () => {
+    stopReplyProgress();
+    stopGroupReplyProgress();
+    if (currentSource === 'agent') stopPolling();
     setSessionsOpen(true);
     document.getElementById('conversation-list').querySelector('[aria-current="true"]')?.focus();
   });
@@ -4339,43 +4675,50 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   document.getElementById('group-agent-form').addEventListener('submit', async event => {
     event.preventDefault();
-    if (groupReplyBusy || currentSource !== 'social' || !currentConversation) return;
+    if (groupReplyBusy || currentSource !== 'social' || currentConversation?.kind !== 'group'
+      || currentConversation.public_agent) return;
     const cid = currentConversation.id;
+    const scope = sendScope();
     const agentIds = [...document.querySelectorAll('#group-agent-choices input[name="group-agent"]:checked')]
       .map(box => box.value);
-    const prompt = document.getElementById('group-agent-prompt').value;
+    const field = document.getElementById('group-agent-prompt');
+    const prompt = field.value;
     if (!agentIds.length) {
       show('error', '请选择至少一个群内智能体。');
       return;
     }
     if (!prompt.trim()) return;
-    const fingerprint = JSON.stringify([workspaceId(), cid, agentIds.slice().sort(), prompt]);
+    const fingerprint = JSON.stringify([scope, agentIds.slice().sort(), prompt]);
     if (!groupReplyAttempt || groupReplyAttempt.fingerprint !== fingerprint) {
       groupReplyAttempt = {fingerprint, key: idempotencyKey('group-reply-')};
     }
     groupReplyBusy = true;
-    document.getElementById('group-agent-submit').disabled = true;
+    const button = document.getElementById('group-agent-submit');
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = '发送中…';
     try {
       const result = await request('POST', `${socialBase()}/${cid}/agent-replies`,
-        {agent_ids: agentIds, prompt}, {'Idempotency-Key': groupReplyAttempt.key});
-      if (![200, 201].includes(result.status)) {
-        show('error', messageFor(result.body.error, '请求未确认；重试相同内容将复用请求标识。'));
+        {agent_ids: agentIds, prompt}, {'Idempotency-Key': groupReplyAttempt.key})
+        .catch(() => ({status: 0, body: {}}));
+      if (result.status !== 202 || !result.body.message?.id) {
+        if (scope === sendScope()) show('error', messageFor(result.body.error, '发送未确认，请重试。'));
         return;
       }
       groupReplyAttempt = null;
-      if (currentSource === 'social' && currentConversation && currentConversation.id === cid) {
-        await openSocialConversation(cid);
-        const replies = result.body.replies || (result.body.reply ? [result.body.reply] : []);
-        const failed = replies.filter(item => item.status === 'failed').length;
-        show(failed ? 'error' : 'ok', failed
-          ? (replies.length - failed) + ' 个已提交，' + failed + ' 个失败。'
-          : '已请求 ' + replies.length + ' 个智能体回复。');
+      if (scope === sendScope()) {
+        if (field.value === prompt) field.value = '';
+        if (socialHistory?.readingHistory) void openSocialConversation(cid);
+        else {
+          renderDeliveredSocialMessage(scope, result.body.message);
+          scheduleSocialPoll(currentConversation);
+        }
+        show('ok', '已发送到群聊。', {announceOnly: true});
       }
     } finally {
       groupReplyBusy = false;
-      if (currentSource === 'social' && currentConversation && currentConversation.id === cid) {
-        await openSocialConversation(cid);
-      }
+      button.textContent = label;
+      button.disabled = !document.getElementById('group-agent-choices').querySelector('input:not(:disabled)');
     }
   });
 
@@ -4535,6 +4878,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           job.state = state;
           if (isCurrent()) paintSendJob(job);
         };
+        const beginReply = () => {
+          if (!servedByDsbot || queue.social || queue.replying === job) return;
+          queue.replying = job;
+          if (isCurrent()) {
+            const scroller = document.getElementById('message-scroller');
+            const follow = messageScrollerAtBottom(scroller);
+            stopPolling();
+            renderPendingSend();
+            syncReplyProgress();
+            if (follow) scroller.scrollTop = scroller.scrollHeight;
+          }
+        };
         try {
           if (!queue.conversationId) {
             feedback('正在创建对话…');
@@ -4565,12 +4920,32 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           const path = `${queue.base}/${queue.conversationId}/messages`;
           const headers = {'Idempotency-Key':job.key};
           feedback(job.files.length ? '正在上传附件…' : queue.social ? '正在发送…' : '正在等待智能体回复…');
-          const result = job.files.length
-            ? await sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
-              {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
-                feedback(percent < 100 ? `正在上传附件 · ${percent}%` : '附件已上传，正在等待智能体回复…');
-              })
-            : await request('POST', path, job.message, headers);
+          let result;
+          let anchor;
+          try {
+            if (job.files.length) {
+              result = await sendPrivateAttachmentMessage(document.defaultView, path, job.message, job.files,
+                {...headers, 'X-CSRF-Token':csrfCookie(document.cookie)}, percent => {
+                  feedback(percent < 100 ? `正在上传附件 · ${percent}%` : '附件已上传，正在等待智能体回复…');
+                  if (percent >= 100) beginReply();
+                });
+            } else {
+              const response = request('POST', path, job.message, headers);
+              beginReply();
+              result = await response;
+            }
+          } finally {
+            if (queue.replying === job) {
+              if (isCurrent()) {
+                const scroller = document.getElementById('message-scroller');
+                anchor = {top: scroller.scrollTop, follow: messageScrollerAtBottom(scroller)};
+                if (replyWatch?.key === job.key) stopReplyProgress();
+              }
+              queue.replying = null;
+              job.replyView?.bubble.remove();
+              job.replyView = null;
+            }
+          }
           if (![200, 201].includes(result.status) || !result.body.message?.id) {
             const code = result.body.error?.code;
             if (isCurrent() && code === 'public_chat_closed' && currentConversation?.public_agent) {
@@ -4598,8 +4973,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             } else {
               const reply = result.body.reply;
               if (reply?.id) {
-                if (renderAgentMessages(append(lastAgentItems, result.body.message, reply))) schedulePoll();
-              } else void openAgentConversation(queue.agentId, queue.conversationId);
+                if (renderAgentMessages(append(lastAgentItems, result.body.message, reply), {followLatest: false, anchor})) schedulePoll();
+              } else void openAgentConversation(queue.agentId, queue.conversationId, {refresh: true});
               const notice = sendNotice(reply);
               show(notice.kind, notice.text, notice);
             }
@@ -4608,6 +4983,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         } catch (error) {
           job.failed = true;
           feedback(error instanceof TypeError || !error?.message ? '未能确认发送结果，请重试。' : error.message);
+          if (isCurrent() && !queue.social) syncReplyProgress();
         }
       }
     } finally {
