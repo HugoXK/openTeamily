@@ -1,4 +1,7 @@
 import { createLookAvatar } from '../look/app.mjs';
+import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../shell/chat-utils.mjs';
+
+export { csrfCookie, canManage, idempotencyKey, statusLabel };
 
 // Two-letter card monogram ("Slides Assistant" -> "SA"; CJK names keep one glyph).
 export function agentMonogram(name) {
@@ -13,15 +16,6 @@ export function agentTone(name) {
   let hash = 0;
   for (const ch of String(name || '')) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
   return String((hash % 6) + 1);
-}
-
-export function csrfCookie(source) {
-  const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
-  return match ? decodeURIComponent(match[1]) : '';
-}
-
-export function canManage(actor) {
-  return actor === 'owner' || actor === 'admin';
 }
 
 export const AGENT_CATEGORIES = [
@@ -122,22 +116,6 @@ export function fillCategoryOptions(select, doc) {
     option.textContent = entry.label;
     select.append(option);
   }
-}
-
-export function idempotencyKey(prefix) {
-  const raw = (globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
-  return ((prefix || 'agent-') + raw.replace(/-/g, '')).slice(0, 64);
-}
-
-export function statusLabel(message) {
-  if (!message) return '';
-  if (message.status === 'queued' && message.error_code === 'no_agent') return '等待已连接的运行时。';
-  if (message.status === 'queued') return '排队中。';
-  if (message.status === 'running') return '生成中。';
-  if (message.status === 'failed' && message.error_code === 'session/attachment-invalid') return '当前模型无法处理这个附件。';
-  if (message.status === 'failed') return '回复失败' + (message.error_code ? '（' + message.error_code + '）' : '') + '。';
-  if (message.status === 'cancelled') return '已取消。';
-  return message.body || '';
 }
 
 // The template endpoint reports a handful of known refusals; keep those in the

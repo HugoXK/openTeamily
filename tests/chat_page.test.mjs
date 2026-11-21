@@ -2927,7 +2927,7 @@ test('a cold native Chat boot provisions the personal workspace and ignores the 
   }
 });
 
-test('a linked native history and its message jump render before the unrelated Social directory returns', async t => {
+test('a linked native history and message jump render while settings and the Social directory load', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const scope = linkBase(linkWork);
   const hash = `#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}&message=${linkAgentOlder}`;
@@ -2948,9 +2948,6 @@ test('a linked native history and its message jump render before the unrelated S
     await settle();
     assert.ok(fixture.calls.some(call => call.path === '/v1/onboarding'));
     assert.ok(fixture.calls.some(call => call.path === '/v1/settings'));
-    assert.equal(fixture.calls.some(call => call.path === scope + linkNativeLatest), false, 'settings still load before detail');
-    settings.resolve(json(200, {settings: {values: {send_shortcut: 'mod_enter'}}}));
-    await settle();
     assert.ok(fixture.calls.some(call => call.path === scope + linkSocialDirectory), 'the Social directory really is pending');
     const personal = fixture.calls.findIndex(call => call.path === '/v1/personal-agent' && call.method === 'GET');
     const workspaces = fixture.calls.findIndex(call => call.path === '/v1/workspaces?limit=100');
@@ -2958,7 +2955,6 @@ test('a linked native history and its message jump render before the unrelated S
     assert.ok(personal >= 0 && workspaces >= 0 && personal < detail && workspaces < detail, 'workspace authorization precedes detail');
     assert.equal(fixture.calls.some(call => call.path === '/v1/personal-agent' && call.method === 'POST'), false,
       'a running DS-Bot with an existing personal binding does not need to provision again');
-    assert.equal(fixture.el('chat-body').dataset.sendShortcut, 'mod_enter');
     assert.deepEqual(fixture.messages(), [linkAgentOlder]);
     assert.equal(fixture.el('chat-title').textContent, fixture.agent.name);
     assert.equal(fixture.el('message-list').children[0].dataset.searchJump, 'true');
@@ -2966,6 +2962,10 @@ test('a linked native history and its message jump render before the unrelated S
     assert.equal(globalThis.location.hash, hash);
     assert.equal(fixture.calls.some(call => call.path.endsWith('/read')), false);
     assert.equal(fixture.calls.filter(call => call.path === around).length, 1);
+    settings.resolve(json(200, {settings: {values: {send_shortcut: 'mod_enter'}}}));
+    await settle();
+    assert.equal(fixture.el('chat-body').dataset.sendShortcut, 'mod_enter');
+    assert.equal(fixture.el('message-list').children[0].dataset.searchJump, 'true');
     directory.resolve(json(200, {items: []}));
     await loading;
     await settle();
@@ -2986,6 +2986,83 @@ test('a linked native history and its message jump render before the unrelated S
     settings.resolve(json(200, {settings: {values: {}}}));
     onboarding.resolve(json(200, {onboarding: {completed: true}}));
     directory.resolve(json(200, {items: []}));
+    fixture.restore();
+  }
+});
+
+test('a quick native send clears the draft and applies the saved reply language after settings reach the queue', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const settings = Promise.withResolvers();
+  const sendPath = scope + linkNativePath + '/messages';
+  fixture.routes.set('/v1/settings', () => settings.promise);
+  fixture.routes.set(sendPath, () => json(201, {
+    message:{id:'sent',role:'user',body:'hola',status:'succeeded'},
+    reply:{id:'answer',role:'assistant',body:'hola',status:'succeeded'},
+  }));
+  try {
+    await mount(fixture.doc, {fetcher:fixture.fetcher});
+    assert.deepEqual(fixture.messages(), [linkAgentOlder,linkAgentLatest]);
+    const field = fixture.el('chat-body');
+    field.value = 'hola';
+    await fire(fixture.el('chat-form'), 'submit', {preventDefault() {}});
+    assert.equal(field.value, '');
+    assert.match(fixture.el('message-list').children.at(-1).children[1].textContent, /加载聊天偏好/);
+    assert.equal(fixture.calls.some(call => call.path === sendPath), false);
+    field.value = 'next draft';
+    settings.resolve(json(200, {settings:{values:{chat_language:'es',send_shortcut:'mod_enter'}}}));
+    await settle();
+    assert.deepEqual(fixture.calls.filter(call => call.path === sendPath).map(call => call.body), [{body:'hola',chat_language:'es'}]);
+    assert.equal(field.value, 'next draft');
+    assert.equal(field.dataset.sendShortcut, 'mod_enter');
+    assert.deepEqual(fixture.messages().slice(-2), ['sent','answer']);
+  } finally {
+    settings.resolve(json(500, {}));
+    fixture.restore();
+  }
+});
+
+test('an unavailable session keeps the prior draft and a superseded retry cannot change its destination', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const unavailable = Promise.withResolvers();
+  const retry = Promise.withResolvers();
+  let attempts = 0;
+  fixture.routes.set(scope + linkSocialPath, () => (++attempts === 1 ? unavailable.promise : retry.promise));
+  const click = cid => fire(fixture.el('conversation-list'), 'click', {
+    target:sessionRows(fixture.el).find(row => row.dataset.conversation === cid),
+  });
+  try {
+    await mount(fixture.doc, {fetcher:fixture.fetcher});
+    const field = fixture.el('chat-body');
+    field.value = 'keep this private draft';
+    await fire(field, 'input');
+    const opening = click(linkSocial);
+    await settle();
+    assert.equal(sessionRows(fixture.el).find(row => row.dataset.conversation === linkSocial).getAttribute('aria-busy'), 'true');
+    assert.equal(fixture.el('main-panel').inert, true);
+    assert.equal(fixture.el('chat-send').disabled, true);
+    assert.equal(fixture.selected(), linkThread);
+    await fire(fixture.el('chat-form'), 'submit', {preventDefault() {}});
+    assert.equal(fixture.calls.some(call => call.method === 'POST' && call.path.endsWith('/messages')), false);
+    unavailable.resolve(json(503, {}));
+    await opening;
+    assert.equal(fixture.el('session-transition-retry').hidden, false);
+    assert.equal(fixture.el('chat-send').disabled, false);
+    assert.equal(field.value, 'keep this private draft');
+    await fire(fixture.el('session-transition-retry'), 'click');
+    await settle();
+    assert.equal(attempts, 2);
+    await click(linkThread);
+    retry.resolve(json(200, {conversation:{id:linkSocial,kind:'group',title:'Late group'},items:[]}));
+    await settle();
+    assert.equal(fixture.selected(), linkThread);
+    assert.equal(fixture.el('session-transition').hidden, true);
+    assert.equal(fixture.el('main-panel').inert, false);
+    assert.equal(field.value, 'keep this private draft');
+  } finally {
+    unavailable.resolve(json(503, {}));
+    retry.resolve(json(503, {}));
     fixture.restore();
   }
 });

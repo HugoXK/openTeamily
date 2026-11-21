@@ -152,6 +152,48 @@ export function createAgents({ db, host }) {
     try { return (await host.call('personal/get', {})) || {recall:'off'} } catch { return {recall:'off'} }
   }
 
+  function observeAgent(row, bot, rosterAttached) {
+    if (bot) return {...row,
+      name: row.native_name && bot.name !== row.native_name ? bot.name : row.name,
+      instructions: bot.instructions || '', archived: Number(Boolean(bot.hidden)),
+      native_bot_id: bot.id, native_name: bot.name}
+    if (rosterAttached && row.native_bot_id) return {...row, archived: 1, native_name: null, native_deleted: true}
+    return row
+  }
+
+  async function chatDirectory(workspaceId, {includeArchived, cursor, limit}) {
+    const rows = all(`SELECT a.*, o.bot_id AS native_bot_id, o.last_name AS native_name
+      FROM agents a LEFT JOIN native_agent_objects o ON o.agent_id=a.id
+      WHERE a.workspace_id=? AND a.id>? ORDER BY a.id`, workspaceId, cursor)
+    // Native writes own reconciliation. Listing still works before the roster
+    // attaches and can reflect live edits without queueing behind a model turn.
+    const rt = host.currentRuntime?.()?.rt
+    const rosterAttached = typeof rt?.botOf === 'function'
+    const unmapped = new Map()
+    if (rosterAttached && rows.some(row => !row.native_bot_id)) {
+      for (const bot of Object.values(rt.state?.bots ?? {})) {
+        const link = bot.openteamily
+        if (link?.workspace_id === workspaceId && !unmapped.has(link.agent_id)) unmapped.set(link.agent_id, bot)
+      }
+    }
+    const page = []
+    for (const row of rows) {
+      const bot = row.native_bot_id ? rt?.botOf?.(row.native_bot_id) : unmapped.get(row.id)
+      const observed = observeAgent(row, bot, rosterAttached)
+      if (!includeArchived && observed.archived) continue
+      page.push(observed)
+      if (page.length > limit) break
+    }
+    const items = page.slice(0, limit).map(view)
+    const binding = one('SELECT agent_id FROM native_personal_binding WHERE singleton=1 AND workspace_id=?', workspaceId)
+    const personal = binding && items.find(agent => agent.id === binding.agent_id)
+    if (personal) {
+      const profile = await privateProfile(personal)
+      if (profile) personal.memory_recall_default = profile.recall !== 'off'
+    }
+    return {items, cursor: page.length > limit ? items.at(-1)?.id ?? null : null}
+  }
+
   function memoryMode(convo, profile) {
     const setting = one('SELECT enabled,scope FROM agent_conversation_memory WHERE conversation_id=?', convo.id)
     if (setting) return setting.enabled ? setting.scope : 'off'
@@ -512,12 +554,11 @@ export function createAgents({ db, host }) {
       }
       const {native_name, ...mapping} = await native.readSession(agent, `agent:${agent.id}:${row.id}`, row.title)
       const current = load(agent.workspace_id, agent.id)
-      // An already-bound Session stays readable while a turn holds the native lock.
-      // Honour a recent roster archive without taking that lock to reconcile it.
-      const rosterBot = host.currentRuntime?.()?.rt?.botOf(mapping.native_bot_id)
+      const rt = host.currentRuntime?.()?.rt
+      const observed = observeAgent({...current, native_bot_id: mapping.native_bot_id, native_name},
+        rt?.botOf?.(mapping.native_bot_id), typeof rt?.botOf === 'function')
       return {
-        agent: view({...current, archived: current.archived || Number(Boolean(rosterBot?.hidden)),
-          native_bot_id: mapping.native_bot_id, native_name}),
+        agent: view(observed),
         conversation: {...row, ...mapping, ...memorySetting(memoryMode(row,await privateProfile(agent)))},
         ...(history ? conversationHistory(row.id, history) : {items: conversationMessages(row.id)}),
       }
@@ -761,7 +802,7 @@ export function createAgents({ db, host }) {
       return { imported }
     },
   }
-  endpoints.v1 = agentsV1({ endpoints, log: host?.log })
+  endpoints.v1 = agentsV1({ endpoints, chatDirectory, log: host?.log })
   const migrate = async (bundle) => (bundle?.format === 'openteamily-dsbot-import' ? importOfficialBundle(endpoints, bundle) : endpoints.import(bundle))
   return { endpoints, migrate }
 }

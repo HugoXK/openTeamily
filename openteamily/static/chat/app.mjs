@@ -42,8 +42,7 @@ export function jumpToSearchHit(list, messageId, {schedule = globalThis.setTimeo
   schedule(() => { delete target.dataset.searchJump; }, ms);
   return true;
 }
-import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
-import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
+import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { dsbotServed } from './dsbot.mjs';
 import { agentSavePath, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
@@ -789,6 +788,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // conversation triggers. Each render that finishes for that conversation
   // retries the jump, and a landed jump clears it.
   let pendingHitJump = null;
+  let sessionTransition = null;
   const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation && !currentConversation.public_agent ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
   const autoTranslation = mountGroupTranslation(document,{request});
@@ -883,7 +883,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let resourceItems = [];
   let sendShortcut = 'enter';
   let chatLanguage = 'auto';
-  let chatPreferences = {message_folding:'standard', document_cards:false, link_previews:true};
+  const defaultChatPreferences = {message_folding:'standard', document_cards:false, link_previews:true};
+  let chatPreferences = defaultChatPreferences;
+  let chatSettings = null;
   let attachmentSender;
   const pendingSends = new Map();
   const agentReplyViews = new Map();
@@ -1011,7 +1013,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function sendClosed() {
-    return currentSource === 'social'
+    return Boolean(sessionTransition?.pending) || currentSource === 'social'
       && (currentConversation?.public_agent?.open === false || currentConversation?.direct?.open === false);
   }
 
@@ -1352,6 +1354,63 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let markingConversationsRead = false;
 
+  function sessionTargetMatches(target, row) {
+    return target?.cid === row.dataset.conversation && target.source === row.dataset.source;
+  }
+
+  function syncSessionTransition() {
+    const transition = sessionTransition;
+    const pending = Boolean(transition?.pending);
+    document.getElementById('session-transition').hidden = !transition;
+    document.getElementById('session-transition-status').textContent = !transition ? '' : pending
+      ? uiLabel(`正在打开「${transition.title}」…`, `Opening “${transition.title}”…`)
+      : uiLabel(`无法打开「${transition.title}」。`, `Couldn’t open “${transition.title}”.`);
+    const retry = document.getElementById('session-transition-retry');
+    retry.hidden = !transition || pending;
+    retry.textContent = uiLabel('重试', 'Retry');
+    mainPanel.inert = pending;
+    for (const item of document.getElementById('conversation-list').children) {
+      const row = item.children[0];
+      if (pending && sessionTargetMatches(transition, row)) row.setAttribute('aria-busy', 'true');
+      else row.removeAttribute('aria-busy');
+    }
+    renderPendingSend();
+  }
+
+  function clearSessionTransition() {
+    if (!sessionTransition) return;
+    sessionTransition = null;
+    syncSessionTransition();
+  }
+
+  async function openSessionTarget(target) {
+    if (sessionTransition?.pending && sessionTransition.cid === target.cid && sessionTransition.source === target.source) return false;
+    const transition = {...target, pending: true};
+    sessionTransition = transition;
+    if (narrowScreen()) setSessionsOpen(true);
+    syncSessionTransition();
+    show('', '');
+    const options = {acknowledge: !target.message, transition};
+    const opened = target.source === 'social' ? await openSocialConversation(target.cid, options)
+      : await openAgentConversation(target.agent, target.cid, options);
+    if (sessionTransition !== transition) return false;
+    if (!opened) {
+      transition.pending = false;
+      syncSessionTransition();
+      show('', '');
+      return false;
+    }
+    clearSessionTransition();
+    if (target.message) await jumpToMessage(target.message, status);
+    else if (narrowScreen() && !document.body.classList.contains('sessions-open')
+      && document.activeElement === document.body) document.getElementById('chat-title').focus();
+    return true;
+  }
+
+  document.getElementById('session-transition-retry').addEventListener('click', () => {
+    if (sessionTransition && !sessionTransition.pending) void openSessionTarget(sessionTransition);
+  });
+
   function renderSessions() {
     const list = document.getElementById('conversation-list');
     list.replaceChildren();
@@ -1383,6 +1442,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       button.dataset.conversation = session.id;
       button.dataset.source = session.source;
       if (session.agent_id) button.dataset.agent = session.agent_id;
+      if (sessionTransition?.pending && sessionTargetMatches(sessionTransition, button)) button.setAttribute('aria-busy', 'true');
       if (currentConversation && currentConversation.id === session.id && currentSource === session.source) {
         button.setAttribute('aria-current', 'true');
       }
@@ -2845,10 +2905,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         setNotificationsOpen(false);
         if (target) { globalThis.location.assign(target); return; }
         if (item.conversation_id) {
-          const opened = await openSocialConversation(item.conversation_id, {acknowledge: !item.message_id});
-          if (opened && item.message_id && currentSource === 'social' && currentConversation?.id === item.conversation_id) {
-            await jumpToMessage(item.message_id, status);
-          }
+          await openSessionTarget({source:'social', cid:item.conversation_id, message:item.message_id,
+            title:item.title || uiLabel('会话', 'conversation')});
         }
         await loadNotifications();
       });
@@ -3355,6 +3413,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function openEmptyAgentChat(agentId) {
     const agent = agents.find(item => item.id === agentId);
     if (!agent) return;
+    clearSessionTransition();
     cancelStartupLink();
     stopReplyProgress();
     socialOpen += 1;
@@ -3396,8 +3455,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (status.dataset.kind === 'loading' && status.textContent === '正在打开对话…') show('', '');
   }
 
-  async function openAgentConversation(agentId, conversationId, {refresh = false, acknowledge = true, link} = {}) {
+  async function openAgentConversation(agentId, conversationId, {refresh = false, acknowledge = true, link, transition} = {}) {
     if (pendingHitJump && pendingHitJump.conversationId !== conversationId) pendingHitJump = null;
+    if (sessionTransition?.pending && transition !== sessionTransition) return false;
     if (refresh && openingStartupLink()) return false;
     const nativeRefresh = refresh && servedByDsbot;
     const history = privateHistory;
@@ -3443,7 +3503,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!agent || conversation?.id !== conversationId || (link && (
       (agent.workspace_id && agent.workspace_id !== wid) || (conversation.workspace_id && conversation.workspace_id !== wid)
       || (conversation.agent_id && conversation.agent_id !== agentId)))) {
-      if (link) show('error', '无法打开对话。');
+      if (!refresh) show('error', '无法打开对话。');
       return false;
     }
     setSocialHistory(null);
@@ -3499,24 +3559,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return stillOpen();
   }
 
-  async function openSocialConversation(conversationId, {acknowledge = true, refresh = false, publicStartCurrent, link} = {}) {
+  async function openSocialConversation(conversationId, {acknowledge = true, refresh = false, publicStartCurrent, link, transition} = {}) {
     if (pendingHitJump && pendingHitJump.conversationId !== conversationId) pendingHitJump = null;
-    if (refresh && openingStartupLink()) return false;
+    if (sessionTransition?.pending && transition !== sessionTransition) return false;
+    if (refresh && (openingStartupLink() || currentSource !== 'social'
+      || currentConversation?.id !== conversationId)) return false;
     if (!refresh && !link) cancelStartupLink();
     stopReplyProgress();
     renderAgentQuickStarts();
     const open = ++socialOpen;
     const wid = workspaceId();
     const owner = currentUser;
-    if (currentSource !== 'social' || currentConversation?.id !== conversationId) {
-      setSocialHistory(null);
-      voiceRecorder.clear();
-    }
-    currentAgent = null;
-    currentSource = 'social';
-    if (privateHistory) setPrivateHistory(null);
     stopPolling();
-    const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner && currentSource === 'social';
+    const sameScope = () => open === socialOpen && workspaceId() === wid && currentUser === owner;
     const stillOpen = () => sameScope() && (!link || link.current());
     const result = await request('GET', `${socialBase()}/${conversationId}`).catch(() => ({status: 0, body: {}}));
     if (!stillOpen() || (publicStartCurrent && !publicStartCurrent())) return false;
@@ -3526,6 +3581,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         return false;
       }
       show('error', messageFor(result.body.error, '无法打开会话。'));
+      if (currentSource === 'agent' && !syncReplyProgress() && lastAgentItems.some(waitingAgentReply)) schedulePoll();
+      if (currentSource === 'social') { syncGroupReplyProgress(); scheduleSocialPoll(currentConversation); }
       return false;
     }
     const updated = result.body.conversation;
@@ -3545,10 +3602,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       scheduleSocialPoll(updated);
       return true;
     }
-    if (!currentConversation || currentConversation.id !== updated.id) {
+    if (currentSource !== 'social' || currentConversation?.id !== updated.id) {
+      voiceRecorder.clear();
       closeInChatSearch({restoreScroll: false, focus: false});
     }
+    currentAgent = null;
+    currentSource = 'social';
     currentConversation = updated;
+    if (privateHistory) setPrivateHistory(null);
     publicDraft.enter(sendScope(), Boolean(updated.public_agent));
     renderReplyDraft();
     if (liveBanner) liveBanner.hidden = true;
@@ -3590,8 +3651,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const read = request('POST', `${socialBase()}/${conversationId}/read`, cursor).then(acknowledged => {
         if (!sameScope() || acknowledged.status !== 200) return;
         applyOpenedRead('social', updated, acknowledged.body.unread_count, link, cursor.seq);
+        if (servedByDsbot && !link) renderSessions();
       }).catch(() => {});
-      if (!link) await read;
+      if (!servedByDsbot && !link) await read;
     }
     if (!stillOpen()) return false;
     renderSessions();
@@ -4033,25 +4095,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         closeSearchPanel();
         if (item.type === 'agent') {
           const first = sessions.find(row => row.source === 'agent' && row.agent_id === item.id);
-          if (first) await openAgentConversation(item.id, first.id);
+          if (first) await openSessionTarget({source:'agent', cid:first.id, agent:item.id, title:first.title});
           else openEmptyAgentChat(item.id);
         } else if (item.type === 'social' || item.kind === 'social') {
           // Opening writes the hash, which re-runs load() on hashchange and
           // repaints the thread. Hold the hit across that repaint; the render
           // that finishes for this conversation performs the jump.
           if (item.messageId) pendingHitJump = {conversationId: item.conversationId || item.id, messageId: item.messageId};
-          const opened = await openSocialConversation(item.conversationId || item.id, {acknowledge: !item.messageId});
-          if (opened && item.messageId && currentConversation?.id === item.conversationId) {
-            await jumpToMessage(item.messageId, status);
-          }
+          await openSessionTarget({source:'social', cid:item.conversationId || item.id, message:item.messageId,
+            title:item.title || uiLabel('会话', 'conversation')});
         } else if (item.type === 'agent-message' || item.kind === 'agent') {
           const session = sessions.find(row => row.source === 'agent' && row.id === item.conversationId);
           const agentId = item.agentId || session?.agent_id;
           if (agentId && item.messageId) pendingHitJump = {conversationId: item.conversationId, messageId: item.messageId};
-          if (agentId && await openAgentConversation(agentId, item.conversationId, {acknowledge: !item.messageId})
-            && item.messageId && currentConversation?.id === item.conversationId) {
-            await jumpToMessage(item.messageId, status);
-          }
+          if (agentId) await openSessionTarget({source:'agent', cid:item.conversationId, agent:agentId,
+            message:item.messageId, title:session?.title || item.title || uiLabel('会话', 'conversation')});
         } else if (item.type === 'contact') {
           openComposeDialog('contact');
           const box = document.querySelector(`#member-choices input[value="${item.id}"]`);
@@ -4199,6 +4257,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   let loadRequest = 0;
 
+  function loadChatSettings(owner) {
+    if (chatSettings?.owner === owner) return;
+    sendShortcut = 'enter';
+    chatLanguage = 'auto';
+    chatPreferences = defaultChatPreferences;
+    const settings = {owner, ready:false, look:null};
+    chatSettings = settings;
+    settings.promise = request('GET', '/v1/settings', undefined, undefined, AbortSignal.timeout(1800))
+      .catch(() => null).then(result => {
+        if (chatSettings !== settings || currentUser?.id !== owner) return;
+        settings.ready = true;
+        const values = result?.status === 200 ? result.body?.settings?.values : null;
+        if (values) {
+          chatPreferences = values;
+          sendShortcut = values.send_shortcut === 'mod_enter' ? 'mod_enter' : 'enter';
+          chatLanguage = typeof values.chat_language === 'string' ? values.chat_language : 'auto';
+        }
+        starterComposer.dataset.sendShortcut = sendShortcut;
+        settings.look = result?.status === 200 ? result.body?.personal_look : null;
+        if (settings.look && personalAgentId) {
+          personalLook = settings.look;
+          renderSessions();
+          if (currentSource === 'agent' && currentAgent?.id === personalAgentId && !currentConversation) {
+            applyChatIdentity(document, currentAgent.name, null, personalLook);
+          }
+        }
+        const presentationChanged = values && (values.auto_translate === true
+          || Object.keys(defaultChatPreferences).some(key => values[key] !== undefined && values[key] !== defaultChatPreferences[key]));
+        if (presentationChanged && currentConversation && !openingStartupLink() && !readingPrivateContext() && !readingSocialContext()) {
+          if (currentSource === 'social') renderSocialMessages(lastSocialItems, {refresh:true});
+          else renderAgentMessages(lastAgentItems, {followLatest:false});
+        }
+      });
+  }
+
   async function load() {
     const sequence = ++loadRequest;
     const hash = location.hash;
@@ -4212,6 +4305,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (session.status !== 200 || !session.body?.user?.id) {
       if (banner) banner.hidden = true;
       currentUser = null;
+      chatSettings = null;
+      clearSessionTransition();
       currentAgent = null;
       renderAgentQuickStarts();
       resetNotifications();
@@ -4240,6 +4335,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (currentUser && currentUser.id !== session.body.user.id) {
+      clearSessionTransition();
       currentAgent = null;
       currentConversation = null;
       socialOpen += 1;
@@ -4258,6 +4354,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const owner = session.body.user;
     if (currentUser?.id !== owner.id && banner) banner.hidden = true;
     currentUser = owner;
+    loadChatSettings(owner.id);
     if (banner) void request('GET', '/v1/onboarding').then(onboarding => {
       if (sequence !== loadRequest || currentUser !== owner || location.pathname !== pathname || onboarding.status !== 200) return;
       banner.hidden = Boolean(onboarding.body.progress?.completed ?? onboarding.body.onboarding?.completed);
@@ -4292,24 +4389,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const listed = await listWorkspaces();
       return {personal, listed};
     })();
-    const [{personal, listed}, settings] = await Promise.all([
-      personalAndWorkspaces,
-      request('GET', '/v1/settings'),
-    ]);
+    const {personal, listed} = await personalAndWorkspaces;
     if (!bootCurrent()) return;
 
     const personalEntity = [200, 201].includes(personal.status) ? personal.body.personal_agent : null;
     const personalWorkspace = personalEntity?.workspace?.id || '';
     personalAgentId = personalEntity && personalEntity.agent ? personalEntity.agent.id : '';
-    personalLook = personalEntity ? settings.body?.personal_look || personalEntity.look || null : null;
-    if (settings.status === 200 && settings.body?.settings?.values) chatPreferences = settings.body.settings.values;
-    const stored = settings.status === 200 && settings.body && settings.body.settings
-      && settings.body.settings.values && settings.body.settings.values.send_shortcut;
-    sendShortcut = stored === 'mod_enter' ? 'mod_enter' : 'enter';
-    const storedLanguage = settings.status === 200 && settings.body && settings.body.settings
-      && settings.body.settings.values && settings.body.settings.values.chat_language;
-    chatLanguage = typeof storedLanguage === 'string' ? storedLanguage : 'auto';
-    document.getElementById('chat-body').dataset.sendShortcut = sendShortcut;
+    personalLook = personalEntity ? chatSettings?.look || personalEntity.look || null : null;
     if (listed.status !== 200 || (publicIntent && !listed.body.items?.length)) {
       setSessionsStatus('无法加载工作区，请重试。');
       if (publicIntent && publicAgentContinuation(publicAgentIntentFromHash(location.hash)) === publicAgentContinuation(publicIntent)) {
@@ -4623,6 +4709,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await loadNotifications();
   });
   function clearChatScope() {
+    clearSessionTransition();
     cancelStartupLink();
     stopReplyProgress();
     stopGroupReplyProgress();
@@ -5215,11 +5302,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('conversation-list').addEventListener('click', async event => {
     const button = event.target.closest('button[data-conversation]');
     if (!button) return;
-    const opened = button.dataset.source === 'social'
-      ? await openSocialConversation(button.dataset.conversation)
-      : await openAgentConversation(button.dataset.agent, button.dataset.conversation);
-    if (opened && narrowScreen() && !document.body.classList.contains('sessions-open')
-      && document.activeElement === document.body) document.getElementById('chat-title').focus();
+    const {source, agent, conversation: cid} = button.dataset;
+    const title = sessions.find(item => item.id === cid && item.source === source)?.title || uiLabel('会话', 'conversation');
+    await openSessionTarget({source, agent, cid, title});
   });
 
   document.getElementById('new-conversation').addEventListener('click', event => {
@@ -5422,7 +5507,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       };
       pendingSends.set(scope, queue);
     }
-    queue.jobs.push(makeSendJob(queue, message, files, reply));
+    const job = makeSendJob(queue, message, files, reply);
+    if (!social && chatSettings && !chatSettings.ready) job.preferences = chatSettings;
+    queue.jobs.push(job);
     field.value = '';
     publicDraft.persist();
     field.focus({preventScroll: true});
@@ -5462,6 +5549,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           }
         };
         try {
+          if (job.preferences) {
+            feedback(uiLabel('正在加载聊天偏好…', 'Loading chat preferences…'));
+            await job.preferences.promise;
+            if (pendingSends.get(queue.scope) !== queue || queue.owner !== currentUser?.id) return;
+            job.message = messagePayload(job.message.body, chatLanguage);
+            job.preferences = null;
+          }
           if (!queue.conversationId) {
             feedback('正在创建对话…');
             const body = {title: '新对话'};
@@ -5620,7 +5714,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   document.getElementById('chat-body').addEventListener('keydown', event => {
-    if (agentMentions.keydown(event) || !shouldSendOnShortcut(event, sendShortcut)) return;
+    if (agentMentions.keydown(event) || !chatSettings?.ready || !shouldSendOnShortcut(event, sendShortcut)) return;
     event.preventDefault();
     if (!(document.getElementById('chat-body').value || '').trim() && !attachmentSender?.draftFiles?.(sendScope())?.length) return;
     sendCurrentMessage();
