@@ -20,6 +20,7 @@ function wrap(fn) {
 const publicAgent = (agent) => ({ ...agent, archived: agent.archived ? 1 : 0, homepage: agent.homepage ?? { visibility: 'restricted' } })
 const publicConversation = (row, workspaceId, agentId) => ({
   id: row.id, native_bot_id: row.native_bot_id || null, native_session_id: row.native_session_id || null, workspace_id: workspaceId, agent_id: agentId, title: row.title, created: row.created, updated: row.updated, preview: row.preview ?? '', unread_count: 0,
+  ...(typeof row.memory_recall === 'boolean' ? {memory_recall: row.memory_recall} : {}),
 })
 const publicMessage = (row, workspaceId, agentId) => {
   const status = row.status === 'sent' ? 'succeeded' : row.status
@@ -31,13 +32,14 @@ const publicMessage = (row, workspaceId, agentId) => {
   return {
     ...(attachments.length ? {attachments} : {}),
     ...(meta?.clientKey ? {client_key:meta.clientKey} : {}),
+    ...(meta?.memory_refs?.length ? {memory_refs: meta.memory_refs} : {}),
     id: row.id, conversation_id: row.conversation_id, workspace_id: workspaceId, agent_id: agentId, role: row.role,
     body: row.text ?? row.body ?? '', status, created: row.created, updated: row.updated ?? row.created,
     task_id: null, error_code: meta?.error ? String(meta.error).replace(/^agents\//, '') : row.error_code ?? null, agent_revision: null,
   }
 }
 
-export function agentsV1({ endpoints, log, personalSend }) {
+export function agentsV1({ endpoints, log }) {
   const call = (name, payload) => endpoints[name](payload)
   const routes = [
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages/${HEX}/files/([0-3])$`),
@@ -60,12 +62,14 @@ export function agentsV1({ endpoints, log, personalSend }) {
       const payload = {workspace_id:workspaceId,id,agent_id:id,conversation_id:conversationId,
         text:body.body ?? body.text,reply_language:body.reply_language,attachments:body.attachments,
         idempotency_key:req.headers.get('idempotency-key'),return_failed:true}
-      const binding = payload.attachments && personalSend ? await call('personal-binding', {}) : null
-      const result = binding?.workspace_id === workspaceId && binding?.agent_id === id
-        ? await personalSend(payload) : await call('send', payload)
+      const result = await call('send', payload)
       return { status: 201, body: { message: publicMessage(result.message, workspaceId, id), reply: publicMessage(result.reply, workspaceId, id) } }
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
+      if (req.method === 'POST') {
+        const body = await req.json()
+        return {body:await call('setMemoryRecall', {workspace_id:workspaceId,id,conversation_id:conversationId,memory_recall:body.memory_recall})}
+      }
       if (req.method !== 'GET') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
       const { agent, conversation, items } = await call('openConversation', { workspace_id: workspaceId, id, conversation_id: conversationId })
       return { status: 200, body: { conversation: publicConversation(conversation, workspaceId, id), agent: publicAgent(agent), items: items.map((row) => publicMessage(row, workspaceId, id)) } }
@@ -77,7 +81,7 @@ export function agentsV1({ endpoints, log, personalSend }) {
       }
       if (req.method === 'POST') {
         const body = await req.json()
-        const result = await call('conversation-create', { workspace_id: workspaceId, id, title: body.title,
+        const result = await call('conversation-create', { workspace_id: workspaceId, id, title: body.title, memory_recall: body.memory_recall,
           idempotency_key: req.headers.get('idempotency-key') })
         return { status: result.status ?? 201, body: { conversation: publicConversation(result.conversation, workspaceId, id) } }
       }

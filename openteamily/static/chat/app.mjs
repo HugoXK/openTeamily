@@ -11,7 +11,7 @@ export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
-import { dsbotServed, dsbotRoute, dsbotRequest } from './dsbot.mjs';
+import { dsbotServed } from './dsbot.mjs';
 import { agentSavePath, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
 
 export const SEARCH_TABS = [
@@ -831,6 +831,50 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const sendScope = (conversation = currentConversation?.id) =>
     JSON.stringify([currentUser?.id, workspaceId(), currentSource, currentAgent?.id, conversation]);
 
+  const memoryRecall = document.getElementById('agent-memory-recall');
+  const memoryDrafts = new Map();
+  const memoryWrites = new Set();
+  const recallEnabled = scope => currentConversation?.memory_recall ?? memoryDrafts.get(scope)
+    ?? currentAgent?.memory_recall_default ?? true;
+
+  function syncMemoryRecall(scope = sendScope()) {
+    if (!memoryRecall) return;
+    const visible = servedByDsbot && currentSource === 'agent' && Boolean(currentAgent);
+    memoryRecall.hidden = !visible;
+    if (!visible) return;
+    const enabled = recallEnabled(scope);
+    memoryRecall.setAttribute('aria-pressed', String(enabled));
+    const label = enabled ? '记忆已开启' : '记忆已关闭';
+    if (memoryRecall.textContent !== label) memoryRecall.textContent = label;
+    memoryRecall.disabled = memoryWrites.has(scope) || Boolean(pendingSends.get(scope)?.jobs.some(job => !job.failed));
+  }
+
+  memoryRecall?.addEventListener('click', async () => {
+    if (memoryRecall.hidden || memoryRecall.disabled) return;
+    const scope = sendScope();
+    const enabled = !recallEnabled(scope);
+    if (!currentConversation) {
+      memoryDrafts.set(scope, enabled);
+      syncMemoryRecall(scope);
+      return;
+    }
+    const path = `${agentBase()}/conversations/${currentConversation.id}`;
+    memoryWrites.add(scope);
+    renderPendingSend();
+    try {
+      const result = await request('POST', path, {memory_recall:enabled});
+      if (sendScope() !== scope) return;
+      if (result.status !== 200 || result.body.memory_recall !== enabled) throw new Error();
+      currentConversation.memory_recall = enabled;
+      show('ok', enabled ? '已开启后续消息的记忆检索。' : '已关闭后续消息的记忆检索。', {announceOnly: true});
+    } catch {
+      if (sendScope() === scope) show('error', '记忆开关未保存，请重试。');
+    } finally {
+      memoryWrites.delete(scope);
+      if (sendScope() === scope) renderPendingSend();
+    }
+  });
+
   const replyDrafts = new Map();
   const replyPanel = document.getElementById('chat-reply-preview');
   const replyDraftTitle = document.getElementById('chat-reply-author');
@@ -906,8 +950,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   function renderPendingSend() {
     const list = document.getElementById('message-list');
-    const queue = pendingSends.get(sendScope());
-    document.getElementById('chat-send').disabled = sendClosed();
+    const scope = sendScope();
+    const queue = pendingSends.get(scope);
+    document.getElementById('chat-send').disabled = sendClosed() || memoryWrites.has(scope);
+    syncMemoryRecall(scope);
     const bubbles = new Set((queue?.jobs || []).map(job => job.bubble));
     for (const child of Array.from(list.children)) {
       if (child.dataset.sendPending && !bubbles.has(child)) child.remove();
@@ -924,7 +970,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (job.status.textContent !== job.state) job.status.textContent = job.state;
     job.bubble.dataset.sendPending = job.failed ? 'failed' : 'pending';
     job.actions.hidden = !job.failed;
-    job.retry.disabled = sendClosed();
+    job.retry.disabled = sendClosed() || memoryWrites.has(sendScope());
   }
 
   function makeSendJob(queue, message, files, reply) {
@@ -956,7 +1002,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const job = {key, message, files, bubble, status, actions, retry, failed: false,
       state: queue.active ? '等待发送…' : '正在发送…'};
     retry.addEventListener('click', () => {
-      if (!job.failed || sendClosed()) return;
+      if (!job.failed || job.retry.disabled) return;
       job.failed = false;
       job.state = '等待发送…';
       paintSendJob(job);
@@ -982,8 +1028,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function request(method, path, body, extra) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie), ...(extra || {})};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
-    const plugin = servedByDsbot ? dsbotRoute(method, path, body, personalAgentId) : null;
-    if (plugin) return dsbotRequest(fetcher, plugin, personalAgentId, headers);
     const response = await fetcher(path, {
       method, headers, credentials: 'same-origin',
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -1201,6 +1245,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (busy) line.dataset.busy = '1'; else delete line.dataset.busy;
   }
 
+  function memorySources(item) {
+    if (item.role !== 'assistant' || item.status !== 'succeeded' || !Array.isArray(item.memory_refs)) return null;
+    const wid = workspaceId();
+    const refs = item.memory_refs.filter(ref => ref?.workspace_id === wid && /^[0-9a-f]{32}$/.test(ref.id));
+    if (!refs?.length) return null;
+    const sources = document.createElement('details');
+    sources.className = 'reply-memory-sources';
+    const summary = document.createElement('summary');
+    summary.textContent = `参考记忆 · ${refs.length}`;
+    const list = document.createElement('ol');
+    for (const ref of refs) {
+      const row = document.createElement('li');
+      const link = document.createElement('a');
+      const params = new URLSearchParams({workspace:wid, page:ref.id});
+      if (Number.isSafeInteger(ref.revision) && ref.revision > 0) params.set('revision', String(ref.revision));
+      link.href = '/memory?' + params.toString();
+      link.textContent = ref.title || '记忆页';
+      row.append(link);
+      list.append(row);
+    }
+    sources.append(summary, list);
+    return sources;
+  }
+
   let lastAgentItems = [];
   function renderAgentMessages(items) {
     const list = document.getElementById('message-list');
@@ -1233,6 +1301,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         li.append(role, body);
       }
       for (const attachment of item.attachments || []) li.append(renderChatFile(document,attachment));
+      const sources = memorySources(item);
+      if (sources) li.append(sources);
       if (item.role === 'assistant' && saveableAgentMessage(item)) {
         li.append(saveMessageButton(item, currentAgent.id));
       }
@@ -2419,6 +2489,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
+  function openEmptyAgentChat(agentId) {
+    const agent = agents.find(item => item.id === agentId);
+    if (!agent) return;
+    socialOpen += 1;
+    currentConversation = null;
+    currentAgent = agent;
+    currentSource = 'agent';
+    stopPolling();
+    setSocialHistory(null);
+    autoTranslation.open(null);
+    agentMentions.clear();
+    voiceRecorder.clear();
+    voiceRecorder.refresh();
+    clearVoicePlayers();
+    chatCalls.sync();
+    setSocialHeaderTools(false);
+    setGroupInfo(null);
+    renderReplyDraft();
+    if (liveBanner) liveBanner.hidden = true;
+    document.getElementById('social-agent-members').hidden = true;
+    document.getElementById('pin-conversation').hidden = true;
+    setDirectoryLink({source:'agent'});
+    applyChatIdentity(document, agent.name, null, agent.id === personalAgentId ? personalLook : null);
+    writeHash({workspace:workspaceId(), agent:agentId});
+    setSessionsOpen(false);
+    renderAgentMessages([]);
+    syncPlusState();
+  }
+
   async function openAgentConversation(agentId, conversationId) {
     const open = ++socialOpen;
     const wid = workspaceId();
@@ -2971,23 +3070,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         if (item.type === 'agent') {
           const first = sessions.find(row => row.source === 'agent' && row.agent_id === item.id);
           if (first) await openAgentConversation(item.id, first.id);
-          else {
-            currentAgent = agents.find(entry => entry.id === item.id) || null;
-            currentConversation = null;
-            currentSource = 'agent';
-            renderReplyDraft();
-            chatCalls.sync();
-            socialOpen += 1;
-            setSocialHistory(null);
-            if (currentAgent) applyChatIdentity(document, currentAgent.name, null,
-              currentAgent.id === personalAgentId ? personalLook : null);
-            document.getElementById('chat-empty').hidden = false;
-            document.getElementById('message-list').replaceChildren();
-            renderPendingSend();
-            syncPlusState();
-            attachmentSender?.render();
-            writeHash({workspace: workspaceId(), agent: item.id});
-          }
+          else openEmptyAgentChat(item.id);
         } else if (item.type === 'social' || item.kind === 'social') {
           const opened = await openSocialConversation(item.conversationId || item.id, {acknowledge: !item.messageId});
           if (opened && item.messageId && currentConversation?.id === item.conversationId) {
@@ -3061,6 +3144,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       autoTranslation.open(null);
       attachmentSender?.reset();
       pendingSends.clear();
+      memoryDrafts.clear();
+      memoryWrites.clear();
       replyDrafts.clear();
       renderReplyDraft();
       currentConversation = null;
@@ -3080,6 +3165,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (currentUser && currentUser.id !== session.body.user.id) {
       attachmentSender?.reset();
       pendingSends.clear();
+      memoryDrafts.clear();
+      memoryWrites.clear();
       replyDrafts.clear();
       renderReplyDraft();
     }
@@ -3182,20 +3269,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     } else if (start.agent) {
       const first = sessions.find(row => row.source === 'agent' && row.agent_id === start.agent);
       if (first) await openAgentConversation(start.agent, first.id);
-      else {
-        currentAgent = agents.find(item => item.id === start.agent) || null;
-        currentSource = 'agent';
-        socialOpen += 1;
-        setSocialHistory(null);
-        if (currentAgent) {
-          applyChatIdentity(document, currentAgent.name, null, currentAgent.id === personalAgentId ? personalLook : null);
-          setSessionsOpen(false);
-        }
-        renderPendingSend();
-        syncPlusState();
-        attachmentSender?.render();
-        writeHash({workspace: workspaceId(), agent: start.agent});
-      }
+      else openEmptyAgentChat(start.agent);
     } else if (sessions.length && !narrowScreen()) {
       const first = sessions[0];
       if (first.source === 'social') await openSocialConversation(first.id);
@@ -4044,7 +4118,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const scope = sendScope();
     const files = social ? [] : attachmentSender?.draftFiles?.(scope) || [];
     if (!field.value.trim() && !files.length) return;
-    if (sendClosed()) return;
+    if (sendClosed() || memoryWrites.has(scope)) return;
     if (social ? !currentConversation : !currentAgent) {
       show('error', social ? '请先打开或创建一个会话。' : '请先选择一个智能体。');
       return;
@@ -4063,6 +4137,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         base: social ? socialBase() : `${agentBase()}/conversations`,
         conversationId: currentConversation?.id, jobs: [], active: false,
         createKey: currentConversation ? null : idempotencyKey('chat-'),
+        memoryRecall: memoryDrafts.get(scope),
       };
       pendingSends.set(scope, queue);
     }
@@ -4094,7 +4169,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         try {
           if (!queue.conversationId) {
             feedback('正在创建对话…');
-            const created = await request('POST', queue.base, {title: '新对话'}, {'Idempotency-Key': queue.createKey});
+            const body = {title: '新对话'};
+            if (queue.memoryRecall !== undefined) body.memory_recall = queue.memoryRecall;
+            const created = await request('POST', queue.base, body, {'Idempotency-Key': queue.createKey});
             const conversation = created.body.conversation;
             if (![200, 201].includes(created.status) || !conversation?.id) {
               throw new Error(messageFor(created.body.error, '创建对话失败，请重试。'));
@@ -4105,6 +4182,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             queue.conversationId = conversation.id;
             queue.scope = JSON.stringify([queue.owner, queue.wid, 'agent', queue.agentId, conversation.id]);
             pendingSends.delete(previous);
+            memoryDrafts.delete(previous);
             pendingSends.set(queue.scope, queue);
             if (visible) {
               currentConversation = conversation;
@@ -4247,6 +4325,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const attachInput = document.getElementById('chat-attachment');
   const defaultAccept = attachInput ? attachInput.getAttribute('accept') || '' : '';
   function syncPlusState() {
+    syncMemoryRecall();
     const social = currentSource === 'social' && Boolean(currentConversation);
     const agent = currentSource === 'agent' && Boolean(currentAgent);
     const available = servedByDsbot && ((social && !currentConversation.public_agent && currentConversation.direct?.open !== false) || agent);

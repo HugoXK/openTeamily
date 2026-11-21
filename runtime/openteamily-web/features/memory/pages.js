@@ -264,5 +264,5 @@ export function allPages(store, payload) {
 export function search(store, needle, limit) {
   const key = casefold(needle)
   return store.all('SELECT * FROM memory_pages ORDER BY updated DESC, id').filter((row) => casefold(row.title).includes(key) || casefold(row.body).includes(key))
-    .slice(0, limit).map((row) => ({ kind: 'memory', id: row.id, workspace_id: row.workspace_id, title: row.title, snippet: snippet(row.body), updated: row.updated, href: `/memory/?page=${row.id}` }))
+    .slice(0, limit).map((row) => ({ kind: 'memory', id: row.id, workspace_id: row.workspace_id, title: row.title, snippet: snippet(row.body), updated: row.updated, href: `/memory?workspace=${row.workspace_id}&page=${row.id}` }))
 }

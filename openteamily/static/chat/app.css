@@ -2286,3 +2286,18 @@ button.message-quote:hover { background: var(--ot-bg-accent); }
 }
 #message-list .send-actions[hidden] { display: none; }
 #message-list .send-actions button { min-height: 2rem; }
+
+#agent-memory-recall {
+  width: auto;
+  padding-inline: .5rem;
+  margin-inline-start: auto;
+  white-space: nowrap;
+  font-size: .75rem;
+}
+#agent-memory-recall[hidden] { display: none; }
+#agent-memory-recall[aria-pressed="true"] { background: var(--ot-accent-soft); color: var(--ot-ink); }
+#message-list .reply-memory-sources { margin: .375rem 0; font-size: .8125rem; color: var(--ot-muted); }
+#message-list .reply-memory-sources summary { cursor: pointer; width: fit-content; }
+#message-list .reply-memory-sources ol { padding-inline-start: 1.375rem; margin: .25rem 0 0; }
+#message-list .reply-memory-sources li { display: list-item; padding: 0; max-width: 100%; border: 0; background: none; box-shadow: none; }
+#message-list .reply-memory-sources a { display: inline-block; padding: .1875rem 0; color: var(--ot-ink); overflow-wrap: anywhere; }

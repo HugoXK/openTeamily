@@ -379,6 +379,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentAction = null;
   let pageChoices = [];
   let workspaceRequest = 0;
+  let pageRequest = 0;
   let currentView = 'overview';
   let listFilter = 'all';
   let topicFilter = '';
@@ -901,6 +902,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const linked = new URLSearchParams(document.defaultView?.location?.search || '');
     const workspace = linked.get('workspace'), pageId = linked.get('page');
     const deepLink = /^[0-9a-f]{32}$/.test(workspace || '') && /^[0-9a-f]{32}$/.test(pageId || '');
+    const linkedRevision = linked.get('revision');
+    const revision = /^[1-9][0-9]{0,7}$/.test(linkedRevision || '') ? Number(linkedRevision) : undefined;
     let {initial, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces');
     if (deepLink && !initial.body.items?.some(item => item.id === workspace) && supplemental) {
       const shared = await supplemental;
@@ -917,7 +920,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
     const directory = loadWorkspace();
     if (deepLink && workspaceId() === workspace) {
-      await Promise.all([directory, openPage(pageId)]);
+      await Promise.all([directory, openPage(pageId, revision)]);
     } else {
       await directory;
       if (deepLink && seq === sessionRequest) show('error', '无法打开此工作区的记忆页。');
@@ -1207,23 +1210,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (button) button.addEventListener('click', () => dreamDecide(action));
   }
 
-  async function openPage(pageId) {
+  async function openPage(pageId, revision) {
     closeDeleteConfirm({restoreFocus: false});
     closePageHistory({restoreFocus: false});
     hideGraphHoverCard(document.getElementById('graph-hover-card'));
     const id = workspaceId();
     if (!id) return;
     const seq = workspaceRequest;
+    const token = ++pageRequest;
     const seen = await request('GET', `/v1/workspaces/${id}/memory/${pageId}`);
-    if (seq !== workspaceRequest) return;
+    if (seq !== workspaceRequest || token !== pageRequest) return;
     if (seen.status !== 200 || !seen.body.page) {
       show('error', messageFor(seen.body.error, '无法打开记忆页。'));
       return;
     }
-    showPage(seen.body.page);
+    const page = seen.body.page;
+    showPage(page, revision);
+    if (revision && revision !== page.revision && historyPanel) {
+      const preview = historyPreviewToken;
+      await openPageHistory();
+      if (seq === workspaceRequest && token === pageRequest && currentPage?.id === pageId
+          && !historyPanel.hidden && preview === historyPreviewToken) await previewPageVersion(revision);
+    }
   }
 
-  function showPage(page) {
+  function showPage(page, revision) {
     currentPage = page;
     currentAction = null;
     if (dreamPanel) dreamPanel.hidden = true;
@@ -1247,10 +1258,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
     renderPageLinks();
     syncExportButton();
-    const view = document.defaultView;
-    if (/^[0-9a-f]{32}$/.test(workspaceId()) && /^[0-9a-f]{32}$/.test(page.id)) {
-      view?.history?.replaceState?.({}, '', '/memory?' + new URLSearchParams({workspace:workspaceId(), page:page.id}));
-    }
+    syncPageUrl(revision);
+  }
+
+  function syncPageUrl(revision) {
+    const id = workspaceId();
+    if (!/^[0-9a-f]{32}$/.test(id) || !/^[0-9a-f]{32}$/.test(currentPage?.id || '')) return;
+    const params = new URLSearchParams({workspace:id, page:currentPage.id});
+    if (revision) params.set('revision', String(revision));
+    document.defaultView?.history?.replaceState?.({}, '', '/memory?' + params.toString());
   }
 
   function rememberPage(page) {
@@ -1263,12 +1279,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const historyOpen = document.getElementById('page-history-open');
   let historySelection = 0;
   let historyTokens = 0;
+  let historyPreviewToken = 0;
 
   function closePageHistory({restoreFocus = true} = {}) {
     if (!historyPanel || historyPanel.hidden) return;
     historyPanel.hidden = true;
+    historyTokens += 1;
+    historyPreviewToken += 1;
     historySelection = 0;
-    if (restoreFocus && historyOpen) historyOpen.focus();
+    if (restoreFocus) {
+      syncPageUrl();
+      historyOpen?.focus();
+    }
   }
 
   function applyPageToEditor(page) {
@@ -1333,8 +1355,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function previewPageVersion(revision) {
     const wid = workspaceId();
     if (!wid || !currentPage) return;
-    const result = await request('GET', `/v1/workspaces/${wid}/memory/${currentPage.id}/versions/${revision}`);
-    if (workspaceId() !== wid) return;
+    const id = currentPage.id;
+    const token = ++historyPreviewToken;
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/${id}/versions/${revision}`);
+    if (workspaceId() !== wid || currentPage?.id !== id || token !== historyPreviewToken) return;
     const status = document.getElementById('page-history-status');
     if (result.status !== 200 || !result.body.version) {
       if (status) status.textContent = '这一版没有读取成功。';
@@ -1347,6 +1371,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('page-history-preview-body').textContent = version.body || '（空白正文）';
     const preview = document.getElementById('page-history-preview');
     if (preview) preview.hidden = false;
+    syncPageUrl(revision);
     if (status) status.textContent = '';
   }
 
@@ -1366,6 +1391,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     applyPageToEditor(result.body.page);
+    syncPageUrl();
     historySelection = 0;
     const preview = document.getElementById('page-history-preview');
     if (preview) preview.hidden = true;
@@ -1730,6 +1756,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     closeDeleteConfirm({restoreFocus: false});
     currentPage = saved.body.page;
+    if (!historySelection) syncPageUrl();
     rememberPage(currentPage);
     syncExportButton();
     editor.elements.topics.value = formatTopics(currentPage.topics);
