@@ -1,5 +1,6 @@
 import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/public-agent-link.mjs';
+import { workCommentsFromHash } from '../shell/work-comments-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 
@@ -259,11 +260,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     }
   }
 
-  async function continuePublicAgent(intent) {
-    const continuation = publicAgentContinuation(intent);
+  async function continuePublicActivity({target, backPath, loadingText, errorText, retryId}) {
+    const hash = view.location.hash;
+    const stillCurrent = () => view.location.pathname === '/login' && view.location.hash === hash;
     loginPanel.hidden = true;
     mainPanel.hidden = true;
-    show(document, 'loading', '正在打开公开智能体…');
+    show(document, 'loading', loadingText);
     try {
       const [, initial] = await Promise.all([
         request('POST', '/v1/personal-agent').catch(() => ({status: 0})),
@@ -271,28 +273,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       ]);
       let ready = initial;
       for (let attempt = 0; attempt < 23 && !ready.body?.items?.length; attempt++) {
-        if (publicAgentContinuation(publicAgentIntentFromHash(view.location?.hash)) !== continuation) return;
+        if (!stillCurrent()) return;
         await new Promise(resolve => globalThis.setTimeout(resolve, 1000));
         ready = await request('GET', '/v1/workspaces?scope=personal').catch(() => ({status: 0}));
       }
-      if (publicAgentContinuation(publicAgentIntentFromHash(view.location?.hash)) !== continuation) return;
+      if (!stillCurrent()) return;
       if (ready.status === 200 && ready.body?.items?.length) {
-        view.location.replace('/chat' + continuation);
+        view.location.replace(target);
         return;
       }
     } catch {}
-    show(document, 'error', '聊天尚未准备好。');
+    if (!stillCurrent()) return;
+    show(document, 'error', errorText);
     const status = document.getElementById('status');
     const retry = document.createElement('button');
     retry.type = 'button';
-    retry.id = 'public-agent-login-retry';
+    retry.id = retryId;
     retry.className = 'public-agent-action';
     retry.textContent = '重试';
     retry.addEventListener('click', () => void load());
     const back = document.createElement('a');
-    back.href = '/a/' + intent.slug;
+    back.href = backPath;
     back.className = 'public-agent-action';
-    back.textContent = '返回公开主页';
+    back.textContent = '返回公开页面';
     status.append(retry, back);
   }
 
@@ -305,9 +308,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         currentUser = null;
         loginPanel.hidden = false;
         mainPanel.hidden = true;
-        const intent = view.location?.pathname === '/login' && publicAgentIntentFromHash(view.location.hash);
+        const hash = view.location?.pathname === '/login' ? view.location.hash : '';
+        const intent = publicAgentIntentFromHash(hash);
+        const work = workCommentsFromHash(hash);
+        const continuation = intent ? publicAgentContinuation(intent) : (work ? '#work-comments=' + work : '');
         const register = loginPanel.querySelector?.('.login-register-button');
-        if (register && intent) register.href = '/register' + publicAgentContinuation(intent);
+        if (register && continuation) register.href = '/register' + continuation;
         show(document, '', '');
         return;
       }
@@ -326,9 +332,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         return;
       }
       if (view.location?.pathname === '/login') {
-        const intent = publicAgentIntentFromHash(view.location.hash);
-        if (intent) await continuePublicAgent(intent);
-        else view.location.replace('/');
+        const hash = view.location.hash;
+        const intent = publicAgentIntentFromHash(hash);
+        const work = workCommentsFromHash(hash);
+        if (intent) {
+          await continuePublicActivity({
+            target: '/chat' + publicAgentContinuation(intent), backPath: '/a/' + intent.slug,
+            loadingText: '正在打开公开智能体…', errorText: '聊天尚未准备好。', retryId: 'public-agent-login-retry',
+          });
+        } else if (work) {
+          await continuePublicActivity({
+            target: '/discover?' + new URLSearchParams({work, comments: '1'}), backPath: '/w/' + work,
+            loadingText: '正在打开作品评论…', errorText: '暂时无法打开评论。', retryId: 'work-comments-login-retry',
+          });
+        } else {
+          view.location.replace('/');
+        }
         return;
       }
       currentUser = session.body.user;

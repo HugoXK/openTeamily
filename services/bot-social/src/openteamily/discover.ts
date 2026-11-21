@@ -9,6 +9,7 @@ import { newId } from "../ids.js";
 import { DEFAULT_ATTACHMENT_LIMITS } from "../attachments.js";
 import { CHAT_FILE_BODY_LIMIT, decodeChatFile } from "./chat-files.js";
 import { body, handleKey, hashCode, intParam, one, OtContext, optText, params, query, text } from "./core.js";
+import { WORK_COMMENTS_SCHEMA, registerWorkComments, workCommentCount, workCommentsPage } from "./work-comments.js";
 
 export const DISCOVER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_listings (
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS ot_follows (follower_id TEXT NOT NULL, creator_id TEX
 CREATE INDEX IF NOT EXISTS ot_follows_creator ON ot_follows(creator_id);
 CREATE INDEX IF NOT EXISTS ot_likes_recent ON ot_likes(listing_id, created_at);
 CREATE INDEX IF NOT EXISTS ot_collections_recent ON ot_collections(listing_id, created_at);
+${WORK_COMMENTS_SCHEMA}
 `;
 
 export const CATEGORIES = ["content-creation", "customer-support", "data-analysis", "design", "education", "engineering", "finance", "it-security", "investment", "legal", "life", "marketing", "operations", "product", "recruiting", "research", "sales"];
@@ -71,6 +73,7 @@ const listingView = (ot: OtContext, l: any, viewer: string | null, withSnapshot 
   id: l.id, slug: l.slug, kind: l.kind, title: l.title, summary: l.summary, category: l.category, work_kind: l.work_kind,
   creator: ot.profileView(l.owner_id), listed: !!l.listed, chat_enabled: l.kind === "agent" && !!l.chat_enabled, updated_at: l.updated_at, created_at: l.created_at,
   path: listingPath(ot, l), ...(viewer ? engagement(ot, l, viewer) : { likes: ot.get<any>("SELECT COUNT(*) AS n FROM ot_likes WHERE listing_id = ?", l.id).n, collections: ot.get<any>("SELECT COUNT(*) AS n FROM ot_collections WHERE listing_id = ?", l.id).n, liked: false, collected: false, following: false, own: false }),
+  ...(l.kind === "work" ? {comment_count: workCommentCount(ot, l.id)} : {}),
   ...(withSnapshot ? { snapshot: l.snapshot ?? null } : {}),
 });
 
@@ -92,12 +95,17 @@ function publishedQuickStarts(listing: {id: string; kind: string; snapshot: stri
   return {starts, version: hashCode(JSON.stringify([listing.id, starts]))};
 }
 
-function publicPage(l: any, view: any) {
+function publicPage(ot: OtContext, l: any, view: any) {
   const creator = view.creator?.display_name || view.creator?.handle || "";
   const title = String(view.title || view.slug);
   const policy = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';";
   if (l.kind === "work") {
     const download = l.work_kind === "model3d" ? `<p><a href="/w/${l.slug}/file">下载 GLB</a></p>` : "";
+    const comments = workCommentsPage(ot, l, null, {limit: "4"});
+    const recent = comments.items.map(item => item.removed
+      ? '<li><span class="meta">评论已移除</span></li>'
+      : `<li><p class="meta">${escapeHtml(item.author?.name || item.author?.handle || "")}</p><pre>${escapeHtml(item.body)}</pre></li>`).join("");
+    const detail = `/login#work-comments=${encodeURIComponent(l.slug)}`;
     const content = l.snapshot && !String(l.snapshot).startsWith("{")
       ? `<pre>${escapeHtml(String(l.snapshot).slice(0, 20_000))}</pre>`
       : (view.summary ? `<p>${escapeHtml(view.summary)}</p>` : "");
@@ -110,13 +118,19 @@ function publicPage(l: any, view: any) {
 <style>
 body{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#1a1a1a}
 .meta{color:#555;font-size:.9rem}
-pre{white-space:pre-wrap;background:#f6f6f6;padding:1rem;border-radius:8px}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f6f6;padding:1rem;border-radius:8px}
+.comments{margin:2rem 0}.comments ul{padding:0;list-style:none}.comments pre{font:inherit;margin:.3rem 0 .8rem}
 </style>
 </head><body>
 <p class="meta">作品${creator ? " · " + escapeHtml(creator) : ""}</p>
 <h1>${escapeHtml(title)}</h1>
 ${content}
 ${download}
+<section class="comments" aria-labelledby="comments-title">
+<h2 id="comments-title">评论（${comments.comment_count}）</h2>
+${recent ? `<ul>${recent}</ul>` : ""}
+<a href="${detail}">查看评论</a>
+</section>
 </body></html>
 `;
   }
@@ -277,6 +291,7 @@ function popularWorks(ot: OtContext) {
 
 export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   const popular = popularWorks(ot);
+  registerWorkComments(app, ot);
   const columns = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_listings)").map(column => column.name));
   if (!columns.has("chat_enabled")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_enabled INTEGER NOT NULL DEFAULT 0");
   if (!columns.has("chat_from")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_from INTEGER NOT NULL DEFAULT 0");
@@ -430,19 +445,18 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   // https://<origin>/social/a/<slug> and /social/w/<slug> through the existing edge prefix.
   app.get("/v1/ot/public/listings/:slug", async (req, reply) => {
     const l = listedBySlug(ot, params(req).slug);
-    if (l.kind === "agent") reply.header("Cache-Control", "no-store");
+    reply.header("Cache-Control", "no-store");
     return listingView(ot, l, null, true);
   });
   const sendPublic = async (req: any, reply: any, kind: "agent" | "work") => {
-    if (kind === "agent") reply.header("Cache-Control", "no-store");
+    reply.header("Cache-Control", "no-store");
     const l = listedBySlug(ot, params(req).slug);
     assert(l.kind === kind, 404, "listing_not_found", "no such listing");
     const view = listingView(ot, l, null, true);
     const accept = String(req.headers.accept || "");
     if (accept.includes("application/json") && !accept.includes("text/html")) return view;
     reply.header("Content-Type", "text/html; charset=utf-8");
-    if (kind === "work") reply.header("Cache-Control", l.work_kind === "model3d" ? "no-store" : "public, max-age=60");
-    return reply.send(publicPage(l, view));
+    return reply.send(publicPage(ot, l, view));
   };
   app.get("/a/:slug", async (req, reply) => sendPublic(req, reply, "agent"));
   app.get("/w/:slug", async (req, reply) => sendPublic(req, reply, "work"));

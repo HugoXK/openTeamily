@@ -178,3 +178,59 @@ test('native Discover forwards popularity cursors separately and publishes only 
   assert.equal(saved.status, 201)
   assert.equal(saved.body.discover.listed, true)
 })
+
+test('native work detail and comment routes forward the personal connector and return public projections', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-cd-comments-'))
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({token: 'commenter-fixture', server: SERVER}), {mode: 0o600})
+  const upstream = '/v1/ot/discover/writer-demo'
+  const root = '/v1/discover/works/writer-demo'
+  const id = 'otwc_' + '0'.repeat(26)
+  const key = 'comment-key-2026-11'
+  const comment = {
+    id, parent_id: null, body: '欢迎交流', created_at: 1_790_000_000_000,
+    author: {handle: 'writer.home', name: '作者', platform_user_id: 'private'},
+    mine: true, can_remove: true, removed: false, reply_count: 0, likes: 0, liked: false,
+    owner_id: 'private',
+  }
+  let creates = 0
+  const fetch = async (url, init) => {
+    assert.equal(init.headers.authorization, 'Bearer commenter-fixture')
+    const path = url.slice(SERVER.length)
+    if (path === upstream) return Response.json({
+      kind: 'work', listed: true, slug: 'writer-demo', title: '参考作品', comment_count: 1, snapshot: 'private instruction',
+    })
+    if (path === upstream + '/comments?parent_id=' + id + '&cursor=100.' + id + '&limit=12') {
+      return Response.json({items: [comment], cursor: null, comment_count: 1})
+    }
+    if (path === upstream + '/comments') {
+      assert.equal(init.method, 'POST')
+      assert.deepEqual(JSON.parse(init.body), {body: '欢迎交流', client_key: key})
+      return Response.json({comment, comment_count: 1, replayed: creates++ > 0})
+    }
+    if (path === upstream + '/comments/' + id + '/like') {
+      assert.deepEqual(JSON.parse(init.body), {enabled: true})
+      return Response.json({comment: {...comment, liked: true, likes: 1}})
+    }
+    assert.equal(path, upstream + '/comments/' + id + '/remove')
+    return Response.json({comment_count: 0})
+  }
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath, fetch}))
+  const call = (method, path, body, idempotency_key) =>
+    discover({dataDir: dir}).endpoints.v1({method, path, body, idempotency_key})
+
+  const work = (await call('GET', root)).body.work
+  assert.equal(work.comment_count, 1)
+  assert.ok(!Object.hasOwn(work, 'snapshot'))
+  const page = await call('GET', root + '/comments?parent_id=' + id + '&cursor=100.' + id + '&limit=12')
+  assert.equal(page.status, 200)
+  assert.deepEqual(page.body.items[0].author, {handle: 'writer.home', name: '作者'})
+  assert.ok(!Object.hasOwn(page.body.items[0], 'owner_id'))
+  assert.equal((await call('POST', root + '/comments', {body: comment.body})).status, 400)
+  assert.equal((await call('POST', root + '/comments', {body: comment.body}, key)).status, 201)
+  assert.equal((await call('POST', root + '/comments', {body: comment.body}, key)).status, 200)
+  const update = await call('POST', root + '/comments/' + id + '/like', {enabled: true})
+  assert.equal(update.body.comment.liked, true)
+  assert.equal((await call('POST', root + '/comments/' + id + '/remove', {})).body.comment_count, 0)
+  assert.equal((await call('GET', root + '/comments?limit=1&limit=2')).status, 400)
+})

@@ -978,3 +978,108 @@ test('a work with an empty preview says it has no content yet', async () => {
   assert.match(JSON.stringify(panel), new RegExp(app.FEED_DETAIL_EMPTY));
   assert.equal(JSON.stringify(panel).includes(app.FEED_DETAIL_UNREADABLE), false);
 });
+
+const commentResponse = (body, status = 200) => ({status, json: async () => body});
+
+test('guest comments are loaded on demand and render literal text with a safe sign-in link', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const work = detailFixture({comment_count: 1});
+  const requests = [];
+  const fetcher = async (path, options) => {
+    requests.push([path, options.method]);
+    if (path === '/v1/auth/session') return commentResponse({}, 401);
+    if (path === '/v1/discover/works?limit=12') return commentResponse({items: [work]});
+    if (path === '/w/ci-fixture-doc/comments?limit=12') return commentResponse({items: [{
+      id: 'fixture-comment', body: '<script>公开文本</script>', author: {name: 'Alice'},
+      created_at: 1_800_000_000_000,
+    }], comment_count: 1});
+    throw new Error('Unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location: {search: ''}});
+  assert.equal(requests.some(([path]) => path.includes('/comments')), false);
+  const [toggle] = classHits(doc.getElementById('feed-grid'), 'feed-comments-toggle');
+  assert.equal(toggle.textContent, '评论 · 1');
+  await toggle.handlers.click();
+  const [row] = classHits(doc.getElementById('feed-comments-list'), 'feed-comment-body');
+  assert.equal(row.textContent, '<script>公开文本</script>');
+  assert.equal(doc.getElementById('feed-comments-form').hidden, true);
+  assert.equal(doc.getElementById('feed-comments-login').href, '/login#work-comments=ci-fixture-doc');
+  assert.equal(requests.every(([, method]) => method === 'GET'), true);
+});
+
+test('posting a comment clears the editor and exposes pending text before the reply, then retries with the same key', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const work = detailFixture({comment_count: 0});
+  const writes = [];
+  let finishFirst;
+  const fetcher = (path, options) => {
+    if (path === '/v1/auth/session') return Promise.resolve(commentResponse({user: {id: 'a', username: 'alice'}}));
+    if (path.startsWith('/v1/discover/me/works?')) return Promise.resolve(commentResponse({items: [work]}));
+    if (path.endsWith('/comments?limit=12')) return Promise.resolve(commentResponse({items: [], comment_count: 0}));
+    if (path === '/v1/discover/works/ci-fixture-doc/comments' && options.method === 'POST') {
+      writes.push({key: options.headers['Idempotency-Key'], body: JSON.parse(options.body)});
+      if (writes.length === 1) return new Promise(resolve => { finishFirst = resolve; });
+      return Promise.resolve(commentResponse({comment: {
+        id: 'posted', body: '第一行\n第二行', author: {name: 'Alice'}, parent_id: null,
+      }, comment_count: 1}));
+    }
+    throw new Error('Unexpected ' + path);
+  };
+  await mount(doc, {fetcher, location: {search: ''}});
+  const [toggle] = classHits(doc.getElementById('feed-grid'), 'feed-comments-toggle');
+  await toggle.handlers.click();
+  const form = doc.getElementById('feed-comments-form');
+  const input = doc.getElementById('feed-comments-input');
+  const list = doc.getElementById('feed-comments-list');
+  input.value = '第一行\n第二行';
+  input.handlers.input();
+  const posting = form.handlers.submit({preventDefault() {}});
+  assert.equal(input.value, '');
+  assert.equal(doc.getElementById('feed-comments-submit').disabled, true);
+  assert.equal(classHits(list, 'is-pending').length, 1);
+  assert.equal(classHits(list, 'feed-comment-body')[0].textContent, '第一行\n第二行');
+  finishFirst(commentResponse({}, 503));
+  await posting;
+  assert.equal(input.value, '第一行\n第二行');
+  assert.match(doc.getElementById('feed-comments-status').textContent, /草稿已保留/);
+  assert.equal(classHits(list, 'is-pending').length, 0);
+
+  await form.handlers.submit({preventDefault() {}});
+  assert.equal(writes.length, 2);
+  assert.match(writes[0].key, /^comment-/);
+  assert.deepEqual(writes[1], writes[0]);
+  assert.equal(input.value, '');
+  assert.equal(classHits(list, 'feed-comment-body').length, 1);
+  assert.equal(toggle.textContent, '评论 · 1');
+});
+
+test('comment permalinks open a published work missing from the feed without waiting for the feed', async () => {
+  const {mount, workCommentsFromSearch} = await import('../openteamily/static/discover/app.mjs');
+  assert.equal(workCommentsFromSearch('?work=../private&comments=1'), '');
+  const doc = feedDocument();
+  const requests = [];
+  let finishFeed;
+  const fetcher = (path) => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return Promise.resolve(commentResponse({user: {id: 'a', username: 'alice'}}));
+    if (path.startsWith('/v1/discover/me/works?')) return new Promise(resolve => { finishFeed = resolve; });
+    if (path === '/v1/discover/works/older-work') return Promise.resolve(commentResponse({
+      work: detailFixture({slug: 'older-work', title: '早期作品', comment_count: 0}),
+    }));
+    if (path === '/v1/discover/works/older-work/comments?limit=12') {
+      return Promise.resolve(commentResponse({items: [], comment_count: 0}));
+    }
+    throw new Error('Unexpected ' + path);
+  };
+  const mounted = mount(doc, {fetcher, location: {search: '?work=older-work&comments=1'}});
+  await flush();
+  assert.equal(doc.getElementById('feed-comments-dialog').open, true);
+  assert.equal(doc.getElementById('feed-comments-work').textContent, '早期作品');
+  assert.equal(doc.getElementById('feed-comments-empty').hidden, false);
+  assert.ok(requests.includes('/v1/discover/works/older-work/comments?limit=12'));
+  finishFeed(commentResponse({items: []}));
+  await mounted;
+  assert.equal(doc.getElementById('feed-comments-dialog').open, true);
+});

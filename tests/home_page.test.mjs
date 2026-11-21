@@ -40,3 +40,14 @@ test('home artifact rows deep-link to the existing space editor query', () => {
   assert.equal(spaceHref(workspace, artifact), '/space?workspace=' + workspace + '&artifact=' + artifact);
   assert.equal(spaceHref(workspace), '/space?workspace=' + workspace);
 });
+
+test('a public work login intent names exactly one valid work slug', async () => {
+  const {workCommentsFromHash} = await import('../openteamily/static/shell/work-comments-link.mjs');
+  assert.equal(workCommentsFromHash('#work-comments=writer-demo'), 'writer-demo');
+  for (const hash of [
+    '#work-comments=one&work-comments=two', '#work-comments=writer-demo&next=/profile',
+    '#work-comments=https%3A%2F%2Fexample.invalid', '#work-comments=..%2Fwork', '#public-agent=writer-demo',
+  ]) {
+    assert.equal(workCommentsFromHash(hash), '');
+  }
+});

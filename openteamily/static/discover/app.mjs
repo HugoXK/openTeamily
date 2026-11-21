@@ -1,6 +1,7 @@
 import { AGENT_CATEGORIES, categoryFromSearch, categoryLabel, csrfCookie } from '../agents/app.mjs';
 import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
 import { renderThumb, thumbModel } from '../shell/thumb.mjs';
+import { commentsLabel, mountWorkComments } from './comments.mjs';
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 
@@ -104,6 +105,12 @@ export function feedSearchText(state) {
   if (state && state.query) params.set('q', state.query);
   const text = params.toString();
   return text ? '?' + text : '';
+}
+
+export function workCommentsFromSearch(search) {
+  const params = new URLSearchParams(search || '');
+  const slug = params.get('work');
+  return params.get('comments') === '1' && validSlug(slug) ? slug : '';
 }
 
 export function formatFeedTime(value) {
@@ -468,6 +475,40 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   const feedState = {...initialFeed, items: [], cursor: '', loading: false};
   let feedRequest = 0;
+  let commentLinkRequest = 0;
+  const commentButtons = new Map();
+  const workComments = mountWorkComments(document, {
+    request,
+    onCount(slug, count) {
+      const item = feedState.items.find(work => work.slug === slug);
+      if (item) item.comment_count = count;
+      const button = commentButtons.get(slug);
+      if (button) button.textContent = commentsLabel(count);
+    },
+  });
+
+  async function openCommentLink() {
+    const seq = ++commentLinkRequest;
+    const slug = workCommentsFromSearch(location?.search);
+    if (!slug) {
+      workComments.close();
+      return;
+    }
+    const signedIn = Boolean(currentUser);
+    const result = await request('GET', (signedIn ? '/v1/discover/works/' : '/w/') + slug)
+      .catch(() => ({status: 0}));
+    if (seq !== commentLinkRequest) return;
+    const work = signedIn ? result.body?.work : result.body;
+    if (result.status !== 200 || work?.slug !== slug) {
+      show('error', result.status === 404 ? '这件作品已下架或不可访问。' : '无法打开作品评论，请刷新后重试。');
+      return;
+    }
+    return workComments.open(work);
+  }
+
+  function loadFeedWithCommentLink() {
+    return Promise.all([loadFeed(), openCommentLink()]);
+  }
 
   function applyFeedChrome({restoreQuery = false} = {}) {
     for (const name of ['following', 'activity', 'collected']) {
@@ -504,7 +545,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     window.addEventListener('popstate', () => {
       Object.assign(feedState, feedStateFromSearch(location?.search));
       applyFeedChrome({restoreQuery: true});
-      return loadFeed();
+      return loadFeedWithCommentLink();
     });
   }
 
@@ -688,6 +729,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (start === 0) {
       coverObserver?.disconnect();
       pendingCovers.clear();
+      commentButtons.clear();
       grid.replaceChildren();
     }
     for (const item of feedState.items.slice(start)) {
@@ -697,9 +739,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       const entry = document.createElement('article');
       entry.className = 'feed-entry';
       entry.append(card);
-      if (!currentUser) { grid.append(entry); attachFeedDetail(entry, item); continue; }
       const actions = document.createElement('div');
-      for (const [action, flag, label] of [['like','liked','点赞'], ['collect','collected','收录'], ['follow','following','关注作者']]) {
+      const engagement = currentUser ? [['like','liked','点赞'], ['collect','collected','收录'], ['follow','following','关注作者']] : [];
+      for (const [action, flag, label] of engagement) {
         if (action === 'follow' && item.own_work) continue;
         const button = document.createElement('button'); button.type = 'button';
         button.textContent = (item[flag] ? '取消' : '') + label + (action === 'like' ? ' · ' + (item.likes || 0) : '');
@@ -717,7 +759,21 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         });
         actions.append(button);
       }
-      entry.append(actions);
+      if (validSlug(item.slug)) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'feed-comments-toggle';
+        button.textContent = commentsLabel(item.comment_count);
+        button.setAttribute('aria-haspopup', 'dialog');
+        button.setAttribute('aria-controls', 'feed-comments-dialog');
+        button.addEventListener('click', () => {
+          commentLinkRequest += 1;
+          return workComments.open(item, button);
+        });
+        actions.append(button);
+        commentButtons.set(item.slug, button);
+      }
+      if (actions.childElementCount) entry.append(actions);
       attachFeedDetail(entry, item);
       grid.append(entry);
     }
@@ -1203,16 +1259,18 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const session = await sessionLoad;
     if (session.status !== 200) {
       currentUser = null;
+      workComments.setActor('');
       loginPanel.hidden = false;
       mainPanel.hidden = false;
       document.getElementById('catalog-manage').hidden = true;
       show('', '');
-      if (!catalogView) return loadFeed();
+      if (!catalogView) return loadFeedWithCommentLink();
       if (teamsView) await loadTeams();
       await directoryLoad;
       return;
     }
     currentUser = session.body.user;
+    workComments.setActor(currentUser.id || currentUser.username);
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('catalog-manage').hidden = !agentsView;
@@ -1235,7 +1293,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       else if (location?.hash === '#catalog-manage') manage.open = true;
     }
     show('', '');
-    if (!catalogView) return loadFeed();
+    if (!catalogView) return loadFeedWithCommentLink();
     if (teamsView) await loadTeams();
     await directoryLoad;
   }

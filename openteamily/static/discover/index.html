@@ -171,6 +171,35 @@
     </section>
   </section>
   </main>
+  <dialog id="feed-comments-dialog" class="feed-comments-dialog" aria-labelledby="feed-comments-title">
+    <header class="feed-comments-header">
+      <div>
+        <h2 id="feed-comments-title">评论</h2>
+        <a id="feed-comments-work" href="/discover"></a>
+      </div>
+      <button type="button" id="feed-comments-close" autofocus>关闭</button>
+    </header>
+    <div class="feed-comments-scroll">
+      <p id="feed-comments-read-status" role="status"></p>
+      <p id="feed-comments-empty" hidden>还没有评论。</p>
+      <ul id="feed-comments-list" class="feed-comments-thread" aria-label="作品评论"></ul>
+      <button type="button" id="feed-comments-more" hidden>加载更多评论</button>
+    </div>
+    <p id="feed-comments-status" role="status"></p>
+    <a id="feed-comments-login" class="feed-comments-login" href="/login" hidden>登录后发表评论</a>
+    <form id="feed-comments-form" hidden>
+      <div id="feed-comments-reply-target" class="feed-comments-reply-target" hidden>
+        <span id="feed-comments-reply-name"></span>
+        <button type="button" id="feed-comments-cancel-reply">取消回复</button>
+      </div>
+      <label for="feed-comments-input" class="visually-hidden">写公开评论</label>
+      <textarea id="feed-comments-input" rows="2" maxlength="2000" placeholder="写公开评论…" required></textarea>
+      <div class="feed-comments-form-actions">
+        <button type="button" id="feed-comments-retry-post" hidden>重试上条</button>
+        <button type="submit" id="feed-comments-submit" disabled>发送</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="catalog-category-dialog" class="catalog-dialog" aria-labelledby="catalog-category-title">
     <h2 id="catalog-category-title">分类</h2>
     <label>搜索分类 <input type="search" id="catalog-category-query" maxlength="60" autocomplete="off"></label>

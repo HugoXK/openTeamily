@@ -67,6 +67,7 @@ class SettingsPage:
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
         '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/public-agent-link.mjs': ('shell', 'public-agent-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/work-comments-link.mjs': ('shell', 'work-comments-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-skills.mjs': ('shell', 'dsbot-skills.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
@@ -84,6 +85,7 @@ class SettingsPage:
         '/messenger/app.css': ('messenger', 'app.css', 'text/css; charset=utf-8'),
         '/discover': ('discover', 'index.html', 'text/html; charset=utf-8'),
         '/discover/app.mjs': ('discover', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/discover/comments.mjs': ('discover', 'comments.mjs', 'text/javascript; charset=utf-8'),
         '/discover/app.css': ('discover', 'app.css', 'text/css; charset=utf-8'),
         '/meetings': ('meetings', 'index.html', 'text/html; charset=utf-8'),
         '/meetings/app.mjs': ('meetings', 'app.mjs', 'text/javascript; charset=utf-8'),
@@ -188,6 +190,8 @@ class SettingsPage:
             return template in TEMPLATES and template != 'custom'
         if path == '/discover':
             if query in ('tab=agents', 'tab=agents&section=groups'):
+                return True
+            if re.fullmatch(r'work=[a-z0-9][a-z0-9-]{1,28}[a-z0-9]&comments=1|comments=1&work=[a-z0-9][a-z0-9-]{1,28}[a-z0-9]', query):
                 return True
             # The feed tab, category and search are shareable deep links. The
             # router only serves the screen; the page reads these itself, so the

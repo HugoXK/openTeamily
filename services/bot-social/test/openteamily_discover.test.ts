@@ -92,7 +92,7 @@ test("public listing pages need no token and hide unlisted works", async () => {
   const html = await fetch(`${S.base}/w/essay-${tag}`);
   assert.equal(html.status, 200);
   assert.match(html.headers.get("content-type") || "", /text\/html/);
-  assert.equal(html.headers.get("cache-control"), "public, max-age=60");
+  assert.equal(html.headers.get("cache-control"), "no-store");
   const page = await html.text();
   assert.match(page, /Public essay/);
   assert.equal(page.includes("<script>"), false, "snapshot is escaped");
