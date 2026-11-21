@@ -199,8 +199,8 @@ export function createAgents({ db, host }) {
     return {...row, meta:JSON.parse(row.meta)}
   }
 
-  async function trackSend(userId, replyId, perform) {
-    const progress = {text: ''}
+  async function trackSend(userId, replyId, perform, onAccepted) {
+    const progress = {text: '', ...(onAccepted ? {onAccepted:new Set([onAccepted])} : {})}
     liveReplies.set(replyId, progress)
     const promise = perform(text => {
       if (typeof text === 'string') progress.text = text.slice(0, LIMITS.text)
@@ -212,18 +212,40 @@ export function createAgents({ db, host }) {
     }
   }
 
-  async function sendWithAttachments(p, agent, convo, text) {
+  async function sendWithAttachments(p, agent, convo, text, work) {
     const key = p.idempotency_key
     if (typeof key !== 'string' || !IDEM.test(key)) fail('invalid', 'Attachment send key required', 400)
-    const files = privateFiles(p.attachments)
-    const hash = fingerprintAttachments(text, p.reply_language, files)
+    let files = work ? undefined : privateFiles(p.attachments)
+    const hash = work ? sha(JSON.stringify(['saved-work',work.artifact_id,work.revision,text,p.reply_language || '']))
+      : fingerprintAttachments(text, p.reply_language, files)
     const userId = sendId('attachment', 'user', convo.id, key)
     const replyId = sendId('attachment', 'reply', convo.id, key)
     const result = () => ({message:messageRow(userId),reply:messageRow(replyId)})
-    const prior = one('SELECT meta FROM agent_messages WHERE id=?', userId)
-    if (prior) {
-      if (JSON.parse(prior.meta).requestHash !== hash) fail('conflict', 'Attachment send key was used for a different message', 409)
-      return activeTurns.get(userId) || result()
+    const accepted = work && typeof p.onAccepted === 'function' ? () => p.onAccepted(result()) : null
+    function replay() {
+      const prior = one('SELECT meta FROM agent_messages WHERE id=?', userId)
+      if (!prior) return null
+      const meta = JSON.parse(prior.meta)
+      if (meta.requestHash !== hash) fail('conflict', 'Attachment send key was used for a different message', 409)
+      const running = activeTurns.get(userId)
+      if (running && accepted) {
+        if (meta.files?.length) accepted()
+        else {
+          const progress = liveReplies.get(replyId)
+          progress.onAccepted ??= new Set()
+          progress.onAccepted.add(accepted)
+        }
+      }
+      return running || result()
+    }
+    const previous = replay()
+    if (previous) return previous
+    if (work) {
+      const snapshot = await host.call('artifacts/chatAttachment', {workspace_id:agent.workspace_id,...work})
+      const concurrent = replay()
+      if (concurrent) return concurrent
+      files = privateFiles([snapshot.attachment], {savedWork:true})
+      text ||= snapshot.body
     }
     const userMeta = {requestHash:hash,clientKey:key,nativePending:true}
     db.exec('BEGIN')
@@ -254,8 +276,13 @@ export function createAgents({ db, host }) {
           files,
           onProgress,
           onStaged(value) {
-            staged = value
+            staged = value.map((file, index) => files[index]?.resource ? {...file,resource:files[index].resource} : file)
             run('UPDATE agent_messages SET meta=? WHERE id=?', JSON.stringify({...userMeta,files:staged}), userId)
+            const listeners = liveReplies.get(replyId)?.onAccepted
+            if (staged.length && listeners) {
+              for (const listener of listeners) listener()
+              listeners.clear()
+            }
           },
         })
         run('UPDATE agent_messages SET text=?, status=?, meta=? WHERE id=?', reply.text, 'succeeded',
@@ -276,7 +303,7 @@ export function createAgents({ db, host }) {
         run('UPDATE agent_conversations SET updated=? WHERE id=?', now(), convo.id)
       }
       return result()
-    })
+    }, accepted)
   }
 
   const endpoints = {
@@ -524,6 +551,13 @@ export function createAgents({ db, host }) {
       const agent = load(ws(p), p.id)
       const convo = conversation(agent, p.conversation_id)
       const text = typeof p.text === 'string' ? p.text.trim() : ''
+      if (p.artifact_id !== undefined) {
+        if (typeof p.artifact_id !== 'string' || !ID.test(p.artifact_id) || !Number.isSafeInteger(p.artifact_revision)
+            || p.artifact_revision < 1 || p.attachments !== undefined || text.length > LIMITS.text) {
+          fail('invalid', '请选择作品的已保存版本。', 400)
+        }
+        return sendWithAttachments(p, agent, convo, text, {artifact_id:p.artifact_id,revision:p.artifact_revision})
+      }
       if (p.attachments !== undefined) {
         if (text.length > LIMITS.text) fail('invalid', 'text must be 1–20000 characters', 400)
         return sendWithAttachments(p, agent, convo, text)
@@ -607,7 +641,7 @@ export function createAgents({ db, host }) {
       const agent = load(ws(p), p.id)
       const convo = conversation(agent, p.conversation_id)
       const { kind, q, cursor, limit } = p
-      if (!['photo','file'].includes(kind) || typeof q !== 'string' || q.length > 80 || CONTROL.test(q)
+      if (!['photo','file','resource'].includes(kind) || typeof q !== 'string' || q.length > 80 || CONTROL.test(q)
           || !Number.isInteger(limit) || limit < 1 || limit > 50
           || typeof cursor !== 'string' || (cursor && !/^[0-9a-f]{32}\.[0-3]$/.test(cursor))) {
         fail('invalid', 'Invalid attachment search', 400)
@@ -615,19 +649,24 @@ export function createAgents({ db, host }) {
       const [messageId, slot] = cursor.split('.')
       const anchor = cursor ? one("SELECT created,rowid AS position FROM agent_messages WHERE conversation_id=? AND id=? AND role='user'", convo.id, messageId) : null
       if (cursor && !anchor) fail('invalid', 'Invalid attachment cursor', 400)
+      const filter = kind === 'resource' ? `json_type(f.value,'$.resource')='object'
+          AND instr(ot_search_fold(COALESCE(json_extract(f.value,'$.resource.title'),'')),ot_search_fold(?))>0`
+        : `(substr(mime,1,6)='image/')=${kind === 'photo' ? 1 : 0}
+          AND instr(ot_search_fold(title),ot_search_fold(?))>0`
       const rows = all(`SELECT m.id AS message_id, m.created AS created_at, CAST(f.key AS INTEGER) AS slot,
           json_extract(f.value,'$.title') AS title, json_extract(f.value,'$.mime') AS mime,
-          json_extract(f.value,'$.bytes') AS bytes
+          json_extract(f.value,'$.bytes') AS bytes, json_extract(f.value,'$.resource') AS resource_json
         FROM agent_messages m CROSS JOIN json_each(m.meta,'$.files') f
         WHERE m.conversation_id=? AND m.role='user' AND json_type(m.meta,'$.files')='array'
           AND f.type='object' AND CAST(f.key AS INTEGER) BETWEEN 0 AND ?
-          AND title IS NOT NULL AND mime IS NOT NULL AND (substr(mime,1,6)='image/')=?
-          AND instr(ot_search_fold(title),ot_search_fold(?))>0
+          AND title IS NOT NULL AND mime IS NOT NULL AND ${filter}
           AND (? IS NULL OR (m.created,m.rowid,-CAST(f.key AS INTEGER)) < (?,?,?))
         ORDER BY m.created DESC,m.rowid DESC,slot ASC LIMIT ?`,
-        convo.id, PRIVATE_FILE_COUNT - 1, kind === 'photo' ? 1 : 0, q.trim(),
+        convo.id, PRIVATE_FILE_COUNT - 1, q.trim(),
         anchor?.created ?? null, anchor?.created ?? null, anchor?.position ?? null, -Number(slot ?? 0), limit + 1)
-      const items = rows.slice(0, limit)
+      const items = rows.slice(0, limit).map(({resource_json,...row}) => ({
+        ...row, ...(resource_json ? {resource:JSON.parse(resource_json)} : {}),
+      }))
       const last = items.at(-1)
       return {items, next_cursor: rows.length > limit ? `${last.message_id}.${last.slot}` : null}
     },

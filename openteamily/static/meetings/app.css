@@ -18,6 +18,7 @@
   justify-content: space-between;
   gap: 0.5rem;
 }
+#meeting-shares-history { margin-top: .5rem; }
 #meeting-list { list-style: none; margin: 0.6rem 0 0; padding: 0; display: grid; gap: 2px; }
 #meeting-list li { border: 0; }
 .meeting-row {
@@ -87,3 +88,82 @@
   text-decoration: none;
 }
 #meeting-library:hover, #meeting-library:focus-visible { color: var(--ot-accent); }
+
+#shared-meeting-detail header { margin-bottom: 1.25rem; }
+.meeting-layout.is-reading-receipt {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 54rem;
+  margin-inline: auto;
+}
+#shared-meeting-title { margin: .45rem 0; overflow-wrap: anywhere; }
+.shared-meeting-badge {
+  display: inline-block;
+  margin: 0;
+  padding: .2rem .55rem;
+  border-radius: 999px;
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+  font-size: .8rem;
+  font-weight: 650;
+}
+#shared-meeting-summary {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#shared-meeting-actions, #meeting-share-sent {
+  list-style: none;
+  padding: 0;
+  margin: .5rem 0;
+}
+#shared-meeting-actions li, #meeting-share-sent li {
+  padding: .65rem 0;
+  border-top: 1px solid var(--ot-line);
+  overflow-wrap: anywhere;
+}
+#shared-meeting-actions li > p { margin: .2rem 0; }
+#meeting-share-dialog {
+  width: min(100% - 1.5rem, 37rem);
+  max-height: calc(100dvh - 1.5rem);
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 1rem;
+  border: 1px solid var(--ot-line);
+  border-radius: var(--ot-radius-lg);
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+#meeting-share-dialog::backdrop { background: rgb(0 0 0 / 38%); }
+.meeting-share-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: .75rem;
+}
+.meeting-share-head h2, .meeting-share-history h3 { margin: 0; }
+#meeting-share-form {
+  display: grid;
+  gap: .55rem;
+  margin: .75rem 0;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+}
+#meeting-share-recipient-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  gap: .25rem .6rem;
+  max-height: 10rem;
+  overflow-y: auto;
+}
+#meeting-share-recipient-items label {
+  display: flex;
+  align-items: center;
+  min-height: 2.25rem;
+  margin: 0;
+  gap: .4rem;
+  overflow-wrap: anywhere;
+}
+#meeting-share-recipient-items input { width: auto; flex: none; }
+#meeting-share-recipient-status, #meeting-share-status { margin: 0; }
+#meeting-share-dialog p:empty { display: none; }
+.meeting-share-history { margin-top: 1rem; }

@@ -13,7 +13,7 @@ export function artifactTargetFromSearch(search) {
 import { bindDocumentEditor } from '../shell/rich-editor.mjs';
 import { mountSpreadsheet } from './spreadsheet.mjs';
 import {
-  renderThumb,
+  artifactKindLabel as kindLabel, renderThumb,
   websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
   socialSavePath, agentSavePath, defaultSaveTitle, describeWebsiteDispatch, conversationChatHref,
 } from '../shell/thumb.mjs';
@@ -130,7 +130,6 @@ export function meetingTimeLabel(epochSeconds) {
     + `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** Meetings come from GET /v1/workspaces/<wid>/meetings; the page only lists them, newest first. */
 export function meetingRows(items) {
   const rows = (items || []).filter((item) => item && typeof item.title === 'string');
   rows.sort((left, right) => (Number(right.started_at) || 0) - (Number(left.started_at) || 0));
@@ -139,6 +138,7 @@ export function meetingRows(items) {
     title: item.title,
     started_at: Number(item.started_at) || 0,
     actionLabel: meetingActionLabel(item.action_count, item.done_count),
+    ...(item.shared === true ? {shared: true, organizer: item.organizer} : {}),
   }));
 }
 
@@ -147,6 +147,7 @@ export function meetingsForScope(items, {scope = 'all', username = '', userId = 
   if (scope !== 'joined') return rows;
   const name = (username || '').trim().toLowerCase();
   return rows.filter((row) => {
+    if (row.shared === true) return true;
     // The single-owner DS-Bot uses this marker when its platform user ID is unavailable.
     if (userId && (row.created_by === userId || row.created_by === 'owner')) return true;
     const attendees = Array.isArray(row.attendees) ? row.attendees : [];
@@ -285,6 +286,17 @@ export function conversationLabel(item) {
   return item.kind === 'dm' ? '单聊' : '群聊';
 }
 
+function agentConversations(directory, {includeArchived = false} = {}) {
+  const agents = new Map((directory.items || []).filter(agent => includeArchived || !agent.archived)
+    .map(agent => [agent.id, agent]));
+  return (directory.conversations || []).filter(row => agents.has(row.agent_id)).map(row => {
+    const agent = agents.get(row.agent_id);
+    const title = (row.title || '').trim();
+    const label = title && title !== agent.name ? agent.name + ' · ' + title : agent.name;
+    return {...row, source: 'agent', label};
+  });
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -311,6 +323,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let meetingLoadedFor = '';
   let meetingLoading = false;
   let meetingRequest = 0;
+  let meetingSharedCursor = '';
   // A delete question is bound to the workspace and artifact it was asked about;
   // leaving that workspace retires it instead of letting the answer land elsewhere.
   let pendingDeleteCancel = null;
@@ -357,16 +370,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       });
       box.appendChild(button);
     }
-  }
-
-  function kindLabel(kind, mime) {
-    if (kind === 'website') return '网站';
-    if (kind === 'media') return mime === 'model/gltf-binary' ? '3D 模型' : '媒体';
-    if (kind === 'whiteboard') return '白板';
-    if (kind === 'slides') return '幻灯片';
-    if (kind === 'dashboard') return '看板';
-    if (kind === 'spreadsheet') return '电子表格';
-    return '文档';
   }
 
   function strokeId() {
@@ -949,24 +952,46 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (sessionEmpty) sessionEmpty.hidden = sessions.length > 0;
   }
 
-  async function loadMeetings() {
+  async function loadMeetings({appendShared = false} = {}) {
     const id = workspaceId();
-    if (!id || meetingLoadedFor === id) return;
+    if (!id || (appendShared ? !meetingSharedCursor || meetingLoading : meetingLoadedFor === id)) return;
     const seq = ++meetingRequest;
-    meetingItems = [];
+    if (!appendShared) {
+      meetingItems = [];
+      meetingSharedCursor = '';
+    }
     meetingError = '';
     meetingLoadedFor = id;
     meetingLoading = true;
     renderCatalog();
-    const listed = await request('GET', `/v1/workspaces/${id}/meetings?limit=100`).catch(() => ({status: 0, body: {}}));
+    const base = `/v1/workspaces/${id}/meetings`;
+    const get = path => request('GET', path).catch(() => ({status: 0, body: {}}));
+    const query = new URLSearchParams({limit: '100'});
+    if (appendShared) query.set('cursor', meetingSharedCursor);
+    const [listed, shared] = await Promise.all([
+      appendShared ? null : get(base + '?limit=100'),
+      servedByDsBot(document) ? get(base + '/shared?' + query) : null,
+    ]);
     if (seq !== meetingRequest || workspaceId() !== id) return;
     meetingLoading = false;
-    if (listed.status === 200) {
+    if (listed?.status === 200) {
       meetingItems = listed.body.items || [];
-    } else {
-      meetingLoadedFor = '';
+    } else if (listed) {
       meetingError = messageFor(listed.body.error, '无法读取会议纪要。');
     }
+    if (shared?.status === 200) {
+      const ids = new Set(meetingItems.filter(item => item.shared === true).map(item => item.id));
+      for (const item of shared.body.items || []) {
+        if (ids.has(item.id)) continue;
+        meetingItems.push({...item, shared: true});
+        ids.add(item.id);
+      }
+      const cursor = shared.body.cursor;
+      meetingSharedCursor = typeof cursor === 'string' && cursor !== meetingSharedCursor ? cursor : '';
+    } else if (shared && !meetingError) {
+      meetingError = appendShared ? '无法加载更多共享纪要，请重试。' : '无法读取收到的共享纪要。';
+    }
+    if (meetingError) meetingLoadedFor = '';
     if (catalogKind === 'meetings') renderCatalog();
   }
 
@@ -976,8 +1001,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const emptyMeetings = document.getElementById('empty-meetings');
     const errorBox = document.getElementById('meetings-error');
     const needle = search.value.trim().toLocaleLowerCase();
-    const matches = meetingItems.filter(item => [item.title, ...(item.attendees || [])]
-      .some(value => String(value).toLocaleLowerCase().includes(needle)));
+    const matches = meetingItems.filter(item => [item.title, item.organizer, ...(item.attendees || [])]
+      .some(value => String(value || '').toLocaleLowerCase().includes(needle)));
     const rows = meetingRows(meetingsForScope(matches, {
       scope: meetingScope,
       username: currentUser && currentUser.username,
@@ -986,7 +1011,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const caption = document.getElementById('meetings-caption');
     if (caption) {
       caption.textContent = meetingScope === 'joined'
-        ? '你出席或创建的会议纪要，最新的在前。'
+        ? '你参与、创建或收到的会议纪要，最新的在前。'
         : '这个工作区的会议纪要，最新的在前。';
     }
     list.textContent = '';
@@ -1005,6 +1030,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (empty) empty.hidden = !meetingError && rows.length > 0;
     const retry = document.getElementById('retry-meetings');
     if (retry) retry.hidden = !meetingError;
+    const more = document.getElementById('more-shared-meetings');
+    if (more) {
+      more.hidden = !meetingSharedCursor;
+      more.disabled = meetingLoading;
+      more.textContent = meetingLoading ? '正在加载…' : '加载更多共享纪要';
+    }
     const create = document.getElementById('new-meeting-in-space');
     if (create) {
       create.hidden = !workspaceId();
@@ -1015,16 +1046,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       item.className = 'meeting-item';
       item.dataset.kind = 'meetings';
       const link = document.createElement('a');
-      link.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), meeting: row.id});
+      link.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), [row.shared ? 'shared' : 'meeting']: row.id});
       const title = document.createElement('span');
       title.className = 'meeting-title';
-      title.textContent = row.title;
+      title.append(document.createTextNode(row.title));
+      if (row.shared) {
+        item.dataset.meetingShared = 'true';
+        const badge = document.createElement('span');
+        badge.className = 'meeting-share-badge';
+        badge.textContent = '共享纪要';
+        title.append(badge);
+      }
       const when = document.createElement('span');
       when.className = 'note';
       when.textContent = meetingTimeLabel(row.started_at);
       const actions = document.createElement('span');
       actions.className = 'note meeting-actions';
-      actions.textContent = row.actionLabel;
+      actions.textContent = [row.shared && row.organizer ? row.organizer + ' 分享' : '', row.actionLabel].filter(Boolean).join(' · ');
       link.append(title, when, actions);
       item.appendChild(link);
       list.appendChild(item);
@@ -1043,6 +1081,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       renderList(items, (item) => openEditor(item));
       const meetingsErrorBox = document.getElementById('meetings-error');
       if (meetingsErrorBox) meetingsErrorBox.hidden = true;
+      const moreMeetings = document.getElementById('more-shared-meetings');
+      if (moreMeetings) moreMeetings.hidden = true;
     }
     // The meetings list owns its own empty and error rows; the artifact empty states stay out of it.
     if (catalogKind === 'meetings') {
@@ -1137,43 +1177,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function openSendDialog(item) {
     if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
     const wid = workspaceId();
-    const state = {item, wid, destination: null, pending: false, keys: new Map()};
+    const state = {item: {...item}, wid, destination: null, pending: false, keys: new Map()};
     sendingArtifact = state;
     sendDialog.hidden = false;
     sendConfirm.disabled = true;
     const formats = {document:'Word 文档', website:'网页源码（文本）', whiteboard:'白板数据（JSON）',
       slides:'PowerPoint 文件', dashboard:'Excel 文件', spreadsheet:'Excel 工作簿', media:'媒体文件'};
-    sendLead.textContent = `「${item.title}」版本 ${item.revision} 将作为${formats[item.kind]}发送。请选择接收会话。`;
+    const lead = `「${item.title}」版本 ${item.revision} 将作为${formats[item.kind]}发送。`;
+    sendLead.textContent = lead + '请选择接收会话。';
     sendStatus();
     sendList.replaceChildren();
     sendEmpty.hidden = false;
     sendEmpty.textContent = '正在读取会话…';
     sendCancel?.focus();
-    const listed = await request('GET', `/v1/workspaces/${wid}/social/conversations?limit=100`)
-      .catch(() => ({status:0, body:{}}));
+    const native = servedByDsBot(document);
+    const base = `/v1/workspaces/${wid}`;
+    const get = suffix => request('GET', base + suffix).catch(() => ({status: 0, body: {}}));
+    const [social, directory] = await Promise.all([
+      get('/social/conversations?limit=100'),
+      native ? get('/agents?limit=100&include=conversations') : null,
+    ]);
     if (sendingArtifact !== state || workspaceId() !== wid) return;
-    if (listed.status !== 200) {
-      sendEmpty.textContent = messageFor(listed.body.error, '无法读取会话列表。');
-      return;
-    }
-    const items = (listed.body.items || []).filter(item => !item.public_agent && item.direct?.open !== false);
+    const socialItems = social.status === 200 ? (social.body.items || [])
+      .filter(row => !row.public_agent && row.direct?.open !== false)
+      .map(row => ({...row, source: 'social', label: conversationLabel(row)})) : [];
+    const privateItems = directory?.status === 200 ? agentConversations(directory.body) : [];
+    const items = [...socialItems, ...privateItems].sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    const incomplete = social.status !== 200 || (native && (directory?.status !== 200 || !Array.isArray(directory.body.conversations)));
     if (artifactSendOrigin?.wid === wid && artifactSendOrigin.item.id === item.id) {
-      state.destination = items.find(conversation => conversation.id === artifactSendOrigin.conversation) || null;
+      state.destination = socialItems.find(conversation => conversation.id === artifactSendOrigin.conversation) || null;
       sendConfirm.disabled = !state.destination;
     }
     sendEmpty.hidden = items.length > 0;
-    sendEmpty.textContent = '这个工作区还没有可发送的群或单聊。';
+    sendEmpty.textContent = incomplete ? '无法读取可发送的会话，请稍后重试。' : '这个工作区还没有可发送的会话。';
+    if (items.length && incomplete) sendStatus('部分会话无法加载。');
     for (const conversation of items) {
       const row = document.createElement('li');
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = conversationLabel(conversation);
+      button.dataset.chatSource = conversation.source;
+      button.textContent = conversation.source === 'agent' ? '智能体 · ' + conversation.label : conversation.label;
       button.setAttribute('aria-pressed', String(state.destination === conversation));
       button.addEventListener('click', () => {
         if (state.pending) return;
         state.destination = conversation;
         for (const option of sendList.querySelectorAll('button')) option.setAttribute('aria-pressed', String(option === button));
         sendConfirm.disabled = false;
+        sendLead.textContent = lead + (conversation.source === 'agent' ? '智能体会读取这份附件。' : '');
         sendStatus();
       });
       row.append(button);
@@ -1185,24 +1235,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const state = sendingArtifact;
     if (!state?.destination || state.pending || workspaceId() !== state.wid) return;
     const {wid, item, destination, keys} = state;
-    const key = keys.get(destination.id) || idempotencyKey();
-    keys.set(destination.id, key);
+    const isAgent = destination.source === 'agent';
+    const collection = isAgent ? `agents/${destination.agent_id}/conversations` : 'social/conversations';
+    const path = `/v1/workspaces/${wid}/${collection}/${destination.id}/messages`;
+    const key = keys.get(path) || idempotencyKey();
+    keys.set(path, key);
     state.pending = true;
     sendConfirm.disabled = true;
     sendConfirm.textContent = '正在发送…';
     if (sendCancel) sendCancel.disabled = true;
     sendStatus();
     try {
-      const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${destination.id}/messages`,
+      const result = await request('POST', path,
         {artifact_id: item.id, artifact_revision: item.revision}, {'Idempotency-Key': key});
       if (sendingArtifact !== state || workspaceId() !== wid) return;
-      if (result.status !== 200 && result.status !== 201) {
+      const accepted = isAgent ? [201, 202].includes(result.status) && result.body?.message?.id
+        : [200, 201].includes(result.status);
+      if (!accepted) {
         sendStatus(messageFor(result.body.error, '发送失败，请重试。'));
         return;
       }
       state.pending = false;
       closeSendDialog();
-      show('ok', '已发送到「' + conversationLabel(destination) + '」。');
+      show('ok', '已发送到「' + destination.label + '」。');
     } catch {
       if (sendingArtifact === state && workspaceId() === wid) sendStatus('未能确认发送结果，请选择同一会话重试。');
     } finally {
@@ -1257,7 +1312,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     send.textContent = '发送到聊天';
     if (canSendArtifactToChat(item)) {
       send.disabled = false;
-      send.title = '把此作品的保存版本发到群聊或单聊';
+      send.title = '把此作品的保存版本发到会话';
       send.addEventListener('click', () => {
         closeItemMenu();
         openSendDialog(item);
@@ -1725,6 +1780,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     model3dPreview.setSource('');
     setWebsitePreview();
     meetingLoadedFor = '';
+    meetingSharedCursor = '';
     meetingItems = [];
     meetingError = '';
     meetingLoading = false;
@@ -1736,6 +1792,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else void loadList();
   });
   document.getElementById('retry-meetings')?.addEventListener('click', () => loadMeetings());
+  document.getElementById('more-shared-meetings')?.addEventListener('click', () => loadMeetings({appendShared: true}));
 
   document.getElementById('new-artifact').addEventListener('click', () => {
     draftKind = 'document';
@@ -2332,12 +2389,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       get('/agents?limit=100&include=conversations'),
     ]);
     if (!current()) return;
-    const agentById = new Map((agents.body.items || []).map(agent => [agent.id, agent]));
     const conversations = [
       ...(social.body.items || []).map(row => ({...row, label: conversationLabel(row), social: true})),
-      ...(agents.body.conversations || []).filter(row => agentById.has(row.agent_id)).map(row => ({
-        ...row, label: agentById.get(row.agent_id).name + ' · ' + row.title,
-      })),
+      ...agentConversations(agents.body, {includeArchived: true}),
     ].sort((a, b) => (b.updated || 0) - (a.updated || 0));
     const incomplete = social.status !== 200 || agents.status !== 200 || !Array.isArray(agents.body.conversations);
     feedback(incomplete ? '部分会话无法加载。' : (conversations.length ? '' : '这个工作区还没有会话。'));

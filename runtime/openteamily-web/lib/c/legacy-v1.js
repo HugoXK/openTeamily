@@ -115,8 +115,8 @@ function conversationItem(row, me, env, workspaceId) {
   }
 }
 
-function attachmentItem({ title, mime, bytes }, workspaceId, conversationId, messageId) {
-  return { title, mime, bytes, id: messageId,
+function attachmentItem({ title, mime, bytes, resource }, workspaceId, conversationId, messageId) {
+  return { title, mime, bytes, id: messageId, ...(resource ? {resource} : {}),
     path: `/v1/workspaces/${workspaceId}/social/conversations/${seg(conversationId)}/messages/${seg(messageId)}/file`,
   }
 }
@@ -762,17 +762,21 @@ function messengerRoutes(host, wakeReplies) {
         return wrap(async () => {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
-          let message = body
+          let attachment
           if (body?.artifact_id !== undefined) {
             if (body.voice || body.attachment || scope.conversation?.public_agent) {
               throw new Fault(400, 'invalid', '请选择可以接收附件的群聊或单聊。')
             }
             const snapshot = await host.call('artifacts/chatAttachment', {workspace_id: match[1],
               artifact_id: body.artifact_id, revision: body.artifact_revision})
-            message = {...body, body: snapshot.body, attachment: snapshot.attachment}
+            body = {...body,body:snapshot.body}
+            attachment = snapshot.attachment
+          } else if (body?.attachment !== undefined) {
+            const {title,mime,data} = body.attachment || {}
+            attachment = {title,mime,data}
           }
           const me = await meOf(bs, env)
-          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: message?.body, voice: message?.voice, attachment: message?.attachment, workspace: match[1], direct: accountConversation(scope.conversation), client_key: idempotency_key, mentions: message?.mentions, agent_mentions: message?.agent_mentions, reply_to: message?.reply_to })
+          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, voice: body?.voice, attachment, workspace: match[1], direct: accountConversation(scope.conversation), client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
           if (data.reply_jobs?.some(job => job.status === 'queued')) wakeReplies()
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
         })

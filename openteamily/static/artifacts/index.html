@@ -153,7 +153,7 @@
         <span class="visually-hidden">通知</span>
       </button>
     </header>
-    <p id="layout-note" class="note" hidden>封面由作品自身内容生成：文档首行、网页标题、白板笔画、幻灯片首页、看板组件和图片原图；音视频只显示类型。所有作品类型都可以将已保存的修订通过菜单发送到群或单聊；接收成员可以下载该版本。</p>
+    <p id="layout-note" class="note" hidden>封面由作品自身内容生成：文档首行、网页标题、白板笔画、幻灯片首页、看板组件和图片原图；音视频只显示类型。作品菜单可将已保存的版本发送到群聊、单聊或智能体会话。</p>
     <p id="whoami" class="visually-hidden"></p>
     <section id="list-panel" class="artifacts-workspace">
       <aside class="artifact-dir" id="artifact-dir">
@@ -194,6 +194,7 @@
       </aside>
       <section class="artifact-main">
         <ul id="artifact-list"></ul>
+        <button type="button" id="more-shared-meetings" class="secondary" hidden>加载更多共享纪要</button>
         <div id="list-empty" hidden>
           <div id="empty-all">
             <div class="empty-hero" aria-hidden="true"><span class="empty-cta-icon" data-tone="stack" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 8.5 12 5l8 3.5-8 3.5L4 8.5zm0 4.2 8 3.5 8-3.5v1.8L12 18 4 14.5v-1.8z"/></svg></span></div>
@@ -418,7 +419,7 @@
       <h2 id="send-to-chat-title">发送到聊天</h2>
       <p id="send-to-chat-lead" class="note"></p>
       <ul id="send-to-chat-list"></ul>
-      <p id="send-to-chat-empty" class="empty-state" hidden>这个工作区还没有可发送的群或单聊。</p>
+      <p id="send-to-chat-empty" class="empty-state" hidden>这个工作区还没有可发送的会话。</p>
       <p id="send-to-chat-error" class="note" role="status" hidden></p>
       <div class="send-dialog-actions">
         <button type="button" id="send-to-chat-cancel">取消</button>

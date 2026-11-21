@@ -1,4 +1,5 @@
 import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
+import { artifactVersionLabel } from '../shell/thumb.mjs';
 
 export const MAX_CHAT_FILE_BYTES = 8 * 1024 * 1024;
 export const AGENT_FILE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,.pdf,.txt,.md,.csv,.tsv,.json,.docx,.xlsx,.pptx';
@@ -42,7 +43,8 @@ export function chatFileDownload(document, attachment) {
   if (!attachment.path) return null;
   const title = attachment.title || '附件';
   const link = document.createElement('a');
-  link.href = attachment.path + (attachment.bytes === undefined ? '' : '?download=1');
+  const separator = attachment.path.includes('?') ? '&' : '?';
+  link.href = attachment.path + (attachment.bytes === undefined ? '' : separator + 'download=1');
   if (attachment.bytes !== undefined) link.download = title;
   link.textContent = '下载';
   link.setAttribute('aria-label', '下载' + title);
@@ -52,7 +54,7 @@ export function chatFileDownload(document, attachment) {
 export function renderChatFile(document, attachment, {pending = false} = {}) {
   const card = document.createElement('article');
   card.className = 'chat-file';
-  const title = attachment.title || '附件';
+  const title = attachment.resource?.title || attachment.title || '附件';
   const media = mediaElement(document, attachment.mime, attachment.path, title, pending);
   if (media) card.append(media);
   const details = document.createElement('div');
@@ -62,6 +64,12 @@ export function renderChatFile(document, attachment, {pending = false} = {}) {
   const name = document.createElement('strong');
   name.textContent = title;
   info.append(name);
+  const version = artifactVersionLabel(attachment.resource, attachment.mime);
+  if (version) {
+    const meta = document.createElement('small');
+    meta.textContent = version;
+    info.append(meta);
+  }
   if (Number.isSafeInteger(attachment.bytes)) {
     const size = document.createElement('small');
     size.textContent = formatBytes(attachment.bytes);

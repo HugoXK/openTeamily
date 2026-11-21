@@ -1,5 +1,5 @@
 import {mountMeetingAudio} from './audio.mjs';
-import {readWorkspaceChoices} from '../shell/dsbot-api.mjs';
+import {readWorkspaceChoices, servedByDsBot} from '../shell/dsbot-api.mjs';
 import {takeMeetingFromChat} from '../shell/meeting-link.mjs';
 
 function csrfCookie(source) {
@@ -92,6 +92,293 @@ async function request(method, path, body, extra, signal) {
   return { status: response.status, body: payload };
 }
 
+const meetingKey = prefix => prefix + (globalThis.crypto?.randomUUID
+  ? crypto.randomUUID().replace(/-/g, '') : String(Date.now()));
+
+export function mountMeetingShares(document, {request, context, historyWorkspace = () => '', key = () => meetingKey('meeting-share-')}) {
+  const control = name => document.getElementById('meeting-share-' + name);
+  const trigger = document.getElementById('share-meeting');
+  const historyTrigger = document.getElementById('meeting-shares-history');
+  const dialog = control('dialog');
+  if (!trigger || typeof dialog?.showModal !== 'function') return {sync() {}};
+  const close = control('close');
+  const select = control('conversation');
+  const recipients = control('recipients');
+  const choices = control('recipient-items');
+  const feedback = control('recipient-status');
+  const submit = control('submit');
+  const status = control('status');
+  const sent = control('sent');
+  const sentStatus = control('sent-status');
+  const sentMore = control('sent-more');
+  const form = control('form');
+  let view;
+  let attempt;
+
+  const call = (method, path, body, headers, signal) => request(method, path, body, headers, signal)
+    .catch(() => ({status: 0, body: {}}));
+  function isCurrent(state) {
+    if (!dialog.open || view !== state || !state) return false;
+    if (state.historyOnly) return historyWorkspace() === state.workspace;
+    const target = context();
+    return target?.workspace === state.workspace && target.meeting.id === state.meeting.id;
+  }
+  function syncForm(state) {
+    close.disabled = state.busy;
+    select.disabled = state.busy || select.options.length < 2;
+    recipients.disabled = state.busy;
+    submit.disabled = state.busy || !state.selected.size;
+    sentMore.hidden = !state.sentCursor;
+    sentMore.disabled = state.busy || state.sentLoading;
+    for (const button of sent.querySelectorAll('button')) button.disabled = state.busy || state.sentLoading;
+  }
+
+  function renderSent(state, items) {
+    sent.replaceChildren();
+    sentStatus.textContent = items.length ? '' : '尚未分享。';
+    for (const item of items) {
+      const li = document.createElement('li');
+      li.dataset.shareId = item.id;
+      const info = document.createElement('p');
+      info.textContent = [`版本 ${item.revision}`, formatTime(item.created), (item.recipients || []).join('、')]
+        .filter(Boolean).join(' · ');
+      const actions = document.createElement('div');
+      actions.className = 'meeting-actions';
+      const revoke = document.createElement('button');
+      revoke.type = 'button';
+      revoke.className = 'secondary meeting-share-revoke';
+      revoke.textContent = '撤回分享';
+      revoke.addEventListener('click', () => {
+        if (!isCurrent(state) || state.busy || state.sentLoading) return;
+        const note = document.createElement('span');
+        note.textContent = '撤回后，接收人将无法打开这个副本。';
+        const confirm = document.createElement('button');
+        confirm.type = 'button';
+        confirm.className = 'meeting-share-revoke-confirm';
+        confirm.textContent = '确认撤回';
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.className = 'secondary';
+        cancel.textContent = '取消';
+        cancel.addEventListener('click', () => { actions.replaceChildren(revoke); revoke.focus(); });
+        confirm.addEventListener('click', async () => {
+          if (!isCurrent(state) || state.busy || state.sentLoading) return;
+          state.sentRequest = (state.sentRequest || 0) + 1;
+          state.busy = true;
+          syncForm(state);
+          sentStatus.textContent = '正在撤回…';
+          const result = await call('POST', `${state.base}/shared/${item.id}/revoke`, {});
+          if (!isCurrent(state)) return;
+          state.busy = false;
+          const revoked = result.status === 200 || result.status === 204;
+          if (revoked) {
+            state.sentItems = state.sentItems.filter(row => row.id !== item.id);
+            li.remove();
+            sentStatus.textContent = '已撤回分享。';
+          } else {
+            sentStatus.textContent = messageFor(result.body.error, '无法撤回分享，请重试。');
+          }
+          syncForm(state);
+          if (revoked) close.focus();
+        });
+        actions.replaceChildren(note, confirm, cancel);
+        confirm.focus();
+      });
+      actions.append(revoke);
+      if (state.historyOnly) {
+        const title = document.createElement('strong');
+        title.textContent = item.title;
+        li.append(title);
+      }
+      li.append(info, actions);
+      sent.append(li);
+    }
+    syncForm(state);
+  }
+
+  async function loadSent(state, append = false) {
+    if (!isCurrent(state) || (append && (!state.sentCursor || state.sentLoading || state.busy))) return;
+    const sequence = state.sentRequest = (state.sentRequest || 0) + 1;
+    state.sentLoading = true;
+    syncForm(state);
+    sentStatus.textContent = '正在加载分享记录…';
+    const query = new URLSearchParams(state.historyOnly ? {sent: '1', limit: '100'} : {limit: '100'});
+    if (append) query.set('cursor', state.sentCursor);
+    const result = await call('GET', state.path + '?' + query, undefined, undefined, state.controller.signal);
+    if (!isCurrent(state) || sequence !== state.sentRequest) return;
+    state.sentLoading = false;
+    if (result.status === 200) {
+      const items = result.body.items || [];
+      state.sentItems = append ? [...new Map([...state.sentItems, ...items].map(row => [row.id, row])).values()] : items;
+      const cursor = result.body.cursor;
+      state.sentCursor = typeof cursor === 'string' && (!append || cursor !== state.sentCursor) ? cursor : '';
+      renderSent(state, state.sentItems);
+    } else {
+      sentStatus.textContent = messageFor(result.body.error, '无法加载分享记录。关闭后可重新打开。');
+      syncForm(state);
+    }
+  }
+
+  async function open(target, historyOnly = false) {
+    if (!target?.workspace || dialog.open) return;
+    const base = `/v1/workspaces/${target.workspace}/meetings`;
+    const state = view = {
+      workspace: target.workspace, meeting: {...target.meeting}, base, historyOnly,
+      path: historyOnly ? base + '/shared' : `${base}/${target.meeting.id}/shares`,
+      selected: new Set(), busy: false, controller: new AbortController(), sentItems: [],
+    };
+    control('title').textContent = historyOnly ? '分享记录' : '分享纪要';
+    control('lead').textContent = historyOnly ? ''
+      : `分享「${state.meeting.title}」的版本 ${state.meeting.revision}。接收人只能查看标题、时间、摘要和行动项。`;
+    form.hidden = historyOnly;
+    select.replaceChildren();
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = '请选择会话';
+    select.append(option);
+    select.value = '';
+    choices.replaceChildren();
+    sent.replaceChildren();
+    status.textContent = '';
+    feedback.textContent = '正在加载会话…';
+    syncForm(state);
+    dialog.showModal();
+    void loadSent(state);
+    if (historyOnly) return;
+    const path = `/v1/workspaces/${state.workspace}/social/conversations?limit=100`;
+    const result = await call('GET', path, undefined, undefined, state.controller.signal);
+    if (!isCurrent(state)) return;
+    if (result.status !== 200) {
+      feedback.textContent = messageFor(result.body.error, '无法加载会话。关闭后可重新打开。');
+      return;
+    }
+    for (const row of result.body.items || []) {
+      if (!['group', 'dm'].includes(row.kind) || row.public_agent || row.direct?.open === false) continue;
+      const entry = document.createElement('option');
+      entry.value = row.id;
+      entry.textContent = row.title || (row.members || []).map(member => member.username).filter(Boolean).join('、')
+        || (row.kind === 'group' ? '群聊' : '单聊');
+      select.append(entry);
+    }
+    feedback.textContent = select.options.length > 1 ? '' : '当前工作区没有可分享的会话。';
+    syncForm(state);
+  }
+  trigger.addEventListener('click', () => open(context()));
+  historyTrigger?.addEventListener('click', () => open({workspace: historyWorkspace()}, true));
+  sentMore.addEventListener('click', () => { if (view) return loadSent(view, true); });
+
+  select.addEventListener('change', async () => {
+    const state = view;
+    if (!state || !isCurrent(state) || state.busy) return;
+    state.recipientRequest?.abort();
+    state.selected.clear();
+    choices.replaceChildren();
+    status.textContent = '';
+    syncForm(state);
+    const conversation = select.value;
+    feedback.textContent = conversation ? '正在加载接收人…' : '';
+    if (!conversation) return;
+    const controller = state.recipientRequest = new AbortController();
+    const query = new URLSearchParams({conversation_id: conversation});
+    const result = await call('GET', `${state.base}/share-recipients?${query}`, undefined, undefined, controller.signal);
+    if (!isCurrent(state) || state.recipientRequest !== controller || select.value !== conversation) return;
+    if (result.status !== 200) {
+      feedback.textContent = messageFor(result.body.error, '无法加载接收人，请重新选择会话。');
+      return;
+    }
+    for (const item of result.body.items || []) {
+      const label = document.createElement('label');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.name = 'recipient';
+      box.value = item.id;
+      box.addEventListener('change', () => {
+        if (!isCurrent(state) || state.busy) return;
+        if (box.checked && state.selected.size >= 50) {
+          box.checked = false;
+          feedback.textContent = '最多选择 50 位接收人。';
+          return;
+        }
+        if (box.checked) state.selected.add(item.id);
+        else state.selected.delete(item.id);
+        feedback.textContent = '';
+        syncForm(state);
+      });
+      label.append(box, document.createTextNode(item.name));
+      choices.append(label);
+    }
+    feedback.textContent = choices.children.length ? '' : '这个会话中没有可选择的其他接收人。';
+  });
+
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    const state = view;
+    if (!state || state.historyOnly || !isCurrent(state) || state.busy || !select.value || !state.selected.size) return;
+    const body = {revision: state.meeting.revision, conversation_id: select.value, recipient_ids: [...state.selected].sort()};
+    const fingerprint = JSON.stringify([state.path, body]);
+    if (fingerprint !== attempt?.fingerprint) attempt = {fingerprint, key: key()};
+    state.busy = true;
+    syncForm(state);
+    status.textContent = '正在分享…';
+    const result = await call('POST', state.path, body, {'Idempotency-Key': attempt.key});
+    if (!isCurrent(state)) return;
+    state.busy = false;
+    if (![200, 201].includes(result.status) || !result.body.meeting?.id) {
+      status.textContent = result.status === 409 ? '纪要已更新。请关闭分享窗口，重新打开会议后再试。'
+        : messageFor(result.body.error, '分享未确认，请重试。');
+      syncForm(state);
+      return;
+    }
+    attempt = null;
+    state.selected.clear();
+    for (const label of choices.children) label.children[0].checked = false;
+    status.textContent = '已分享纪要。';
+    syncForm(state);
+    void loadSent(state);
+  });
+  close.addEventListener('click', () => { if (!view?.busy) dialog.close(); });
+  dialog.addEventListener('cancel', event => { if (view?.busy) event.preventDefault(); });
+  dialog.addEventListener('close', () => {
+    if (dialog.open) return;
+    view?.controller.abort();
+    view?.recipientRequest?.abort();
+    view = null;
+  });
+  return {sync() {
+    trigger.hidden = !context();
+    if (historyTrigger) historyTrigger.hidden = !historyWorkspace();
+    if (dialog.open && !isCurrent(view)) dialog.close();
+  }};
+}
+
+export function renderSharedMeeting(document, meeting) {
+  const title = document.getElementById('shared-meeting-title');
+  title.textContent = meeting.title;
+  document.getElementById('shared-meeting-meta').textContent = [
+    meeting.organizer ? '组织者 ' + meeting.organizer : '',
+    formatTime(meeting.started_at), `版本 ${meeting.revision}`,
+  ].filter(Boolean).join(' · ');
+  document.getElementById('shared-meeting-summary').textContent = meeting.summary || '没有摘要。';
+  const actions = meeting.action_items || [];
+  const list = document.getElementById('shared-meeting-actions');
+  list.replaceChildren();
+  for (const item of actions) {
+    const li = document.createElement('li');
+    const text = document.createElement('p');
+    text.textContent = item.text;
+    const state = document.createElement('p');
+    state.className = 'note';
+    state.textContent = [item.owner ? '负责人 ' + item.owner : '', item.done ? '已完成' : '待完成']
+      .filter(Boolean).join(' · ');
+    li.append(text, state);
+    list.append(li);
+  }
+  list.hidden = !actions.length;
+  document.getElementById('shared-meeting-no-actions').hidden = Boolean(actions.length);
+  document.getElementById('shared-meeting-detail').hidden = false;
+  title.focus();
+}
+
 function mount() {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -103,6 +390,15 @@ function mount() {
   let workspaceLoad = 0;
   if (!status || !loginPanel || !mainPanel || !form) return;
   let current = null;
+  const sharedDetail = document.getElementById('shared-meeting-detail');
+  const emptyDetail = document.getElementById('meeting-empty');
+  const sharing = mountMeetingShares(document, {
+    request,
+    context: () => servedByDsBot(document) && current?.id && workspaceId()
+      ? {workspace: workspaceId(), meeting: current} : null,
+    historyWorkspace: () => servedByDsBot(document) && !document.getElementById('meeting-list-pane')?.hidden
+      ? workspaceId() : '',
+  });
   let meetings = [];
   let actions = [];
   const attendeeInput = document.getElementById('meeting-attendees');
@@ -384,14 +680,23 @@ function mount() {
     }
   }
 
+  function setReceiptMode(receipt) {
+    const pane = document.getElementById('meeting-list-pane');
+    if (pane) pane.hidden = receipt;
+    document.getElementById('meeting-layout')?.classList.toggle('is-reading-receipt', receipt);
+    if (!receipt && sharedDetail) sharedDetail.hidden = true;
+    sharing.sync();
+  }
+
   function fill(meeting) {
     selection += 1;
     syncLibraryLink();
     audio.reset();
     hideAttendees();
     current = meeting;
+    setReceiptMode(false);
     form.hidden = false;
-    document.getElementById('meeting-empty').hidden = true;
+    emptyDetail.hidden = true;
     document.getElementById('meeting-title').value = meeting ? meeting.title : '';
     document.getElementById('meeting-started-at').value = inputTime(meeting ? meeting.started_at : null);
     document.getElementById('meeting-attendees').value = meeting ? (meeting.attendees || []).join(', ') : '';
@@ -445,9 +750,33 @@ function mount() {
     fill(result.body.meeting);
   }
 
+  async function openSharedMeeting(id) {
+    const workspace = workspaceId(), pendingSelection = ++selection;
+    current = null;
+    sharing.sync();
+    audio.reset();
+    clearDraft();
+    hideAttendees();
+    form.hidden = true;
+    setReceiptMode(true);
+    sharedDetail.hidden = true;
+    emptyDetail.hidden = true;
+    show('', '正在加载共享纪要…');
+    const result = await request('GET', `${base()}/shared/${id}`).catch(() => ({status: 0, body: {}}));
+    if (workspaceId() !== workspace || pendingSelection !== selection) return;
+    const meeting = result.body.meeting;
+    if (result.status !== 200 || meeting?.id !== id || meeting.shared !== true) {
+      show('error', result.status === 404 ? '这份共享纪要已撤回或你没有查看权限。' : '无法打开共享纪要，请重试。');
+      return;
+    }
+    renderSharedMeeting(document, meeting);
+    show('', '');
+  }
+
   function syncLibraryLink() {
     if (back) back.href = '/space?view=meetings' + (workspaceId() ? '#workspace=' + encodeURIComponent(workspaceId()) : '');
     newButton.disabled = !workspaceId();
+    sharing.sync();
   }
 
   function fillWorkspaces(items, selected) {
@@ -467,6 +796,9 @@ function mount() {
     const session = await request('GET', '/v1/auth/session');
     if (seq !== workspaceLoad) return;
     if (session.status !== 200) {
+      current = null;
+      sharing.sync();
+      if (sharedDetail) sharedDetail.hidden = true;
       audio.reset();
       loginPanel.hidden = false;
       mainPanel.hidden = true;
@@ -506,7 +838,16 @@ function mount() {
       return;
     }
     const meetingId = linked.get('meeting') || '';
-    if (workspaceId() === linkedWorkspace && /^[0-9a-f]{32}$/.test(meetingId)) {
+    if (linked.has('shared')) {
+      const shareId = linked.get('shared');
+      if (workspaceId() === linkedWorkspace && /^[0-9a-f]{32}$/.test(shareId) && !meetingId) {
+        await openSharedMeeting(shareId);
+      } else {
+        form.hidden = true;
+        if (sharedDetail) sharedDetail.hidden = true;
+        show('error', '共享纪要链接无效。');
+      }
+    } else if (workspaceId() === linkedWorkspace && /^[0-9a-f]{32}$/.test(meetingId)) {
       await Promise.all([openMeeting(meetingId), loadList({keepEditor: true})]);
     } else if (linked.get('new') === '1') {
       fill(null);
@@ -530,6 +871,7 @@ function mount() {
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
+    if (form.hidden) return;
     const title = document.getElementById('meeting-title').value.trim();
     const started = document.getElementById('meeting-started-at').value;
     const startedAt = Math.floor(new Date(started).getTime() / 1000);
@@ -553,8 +895,7 @@ function mount() {
       if (target?.id) {
         result = await request('POST', `${base()}/${target.id}`, {revision: target.revision, changes});
       } else {
-        const key = 'meeting-' + (globalThis.crypto?.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Date.now()));
-        result = await request('POST', base(), changes, {'Idempotency-Key': key});
+        result = await request('POST', base(), changes, {'Idempotency-Key': meetingKey('meeting-')});
       }
     } catch {
       result = {status: 0, body: {}};
@@ -640,8 +981,10 @@ function mount() {
     hideAttendees();
     memberCache = {workspace: '', items: [], failed: false};
     current = null;
+    sharing.sync();
     actions = [];
     form.hidden = true;
+    setReceiptMode(false);
     if (workspaceId()) void loadList();
   });
 

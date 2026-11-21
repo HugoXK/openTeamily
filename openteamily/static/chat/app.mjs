@@ -16,7 +16,7 @@ import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/ap
 import { conversationLabel, memberChoices, validMessage } from '../messenger/app.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 import { dsbotServed } from './dsbot.mjs';
-import { agentSavePath, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
+import { agentSavePath, artifactVersionLabel, defaultSaveTitle, saveableAgentMessage, saveableSocialMessage, socialSavePath, spaceHref } from '../shell/thumb.mjs';
 
 export const SEARCH_TABS = [
   ['all', '全部'],
@@ -4240,6 +4240,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   const CONVERSATION_SCOPES = {
     messages: {placeholder: '搜索当前会话', note: '搜索当前会话中的消息。'},
+    resources: {placeholder: '搜索资料标题', note: '搜索在这个会话中分享的资料。', kind: 'resource', noun: '资料', unit: '份'},
     photos: {placeholder: '搜索照片文件名', note: '搜索当前会话中的照片。', kind: 'photo', noun: '照片', unit: '张'},
     files: {placeholder: '搜索文件名', note: '搜索当前会话中的文件。', kind: 'file', noun: '文件', unit: '个'},
   };
@@ -4282,11 +4283,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('conversation-search-scope-note').textContent = note;
   }
 
-  function attachmentHitRow(item, view, photo) {
+  function attachmentHitRow(item, view, kind) {
     const {attachment} = item;
-    const title = attachment.title || (photo ? '未命名照片' : '未命名文件');
+    const photo = kind === 'photo';
+    const isResource = kind === 'resource';
+    const resource = isResource ? attachment.resource : null;
+    const title = resource?.title || attachment.title || (photo ? '未命名照片' : isResource ? '未命名资料' : '未命名文件');
     const li = document.createElement('li');
-    li.className = 'attachment-search-hit';
+    li.className = 'attachment-search-hit' + (isResource ? ' resource-search-hit' : '');
     const jump = document.createElement('button');
     jump.type = 'button';
     jump.className = 'search-hit attachment-search-jump';
@@ -4300,7 +4304,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const avatar = document.createElement('span');
     avatar.className = 'search-hit-avatar';
     avatar.setAttribute('aria-hidden', 'true');
-    avatar.textContent = photo ? '照' : '件';
+    avatar.textContent = photo ? '照' : isResource ? '资' : '件';
     const head = document.createElement('span');
     head.className = 'search-hit-head';
     const name = document.createElement('strong');
@@ -4308,9 +4312,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     name.title = title;
     head.append(name);
     const when = document.createElement('time');
-    when.className = 'search-hit-text';
     when.textContent = formatSessionTime(item.created_at);
-    jump.append(avatar, head, when);
+    const version = artifactVersionLabel(resource, attachment.mime);
+    if (version) {
+      const meta = document.createElement('span');
+      meta.className = 'search-hit-text resource-search-meta';
+      const description = document.createElement('span');
+      description.textContent = version;
+      meta.append(description, when);
+      jump.append(avatar, head, meta);
+    } else {
+      when.className = 'search-hit-text';
+      jump.append(avatar, head, when);
+    }
     li.append(jump);
     const download = chatFileDownload(document, attachment);
     if (download) {
@@ -4334,7 +4348,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const id = JSON.stringify([item.message_id, item.attachment.id]);
       if (view.seen.has(id)) continue;
       view.seen.add(id);
-      inChatResults.append(attachmentHitRow(item, view, kind === 'photo'));
+      inChatResults.append(attachmentHitRow(item, view, kind));
     }
     const next = result.body.next_cursor;
     view.cursor = typeof next === 'string' && next !== view.cursor ? next : '';

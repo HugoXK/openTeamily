@@ -117,6 +117,7 @@ export default defineFeature({
       const title = row.title.replace(/[.\/\\]/g, '_').trim()
       return {body: `${row.title} · 版本 ${revision}`, attachment: {
         title: `${title}-v${revision}.${file.extension}`, mime: file.mime, data: bytes.toString('base64'),
+        resource: {kind,title:row.title,revision},
       }}
     },
     async files(payload) {

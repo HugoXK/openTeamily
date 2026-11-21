@@ -22,8 +22,9 @@ const publicConversation = (row, workspaceId, agentId) => ({
   id: row.id, native_bot_id: row.native_bot_id || null, native_session_id: row.native_session_id || null, workspace_id: workspaceId, agent_id: agentId, title: row.title, created: row.created, updated: row.updated, preview: row.preview ?? '', unread_count: 0,
   ...(typeof row.memory_recall === 'boolean' ? {memory_recall:row.memory_recall,memory_scope:row.memory_scope} : {}),
 })
-const publicFile = ({title,mime,bytes}, index, workspaceId, agentId, conversationId, messageId) => ({
+const publicFile = ({title,mime,bytes,resource}, index, workspaceId, agentId, conversationId, messageId) => ({
   title,mime,bytes,path:`/v1/workspaces/${workspaceId}/agents/${agentId}/conversations/${conversationId}/messages/${messageId}/files/${index}`,
+  ...(resource ? {resource} : {}),
 })
 const publicMessage = (row, workspaceId, agentId) => {
   const status = row.status === 'sent' ? 'succeeded' : row.status
@@ -73,7 +74,7 @@ export function agentsV1({ endpoints, log }) {
       handle: wrap(async (req, workspaceId, id, conversationId, messageId, index) => {
         if (req.method !== 'GET') throw new FeatureError(405, 'method', 'Only GET is supported')
         const file = await call('attachment', {workspace_id:workspaceId,id,conversation_id:conversationId,message_id:messageId,index:Number(index)})
-        const inline = file.mime.startsWith('image/') && req.query.get('download') !== '1'
+        const inline = /^(image|audio|video)\//.test(file.mime) && req.query.get('download') !== '1'
         return {status:200, raw:file.data, filename:file.title, headers:{'content-type':file.mime}, inline}
       }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages/${HEX}/artifact$`), handle: wrap(async (req, workspaceId, id, conversationId, messageId) => {
@@ -94,8 +95,16 @@ export function agentsV1({ endpoints, log }) {
       const payload = {workspace_id:workspaceId,id,agent_id:id,conversation_id:conversationId,
         text:body.body ?? body.text,reply_language:body.reply_language,attachments:body.attachments,
         idempotency_key:req.headers.get('idempotency-key'),return_failed:true}
+      const project = result => ({message:publicMessage(result.message, workspaceId, id),
+        reply:publicMessage(result.reply, workspaceId, id)})
+      if (body.artifact_id !== undefined) {
+        const staged = Promise.withResolvers()
+        const sending = call('send', {...payload,artifact_id:body.artifact_id,artifact_revision:body.artifact_revision,
+          onAccepted:result => staged.resolve({status:202,body:project(result)})})
+        return Promise.race([staged.promise,sending.then(result => ({status:201,body:project(result)}))])
+      }
       const result = await call('send', payload)
-      return { status: 201, body: { message: publicMessage(result.message, workspaceId, id), reply: publicMessage(result.reply, workspaceId, id) } }
+      return {status:201,body:project(result)}
     }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
       if (req.method === 'POST') {

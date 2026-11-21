@@ -214,6 +214,41 @@ test('legacy chat forwards explicitly selected group agents to Bot Social', asyn
   assert.deepEqual(f.calls.at(-1).body.agent_mentions, targets)
 })
 
+test('only exported saved works add version metadata to group attachments and resource results', async () => {
+  const dir = fixture()
+  const workspace = 'a'.repeat(32)
+  const artifactId = 'f'.repeat(32)
+  const resource = {kind:'document',title:'出货报告',revision:2}
+  const file = {title:'出货报告-v2.docx',mime:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    data:Buffer.from('fixture bytes').toString('base64')}
+  const f = fake({
+    'POST /v1/ot/conversations/otc_1/messages': input => ({id:'otm_work',body:input.body,
+      attachment:{title:input.attachment.title,mime:input.attachment.mime,bytes:13,resource:input.attachment.resource}}),
+    [`GET /v1/ot/workspaces/${workspace}/conversations/otc_1/attachments`]: () => ({
+      items:[{message_id:'otm_work',created_at:21,attachment:{title:file.title,mime:file.mime,bytes:13,resource}}],next_cursor:null,
+    }),
+  })
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
+  const feature = messenger({dataDir:dir, async call(endpoint,payload) {
+    if (endpoint === 'agents/personal-binding') return null
+    assert.equal(endpoint,'artifacts/chatAttachment')
+    assert.deepEqual(payload,{workspace_id:workspace,artifact_id:artifactId,revision:2})
+    return {body:'出货报告 · 版本 2',attachment:{...file,resource}}
+  }}).endpoints
+  const base = `/v1/workspaces/${workspace}/social/conversations/otc_1`
+  const posted = await feature.v1({method:'POST',path:base+'/messages',
+    body:{artifact_id:artifactId,artifact_revision:2}})
+  assert.deepEqual(posted.body.message.attachment.resource,resource)
+  assert.deepEqual(f.calls.at(-1).body.attachment,{...file,resource})
+  const plain = await feature.v1({method:'POST',path:base+'/messages',body:{attachment:{...file,resource}}})
+  assert.equal(plain.body.message.attachment.resource,undefined)
+  await feature.send({conversation_id:'otc_1',attachment:{...file,resource}})
+  assert.deepEqual(f.calls.at(-1).body.attachment,file)
+  const listed = await feature.v1({method:'GET',path:base+'/attachments?kind=resource'})
+  assert.deepEqual(listed.body.items[0].attachment,{title:file.title,mime:file.mime,bytes:13,id:'otm_work',
+    path:base+'/messages/otm_work/file',resource})
+})
+
 
 test('voice recording and playback proxy through the member messenger', async () => {
   const dir = fixture()
