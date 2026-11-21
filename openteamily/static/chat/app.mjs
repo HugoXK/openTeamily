@@ -522,6 +522,9 @@ export function notificationSummary(item) {
     const organizer = item.organizer || '会议组织者';
     return `${organizer} 分享了纪要` + (item.title ? `「${item.title}」` : '');
   }
+  if (item.kind === 'team.run_shared') {
+    return `${item.actor_username || '成员'} 分享了协作结果` + (item.title ? `「${item.title}」` : '');
+  }
   if (item.kind === 'messenger.mention') {
     const author = item.by?.display_name || item.by?.handle || '成员';
     return `${author} 提及了你`;
@@ -694,10 +697,16 @@ export function reminderNotice(status, body = {}) {
 const NOTIFICATION_ID = /^[0-9a-f]{32}$/;
 const NOTIFICATION_SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const MEETING_NOTIFICATION_PATH = /^\/meetings#workspace=([0-9a-f]{32})&shared=([0-9a-f]{32})$/;
+const TEAM_RUN_SHARE = /^otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
 const LINKED_NOTIFICATION_KINDS = new Set(['meeting.shared', 'discover.published', 'follow_work', 'artifact.shared', 'automation_reminder']);
 
 export function notificationTarget(item, workspace) {
   if (item?.kind === 'automation_reminder') return '/automations';
+  if (item?.kind === 'team.run_shared') {
+    if (!NOTIFICATION_ID.test(workspace || '') || item.workspace_id !== workspace || !TEAM_RUN_SHARE.test(item.share_id || '')) return null;
+    const target = '/team-runs#' + new URLSearchParams({workspace, shared: item.share_id});
+    return item.path == null || item.path === target ? target : null;
+  }
   if (item?.kind === 'meeting.shared') {
     const path = typeof item.path === 'string' ? MEETING_NOTIFICATION_PATH.exec(item.path) : null;
     const share = item.share_id ?? path?.[2];

@@ -1977,6 +1977,14 @@ test('notification targets only resolve exact receipt scope and safe public list
   assert.equal(notificationTarget(work, other), null);
   assert.equal(notificationTarget({...work, message_id: '../settings'}, workspace), null);
   assert.equal(notificationTarget({...work, path: '//outside.example'}, workspace), null);
+  const taskShare = 'otsr_' + '0'.repeat(26);
+  const task = {kind: 'team.run_shared', workspace_id: workspace, share_id: taskShare,
+    title: '评审纪要', actor_username: '小林'};
+  const taskPath = '/team-runs#workspace=' + workspace + '&shared=' + taskShare;
+  assert.equal(notificationSummary(task), '小林 分享了协作结果「评审纪要」');
+  assert.equal(notificationTarget({...task, path: taskPath}, workspace), taskPath);
+  assert.equal(notificationTarget(task, other), null);
+  assert.equal(notificationTarget({...task, path: taskPath + '&run=' + share}, workspace), null);
 });
 
 test('mention notifications show a badge, open the conversation and mark read', async () => {

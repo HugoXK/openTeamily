@@ -16,6 +16,8 @@ export const MOVED = [
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/overview$/, 'overview'],
   [/^\/v1\/team-templates$/, 'team-templates'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/team-templates\/[a-z0-9-]{3,40}$/, 'team-templates'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/team-runs(?:\/[0-9a-f]{32}(?:\/(?:cancel|remove|steps\/[0-7]\/(?:retry|artifact)))?)?$/, 'team-runs'],
+  [/^\/v1\/workspaces\/[0-9a-f]{32}\/(?:team-runs\/[0-9a-f]{32}\/share|shared-runs(?:\/otsr_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}(?:\/revoke)?)?)$/, 'shares'],
   [/^\/v1\/contacts(?:\/(?:lookup|otcpt_[A-Za-z0-9_-]{1,80}))?$/, 'social'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/notifications(?:\/read)?$/, 'social'],
   [/^\/v1\/(?:automation-templates|onboarding\/automations)$/, 'automations'],

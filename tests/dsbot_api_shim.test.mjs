@@ -211,3 +211,16 @@ test('work detail and comment paths stay within the viewer’s Discover plugin',
   }
   assert.equal(movedTarget(base + '/comments/forum/comment', ORIGIN), null);
 });
+test('collaboration pages use the owner runtime for private runs and Bot Social shares', () => {
+  const origin = 'https://openteamily.example';
+  const base = '/v1/workspaces/' + 'c'.repeat(32);
+  const run = base + '/team-runs/' + 'd'.repeat(32);
+  const share = base + '/shared-runs/otsr_' + '1'.repeat(26);
+  for (const [path, feature] of [
+    [base + '/team-runs', 'team-runs'], [run + '/steps/0/artifact', 'team-runs'],
+    [run + '/steps/7/retry', 'team-runs'], [run + '/share', 'shares'], [share + '/revoke', 'shares'],
+  ]) {
+    assert.deepEqual(movedTarget(path, origin), {feature, path});
+  }
+  assert.equal(movedTarget(run + '/steps/8/retry', origin), null);
+});

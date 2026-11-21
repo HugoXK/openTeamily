@@ -301,6 +301,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return workspaceSelect.value;
   }
 
+  function syncTeamRunLink() {
+    const link = document.getElementById('open-team-runs');
+    if (!link) return;
+    const workspace = workspaceId();
+    link.href = /^[0-9a-f]{32}$/.test(workspace) ? '/team-runs#workspace=' + workspace : '/team-runs';
+  }
+
   function agentBase() {
     return `/v1/workspaces/${workspaceId()}/agents/${currentAgent && currentAgent.id}`;
   }
@@ -351,6 +358,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (previous && [...workspaceSelect.options].some(option => option.value === previous)) {
       workspaceSelect.value = previous;
     }
+    syncTeamRunLink();
     if (!workspaces.length) {
       directoryAgents = [];
       fillCreatorOptions(creatorFilter, [], memberNames, document);
@@ -698,7 +706,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  workspaceSelect.addEventListener('change', () => loadWorkspace());
+  workspaceSelect.addEventListener('change', () => {
+    syncTeamRunLink();
+    return loadWorkspace();
+  });
 
   document.getElementById('agent-list').addEventListener('click', async event => {
     const button = event.target.closest('button[data-id]');
