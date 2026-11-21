@@ -261,10 +261,10 @@ class GatewayTest(unittest.TestCase):
         self.assertIn('location ^~ /v1/admin/ { return 404; }', social)
 
 
-    def report(self, iid, body, manager_token):
+    def report(self, iid, body, manager_token, *, action='dsbot-upstream'):
         import io
         raw = json.dumps(body).encode()
-        env = {'REQUEST_METHOD': 'POST', 'PATH_INFO': f'/v1/internal/instances/{iid}/dsbot-upstream',
+        env = {'REQUEST_METHOD': 'POST', 'PATH_INFO': f'/v1/internal/instances/{iid}/{action}',
                'REMOTE_ADDR': '127.0.0.1', 'CONTENT_LENGTH': str(len(raw)), 'wsgi.input': io.BytesIO(raw),
                'HTTP_AUTHORIZATION': f'Bearer manager-a.{manager_token}'}
         seen = {}
@@ -285,6 +285,46 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(self.report('1' * 32, dict(good, address='8.8.8.8:8080'), token)[0], 400)
         self.assertEqual(self.report('1' * 32, good, 'x' * 43)[0], 401)
         self.assertEqual(self.report('1' * 32, dict(good, extra=1), token)[0], 400)
+
+    def test_retired_instance_cannot_route_or_receive_manager_reports(self):
+        owner, canonical, retired = 'a' * 32, '1' * 32, '3' * 32
+        token = secrets.token_urlsafe(32)
+        self.app.manager_auth = ManagerAuth([
+            ManagerIdentity('manager-a', digest(token), frozenset({canonical, retired}), 'compose'),
+        ])
+        with self.store.transaction() as db:
+            db.execute(
+                "INSERT INTO instances(id,workspace_id,owner_id,profile,backend_mode,image_ref,volume_ref,"
+                "desired,revision,operation_id,operation_type,observed,observed_revision,health,process_ref,"
+                "create_key,created,retired_at,retired_to) "
+                "VALUES(?,?,?,'p','compose','img','retired-volume','running',1,'op','start','running',1,"
+                "'healthy',?,'retired',0,3,?)",
+                (retired, '0' * 32, owner, '9' * 32, canonical),
+            )
+            # Simulate a stale upstream record left in the control plane.
+            db.execute('INSERT INTO dsbot_upstreams VALUES(?,?,?,?)',
+                       (retired, '172.30.0.13:8080', 'dsh-auth-retired=' + 'S' * 20, 2))
+            with self.assertRaisesRegex(ValueError, 'Instance is not active'):
+                gw.record_upstream(db, retired, '172.30.0.14:8080', 'dsh-auth-retired=' + 'S' * 20, 4)
+
+        status, headers = self.call(self.tokens[owner], uri='/chat')
+        self.assertEqual((status, headers.get('X-OT-Instance')), (204, canonical))
+        status, headers = self.call(
+            uri=f'/v1/gateway/agents/{owner}/invocations', method='POST',
+            Authorization='Bearer ota_' + retired + '_' + 'K' * 43,
+        )
+        self.assertEqual((status, headers.get('X-OT-Gateway-Error')), (503, 'dsbot_not_ready'))
+        self.assertNotIn('X-OT-Upstream', headers)
+        status, body = self.report(retired, {
+            'address': '172.30.0.14:8080', 'auth_cookie': 'dsh-auth-retired=' + 'S' * 20,
+            'process_ref': '9' * 32,
+        }, token)
+        self.assertEqual((status, body['error']['code']), (403, 'not_granted'))
+        status, body = self.report(retired, {'seal_key': 'ab' * 32}, token, action='dsbot-import')
+        self.assertEqual((status, body['error']['code']), (403, 'not_granted'))
+        status, body = self.report(canonical, {'seal_key': 'ab' * 32}, token, action='dsbot-import')
+        self.assertEqual(status, 200)
+        self.assertTrue(body['owner_imported'])
 
     def test_operator_key_file_must_be_private(self):
         path = os.path.join(self.tmp.name, 'gw.json')

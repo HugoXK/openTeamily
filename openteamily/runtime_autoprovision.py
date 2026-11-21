@@ -72,31 +72,37 @@ def owned_instance(db, user_id):
     from .lifecycle import fail
     provision = load(db, user_id)
     if provision is not None:
-        row = db.execute('SELECT id FROM instances WHERE id=? AND owner_id=?',
+        row = db.execute('SELECT id FROM instances WHERE id=? AND owner_id=? AND retired_at IS NULL',
                          (provision['instance_id'], user_id)).fetchone()
         if row is None:
             fail(409, 'conflict', 'The provisioned runtime is unavailable')
         return row['id']
-    rows = db.execute('SELECT id FROM instances WHERE owner_id=? LIMIT 2', (user_id,)).fetchall()
+    rows = db.execute('SELECT id FROM instances WHERE owner_id=? AND retired_at IS NULL LIMIT 2', (user_id,)).fetchall()
     if len(rows) > 1:
         fail(409, 'conflict', 'Multiple runtimes are registered for this account')
     return rows[0]['id'] if rows else None
 
 
 def assigned(db, manager_id, instance_id):
-    return db.execute('SELECT instance_id FROM runtime_auto_provisions WHERE manager_id=? AND instance_id=?',
-                      (manager_id, instance_id)).fetchone() is not None
+    return db.execute(
+        'SELECT 1 FROM runtime_auto_provisions p JOIN instances i ON i.id=p.instance_id '
+        'WHERE p.manager_id=? AND p.instance_id=? AND i.retired_at IS NULL',
+        (manager_id, instance_id)).fetchone() is not None
 
 
 def assigned_ids(db, manager_id, cursor=''):
     """Sorted lazy iterator; bounded by the operator's global cap."""
-    for row in db.execute('SELECT instance_id FROM runtime_auto_provisions WHERE manager_id=? AND instance_id>? '
-                          'ORDER BY instance_id', (manager_id, cursor)):
+    for row in db.execute(
+        'SELECT p.instance_id FROM runtime_auto_provisions p JOIN instances i ON i.id=p.instance_id '
+        'WHERE p.manager_id=? AND p.instance_id>? AND i.retired_at IS NULL ORDER BY p.instance_id',
+        (manager_id, cursor)):
         yield row[0]
 
 
 def is_auto(db, instance_id):
-    return db.execute('SELECT 1 FROM runtime_auto_provisions WHERE instance_id=?', (instance_id,)).fetchone() is not None
+    return db.execute(
+        'SELECT 1 FROM runtime_auto_provisions p JOIN instances i ON i.id=p.instance_id '
+        'WHERE p.instance_id=? AND i.retired_at IS NULL', (instance_id,)).fetchone() is not None
 
 
 def create_key(user_id):
@@ -116,7 +122,10 @@ def ensure(db, lifecycle, policy, user_id, workspace_id, agent_id, now):
         return {'state': 'disabled', 'instance_id': None}
     row = load(db, user_id)
     if row is not None:
-        return {'state': 'existing', 'instance_id': row['instance_id']}
+        try:
+            return {'state': 'existing', 'instance_id': owned_instance(db, user_id)}
+        except RuntimeFault as error:
+            return {'state': 'failed', 'instance_id': None, 'error_code': error.code}
     owner = db.execute('SELECT owner_id FROM workspaces WHERE id=?', (workspace_id,)).fetchone()
     if owner is None or owner['owner_id'] != user_id:
         return {'state': 'failed', 'instance_id': None, 'error_code': 'not_personal_workspace'}

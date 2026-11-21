@@ -268,7 +268,7 @@ def gateway_call(uri, authorization):
 def _upstream_row(db, instance_id):
     row = db.execute(
         "SELECT i.id, u.address, u.auth_cookie FROM instances i JOIN dsbot_upstreams u ON u.instance_id=i.id "
-        "WHERE i.id=? AND i.desired='running' AND i.observed='running' AND i.health='healthy' "
+        "WHERE i.id=? AND i.retired_at IS NULL AND i.desired='running' AND i.observed='running' AND i.health='healthy' "
         "AND i.blocked=0 AND i.observed_revision=i.revision",
         (instance_id,)).fetchone()
     if row is None:
@@ -348,16 +348,22 @@ def validate_address(address):
 
 
 def record_upstream(db, instance_id, address, auth_cookie, now):
-    """Manager side: remember where an instance listens and its DSH session cookie."""
+    """Manager side: remember where an active instance listens and its DSH session cookie."""
     if not re.fullmatch(r'[0-9a-f]{32}', instance_id or ''):
         raise ValueError('Invalid instance id')
     name, _, value = (auth_cookie or '').partition('=')
     if not COOKIE_NAME.fullmatch(name) or not re.fullmatch(r'[A-Za-z0-9._~-]{16,2048}', value):
         raise ValueError('Invalid DSH session cookie')
     ensure_schema(db)
-    db.execute('INSERT INTO dsbot_upstreams VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET '
-               'address=excluded.address, auth_cookie=excluded.auth_cookie, updated=excluded.updated',
-               (instance_id, validate_address(address), auth_cookie, int(now)))
+    updated = db.execute(
+        'INSERT INTO dsbot_upstreams(instance_id,address,auth_cookie,updated) '
+        'SELECT id,?,?,? FROM instances WHERE id=? AND retired_at IS NULL '
+        'ON CONFLICT(instance_id) DO UPDATE SET address=excluded.address, '
+        'auth_cookie=excluded.auth_cookie, updated=excluded.updated',
+        (validate_address(address), auth_cookie, int(now), instance_id),
+    )
+    if updated.rowcount != 1:
+        raise ValueError('Instance is not active')
 
 
 def exchange_launch_url(launch_url, address, timeout=10):
@@ -443,7 +449,7 @@ class GatewayApp:
             raise GatewayError(400, 'invalid')
         seal = bytes.fromhex(key)
         with self.store.transaction() as db:
-            row = db.execute('SELECT owner_id FROM instances WHERE id=?', (iid,)).fetchone()
+            row = db.execute('SELECT owner_id FROM instances WHERE id=? AND retired_at IS NULL', (iid,)).fetchone()
             if row is None or not Lifecycle.grants(db, manager, iid):
                 raise GatewayError(403, 'not_granted')
             try:
@@ -500,7 +506,7 @@ class GatewayApp:
         if not isinstance(body['process_ref'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['process_ref']):
             raise GatewayError(400, 'invalid')
         with self.store.transaction() as db:
-            row = db.execute('SELECT process_ref, observed FROM instances WHERE id=?', (iid,)).fetchone()
+            row = db.execute('SELECT process_ref, observed FROM instances WHERE id=? AND retired_at IS NULL', (iid,)).fetchone()
             if row is None or not Lifecycle.grants(db, manager, iid):
                 raise GatewayError(403, 'not_granted')
             if row[1] != 'running' or row[0] != body['process_ref']:
