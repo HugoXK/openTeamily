@@ -115,6 +115,7 @@ const HASH_VIEWS = {
   'image-api': 'model-api',
   'video-api': 'model-api',
   'music-api': 'model-api',
+  'model3d-api': 'model-api',
   'skill-secrets': 'skill-configuration',
 };
 
@@ -521,6 +522,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const mediaApis = [
     mountMediaApi(document, request, 'video', '视频'),
     mountMediaApi(document, request, 'music', '音乐'),
+    mountMediaApi(document, request, 'model3d', '3D 模型'),
   ].filter(Boolean);
   let imageAccount = null;
   let imageRevision = null;

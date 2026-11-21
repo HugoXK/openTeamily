@@ -105,6 +105,7 @@
               <label><input type="checkbox" name="file-type" value="图片"> 图片</label>
               <label><input type="checkbox" name="file-type" value="视频"> 视频</label>
               <label><input type="checkbox" name="file-type" value="音频"> 音频</label>
+              <label><input type="checkbox" name="file-type" value="3D 模型"> 3D 模型</label>
               <label><input type="checkbox" name="file-type" value="白板"> 白板</label>
               <label><input type="checkbox" name="file-type" value="消息"> 消息</label>
             </div>
@@ -290,11 +291,19 @@
         <textarea name="body" maxlength="8000" rows="16"></textarea>
       </label>
       <div id="media-editor" hidden>
-        <label>文件 <input id="media-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,audio/mpeg,audio/ogg,audio/wav,video/mp4,video/webm"></label>
+        <label id="media-file-picker">文件 <input id="media-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,audio/mpeg,audio/ogg,audio/wav,video/mp4,video/webm"></label>
         <p id="media-meta" class="note"></p>
         <img id="media-image" alt="" hidden src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
         <audio id="media-audio" controls hidden></audio>
         <video id="media-video" controls hidden></video>
+        <section id="media-model3d" aria-label="3D 模型" hidden>
+          <div id="media-model3d-preview" hidden></div>
+          <p id="media-model3d-status" class="note" role="status"></p>
+          <div class="artifact-editor-actions">
+            <button type="button" id="media-model3d-toggle" aria-controls="media-model3d-preview" aria-expanded="false">预览 3D 模型</button>
+            <a id="media-model3d-download">下载 GLB</a>
+          </div>
+        </section>
       </div>
       <section id="slides-editor" aria-label="幻灯片编辑器" hidden>
         <div class="artifact-editor-actions">
@@ -386,7 +395,7 @@
       </section>
       <section id="discover-panel" hidden>
         <h2>公开到发现页</h2>
-        <p class="note">发布后会出现在公开发现动态里，并用短地址 /w/… 打开。不会自动发布。发布后任何访问者可查看作品；媒体内容也可公开查看和下载。推荐尚未接通。</p>
+        <p class="note">发布后会出现在公开发现动态里。任何访问者都能通过公开链接查看作品和下载已发布的 3D 文件。</p>
         <p id="discover-status" class="note" hidden></p>
         <div id="discover-form" class="discover-form" role="group" aria-label="公开到发现页">
           <label for="discover-slug">公开短地址</label>

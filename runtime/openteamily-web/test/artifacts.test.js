@@ -1,3 +1,4 @@
+import { triangleGlb } from './fixtures/triangle-glb.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync, readFileSync } from 'node:fs'
@@ -280,4 +281,26 @@ test('generated MP3 is saved once and keeps the original bytes for playback and 
   assert.equal(share.attachment.mime, 'audio/mpeg')
   assert.match(share.attachment.title, /\.mp3$/)
   assert.equal(share.attachment.data, content.download.data)
+})
+
+test('generated GLB can be viewed, downloaded and attached to chat above the usual media limit', async () => {
+  const bot = await boot()
+  const generate = bot.features.table['artifacts/generatedModel3d']
+  const request = {workspace_id: WS, job_id: '9'.repeat(32)}
+  const data = triangleGlb({byteLength: 2 * 1024 * 1024 + 4})
+  await assert.rejects(generate({...request, title: '未授权', data}, {}), {status: 404})
+  const {id} = await generate({...request, title: '3D 模型', data}, {internal: true})
+  assert.equal((await generate(request, {internal: true})).id, id)
+  const view = await bot.call('artifacts', 'GET', base('/' + id + '/file'))
+  assert.equal(view.download.inline, true)
+  assert.equal(view.download.content_type, 'model/gltf-binary')
+  assert.deepEqual(Buffer.from(view.download.data, 'base64'), data)
+  const exported = await bot.call('artifacts', 'GET', base('/' + id + '/export'))
+  assert.equal(exported.download.data, view.download.data)
+  const share = await bot.features.table['artifacts/chatAttachment']({
+    workspace_id: WS, artifact_id: id, revision: 1,
+  }, {internal: true})
+  assert.equal(share.attachment.mime, 'model/gltf-binary')
+  assert.match(share.attachment.title, /\.glb$/)
+  assert.equal(share.attachment.data, view.download.data)
 })

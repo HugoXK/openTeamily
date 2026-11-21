@@ -7,10 +7,13 @@ export const CHAT_FILE_BODY_LIMIT = Math.ceil(CHAT_FILE_MAX_BYTES / 3) * 4 + 32 
 const LIMITS = {...DEFAULT_ATTACHMENT_LIMITS, maxBytes: CHAT_FILE_MAX_BYTES};
 const MEDIA: Record<string, string> = {
   mp4: "video/mp4", webm: "video/webm", mp3: "audio/mpeg", wav: "audio/wav",
-  ogg: "audio/ogg", m4a: "audio/mp4",
+  ogg: "audio/ogg", m4a: "audio/mp4", glb: "model/gltf-binary",
 };
 const mediaTypes = new Set(Object.values(MEDIA));
 const sniffMedia = (data: Buffer, mime: string) => {
+  if (mime === "model/gltf-binary") return data.length >= 28 &&
+    data.toString("ascii", 0, 4) === "glTF" && data.readUInt32LE(4) === 2 &&
+    data.readUInt32LE(8) === data.length && data.toString("ascii", 16, 20) === "JSON";
   if (mime === "video/mp4" || mime === "audio/mp4") return data.toString("ascii", 4, 8) === "ftyp";
   if (mime === "video/webm") return data.subarray(0, 4).toString("hex") === "1a45dfa3";
   if (mime === "audio/ogg") return data.toString("ascii", 0, 4) === "OggS";

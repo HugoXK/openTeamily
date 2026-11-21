@@ -1,5 +1,6 @@
 // Credentials stay in form memory and the existing same-origin auth API only.
 import {publicAgentIntentFromHash, publicAgentContinuation} from '../shell/public-agent-link.mjs';
+import {publicWorkIntentFromHash} from '../shell/public-work-link.mjs';
 const MESSAGES = {
   registration_closed: '本实例尚未开放注册，请联系实例管理员。',
   conflict: '此用户名不可用，请选择其他用户名。',
@@ -38,7 +39,9 @@ export function mountRegistration(document, navigate, fetcher = globalThis.fetch
   const status = document.getElementById('register-status');
   const username = document.getElementById('register-username');
   const password = document.getElementById('register-password');
-  const continuation = publicAgentContinuation(publicAgentIntentFromHash(document.defaultView?.location?.hash));
+  const hash = document.defaultView?.location?.hash;
+  const work = publicWorkIntentFromHash(hash);
+  const continuation = work?.continuation ?? publicAgentContinuation(publicAgentIntentFromHash(hash));
   const login = document.querySelector?.('a[href="/login"]');
   if (login && continuation) login.href = '/login' + continuation;
   const helpButton=document.getElementById('help-menu-button'),helpMenu=document.getElementById('help-menu');

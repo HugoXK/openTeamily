@@ -245,7 +245,7 @@
       <button type="button" id="group-memory-open" class="group-info-row" aria-haspopup="dialog" hidden>群记忆</button>
       <section class="group-info-card" aria-labelledby="group-info-notice-heading">
         <div class="group-info-card-head"><h3 id="group-info-notice-heading">群公告</h3><button type="button" class="group-info-link" id="group-announcement-open">查看 / 编辑</button></div>
-        <p class="group-info-sub" id="group-announcement-preview" style="white-space:pre-wrap">正在读取公告…</p>
+        <p class="group-info-sub" id="group-announcement-preview">正在读取公告…</p>
       </section>
       <section class="group-info-card group-info-list" aria-label="通话">
         <button type="button" class="group-info-row" id="group-call-video">视频通话</button>
@@ -429,6 +429,40 @@
         </figure>
       </form>
     </dialog>
+    <dialog id="model3d-create-dialog" class="chat-save-dialog" aria-labelledby="model3d-create-title">
+      <form id="model3d-create-form">
+        <div class="media-create-head">
+          <h2 id="model3d-create-title">生成 3D 模型</h2>
+          <button type="button" id="model3d-create-close">关闭</button>
+        </div>
+        <label>生成方式
+          <select name="source">
+            <option value="text">根据描述</option>
+            <option value="image">根据参考图</option>
+          </select>
+        </label>
+        <label>模型描述<textarea name="prompt" maxlength="800" rows="3" required placeholder="描述物体的形状、颜色和材质"></textarea></label>
+        <label hidden>参考图
+          <input type="file" name="image" accept="image/png,image/jpeg,image/webp" aria-describedby="model3d-create-image-hint" required disabled>
+          <span id="model3d-create-image-hint" class="note">PNG、JPG 或 WebP，最大 2 MB。</span>
+        </label>
+        <div class="media-create-controls">
+          <button id="model3d-create-submit" type="submit" disabled>生成模型</button>
+        </div>
+        <p id="model3d-create-status" class="note" role="status"></p>
+        <a id="model3d-create-settings" href="/settings/model-api#model3d-api" hidden>配置 3D 模型</a>
+        <figure id="model3d-create-result" hidden>
+          <div id="model3d-create-preview" class="model3d-preview-frame" hidden></div>
+          <p id="model3d-create-preview-status" class="note model3d-preview-status" role="status"></p>
+          <figcaption class="media-create-links">
+            <button type="button" id="model3d-create-open-preview" aria-controls="model3d-create-preview" aria-expanded="false">预览 3D 模型</button>
+            <a id="model3d-create-space">在资料空间打开</a>
+            <a id="model3d-create-download">下载 GLB</a>
+            <button type="button" id="model3d-create-send" hidden>发送到会话</button>
+          </figcaption>
+        </figure>
+      </form>
+    </dialog>
     <dialog id="group-memory-dialog" class="chat-save-dialog" aria-labelledby="group-memory-title">
       <div class="group-memory-head">
         <h2 id="group-memory-title">群记忆</h2>
@@ -553,7 +587,7 @@
                   <button type="button" id="composer-image-create" disabled data-tone="image" title="根据描述生成图片" aria-haspopup="dialog"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z M4 16l5-5 4 4 2-2 5 5 M15 8.5h.01"/></svg><span>图片</span></button>
                   <button type="button" id="composer-video-create" disabled data-tone="camera" title="根据描述生成视频" aria-haspopup="dialog"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z M12 16.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/></svg><span>视频</span></button>
                   <button type="button" id="composer-music-create" disabled data-tone="music" title="根据描述生成音乐" aria-haspopup="dialog"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l11-2v12 M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z M20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg><span>音乐</span></button>
-                  <button type="button" disabled data-tone="cube" title="未接通：还没有在输入区直接生成 3D 的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z M4 7.5l8 4.5 8-4.5 M12 12v9"/></svg><span>3D 模型</span><span class="plus-tag">未接通</span></button>
+                  <button type="button" id="composer-model3d-create" disabled data-tone="cube" title="用描述或参考图生成 3D 模型" aria-haspopup="dialog"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z M4 7.5l8 4.5 8-4.5 M12 12v9"/></svg><span>3D 模型</span></button>
                 </div>
               </section>
               <section class="plus-section" aria-labelledby="plus-auto">

@@ -414,6 +414,18 @@
         </div>
       </fieldset>
     </form>
+    <form id="model3d-api-form" method="post" action="/v1/model-api/model3d">
+      <fieldset id="model3d-api" class="settings-card" disabled>
+        <legend>3D 模型</legend>
+        <p class="note">使用 Meshy 7.1 将描述或参考图生成 GLB 文件。此密钥仅用于当前账号的 3D 生成任务。</p>
+        <label>Meshy API 密钥 <input type="password" name="api_key" maxlength="4096" autocomplete="new-password"></label>
+        <p id="model3d-api-status" class="note" role="status"></p>
+        <div class="settings-form-actions">
+          <button type="submit" id="save-model3d-api">保存 3D 配置</button>
+          <button type="button" id="clear-model3d-api" hidden>移除 3D 密钥</button>
+        </div>
+      </fieldset>
+    </form>
     </div>
     <div data-settings-page="skill-configuration" hidden>
         <header class="settings-subhead">

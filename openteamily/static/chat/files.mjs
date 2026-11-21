@@ -1,3 +1,5 @@
+import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
+
 export const MAX_CHAT_FILE_BYTES = 8 * 1024 * 1024;
 export const AGENT_FILE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,.pdf,.txt,.md,.csv,.tsv,.json,.docx,.xlsx,.pptx';
 const AGENT_FILE_EXT = new Set(['png','jpg','jpeg','gif','webp','pdf','txt','md','csv','tsv','json','docx','xlsx','pptx']);
@@ -64,6 +66,21 @@ export function renderChatFile(document, attachment, {pending = false} = {}) {
     details.append(link);
   }
   card.append(details);
+  if (!pending && attachment.path && attachment.mime === 'model/gltf-binary') {
+    card.classList.add('chat-file-model3d');
+    card.dataset.model3dSource = attachment.path;
+    const button = document.createElement('button');
+    button.className = 'chat-file-model3d-toggle';
+    button.type = 'button';
+    const status = document.createElement('p');
+    status.className = 'model3d-preview-status';
+    status.setAttribute('role', 'status');
+    const preview = document.createElement('div');
+    preview.className = 'chat-file-model3d-preview model3d-preview-frame';
+    details.append(button);
+    card.append(status, preview);
+    bindModel3dPreview(button, preview, status).setSource(attachment.path);
+  }
   return card;
 }
 

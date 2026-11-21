@@ -1,11 +1,42 @@
+import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
+
 const HEX = /^[0-9a-f]{32}$/;
 const running = job => job?.state === 'queued' || job?.state === 'running';
+const MODEL3D_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+
+function readPrompt(prompt) {
+  const value = prompt.value.trim();
+  if (!value || value.length > prompt.maxLength) throw new Error('请输入有效的生成描述。');
+  return value;
+}
+
+function matchingInputs(previous, values) {
+  if (!previous) return false;
+  if (values.image) return previous.image?.mime === values.image.mime && previous.image.data === values.image.data;
+  return Object.keys(values).every(name => previous[name] === values[name]);
+}
+
+async function readModel3dValues({prompt, image, source}) {
+  if (source.value !== 'image') return {prompt: readPrompt(prompt)};
+  const file = image.files[0];
+  if (!file?.size) throw new Error('请选择一张参考图。');
+  if (!MODEL3D_IMAGE_TYPES.has(file.type) || file.size > 2 * 1024 * 1024) {
+    throw new Error('请选择 2 MB 以内的 PNG、JPG 或 WebP 图片。');
+  }
+  const url = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reader.onabort = () => reject(new Error('无法读取参考图，请重新选择。'));
+    reader.readAsDataURL(file);
+  });
+  return {image: {mime: file.type, data: url.slice(url.indexOf(',') + 1)}};
+}
 
 export function mountVideoCreator(document, options) {
   return mountMediaCreator(document, options, {
     type: 'video', noun: '视频', endpoint: 'videos',
     fields: ['shape'],
-    read: ({shape}) => ({shape: shape.value}),
+    read: ({prompt, shape}) => ({prompt: readPrompt(prompt), shape: shape.value}),
     fill: ({shape}, values) => { shape.value = values?.shape || 'landscape'; },
   });
 }
@@ -14,10 +45,34 @@ export function mountMusicCreator(document, options) {
   return mountMediaCreator(document, options, {
     type: 'music', noun: '音乐', endpoint: 'music',
     fields: ['duration', 'instrumental'],
-    read: ({duration, instrumental}) => ({duration: Number(duration.value), instrumental: instrumental.checked}),
+    read: ({prompt, duration, instrumental}) => ({prompt: readPrompt(prompt),
+      duration: Number(duration.value), instrumental: instrumental.checked}),
     fill: ({duration, instrumental}, values) => {
       duration.value = String(values?.duration ?? 30);
       instrumental.checked = values?.instrumental ?? true;
+    },
+  });
+}
+
+export function mountModel3dCreator(document, options) {
+  return mountMediaCreator(document, options, {
+    type: 'model3d', noun: '3D 模型', endpoint: 'models-3d', configuration: '3D 模型',
+    fields: ['source', 'image'], read: readModel3dValues,
+    fill: ({source, image}, values) => {
+      source.value = values?.source === 'image' || values?.image ? 'image' : 'text';
+      image.value = '';
+    },
+    sync: ({source, prompt, image}, busy) => {
+      const fromImage = source.value === 'image';
+      prompt.closest('label').hidden = fromImage;
+      image.closest('label').hidden = !fromImage;
+      prompt.disabled = busy || fromImage;
+      image.disabled = busy || !fromImage;
+    },
+    runningLabel: ({stage, progress}) => {
+      const label = stage === 'refine' ? '正在添加材质' : '正在生成模型';
+      const percent = Number.isInteger(progress) && progress > 0 && progress <= 100 ? `（${progress}%）` : '';
+      return label + percent + '，可以关闭窗口。';
     },
   });
 }
@@ -37,6 +92,9 @@ function mountMediaCreator(document, {request, context, key, share, onOpen, noti
   const settings = element('settings');
   const result = element('result');
   const preview = element('preview');
+  const viewer = type === 'model3d'
+    ? bindModel3dPreview(element('open-preview'), preview, element('preview-status'))
+    : null;
   const sendButton = element('send');
   const attempts = new Map();
   const sent = new Set();
@@ -50,18 +108,27 @@ function mountMediaCreator(document, {request, context, key, share, onOpen, noti
   function setForm(draft, busy) {
     submit.disabled = busy || !draft.configured;
     for (const input of inputs) input.disabled = busy;
+    media.sync?.(form.elements, busy);
+  }
+
+  function setPreview(url) {
+    if (viewer) viewer.setSource(url);
+    else if (url) preview.src = url;
+    else {
+      preview.removeAttribute('src');
+      preview.load();
+    }
   }
 
   function clearResult() {
     result.hidden = true;
     sendButton.hidden = true;
-    preview.removeAttribute('src');
-    preview.load();
+    setPreview('');
   }
 
   function renderResult(draft, artifact) {
     const base = `/v1/workspaces/${draft.workspace}/artifacts/${artifact}`;
-    preview.src = base + '/file';
+    setPreview(base + '/file');
     element('space').href = '/space?' + new URLSearchParams({workspace: draft.workspace, artifact});
     element('download').href = base + '/export';
     sendButton.hidden = !draft.sendLabel;
@@ -76,7 +143,8 @@ function mountMediaCreator(document, {request, context, key, share, onOpen, noti
     setForm(draft, running(job));
     settings.hidden = draft.configured;
     if (running(job)) {
-      status.textContent = job.state === 'queued' ? '正在排队…' : '正在生成，可以关闭窗口。';
+      status.textContent = job.state === 'queued' ? '正在排队…'
+        : media.runningLabel?.(job) || '正在生成，可以关闭窗口。';
       timer = setTimeout(() => void poll(draft, job.id), 1800);
     } else if (job?.state === 'failed') {
       status.textContent = job.message || noun + '生成失败，请重试。';
@@ -85,7 +153,7 @@ function mountMediaCreator(document, {request, context, key, share, onOpen, noti
       status.textContent = noun + '已保存到资料空间。';
       renderResult(draft, job.artifact_id);
     } else {
-      status.textContent = draft.configured ? '' : '请先配置' + noun + '模型。';
+      status.textContent = draft.configured ? '' : '请先配置' + (media.configuration || noun + '模型') + '。';
     }
   }
 
@@ -131,18 +199,27 @@ function mountMediaCreator(document, {request, context, key, share, onOpen, noti
     render(draft, job);
   });
 
+  if (media.sync) form.addEventListener('change', () => media.sync(form.elements, false));
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const draft = session;
     if (!draft || !current(draft) || submit.disabled) return;
-    const values = {prompt: prompt.value.trim(), ...media.read(form.elements)};
-    if (!values.prompt || values.prompt.length > prompt.maxLength) return;
-    const prior = attempts.get(draft.scope);
-    const attempt = prior && Object.keys(values).every(name => prior.values[name] === values[name])
-      ? prior : {values, key: key()};
-    attempts.set(draft.scope, attempt);
     setForm(draft, true);
     status.textContent = '正在提交…';
+    let values;
+    try {
+      values = await media.read(form.elements);
+    } catch (error) {
+      if (current(draft)) {
+        setForm(draft, false);
+        status.textContent = error.message;
+      }
+      return;
+    }
+    if (!current(draft)) return;
+    const prior = attempts.get(draft.scope);
+    const attempt = matchingInputs(prior?.values, values) ? prior : {values, key: key()};
+    attempts.set(draft.scope, attempt);
     clearResult();
     const response = await call('POST', draft.path, values, {'Idempotency-Key': attempt.key});
     const accepted = response.status === 202 && response.body.job;
@@ -180,7 +257,7 @@ function mountMediaCreator(document, {request, context, key, share, onOpen, noti
     }
   });
 
-  preview.addEventListener('error', () => {
+  if (!viewer) preview.addEventListener('error', () => {
     if (!result.hidden && session && current(session)) status.textContent = noun + '已保存，暂时无法预览。';
   });
   element('close').addEventListener('click', () => dialog.close());

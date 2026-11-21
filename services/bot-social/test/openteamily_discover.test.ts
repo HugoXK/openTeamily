@@ -5,6 +5,16 @@ import assert from "node:assert/strict";
 import { bulkAuth, startServer } from "./helpers.js";
 import { home } from "./openteamily_helpers.js";
 
+const TRIANGLE_GLB = [
+  "Z2xURgIAAACUAQAAVAEAAEpTT057ImFzc2V0Ijp7InZlcnNpb24iOiIyLjAifSwic2NlbmUiOjAsInNjZW5lcyI6",
+  "W3sibm9kZXMiOlswXX1dLCJub2RlcyI6W3sibWVzaCI6MH1dLCJtZXNoZXMiOlt7InByaW1pdGl2ZXMiOlt7ImF0",
+  "dHJpYnV0ZXMiOnsiUE9TSVRJT04iOjB9fV19XSwiYnVmZmVycyI6W3siYnl0ZUxlbmd0aCI6MzZ9XSwiYnVmZmVy",
+  "Vmlld3MiOlt7ImJ1ZmZlciI6MCwiYnl0ZUxlbmd0aCI6MzYsInRhcmdldCI6MzQ5NjJ9XSwiYWNjZXNzb3JzIjpb",
+  "eyJidWZmZXJWaWV3IjowLCJjb21wb25lbnRUeXBlIjo1MTI2LCJjb3VudCI6MywidHlwZSI6IlZFQzMiLCJtaW4i",
+  "OlstMSwtMSwwXSwibWF4IjpbMSwxLDBdfV19ICAgJAAAAEJJTgAAAIC/AACAvwAAAAAAAIA/AACAvwAAAAAAAAAA",
+  "AACAPwAAAAA=",
+].join("");
+
 let S: Awaited<ReturnType<typeof startServer>>;
 before(async () => { S = await startServer(bulkAuth); });
 after(async () => { await S.stop(); });
@@ -82,7 +92,7 @@ test("public listing pages need no token and hide unlisted works", async () => {
   const html = await fetch(`${S.base}/w/essay-${tag}`);
   assert.equal(html.status, 200);
   assert.match(html.headers.get("content-type") || "", /text\/html/);
-  assert.equal(html.headers.get("cache-control"), "public, max-age=60");
+  assert.equal(html.headers.get("cache-control"), "no-store");
   const page = await html.text();
   assert.match(page, /Public essay/);
   assert.equal(page.includes("<script>"), false, "snapshot is escaped");
@@ -213,4 +223,195 @@ test("public quick-start opens one private thread and drafts the current publish
   assert.equal(unpublished.status, 404);
   assert.equal(unpublished.headers.get("cache-control"), "no-store");
   assert.equal((await visitor.call("POST", path, request)).status, 404);
+});
+
+test("popular works use recent public engagement, with stable account-scoped cursors", async (t) => {
+  let now = Date.now();
+  const server = await startServer({...bulkAuth, now: () => now});
+  t.after(() => server.stop());
+  const author = await home(server.base, "popularity-author");
+  const reader = await home(server.base, "popularity-reader");
+  const other = await home(server.base, "popularity-other");
+  const publish = async (slug: string, work_kind = "document", kind = "work") => {
+    now += 1_000;
+    return author.ok("PUT", "/v1/ot/listings", {
+      kind, ref: slug, slug, title: `Workshop ${slug}`, work_kind, snapshot: `Public ${slug}`,
+      ...(work_kind === "model3d" ? {model_data: TRIANGLE_GLB} : {}),
+    });
+  };
+  const oldest = await publish("old-work");
+  const model = await publish("model-work", "model3d");
+  await publish("new-work");
+  await publish("not-a-work", "document", "agent");
+  const base = "/v1/ot/discover?kind=work&sort=popular&q=workshop";
+  const slugs = (page: {items: {slug: string}[]}) => page.items.map(item => item.slug);
+
+  assert.equal((await fetch(server.base + base)).status, 401);
+  const sparse = await reader.ok("GET", base);
+  assert.deepEqual(slugs(sparse), ["new-work", "model-work", "old-work"]);
+  assert.equal(sparse.next_cursor, null);
+  await author.ok("POST", `/v1/ot/listings/${oldest.id}/like`, {});
+  assert.deepEqual(slugs(await reader.ok("GET", base)), slugs(sparse), "self-engagement does not boost a work");
+  await reader.ok("POST", "/v1/ot/follows", {handle: author.handle});
+  await reader.ok("POST", `/v1/ot/listings/${oldest.id}/like`, {});
+  await reader.ok("POST", `/v1/ot/listings/${model.id}/collect`, {});
+  const ranked = await reader.ok("GET", base);
+  assert.deepEqual(slugs(ranked), ["model-work", "old-work", "new-work"]);
+  assert.equal(ranked.items[0].collected, true);
+  assert.equal(ranked.items[0].following, true);
+  assert.ok(ranked.items.every((item: any) => item.snapshot === undefined && item.ref === undefined && item.position === undefined));
+  const independent = await other.ok("GET", base);
+  assert.deepEqual(slugs(independent), slugs(ranked), "shared order is independent of the viewer's flags");
+  assert.equal(independent.items[0].collected, false);
+  assert.equal(independent.items[0].following, false);
+  assert.deepEqual(slugs(await other.ok("GET", base + "&work_kind=model3d")), ["model-work"]);
+  assert.deepEqual(slugs(await other.ok("GET", "/v1/ot/discover?kind=work&q=workshop")), slugs(sparse));
+  assert.deepEqual(slugs(await reader.ok("GET", "/v1/ot/discover?kind=work&tab=following&q=workshop")), slugs(sparse));
+
+  const pageOne = await reader.ok("GET", base + "&limit=1");
+  assert.deepEqual(slugs(pageOne), ["model-work"]);
+  assert.match(pageOne.next_cursor, /^[A-Za-z0-9_-]{32}\.[1-9][0-9]{0,2}$/);
+  const suffix = "&limit=1&cursor=" + encodeURIComponent(pageOne.next_cursor);
+  assert.equal((await other.call("GET", base + suffix)).status, 400);
+  assert.equal((await reader.call("GET", base + suffix + "&work_kind=model3d")).status, 400);
+  assert.equal((await reader.call("GET", base + "&before=42")).status, 400);
+  assert.equal((await reader.call("GET", base + "&tab=collected")).status, 400);
+  assert.equal((await reader.call("GET", base + "&cursor=42")).status, 400);
+
+  await reader.ok("POST", `/v1/ot/listings/${model.id}/collect`, {on:false});
+  await author.ok("DELETE", `/v1/ot/listings/${oldest.id}`);
+  const pageTwo = await reader.ok("GET", base + suffix);
+  assert.deepEqual(slugs(pageTwo), ["new-work"], "revoked works are skipped without re-ranking page one");
+  assert.equal(pageTwo.next_cursor, null);
+  assert.deepEqual(slugs(await reader.ok("GET", base)), ["new-work", "model-work"]);
+  assert.equal((await fetch(server.base + "/w/old-work")).status, 404);
+  now += 11 * 60_000;
+  const expired = await reader.call("GET", base + suffix);
+  assert.equal(expired.status, 409);
+  assert.equal(expired.data.error.code, "popularity_expired");
+});
+
+
+test("public GLB downloads appear only after an explicit publish and disappear on revoke", async () => {
+  const owner = await home(S.base, "model-author");
+  const visitor = await home(S.base, "model-visitor");
+  const payload = {kind: "work", ref: "glb-fixture", slug: "clay-figure", title: "陶土模型 🏺", work_kind: "model3d"};
+  const publicPage = S.base + "/w/clay-figure";
+  const publicFile = publicPage + "/file";
+  assert.equal((await fetch(publicFile)).status, 404);
+  assert.equal((await owner.call("PUT", "/v1/ot/listings", {...payload, model_data: "aGVsbG8="})).status, 400);
+  assert.equal((await fetch(publicPage)).status, 404, "invalid files never create a public page");
+  const model = await owner.ok("PUT", "/v1/ot/listings", {...payload, model_data: TRIANGLE_GLB});
+  assert.equal(model.model_data, undefined);
+  const document = await fetch(publicPage);
+  assert.equal(document.status, 200);
+  assert.match(await document.text(), /href="\/w\/clay-figure\/file"/);
+  const file = await fetch(publicFile);
+  assert.equal(file.status, 200);
+  assert.equal(file.headers.get("content-type"), "model/gltf-binary");
+  assert.equal(file.headers.get("cache-control"), "no-store");
+  assert.match(file.headers.get("content-disposition") ?? "", /filename="clay-figure\.glb"/);
+  assert.equal(Buffer.from(await file.arrayBuffer()).toString("base64"), TRIANGLE_GLB);
+
+  assert.equal((await visitor.call("DELETE", "/v1/ot/listings/" + model.id)).status, 404);
+  await owner.ok("DELETE", "/v1/ot/listings/" + model.id);
+  assert.equal((await fetch(publicPage)).status, 404);
+  assert.equal((await fetch(publicFile)).status, 404);
+});
+
+test("work detail follows the filtered feed across page boundaries and timestamp ties", async (t) => {
+  let now = Date.now();
+  const server = await startServer({...bulkAuth, now: () => now});
+  t.after(() => server.stop());
+  const author = await home(server.base, "work-nav-author");
+  const outsider = await home(server.base, "work-nav-outsider");
+  const viewer = await home(server.base, "work-nav-viewer");
+  const publish = (owner: typeof author, slug: string, title: string, workKind = "document") =>
+    owner.ok("PUT", "/v1/ot/listings", {
+      kind: "work", ref: slug, slug, title, work_kind: workKind, snapshot: "Public snapshot",
+    });
+
+  const oldest = await publish(author, "nav-oldest", "Trail sketch oldest");
+  now += 1_000;
+  const draft = await publish(author, "nav-hidden", "Trail sketch hidden");
+  await publish(author, "nav-middle", "Trail sketch middle");
+  await publish(author, "nav-same-time", "Trail sketch tied");
+  await publish(outsider, "nav-unfollowed", "Trail sketch outside");
+  await publish(author, "nav-other-kind", "Trail sketch website", "website");
+  await publish(author, "nav-other-search", "Unrelated plans");
+  await author.ok("PUT", "/v1/ot/listings", {
+    kind: "agent", ref: "nav-agent", slug: "nav-agent", title: "Trail sketch helper",
+  });
+  await author.ok("DELETE", "/v1/ot/listings/" + draft.id);
+  await viewer.ok("POST", "/v1/ot/follows", {handle: author.handle});
+
+  const base = "/v1/ot/discover";
+  const detailPath = (slug: string, q = "") => `${base}/${slug}/detail${q}`;
+  const filters = "tab=following&work_kind=document&q=trail%20sketch";
+  const page = await viewer.ok("GET", `${base}?kind=work&${filters}`);
+  const slim = ({slug, title}: {slug: string; title: string}) => ({slug, title});
+  const visible = page.items.map(slim);
+  assert.deepEqual(new Set(visible.map((item: {slug: string}) => item.slug)),
+    new Set(["nav-oldest", "nav-middle", "nav-same-time"]));
+  assert.equal((await viewer.ok("GET", `${base}?kind=work&${filters}&limit=1`)).items.length, 1);
+  for (const [index, item] of visible.entries()) {
+    const data = await viewer.ok("GET", detailPath(item.slug, "?" + filters));
+    assert.deepEqual(slim(data.work), item);
+    assert.equal(data.work.following, true);
+    assert.ok(!("snapshot" in data.work) && !("ref" in data.work));
+    assert.deepEqual(data.previous, visible[index - 1] ?? null);
+    assert.deepEqual(data.next, visible[index + 1] ?? null);
+  }
+  const unmatched = await viewer.ok("GET", detailPath("nav-unfollowed", "?" + filters));
+  assert.equal(unmatched.work.slug, "nav-unfollowed");
+  assert.equal(unmatched.previous, null);
+  assert.equal(unmatched.next, null);
+  await viewer.ok("POST", `/v1/ot/listings/${oldest.id}/collect`, {});
+  const collected = await viewer.ok("GET", detailPath(oldest.slug, "?tab=collected"));
+  assert.equal(collected.work.collected, true);
+  assert.equal(collected.previous, null);
+  assert.equal(collected.next, null);
+
+  // The previously older work takes the first rank after a visitor collects it.
+  const hotFilter = "sort=popular&work_kind=document&q=trail%20sketch";
+  const ranked = (await viewer.ok("GET", `${base}?kind=work&${hotFilter}`)).items.map(slim);
+  assert.equal(ranked[0].slug, oldest.slug);
+  const popular = await viewer.ok("GET", detailPath(oldest.slug, "?" + hotFilter));
+  assert.equal(popular.previous, null);
+  assert.deepEqual(popular.next, ranked[1]);
+  assert.equal((await viewer.call("GET", detailPath("nav-hidden"))).status, 404);
+  assert.equal((await author.call("GET", detailPath("nav-hidden"))).status, 404, "the public viewer hides revoked works from their author");
+  assert.equal((await viewer.call("GET", detailPath("nav-agent"))).status, 404);
+  assert.equal((await viewer.call("GET", detailPath(oldest.slug, "?sort=popular&tab=following"))).status, 400);
+  assert.equal((await viewer.call("GET", detailPath(oldest.slug, "?work_kind=unknown"))).status, 400);
+  assert.equal((await viewer.call("GET", detailPath(oldest.slug, "?q=trail&q=sketch"))).status, 400);
+  assert.equal((await fetch(server.base + detailPath(oldest.slug))).status, 401);
+});
+
+test("guest work pages navigate directly between public works and keep the share entry", async (t) => {
+  let now = Date.now();
+  const server = await startServer({...bulkAuth, now: () => now});
+  t.after(() => server.stop());
+  const author = await home(server.base, "guest-work-nav");
+  const publish = (slug: string, title: string, kind = "work") => {
+    now += 1_000;
+    return author.ok("PUT", "/v1/ot/listings", {kind, ref: slug, slug, title, snapshot: "Public preview"});
+  };
+  const older = await publish("guest-nav-older", "Older <work>");
+  await publish("guest-nav-agent", "An agent", "agent");
+  const withdrawn = await publish("guest-nav-withdrawn", "Withdrawn");
+  const newer = await publish("guest-nav-newer", "Newer work");
+  await author.ok("DELETE", "/v1/ot/listings/" + withdrawn.id);
+  const opened = await fetch(server.base + newer.path);
+  assert.equal(opened.status, 200);
+  assert.equal(opened.headers.get("cache-control"), "no-store");
+  const html = await opened.text();
+  assert.match(html, /<span aria-disabled="true">上一件<\/span>/);
+  assert.match(html, /<a rel="next" href="\/w\/guest-nav-older" title="Older &lt;work&gt;">下一件<\/a>/);
+  assert.match(html, /href="\/login#work-detail=guest-nav-newer">分享作品/);
+  assert.match(html, /href="\/login#work-comments=guest-nav-newer">查看评论/);
+  assert.doesNotMatch(html, /guest-nav-withdrawn|guest-nav-agent/);
+  const previous = await (await fetch(server.base + older.path)).text();
+  assert.match(previous, /<a rel="prev" href="\/w\/guest-nav-newer"[^>]*>上一件<\/a>/);
+  assert.match(previous, /<span aria-disabled="true">下一件<\/span>/);
 });

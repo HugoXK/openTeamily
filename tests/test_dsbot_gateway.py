@@ -165,15 +165,23 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/export'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/spreadsheet/draft'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/slides/draft'), 'artifacts')
+        work = '/v1/discover/works/work-demo'
+        comment = 'otwc_' + '0' * 26
+        for path in (work, work + '/comments', work + '/comments/' + comment + '/like',
+                     work + '/comments/' + comment + '/remove'):
+            self.assertEqual(gw.moved_api(path), 'discover')
         self.assertEqual(gw.moved_api('/v1/model-api/image'), 'model-api')
         self.assertEqual(gw.moved_api('/v1/model-api/video'), 'model-api')
         self.assertEqual(gw.moved_api('/v1/model-api/music'), 'model-api')
+        self.assertEqual(gw.moved_api('/v1/model-api/model3d'), 'model-api')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/images'), 'images')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/videos'), 'videos')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/music'), 'music')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/models-3d'), 'model3d')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/images/{aid}'), 'images')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/videos/{aid}'), 'videos')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/music/{aid}'), 'music')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/models-3d/{aid}'), 'model3d')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/revoke'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'), 'discover')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/messages/{aid}/files/0'), 'agents')

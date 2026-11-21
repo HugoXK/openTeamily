@@ -24,6 +24,7 @@ const IMAGE_PURPOSE = 'openteamily.model-api.image'
 const FIXED_PROVIDERS = {
   video: {provider: 'runway', model: 'gen4.5', name: 'Runway', label: '视频'},
   music: {provider: 'elevenlabs', model: 'music_v2_5', name: 'ElevenLabs', label: '音乐'},
+  model3d: {provider: 'meshy', model: 'meshy-7.1', name: 'Meshy', label: '3D'},
 }
 const DEFAULT_IMAGE_BASE = 'https://api.openai.com/v1'
 const DEFAULT_IMAGE_MODEL = 'gpt-image-1.5'
@@ -217,6 +218,7 @@ export function createModelApi({ dir, sealKey, env = process.env, clock = nowSec
     store, get, save, effective, resolveForProxy, resolveImage, policy,
     resolveVideo: () => resolveMedia('video'),
     resolveMusic: () => resolveMedia('music'),
+    resolveModel3d: () => resolveMedia('model3d'),
     legacy: [
       ...mediaRoutes,
       { method:'GET', path:/^\/v1\/model-api\/image$/, handle:async () => [200,{image_api:imageView()}] },

@@ -40,3 +40,19 @@ test('home artifact rows deep-link to the existing space editor query', () => {
   assert.equal(spaceHref(workspace, artifact), '/space?workspace=' + workspace + '&artifact=' + artifact);
   assert.equal(spaceHref(workspace), '/space?workspace=' + workspace);
 });
+
+test('public work login resumes the requested panel for one safe work slug', async () => {
+  const {publicWorkIntentFromHash} = await import('../openteamily/static/shell/public-work-link.mjs');
+  assert.deepEqual(publicWorkIntentFromHash('#work-comments=writer-demo'), {
+    slug: 'writer-demo', panel: 'comments', continuation: '#work-comments=writer-demo',
+    target: '/discover?work=writer-demo&comments=1',
+  });
+  assert.deepEqual(publicWorkIntentFromHash('#work-detail=writer-demo'), {
+    slug: 'writer-demo', panel: 'share', continuation: '#work-detail=writer-demo',
+    target: '/discover?work=writer-demo&share=1',
+  });
+  for (const hash of [
+    '#work-comments=one&work-comments=two', '#work-comments=writer-demo&next=/profile',
+    '#work-detail=https%3A%2F%2Fexample.invalid', '#work-comments=..%2Fwork', '#public-agent=writer-demo',
+  ]) assert.equal(publicWorkIntentFromHash(hash), null);
+});

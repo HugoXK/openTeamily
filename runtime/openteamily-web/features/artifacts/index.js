@@ -11,6 +11,7 @@ import { routes } from './routes.js'
 import { importMedia } from './media.js'
 import { emptyBoard, MAX_GENERATED_VIDEO_BYTES, MAX_MEDIA_BYTES, publicKind } from './model.js'
 import { sniffMime } from './render.js'
+import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { exportOffice } from './office.js'
 import { decodeStructured } from './structured.js'
 
@@ -56,6 +57,9 @@ export default defineFeature({
     async generatedMusic(input, call) {
       return generatedMedia(ctx, input, call, 'music', 'audio/mpeg', 'mp3', MAX_MEDIA_BYTES)
     },
+    async generatedModel3d(input, call) {
+      return generatedMedia(ctx, input, call, 'model3d', GLB_MIME, 'glb', MAX_GLB_BYTES)
+    },
     async saveChatMessage(input, call) {
       if (!call?.internal) refuse(403, 'forbidden', 'Save chat messages from their conversation')
       const { workspace_id: workspace, conversation_id, message_id, agent_id, conversation_title, body } = input
@@ -91,7 +95,7 @@ export default defineFeature({
           mime: 'application/json', extension: 'json'}
       } else {
         const result = exportBytes(row, ctx.featureDir, workspace, fromVersion)
-        const extensions = {'image/jpeg':'jpg', 'audio/mpeg':'mp3'}
+        const extensions = {'image/jpeg':'jpg', 'audio/mpeg':'mp3', [GLB_MIME]: 'glb'}
         const extension = extensions[result.contentType] || result.contentType.split('/').at(-1)
         file = {payload: result.payload, mime: kind === 'website' ? 'text/plain' : result.contentType,
           extension: kind === 'website' ? 'txt' : extension}

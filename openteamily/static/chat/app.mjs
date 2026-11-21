@@ -4,7 +4,7 @@ import { AGENT_FILE_ACCEPT, mountChatFiles, renderChatFile, sendPrivateAttachmen
 import { mountGroupTranslation } from './translation.mjs';
 import { mountChatCalls } from './calls.mjs';
 import { mountImageCreator } from './image-create.mjs';
-import { mountMusicCreator, mountVideoCreator } from './video-create.mjs';
+import { mountModel3dCreator, mountMusicCreator, mountVideoCreator } from './video-create.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { stageMeetingFromChat } from '../shell/meeting-link.mjs';
@@ -2039,6 +2039,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     clearVoicePlayers();
     lastSocialItems = items || [];
     const list = document.getElementById('message-list');
+    // Keep an open model attached to its original message when a sync rebuilds the list.
+    const models = new Map();
+    const focusedModelControl = document.activeElement?.closest('.chat-file-model3d') ? document.activeElement : null;
+    for (const row of list.children) {
+      const model = Array.from(row.children).find(child => child.dataset.model3dSource);
+      if (model) models.set(row.dataset.messageId, model);
+    }
     list.replaceChildren();
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
     const people = currentConversation && currentConversation.members || members;
@@ -2074,7 +2081,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!mine) autoTranslation.add(item,li,body);
       if (item.voice && !item.retracted) li.insertBefore(voicePlayer(item), time);
       if (item.attachment?.bytes !== undefined && !item.retracted) {
-        li.insertBefore(renderChatFile(document, item.attachment), time);
+        const model = models.get(item.id);
+        const reuse = item.attachment.mime === 'model/gltf-binary'
+          && model?.dataset.model3dSource === item.attachment.path;
+        li.insertBefore(reuse ? model : renderChatFile(document, item.attachment), time);
       } else if (item.attachment && !item.retracted) {
         const card = document.createElement('article');
         card.className = 'stream-artifact';
@@ -2190,6 +2200,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       list.append(li);
     }
+    if (focusedModelControl?.isConnected) focusedModelControl.focus({preventScroll: true});
     renderPendingSend();
     attachmentSender?.render();
     if (keepScroll) scroller.scrollTop = Math.max(0, oldTop + scroller.scrollHeight - oldHeight);
@@ -4722,6 +4733,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   const videoCreator = mountVideoCreator(document, mediaOptions('video'));
   const musicCreator = mountMusicCreator(document, mediaOptions('music'));
+  const model3dCreator = mountModel3dCreator(document, mediaOptions('model3d'));
   const attachInput = document.getElementById('chat-attachment');
   const defaultAccept = attachInput ? attachInput.getAttribute('accept') || '' : '';
   function syncPlusState() {
@@ -4729,6 +4741,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     imageCreator.sync();
     videoCreator.sync();
     musicCreator.sync();
+    model3dCreator.sync();
     const social = currentSource === 'social' && Boolean(currentConversation);
     const shareable = social && !currentConversation.public_agent && currentConversation.direct?.open !== false;
     const workspace = workspaceId();

@@ -2278,6 +2278,7 @@ button.message-quote:hover { background: var(--ot-bg-accent); }
 #group-memory-list li { border: 1px solid var(--ot-line); border-radius: .65rem; padding: .75rem; }
 #group-memory-list :is(h3, p) { margin: 0 0 .4rem; overflow-wrap: anywhere; }
 .group-memory-body { white-space: pre-wrap; }
+#group-announcement-preview { white-space: pre-wrap; }
 .group-memory-actions, #message-list .group-memory-refs { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; }
 #message-list .group-memory-refs { color: var(--ot-muted); font-size: .75rem; margin-top: .35rem; }
 #message-list .group-memory-refs button { max-width: 100%; overflow-wrap: anywhere; text-align: start; }
@@ -2362,8 +2363,8 @@ button.message-quote:hover { background: var(--ot-bg-accent); }
   cursor: pointer;
 }
 .chat-save-dialog .media-create-toggle input { width: auto; }
-:is(#image-create-status, #video-create-status, #music-create-status) { margin: 0; }
-:is(#image-create-result, #video-create-result, #music-create-result) { margin: 0; }
+:is(#image-create-status, #video-create-status, #music-create-status, #model3d-create-status) { margin: 0; }
+:is(#image-create-result, #video-create-result, #music-create-result, #model3d-create-result) { margin: 0; }
 :is(#image-create-preview, #video-create-preview) {
   display: block;
   width: 100%;
@@ -2375,3 +2376,23 @@ button.message-quote:hover { background: var(--ot-bg-accent); }
 }
 #music-create-preview { display: block; width: 100%; }
 .media-create-links { margin-top: .6rem; }
+.model3d-preview-frame {
+  width: 100%;
+  min-height: 12rem;
+  background: var(--ot-surface-2);
+  border-radius: .75rem;
+}
+.model3d-preview-frame canvas {
+  display: block;
+  width: 100%;
+  height: clamp(12rem, 32dvh, 18rem);
+  touch-action: none;
+  cursor: grab;
+}
+.model3d-preview-frame canvas:active { cursor: grabbing; }
+.model3d-preview-frame canvas:focus-visible { outline: 2px solid var(--ot-focus); outline-offset: -2px; }
+.model3d-preview-status:empty { display: none; }
+.chat-file-model3d { width: min(22rem, 100%); }
+.chat-file-model3d-toggle { min-height: 2.5rem; }
+.chat-file-model3d .chat-file-details { flex-wrap: wrap; }
+#model3d-create-image-hint { margin: 0; }
