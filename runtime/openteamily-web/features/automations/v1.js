@@ -5,10 +5,6 @@ import { FeatureError } from '../../featurekit/http.js'
 import { createV1Endpoint } from '../../featurekit/v1.js'
 
 const HEX = '([0-9a-f]{32})'
-const usernameOf = () => {
-  const value = String(process.env.OPENTEAMILY_OWNER_USERNAME ?? '')
-  return /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/.test(value) ? value : ''
-}
 
 function wrap(fn) {
   return async (...args) => {
@@ -20,11 +16,25 @@ function wrap(fn) {
   }
 }
 
-export function automationsV1({ endpoints, log }) {
+export function automationsV1({ endpoints, log, personalBinding }) {
   const call = (name, payload) => endpoints[name](payload)
   const routes = [
+    { pattern: /^\/v1\/onboarding\/automations$/, handle: wrap(async (req) => {
+      if (req.method !== 'POST' || req.query.size) throw new FeatureError(400, 'invalid', 'Invalid onboarding automation request')
+      const { workspace_id, template_ids, username } = await req.json() || {}
+      const binding = await personalBinding?.()
+      if (!binding?.workspace_id) throw new FeatureError(503, 'unavailable', 'Personal workspace is still being initialized')
+      if (workspace_id !== binding.workspace_id) throw new FeatureError(403, 'forbidden', 'Onboarding requires the personal workspace')
+      const { status, created, skipped } = await call('createOnboarding', { workspace_id, template_ids, username: req.ownerUsername || username })
+      return { status, body: { created, skipped } }
+    }) },
     { pattern: /^\/v1\/automation-templates$/, handle: wrap(async () => ({ status: 200, body: await call('templates') })) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/tick$`), handle: wrap(async (req, workspaceId) => ({ status: 200, body: await call('tick', { workspace_id: workspaceId }) })) },
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/run$`), handle: wrap(async (req, workspaceId, id) => {
+      if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only POST is supported')
+      const result = await call('runNow', { workspace_id: workspaceId, id, idempotency_key: req.headers.get('idempotency-key') })
+      return { status: result.status, body: { run: result.run } }
+    }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/runs/${HEX}/(cancel|retry|artifact)$`), handle: wrap(async (req, workspaceId, id, runId, action) => {
       if (action === 'artifact') throw new FeatureError(503, 'unavailable', 'Saving a run to the works library is not in this DS-Bot yet')
       const payload = { workspace_id: workspaceId, id, run_id: runId, idempotency_key: req.headers.get('idempotency-key') }
@@ -39,7 +49,7 @@ export function automationsV1({ endpoints, log }) {
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations/${HEX}/remove$`), handle: wrap(async (req, workspaceId, id) => ({ status: 200, body: await call('remove', { workspace_id: workspaceId, id }) })) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/automations(?:/${HEX})?$`), handle: wrap(async (req, workspaceId, id) => {
       if (!id && req.method === 'GET') {
-        return { status: 200, body: await call('list', { workspace_id: workspaceId, q: req.query.get('q') || undefined, category: req.query.get('category') || undefined, username: usernameOf() }) }
+        return { status: 200, body: await call('list', { workspace_id: workspaceId, q: req.query.get('q') || undefined, category: req.query.get('category') || undefined, username: req.ownerUsername }) }
       }
       if (!id && req.method === 'POST') {
         const body = await req.json()

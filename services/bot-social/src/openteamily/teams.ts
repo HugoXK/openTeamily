@@ -4,6 +4,7 @@
 // listed teams searchable by every signed-in member. OpenTeamily semantics; not Teamily parity.
 import type { FastifyInstance } from "fastify";
 import { assert } from "../errors.js";
+import { randomBytes } from "node:crypto";
 import { newId } from "../ids.js";
 import { body, hashCode, intParam, one, OtContext, optText, params, query, secretCode, text } from "./core.js";
 
@@ -14,6 +15,10 @@ CREATE TABLE IF NOT EXISTS ot_teams (
   workspace_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ot_teams_workspace ON ot_teams(workspace_id) WHERE workspace_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS ot_workspace_requests (
+  owner_id TEXT NOT NULL, key_hash TEXT NOT NULL, request_hash TEXT NOT NULL, team_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL, PRIMARY KEY (owner_id, key_hash)
+);
 CREATE TABLE IF NOT EXISTS ot_team_members (
   team_id TEXT NOT NULL REFERENCES ot_teams(id) ON DELETE CASCADE, owner_id TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('owner','admin','member')), suspended INTEGER NOT NULL DEFAULT 0,
@@ -185,6 +190,58 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
     assert(workspaceId === null, 409, "membership_migration_required", "workspace binding requires verified platform membership migration");
     const team = insertTeam(ot, me.ownerId, { name, slug, summary, workspaceId });
     return reply.status(201).send(teamView(ot, team, me.ownerId));
+  });
+  // ---- workspaces (replaces platform GET/POST /v1/workspaces and POST /v1/teams)
+  // Every OpenTeamily workspace is a Bot Social team with a 32-hex workspace_id. New ids
+  // are generated here, so creating one never claims an existing platform workspace.
+  const workspaceView = (t: any, viewer: string) => ({ ...teamView(ot, t, viewer), kind: t.slug ? "team" : "workspace" });
+  app.get("/v1/ot/workspaces", async (req) => {
+    const me = ot.me(req);
+    const rows = ot.all<any>("SELECT t.* FROM ot_teams t JOIN ot_team_members m ON m.team_id = t.id WHERE m.owner_id = ? AND m.suspended = 0 ORDER BY t.created_at, t.id", me.ownerId);
+    for (const t of rows) {
+      if (t.workspace_id) continue;
+      // Native teams get a fresh random id so workspace-keyed pages can address them.
+      t.workspace_id = randomBytes(16).toString("hex");
+      ot.run("UPDATE ot_teams SET workspace_id = ? WHERE id = ? AND workspace_id IS NULL", t.workspace_id, t.id);
+    }
+    return { workspaces: rows.map((t) => workspaceView(t, me.ownerId)) };
+  });
+  app.post("/v1/ot/workspaces", async (req, reply) => {
+    const me = ot.me(req);
+    const b = body(req);
+    const name = text(b.name, "name", { min: 1, max: 80 });
+    const slug = b.slug === undefined || b.slug === null || b.slug === "" ? null : String(b.slug);
+    if (slug !== null) assert(SLUG.test(slug) && !RESERVED.has(slug), 400, "invalid_request", "team id must be 3-30 lowercase letters, digits or dashes");
+    const key = text(b.idempotency_key, "idempotency_key", { min: 16, max: 64 });
+    const keyHash = hashCode("ws:" + key);
+    const requestHash = hashCode(JSON.stringify([name, slug]));
+    const prior = ot.get<any>("SELECT * FROM ot_workspace_requests WHERE owner_id = ? AND key_hash = ?", me.ownerId, keyHash);
+    if (prior) {
+      assert(prior.request_hash === requestHash, 409, "conflict", "idempotency key was used for a different request");
+      const team = ot.get<any>("SELECT * FROM ot_teams WHERE id = ?", prior.team_id);
+      assert(team, 404, "team_not_found", "no such team");
+      return workspaceView(team, me.ownerId);
+    }
+    if (slug !== null) assert(!ot.get("SELECT 1 FROM ot_teams WHERE slug = ?", slug), 409, "slug_taken", "that team id is taken");
+    const team = insertTeam(ot, me.ownerId, { name, slug, summary: "", workspaceId: randomBytes(16).toString("hex") });
+    ot.run("INSERT INTO ot_workspace_requests(owner_id, key_hash, request_hash, team_id, created_at) VALUES (?,?,?,?,?)", me.ownerId, keyHash, requestHash, team.id, ot.now());
+    return reply.status(201).send(workspaceView(team, me.ownerId));
+  });
+  // Turn an existing workspace into a named team (legacy POST /v1/teams mode=convert).
+  app.post("/v1/ot/workspaces/:workspace_id/convert", async (req) => {
+    const me = ot.me(req);
+    const existing = ot.get<any>("SELECT * FROM ot_teams WHERE workspace_id = ?", workspaceIdOf(params(req).workspace_id));
+    assert(existing, 404, "team_not_found", "no such team");
+    const { team } = requireMember(ot, existing.id, me.ownerId, ["owner"]);
+    const b = body(req);
+    const name = text(b.name, "name", { min: 1, max: 60 });
+    const slug = String(b.slug ?? "");
+    assert(SLUG.test(slug) && !RESERVED.has(slug), 400, "invalid_request", "team id must be 3-30 lowercase letters, digits or dashes");
+    if (team.slug === slug) return workspaceView(team, me.ownerId);
+    assert(!team.slug, 409, "conflict", "this workspace is already a team");
+    assert(!ot.get("SELECT 1 FROM ot_teams WHERE slug = ?", slug), 409, "slug_taken", "that team id is taken");
+    ot.run("UPDATE ot_teams SET slug = ?, name = ?, updated_at = ? WHERE id = ?", slug, name, ot.now(), team.id);
+    return workspaceView(ot.get("SELECT * FROM ot_teams WHERE id = ?", team.id), me.ownerId);
   });
   app.get("/v1/ot/teams", async (req) => {
     const me = ot.me(req);
@@ -374,7 +431,7 @@ export function registerTeams(app: FastifyInstance, ot: OtContext) {
         const r = roleOf(ot, t.id, me.ownerId);
         const pending = ot.get<any>("SELECT status FROM ot_join_requests WHERE team_id = ? AND owner_id = ?", t.id, me.ownerId);
         const v = teamView(ot, t, me.ownerId);
-        return { id: v.id, name: v.name, summary: v.summary, member_count: v.member_count, updated_at: v.updated_at, membership: r ? "member" : pending?.status === "pending" ? "pending" : null };
+        return { id: v.id, name: v.name, summary: v.summary, member_count: v.member_count, updated_at: v.updated_at, membership: r?.suspended ? "suspended" : r ? "member" : pending?.status === "pending" ? "pending" : null };
       }),
     };
   });

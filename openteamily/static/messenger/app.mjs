@@ -14,6 +14,7 @@ export function samePerson(item, self) {
 export function conversationLabel(row, currentUserId) {
   if (!row) return '';
   if (row.kind === 'group') return row.title || '群聊';
+  if (row.direct && row.title) return row.title;
   const others = (row.members || []).filter(member => !samePerson(member, currentUserId));
   if (others.length) return others.map(member => member.username).join('、');
   return row.title || '单聊';
@@ -245,6 +246,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis) } 
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
+    // Preserve previously shared agent links through the current chat page.
+    const startSlug = new URLSearchParams(String(globalThis.location?.hash || '').slice(1)).get('start');
+    if (startSlug && /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(startSlug)) {
+      globalThis.location.replace('/chat#public-agent=' + startSlug);
+      return;
+    }
     const listed = await request('GET', '/v1/workspaces?limit=100');
     const workspaces = listed.status === 200 ? (listed.body.items || []) : [];
     const previous = workspaceSelect.value;

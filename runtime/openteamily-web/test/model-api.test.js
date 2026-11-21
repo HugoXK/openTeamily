@@ -101,7 +101,7 @@ test('policy file: missing, malformed, writable and valid', () => {
 
 test('feature factory publishes the in-process proxy override', async () => {
   const dir = tmp()
-  const host = { featureDir: () => dir }
+  const host = { dataDir: dir, featureDir: () => dir }
   const feature = modelApiFeature(host)
   assert.equal(typeof globalThis[OVERRIDE], 'function')
   assert.equal(globalThis[OVERRIDE](), null)
@@ -109,5 +109,7 @@ test('feature factory publishes the in-process proxy override', async () => {
   assert.equal(globalThis[OVERRIDE]().api_key, KEY)
   const got = await feature.endpoints.get()
   assert.ok(!JSON.stringify(got).includes(KEY))
+  await assert.rejects(feature.endpoints.imageProvider({}, { internal: false }), { code: 'model-api/not-found' })
+  assert.equal(await feature.endpoints.imageProvider({}, { internal: true }), null)
   delete globalThis[OVERRIDE]
 })

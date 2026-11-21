@@ -1,6 +1,7 @@
 // Bounded OOXML and text-PDF exporters (legacy office_exports.py), run inside
 // this user's DS-Bot. No subprocess, URL fetch, macro or external relationship.
 import { crc32, deflateRawSync } from 'node:zlib'
+import {decodeWorkbook,spreadsheetCell} from './workbook.js'
 import { publicKind } from './model.js'
 import { decodeDashboard, decodeSlides, decodeStructured } from './structured.js'
 
@@ -96,20 +97,36 @@ function column(index) {
 }
 
 export function xlsx(rows) {
-  if (rows.length > 3000 || rows.some((row) => row.length > 100)) throw new Error('Spreadsheet exceeds bounded export capacity')
-  const data = rows.map((row, i) => {
-    const n = i + 1
-    const cells = row.map((value, c) => '<c r="' + column(c + 1) + n + '" t="inlineStr"><is><t xml:space="preserve">' + escapeXml(clean(value)) + '</t></is></c>').join('')
-    return '<row r="' + n + '">' + cells + '</row>'
-  }).join('')
-  const sheet = XML + `<worksheet xmlns="${SHEET}"><sheetData>` + data + '</sheetData></worksheet>'
-  const workbook = XML + `<workbook xmlns="${SHEET}" xmlns:r="${OFFICE.slice(0, -1)}"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>`
-  const rels = XML + `<Relationships xmlns="${REL}"><Relationship Id="rId1" Type="${OFFICE}worksheet" Target="worksheets/sheet1.xml"/></Relationships>`
-  return zipParts(
-    { 'xl/workbook.xml': workbook, 'xl/worksheets/sheet1.xml': sheet, 'xl/_rels/workbook.xml.rels': rels },
-    'xl/workbook.xml',
-    { 'xl/workbook.xml': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml', 'xl/worksheets/sheet1.xml': 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml' },
-  )
+  return workbookPackage([{name:'Data',rows}])
+}
+
+export function workbookPackage(sheets, typed = false) {
+  const parts = {}
+  const types = {'xl/workbook.xml':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml'}
+  const relationships = []
+  const descriptors = []
+  sheets.forEach(({name,rows},index) => {
+    if (rows.length > 3000 || rows.some(row => row.length > 100)) throw new Error('Spreadsheet exceeds bounded export capacity')
+    const part = 'worksheets/sheet' + (index + 1) + '.xml'
+    const id = index + 1
+    descriptors.push(`<sheet name="${escapeXml(clean(name)).replace(/"/g,'&quot;')}" sheetId="${id}" r:id="rId${id}"/>`)
+    relationships.push(`<Relationship Id="rId${id}" Type="${OFFICE}worksheet" Target="${part}"/>`)
+    const body = rows.map((row,r) => {
+      const cells = row.map((value,c) => {
+        const ref = column(c+1) + (r+1)
+        const cell = typed ? spreadsheetCell(value) : {text:value}
+        if (cell.formula) return `<c r="${ref}"><f>${cell.formula}</f></c>`
+        if (cell.number !== undefined) return `<c r="${ref}"><v>${cell.number}</v></c>`
+        return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${escapeXml(clean(cell.text))}</t></is></c>`
+      }).join('')
+      return `<row r="${r+1}">${cells}</row>`
+    }).join('')
+    parts['xl/'+part] = XML + `<worksheet xmlns="${SHEET}"><sheetData>${body}</sheetData></worksheet>`
+    types['xl/'+part] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'
+  })
+  parts['xl/workbook.xml'] = XML + `<workbook xmlns="${SHEET}" xmlns:r="${OFFICE.slice(0,-1)}"><sheets>${descriptors.join('')}</sheets>${typed ? '<calcPr calcId="0" fullCalcOnLoad="1"/>' : ''}</workbook>`
+  parts['xl/_rels/workbook.xml.rels'] = XML + `<Relationships xmlns="${REL}">${relationships.join('')}</Relationships>`
+  return zipParts(parts,'xl/workbook.xml',types)
 }
 
 // East Asian Width W/F ranges used to wrap PDF lines the same way as unicodedata.
@@ -281,12 +298,14 @@ export function exportOffice(row, format, fromVersion = false) {
   let structured = null
   if (kind === 'dashboard') structured = decodeDashboard(row.dashboard_json)
   else if (kind === 'slides') structured = decodeSlides(row.slides_json)
+  else if (kind === 'spreadsheet') structured = decodeWorkbook(row.spreadsheet_json)
   else if (kind === 'document') {
     const [detected, value] = decodeStructured(row.body)
     if (value) { kind = detected; structured = value }
   }
   let payload
   if (format === 'docx' && kind === 'document') payload = docx(row.title, row.body)
+  else if (format === 'xlsx' && kind === 'spreadsheet' && structured) payload = workbookPackage(structured.sheets,true)
   else if (format === 'xlsx' && kind === 'dashboard') payload = xlsx(structuredRows(row.title, structured))
   else if (format === 'pptx' && kind === 'slides') payload = pptx(row.title, (structured || {}).slides || [])
   else if (format === 'pdf' && (kind === 'document' || kind === 'slides' || kind === 'dashboard')) {

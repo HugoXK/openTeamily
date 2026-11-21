@@ -1,7 +1,7 @@
 // OpenTeamily Discover on Bot Social: opt-in public catalog of agents and works, likes, collections,
 // creator follows and follow notifications. Ported from the legacy discover.py (#87, #313, #335).
 // A listing is a whitelisted projection the owner's DS-Bot chose to publish (title, summary,
-// category, kind and an optional bounded public snapshot); never instructions, memory or tokens.
+// category, kind and an optional explicitly released snapshot).
 import type { FastifyInstance } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
@@ -11,7 +11,8 @@ export const DISCOVER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_listings (
   id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('agent','work')), ref TEXT NOT NULL,
   slug TEXT NOT NULL UNIQUE, title TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', category TEXT, work_kind TEXT,
-  snapshot TEXT, listed INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  snapshot TEXT, listed INTEGER NOT NULL DEFAULT 1, chat_enabled INTEGER NOT NULL DEFAULT 0,
+  chat_from INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
   UNIQUE (owner_id, kind, ref)
 );
 CREATE INDEX IF NOT EXISTS ot_listings_feed ON ot_listings(listed, updated_at);
@@ -56,7 +57,7 @@ function listingPath(ot: OtContext, l: { kind: string; slug: string }) {
 
 const listingView = (ot: OtContext, l: any, viewer: string | null, withSnapshot = false) => ({
   id: l.id, slug: l.slug, kind: l.kind, title: l.title, summary: l.summary, category: l.category, work_kind: l.work_kind,
-  creator: ot.profileView(l.owner_id), listed: !!l.listed, updated_at: l.updated_at, created_at: l.created_at,
+  creator: ot.profileView(l.owner_id), listed: !!l.listed, chat_enabled: l.kind === "agent" && !!l.chat_enabled, updated_at: l.updated_at, created_at: l.created_at,
   path: listingPath(ot, l), ...(viewer ? engagement(ot, l, viewer) : { likes: ot.get<any>("SELECT COUNT(*) AS n FROM ot_likes WHERE listing_id = ?", l.id).n, collections: ot.get<any>("SELECT COUNT(*) AS n FROM ot_collections WHERE listing_id = ?", l.id).n, liked: false, collected: false, following: false, own: false }),
   ...(withSnapshot ? { snapshot: l.snapshot ?? null } : {}),
 });
@@ -94,6 +95,7 @@ pre{white-space:pre-wrap;background:#f6f6f6;padding:1rem;border-radius:8px}
 <h1>${escapeHtml(view.title || view.slug)}</h1>
 ${body}
 ${startList}
+${l.kind === "agent" && l.chat_enabled ? `<p><a href="/chat#public-agent=${encodeURIComponent(l.slug)}">开始对话</a></p>` : ""}
 </body></html>
 `;
 }
@@ -106,6 +108,10 @@ function listedBySlug(ot: OtContext, slug: string) {
 }
 
 export function registerDiscover(app: FastifyInstance, ot: OtContext) {
+  const columns = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_listings)").map(column => column.name));
+  if (!columns.has("chat_enabled")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_enabled INTEGER NOT NULL DEFAULT 0");
+  if (!columns.has("chat_from")) ot.run("ALTER TABLE ot_listings ADD COLUMN chat_from INTEGER NOT NULL DEFAULT 0");
+
   app.put("/v1/ot/listings", async (req) => {
     const me = ot.me(req);
     const b = body(req);
@@ -119,6 +125,11 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     assert(workKind === null || WORK_KINDS.includes(workKind), 400, "invalid_request", "unknown work kind");
     const snapshot = b.snapshot == null ? null : text(b.snapshot, "snapshot", { max: SNAPSHOT_MAX, multiline: true });
     const existing = ot.get<any>("SELECT * FROM ot_listings WHERE owner_id = ? AND kind = ? AND ref = ?", me.ownerId, b.kind, b.ref);
+    assert(b.chat_enabled === undefined || (b.kind === "agent" && typeof b.chat_enabled === "boolean"),
+      400, "invalid_request", "chat_enabled must be a boolean on an agent listing");
+    const chatEnabled = b.kind === "agent" && (b.chat_enabled ?? !!(existing?.listed && existing.chat_enabled));
+    const chatFrom = chatEnabled && existing?.listed && existing.chat_enabled ? existing.chat_from
+      : chatEnabled ? ot.get<{seq: number}>("SELECT COALESCE(MAX(rowseq),0) AS seq FROM ot_messages")!.seq : 0;
     const slug = String(b.slug ?? existing?.slug ?? "");
     assert(SLUG.test(slug) && !RESERVED.has(slug), 400, "invalid_request", "slug must be 3-30 lowercase letters, digits or dashes");
     const clash = ot.get<any>("SELECT id FROM ot_listings WHERE slug = ?", slug);
@@ -127,10 +138,10 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     const id = existing?.id ?? newId("otl");
     ot.tx(() => {
       if (existing) {
-        ot.run("UPDATE ot_listings SET slug = ?, title = ?, summary = ?, category = ?, work_kind = ?, snapshot = ?, listed = 1, updated_at = ? WHERE id = ?", slug, title, summary, category, workKind, snapshot, now, id);
+        ot.run("UPDATE ot_listings SET slug = ?, title = ?, summary = ?, category = ?, work_kind = ?, snapshot = ?, listed = 1, chat_enabled = ?, chat_from = ?, updated_at = ? WHERE id = ?", slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, id);
       } else {
         assert(ot.get<any>("SELECT COUNT(*) AS n FROM ot_listings WHERE owner_id = ?", me.ownerId).n < 500, 429, "too_many_listings", "listing limit reached");
-        ot.run("INSERT INTO ot_listings(id, owner_id, kind, ref, slug, title, summary, category, work_kind, snapshot, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", id, me.ownerId, b.kind, b.ref, slug, title, summary, category, workKind, snapshot, now, now);
+        ot.run("INSERT INTO ot_listings(id, owner_id, kind, ref, slug, title, summary, category, work_kind, snapshot, chat_enabled, chat_from, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", id, me.ownerId, b.kind, b.ref, slug, title, summary, category, workKind, snapshot, Number(chatEnabled), chatFrom, now, now);
       }
       if (!existing || !existing.listed) {
         for (const f of ot.all<any>("SELECT follower_id FROM ot_follows WHERE creator_id = ? LIMIT 5000", me.ownerId)) {
@@ -142,13 +153,14 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   });
   app.delete("/v1/ot/listings/:id", async (req) => {
     const me = ot.me(req);
-    const r = ot.run("UPDATE ot_listings SET listed = 0, updated_at = ? WHERE id = ? AND owner_id = ?", ot.now(), params(req).id, me.ownerId);
+    const r = ot.run("UPDATE ot_listings SET listed = 0, chat_enabled = 0, updated_at = ? WHERE id = ? AND owner_id = ?", ot.now(), params(req).id, me.ownerId);
     assert(r.changes === 1, 404, "listing_not_found", "no such listing of yours");
     return { unlisted: true };
   });
   app.get("/v1/ot/listings/mine", async (req) => {
     const me = ot.me(req);
-    return { listings: ot.all<any>("SELECT * FROM ot_listings WHERE owner_id = ? ORDER BY updated_at DESC", me.ownerId).map((l) => listingView(ot, l, me.ownerId)) };
+    const rows = ot.all<any>("SELECT * FROM ot_listings WHERE owner_id = ? ORDER BY updated_at DESC", me.ownerId);
+    return { listings: rows.map((l) => ({ ...listingView(ot, l, me.ownerId), ref: l.ref })) };
   });
   app.get("/v1/ot/discover", async (req) => {
     const me = ot.me(req);
@@ -236,5 +248,31 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     assert(l.kind === "work", 404, "listing_not_found", "no such listing");
     const snapshot = l.snapshot ? String(l.snapshot).slice(0, 2000) : "";
     return { preview: snapshot.startsWith("{") ? (listingView(ot, l, null).summary || "") : snapshot };
+  });
+
+  // Public homepage "start a conversation": a signed-in visitor talks to the creator's
+  // agent. Bot Social creates one private thread (visitor + creator) with that agent
+  // attached; the creator's own DS-Bot answers through its agent inbox.
+  app.post("/v1/ot/discover/:slug/start", async (req, reply) => {
+    const me = ot.me(req);
+    const l = listedBySlug(ot, params(req).slug);
+    assert(l.kind === "agent", 404, "listing_not_found", "no such listing");
+    assert(l.chat_enabled, 409, "public_chat_closed", "该智能体未开放访客聊天。");
+    assert(l.owner_id !== me.ownerId, 400, "invalid_request", "this is your own agent");
+    const key = `agent:${l.id}:${me.ownerId}`;
+    let conv = ot.get<any>("SELECT * FROM ot_conversations WHERE dm_key = ?", key);
+    const now = ot.now();
+    if (!conv) {
+      const id = newId("otc");
+      ot.tx(() => {
+        ot.run("INSERT INTO ot_conversations(id, kind, title, dm_key, created_by, created_at, updated_at) VALUES (?, 'group', ?, ?, ?, ?, ?)", id, String(l.title).slice(0, 80), key, me.ownerId, now, now);
+        for (const o of [me.ownerId, l.owner_id]) ot.run("INSERT INTO ot_conversation_members(conversation_id, owner_id, created_at) VALUES (?,?,?)", id, o, now);
+        ot.run("INSERT INTO ot_conversation_agents(conversation_id, agent_ref, owner_id, name, auto_reply, created_at) VALUES (?,?,?,?,1,?)", id, l.ref, l.owner_id, String(l.title).slice(0, 80), now);
+      });
+      conv = ot.get<any>("SELECT * FROM ot_conversations WHERE id = ?", id);
+      ot.notify(l.owner_id, "discover.conversation_started", { listing_id: l.id, slug: l.slug, conversation_id: id, visitor: ot.profileView(me.ownerId) });
+      return reply.status(201).send({ conversation_id: conv.id, agent_ref: l.ref, created: true });
+    }
+    return { conversation_id: conv.id, agent_ref: l.ref, created: false };
   });
 }

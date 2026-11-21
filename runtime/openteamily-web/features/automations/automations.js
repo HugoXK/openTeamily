@@ -27,10 +27,12 @@ function tx(db, fn) {
 
 // One DS-Bot turn through the runtime wrapper's chatTurn service (B1 contract).
 export function dsBotTurn(host) {
-  return async ({ conversation, prompt, requestId }) => {
+  return async ({ conversation, prompt, requestId, skillScope }) => {
     const services = await host.runtime()
     if (typeof services?.chatTurn !== 'function') throw Object.assign(new Error('DS-Bot chat service unavailable'), { code: 'automations/runtime-unavailable' })
-    const reply = await services.chatTurn(conversation, prompt, requestId)
+    const material = skillScope ? await host.call('skills/materialForScope', { scope: skillScope }) : { items: [] }
+    const context = material.items.map(i => i.content).join('\n\n')
+    const reply = await services.chatTurn(conversation, context ? `[User-approved instruction-only skills]\n${context}\n\n${prompt}` : prompt, requestId)
     return { text: reply?.text, session_id: reply?.sessionId ?? null, turn_id: reply?.turnId ?? null }
   }
 }
@@ -64,6 +66,10 @@ CREATE INDEX IF NOT EXISTS ot_automation_run_list ON ot_automation_runs(automati
 CREATE TABLE IF NOT EXISTS ot_automation_retries (
  run_id TEXT NOT NULL, key_hash TEXT NOT NULL, new_run_id TEXT NOT NULL, created INTEGER NOT NULL,
  PRIMARY KEY(run_id, key_hash));
+CREATE TABLE IF NOT EXISTS ot_automation_manual_runs (
+ automation_id TEXT NOT NULL REFERENCES ot_automations(id) ON DELETE CASCADE,
+ key_hash TEXT NOT NULL, run_id TEXT NOT NULL REFERENCES ot_automation_runs(id) ON DELETE CASCADE,
+ PRIMARY KEY(automation_id, key_hash));
 `
 
 const sha = (text) => createHash('sha256').update(String(text)).digest('hex')
@@ -129,15 +135,16 @@ export function runView(row) {
   if (row.error_code === 'cancelled') status = 'cancelled'
   else if (row.error_code === 'timeout') status = 'timeout'
   const out = {
-    id: row.id, automation_id: row.automation_id, workspace_id: row.workspace_id, due_at: row.due_at,
+    id: row.id, automation_id: row.automation_id, workspace_id: row.workspace_id, due_at: row.due_at < 0 ? row.started : row.due_at,
     started: row.started, finished: row.finished, status, error_code: row.error_code,
+    ...(row.due_at < 0 ? { trigger: 'manual' } : {}),
     dispatch: { backend: 'ds-bot', ...(dispatch.ds_bot ? { ds_bot: dispatch.ds_bot } : {}) },
   }
   if (dispatch.result && typeof dispatch.result === 'object') out.result = dispatch.result
   return out
 }
 
-export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error }) {
+export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, log = console.error, personalBinding }) {
   db.exec(SCHEMA)
   const inflight = new Map() // run id -> promise
   let timer = null
@@ -182,6 +189,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       if (!item || item.status !== 'queued') return
       try {
         const reply = await turn({
+          skillScope: `automation:${item.workspace_id}:${item.automation_id}`,
           conversation: `automation:${item.automation_id}`,
           prompt: `[OpenTeamily 自动化 · ${item.title}]\n${item.prompt}`,
           requestId: `ot-automation:${runId}`,
@@ -240,16 +248,18 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   }
   function stop() { if (timer) clearInterval(timer); timer = null }
 
-  function create(payload) {
+  function createInTransaction(payload) {
     const workspaceId = workspaceOf(payload)
     const { title, template_id: templateId, schedule, participants: names } = payload
     const intent = payload.intent ?? ''
     const scope = payload.scope ?? 'once'
     const agents = payload.agents ?? []
+    const enabled = payload.enabled === undefined ? templateId === REMINDER : payload.enabled
     if (!validTitle(title) || !Object.hasOwn(TEMPLATES, templateId) || !validSchedule(schedule) || !validUsernames(names)
       || !validIntent(intent) || !SCOPES.has(scope) || !validAgents(agents)) {
       refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
     }
+    if (typeof enabled !== 'boolean') refuse(400, 'invalid', 'enabled must be a boolean')
     const key = String(payload.idempotency_key ?? '')
     if (!IDEM.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
     const sched = normalizeSchedule(schedule)
@@ -260,26 +270,52 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     else if (validPrompt(prompt)) compiled = prompt === compiledPrompt
     else refuse(400, 'invalid', 'Provide a title, prompt, template, schedule and participants')
     const clean = title.trim()
-    const requestHash = sha(JSON.stringify({ agents, intent, participants: names, prompt, schedule: sched, scope, template_id: templateId, title: clean }))
+    const requestHash = sha(JSON.stringify({ agents, intent, participants: names, prompt, schedule: sched, scope, template_id: templateId, title: clean,
+      ...(payload.enabled === undefined ? {} : { enabled }) }))
     const keyHash = sha(key)
+    const existing = one('SELECT * FROM ot_automations WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
+    if (existing) {
+      const replay = existing.template_id === REMINDER && templateId === REMINDER
+      if (existing.request_hash !== requestHash && !replay) refuse(409, 'conflict', 'Idempotency key was used for a different request')
+      return { status: 200, automation: view(existing) }
+    }
+    if (one('SELECT id FROM ot_automations WHERE workspace_id=? AND title_hash=?', workspaceId, sha(clean.toLowerCase()))) {
+      refuse(409, 'conflict', 'An automation with this title already exists')
+    }
+    if (one('SELECT COUNT(*) AS n FROM ot_automations WHERE workspace_id=?', workspaceId).n >= MAX_AUTOMATIONS) refuse(429, 'quota', 'Automation capacity reached')
+    const id = newId()
+    const now = clock()
+    run('INSERT INTO ot_automations (id, workspace_id, title, title_hash, prompt, template_id, schedule, participants, enabled, revision, created, updated, key_hash, request_hash, intent, scope, agents, compiled) VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)',
+      id, workspaceId, clean, sha(clean.toLowerCase()), prompt, templateId, JSON.stringify(sched),
+      JSON.stringify(names.map((username) => ({ username }))), enabled ? 1 : 0, now, now, keyHash, requestHash,
+      intent, scope, JSON.stringify(agents.map((n) => n.trim())), compiled ? 1 : 0)
+    return { status: 201, automation: view(one('SELECT * FROM ot_automations WHERE id=?', id)) }
+  }
+
+  function createOnboarding(payload) {
+    const workspaceId = workspaceOf(payload)
+    const ids = payload.template_ids
+    if (!Array.isArray(ids) || ids.length < 1 || ids.length > 6 || new Set(ids).size !== ids.length
+      || ids.some(id => typeof id !== 'string' || id === 'custom' || id === REMINDER || !Object.hasOwn(TEMPLATES, id))) {
+      refuse(400, 'invalid', 'Provide 1–6 known automation templates')
+    }
     return tx(db, () => {
-      const existing = one('SELECT * FROM ot_automations WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
-      if (existing) {
-        const replay = existing.template_id === REMINDER && templateId === REMINDER
-        if (existing.request_hash !== requestHash && !replay) refuse(409, 'conflict', 'Idempotency key was used for a different request')
-        return { status: 200, automation: view(existing) }
+      const created = [], skipped = []
+      for (const id of ids) {
+        const title = TEMPLATES[id].title
+        if (one('SELECT 1 FROM ot_automations WHERE workspace_id=? AND title_hash=?', workspaceId, sha(title.toLowerCase()))) {
+          skipped.push({ template_id: id, title })
+          continue
+        }
+        const result = createInTransaction({
+          workspace_id: workspaceId, title, template_id: id,
+          schedule: { kind: 'daily', time: '09:00', time_zone: 'Asia/Shanghai' },
+          participants: [payload.username], scope: 'ongoing', idempotency_key: 'onboarding-template-' + id,
+        })
+        if (result.status === 201) created.push({ id: result.automation.id, template_id: id, title })
+        else skipped.push({ template_id: id, title })
       }
-      if (one('SELECT id FROM ot_automations WHERE workspace_id=? AND title_hash=?', workspaceId, sha(clean.toLowerCase()))) {
-        refuse(409, 'conflict', 'An automation with this title already exists')
-      }
-      if (one('SELECT COUNT(*) AS n FROM ot_automations WHERE workspace_id=?', workspaceId).n >= MAX_AUTOMATIONS) refuse(429, 'quota', 'Automation capacity reached')
-      const id = newId()
-      const now = clock()
-      run('INSERT INTO ot_automations (id, workspace_id, title, title_hash, prompt, template_id, schedule, participants, enabled, revision, created, updated, key_hash, request_hash, intent, scope, agents, compiled) VALUES(?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)',
-        id, workspaceId, clean, sha(clean.toLowerCase()), prompt, templateId, JSON.stringify(sched),
-        JSON.stringify(names.map((username) => ({ username }))), templateId === REMINDER ? 1 : 0, now, now, keyHash, requestHash,
-        intent, scope, JSON.stringify(agents.map((n) => n.trim())), compiled ? 1 : 0)
-      return { status: 201, automation: view(one('SELECT * FROM ot_automations WHERE id=?', id)) }
+      return { status: created.length ? 201 : 200, created, skipped }
     })
   }
 
@@ -347,10 +383,36 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (cursor && !HEX32.test(cursor)) refuse(400, 'invalid', 'Invalid pagination parameters')
     const status = payload.status ?? ''
     if (status && !['queued', 'succeeded', 'failed', 'skipped'].includes(status)) refuse(400, 'invalid', 'Invalid run status')
-    const rows = status
-      ? all('SELECT * FROM ot_automation_runs WHERE automation_id=? AND id>? AND status=? ORDER BY id LIMIT ?', row.id, cursor, status, limit + 1)
-      : all('SELECT * FROM ot_automation_runs WHERE automation_id=? AND id>? ORDER BY id LIMIT ?', row.id, cursor, limit + 1)
+    const after = cursor && loadRun(row, cursor)
+    const params = [row.id]
+    let filter = 'automation_id=?'
+    if (status) { filter += ' AND status=?'; params.push(status) }
+    if (after) { filter += ' AND (started,id)<(?,?)'; params.push(after.started, after.id) }
+    const rows = all(`SELECT * FROM ot_automation_runs WHERE ${filter} ORDER BY started DESC, id DESC LIMIT ?`, ...params, limit + 1)
     return { items: rows.slice(0, limit).map(runView), cursor: rows.length > limit ? rows[limit - 1].id : null }
+  }
+
+  function runNow(payload) {
+    const row = load(workspaceOf(payload), payload.id)
+    const key = String(payload.idempotency_key ?? '')
+    if (!IDEM.test(key)) refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
+    const keyHash = sha(key)
+    const outcome = tx(db, () => {
+      const prior = one(`SELECT r.* FROM ot_automation_manual_runs m JOIN ot_automation_runs r ON r.id=m.run_id
+        WHERE m.automation_id=? AND m.key_hash=?`, row.id, keyHash)
+      if (prior) return { status: 200, run: runView(prior) }
+      if (one("SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND status='queued'", row.id)) {
+        refuse(409, 'already_running', '这条自动化正在运行。')
+      }
+      // Keep manual runs and scheduled slots distinct.
+      const slot = Math.min(0, one('SELECT MIN(due_at) AS m FROM ot_automation_runs WHERE automation_id=?', row.id).m ?? 0) - 1
+      const id = insertRun(row, slot)
+      if (!id) refuse(429, 'quota', 'Automation run capacity reached')
+      run('INSERT INTO ot_automation_manual_runs VALUES(?,?,?)', row.id, keyHash, id)
+      return { status: 202, run: runView(one('SELECT * FROM ot_automation_runs WHERE id=?', id)) }
+    })
+    if (outcome.status === 202) void execute(outcome.run.id)
+    return outcome
   }
 
   function cancel(payload) {
@@ -418,7 +480,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     'automations/templates': () => ({ items: Object.values(TEMPLATES).map((t) => ({ ...t })) }),
     'automations/list': list,
     'automations/get': (p) => ({ automation: view(load(workspaceOf(p), p?.id)) }),
-    'automations/create': create,
+    'automations/create': (p) => tx(db, () => createInTransaction(p)),
+    'automations/createOnboarding': createOnboarding,
     'automations/update': update,
     'automations/remove': (p) => {
       const row = load(workspaceOf(p), p?.id)
@@ -426,6 +489,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       return { removed: view(row) }
     },
     'automations/runs': runs,
+    'automations/runNow': runNow,
     'automations/run': (p) => ({ run: runView(loadRun(load(workspaceOf(p), p?.id), p?.run_id)) }),
     'automations/cancel': cancel,
     'automations/retry': retry,
@@ -435,7 +499,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
 
   const ops = {}
   for (const [name, handler] of Object.entries(endpoints)) ops[name.slice('automations/'.length)] = handler
-  ops.v1 = automationsV1({ endpoints: ops, log })
+  ops.v1 = automationsV1({ endpoints: ops, log, personalBinding })
   ops.importRuns = (p) => ({ imported: recordLegacyRuns(db, p) })
   endpoints['automations/v1'] = ops.v1
   endpoints['automations/import-runs'] = ops.importRuns
@@ -446,13 +510,16 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
 export default async function automations(host) {
   const { openDatabase } = await import('../../src/store.js')
   const db = await openDatabase(host, 'automations.sqlite3')
-  const feature = createAutomations({ db, turn: dsBotTurn(host), log: host.log })
+  const feature = createAutomations({ db, turn: dsBotTurn(host), log: host.log,
+    personalBinding: () => host.call('agents/personal-binding', {}) })
   const imported = await importPending({ host, db, migrate: feature.migrate })
   // The clock starts once this user's DS-Bot is attached, so no slot fires into a
   // runtime that is still booting.
   if (!imported.some(item => item.status === 'rejected') && process.env.OPENTEAMILY_AUTOMATIONS_CLOCK !== '0') host.runtime({ timeoutMs: 10 * 60_000 }).then(() => feature.start(), () => feature.start())
   const ops = {}
-  for (const [name, handler] of Object.entries(feature.ops)) ops[name] = async (payload) => handler(payload ?? {})
+  for (const [name, handler] of Object.entries(feature.ops)) {
+    if (name !== 'createOnboarding') ops[name] = async (payload) => handler(payload ?? {})
+  }
   ops.v1 = feature.ops.v1
   ops.importRuns = feature.ops.importRuns
   return { pages: ['automations'], endpoints: ops, migrate: feature.migrate }

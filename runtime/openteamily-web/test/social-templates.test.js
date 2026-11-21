@@ -31,6 +31,7 @@ function setup(calls, { existing = [] } = {}) {
   let created = 0
   const host = {
     dataDir: dir,
+    featureDir: () => dir,
     async call(endpoint, payload) {
       if (endpoint === 'agents/list') return { items: existing }
       if (endpoint === 'agents/create') { created++; return { agent: { id: `id${created}`, name: payload.name, category: payload.category } } }
@@ -41,7 +42,7 @@ function setup(calls, { existing = [] } = {}) {
 }
 
 test('list exposes the three public templates and the Discover create-team entry (#313)', async () => {
-  const { templates, create_entry } = await teamTemplates({}).endpoints.list()
+  const { templates, create_entry } = await teamTemplates(setup([])).endpoints.list()
   assert.equal(templates.length, 3)
   assert.deepEqual(templates.map((t) => t.slug), TEMPLATES.map((t) => t.slug))
   assert.ok(!JSON.stringify(templates).includes('你负责'), 'instructions are not listed')
@@ -56,11 +57,10 @@ test('apply creates missing agents, reuses same-name ones, and opens a group wit
   assert.equal(out.agents.length, 3)
   assert.equal(out.agents[0].id, 'reuse')
   assert.equal(out.conversation.id, 'otc_9')
-  // two new agents created in host.call, plus Bot Social group + 3 agent attachments (including reused)
-  const attaches = calls.filter((c) => c.method === 'PUT')
-  assert.equal(attaches.length, 3)
-  assert.ok(attaches.every((c) => c.body.auto_reply === false))
-  assert.equal(attaches[0].path, '/v1/ot/conversations/otc_9/agents/reuse')
+  const creates = calls.filter(c => c.method === 'POST' && c.path === '/v1/ot/conversations')
+  assert.equal(creates.length, 1)
+  assert.deepEqual(creates[0].body.agents.map(a => a.agent_ref), ['reuse','id1','id2'])
+  assert.equal(calls.some(c => c.method === 'PUT'), false)
 })
 
 test('bulk invites, role copy, muted unread already excluded, and first_unread_seq (#281 #345 #358)', async () => {
