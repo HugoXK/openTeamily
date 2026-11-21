@@ -222,3 +222,45 @@ test("quoted messages keep a real link and respect each reader's access", async 
   assert.deepEqual((await peer.ok("GET", submitted)).reply_preview, {message_id:revised.id, available:false});
   assert.equal((await peer.call("POST", send, {body:"Too late", reply_to:revised.id})).status,409);
 });
+
+test("forwarding is atomic, supports media and history, and keeps origin labels", async () => {
+  const [sender, relay, recipient] = await Promise.all([
+    home(S.base, "forward-sender"), home(S.base, "forward-relay"), home(S.base, "forward-recipient"),
+  ]);
+  for (const person of [sender, recipient]) {
+    const request = await relay.ok("POST", "/v1/ot/contacts", {handle:person.handle});
+    await person.ok("POST", "/v1/ot/contacts/" + request.id, {action:"accept"});
+  }
+  const root = "/v1/ot/conversations";
+  const source = await relay.ok("POST", root, {kind:"group", account_group:true, title:"Older source", members:[sender.handle]});
+  const target = await relay.ok("POST", root, {kind:"group", account_group:true, title:"Shared target", members:[recipient.handle],
+    agents:[{agent_ref:"helper",name:"Helper"}]});
+  const room = root + "/" + source.id + "/messages";
+  const textMessage = await sender.ok("POST", room, {body:"Original @helper text"});
+  const bytes = Buffer.from("This is the forwarded file").toString("base64");
+  const fileMessage = await sender.ok("POST", room, {direct:true, attachment:{title:"forwarded.txt",mime:"text/plain",data:bytes}});
+  const voice = {mime:"audio/webm",data:Buffer.from("1a45dfa30011111111222222","hex").toString("base64")};
+  const recording = await sender.ok("POST", room, {voice});
+  const messages = root + "/" + target.id + "/messages";
+  const api = root + "/" + source.id + "/forward";
+  const input = {message_ids:[recording.id,fileMessage.id,textMessage.id],target_conversation_id:target.id,request_key:"one-forward-action"};
+  const hidden = await sender.ok("POST", room, {body:"Hidden source"});
+  await relay.ok("POST", "/v1/ot/messages/" + hidden.id + "/hide", {conversation_id:source.id});
+  const rejected = await relay.call("POST", api, {...input, message_ids:[textMessage.id,hidden.id]});
+  assert.equal(rejected.status,409);
+  assert.deepEqual((await recipient.ok("GET", messages)).messages, []);
+  assert.equal((await recipient.call("POST",api,input)).status,404);
+  assert.equal((await sender.call("POST",api,input)).status,404);
+  const published = await relay.ok("POST", api, input);
+  assert.deepEqual(await relay.ok("POST", api, {...input,message_ids:input.message_ids.toReversed()}),published);
+  assert.equal((await relay.call("POST", api, {...input,message_ids:[textMessage.id]})).status,409);
+  const forwarded = (await recipient.ok("GET", messages)).messages;
+  assert.equal(forwarded.length,3);
+  assert.deepEqual(forwarded.map((row: any) => row.forwarded_from), Array(3).fill({author:textMessage.author.display_name}));
+  assert.equal(forwarded[0].body,textMessage.body);
+  assert.deepEqual(forwarded[0].mentions,[]);
+  assert.equal(forwarded[0].reply_to,null);
+  assert.equal((await recipient.ok("GET", messages + "/" + forwarded[1].id + "/file")).data,bytes);
+  assert.equal((await recipient.ok("GET", messages + "/" + forwarded[2].id + "/voice")).data,voice.data);
+  assert.equal((await recipient.call("GET",room + "/" + fileMessage.id + "/file")).status,404);
+});

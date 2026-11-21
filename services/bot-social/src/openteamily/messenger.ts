@@ -47,8 +47,13 @@ CREATE TABLE IF NOT EXISTS ot_messages (
   conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE, seq INTEGER NOT NULL,
   author_id TEXT NOT NULL, author_kind TEXT NOT NULL CHECK (author_kind IN ('member','agent')), agent_ref TEXT, agent_name TEXT,
   body TEXT NOT NULL, mentions TEXT NOT NULL DEFAULT '[]', reply_to TEXT, reply_mode TEXT, client_key TEXT,
-  created_at INTEGER NOT NULL, edited_at INTEGER, retracted INTEGER NOT NULL DEFAULT 0, pinned_by TEXT,
+  created_at INTEGER NOT NULL, edited_at INTEGER, retracted INTEGER NOT NULL DEFAULT 0, pinned_by TEXT, forwarded_author TEXT,
   UNIQUE (conversation_id, seq), UNIQUE (conversation_id, author_id, client_key)
+);
+CREATE TABLE IF NOT EXISTS ot_forward_requests (
+  owner_id TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
+  conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE, forwarded INTEGER NOT NULL,
+  PRIMARY KEY (owner_id, request_key)
 );
 CREATE TABLE IF NOT EXISTS ot_hidden_messages (
   owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE,
@@ -228,6 +233,7 @@ const messageView = (ot: OtContext, m: any, viewer?: string) => ({
   body: m.retracted ? "" : m.body, revision: m.revision, retracted: !!m.retracted, edited_at: m.edited_at, created_at: m.created_at,
   mentions: JSON.parse(m.mentions), ...(viewer ? {reply_jobs: replyJobViews(ot, m, viewer)} : {}), reply_to: m.reply_to, pinned: !!m.pinned_by,
   ...(viewer && m.reply_to && !m.retracted ? {reply_preview: replyPreview(ot, m, viewer)} : {}),
+  ...(m.forwarded_author && !m.retracted ? {forwarded_from: {author: m.forwarded_author}} : {}),
   attachment: m.retracted ? undefined : attachmentView(ot, m.id),
   voice: m.retracted ? undefined : ot.get<{mime: string}>("SELECT mime FROM ot_voice_messages WHERE message_id=?", m.id),
   reactions: ot.all<any>("SELECT emoji, COUNT(*) AS n, SUM(owner_id = ?) AS me FROM ot_reactions WHERE message_id = ? GROUP BY emoji", viewer ?? "", m.id).map((r) => ({ emoji: r.emoji, count: r.n, mine: !!r.me })),
@@ -318,7 +324,7 @@ function assertReachable(ot: OtContext, from: string, to: string, teamId?: strin
   }
 }
 
-function insertMessage(ot: OtContext, conv: any, row: { author: string; kind: "member" | "agent"; agentRef?: string; agentName?: string; body: string; mentions: string[]; replyTo?: string | null; replyMode?: string | null; clientKey?: string | null }) {
+function insertMessage(ot: OtContext, conv: any, row: { author: string; kind: "member" | "agent"; agentRef?: string; agentName?: string; body: string; mentions: string[]; replyTo?: string | null; replyMode?: string | null; clientKey?: string | null; forwardedAuthor?: string }) {
   if (row.clientKey) {
     const dup = ot.get<any>("SELECT * FROM ot_messages WHERE conversation_id = ? AND author_id = ? AND client_key = ?", conv.id, row.author, row.clientKey);
     if (dup) return dup;
@@ -326,8 +332,8 @@ function insertMessage(ot: OtContext, conv: any, row: { author: string; kind: "m
   const seq = conv.last_seq + 1;
   const now = ot.now();
   const id = newId("otm");
-  ot.run("INSERT INTO ot_messages(id, conversation_id, seq, author_id, author_kind, agent_ref, agent_name, body, mentions, reply_to, reply_mode, client_key, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    id, conv.id, seq, row.author, row.kind, row.agentRef ?? null, row.agentName ?? null, row.body, JSON.stringify(row.mentions), row.replyTo ?? null, row.replyMode ?? null, row.clientKey ?? null, now);
+  ot.run("INSERT INTO ot_messages(id, conversation_id, seq, author_id, author_kind, agent_ref, agent_name, body, mentions, reply_to, reply_mode, client_key, created_at, forwarded_author) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    id, conv.id, seq, row.author, row.kind, row.agentRef ?? null, row.agentName ?? null, row.body, JSON.stringify(row.mentions), row.replyTo ?? null, row.replyMode ?? null, row.clientKey ?? null, now, row.forwardedAuthor ?? null);
   ot.run("UPDATE ot_conversations SET last_seq = ?, updated_at = ? WHERE id = ?", seq, now, conv.id);
   if (row.kind === "member") ot.run("UPDATE ot_conversation_members SET read_seq = ? WHERE conversation_id = ? AND owner_id = ?", seq, conv.id, row.author);
   return ot.get<any>("SELECT * FROM ot_messages WHERE id = ?", id);
@@ -387,6 +393,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   registerActivityTriggers(ot);
   const messageCols = new Set(ot.all<any>("PRAGMA table_info(ot_messages)").map(c => c.name));
   if (!messageCols.has("revision")) ot.run("ALTER TABLE ot_messages ADD COLUMN revision INTEGER NOT NULL DEFAULT 1");
+  if (!messageCols.has("forwarded_author")) ot.run("ALTER TABLE ot_messages ADD COLUMN forwarded_author TEXT");
   const agentCols = new Set(ot.all<any>("PRAGMA table_info(ot_conversation_agents)").map(c => c.name));
   if (!agentCols.has("auto_reply_after_seq")) {
     ot.run("ALTER TABLE ot_conversation_agents ADD COLUMN auto_reply_after_seq INTEGER NOT NULL DEFAULT 0");
@@ -767,6 +774,50 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       return m;
     });
     return reply.status(201).send(messageView(ot, msg, me.ownerId));
+  });
+  app.post("/v1/ot/conversations/:id/forward", async (req, reply) => {
+    const me = ot.me(req);
+    const input = body(req);
+    const sourceId = params(req).id;
+    const targetId = text(input.target_conversation_id, "target_conversation_id", {min: 1, max: 80});
+    const workspace = optText(input.workspace, "workspace", {min: 32, max: 32});
+    const key = optText(input.request_key, "request_key", {min: 1, max: 80});
+    assert(sourceId !== targetId, 400, "invalid_request", "请选择另一个会话。");
+    assert(Array.isArray(input.message_ids) && input.message_ids.length > 0 && input.message_ids.length <= 20,
+      400, "invalid_request", "请选择 1–20 条消息。");
+    const ids = Array.from(new Set<string>(input.message_ids.map((id: unknown) => text(id, "message_id", {min: 1, max: 80})))).sort();
+    const fingerprint = createHash("sha256").update(JSON.stringify([sourceId, targetId, workspace, ids])).digest("hex");
+    const result = ot.tx(() => {
+      const scoped = (id: string) => workspace ? workspaceConversation(ot, workspace, id, me.ownerId).conv
+        : accountConversation(ot, id, me.ownerId);
+      const source = scoped(sourceId), target = scoped(targetId);
+      requireOrdinaryGroup(source);
+      requireOrdinaryGroup(target);
+      const prior = key && ot.get<{fingerprint: string; forwarded: number}>(
+        "SELECT fingerprint,forwarded FROM ot_forward_requests WHERE owner_id=? AND request_key=?", me.ownerId, key);
+      if (prior) {
+        assert(prior.fingerprint === fingerprint, 409, "conflict", "此转发请求已用于另一批消息。");
+        return {forwarded: prior.forwarded, target_conversation_id: target.id};
+      }
+      requireDirectReach(ot, target, me.ownerId);
+      const originals = ot.all<any>(`SELECT m.* FROM ot_messages m WHERE m.conversation_id=? AND m.retracted=0
+        AND ${VISIBLE_MESSAGE} AND m.id IN (${ids.map(() => "?").join(",")}) ORDER BY m.seq`, source.id, me.ownerId, ...ids);
+      assert(originals.length === ids.length, 409, "forward_unavailable", "所选消息中有内容已不可转发，请重新选择。");
+      for (const original of originals) {
+        const author = original.forwarded_author || (original.author_kind === "agent"
+          ? original.agent_name : ot.profileView(original.author_id).display_name);
+        const copied = insertMessage(ot, target, {author: me.ownerId, kind: "member", body: original.body,
+          mentions: [], forwardedAuthor: author || "成员"});
+        target.last_seq = copied.seq;
+        ot.run("INSERT INTO ot_voice_messages SELECT ?,mime,data FROM ot_voice_messages WHERE message_id=?", copied.id, original.id);
+        if (attachmentView(ot, original.id)) {
+          saveAttachment(ot, copied.id, me.ownerId, readAttachment(ot, source.id, original.id));
+        }
+      }
+      if (key) ot.run("INSERT INTO ot_forward_requests VALUES (?,?,?,?,?)", me.ownerId, key, fingerprint, target.id, originals.length);
+      return {forwarded: originals.length, target_conversation_id: target.id};
+    });
+    return reply.status(201).send(result);
   });
   app.get("/v1/ot/workspaces/:workspace/conversations/:id/messages/:message/file", async req => {
     const me = ot.me(req);

@@ -522,7 +522,7 @@ export function reactionToggle(reactions, emoji) {
 }
 
 export function forwardTargets(conversations, currentId) {
-  return (conversations || []).filter(item => item.id !== currentId)
+  return (conversations || []).filter(item => item.id !== currentId && !item.public_agent && item.direct?.open !== false)
     .map(item => ({id: item.id, label: (item.kind === 'dm' ? '单聊 · ' : '群聊 · ') + (item.title || '会话')}));
 }
 
@@ -1191,6 +1191,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   let selecting = false;
+  let forwardBusy = false;
+  let forwardAttempt = null;
   const selectedMessages = new Set();
   let pinnedIds = new Set();
 
@@ -1200,7 +1202,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     bar.hidden = !selecting;
     document.getElementById('forward-count').textContent = forwardCountLabel(selectedMessages.size);
     const target = document.getElementById('forward-target');
-    document.getElementById('forward-submit').disabled = !(selectedMessages.size && target.value);
+    document.getElementById('forward-submit').disabled = forwardBusy || !(selectedMessages.size && target.value);
     const toggle = document.getElementById('multi-select-toggle');
     if (toggle) { toggle.setAttribute('aria-pressed', selecting ? 'true' : 'false'); toggle.textContent = selecting ? '退出多选' : '多选'; }
   }
@@ -1251,7 +1253,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       box.checked = selectedMessages.has(item.id);
       box.setAttribute('aria-label', '选择这条消息');
       box.addEventListener('change', () => {
-        if (box.checked) selectedMessages.add(item.id); else selectedMessages.delete(item.id);
+        if (box.checked && selectedMessages.size >= 20) {
+          box.checked = false;
+          show('error', '一次最多转发 20 条消息。');
+        } else if (box.checked) {
+          selectedMessages.add(item.id);
+        } else {
+          selectedMessages.delete(item.id);
+        }
         syncForwardBar();
       });
       label.append(box, document.createTextNode('选择'));
@@ -3149,18 +3158,31 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   if (forwardSubmit) forwardSubmit.addEventListener('click', async () => {
     const cid = currentConversation && currentConversation.id, target = forwardTarget.value;
     const ids = lastSocialItems.filter(item => selectedMessages.has(item.id)).map(item => item.id);
-    if (!cid || !target || !ids.length) return;
-    forwardSubmit.disabled = true;
-    const result = await request('POST', `${socialBase()}/${cid}/forward`,
-      {message_ids: ids, target_conversation_id: target}, {'Idempotency-Key': idempotencyKey('forward-')});
-    if (result.status !== 201 && result.status !== 200) {
-      show('error', messageFor(result.body.error, '转发失败。'));
+    if (!cid || !target || !ids.length || forwardBusy) return;
+    const scope = sendScope();
+    const signature = JSON.stringify([scope, target, ids]);
+    if (forwardAttempt?.signature !== signature) forwardAttempt = {signature, key:idempotencyKey('forward-')};
+    forwardBusy = true;
+    syncForwardBar();
+    try {
+      const result = await request('POST', `${socialBase()}/${cid}/forward`,
+        {message_ids: ids, target_conversation_id: target}, {'Idempotency-Key':forwardAttempt.key});
+      if (result.status !== 201 && result.status !== 200) {
+        if (scope === sendScope()) show('error', messageFor(result.body.error, '转发失败，请重试。'));
+        return;
+      }
+      forwardAttempt = null;
+      if (scope === sendScope()) {
+        setSelecting(false);
+        show('ok', `已转发 ${result.body.forwarded ?? ids.length} 条消息。`);
+        await loadSessions();
+      }
+    } catch {
+      if (scope === sendScope()) show('error', '未能确认转发结果，请重试。');
+    } finally {
+      forwardBusy = false;
       syncForwardBar();
-      return;
     }
-    setSelecting(false);
-    show('ok', `已转发 ${ids.length} 条消息。`);
-    await loadSessions();
   });
   const chatInvite = document.getElementById('chat-invite');
   if (chatInvite) chatInvite.addEventListener('click', () => {
