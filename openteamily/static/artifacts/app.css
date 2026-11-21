@@ -1223,6 +1223,15 @@ body.app-workspace #document-rich:focus-visible { outline: none; }
 }
 
 .meeting-item .meeting-title { font-weight: 650; overflow-wrap: anywhere; }
+.meeting-item .meeting-share-badge {
+  display: inline-block;
+  margin-inline-start: .5rem;
+  padding: .1rem .45rem;
+  border-radius: 999px;
+  background: var(--ot-accent-soft);
+  color: var(--ot-accent-hover);
+  font-size: .72rem;
+}
 .meeting-item .note { margin: 0; color: var(--ot-muted); font-size: .75rem; }
 .meeting-item .meeting-actions { grid-column: 1 / -1; }
 

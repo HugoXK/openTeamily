@@ -177,7 +177,7 @@ function publicListing(ot: OtContext, conversation: {dm_key?: string | null}) {
   }>("SELECT ref, owner_id, slug, title, summary, snapshot, listed, chat_enabled, chat_from FROM ot_listings WHERE id=? AND kind='agent'", key.split(":")[1]) ?? null;
 }
 
-function fixedPublicThread(conv: {dm_key?: string | null}) {
+export function fixedPublicThread(conv: {dm_key?: string | null}) {
   return !!conv.dm_key?.startsWith("agent:");
 }
 
@@ -195,7 +195,7 @@ export function requireDirectReach(ot: OtContext, conv: {id: string; kind: strin
   assert(peer && directReachable(ot, owner, peer.owner_id), 403, "not_reachable", "请先建立联系人关系。");
 }
 
-function accountConversation(ot: OtContext, id: string, owner: string) {
+export function accountConversation(ot: OtContext, id: string, owner: string) {
   const conv = memberOf(ot, id, owner);
   assert(ordinaryDirect(conv) || conv.account_group === 1, 404, "conversation_not_found", "no such personal conversation");
   return conv;
@@ -242,14 +242,14 @@ function messageMemories(ot: OtContext, m: any) {
     JOIN ot_group_memories g ON g.id=r.memory_id WHERE r.message_id=? AND g.conversation_id=? AND ${ACTIVE_MEMORIES}`,m.id,m.conversation_id);
 }
 
-function workspaceTeam(ot: OtContext, workspace: string, ownerId: string) {
+export function workspaceTeam(ot: OtContext, workspace: string, ownerId: string) {
   assert(/^[0-9a-f]{32}$/.test(workspace), 400, "invalid_request", "Invalid workspace");
   const match = ot.get<{id: string}>("SELECT id FROM ot_teams WHERE workspace_id=?", workspace);
   assert(match, 404, "team_not_found", "Workspace not found");
   return requireMember(ot, match.id, ownerId).team;
 }
 
-function workspaceConversation(ot: OtContext, workspace: string, id: string, ownerId: string) {
+export function workspaceConversation(ot: OtContext, workspace: string, id: string, ownerId: string) {
   const team = workspaceTeam(ot, workspace, ownerId);
   const conv = memberOf(ot, id, ownerId);
   let directPeer: string | undefined;

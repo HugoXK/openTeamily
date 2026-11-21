@@ -130,7 +130,6 @@ export function meetingTimeLabel(epochSeconds) {
     + `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** Meetings come from GET /v1/workspaces/<wid>/meetings; the page only lists them, newest first. */
 export function meetingRows(items) {
   const rows = (items || []).filter((item) => item && typeof item.title === 'string');
   rows.sort((left, right) => (Number(right.started_at) || 0) - (Number(left.started_at) || 0));
@@ -139,6 +138,7 @@ export function meetingRows(items) {
     title: item.title,
     started_at: Number(item.started_at) || 0,
     actionLabel: meetingActionLabel(item.action_count, item.done_count),
+    ...(item.shared === true ? {shared: true, organizer: item.organizer} : {}),
   }));
 }
 
@@ -147,6 +147,7 @@ export function meetingsForScope(items, {scope = 'all', username = '', userId = 
   if (scope !== 'joined') return rows;
   const name = (username || '').trim().toLowerCase();
   return rows.filter((row) => {
+    if (row.shared === true) return true;
     // The single-owner DS-Bot uses this marker when its platform user ID is unavailable.
     if (userId && (row.created_by === userId || row.created_by === 'owner')) return true;
     const attendees = Array.isArray(row.attendees) ? row.attendees : [];
@@ -322,6 +323,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let meetingLoadedFor = '';
   let meetingLoading = false;
   let meetingRequest = 0;
+  let meetingSharedCursor = '';
   // A delete question is bound to the workspace and artifact it was asked about;
   // leaving that workspace retires it instead of letting the answer land elsewhere.
   let pendingDeleteCancel = null;
@@ -950,24 +952,46 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (sessionEmpty) sessionEmpty.hidden = sessions.length > 0;
   }
 
-  async function loadMeetings() {
+  async function loadMeetings({appendShared = false} = {}) {
     const id = workspaceId();
-    if (!id || meetingLoadedFor === id) return;
+    if (!id || (appendShared ? !meetingSharedCursor || meetingLoading : meetingLoadedFor === id)) return;
     const seq = ++meetingRequest;
-    meetingItems = [];
+    if (!appendShared) {
+      meetingItems = [];
+      meetingSharedCursor = '';
+    }
     meetingError = '';
     meetingLoadedFor = id;
     meetingLoading = true;
     renderCatalog();
-    const listed = await request('GET', `/v1/workspaces/${id}/meetings?limit=100`).catch(() => ({status: 0, body: {}}));
+    const base = `/v1/workspaces/${id}/meetings`;
+    const get = path => request('GET', path).catch(() => ({status: 0, body: {}}));
+    const query = new URLSearchParams({limit: '100'});
+    if (appendShared) query.set('cursor', meetingSharedCursor);
+    const [listed, shared] = await Promise.all([
+      appendShared ? null : get(base + '?limit=100'),
+      servedByDsBot(document) ? get(base + '/shared?' + query) : null,
+    ]);
     if (seq !== meetingRequest || workspaceId() !== id) return;
     meetingLoading = false;
-    if (listed.status === 200) {
+    if (listed?.status === 200) {
       meetingItems = listed.body.items || [];
-    } else {
-      meetingLoadedFor = '';
+    } else if (listed) {
       meetingError = messageFor(listed.body.error, '无法读取会议纪要。');
     }
+    if (shared?.status === 200) {
+      const ids = new Set(meetingItems.filter(item => item.shared === true).map(item => item.id));
+      for (const item of shared.body.items || []) {
+        if (ids.has(item.id)) continue;
+        meetingItems.push({...item, shared: true});
+        ids.add(item.id);
+      }
+      const cursor = shared.body.cursor;
+      meetingSharedCursor = typeof cursor === 'string' && cursor !== meetingSharedCursor ? cursor : '';
+    } else if (shared && !meetingError) {
+      meetingError = appendShared ? '无法加载更多共享纪要，请重试。' : '无法读取收到的共享纪要。';
+    }
+    if (meetingError) meetingLoadedFor = '';
     if (catalogKind === 'meetings') renderCatalog();
   }
 
@@ -977,8 +1001,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const emptyMeetings = document.getElementById('empty-meetings');
     const errorBox = document.getElementById('meetings-error');
     const needle = search.value.trim().toLocaleLowerCase();
-    const matches = meetingItems.filter(item => [item.title, ...(item.attendees || [])]
-      .some(value => String(value).toLocaleLowerCase().includes(needle)));
+    const matches = meetingItems.filter(item => [item.title, item.organizer, ...(item.attendees || [])]
+      .some(value => String(value || '').toLocaleLowerCase().includes(needle)));
     const rows = meetingRows(meetingsForScope(matches, {
       scope: meetingScope,
       username: currentUser && currentUser.username,
@@ -987,7 +1011,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const caption = document.getElementById('meetings-caption');
     if (caption) {
       caption.textContent = meetingScope === 'joined'
-        ? '你出席或创建的会议纪要，最新的在前。'
+        ? '你参与、创建或收到的会议纪要，最新的在前。'
         : '这个工作区的会议纪要，最新的在前。';
     }
     list.textContent = '';
@@ -1006,6 +1030,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (empty) empty.hidden = !meetingError && rows.length > 0;
     const retry = document.getElementById('retry-meetings');
     if (retry) retry.hidden = !meetingError;
+    const more = document.getElementById('more-shared-meetings');
+    if (more) {
+      more.hidden = !meetingSharedCursor;
+      more.disabled = meetingLoading;
+      more.textContent = meetingLoading ? '正在加载…' : '加载更多共享纪要';
+    }
     const create = document.getElementById('new-meeting-in-space');
     if (create) {
       create.hidden = !workspaceId();
@@ -1016,16 +1046,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       item.className = 'meeting-item';
       item.dataset.kind = 'meetings';
       const link = document.createElement('a');
-      link.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), meeting: row.id});
+      link.href = '/meetings#' + new URLSearchParams({workspace: workspaceId(), [row.shared ? 'shared' : 'meeting']: row.id});
       const title = document.createElement('span');
       title.className = 'meeting-title';
-      title.textContent = row.title;
+      title.append(document.createTextNode(row.title));
+      if (row.shared) {
+        item.dataset.meetingShared = 'true';
+        const badge = document.createElement('span');
+        badge.className = 'meeting-share-badge';
+        badge.textContent = '共享纪要';
+        title.append(badge);
+      }
       const when = document.createElement('span');
       when.className = 'note';
       when.textContent = meetingTimeLabel(row.started_at);
       const actions = document.createElement('span');
       actions.className = 'note meeting-actions';
-      actions.textContent = row.actionLabel;
+      actions.textContent = [row.shared && row.organizer ? row.organizer + ' 分享' : '', row.actionLabel].filter(Boolean).join(' · ');
       link.append(title, when, actions);
       item.appendChild(link);
       list.appendChild(item);
@@ -1044,6 +1081,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       renderList(items, (item) => openEditor(item));
       const meetingsErrorBox = document.getElementById('meetings-error');
       if (meetingsErrorBox) meetingsErrorBox.hidden = true;
+      const moreMeetings = document.getElementById('more-shared-meetings');
+      if (moreMeetings) moreMeetings.hidden = true;
     }
     // The meetings list owns its own empty and error rows; the artifact empty states stay out of it.
     if (catalogKind === 'meetings') {
@@ -1741,6 +1780,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     model3dPreview.setSource('');
     setWebsitePreview();
     meetingLoadedFor = '';
+    meetingSharedCursor = '';
     meetingItems = [];
     meetingError = '';
     meetingLoading = false;
@@ -1752,6 +1792,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     else void loadList();
   });
   document.getElementById('retry-meetings')?.addEventListener('click', () => loadMeetings());
+  document.getElementById('more-shared-meetings')?.addEventListener('click', () => loadMeetings({appendShared: true}));
 
   document.getElementById('new-artifact').addEventListener('click', () => {
     draftKind = 'document';

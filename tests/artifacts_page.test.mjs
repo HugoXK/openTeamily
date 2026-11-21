@@ -737,6 +737,35 @@ test('meetingsForScope keeps the workspace list unless the joined scope is selec
   const local = [{id: 'm4', title: '独立容器的会议', attendees: [], created_by: 'owner'}];
   assert.deepEqual(meetingsForScope(local, {scope: 'joined', userId: 'u1'}).map(row => row.id), ['m4']);
   assert.deepEqual(meetingsForScope(local, {scope: 'joined'}), []);
+  const receipt = {id: 'received', title: '收到的纪要', organizer: '组织者', shared: true};
+  assert.deepEqual(meetingsForScope([local[0], receipt], {scope: 'joined'}), [receipt]);
+});
+
+test('the Space meetings list keeps local notes and pages received read-only copies separately', async () => {
+  const sent = query => ({id: query, title: '收到的 ' + query, shared: true, organizer: '会议主持人',
+    started_at: 1710000000, action_count: 1, done_count: 1});
+  const page = await openArtifactsPage({withKinds: true, native: true,
+    meetings: [{id: 'local', title: '本人纪要', started_at: 1700000000}],
+    extraRequest(path) {
+      if (path.endsWith('/meetings/shared?limit=100')) return reply({body: {items: [sent('first')], cursor: 'second-page'}});
+      if (path.endsWith('/meetings/shared?limit=100&cursor=second-page')) return reply({body: {items: [sent('second')], cursor: null}});
+    },
+  });
+  try {
+    await page.openKind('meetings');
+    const list = page.elements.get('artifact-list');
+    const more = page.elements.get('more-shared-meetings');
+    assert.deepEqual(list.children.map(row => row.children[0].href), [
+      '/meetings#workspace=w1&shared=first', '/meetings#workspace=w1&meeting=local',
+    ]);
+    assert.equal(list.children[0].dataset.meetingShared, 'true');
+    assert.match(list.children[0].textContent, /收到的 first共享纪要.*会议主持人/);
+    assert.equal(more.hidden, false);
+    await more.dispatch('click');
+    assert.equal(list.children.length, 3);
+    assert.equal(more.hidden, true);
+    assert.equal(page.meetingCalls().length, 1, 'receipt pagination does not reload the owner notes');
+  } finally { page.close(); }
 });
 
 test('the meetings kind renders the workspace meetings from the existing endpoint', async () => {
