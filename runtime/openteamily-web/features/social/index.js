@@ -5,16 +5,33 @@ import { wrap } from '../../lib/c/legacy-v1.js'
 
 // #284: a notification switch is only real if this read path honours it. The
 // preferences are stored by the settings feature (settings.js notificationPrefs),
-// so the inbox asks that feature instead of keeping a second copy. Each row's
-// Bot Social kind maps to the category the settings page calls by name; a kind
-// outside the three (team membership, calls, adds) is never hidden.
-const NOTIFY_CATEGORY = {
-  'messenger.mention': 'mentions',
-  mention: 'mentions',
-  agent_reply: 'task_completion',
-  artifact: 'artifacts',
-  'discover.published': 'artifacts',
-  follow_work: 'artifacts',
+// so the inbox asks that feature instead of keeping a second copy.
+//
+// The category map follows the kinds Bot Social actually produces
+// (`git grep "ot.notify(" services/bot-social/src`: messenger.mention,
+// messenger.added, messenger.call, discover.published,
+// discover.conversation_started, follow.new, team.run_shared, team.join_request,
+// team.member_joined, team.membership_changed, team.removed, team.join_decided).
+// Only `messenger.mention` is a mention; nothing there is a task-completion or
+// artifact notice, so those two filters are forward-looking and change no visible
+// row today. `discover.published` and `follow.new` are follow notices ("someone
+// you follow published"), not work notices — hiding them under 作品通知 would drop
+// rows the user never asked to mute. A kind absent from this map is never hidden.
+const NOTIFY_CATEGORY = { 'messenger.mention': 'mentions' }
+
+// The listing body for the inbox: Bot Social rows projected to the shape the
+// Bot Social page reads, minus the categories the user switched off. A hidden row
+// must not keep the badge up, so once anything is filtered the count is the
+// unread rows this page actually shows; Bot Social caps one page at 200 rows, so
+// that is exact for the common case and never higher than the listing.
+export function notificationPage(data, prefs = {}) {
+  const items = (data?.notifications ?? []).map(n => ({
+    ...n.data, id: n.id, seq: n.seq, kind: n.kind,
+    created: Math.floor(n.created_at / 1000), read: n.read,
+  }))
+  const shown = items.filter(item => prefs[NOTIFY_CATEGORY[item.kind]] !== false)
+  const unreadCount = shown.length === items.length ? (data?.unread ?? 0) : shown.filter(item => !item.read).length
+  return { items: shown, unread_count: unreadCount, limit: 200 }
 }
 
 export default function social(host) {
@@ -50,15 +67,7 @@ export default function social(host) {
             if (!personal) await bs().get('/v1/ot/teams/by-workspace/' + match[1])
             const scope = personal ? {personal:'1'} : {workspace_id:match[1]}
             const data = await bs().get('/v1/ot/notifications' + qs({ limit: 200, ...scope, unread: new URLSearchParams(query).get('filter') === 'unread' ? '1' : undefined }))
-            const prefs = await notificationPrefs()
-            const items = data.notifications.map(n => ({ ...n.data, id: n.id, seq: n.seq, kind: n.kind, created: Math.floor(n.created_at / 1000), read: n.read }))
-            const shown = items.filter(item => prefs[NOTIFY_CATEGORY[item.kind]] !== false)
-            // A hidden row must not keep the badge up: once anything is filtered
-            // the count is the unread rows this page actually shows. Bot Social
-            // caps one page at 200 rows, so this is exact for the common case and
-            // never higher than what the listing shows.
-            const unreadCount = shown.length === items.length ? data.unread : shown.filter(item => !item.read).length
-            return [200, { items: shown, unread_count: unreadCount, limit: 200 }]
+            return [200, notificationPage(data, await notificationPrefs())]
           } },
         { method: 'POST', path: /^\/v1\/workspaces\/([0-9a-f]{32})\/notifications\/read$/,
           async handle({ match, body }) {
