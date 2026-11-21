@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS ot_agent_reply_jobs (
   owner_id TEXT NOT NULL, agent_ref TEXT NOT NULL, agent_name TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('queued','running','failed','replied')),
   attempt INTEGER NOT NULL DEFAULT 1, updated_at INTEGER NOT NULL, source_revision INTEGER,
-  progress_revision INTEGER NOT NULL DEFAULT 0,
+  progress_revision INTEGER NOT NULL DEFAULT 0, claim_id TEXT,
   UNIQUE (message_id, owner_id, agent_ref)
 );
 CREATE INDEX IF NOT EXISTS ot_agent_reply_jobs_queue ON ot_agent_reply_jobs(owner_id, status, updated_at);
@@ -116,6 +116,7 @@ type ReplyJob = {
   id: string; message_id: string; owner_id: string; agent_ref: string; agent_name: string;
   status: "queued" | "running" | "failed" | "replied"; attempt: number; updated_at: number;
   available: number; source_revision: number | null; current_revision: number; progress_revision: number;
+  claim_id: string | null;
 };
 
 const REPLY_JOB_SOURCE = `SELECT j.*, src.conversation_id, src.retracted, src.seq, src.revision AS current_revision,
@@ -135,6 +136,14 @@ function replyJobState(job: ReplyJob, now: number) {
       && (!job.available || job.updated_at <= now - REPLY_JOB_TIMEOUT
         || (job.source_revision !== null && job.source_revision !== job.current_revision))) return "failed";
   return job.status;
+}
+
+function replyClaimId(value: unknown) {
+  if (value === undefined) return null;
+  assert(typeof value === "string" && value.length === 36
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value),
+  400, "invalid_request", "Invalid reply job claim");
+  return value;
 }
 
 function replyJobViews(ot: OtContext, message: any, viewer?: string) {
@@ -478,6 +487,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   if (!messageCols.has("forwarded_author")) ot.run("ALTER TABLE ot_messages ADD COLUMN forwarded_author TEXT");
   const jobCols = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_agent_reply_jobs)").map(c => c.name));
   if (!jobCols.has("source_revision")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN source_revision INTEGER");
+  if (!jobCols.has("claim_id")) ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN claim_id TEXT");
   if (!jobCols.has("progress_revision")) {
     ot.tx(() => {
       ot.run("ALTER TABLE ot_agent_reply_jobs ADD COLUMN progress_revision INTEGER NOT NULL DEFAULT 0");
@@ -1100,7 +1110,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   app.post("/v1/ot/conversations/:id/messages/:message/agent-retry", async req => {
     const me = ot.me(req);
     const {id, message} = params(req);
-    const jobId = text(body(req).job_id, "job_id", {min: 1, max: 80});
+    const b = body(req);
+    const jobId = text(b.job_id, "job_id", {min: 1, max: 80});
+    const attempt = b.attempt;
+    assert(attempt === undefined || (Number.isSafeInteger(attempt) && attempt > 0),
+      400, "invalid_request", "Invalid reply job attempt");
     return ot.tx(() => {
       const conv = memberOf(ot, id, me.ownerId);
       if (conv.team_id) requireMember(ot, conv.team_id, me.ownerId);
@@ -1110,9 +1124,11 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const job = ot.get<ReplyJob>(REPLY_JOB_SOURCE + " WHERE j.id=? AND j.message_id=?", jobId, message);
       assert(job, 404, "reply_job_not_found", "找不到这次回复。");
       const now = ot.now();
-      assert(job.available && replyJobState(job, now) === "failed" && job.attempt < REPLY_JOB_ATTEMPTS,
+      assert((attempt === undefined || job.attempt === attempt) && job.available
+        && replyJobState(job, now) === "failed" && job.attempt < REPLY_JOB_ATTEMPTS,
         409, "reply_job_unavailable", "当前无法重试这次回复。");
-      ot.run("UPDATE ot_agent_reply_jobs SET status='queued',attempt=attempt+1,updated_at=?,source_revision=NULL,progress_revision=0 WHERE id=?", now, job.id);
+      ot.run(`UPDATE ot_agent_reply_jobs SET status='queued',attempt=attempt+1,updated_at=?,source_revision=NULL,
+        progress_revision=0,claim_id=NULL WHERE id=?`, now, job.id);
       replyProgress.delete(job.id);
       return {reply_jobs: replyJobViews(ot, original, me.ownerId)};
     });
@@ -1122,19 +1138,21 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const me = ot.me(req);
     const b = body(req);
     assert(b.action === "start" || b.action === "fail", 400, "invalid_request", "Invalid reply job action");
+    const claim = replyClaimId(b.claim_id);
     return ot.tx(() => {
       const job = ot.get<ReplyJob>(REPLY_JOB_SOURCE + " WHERE j.id=? AND j.owner_id=?", params(req).id, me.ownerId);
       assert(job, 404, "reply_job_not_found", "找不到这次回复。");
-      const now = ot.now();
-      const expected = b.action === "start" ? "queued" : "running";
-      assert(job.attempt === b.attempt && replyJobState(job, now) === expected,
-        409, "reply_job_unavailable", "这次回复的状态已更新。");
+      assert(job.attempt === b.attempt, 409, "reply_job_unavailable", "这次回复的状态已更新。");
+      const now = ot.now(), state = replyJobState(job, now);
       if (b.action === "start") {
         assert(b.source_revision === undefined || b.source_revision === job.current_revision,
           409, "reply_job_unavailable", "原消息已更新。");
-        ot.run("UPDATE ot_agent_reply_jobs SET status='running',updated_at=?,source_revision=? WHERE id=?",
-          now, job.current_revision, job.id);
+        if (state === "running" && claim !== null && job.claim_id === claim) return {ok: true};
+        assert(state === "queued", 409, "reply_job_unavailable", "这次回复的状态已更新。");
+        ot.run("UPDATE ot_agent_reply_jobs SET status='running',updated_at=?,source_revision=?,claim_id=? WHERE id=?",
+          now, job.current_revision, claim, job.id);
       } else {
+        assert(state === "running" && job.claim_id === claim, 409, "reply_job_unavailable", "这次回复的状态已更新。");
         ot.run("UPDATE ot_agent_reply_jobs SET status='failed',updated_at=? WHERE id=?", now, job.id);
       }
       replyProgress.delete(job.id);
@@ -1149,10 +1167,12 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     assert(Number.isSafeInteger(b.attempt) && b.attempt > 0 && Number.isSafeInteger(b.revision) && b.revision > 0
       && typeof b.text === "string" && b.text.length <= BODY_MAX,
       400, "invalid_request", "Invalid reply progress snapshot");
+    const claim = replyClaimId(b.claim_id);
     const job = ot.get<ReplyJob>(REPLY_JOB_SOURCE + " WHERE j.id=? AND j.owner_id=?", params(req).id, me.ownerId);
     assert(job, 404, "reply_job_not_found", "找不到这次回复。");
     const now = ot.now();
-    assert(job.attempt === b.attempt && job.source_revision === job.current_revision && replyJobState(job, now) === "running",
+    assert(job.attempt === b.attempt && job.claim_id === claim
+      && job.source_revision === job.current_revision && replyJobState(job, now) === "running",
       409, "reply_job_unavailable", "这次回复的状态已更新。");
     const previous = replyProgress.get(job.id);
     assert(b.revision > job.progress_revision, 409, "reply_progress_stale", "这次回复的进度已更新。");
@@ -1163,8 +1183,9 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       assert(replyProgress.size < REPLY_PROGRESS_CAPACITY, 429, "reply_progress_busy", "正在显示的回复进度过多。");
     }
     // Keep ordering across Bot Social restarts. Only the revision counter is durable.
-    const accepted = ot.run("UPDATE ot_agent_reply_jobs SET progress_revision=? WHERE id=? AND status='running' AND attempt=? AND progress_revision<?",
-      b.revision, job.id, job.attempt, b.revision);
+    const accepted = ot.run(`UPDATE ot_agent_reply_jobs SET progress_revision=? WHERE id=?
+      AND status='running' AND attempt=? AND claim_id IS ? AND progress_revision<?`,
+    b.revision, job.id, job.attempt, claim, b.revision);
     assert(accepted.changes === 1, 409, "reply_job_unavailable", "这次回复的状态已更新。");
     replyProgress.set(job.id, {attempt: job.attempt, text: b.text, expires: job.updated_at + REPLY_JOB_TIMEOUT});
     return {ok: true};
@@ -1365,6 +1386,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const ref = String(b.agent_ref ?? "");
     const bodyText = text(b.body, "body", { min: 1, max: BODY_MAX, multiline: true });
     const mode = b.mode === "auto" ? "auto" : b.mode === "public" ? "public" : "mention";
+    const claim = replyClaimId(b.claim_id);
+    assert(claim === null || mode === "mention", 400, "invalid_request", "Invalid reply job claim");
     const msg = ot.tx(() => {
       const conv = memberOf(ot, params(req).id, me.ownerId);
       if (conv.team_id) requireMember(ot, conv.team_id, me.ownerId);
@@ -1384,11 +1407,12 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
         assert(mode !== "public", 400, "invalid_request", "Public mode requires a public agent thread");
       }
       const originalId = b.reply_to ? String(b.reply_to) : null;
-      const job = originalId && mode === "mention" ? ot.get<ReplyJob>(REPLY_JOB_SOURCE
-        + " WHERE j.message_id=? AND j.owner_id=? AND j.agent_ref=? AND src.conversation_id=?", originalId, me.ownerId, ref, conv.id) : undefined;
-      if (b.job_id !== undefined) {
-        assert(job && job.id === b.job_id && job.attempt === b.attempt && job.available
-          && (replyJobState(job, ot.now()) === "running" || job.status === "replied"),
+      const job = originalId && mode !== "public" ? ot.get<ReplyJob>(REPLY_JOB_SOURCE
+        + " WHERE j.message_id=? AND j.owner_id=? AND j.agent_ref=? AND src.conversation_id=? AND (?='mention' OR j.claim_id IS NOT NULL)",
+      originalId, me.ownerId, ref, conv.id, mode) : undefined;
+      if (b.job_id !== undefined || claim !== null || job?.claim_id != null) {
+        assert(mode === "mention" && job && job.id === b.job_id && job.attempt === b.attempt && job.available
+          && job.claim_id === claim && (replyJobState(job, ot.now()) === "running" || job.status === "replied"),
         409, "reply_job_unavailable", "这次回复的状态已更新。");
       } else if (job) {
         // Older inbox clients can finish a first attempt while containers update.

@@ -2475,12 +2475,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         button.setAttribute('aria-label', '重试 ' + job.agent_name);
         button.addEventListener('click', async () => {
           const cid = currentConversation.id;
-          const wid = workspaceId();
+          const scope = sendScope();
           button.disabled = true;
           button.textContent = '重试中…';
-          const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/agent-retry`, {job_id: job.id})
+          const result = await request('POST', `${socialBase()}/${cid}/messages/${item.id}/agent-retry`,
+            {job_id: job.id, attempt: job.attempt})
             .catch(() => ({status: 0, body: {}}));
-          if (workspaceId() !== wid || currentSource !== 'social' || currentConversation?.id !== cid) return;
+          if (sendScope() !== scope || currentSource !== 'social' || currentConversation?.id !== cid) return;
           if (result.status === 200) {
             // A response from a poll started before the click may still be in flight.
             socialOpen++;
@@ -2500,6 +2501,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             button.disabled = false;
             button.textContent = '重试';
             show('error', messageFor(result.body.error, '暂时无法重试，请稍后再试。'));
+            if (result.status === 409) void openSocialConversation(cid, {refresh: true});
           }
         });
         row.append(button);

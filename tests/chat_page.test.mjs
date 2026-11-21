@@ -990,6 +990,32 @@ test('a group reply already absent from the first progress poll refreshes its fa
   } finally { restore(); }
 });
 
+test('group retry submits the displayed attempt and refreshes an outdated failure', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const job = {id: 'retry-job', attempt: 1, status: 'failed', agent_name: '核对助手', can_retry: true};
+  const original = {id: 'source', user_id: alice, body: '请协助核对', created: 1, seq: 1};
+  const attempts = [];
+  const {doc, el, restore, fetcher} = groupReplyChat((path, opts, conversation) => {
+    if (!path) {
+      const latest = attempts.length ? {...job, attempt: 2} : job;
+      return json(200, {conversation, items: [{...original, reply_jobs: [latest]}]});
+    }
+    assert.equal(path, '/messages/source/agent-retry');
+    attempts.push(JSON.parse(opts.body));
+    return json(409, {error: {code: 'reply_job_unavailable', message: '这次回复的状态已更新。'}});
+  });
+  try {
+    await mount(doc, {fetcher});
+    const list = el('message-list');
+    const retry = descendants(list.children[0]).find(node => node.getAttribute('aria-label') === '重试 核对助手');
+    await fire(retry, 'click');
+    await settle();
+    assert.deepEqual(attempts, [{job_id: job.id, attempt: 1}]);
+    const row = descendants(list.children[0]).find(node => node.className === 'group-reply-job');
+    assert.equal(row.dataset.replyAttempt, '2');
+  } finally { restore(); }
+});
+
 test('manual group requests preserve a failed draft and append the eventual accepted group message', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const promptText = '请总结这次讨论';

@@ -2,7 +2,7 @@
 // Bot Social hands over only the messages addressed to this user's agents (agent inbox: @mentions,
 // or every member message where auto-reply is on); the reply is one native DS-Bot turn here and is
 // posted back as the agent. Bot Social enforces the 3-per-hour cap on automatic replies (#346).
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -12,7 +12,7 @@ const MAX_CONTEXT_CHARS = 6000
 const REPLY_TEXT_LIMIT = 4000
 const PROGRESS_INTERVAL = 250
 const INBOX_INTERVAL = 2500
-const DELIVERY_RETRY_DELAY = 150
+const MANAGED_RETRY_DELAY = 150
 
 export function selectGroupMemories(query, items) {
   if (!Array.isArray(items)) return []
@@ -60,7 +60,19 @@ function publicReplyPrompt(item) {
   ].join('\n')
 }
 
-function replyProgress(bs, item, log) {
+// A managed start or delivery can have committed before the response was lost.
+// Bot Social validates the unchanged claim and returns the original result.
+async function replayManagedPost(bs, path, payload) {
+  try { return await bs.post(path, payload) } catch (error) {
+    const status = error?.status
+    const transient = status === undefined ? error?.code === 'social/unreachable' : status >= 500 && status < 600
+    if (!transient) throw error
+  }
+  await delay(MANAGED_RETRY_DELAY)
+  return bs.post(path, payload)
+}
+
+function replyProgress(bs, item, claimId, log) {
   const path = `/v1/ot/agent-reply-jobs/${encodeURIComponent(item.job_id)}/progress`
   let open = true, sending = false
   let timer, pending, previous
@@ -86,7 +98,7 @@ function replyProgress(bs, item, log) {
     sending = true
     nextAt = Date.now() + PROGRESS_INTERVAL
     try {
-      await bs.post(path, {attempt:item.attempt, revision:++revision, text})
+      await bs.post(path, {attempt:item.attempt, claim_id:claimId, revision:++revision, text})
     } catch (error) {
       if ([403, 404, 409].includes(error?.status)) close()
       else log(`agent reply progress: ${error?.code ?? 'error'}`)
@@ -123,11 +135,14 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
   }
   let running = false
 
-  async function changeJob(item, action) {
+  async function changeJob(item, action, claimId) {
     try {
       const sourceRevision = item.message?.revision
-      await bs.post(`/v1/ot/agent-reply-jobs/${encodeURIComponent(item.job_id)}`, {action, attempt:item.attempt,
-        ...(action === 'start' && Number.isSafeInteger(sourceRevision) ? {source_revision:sourceRevision} : {})})
+      const path = `/v1/ot/agent-reply-jobs/${encodeURIComponent(item.job_id)}`
+      const payload = {action, attempt:item.attempt, claim_id:claimId,
+        ...(action === 'start' && Number.isSafeInteger(sourceRevision) ? {source_revision:sourceRevision} : {})}
+      if (action === 'start') await replayManagedPost(bs, path, payload)
+      else await bs.post(path, payload)
       return true
     } catch (error) {
       if (!['social/reply_job_unavailable', 'social/reply_job_not_found'].includes(error?.code)) {
@@ -157,11 +172,12 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
       for (const item of [...(inbox.jobs ?? []), ...(inbox.items ?? [])]) {
         const id = item.message?.id
         if (!id || !item.agent_ref) continue
-        if (item.job_id && !await changeJob(item, 'start')) continue
+        const claimId = item.job_id ? randomUUID() : null
+        if (claimId && !await changeJob(item, 'start', claimId)) continue
         const requestId = item.job_id ? `ots:${item.job_id}:${item.attempt}` : `ots:${id}:${item.agent_ref}`
         const replyKey = `r:${createHash('sha256').update(JSON.stringify([id, item.agent_ref])).digest('hex')}`
         const memories = item.mode === 'public' ? [] : selectGroupMemories(item.message?.body,item.group_memories)
-        const progress = item.job_id && item.mode !== 'public' ? replyProgress(bs, item, log) : null
+        const progress = claimId && item.mode !== 'public' ? replyProgress(bs, item, claimId, log) : null
         const params = {agent_id:item.agent_ref, key:`social:${item.conversation_id}`, request_id:requestId}
         let text
         try {
@@ -175,27 +191,21 @@ export function createAgentReplier({ bs, host, stateFile, log = () => {} }) {
           if (item.mode === 'public') text = '这次回复失败，请稍后重试。'
         } finally { progress?.close() }
         if (!text) {
-          if (item.job_id) await changeJob(item, 'fail')
+          if (claimId) await changeJob(item, 'fail', claimId)
           continue
         }
         try {
           const path = `/v1/ot/conversations/${encodeURIComponent(item.conversation_id)}/agent-messages`
           const payload = {
             agent_ref: item.agent_ref, body: text.slice(0, REPLY_TEXT_LIMIT).toWellFormed(), reply_to: id, mode: item.mode, client_key: replyKey,
-            ...(item.job_id ? {job_id: item.job_id, attempt: item.attempt} : {}),
+            ...(claimId ? {job_id: item.job_id, attempt: item.attempt, claim_id: claimId} : {}),
             ...(memories.length ? {group_memory_ids:memories.map(memory=>memory.id)} : {}),
           }
-          await bs.post(path, payload).catch(async error => {
-            const status = error?.status
-            const transient = status === undefined ? error?.code === 'social/unreachable' : status >= 500 && status < 600
-            if (!item.job_id || !transient) throw error
-            // Bot Social returns the stored reply when a managed attempt was delivered before the connection dropped.
-            await delay(DELIVERY_RETRY_DELAY)
-            await bs.post(path, payload)
-          })
+          if (claimId) await replayManagedPost(bs, path, payload)
+          else await bs.post(path, payload)
           replied++
         } catch (error) {
-          if (item.job_id) await changeJob(item, 'fail')
+          if (claimId) await changeJob(item, 'fail', claimId)
           if (!['social/agent_reply_limit', 'social/auto_reply_disabled', 'social/public_chat_closed', 'social/reply_job_unavailable'].includes(error?.code)) log(`agent reply not posted: ${error?.code ?? 'error'}`)
         }
       }

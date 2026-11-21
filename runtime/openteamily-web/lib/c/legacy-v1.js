@@ -913,7 +913,8 @@ function messengerExtraRoutes(host, wakeReplies) {
         const [, workspace, conversation, message] = match
         const bs = client(host)
         await messengerScope(host, bs, workspace, conversation)
-        const result = await bs.post(conv(conversation) + '/messages/' + seg(message) + '/agent-retry', {job_id: body?.job_id})
+        const result = await bs.post(conv(conversation) + '/messages/' + seg(message) + '/agent-retry',
+          {job_id: body?.job_id, attempt: body?.attempt})
         wakeReplies()
         return [200, result]
       }),
