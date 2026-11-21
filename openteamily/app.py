@@ -413,6 +413,7 @@ class App:
             (user_id, username, password_hash(opaque() + opaque()), now),
         )
         self.attach_oidc(db, user_id, identity, now)
+        self.queue_new_account_runtime(db, user_id, username, now)
         return self.oidc_signed_in(db, now, user_id)
 
     def attach_oidc(self, db, user_id, identity, now):
@@ -500,6 +501,7 @@ class App:
                         refuse(429, 'quota', 'Account capacity reached')
                     user_id = uuid4().hex
                     db.execute('INSERT INTO users VALUES(?,?,?,?)', (user_id, username, password_hash(password), now))
+                    self.queue_new_account_runtime(db, user_id, username, now)
                     headers = self.new_session(db, user_id, now)
                 return 201, {'user': {'id': user_id, 'username': username}}, headers
             with self.store.connect() as db:
@@ -815,11 +817,8 @@ class App:
 
     def personal_agent_ensure(self, db, session, now):
         try:
-            row, created = personal.ensure(
-                db, {'id': session['user_id'], 'username': session['username']},
-                self.config.max_workspaces_per_user, self.config.max_workspaces,
-                self.config.max_agents_per_workspace, now)
-        except ValueError:
+            row, created = self.ensure_personal_agent(db, session['user_id'], session['username'], now)
+        except personal.WorkspaceCapacity:
             refuse(429, 'quota', 'Workspace capacity reached')
         payload = self.personal_payload(db, session, row)
         if self.auto_provision.enabled:
@@ -830,6 +829,21 @@ class App:
                 'error_code': runtime_autoprovision.chat_error(
                     db, lambda iid: self.workspace_instance(db, row['workspace_id'], iid), provision)}
         return (201 if created else 200), payload, []
+
+    def ensure_personal_agent(self, db, user_id, username, now):
+        return personal.ensure(db, {'id': user_id, 'username': username},
+                               self.config.max_workspaces_per_user, self.config.max_workspaces,
+                               self.config.max_agents_per_workspace, now)
+
+    def queue_new_account_runtime(self, db, user_id, username, now):
+        if not self.auto_provision.enabled or self.lifecycle.policy.backend_mode != 'compose':
+            return
+        try:
+            row, _ = self.ensure_personal_agent(db, user_id, username, now)
+        except personal.WorkspaceCapacity:
+            # Signup can succeed even if the personal workspace must be retried.
+            return
+        self.ensure_personal_runtime(db, user_id, row, now)
 
     def ensure_personal_runtime(self, db, user_id, row, now):
         """Server-derived: the caller's own personal workspace and agent only."""
