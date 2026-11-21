@@ -1,3 +1,6 @@
+import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
+import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/public-agent-link.mjs';
+import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 
 export const KIND_LABELS = {
@@ -58,7 +61,10 @@ function element(tag, className, text) {
 }
 
 function show(document, kind, text) {
-  const status = document.getElementById('home-status');
+  const signedIn = document.getElementById('main-panel')?.hidden === false;
+  const status = document.getElementById(signedIn ? 'home-status' : 'status');
+  const other = document.getElementById(signedIn ? 'status' : 'home-status');
+  if (other) other.textContent = '';
   if (!status) return;
   status.dataset.kind = kind || '';
   status.textContent = text || '';
@@ -72,6 +78,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   const greeting = document.getElementById('home-greeting');
   if (!loginPanel || !mainPanel || !form || !workspaceSelect) return null;
 
+  const view = document.defaultView ?? globalThis;
+  const pendingKey = 'ot-pending-meeting';
+  const meetingFromLink = meetingCodeFromHash(view.location?.hash);
+  if (meetingFromLink) {
+    try { view.sessionStorage.setItem(pendingKey, meetingFromLink); } catch {}
+  }
   let currentUser = null;
   let workspaces = [];
   let personal = null;
@@ -175,7 +187,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     list.replaceChildren(...(items || []).map((item) => {
       const li = element('li');
       const link = element('a', 'home-row');
-      link.href = '/space';
+      link.href = spaceHref(selectedId, item && item.id);
       const title = element('strong', '', item.title);
       const meta = element('span', 'home-row-note', kindLabel(item.kind));
       const when = element('time', 'home-row-time', formatWhen(item.updated, now));
@@ -234,12 +246,54 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     renderStats(result.body.counts || null);
     const quickChat = document.querySelector('.home-actions a[href="/chat"]');
     if (quickChat) quickChat.href = '/chat#workspace=' + encodeURIComponent(selectedId);
+    const spaceLinks = document.querySelectorAll('a[href^="/space"]');
+    for (const link of spaceLinks) {
+      if (link.classList.contains('home-row')) continue;
+      link.href = spaceHref(selectedId);
+    }
     const notifications = document.getElementById('home-notifications');
     const unread = Number(result.body.unread_notifications) || 0;
     if (notifications) {
       notifications.hidden = unread === 0;
       notifications.textContent = `有 ${unread} 条未读通知，打开聊天查看`;
     }
+  }
+
+  async function continuePublicAgent(intent) {
+    const continuation = publicAgentContinuation(intent);
+    loginPanel.hidden = true;
+    mainPanel.hidden = true;
+    show(document, 'loading', '正在打开公开智能体…');
+    try {
+      const [, initial] = await Promise.all([
+        request('POST', '/v1/personal-agent').catch(() => ({status: 0})),
+        request('GET', '/v1/workspaces?scope=personal').catch(() => ({status: 0})),
+      ]);
+      let ready = initial;
+      for (let attempt = 0; attempt < 23 && !ready.body?.items?.length; attempt++) {
+        if (publicAgentContinuation(publicAgentIntentFromHash(view.location?.hash)) !== continuation) return;
+        await new Promise(resolve => globalThis.setTimeout(resolve, 1000));
+        ready = await request('GET', '/v1/workspaces?scope=personal').catch(() => ({status: 0}));
+      }
+      if (publicAgentContinuation(publicAgentIntentFromHash(view.location?.hash)) !== continuation) return;
+      if (ready.status === 200 && ready.body?.items?.length) {
+        view.location.replace('/chat' + continuation);
+        return;
+      }
+    } catch {}
+    show(document, 'error', '聊天尚未准备好。');
+    const status = document.getElementById('status');
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.id = 'public-agent-login-retry';
+    retry.className = 'public-agent-action';
+    retry.textContent = '重试';
+    retry.addEventListener('click', () => void load());
+    const back = document.createElement('a');
+    back.href = '/a/' + intent.slug;
+    back.className = 'public-agent-action';
+    back.textContent = '返回公开主页';
+    status.append(retry, back);
   }
 
   async function load() {
@@ -251,11 +305,30 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         currentUser = null;
         loginPanel.hidden = false;
         mainPanel.hidden = true;
+        const intent = view.location?.pathname === '/login' && publicAgentIntentFromHash(view.location.hash);
+        const register = loginPanel.querySelector?.('.login-register-button');
+        if (register && intent) register.href = '/register' + publicAgentContinuation(intent);
         show(document, '', '');
         return;
       }
       if (session.status !== 200 || !session.body.user) {
         show(document, 'error', (session.body.error && session.body.error.message) || '无法读取会话。');
+        return;
+      }
+      let meeting = meetingFromLink;
+      try {
+        meeting ||= view.sessionStorage.getItem(pendingKey);
+        view.sessionStorage.removeItem(pendingKey);
+      } catch {}
+      const target = meetingHref(meeting);
+      if (target) {
+        view.location.replace(target);
+        return;
+      }
+      if (view.location?.pathname === '/login') {
+        const intent = publicAgentIntentFromHash(view.location.hash);
+        if (intent) await continuePublicAgent(intent);
+        else view.location.replace('/');
         return;
       }
       currentUser = session.body.user;
@@ -307,7 +380,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       password: form.elements.password.value,
     });
     if (result.status !== 200) {
-      show(document, 'error', (result.body.error && result.body.error.message) || '无法登录。');
+      show(document, 'error', result.status === 401 ? '用户名或密码不正确。'
+        : (result.body.error && result.body.error.message) || '无法登录。');
       return;
     }
     form.reset();
