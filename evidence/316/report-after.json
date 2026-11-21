@@ -1,0 +1,882 @@
+{
+  "slug": "ev316after",
+  "reuse": {
+    "theme": "dsh-client-ui-theme — token names only: the page maps --dsw-alias-* (shellTokens in themes.js) and resolves our dark arm to documentElement.dataset.themeResolved=dark; body[data-ds-dark-theme] is set by the dsh host, absent in these standalone pages (fact darkAttr), so no parallel palette is invented",
+    "viewports": "none — dsh ships no px breakpoint constant (only prefers-reduced-motion/transparency); 1440x900 + 390x844 are the owner rule, kept as-is",
+    "hmr": "none — not needed for static before/after shots"
+  },
+  "generated_at": "2026-11-21T19:14:08.718Z",
+  "sides": [
+    {
+      "name": "after",
+      "url": "http://127.0.0.1:8773"
+    }
+  ],
+  "images": [
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__agents__agents-default.png",
+      "route": "/agents",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "agents-default",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 68147
+      },
+      "sha256": "ffdccf68cf3d00c816850b1615d354a5528ed4cde4c562bfbb91e587720d502c",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 380
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 380,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__agents__agents-archived-on.png",
+      "route": "/agents",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "agents-archived-on",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 76431
+      },
+      "sha256": "03ef9493fde54e0ece9b6000d67650b07cd0826fc5868a9baa26a3685ff43611",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 414
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 414,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__1440x900__agents__agents-restored.png",
+      "route": "/agents",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "agents-restored",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 72304
+      },
+      "sha256": "02b49929a05e09f1c23e12b1b0b98722aebe3c7f84d91f9e30e605f4fd27a3e3",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 410
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 410,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__agents__agents-default.png",
+      "route": "/agents",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "agents-default",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 72568
+      },
+      "sha256": "f08f096913ecc5b5becdf3ffc5cc1b90689043bea307b799c82fea0a7f292bd6",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 380
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 380,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__agents__agents-archived-on.png",
+      "route": "/agents",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "agents-archived-on",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 80381
+      },
+      "sha256": "ff8a6b8185df3a3fac6d3105ba15ff2d3d590ae1ade4fed058e63d12c4c9a4d5",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 414
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 414,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__1440x900__agents__agents-restored.png",
+      "route": "/agents",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "agents-restored",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 77700
+      },
+      "sha256": "1f0c1f086d2ce8a908693d95f5f5688863c07f36e146ad8b8153a5c1f4ce6cec",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 410
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 410,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__agents__agents-default.png",
+      "route": "/agents",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "agents-default",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 68147
+      },
+      "sha256": "ffdccf68cf3d00c816850b1615d354a5528ed4cde4c562bfbb91e587720d502c",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 380
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 380,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__agents__agents-archived-on.png",
+      "route": "/agents",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "agents-archived-on",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 76431
+      },
+      "sha256": "03ef9493fde54e0ece9b6000d67650b07cd0826fc5868a9baa26a3685ff43611",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 414
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 414,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__1440x900__agents__agents-restored.png",
+      "route": "/agents",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "1440x900",
+      "state": "agents-restored",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 72304
+      },
+      "sha256": "02b49929a05e09f1c23e12b1b0b98722aebe3c7f84d91f9e30e605f4fd27a3e3",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 410
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 410,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__agents__agents-default.png",
+      "route": "/agents",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "agents-default",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 72569
+      },
+      "sha256": "c6ed77312ff7cd5c13722a94b6011991d01f88a1a3c28c906a32a37995d403d2",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 380
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 380,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__agents__agents-archived-on.png",
+      "route": "/agents",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "agents-archived-on",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 80382
+      },
+      "sha256": "2742c7811090789d45e1ebeec773bb4d919913aec72272a791d4e5bf66798c3e",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 414
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 414,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__1440x900__agents__agents-restored.png",
+      "route": "/agents",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "state": "agents-restored",
+      "png": {
+        "width": 1440,
+        "height": 900,
+        "bytes": 77700
+      },
+      "sha256": "1f0c1f086d2ce8a908693d95f5f5688863c07f36e146ad8b8153a5c1f4ce6cec",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 410
+      },
+      "facts": {
+        "vp": "1440x900",
+        "scrollWidth": 1440,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 410,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__agents__agents-default.png",
+      "route": "/agents",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "agents-default",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 64262
+      },
+      "sha256": "143754204182d7a113b19d1dc5d0d84aabde36e96b71ac6785f9e00599302b3b",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 380
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 380,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__agents__agents-archived-on.png",
+      "route": "/agents",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "agents-archived-on",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 71009
+      },
+      "sha256": "ebe9c65673515bdc4db3462ab81b47873e3c62dd5985c707c6931aca098edfbf",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 414
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 414,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__390x844__agents__agents-restored.png",
+      "route": "/agents",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "agents-restored",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 70748
+      },
+      "sha256": "ac2248d49759da55d76c6fbc0d846486a3cc7043ca62d40296df067adf22605b",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 410
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 410,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__agents__agents-default.png",
+      "route": "/agents",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "agents-default",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 70231
+      },
+      "sha256": "3c7b7b2999dd8651763e27fddde6149a949cba9723590095f510cc4f405244be",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 380
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 380,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__agents__agents-archived-on.png",
+      "route": "/agents",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "agents-archived-on",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 76746
+      },
+      "sha256": "419cb0dbf9e24c690d5e52d3095efe72fb2b2ffb7857317a7ee5bfced3a75c1d",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 414
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 414,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__390x844__agents__agents-restored.png",
+      "route": "/agents",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "agents-restored",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 76678
+      },
+      "sha256": "0244cf30ef1110834c0efde6cb98c8bcc73ffb26bb0920b72ccc78a4c4cc4245",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 410
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 410,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__agents__agents-default.png",
+      "route": "/agents",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "agents-default",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 64262
+      },
+      "sha256": "143754204182d7a113b19d1dc5d0d84aabde36e96b71ac6785f9e00599302b3b",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 380
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 380,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__agents__agents-archived-on.png",
+      "route": "/agents",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "agents-archived-on",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 71009
+      },
+      "sha256": "ebe9c65673515bdc4db3462ab81b47873e3c62dd5985c707c6931aca098edfbf",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 414
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 414,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__390x844__agents__agents-restored.png",
+      "route": "/agents",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "390x844",
+      "state": "agents-restored",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 70748
+      },
+      "sha256": "ac2248d49759da55d76c6fbc0d846486a3cc7043ca62d40296df067adf22605b",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 410
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 浅色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 410,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__agents__agents-default.png",
+      "route": "/agents",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "agents-default",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 70231
+      },
+      "sha256": "3c7b7b2999dd8651763e27fddde6149a949cba9723590095f510cc4f405244be",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 380
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 380,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__agents__agents-archived-on.png",
+      "route": "/agents",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "agents-archived-on",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 76746
+      },
+      "sha256": "419cb0dbf9e24c690d5e52d3095efe72fb2b2ffb7857317a7ee5bfced3a75c1d",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 414
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 414,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__390x844__agents__agents-restored.png",
+      "route": "/agents",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "390x844",
+      "state": "agents-restored",
+      "png": {
+        "width": 390,
+        "height": 844,
+        "bytes": 76678
+      },
+      "sha256": "0244cf30ef1110834c0efde6cb98c8bcc73ffb26bb0920b72ccc78a4c4cc4245",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 410
+      },
+      "facts": {
+        "vp": "390x844",
+        "scrollWidth": 390,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 我 深色 下载 QA 智能体 AI 团队 搜索智能体 创建我的智能体 已登录为 qa316after 工作区 证据工作区 你是这个工作区的所有者，可以创建和归档智能体，并与自己的智能体对话。 对照说明 全部 Content Creation Customer Support Data A",
+        "textLength": 410,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": []
+    }
+  ],
+  "failures": []
+}
