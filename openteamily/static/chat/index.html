@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
   <title data-ui-text="chat.page.title">聊天 · OpenTeamily</title>
-  <script type="module" src="/chat/startup.mjs" async></script>
+  <script type="module" src="/chat/startup.mjs" async fetchpriority="high"></script>
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/chat/app.css">
   <link rel="stylesheet" href="/look/app.css">
@@ -616,7 +616,7 @@
       <textarea id="public-draft-recovery-text" rows="3" readonly aria-label="首页草稿" data-ui-label="chat.draft.homepage"></textarea>
       <button type="button" id="public-draft-recovery-clear" data-ui-text="chat.draft.clear_homepage">清除首页草稿</button>
     </details>
-    <form id="chat-form" method="post" action="/v1/workspaces">
+    <form id="chat-form" method="post" action="/v1/workspaces" novalidate>
       <div class="composer">
         <div id="chat-reply-preview" class="composer-reply" hidden>
           <div class="composer-reply-copy" aria-live="polite">
@@ -774,10 +774,13 @@
     </div>
     <p id="chat-meeting-share-status" role="status"></p>
   </div>
+  <p id="chat-meeting-notes-hint" class="note" aria-live="polite" hidden></p>
   <div class="actions" id="chat-call-footer">
     <button type="button" id="chat-meeting-end" hidden data-ui-text="chat.meetings.end">结束会议</button>
     <button type="button" id="chat-meeting-hangup" hidden data-ui-text="chat.meetings.leave">离开会议</button>
     <button type="button" id="chat-call-close" data-ui-text="chat.close">关闭</button>
+    <button type="button" id="chat-meeting-notes-copy" hidden>复制纪要入口</button>
+    <a id="chat-meeting-notes" data-ui-text="chat.meetings.organize" hidden>整理会议纪要</a>
     <button type="submit" form="chat-meeting-form" id="chat-meeting-submit" hidden><span data-ui-text="chat.meetings.join">加入会议</span></button>
   </div>
 </dialog>

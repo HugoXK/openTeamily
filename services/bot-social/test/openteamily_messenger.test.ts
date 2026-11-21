@@ -109,6 +109,7 @@ test("live calls notify members and relay signals only to their target peer", as
   assert.deepEqual(await member.ok("GET", root), {call: null});
   const started = await owner.ok("POST", root + "/join", {kind: "video", start: true, peer_id: first});
   const callId = started.call.id;
+  const recordPath = "/v1/ot/call-records/" + callId;
   assert.equal(started.call.kind, "video");
   assert.equal((await owner.ok("POST", root + "/join", {kind: "video", start: true, peer_id: first})).call.id, callId);
   assert.equal((await owner.call("POST", root + "/join", {kind: "video", start: true, peer_id: "tab-duplicate-12345678"})).status, 409);
@@ -127,10 +128,18 @@ test("live calls notify members and relay signals only to their target peer", as
   const received = await member.ok("POST", root + "/poll", {call_id: callId, peer_id: second});
   assert.equal(received.signals.length, 1);
   assert.deepEqual(received.signals[0].description, signal.description);
-  await owner.ok("POST", root + "/leave", {call_id: callId, peer_id: first});
+  assert.equal((await member.call("GET", recordPath)).data.error.code, "meeting_call_active");
+  assert.deepEqual(await owner.ok("POST", root + "/leave", {call_id: callId, peer_id: first}), {left: true});
+  assert.equal((await owner.call("GET", recordPath)).status, 409);
   assert.equal((await member.ok("GET", root)).call.peers.length, 1);
-  await member.ok("POST", root + "/leave", {call_id: callId, peer_id: second});
+  assert.deepEqual(await member.ok("POST", root + "/leave", {call_id: callId, peer_id: second}), {left: true, handoff: {id: callId}});
   assert.deepEqual(await member.ok("GET", root), {call: null});
+  const ownerRecord = (await owner.ok("GET", recordPath)).record;
+  assert.deepEqual((await member.ok("GET", recordPath)).record, ownerRecord);
+  assert.equal(ownerRecord.title, "Standup");
+  assert.equal(ownerRecord.started_at, started.call.created_at);
+  assert.equal(ownerRecord.attendees.length, 2);
+  assert.equal((await outsider.call("GET", recordPath)).status, 404);
 });
 
 test("group memory sources page past the activation cursor with current membership and revisions", async () => {
@@ -442,12 +451,45 @@ test("standalone video meetings grant access to the call only, and only its host
   assert.deepEqual((await guest.ok("GET", "/v1/ot/conversations")).conversations, []);
   assert.deepEqual((await host.ok("GET", "/v1/ot/conversations")).conversations, []);
   const guestPeer = {call_id: joined.call.id, peer_id: joined.peer_id};
+  const recordPath = "/v1/ot/call-records/" + joined.call.id;
+  assert.deepEqual(await outsider.ok("POST", path + "/preview", {code: created.meeting.code}), {title: input.title});
+  assert.equal((await outsider.call("GET", recordPath)).status, 404);
+  assert.equal((await guest.call("GET", recordPath)).data.error.code, "meeting_call_active");
   assert.equal((await guest.ok("POST", path + "/poll", guestPeer)).call.peers.length, 2);
   assert.equal((await outsider.call("POST", path + "/poll", guestPeer)).status, 404);
   assert.equal((await guest.call("POST", path + "/end", guestPeer)).status, 403);
-  await host.ok("POST", path + "/end", {call_id: created.call.id, peer_id: created.peer_id});
+  const ended = await host.ok("POST", path + "/end", {call_id: created.call.id, peer_id: created.peer_id});
+  assert.deepEqual(ended, {ended: true, handoff: {id: created.call.id}});
   assert.equal((await guest.call("POST", path + "/poll", guestPeer)).status, 404);
   assert.equal((await guest.call("POST", path + "/preview", {code: created.meeting.code})).status, 404);
+  assert.equal((await outsider.call("POST", path + "/join", {code: created.meeting.code, peer_id: "never-attended-browser"})).status, 404);
+  const closed = (await guest.ok("GET", recordPath)).record;
+  assert.deepEqual((await host.ok("GET", recordPath)).record, closed);
+  assert.deepEqual(Object.keys(closed).sort(), ["attendees", "ended_at", "id", "kind", "started_at", "title"]);
+  assert.equal(closed.title, input.title);
+  assert.ok(closed.ended_at >= closed.started_at);
+  const visibleNames = await Promise.all([host.ok("GET", "/v1/ot/me"), guest.ok("GET", "/v1/ot/me")]);
+  assert.deepEqual(closed.attendees.sort(), visibleNames.map(row => row.display_name).sort());
+  await guest.ok("PUT", "/v1/ot/profile", {display_name: "Renamed participant"});
+  assert.deepEqual((await guest.ok("GET", recordPath)).record.attendees.sort(), closed.attendees);
+  assert.deepEqual(await outsider.call("GET", recordPath), await outsider.call("GET", recordPath.replace(created.call.id, "otcav_" + "Z".repeat(26))));
+});
+
+test("expired call leases close the attendance record even when no browser sends leave", async t => {
+  let now = 1_800_000_000_000;
+  const service = await startServer({...bulkAuth, now: () => now});
+  t.after(service.stop);
+  const host = await home(service.base, "expiry-host");
+  const path = "/v1/ot/meeting-calls";
+  const session = await host.ok("POST", path + "/create", {title: "Expired lease", peer_id: "expiry-host-browser"});
+  const recordPath = "/v1/ot/call-records/" + session.call.id;
+  assert.equal((await host.call("GET", recordPath)).status, 409);
+  now += 60_001;
+  const finished = (await host.ok("GET", recordPath)).record;
+  assert.equal(finished.ended_at, now);
+  assert.equal(finished.attendees.length, 1);
+  assert.equal((await host.call("POST", path + "/preview", {code: session.meeting.code})).status, 404);
+  assert.deepEqual((await host.ok("GET", recordPath)).record, finished);
 });
 
 test("chat files are idempotent and readable only by active members of the correct conversation", async () => {

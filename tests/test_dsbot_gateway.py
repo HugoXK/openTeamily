@@ -190,6 +190,7 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/messages/{aid}/files/0'), 'agents')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/attachments'), 'agents')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/reply-progress'), 'agents')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/messages/{aid}/retry'), 'agents')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/social/conversations/otc_01/attachments'), 'messenger')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/profile/dream'), 'memory')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/actions/draft'), 'memory')
@@ -198,6 +199,7 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/candidates/{aid}'), 'memory')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/social/conversations/otc_01/memory/capture'), 'messenger')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/memory/capture'), 'agents')
+
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/draft'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/speech'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/share-recipients'), 'meetings')
@@ -206,7 +208,36 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/action'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/shared/{aid}/revoke'), 'meetings')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/transcribe'), 'meetings')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/meetings/from-call/otcav_' + 'A' * 26), 'meetings')
+        self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/meetings/from-call/otcav_' + 'O' * 26))
         self.assertIsNone(gw.moved_api(f'/v1/workspaces/{ws}/meetings/{aid}/draft'))
+
+    def test_team_runs_are_forwarded_only_to_the_signed_in_users_runtime(self):
+        workspace = 'a' * 32
+        run = 'c' * 32
+        share = 'otsr_' + '0' * 26
+        base = f'/v1/workspaces/{workspace}/team-runs'
+        shared = f'/v1/workspaces/{workspace}/shared-runs'
+        for path, feature in (
+            (base, 'team-runs'),
+            (f'{base}/{run}/steps/7/retry', 'team-runs'),
+            (f'{base}/{run}/steps/1/artifact', 'team-runs'),
+            (f'{base}/{run}/share', 'shares'),
+            (f'{shared}/{share}/revoke', 'shares'),
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(gw.moved_api(path), feature)
+                self.assertEqual(self.call(uri=path, method='POST', origin=ORIGIN)[0], 401)
+                for owner, instance in (('a' * 32, '1' * 32), ('b' * 32, '2' * 32)):
+                    status, headers = self.call(self.tokens[owner], uri=path, method='POST', origin=ORIGIN)
+                    self.assertEqual(status, 204)
+                    self.assertEqual(headers['X-OT-Instance'], instance)
+                    self.assertIn(f'feature={feature}', headers['X-OT-Upstream-Path'])
+        self.assertIsNone(gw.moved_api(f'{base}/{run}/steps/8/retry'))
+        self.assertEqual(self.call(uri='/team-runs')[0], 401)
+        status, headers = self.call(self.tokens['a' * 32], uri='/team-runs')
+        self.assertEqual(status, 204)
+        self.assertEqual(headers['X-OT-Upstream-Path'], '/api/openteamily/page?path=%2Fteam-runs')
 
     def test_c_api_routing_matches_plugin_features_without_platform_execution(self):
         ws, ident = 'a' * 32, 'b' * 32

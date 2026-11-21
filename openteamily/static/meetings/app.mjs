@@ -1,6 +1,6 @@
 import {mountMeetingAudio} from './audio.mjs';
 import {readWorkspaceChoices, servedByDsBot} from '../shell/dsbot-api.mjs';
-import {takeMeetingFromChat} from '../shell/meeting-link.mjs';
+import {isMeetingCallId, takeMeetingFromChat} from '../shell/meeting-link.mjs';
 
 function csrfCookie(source) {
   const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
@@ -438,6 +438,8 @@ function mount() {
   let viewer = '';
   if (!status || !loginPanel || !mainPanel || !form) return;
   let current = null;
+  let callDraft = null;
+  const callSource = document.getElementById('meeting-call-source');
   const sharedDetail = document.getElementById('shared-meeting-detail');
   const emptyDetail = document.getElementById('meeting-empty');
   const sharing = mountMeetingShares(document, {
@@ -910,18 +912,20 @@ function mount() {
     }
     document.getElementById('meeting-meta').textContent = current?.id
       ? '修订 ' + current.revision + ' · 创建者 ' + current.created_by : '新会议';
+    callSource.hidden = !callDraft && !isMeetingCallId(current?.source_call_id);
     sharing.sync();
     renderList();
-    rewriteLocation(current?.id ? {meeting: current.id} : {new: '1'});
+    rewriteLocation(current?.id ? {meeting: current.id} : callDraft ? {'from-call': callDraft.id} : {new: '1'});
   }
 
-  function fill(meeting) {
+  function fill(meeting, source = null) {
     selection += 1;
     resetSave();
     syncLibraryLink();
     audio.reset();
     hideAttendees();
     current = meeting;
+    callDraft = source;
     resume.hidden = true;
     clearArtifactResult();
     setReceiptMode(false);
@@ -929,9 +933,10 @@ function mount() {
     form.hidden = false;
     form.inert = false;
     emptyDetail.hidden = true;
-    document.getElementById('meeting-title').value = meeting ? meeting.title : '';
-    document.getElementById('meeting-started-at').value = inputTime(meeting ? meeting.started_at : null);
-    document.getElementById('meeting-attendees').value = meeting ? (meeting.attendees || []).join(', ') : '';
+    const details = meeting || source;
+    titleInput.value = details?.title ?? '';
+    document.getElementById('meeting-started-at').value = inputTime(details?.started_at);
+    attendeeInput.value = (details?.attendees || []).join(', ');
     document.getElementById('meeting-summary').value = meeting ? (meeting.summary || '') : '';
     document.getElementById('meeting-transcript').value = meeting ? (meeting.transcript || '') : '';
     clearDraft();
@@ -944,6 +949,7 @@ function mount() {
     selection += 1;
     resetSave();
     current = null;
+    callDraft = null;
     actions = [];
     actionFollowups = [];
     resume.hidden = true;
@@ -1052,6 +1058,7 @@ function mount() {
     const workspace = workspaceId(), pendingSelection = ++selection;
     resetSave();
     current = null;
+    callDraft = null;
     sharing.sync();
     audio.reset();
     clearDraft();
@@ -1092,6 +1099,32 @@ function mount() {
     if (items.some(item => item.id === selected)) workspaceSelect.value = selected;
   }
 
+  async function openCallDraft(id, read) {
+    const target = scope();
+    show('loading', '正在打开通话纪要…');
+    const result = await (read || request('GET', `${base()}/from-call/${id}`).catch(() => unavailable));
+    if (!active(target)) return;
+    const {source, meeting, viewer_username: owner, workspace_id: workspace} = result.body;
+    if (result.status !== 200 || owner !== target.viewer || workspace !== target.workspace ||
+        source?.id !== id || typeof source.title !== 'string' || !Number.isSafeInteger(source.started_at) ||
+        !Array.isArray(source.attendees) || (meeting &&
+        (!meetingIdPattern.test(meeting.id) || meeting.source_call_id !== id || meeting.workspace_id !== workspace))) {
+      const code = result.body.error?.code;
+      show('error', result.status === 409 && code === 'meeting_call_active' ? '通话还未结束。结束后可刷新此页面整理纪要。'
+        : result.status === 404 ? '无法访问这场通话的纪要。'
+        : '无法加载通话纪要，请刷新重试。');
+      return;
+    }
+    if (meeting) {
+      await openMeeting(meeting.id, {status: 200, body: {meeting, viewer_username: owner}});
+    } else {
+      fill(null, source);
+      document.getElementById('main').scrollTop = 0;
+      callSource.focus({preventScroll: true});
+      show('ok', '已填入通话信息。上传录音或粘贴转写后，可生成纪要。');
+    }
+  }
+
   async function load() {
     const seq = ++workspaceLoad;
     selection += 1;
@@ -1102,16 +1135,28 @@ function mount() {
     const linkedWorkspace = linked.get('workspace');
     const meetingId = linked.get('meeting') || '';
     const shareId = linked.get('shared') || '';
-    const exact = meetingIdPattern.test(linkedWorkspace)
+    const fromCall = linked.has('from-call');
+    const callId = linked.get('from-call');
+    const validCallLink = native && isMeetingCallId(callId) && linked.getAll('from-call').length === 1 &&
+      !['meeting', 'shared', 'new', 'from'].some(key => linked.has(key)) &&
+      (!linked.has('workspace') || (linked.getAll('workspace').length === 1 && meetingIdPattern.test(linkedWorkspace)));
+    const exact = !fromCall && meetingIdPattern.test(linkedWorkspace)
       && (linked.has('shared') ? !meetingId && meetingIdPattern.test(shareId) : meetingIdPattern.test(meetingId));
     const eagerDetail = native && exact
       ? request('GET', `/v1/workspaces/${linkedWorkspace}/meetings/${shareId ? 'shared/' + shareId : meetingId}`)
         .catch(() => unavailable) : null;
+    const eagerSource = validCallLink && linkedWorkspace
+      ? request('GET', `/v1/workspaces/${linkedWorkspace}/meetings/from-call/${callId}`).catch(() => unavailable) : null;
+    if (fromCall) {
+      form.hidden = true;
+      if (layout) layout.dataset.view = 'catalogue';
+    }
     newButton.disabled = true;
     const session = await request('GET', '/v1/auth/session').catch(() => unavailable);
     if (seq !== workspaceLoad) return;
     if (session.status !== 200) {
       current = null;
+      callDraft = null;
       viewer = '';
       search.value = '';
       openOnly.checked = false;
@@ -1156,7 +1201,9 @@ function mount() {
     const workspaces = listed.status === 200 ? (listed.body.items || []) : [];
     const withVerified = items => verified && !items.some(item => item.id === linkedWorkspace)
       ? [{id: linkedWorkspace, name: '当前工作区'}, ...items] : items;
-    fillWorkspaces(withVerified(workspaces), verified ? workspaceId() : linkedWorkspace || workspaceId());
+    const personal = fromCall && !linkedWorkspace
+      ? workspaces.find(item => item.kind === 'personal')?.id || '' : '';
+    fillWorkspaces(withVerified(workspaces), verified ? workspaceId() : linkedWorkspace || personal || workspaceId());
     void supplemental?.then(shared => {
       if (seq === workspaceLoad && shared.status === 200) fillWorkspaces(withVerified(shared.body.items || []), workspaceId());
     });
@@ -1176,7 +1223,13 @@ function mount() {
       show('error', listed.status === 200 ? '还没有工作区。请先到聊天页创建。' : '无法读取工作区，请刷新重试。');
       return;
     }
-    if (linked.has('shared')) {
+    if (fromCall) {
+      if (!validCallLink || (!linkedWorkspace && !personal)) {
+        show('error', '通话纪要链接无效。');
+        return;
+      }
+      await Promise.all([openCallDraft(callId, eagerSource), loadList({keepEditor: true})]);
+    } else if (linked.has('shared')) {
       if (workspaceId() === linkedWorkspace && meetingIdPattern.test(shareId) && !meetingId) {
         await openSharedMeeting(shareId, viewerMatches && detail);
       } else {
@@ -1215,7 +1268,10 @@ function mount() {
 
   function beginSave() {
     const title = titleInput.value.trim();
-    const startedAt = Math.floor(new Date(startedInput.value).getTime() / 1000);
+    const startedAt = callDraft && startedInput.value === inputTime(callDraft.started_at) ? callDraft.started_at
+      : Math.floor(new Date(startedInput.value).getTime() / 1000);
+    const attendees = callDraft && attendeeInput.value === callDraft.attendees.join(', ') ? callDraft.attendees
+      : parseAttendees(attendeeInput.value);
     if (!title) { showSave('error', '请填写标题。'); return null; }
     if (!Number.isFinite(startedAt)) { showSave('error', '请选择开始时间。'); return null; }
     const submittedActions = actions.filter(action => (action.text || '').trim());
@@ -1223,9 +1279,10 @@ function mount() {
       ...scope(), kind: 'save', id: current?.id, revision: current?.revision, draft: draftContents(), submittedActions,
       key: current?.id ? null : meetingKey('meeting-'),
       changes: {
-        title, started_at: startedAt, attendees: parseAttendees(attendeeInput.value),
+        title, started_at: startedAt, attendees,
         summary: summary.value, transcript: transcript.value,
         action_items: submittedActions.map(({text, owner, done}) => ({text, owner, done})),
+        ...(!current?.id && callDraft ? {source_call_id: callDraft.id} : {}),
       },
     };
   }
@@ -1234,6 +1291,7 @@ function mount() {
     const meeting = result.body.meeting;
     return [200, 201].includes(result.status) && meetingIdPattern.test(meeting?.id || '') &&
       meeting.workspace_id === operation.workspace && (!operation.id || meeting.id === operation.id) &&
+      (!operation.changes.source_call_id || meeting.source_call_id === operation.changes.source_call_id) &&
       Number.isSafeInteger(meeting.revision) && meeting.revision > 0 ? meeting : null;
   }
 
@@ -1280,7 +1338,9 @@ function mount() {
     if (!meeting) {
       if (uncertain) showSave('error', '暂时无法确认保存结果。草稿已保留，请重试。');
       else if (conflict) showSave('error', '会议已在别处更新。草稿已保留，请复制修改后重新打开会议。');
-      else if (result.status === 409) showSave('error', '同名会议已存在。请更换标题后保存。');
+      else if (result.status === 409 && changes.source_call_id && result.body.error?.code === 'meeting_exists') {
+        showSave('error', '这场通话已有纪要。草稿已保留，可复制修改后从通话链接打开已保存的纪要。');
+      } else if (result.status === 409) showSave('error', '同名会议已存在。请更换标题后保存。');
       else showSave('error', messageFor(result.body.error, '保存失败。草稿已保留，请重试。'));
       return;
     }
@@ -1289,6 +1349,7 @@ function mount() {
     if (!newerDraft && layout?.dataset.view !== 'catalogue') fill(meeting);
     else {
       current = meeting;
+      callDraft = null;
       clearArtifactResult();
       for (const action of actions) delete action.savedIndex;
       if (!revisedCreate) operation.submittedActions.forEach((action, index) => { action.savedIndex = index; });
@@ -1415,6 +1476,7 @@ function mount() {
   listRetry.addEventListener('click', () => retryList && loadList(retryList));
 
   workspaceSelect.addEventListener('change', () => {
+    workspaceLoad += 1;
     selection += 1;
     syncLibraryLink();
     audio.reset();

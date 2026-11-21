@@ -8,6 +8,9 @@
 // independent branches continue. No runtime_tasks row exists. Runs are private to
 // the owner; sharing a run with a team goes through Bot Social (phase C).
 import { createHash } from 'node:crypto'
+import { BODY_MAX, TITLE_MAX, validBody } from '../artifacts/model.js'
+import { FeatureError, requireBodyKeys } from '../../featurekit/http.js'
+import { createV1Endpoint } from '../../featurekit/v1.js'
 import { openDatabase, newId } from '../../src/store.js'
 
 export const MIN_STEPS = 2
@@ -15,7 +18,6 @@ export const MAX_STEPS = 8
 export const LIMITS = { title: 80, goal: 2000, instruction: 1000, dependencyBudget: 1200, runs: 50, active: 5, attempts: 3 }
 const ID = /^[0-9a-f]{32}$/
 const IDEM = /^[A-Za-z0-9_-]{16,64}$/
-const ACTIVE = new Set(['queued', 'running'])
 const sha = (t) => createHash('sha256').update(String(t)).digest('hex')
 const now = () => Math.floor(Date.now() / 1000)
 
@@ -23,6 +25,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS team_runs (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL, goal TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('running','succeeded','failed','cancelled')), created INTEGER NOT NULL, updated INTEGER NOT NULL,
   key_hash TEXT NOT NULL, request_hash TEXT NOT NULL, UNIQUE(workspace_id, key_hash));
+CREATE INDEX IF NOT EXISTS team_runs_workspace_recent ON team_runs(workspace_id, created DESC, id DESC);
 CREATE TABLE IF NOT EXISTS team_run_steps (run_id TEXT NOT NULL REFERENCES team_runs(id) ON DELETE CASCADE, position INTEGER NOT NULL,
   agent_id TEXT NOT NULL, agent_name TEXT NOT NULL, instruction TEXT NOT NULL, depends TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('waiting','queued','running','succeeded','failed','blocked','cancelled')),
@@ -54,6 +57,50 @@ export function stepPrompt(run, step, steps) {
   return lines.join('\n')
 }
 
+function teamRunsV1(endpoints, log) {
+  const base = '/v1/workspaces/([0-9a-f]{32})/team-runs'
+  const detail = base + '/([0-9a-f]{32})'
+  const route = (pattern, handle) => ({
+    pattern: new RegExp('^' + pattern + '$'),
+    async handle(req, ...params) {
+      if (req.queryString) throw new FeatureError(400, 'invalid', 'Invalid team run query')
+      try {
+        return await handle(req, ...params)
+      } catch (error) {
+        if (error instanceof FeatureError || !error?.status) throw error
+        throw new FeatureError(error.status, String(error.code ?? 'error').replace(/^team-runs\//, ''), error.message)
+      }
+    },
+  })
+  const only = (req, method) => {
+    if (req.method !== method) throw new FeatureError(405, 'method', 'Only ' + method + ' is supported')
+  }
+  return createV1Endpoint({ feature: 'team-runs', context: {log}, routes: [
+    route(base, async (req, workspace_id) => {
+      if (req.method === 'GET') return { body: await endpoints.list({workspace_id}) }
+      only(req, 'POST')
+      const body = requireBodyKeys(await req.json(64 * 1024), ['title', 'goal', 'steps'])
+      const {status, run} = await endpoints.create({ ...body, workspace_id, idempotency_key: req.headers.get('idempotency-key') })
+      return {status, body: {run}}
+    }),
+    route(detail, async (req, workspace_id, id) => {
+      only(req, 'GET')
+      return {body: await endpoints.get({workspace_id, id})}
+    }),
+    route(detail + '/(cancel|remove)', async (req, workspace_id, id, action) => {
+      only(req, 'POST')
+      return {body: await endpoints[action]({workspace_id, id})}
+    }),
+    route(detail + '/steps/([0-7])/(retry|artifact)', async (req, workspace_id, id, rawPosition, action) => {
+      only(req, 'POST')
+      const payload = {workspace_id, id, position: Number(rawPosition)}
+      if (action === 'retry') return {body: await endpoints.retry(payload)}
+      const {status, artifact} = await endpoints['step-artifact'](payload)
+      return {status, body: {artifact}}
+    }),
+  ] })
+}
+
 export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
   db.exec(SCHEMA)
   const one = (sql, ...a) => db.prepare(sql).get(...a)
@@ -61,12 +108,31 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
   const run = (sql, ...a) => db.prepare(sql).run(...a)
   const inflight = new Map() // `${run}:${pos}` -> promise
   const ws = (p) => { if (typeof p?.workspace_id !== 'string' || !ID.test(p.workspace_id)) fail('invalid', 'workspace_id required', 400); return p.workspace_id }
+  async function workspace(p) {
+    const id = ws(p)
+    const binding = await host.call('agents/personal-binding', {}).catch(() => null)
+    if (binding?.workspace_id === id) return id
+    const teams = await host.call('teams/activeWorkspaces', {}).catch(() => [])
+    if (!Array.isArray(teams) || !teams.some(team => team.id === id)) fail('workspace_unavailable', '无法访问此工作区。', 404)
+    return id
+  }
   const loadRun = (workspaceId, id) => {
     const row = typeof id === 'string' && ID.test(id) ? one('SELECT * FROM team_runs WHERE id=? AND workspace_id=?', id, workspaceId) : undefined
     if (!row) fail('not-found', 'Team run not found', 404)
     return row
   }
   const steps = (runId) => all('SELECT * FROM team_run_steps WHERE run_id=? ORDER BY position', runId)
+  const transaction = (fn) => {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      const result = fn()
+      db.exec('COMMIT')
+      return result
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  }
   const setStep = (runId, position, fields) => {
     const keys = Object.keys(fields).sort()
     run(`UPDATE team_run_steps SET ${keys.map((k) => `${k}=?`).join(', ')} WHERE run_id=? AND position=?`, ...keys.map((k) => fields[k]), runId, position)
@@ -75,10 +141,12 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
     depends_on: JSON.parse(s.depends), status: s.status, error_code: s.error_code, output: s.output, attempts: s.attempts,
     started: s.started, finished: s.finished, stage: depth[s.position], ds_bot: JSON.parse(s.meta) })
   function view(row, withSteps = true) {
-    const list = steps(row.id)
+    const list = withSteps ? steps(row.id) : null
+    const progress = list ? {succeeded: list.filter(s => s.status === 'succeeded').length, total: list.length}
+      : {succeeded: row.succeeded_steps, total: row.total_steps}
     const out = { id: row.id, workspace_id: row.workspace_id, title: row.title, goal: row.goal, status: row.status, created: row.created,
-      updated: row.updated, progress: { succeeded: list.filter((s) => s.status === 'succeeded').length, total: list.length }, served_by: 'ds-bot' }
-    if (withSteps) { const depth = stages(list); out.steps = list.map((s) => stepView(s, depth)) }
+      updated: row.updated, progress, served_by: 'ds-bot' }
+    if (list) { const depth = stages(list); out.steps = list.map(s => stepView(s, depth)) }
     return out
   }
 
@@ -86,40 +154,54 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
   function launch(runRow, step, list) {
     const key = `${runRow.id}:${step.position}`
     if (inflight.has(key)) return
-    setStep(runRow.id, step.position, { status: 'running', started: step.started ?? clock(), attempts: step.attempts + 1, error_code: null })
-    const job = (async () => {
+    const attempt = step.attempts + 1
+    const claim = run(`UPDATE team_run_steps SET status='running', started=?, attempts=?, error_code=NULL
+      WHERE run_id=? AND position=? AND status IN ('waiting','queued')`, clock(), attempt, runRow.id, step.position)
+    if (!claim.changes) return
+    const currentAttempt = () => one(`SELECT 1 FROM team_run_steps
+      WHERE run_id=? AND position=? AND status='running' AND attempts=?`, runRow.id, step.position, attempt)
+    const job = Promise.resolve().then(async () => {
       try {
-        const reply = await host.call('agents/turn', { agent_id: step.agent_id, key: `team-run:${runRow.id}:${step.position}:${step.attempts + 1}`,
-          text: stepPrompt(runRow, step, list), request_id: `ot-team-run:${runRow.id}:${step.position}:${step.attempts + 1}` })
-        const current = one('SELECT status FROM team_run_steps WHERE run_id=? AND position=?', runRow.id, step.position)
-        if (current?.status !== 'running') return // cancelled meanwhile
-        setStep(runRow.id, step.position, { status: 'succeeded', output: String(reply.text ?? ''), finished: clock(), meta: JSON.stringify({ engine: 'ds-bot', session_id: reply.session_id ?? null, turn_id: reply.turn_id ?? null }) })
+        await workspace(runRow)
+        if (!currentAttempt()) return
+        const reply = await host.call('agents/turn', { agent_id: step.agent_id, key: `team-run:${runRow.id}:${step.position}:${attempt}`,
+          text: stepPrompt(runRow, step, list), request_id: `ot-team-run:${runRow.id}:${step.position}:${attempt}` })
+        if (!currentAttempt()) return
+        const output = String(reply?.text ?? '').trim()
+        if (!output) fail('empty-reply', 'DS-Bot turn ended without a reply', 502)
+        setStep(runRow.id, step.position, { status: 'succeeded', output, finished: clock(), meta: JSON.stringify({ engine: 'ds-bot', session_id: reply.session_id ?? null, turn_id: reply.turn_id ?? null }) })
       } catch (error) {
-        const current = one('SELECT status FROM team_run_steps WHERE run_id=? AND position=?', runRow.id, step.position)
-        if (current?.status !== 'running') return
-        const code = /not-found$|archived$/.test(String(error?.code)) ? 'agent_unavailable' : /timed out/i.test(String(error?.message)) ? 'timeout' : 'runtime_failed'
+        if (!currentAttempt()) return
+        const native = String(error?.code ?? '')
+        const code = ({
+          'team-runs/workspace_unavailable': 'workspace_unavailable',
+          'agents/model-unconfigured': 'model_unconfigured',
+          'agents/empty-reply': 'empty_reply',
+          'team-runs/empty-reply': 'empty_reply',
+        })[native] ?? (/not-found$|archived$/.test(native) ? 'agent_unavailable'
+          : /runtime-unavailable$/.test(native) ? 'runtime_unavailable'
+          : /timed out/i.test(String(error?.message)) ? 'timeout' : 'runtime_failed')
         setStep(runRow.id, step.position, { status: 'failed', error_code: code, finished: clock() })
         log(`team run ${runRow.id} step ${step.position} failed (${code})`)
       }
-    })().finally(() => { inflight.delete(key); try { advance(runRow.id) } catch (error) { log('team run advance failed: ' + (error?.message ?? 'error')) } })
+    }).finally(() => { inflight.delete(key); try { advance(runRow.id) } catch (error) { log('team run advance failed: ' + (error?.message ?? 'error')) } })
     inflight.set(key, job)
   }
 
   // Block dependants of failures, launch runnable steps, settle the run status.
-  function advance(runId) {
+  function advance(runId, dispatch = true) {
     const runRow = one('SELECT * FROM team_runs WHERE id=?', runId)
     if (!runRow || runRow.status !== 'running') return runRow
-    for (let pass = 0; pass <= MAX_STEPS; pass += 1) {
-      let changed = false
-      const list = steps(runId)
-      for (const s of list) {
-        if (s.status === 'queued' || (s.status === 'running' && !inflight.has(`${runId}:${s.position}`))) { launch(runRow, { ...s, attempts: s.status === 'running' ? Math.max(0, s.attempts - 1) : s.attempts }, list); changed = true; continue }
-        if (s.status !== 'waiting') continue
-        const deps = JSON.parse(s.depends).map((d) => list[d])
-        if (deps.some((d) => ['failed', 'blocked', 'cancelled'].includes(d.status))) { setStep(runId, s.position, { status: 'blocked', finished: clock() }); changed = true }
-        else if (deps.every((d) => d.status === 'succeeded')) { launch(runRow, s, list); changed = true }
+    const list = steps(runId)
+    for (const s of list) {
+      if (s.status !== 'waiting' && s.status !== 'queued') continue
+      const deps = JSON.parse(s.depends).map((d) => list[d])
+      if (deps.some(d => ['failed', 'blocked', 'cancelled'].includes(d.status))) {
+        s.status = 'blocked'
+        setStep(runId, s.position, { status: 'blocked', finished: clock() })
+      } else if (dispatch && deps.every(d => d.status === 'succeeded')) {
+        launch(runRow, s, list)
       }
-      if (!changed) break
     }
     const states = new Set(steps(runId).map((s) => s.status))
     if (!['waiting', 'queued', 'running'].some((s) => states.has(s))) {
@@ -128,107 +210,149 @@ export function createTeamRuns({ db, host, clock = now, log = () => {} }) {
     return one('SELECT * FROM team_runs WHERE id=?', runId)
   }
 
-  async function parseSteps(workspaceId, value) {
+  function parseSteps(value) {
     if (!Array.isArray(value) || value.length < MIN_STEPS || value.length > MAX_STEPS) fail('invalid', 'Provide 2-8 steps', 400)
     const out = []
     for (const [index, item] of value.entries()) {
       if (!item || typeof item !== 'object' || Object.keys(item).some((k) => !['agent_id', 'instruction', 'depends_on'].includes(k))) fail('invalid', 'Each step needs agent_id, instruction and depends_on', 400)
       const deps = item.depends_on ?? []
       if (typeof item.agent_id !== 'string' || !ID.test(item.agent_id)) fail('invalid', 'Choose an agent for every step', 400)
-      let agent
-      try { agent = (await host.call('agents/get', { workspace_id: workspaceId, id: item.agent_id })).agent } catch { agent = null }
-      if (!agent || agent.archived) fail('invalid', 'Choose an active workspace agent for every step', 400)
       if (!text(item.instruction, LIMITS.instruction)) fail('invalid', 'Each step needs an instruction of at most 1000 characters', 400)
       if (!Array.isArray(deps) || deps.length > index || deps.some((d) => !Number.isInteger(d) || d < 0 || d >= index) || new Set(deps).size !== deps.length) fail('invalid', 'A step may only depend on earlier steps', 400)
-      out.push({ agent, instruction: item.instruction.trim(), depends: [...deps].sort((a, b) => a - b) })
+      out.push({ agent_id: item.agent_id, instruction: item.instruction.trim(), depends: [...deps].sort((a, b) => a - b) })
     }
     return out
   }
 
   const endpoints = {
     async list(p) {
-      const workspaceId = ws(p)
-      return { items: all('SELECT * FROM team_runs WHERE workspace_id=? ORDER BY created DESC, id DESC LIMIT ?', workspaceId, LIMITS.runs).map((r) => view(r, false)) }
+      const workspaceId = await workspace(p)
+      const rows = all(`SELECT r.*,
+        (SELECT COUNT(*) FROM team_run_steps s WHERE s.run_id=r.id) AS total_steps,
+        (SELECT COUNT(*) FROM team_run_steps s WHERE s.run_id=r.id AND s.status='succeeded') AS succeeded_steps
+        FROM team_runs r WHERE r.workspace_id=? ORDER BY r.created DESC,r.id DESC LIMIT ?`, workspaceId, LIMITS.runs)
+      return { items: rows.map(row => view(row, false)) }
     },
-    get: async (p) => ({ run: view(loadRun(ws(p), p.id)) }),
+    get: async (p) => ({ run: view(loadRun(await workspace(p), p.id)) }),
     async create(p) {
-      const workspaceId = ws(p)
+      const workspaceId = await workspace(p)
       if (!text(p.title, LIMITS.title) || !text(p.goal, LIMITS.goal)) fail('invalid', 'Provide a title (<=80) and a goal (<=2000)', 400)
-      const parsed = await parseSteps(workspaceId, p.steps)
-      if (!IDEM.test(String(p.idempotency_key ?? ''))) fail('invalid', 'Supply a 16–64 character Idempotency-Key', 400)
+      const parsed = parseSteps(p.steps)
+      if (typeof p.idempotency_key !== 'string' || !IDEM.test(p.idempotency_key)) fail('invalid', 'Supply a 16–64 character Idempotency-Key', 400)
       const keyHash = sha('team-run:' + p.idempotency_key)
-      const requestHash = sha(JSON.stringify({ goal: p.goal.trim(), steps: parsed.map((s) => [s.agent.id, s.instruction, s.depends]), title: p.title.trim() }))
-      const prior = one('SELECT * FROM team_runs WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
-      if (prior) {
+      const title = p.title.trim(), goal = p.goal.trim()
+      const requestHash = sha(JSON.stringify({ goal, steps: parsed.map(s => [s.agent_id, s.instruction, s.depends]), title }))
+      const existing = () => {
+        const prior = one('SELECT * FROM team_runs WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
+        if (!prior) return null
         if (prior.request_hash !== requestHash) fail('conflict', 'Idempotency key was used for a different request', 409)
         return { status: 200, run: view(prior) }
       }
-      const owned = all('SELECT status FROM team_runs WHERE workspace_id=?', workspaceId)
-      if (owned.length >= LIMITS.runs) fail('quota', 'Team run capacity reached; remove finished runs first', 429)
-      if (owned.filter((r) => r.status === 'running').length >= LIMITS.active) fail('quota', 'Too many running team runs; wait or cancel one', 429)
-      const id = newId()
-      const t = clock()
-      db.exec('BEGIN IMMEDIATE')
-      try {
-        run('INSERT INTO team_runs VALUES(?,?,?,?,?,?,?,?,?)', id, workspaceId, p.title.trim(), p.goal.trim(), 'running', t, t, keyHash, requestHash)
+      const prior = existing()
+      if (prior) return prior
+      const heads = new Map()
+      for (const id of new Set(parsed.map(s => s.agent_id))) {
+        let agent
+        try { agent = (await host.call('agents/get', { workspace_id: workspaceId, id })).agent } catch { agent = null }
+        if (!agent || agent.archived) fail('invalid', 'Choose an active workspace agent for every step', 400)
+        heads.set(id, agent.name)
+      }
+      await workspace(p)
+      const saved = transaction(() => {
+        const concurrent = existing()
+        if (concurrent) return concurrent
+        const owned = one(`SELECT COUNT(*) AS total, COUNT(CASE WHEN status='running' THEN 1 END) AS active
+          FROM team_runs WHERE workspace_id=?`, workspaceId)
+        if (owned.total >= LIMITS.runs) fail('quota', 'Team run capacity reached; remove finished runs first', 429)
+        if (owned.active >= LIMITS.active) fail('quota', 'Too many running team runs; wait or cancel one', 429)
+        const id = newId(), t = clock()
+        run('INSERT INTO team_runs VALUES(?,?,?,?,?,?,?,?,?)', id, workspaceId, title, goal, 'running', t, t, keyHash, requestHash)
         for (const [position, s] of parsed.entries()) {
-          run('INSERT INTO team_run_steps (run_id, position, agent_id, agent_name, instruction, depends, status) VALUES(?,?,?,?,?,?,?)', id, position, s.agent.id, s.agent.name, s.instruction, JSON.stringify(s.depends), 'waiting')
+          run('INSERT INTO team_run_steps (run_id, position, agent_id, agent_name, instruction, depends, status) VALUES(?,?,?,?,?,?,?)',
+            id, position, s.agent_id, heads.get(s.agent_id), s.instruction, JSON.stringify(s.depends), 'waiting')
         }
-        db.exec('COMMIT')
-      } catch (error) { db.exec('ROLLBACK'); throw error }
-      return { status: 201, run: view(advance(id)) }
+        return { id }
+      })
+      return saved.run ? saved : { status: 201, run: view(advance(saved.id)) }
     },
     async cancel(p) {
-      const row = loadRun(ws(p), p.id)
-      if (row.status === 'running') {
-        for (const s of steps(row.id)) if (ACTIVE.has(s.status) || s.status === 'waiting') setStep(row.id, s.position, { status: 'cancelled', error_code: 'cancelled', finished: clock() })
+      const row = loadRun(await workspace(p), p.id)
+      if (row.status === 'running') transaction(() => {
+        run(`UPDATE team_run_steps SET status='cancelled', error_code='cancelled', finished=?
+          WHERE run_id=? AND status IN ('waiting','queued','running')`, clock(), row.id)
         run("UPDATE team_runs SET status='cancelled', updated=? WHERE id=?", clock(), row.id)
-      }
+      })
       return { run: view(one('SELECT * FROM team_runs WHERE id=?', row.id)) }
     },
     async remove(p) {
-      const row = loadRun(ws(p), p.id)
+      const row = loadRun(await workspace(p), p.id)
       if (row.status === 'running') fail('conflict', 'Cancel a running team run before removing it', 409)
       run('DELETE FROM team_runs WHERE id=?', row.id)
       return { removed: row.id }
     },
     async retry(p) {
-      const row = loadRun(ws(p), p.id)
+      const row = loadRun(await workspace(p), p.id)
       const list = steps(row.id)
       const position = p.position
       if (!Number.isInteger(position) || position < 0 || position >= list.length || list[position].status !== 'failed') fail('conflict', 'Only a failed step can be retried', 409)
       if (row.status === 'cancelled') fail('conflict', 'A cancelled run cannot be retried', 409)
       if (list[position].attempts >= LIMITS.attempts) fail('quota', 'This step reached its retry limit', 429)
+      if (row.status !== 'running' && one("SELECT COUNT(*) AS n FROM team_runs WHERE workspace_id=? AND status='running'", row.workspace_id).n >= LIMITS.active) {
+        fail('quota', 'Too many running team runs; wait or cancel one', 429)
+      }
       const reset = new Set([position])
       for (const s of list.slice(position + 1)) if (s.status === 'blocked' && JSON.parse(s.depends).some((d) => reset.has(d))) reset.add(s.position)
-      for (const index of [...reset].sort()) setStep(row.id, index, { status: 'waiting', error_code: null, finished: null })
-      run("UPDATE team_runs SET status='running', updated=? WHERE id=?", clock(), row.id)
+      transaction(() => {
+        for (const index of reset) setStep(row.id, index, { status: 'waiting', error_code: null, started: null, finished: null })
+        run("UPDATE team_runs SET status='running', updated=? WHERE id=?", clock(), row.id)
+      })
       return { run: view(advance(row.id)) }
     },
-    // Save a finished step's output to the works library (artifacts feature, B3).
     async 'step-artifact'(p) {
-      const row = loadRun(ws(p), p.id)
+      const row = loadRun(await workspace(p), p.id)
       const step = steps(row.id)[p.position]
       if (!step || step.status !== 'succeeded' || !step.output.trim()) fail('conflict', 'Only a finished step with output can be saved', 409)
+      if (!validBody(step.output)) fail('too_large', `步骤结果无法保存为 ${BODY_MAX} 字以内的文档。`, 413)
+      const base = `${row.title} · 第 ${step.position + 1} 步`.slice(0, TITLE_MAX).toWellFormed()
+      const key = sha(`artifact-source:team_run:${row.id}:${step.position}`)
+      const save = title => host.call('artifacts/v1', { method: 'POST', path: `/v1/workspaces/${row.workspace_id}/artifacts`,
+        body: { title, body: step.output, kind: 'document' }, idempotency_key: key })
       try {
-        return await host.call('artifacts/create', { workspace_id: row.workspace_id, title: `${row.title} · 第 ${step.position + 1} 步`.slice(0, 80), body: step.output,
-          kind: 'document', idempotency_key: sha(`artifact-source:team_run:${row.id}:${step.position}`).slice(0, 64) })
+        let result = await save(base)
+        if (result.status === 409 && result.body?.error?.code === 'conflict') {
+          result = await save(base.slice(0, TITLE_MAX - 11).toWellFormed() + ' · ' + key.slice(0, 8))
+        }
+        if (result.status !== 200 && result.status !== 201) {
+          fail(result.body?.error?.code ?? 'unavailable', result.body?.error?.message ?? '无法保存步骤结果。', result.status ?? 503)
+        }
+        return { status: result.status, artifact: result.body.artifact }
       } catch (error) {
-        if (error?.code === 'openteamily/not-found') fail('unavailable', 'The works library is not in this DS-Bot yet', 503)
+        if (error?.code === 'openteamily/not-found') fail('unavailable', '资料空间暂不可用。', 503)
         throw error
       }
     },
   }
-  // A previous process's queued/running steps never finished: run them again.
+  // A claimed step may have already used tools or changed state before we lost
+  // its receipt. Resume only work that had not been claimed by the old process.
+  transaction(() => {
+    const interrupted = all(`SELECT DISTINCT s.run_id FROM team_run_steps s JOIN team_runs r ON r.id=s.run_id
+      WHERE r.status='running' AND s.status='running'`)
+    for (const {run_id} of interrupted) {
+      run("UPDATE team_run_steps SET status='failed', error_code='interrupted', finished=? WHERE run_id=? AND status='running'", clock(), run_id)
+      advance(run_id, false)
+    }
+  })
   function resume() { for (const { id } of all("SELECT id FROM team_runs WHERE status='running'")) advance(id) }
+  endpoints.v1 = teamRunsV1(endpoints, log)
   return { endpoints, inflight, advance, resume }
 }
 
 export default async function teamRuns(host) {
   const db = await openDatabase(host, 'team-runs.sqlite3')
   const feature = createTeamRuns({ db, host, log: host.log })
-  host.runtime({ timeoutMs: 10 * 60_000 }).then(() => feature.resume(), () => {})
+  const resume = () => { try { feature.resume() } catch (error) { host.log('team runs could not resume: ' + error.name) } }
+  void host.runtime().then(resume, resume)
   const wrapped = {}
   for (const [name, fn] of Object.entries(feature.endpoints)) wrapped[name] = async (payload) => fn(payload ?? {})
-  return { pages: [], endpoints: wrapped }
+  return { pages: ['team-runs'], endpoints: wrapped }
 }

@@ -59,3 +59,64 @@ test('homepage publish and get, and team-run share omit private fields', async (
   assert.ok(!JSON.stringify(share.body).includes('PRIVATE INSTR'), 'step instructions never shared')
   assert.ok(!JSON.stringify(share.body).includes('error_code'))
 })
+
+test('browser shares bind to the requested team workspace and only expose the permitted snapshot', async () => {
+  const workspace = 'c'.repeat(32)
+  const personal = 'd'.repeat(32)
+  const share = 'otsr_' + 'A'.repeat(26)
+  const view = {id: share, run_ref: RUN.id, title: RUN.title, goal: RUN.goal, status: RUN.status,
+    owner: {owner_id: 'issuer', display_name: 'Writer'}, snapshot: {steps: []}}
+  const calls = []
+  const host = setup([], undefined, {...RUN, workspace_id: workspace})
+  const runtime = host.call
+  host.call = async (endpoint, payload) => endpoint === 'agents/personal-binding'
+    ? {workspace_id: personal} : runtime(endpoint, payload)
+  let viewer = 'issuer'
+  setSharedBotSocial(createBotSocial({server: SERVER,
+    credentialsPath: join(host.dataDir, 'bot', 'flybot-social.json'),
+    fetch: async (url, request) => {
+      const {pathname, search} = new URL(url)
+      calls.push([pathname + search, request.method])
+      if (pathname.startsWith('/v1/ot/teams/by-workspace/')) {
+        assert.equal(pathname.split('/').at(-1), workspace)
+        return Response.json({id: 'ott_a', workspace_id: workspace})
+      }
+      if (pathname === '/v1/ot/me') return Response.json({owner_id: viewer})
+      if (request.method === 'PUT') {
+        const data = JSON.parse(request.body)
+        assert.equal(data.run_ref, RUN.id)
+        assert.equal(data.snapshot.steps[0].output, 'draft ok')
+        assert.equal(data.snapshot.steps[0].instruction, undefined)
+        return Response.json(view)
+      }
+      if (search === '?summary=1') return Response.json({runs: [view]})
+      if (request.method === 'DELETE') return Response.json({unshared: true})
+      assert.equal(pathname.split('/').at(-1), share)
+      return Response.json(view)
+    },
+  }))
+  const endpoint = shares(host).endpoints.v1
+  const root = '/v1/workspaces/' + workspace
+  const denied = await endpoint({method: 'GET', path: '/v1/workspaces/' + personal + '/shared-runs'})
+  assert.equal(denied.status, 404)
+  assert.equal(calls.length, 0)
+  const published = await endpoint({method: 'POST', path: root + '/team-runs/' + RUN.id + '/share',
+    body: {team_id: 'untrusted-team', snapshot: {secret: 'browser values are ignored'}}})
+  assert.equal(published.status, 200)
+  assert.equal(published.body.share.own, true)
+  assert.equal(published.body.share.run_id, RUN.id)
+  viewer = 'teammate'
+  const list = await endpoint({method: 'GET', path: root + '/shared-runs'})
+  assert.equal(list.status, 200)
+  const [summary] = list.body.items
+  assert.equal(summary.own, false)
+  assert.equal(summary.run_id, undefined)
+  assert.equal(summary.snapshot, undefined)
+  assert.equal(summary.goal, undefined)
+  const clicked = await endpoint({method: 'GET', path: root + '/shared-runs/' + share})
+  assert.equal(clicked.body.share.goal, RUN.goal)
+  assert.deepEqual(clicked.body.share.snapshot, view.snapshot)
+  viewer = 'issuer'
+  const revoked = await endpoint({method: 'POST', path: root + '/shared-runs/' + share + '/revoke'})
+  assert.deepEqual(revoked, {status: 200, body: {unshared: true}})
+})

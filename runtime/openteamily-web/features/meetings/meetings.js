@@ -6,6 +6,7 @@ import {
 } from '../../featurekit/http.js'
 import {speechStatus, transcribe} from './speech.js'
 import {shareRoutes} from './shares.js'
+import {callSource} from './call-source.js'
 
 export const LIMITS = {
   TITLE_MAX: 120, ATTENDEES_MAX: 50, ATTENDEE_MAX: 80, TRANSCRIPT_MAX: 40000, SUMMARY_MAX: 8000,
@@ -94,6 +95,7 @@ export function view(row, includeBody = true) {
     attendees: parse(row.attendees), revision: row.revision, created: row.created, updated: row.updated,
     created_by: row.created_by, updated_by: row.updated_by,
     action_count: actions.length, done_count: actions.filter((item) => item.done).length,
+    ...(row.source_call_id ? {source_call_id:row.source_call_id} : {}),
   }
   if (includeBody) Object.assign(data, { summary: row.summary, transcript: row.transcript, action_items: actions })
   return data
@@ -149,7 +151,7 @@ function meetingPage(req, workspaceId) {
     bindings.push(cursor)
   }
   const order = recent ? ' ORDER BY started_at DESC,id' : ' ORDER BY id'
-  const fields = `id,workspace_id,title,started_at,attendees,action_items,revision,created,updated,created_by,updated_by${query ? ',summary' : ''}`
+  const fields = `id,workspace_id,title,started_at,attendees,action_items,revision,created,updated,created_by,updated_by,source_call_id${query ? ',summary' : ''}`
   const select = `SELECT ${fields} FROM meetings ` + boundary + order
   const rows = query || open ? req.store.all(select, ...bindings) : req.store.all(select + ' LIMIT ?', ...bindings, limit + 1)
   const needle = casefold(query)
@@ -219,18 +221,20 @@ function validateAll({ title, started_at, attendees, transcript, summary, action
 }
 
 async function create(req, workspaceId) {
-  const body = requireBodyKeys(await req.json(LIMITS.BODY), FIELDS)
-  const requestedStart = body.started_at ?? null
+  const body = requireBodyKeys(await req.json(LIMITS.BODY), [...FIELDS, 'source_call_id'])
+  const key = idempotencyKey(req.headers)
+  const source = body.source_call_id === undefined ? null : await callSource(req, workspaceId, body.source_call_id)
+  const requestedStart = body.started_at ?? source?.started_at ?? null
   const fields = {
-    title: body.title, started_at: requestedStart ?? req.now, attendees: body.attendees ?? [],
+    title: body.title ?? source?.title, started_at: requestedStart ?? req.now, attendees: body.attendees ?? source?.attendees ?? [],
     transcript: body.transcript ?? '', summary: body.summary ?? '', action_items: body.action_items ?? [],
   }
   validateAll(fields)
   const title = strip(fields.title)
   const attendees = fields.attendees.map(strip)
   const actions = normalizeActions(fields.action_items)
-  const key = idempotencyKey(req.headers)
-  const payload = { title, started_at: requestedStart, attendees: [...attendees].sort(), transcript: fields.transcript, summary: fields.summary, action_items: actions }
+  const payload = { title, started_at: requestedStart, attendees: [...attendees].sort(), transcript: fields.transcript, summary: fields.summary, action_items: actions,
+    ...(source ? {source_call_id:source.id} : {}) }
   const keyHash = digest('meeting:' + key)
   const requestHash = digest(stableJson(payload))
   return req.store.transaction((store) => {
@@ -242,15 +246,26 @@ async function create(req, workspaceId) {
       if (!matches) refuse(409, 'conflict', 'Idempotency key was used for a different request')
       return { status: 200, body: { meeting: view(prior) } }
     }
+    const fromCall = source && store.get('SELECT * FROM meetings WHERE workspace_id=? AND source_call_id=?', workspaceId, source.id)
+    if (fromCall) refuse(409, 'meeting_exists', '这次通话已有纪要。', view(fromCall))
     const hash = titleHash(title)
     if (store.get('SELECT id FROM meetings WHERE workspace_id=? AND title_hash=?', workspaceId, hash)) refuse(409, 'conflict', 'A meeting with this title already exists')
     if (store.get('SELECT COUNT(*) AS n FROM meetings WHERE workspace_id=?', workspaceId).n >= LIMITS.PER_WORKSPACE) refuse(429, 'quota', 'Meeting capacity reached')
     const id = newId()
-    store.run(`INSERT INTO meetings (${COLUMNS.join(',')}) VALUES (${COLUMNS.map(() => '?').join(',')})`,
+    store.run(`INSERT INTO meetings (${COLUMNS.join(',')},source_call_id) VALUES (${COLUMNS.map(() => '?').join(',')},?)`,
       id, workspaceId, title, hash, fields.started_at, JSON.stringify(attendees), fields.transcript, fields.summary,
-      JSON.stringify(actions), 1, req.now, req.now, req.owner, req.owner, keyHash, requestHash)
+      JSON.stringify(actions), 1, req.now, req.now, req.owner, req.owner, keyHash, requestHash, source?.id ?? null)
     return { status: 201, body: { meeting: view(load(store, workspaceId, id)) } }
   })
+}
+
+async function fromCall(req, workspaceId, callId) {
+  if (req.method !== 'GET') refuse(405, 'method', 'Only GET is supported')
+  if (req.queryString) refuse(400, 'invalid', 'Invalid call handoff request')
+  const source = await callSource(req, workspaceId, callId)
+  const existing = req.store.get('SELECT * FROM meetings WHERE workspace_id=? AND source_call_id=?', workspaceId, source.id)
+  return {body: {workspace_id:workspaceId, viewer_username:req.ownerUsername, source,
+    ...(existing ? {meeting:view(existing)} : {})}}
 }
 
 async function update(req, row) {
@@ -332,10 +347,13 @@ export const spec = {
     updated INTEGER NOT NULL, created_by TEXT NOT NULL, updated_by TEXT NOT NULL, key_hash TEXT NOT NULL,
     request_hash TEXT NOT NULL, UNIQUE(workspace_id, key_hash), UNIQUE(workspace_id, title_hash));
     CREATE INDEX IF NOT EXISTS meeting_workspace ON meetings(workspace_id, id);`,
-    'CREATE INDEX IF NOT EXISTS meeting_workspace_recent ON meetings(workspace_id, started_at DESC, id)'],
+    'CREATE INDEX IF NOT EXISTS meeting_workspace_recent ON meetings(workspace_id, started_at DESC, id)',
+    `ALTER TABLE meetings ADD COLUMN source_call_id TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS meeting_workspace_call ON meetings(workspace_id, source_call_id) WHERE source_call_id IS NOT NULL;`],
   importTables: { meetings: COLUMNS },
   routes: [
     ...shareRoutes,
+    { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/from-call\/(otcav_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26})$/, handle: fromCall },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/speech$/, handle: speechStatus },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/transcribe$/, handle: transcribe },
     { pattern: /^\/v1\/workspaces\/([0-9a-f]{32})\/meetings\/draft$/, handle: draftNotes },

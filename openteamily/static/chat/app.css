@@ -1904,6 +1904,17 @@ html[data-theme-resolved="dark"] position: absolute; right: .5rem; bottom: -.625
 #chat-call-dialog .actions button { min-height: 2.75rem; }
 #chat-call-choices button:last-child, #chat-call-join { background: var(--ot-accent); color: var(--ot-on-accent, white); border: 0; }
 #chat-call-footer { justify-content: flex-end; }
+#chat-meeting-notes {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  padding: .4rem .8rem;
+  border-radius: var(--ot-radius-sm);
+  background: var(--ot-accent);
+  color: var(--ot-on-accent, white);
+  text-decoration: none;
+}
+#chat-meeting-notes:hover { background: var(--ot-accent-hover); }
 #chat-call-media { display: grid; gap: .5rem; margin-top: .75rem; }
 #chat-call-media:has(#chat-call-peers > div) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 #chat-call-peers { display: contents; }

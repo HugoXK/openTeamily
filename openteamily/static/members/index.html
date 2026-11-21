@@ -79,9 +79,18 @@
       <p id="role-note" class="note"></p>
     </div>
     <section id="members-panel">
-      <h2>成员列表</h2>
+      <h2 id="members-heading" tabindex="-1">成员列表</h2>
       <ul id="member-list"></ul>
       <p id="members-empty" class="empty-state" hidden>这个工作区还没有可显示的成员。</p>
+    </section>
+    <section id="my-join-requests" aria-labelledby="my-join-requests-heading">
+      <div class="requests-heading">
+        <h2 id="my-join-requests-heading">我的加入申请</h2>
+        <button type="button" id="refresh-my-join-requests" aria-controls="my-join-request-list">刷新状态</button>
+      </div>
+      <p id="my-join-requests-status" class="note" role="status"></p>
+      <ul id="my-join-request-list"></ul>
+      <p id="my-join-requests-empty" class="empty-state" hidden>还没有提交过加入申请。</p>
     </section>
     <form id="add-form" method="post" action="/v1/workspaces" hidden>
       <fieldset>
@@ -121,7 +130,11 @@
       <p id="invites-empty" class="empty-state" hidden>还没有有效或已记录的邀请。</p>
     </section>
     <section id="join-requests-panel" hidden>
-      <h2>待审批的加入申请</h2>
+      <div class="requests-heading">
+        <h2>待审批的加入申请</h2>
+        <button type="button" id="refresh-join-requests" aria-controls="join-request-list">刷新申请</button>
+      </div>
+      <p id="join-requests-status" class="note" role="status"></p>
       <ul id="join-request-list"></ul>
       <p id="join-requests-empty" class="empty-state" hidden>没有待审批的申请。</p>
     </section>

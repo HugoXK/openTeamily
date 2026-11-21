@@ -872,6 +872,99 @@ test('an already running native reply resumes in its existing bubble and loads t
   } finally { restore(); }
 });
 
+for (const deliveredBeforeAck of [false, true]) {
+  test(deliveredBeforeAck ? 'a terminal private receipt can settle the transcript before the message acknowledgment'
+    : 'a lost private message acknowledgment reconciles without another send or transcript reload', async t => {
+    t.mock.timers.enable({apis: ['setTimeout']});
+    const issued = Promise.withResolvers();
+    const deliveries = [];
+    let posts = 0, normalHistory = 0, sendKey;
+    const {doc, el, restore, fetcher} = nativeReplyChat((path, opts, scope) => {
+      if (path === '?limit=50') {
+        normalHistory += 1;
+        return json(200, {...scope, items: []});
+      }
+      if (path === '/messages' && opts.method === 'POST') {
+        posts += 1;
+        sendKey = opts.headers['Idempotency-Key'];
+        if (deliveredBeforeAck) return issued.promise;
+        return Promise.reject(new TypeError('acknowledgment lost'));
+      }
+      const query = new URL(path, 'https://openteamily.test').searchParams;
+      assert.equal(query.get('key'), sendKey);
+      if (!query.has('receipt')) return json(200, {state: 'succeeded'});
+      assert.equal(query.get('receipt'), '1');
+      deliveries.push(sendKey);
+      return json(200, {state: 'succeeded',
+        message: {id: 'sent-once', role: 'user', body: '用户问题', client_key: sendKey},
+        reply: {id: 'saved-reply', role: 'assistant', status: 'succeeded', body: '已完成回复', client_key: sendKey}});
+    });
+    try {
+      await mount(doc, {fetcher});
+      const field = el('chat-body');
+      field.value = '用户问题';
+      await fire(el('chat-form'), 'submit', {preventDefault() {}});
+      field.value = '另一条未发送草稿';
+      if (deliveredBeforeAck) t.mock.timers.tick(400);
+      await settle();
+      assert.deepEqual(el('message-list').children.map(row => row.dataset.messageId), ['sent-once', 'saved-reply']);
+      assert.equal(field.value, '另一条未发送草稿');
+      assert.equal(posts, 1);
+      assert.equal(normalHistory, 1);
+      assert.deepEqual(deliveries, [sendKey]);
+      if (deliveredBeforeAck) {
+        issued.reject(new TypeError('late acknowledgment lost'));
+        await settle();
+        assert.equal(posts, 1);
+        assert.deepEqual(deliveries, [sendKey]);
+      }
+    } finally { restore(); }
+  });
+}
+
+test('a durable failed reply can be retried in place after reload and a lost retry acknowledgment', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const key = 'msg-retryable-text';
+  const id = 'd'.repeat(32);
+  const user = {id: 'original-question', role: 'user', client_key: key, body: '为什么需要复核？'};
+  const failed = {id, role: 'assistant', client_key: key, status: 'failed', attempt: 1, can_retry: true};
+  const running = {...failed, status: 'running', attempt: 2, can_retry: false};
+  const succeeded = {...running, status: 'succeeded', body: '复核可以发现遗漏。'};
+  let started = false, finished = false;
+  const mutations = [];
+  const {doc, el, restore, fetcher} = nativeReplyChat((path, opts, scope) => {
+    if (path === '?limit=50') return json(200, {...scope, items: [user, finished ? succeeded : failed]});
+    if (path === `/messages/${id}/retry` && opts.method === 'POST') {
+      mutations.push({body: JSON.parse(opts.body), key: opts.headers['Idempotency-Key']});
+      started = true;
+      return Promise.reject(new TypeError('retry acknowledgment lost'));
+    }
+    assert.ok(started);
+    const params = new URL(path, 'https://openteamily.test').searchParams;
+    assert.equal(params.get('key'), key);
+    if (params.get('receipt') === '1') return json(200, {state: 'running', message: user, reply: running});
+    finished = true;
+    return json(200, {state: 'succeeded'});
+  });
+  try {
+    await mount(doc, {fetcher});
+    const list = el('message-list');
+    const retry = descendants(list.children.at(-1)).find(node => node.dataset.privateReplyRetry);
+    assert.equal(retry.textContent, '重试回复');
+    el('chat-body').value = '保留输入框';
+    await Promise.all([fire(retry, 'click'), fire(retry, 'click')]);
+    assert.equal(mutations.length, 1);
+    assert.deepEqual(mutations[0].body, {attempt: 1});
+    assert.match(mutations[0].key, /^reply-/);
+    assert.equal(list.children.at(-1).dataset.replyProgress, key);
+    t.mock.timers.tick(400);
+    await settle();
+    assert.deepEqual(list.children.map(row => row.dataset.messageId), [user.id, id]);
+    assert.ok(descendants(list.children.at(-1)).some(node => node.textContent === succeeded.body));
+    assert.equal(el('chat-body').value, '保留输入框');
+  } finally { restore(); }
+});
+
 function groupReplyChat(transport) {
   const {doc, el} = fakeChatDocument(chatHtml());
   doc.querySelector = selector => selector === 'meta[name="openteamily-instance"]' ? {} : null;
@@ -1537,6 +1630,23 @@ test('draft typing during native conversation creation follows the committed thr
   assert.equal(input.value, '第一条正在发送时的下一份草稿');
 });
 
+test('an offscreen private draft follows its new thread without changing the active composer', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const draft = mountPublicDraft(doc);
+  const input = el('chat-body');
+  draft.enter('alice/agent/new');
+  input.value = '同一智能体的下一条问题';
+  await fire(input, 'input');
+  draft.enter('alice/other');
+  input.value = '当前打开的其他会话';
+  draft.move('alice/agent/new', 'alice/agent/created');
+  assert.equal(input.value, '当前打开的其他会话');
+  draft.enter('alice/agent/created');
+  assert.equal(input.value, '同一智能体的下一条问题');
+  draft.enter('alice/agent/new');
+  assert.equal(input.value, '');
+});
+
 test('an over-limit homepage draft stays recoverable without changing the owner and thread composer', async () => {
   const {view} = publicOpeningView();
   const {doc, el} = fakeChatDocument(chatHtml());
@@ -1977,6 +2087,14 @@ test('notification targets only resolve exact receipt scope and safe public list
   assert.equal(notificationTarget(work, other), null);
   assert.equal(notificationTarget({...work, message_id: '../settings'}, workspace), null);
   assert.equal(notificationTarget({...work, path: '//outside.example'}, workspace), null);
+  const taskShare = 'otsr_' + '0'.repeat(26);
+  const task = {kind: 'team.run_shared', workspace_id: workspace, share_id: taskShare,
+    title: '评审纪要', actor_username: '小林'};
+  const taskPath = '/team-runs#workspace=' + workspace + '&shared=' + taskShare;
+  assert.equal(notificationSummary(task), '小林 分享了协作结果「评审纪要」');
+  assert.equal(notificationTarget({...task, path: taskPath}, workspace), taskPath);
+  assert.equal(notificationTarget(task, other), null);
+  assert.equal(notificationTarget({...task, path: taskPath + '&run=' + share}, workspace), null);
 });
 
 test('mention notifications show a badge, open the conversation and mark read', async () => {

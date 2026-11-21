@@ -19,6 +19,8 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/shared`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/shared/${ID}/revoke`, ORIGIN).feature, 'meetings');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/transcribe`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/from-call/otcav_${'A'.repeat(26)}`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/from-call/otcav_${'O'.repeat(26)}`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/draft`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory?q=x`, ORIGIN).feature, 'memory');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${ID}/versions/3/restore`, ORIGIN).feature, 'memory');
@@ -42,6 +44,7 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/archive`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/messages`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/attachments?kind=file`, ORIGIN).feature, 'agents');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/messages/${ID}/retry`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/reply-progress?key=reply-test-key-123`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys`, ORIGIN).feature, 'agent-api');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys/${ID}/revoke`, ORIGIN).feature, 'agent-api');
@@ -210,4 +213,17 @@ test('work detail and comment paths stay within the viewer’s Discover plugin',
     assert.equal(movedTarget(path, ORIGIN)?.feature, 'discover');
   }
   assert.equal(movedTarget(base + '/comments/forum/comment', ORIGIN), null);
+});
+test('collaboration pages use the owner runtime for private runs and Bot Social shares', () => {
+  const origin = 'https://openteamily.example';
+  const base = '/v1/workspaces/' + 'c'.repeat(32);
+  const run = base + '/team-runs/' + 'd'.repeat(32);
+  const share = base + '/shared-runs/otsr_' + '1'.repeat(26);
+  for (const [path, feature] of [
+    [base + '/team-runs', 'team-runs'], [run + '/steps/0/artifact', 'team-runs'],
+    [run + '/steps/7/retry', 'team-runs'], [run + '/share', 'shares'], [share + '/revoke', 'shares'],
+  ]) {
+    assert.deepEqual(movedTarget(path, origin), {feature, path});
+  }
+  assert.equal(movedTarget(run + '/steps/8/retry', origin), null);
 });

@@ -58,10 +58,18 @@ export function mountPublicDraft(document) {
       showRecovery(publicChat ? recovered.get(scope) ?? read(scope, recoveryPrefix) : '');
     },
     move(fromScope, toScope) {
-      if (active?.scope !== fromScope || active.publicChat) return;
-      memory.delete(fromScope);
-      active.scope = toScope;
-      persist();
+      if (active?.scope === fromScope) {
+        if (active.publicChat) return;
+        memory.delete(fromScope);
+        active.scope = toScope;
+        persist();
+      } else {
+        const text = memory.get(fromScope);
+        if (!text || memory.has(toScope) || (active?.scope === toScope && input.value)) return;
+        memory.set(toScope, text);
+        memory.delete(fromScope);
+        if (active?.scope === toScope) input.value = text;
+      }
     },
     fill(text) {
       if (!active?.publicChat || input.disabled) return false;

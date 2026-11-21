@@ -99,6 +99,72 @@ test('meeting creation recognizes the original fingerprint of older saved meetin
   assert.equal((await call('POST', base(), {...body, transcript: '更新后的正文'}, k)).status, 409)
 })
 
+test('only an authorized finished call can prefill and associate a personal meeting draft', async t => {
+  const bot = await boot()
+  const installBinding = runtime => {
+    runtime.features.table['agents/personal-binding'] = async () => ({workspace_id:WS})
+    runtime.features.table['teams/activeWorkspaces'] = async () => []
+  }
+  installBinding(bot)
+  const id = 'otcav_' + 'A'.repeat(26)
+  const sourcePath = base('from-call/' + id)
+  const source = {id, title:'Discussion', kind:'video', started_at:1795212000123, ended_at:1795212200123,
+    attendees:['Alex','  Morgan  ','alex']}
+  const reads = []
+  let relay = 'social/meeting_call_active'
+  setSharedBotSocial({async request(method, path) {
+    assert.equal(method,'GET')
+    reads.push(path)
+    assert.equal(path,'/v1/ot/call-records/' + id)
+    if (relay) throw Object.assign(new Error('fixture'), {code:relay,
+      status:relay === 'social/meeting_call_active' ? 409 : 404})
+    return {record:source}
+  }})
+  t.after(() => setSharedBotSocial(undefined))
+  const call = (method, ...args) => bot.call('meetings', method, ...args)
+  assert.equal((await call('GET', sourcePath.replace(WS, 'b'.repeat(32)))).status, 404)
+  assert.equal(reads.length, 0)
+  const active = await call('GET', sourcePath)
+  assert.equal(active.status, 409)
+  assert.equal(active.body.error.code, 'meeting_call_active')
+  assert.equal((await call('POST', base(), {source_call_id:id}, key())).status, 409)
+  relay = 'social/call_record_not_found'
+  assert.equal((await call('GET', sourcePath)).status, 404)
+  assert.equal((await call('POST', base(), {source_call_id:id}, key())).status, 404)
+  relay = null
+  const gateway = new Request('http://fixture', {headers:{'x-ot-owner-username':'fixture-user'}})
+  const result = await bot.features.table['meetings/v1']({method:'GET',path:sourcePath}, {request:gateway})
+  assert.deepEqual(result.body, {workspace_id:WS, viewer_username:'fixture-user', source:{
+    id, title:'Discussion', kind:'video', started_at:1795212000, ended_at:1795212200, attendees:['Alex','Morgan'],
+  }})
+  assert.deepEqual((await call('GET', base())).body.items, [])
+
+  const draft = {source_call_id:id, title:'My notes', summary:'A summary added in this DS-Bot'}
+  const saveKey = key()
+  const saved = await call('POST', base(), draft, saveKey)
+  assert.equal(saved.status,201)
+  const meeting = saved.body.meeting
+  assert.equal(meeting.source_call_id,id)
+  assert.equal(meeting.started_at,1795212000)
+  assert.deepEqual(meeting.attendees,['Alex','Morgan'])
+  assert.equal(meeting.transcript,'')
+  assert.deepEqual((await call('POST', base(), draft, saveKey)).body.meeting, meeting)
+  const duplicate = await call('POST', base(), {...draft,title:'Another copy'}, key())
+  assert.equal(duplicate.status,409)
+  assert.equal(duplicate.body.error.code,'meeting_exists')
+  assert.equal(duplicate.body.error.current.id,meeting.id)
+  assert.equal((await call('POST', base(meeting.id), {revision:1,changes:{source_call_id:null}})).status,400)
+  const edited = await call('POST', base(meeting.id), {revision:1,changes:{title:'Edited notes'}})
+  assert.equal(edited.body.meeting.source_call_id,id)
+  const restarted = await boot(bot.vol)
+  installBinding(restarted)
+  assert.deepEqual((await restarted.call('meetings','GET',sourcePath)).body.meeting,edited.body.meeting)
+  assert.equal((await restarted.call('meetings','GET',base())).body.items[0].source_call_id,id)
+  const second = await boot()
+  installBinding(second)
+  assert.equal((await second.call('meetings','GET',sourcePath)).body.meeting,undefined)
+})
+
 test('meeting list filters all saved metadata before paging in start-time order', async () => {
   const bot = await boot()
   const otherWorkspace = 'b'.repeat(32)

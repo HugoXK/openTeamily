@@ -17,6 +17,25 @@ test("profile comes from the FlyBot home; no token is refused", async () => {
   assert.equal((await fetch(S.base + "/v1/ot/teams")).status, 401);
 });
 
+test("team creation rolls back when the retry receipt cannot be written", async () => {
+  const owner = await home(S.base, "receipt-owner");
+  const path = "/v1/ot/workspaces";
+  const draft = {name: "Retryable team", slug: "retryable-team", idempotency_key: "test-team-creation-receipt"};
+  S.platform.db.exec(`CREATE TRIGGER fixture_reject_workspace_receipt
+    BEFORE INSERT ON ot_workspace_requests
+    BEGIN SELECT RAISE(ABORT, 'fixture disabled creation receipt'); END`);
+  try {
+    assert.equal((await owner.call("POST", path, draft)).status, 500);
+    assert.deepEqual((await owner.ok("GET", path)).workspaces, []);
+  } finally {
+    S.platform.db.exec("DROP TRIGGER fixture_reject_workspace_receipt");
+  }
+  const created = await owner.ok("POST", path, draft);
+  const recovered = await owner.ok("POST", path, draft);
+  assert.equal(recovered.workspace_id, created.workspace_id);
+  assert.equal((await owner.ok("GET", path)).workspaces.length, 1);
+});
+
 test("team lifecycle: create, invite, accept, roles, suspend, leave", async () => {
   const A = await home(S.base, "owner");
   const B = await home(S.base, "bea");
@@ -104,6 +123,65 @@ test("approval invites and the team directory queue join requests for owners and
   assert.equal((await C.call("POST", `/v1/ot/directory/${team.id}/join`)).status, 404);
   await A.ok("DELETE", `/v1/ot/teams/${team.id}`);
   assert.equal((await C.ok("GET", "/v1/ot/teams")).teams.length, 0);
+});
+
+test("only the owner can grant administrator access through an invitation", async () => {
+  const [owner, admin, applicant, guest] = await Promise.all([
+    home(S.base, "roles-owner"), home(S.base, "roles-admin"), home(S.base, "roles-applicant"), home(S.base, "roles-guest"),
+  ]);
+  const team = await owner.ok("POST", "/v1/ot/workspaces", {name: "Role boundaries", idempotency_key: "team-role-boundaries"});
+  const path = `/v1/ot/teams/${team.id}`;
+  await owner.ok("POST", path + "/members", {handle: admin.handle, role: "admin"});
+  assert.equal((await admin.call("POST", path + "/invites", {role: "admin"})).status, 403);
+  const adminInvite = await owner.ok("POST", path + "/invites", {role: "admin", requires_approval: true});
+  assert.equal((await admin.call("PATCH", path + "/invites/" + adminInvite.invite.id, {frozen: true})).status, 403);
+  const pending = await applicant.ok("POST", "/v1/ot/invites/accept", {code: adminInvite.code});
+  const application = path + "/join-requests/" + pending.request_id;
+  assert.equal((await admin.call("POST", application, {decision: "approve"})).status, 403);
+  assert.equal((await applicant.call("GET", path)).status, 404);
+  await owner.ok("POST", application, {decision: "approve"});
+  assert.equal((await applicant.ok("GET", path)).role, "admin");
+
+  const legacy = await owner.ok("POST", path + "/invites", {role: "admin"});
+  const adminId = (await admin.ok("GET", "/v1/ot/me")).owner_id;
+  // Historical fixture issued while the old role restriction was absent.
+  S.platform.db.prepare("UPDATE ot_invites SET created_by=? WHERE id=?").run(adminId, legacy.invite.id);
+  assert.equal((await guest.ok("POST", "/v1/ot/invites/preview", {code: legacy.code})).usable, false);
+  assert.equal((await guest.call("POST", "/v1/ot/invites/accept", {code: legacy.code})).status, 410);
+  assert.equal((await guest.call("GET", path)).status, 404);
+
+  const memberInvite = await admin.ok("POST", path + "/invites", {requires_approval: true});
+  const memberRequest = await guest.ok("POST", "/v1/ot/invites/accept", {code: memberInvite.code});
+  await admin.ok("POST", path + "/join-requests/" + memberRequest.request_id, {decision: "approve"});
+  assert.equal((await guest.ok("GET", path)).role, "member");
+});
+
+test("applicants see their canonical workspace and a new application has a distinct decision target", async () => {
+  const [owner, applicant, stranger] = await Promise.all([
+    home(S.base, "requests-owner"), home(S.base, "requests-applicant"), home(S.base, "requests-stranger"),
+  ]);
+  const team = await owner.ok("POST", "/v1/ot/workspaces", {name: "Application history", idempotency_key: "team-application-history"});
+  const path = `/v1/ot/teams/${team.id}`;
+  const invite = await owner.ok("POST", path + "/invites", {requires_approval: true});
+  const apply = () => applicant.ok("POST", "/v1/ot/invites/accept", {code: invite.code});
+  const requestPath = path + "/join-requests/";
+  const minePath = "/v1/ot/join-requests/mine";
+  const first = await apply();
+  assert.deepEqual(await apply(), first);
+  const firstRow = (await applicant.ok("GET", minePath)).requests[0];
+  assert.deepEqual([firstRow.id, firstRow.workspace_id, firstRow.team_name, firstRow.status],
+    [first.request_id, team.workspace_id, team.name, "pending"]);
+  assert.deepEqual((await stranger.ok("GET", minePath)).requests, []);
+  await owner.ok("POST", requestPath + first.request_id, {decision: "reject"});
+  assert.equal((await applicant.ok("GET", minePath)).requests[0].status, "rejected");
+
+  const second = await apply();
+  assert.notEqual(second.request_id, first.request_id);
+  assert.equal((await owner.call("POST", requestPath + first.request_id, {decision: "approve"})).status, 404);
+  const current = (await applicant.ok("GET", minePath)).requests;
+  assert.deepEqual(current.map((row: any) => [row.id, row.status]), [[second.request_id, "pending"]]);
+  await owner.ok("POST", requestPath + second.request_id, {decision: "approve"});
+  assert.equal((await applicant.ok("GET", `/v1/ot/teams/by-workspace/${team.workspace_id}`)).role, "member");
 });
 
 test("a platform workspace binds to one team; members can be added by handle", async () => {
