@@ -147,6 +147,10 @@
         <h2 id="conversation-heading"><span data-ui-text="chat.sessions.conversations">对话</span></h2>
         <button type="button" id="conversations-read-all" hidden data-ui-text="chat.sessions.mark_read">单聊和群聊已读</button>
       </div>
+      <div id="session-transition" class="session-transition" hidden>
+        <p id="session-transition-status" role="status"></p>
+        <button id="session-transition-retry" type="button" hidden>重试</button>
+      </div>
       <ul id="conversation-list"></ul>
       <p id="conversations-status" class="note" role="status" hidden></p>
       <p id="conversations-empty" class="note" hidden><span data-ui-text="chat.sessions.empty">还没有对话。用右上角的 + 新建群组或添加联系人，或到智能体目录里开始聊天。</span></p>
