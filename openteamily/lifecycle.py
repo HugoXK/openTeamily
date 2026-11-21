@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import heapq
 
-from . import agent_runtime, bot_social, members, model_api, runtime_autoprovision, runtime_keys
+from . import bot_social, dsbot_bundle, members, model_api, runtime_autoprovision
 from .security import digest, opaque
 
 ID = re.compile(r'[0-9a-f]{32}')
@@ -386,42 +386,17 @@ class Lifecycle:
                     payload['displayName'] = name
             return {'bot_social_present': payload is not None, 'bot_social': payload}
 
-    def runtime_agent_key(self, manager, iid, jid, revision, lease, origin):
-        """Lease-gated instance runtime key for the container task loop. Token is not stored on the job."""
+    def runtime_agent_bootstrap(self, manager, iid, jid, revision, lease):
+        """Return the provisioned owner's initial DS-Bot data for a leased startup."""
         self.expire()
-        if not isinstance(origin, str) or not origin.startswith('http') or any(ord(ch) < 32 for ch in origin) or len(origin) > 512:
-            fail(409, 'runtime_key_unavailable', 'Management origin is not configured')
         with self.store.transaction() as db:
             row, job = self.leased(db, manager, iid, jid, revision, lease)
             if job['operation_type'] not in ('create', 'start', 'restart'):
-                fail(409, 'runtime_key_not_applicable', 'Instance runtime key is only issued for create, start or restart')
-            existing = agent_runtime.load_instance_key(db, iid)
-            wrap_key = agent_runtime.wrapping_key(self.store)
-            now = int(self.clock())
-            payload = {'origin': origin, 'hostname': agent_runtime.hostname_for(iid)}
+                fail(409, 'agent_bootstrap_not_applicable', 'Personal agent bootstrap is only available for create, start or restart')
+            bootstrap = None
             if runtime_autoprovision.is_auto(db, iid):
-                from . import dsbot_bundle
-                bootstrap = dsbot_bundle.build_personal_bootstrap(db, row['owner_id'], iid, now)
-                if bootstrap is not None:
-                    payload['agent_bootstrap'] = bootstrap
-            if existing and existing['issued_job_id'] == job['id']:
-                token = agent_runtime.unwrap(wrap_key, existing['token_blob'])
-                return {'runtime_key_present': True, 'runtime_key': {**payload, 'token': token}}
-            if existing:
-                runtime_keys.revoke(db, existing['key_id'])
-            key_id, token = runtime_keys.issue_instance(db, row['owner_id'], now, iid)
-            blob = agent_runtime.wrap(wrap_key, token)
-            if existing:
-                db.execute(
-                    'UPDATE instance_runtime_keys SET key_id=?, token_blob=?, issued_job_id=?, updated=? WHERE instance_id=?',
-                    (key_id, blob, job['id'], now, iid),
-                )
-            else:
-                db.execute(
-                    'INSERT INTO instance_runtime_keys VALUES(?,?,?,?,?,?,?)',
-                    (iid, row['workspace_id'], key_id, blob, job['id'], now, now),
-                )
-            return {'runtime_key_present': True, 'runtime_key': {**payload, 'token': token}}
+                bootstrap = dsbot_bundle.build_personal_bootstrap(db, row['owner_id'], iid, int(self.clock()))
+            return {'agent_bootstrap': bootstrap}
 
     def heartbeat(self, manager, iid, jid, revision, lease):
         self.expire()
