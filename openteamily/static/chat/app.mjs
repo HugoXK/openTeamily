@@ -738,6 +738,7 @@ async function waitForLinkedNotificationRead(read) {
 }
 
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
+  const uiLabel = (zh, en) => document.documentElement?.lang === 'en' ? en : zh;
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
   const mainPanel = document.getElementById('main-panel');
@@ -1081,7 +1082,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (currentSource === 'agent' && currentAgent) {
       const pending = Boolean(replying) || lastAgentItems.some(waitingAgentReply);
-      setChatSubtitle(pending ? '正在回复…' : 'AI 智能体 · 经运行时回复', pending);
+      setChatSubtitle(pending ? uiLabel('正在回复…', 'Replying…') : uiLabel('AI 智能体 · 经运行时回复', 'AI agent · DS-Bot'), pending);
     }
     const empty = document.getElementById('chat-empty');
     empty.dataset.agent = String(currentSource === 'agent' && Boolean(currentAgent));
@@ -1328,7 +1329,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       || (filter === 'unread' && item.unread_count > 0)
       || (filter === 'read' && !item.unread_count)
       || (filter === 'group' && item.kind === 'group') || (filter === 'dm' && item.kind === 'dm'));
-    document.getElementById('conversation-heading').textContent = '对话 · ' + visible.length;
+    document.getElementById('conversation-heading').textContent = uiLabel('对话 · ', 'Conversations · ') + visible.length;
     const empty = document.getElementById('conversations-empty');
     empty.hidden = Boolean(sessionsStatus) || visible.length > 0;
     if (!empty.hidden) empty.textContent = filter === 'all'
@@ -1377,7 +1378,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const unread = document.createElement('span');
         unread.className = 'unread-badge';
         unread.textContent = String(session.unread_count);
-        unread.setAttribute('aria-label', session.unread_count + ' 条未读消息');
+        unread.setAttribute('aria-label', session.unread_count + uiLabel(' 条未读消息', ' unread'));
         time.append(unread);
       }
 
@@ -1569,7 +1570,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     bubble.className = item.role === 'user' ? 'user' : 'assistant';
     const role = document.createElement('p');
     role.className = 'role';
-    role.textContent = item.role === 'user' ? '你' : (currentAgent?.name || '智能体');
+    role.textContent = item.role === 'user' ? uiLabel('你', 'You') : (currentAgent?.name || uiLabel('智能体', 'Agent'));
     const body = document.createElement('div');
     const waiting = waitingAgentReply(item);
     const failed = item.role === 'assistant' && (item.status === 'failed' || item.status === 'cancelled');
@@ -2020,7 +2021,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const button = document.createElement('button');
     button.type = 'button';
     button.dataset.save = item.id;
-    button.textContent = '保存到资料空间';
+    button.textContent = uiLabel('保存到资料空间', 'Save to Space');
     button.addEventListener('click', () => openSaveMessage(item, agentId));
     return button;
   }
@@ -2454,8 +2455,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       const role = document.createElement('p');
       role.className = 'role';
       const member = people.find(entry => entry.user_id === item.user_id);
-      role.textContent = item.role === 'agent' ? (item.agent_name + ' · AI 智能体 · 运行时回复')
-        : (mine ? '我' : ((member && member.username) || '成员'));
+      role.textContent = item.role === 'agent' ? (item.agent_name + uiLabel(' · AI 智能体 · 运行时回复', ' · AI agent · DS-Bot'))
+        : (mine ? uiLabel('我', 'Me') : ((member && member.username) || uiLabel('成员', 'Member')));
       const body = document.createElement('div');
       body.className = 'body';
       if (item.attachment?.bytes !== undefined && item.body === item.attachment.title) body.hidden = true;
@@ -2613,10 +2614,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     link.hidden = Boolean(session?.public_agent);
     if (session && session.source === 'social') {
       link.href = '/members';
-      link.textContent = '成员';
+      link.textContent = uiLabel('成员', 'Members');
     } else {
       link.href = '/agents';
-      link.textContent = '资料';
+      link.textContent = uiLabel('资料', 'Resources');
     }
   }
 
@@ -2665,7 +2666,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const toggle = document.getElementById('notifications-toggle');
     const text = notificationBadgeText(body.unread_count);
     if (badge) { badge.textContent = text; badge.hidden = !text; }
-    if (toggle) toggle.setAttribute('aria-label', text ? `通知，${body.unread_count} 条未读` : '通知');
+    if (toggle) toggle.setAttribute('aria-label', text ? uiLabel(`通知，${body.unread_count} 条未读`, `Notifications, ${body.unread_count} unread`) : uiLabel('通知', 'Notifications'));
     const list = document.getElementById('notification-list');
     if (!list) return;
     const mentionsOnly = notificationKind?.value === 'mention';
@@ -4127,11 +4128,26 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setSessionsOpen(true);
     document.getElementById('whoami').textContent = currentUser.username;
     if (!sessions.length) setSessionsStatus('正在加载对话…');
-    // Personal-agent initialization may create the workspace returned by the list.
-    const personalAndWorkspaces = request('POST', '/v1/personal-agent').then(async personal => {
-      const listed = await request('GET', '/v1/workspaces?limit=100');
+    const listWorkspaces = () => request('GET', '/v1/workspaces?limit=100');
+    const personalAndWorkspaces = (async () => {
+      if (servedByDsbot) {
+        const personalRequest = request('GET', '/v1/personal-agent').catch(() => null);
+        const workspaceRequest = listWorkspaces().catch(() => null);
+        const personal = await personalRequest;
+        const existing = personal?.body?.personal_agent;
+        if (personal?.status === 200 && existing?.agent?.id && existing.workspace?.id) {
+          const listed = await workspaceRequest;
+          if (listed?.status === 200 && listed.body?.items?.some(space => space.id === existing.workspace.id)) {
+            return {personal, listed};
+          }
+        }
+        if (!bootCurrent()) return {};
+      }
+      // A first-time account can receive a new workspace during initialization.
+      const personal = await request('POST', '/v1/personal-agent');
+      const listed = await listWorkspaces();
       return {personal, listed};
-    });
+    })();
     const [{personal, listed}, settings] = await Promise.all([
       personalAndWorkspaces,
       request('GET', '/v1/settings'),
@@ -4885,7 +4901,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   filterValue?.addEventListener('change', () => {
     const name = filterValue.selectedOptions?.[0]?.textContent;
-    if (name) filterButton?.setAttribute('aria-label', '会话筛选：' + name);
+    if (name) filterButton?.setAttribute('aria-label', uiLabel('会话筛选：', 'Conversation filter: ') + name);
     setFilterOpen(false);
     renderSessions();
   });

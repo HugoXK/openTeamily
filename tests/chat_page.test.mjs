@@ -209,8 +209,8 @@ test('the chat empty state offers two native links to /agents and /guide', () =>
   const start = html.indexOf('id="chat-empty"');
   assert.ok(start > -1, 'the chat page has an empty state');
   const block = html.slice(start, html.indexOf('id="message-list"', start));
-  assert.match(block, /<a href="\/agents">浏览智能体<\/a>/);
-  assert.match(block, /<a href="\/guide">查看功能指引<\/a>/);
+  assert.match(block, /<a href="\/agents"[^>]*>浏览智能体<\/a>/);
+  assert.match(block, /<a href="\/guide"[^>]*>查看功能指引<\/a>/);
   assert.doesNotMatch(block, /<button[^>]*>帮助中心/, 'the next steps are links, not disabled buttons');
 });
 
@@ -2209,7 +2209,7 @@ test('composer + creation grid opens real editors and generation dialogs', () =>
   assert.match(html, /id="composer-music-create"[^>]+aria-haspopup="dialog"/);
   assert.match(html, /<audio id="music-create-preview"[^>]+controls/);
   assert.match(html, /id="composer-model3d-create"[^>]+aria-haspopup="dialog"/);
-  assert.match(html, /<select name="source">\s*<option value="text">根据描述<\/option>\s*<option value="image">根据参考图<\/option>/);
+  assert.match(html, /<select name="source">\s*<option value="text"[^>]*>根据描述<\/option>\s*<option value="image"[^>]*>根据参考图<\/option>/);
   assert.match(html, /id="model3d-create-open-preview"[^>]+aria-expanded="false"/);
 });
 
@@ -2873,6 +2873,40 @@ function linkedChatFixture(hash, {visibility = 'visible'} = {}) {
   return {doc, el, fetcher, routes, calls, scrolls, navigate, messages, selected, agent, nativeThread, nativeRows, restore};
 }
 
+test('a cold native Chat boot provisions the personal workspace and ignores the earlier directory snapshot', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const earlier = Promise.withResolvers();
+  const initialized = Promise.withResolvers();
+  let workspaceReads = 0;
+  fixture.routes.set('/v1/personal-agent', ({method}) => method === 'GET'
+    ? json(200, {personal_agent: null})
+    : initialized.promise);
+  fixture.routes.set('/v1/workspaces?limit=100', () => {
+    workspaceReads += 1;
+    return workspaceReads === 1 ? earlier.promise
+      : json(200, {items: [{id:linkWork, name:'Personal', kind:'personal'}]});
+  });
+  try {
+    const mountPromise = mount(fixture.doc, {fetcher:fixture.fetcher});
+    await settle();
+    assert.equal(workspaceReads, 1);
+    assert.equal(fixture.calls.some(call => call.path === '/v1/personal-agent' && call.method === 'POST'), true);
+    assert.equal(fixture.calls.some(call => call.path === scope + linkNativePath), false);
+    initialized.resolve(json(201, {personal_agent: {workspace: {id:linkWork}, agent:fixture.agent}}));
+    await mountPromise;
+    assert.equal(workspaceReads, 2);
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    earlier.resolve(json(200, {items: []}));
+    await settle();
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+  } finally {
+    earlier.resolve(json(200, {items: []}));
+    initialized.resolve(json(201, {personal_agent: {workspace: {id:linkWork}, agent:fixture.agent}}));
+    fixture.restore();
+  }
+});
+
 test('a linked native history and its message jump render before the unrelated Social directory returns', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const scope = linkBase(linkWork);
@@ -2895,10 +2929,12 @@ test('a linked native history and its message jump render before the unrelated S
     settings.resolve(json(200, {settings: {values: {send_shortcut: 'mod_enter'}}}));
     await settle();
     assert.ok(fixture.calls.some(call => call.path === scope + linkSocialDirectory), 'the Social directory really is pending');
-    const personal = fixture.calls.findIndex(call => call.path === '/v1/personal-agent' && call.method === 'POST');
+    const personal = fixture.calls.findIndex(call => call.path === '/v1/personal-agent' && call.method === 'GET');
     const workspaces = fixture.calls.findIndex(call => call.path === '/v1/workspaces?limit=100');
     const detail = fixture.calls.findIndex(call => call.path === scope + linkNativePath);
-    assert.ok(personal >= 0 && personal < workspaces && workspaces < detail, 'workspace authorization precedes detail');
+    assert.ok(personal >= 0 && workspaces >= 0 && personal < detail && workspaces < detail, 'workspace authorization precedes detail');
+    assert.equal(fixture.calls.some(call => call.path === '/v1/personal-agent' && call.method === 'POST'), false,
+      'a running DS-Bot with an existing personal binding does not need to provision again');
     assert.equal(fixture.el('chat-body').dataset.sendShortcut, 'mod_enter');
     assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
     assert.equal(fixture.el('chat-title').textContent, fixture.agent.name);
