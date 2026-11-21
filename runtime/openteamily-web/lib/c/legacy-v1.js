@@ -22,6 +22,11 @@ const DISCOVER_WORK = '/v1/discover/works/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])'
 const WORK_COMMENT = 'otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}'
 const COMMENT_KEY = /^[A-Za-z0-9_-]{16,64}$/
 const PROFILE_HANDLE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/
+const DISCOVER_MEDIA_KINDS = new Map([
+  ['image/png', 'image'], ['image/jpeg', 'image'], ['image/gif', 'image'], ['image/webp', 'image'],
+  ['audio/mpeg', 'audio'], ['audio/ogg', 'audio'], ['audio/wav', 'audio'],
+  ['video/mp4', 'video'], ['video/webm', 'video'],
+])
 const WORK_LABELS = {
   document: '文档', spreadsheet:'电子表格', website: '网页', whiteboard: '白板', media: '媒体',
   image: '图片', audio: '音频', video: '视频', slides: '幻灯片', dashboard: '看板', model3d: '3D 作品',
@@ -161,6 +166,8 @@ function workMatch(match) {
 function workItem(row) {
   const kind = row.work_kind || (row.kind === 'work' ? 'document' : row.kind)
   const match = workMatch(row.match)
+  const fileAvailable = row.file_available === true && DISCOVER_MEDIA_KINDS.get(row.file_mime) === kind
+    && Number.isSafeInteger(row.file_bytes) && row.file_bytes > 0
   return {
     slug: row.slug,
     title: row.title,
@@ -178,6 +185,7 @@ function workItem(row) {
     comment_count: row.comment_count ?? 0,
     ...(match ? {match} : {}),
     ...(kind === 'website' ? {site_available: row.site_available === true} : {}),
+    ...(fileAvailable ? {file_available: true, file_mime: row.file_mime, file_bytes: row.file_bytes} : {}),
   }
 }
 
@@ -1254,26 +1262,32 @@ function discoverRoutes(host) {
           const artifact = got?.body?.artifact
           if (!artifact) throw new Fault(404, 'not_found', 'Artifact not found')
           const prior = await workListing(bs, match[2])
-          const isModel = artifact.kind === 'media' && artifact.media?.mime === GLB_MIME
-          const kind = isModel ? 'model3d' :
-            ['document', 'website', 'whiteboard', 'media', 'slides', 'dashboard', 'spreadsheet'].includes(artifact.kind) ? artifact.kind : 'document'
+          const mime = artifact.kind === 'media' ? artifact.media?.mime : undefined
+          const mediaKind = mime === GLB_MIME ? 'model3d' : DISCOVER_MEDIA_KINDS.get(mime)
+          if (artifact.kind === 'media' && !mediaKind) {
+            throw new Fault(400, 'attachment_type_blocked', '这个文件格式无法公开发布。')
+          }
+          const kind = mediaKind || artifact.kind
           const siteHtml = kind === 'website' && typeof artifact.body === 'string' && artifact.body.trim() ? artifact.body : null
           const snapshot = siteHtml ? '' : kind === 'document' ? String(artifact.body || '') : [...structuredArtifactText(artifact)].join('\n')
-          let modelData
-          if (isModel) {
+          let file = {}
+          if (mediaKind) {
             const result = await host.call('artifacts/chatAttachment', {
               workspace_id: match[1], artifact_id: match[2], revision: artifact.revision,
             })
-            if (result?.attachment?.mime !== GLB_MIME || !result.attachment.data) {
-              throw new Fault(409, 'conflict', '3D 文件已更新，请刷新后重新发布。')
+            if (result?.attachment?.mime !== mime || typeof result.attachment.data !== 'string' || !result.attachment.data) {
+              throw new Fault(409, 'conflict', '作品文件已更新，请刷新后重新发布。')
             }
-            modelData = result.attachment.data
+            file = mediaKind === 'model3d' ? {model_data: result.attachment.data} : {
+              media_data: result.attachment.data, media_mime: mime,
+              media_filename: artifact.media.filename || result.attachment.title,
+            }
           }
           const data = await bs.put('/v1/ot/listings', {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
             work_kind: kind,
             ...(siteHtml ? {site_html: siteHtml} : {summary: snapshot.slice(0, 300), snapshot: snapshot.slice(0, 200000)}),
-            ...(isModel ? {model_data: modelData} : {}),
+            ...file,
           })
           return [prior ? 200 : 201, { discover: workMeta(data) }]
         })

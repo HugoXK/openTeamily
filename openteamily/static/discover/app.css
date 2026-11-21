@@ -274,6 +274,13 @@ a.catalog-create[hidden] { display: none; }
   background: #fff;
 }
 .work-detail-image { display: block; max-width: 100%; max-height: 50dvh; margin-inline: auto; object-fit: contain; }
+.work-detail-audio { display: block; width: 100%; }
+.work-detail-video {
+  display: block; width: 100%; aspect-ratio: 16 / 9; max-height: 60dvh;
+  border-radius: .625rem; background: #141318; object-fit: contain;
+}
+.work-media-status { color: var(--ot-muted); font-size: .875rem; }
+.work-media-status:empty { display: none; }
 .work-detail-actions { padding-top: .875rem; border-top: 1px solid var(--ot-line); }
 .work-detail-actions .feed-detail-open { display: inline-flex; align-items: center; padding-inline: .5rem; }
 .work-detail-actions button[aria-pressed="true"] { background: var(--ot-accent-soft); color: var(--ot-accent-hover); }
@@ -1039,6 +1046,14 @@ html[data-theme-resolved="dark"] :is(.feed-toolbar, .feed-filters) {
   aspect-ratio: 16 / 10;
   margin: -.75rem -.875rem .25rem;
 }
+.work-cover[data-kind="image"] { position: relative; overflow: hidden; }
+.work-cover-image { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; }
+.work-cover[data-kind="audio"]::after {
+  content: "♫"; color: var(--ot-muted); font-size: 2rem; line-height: 1;
+}
+.work-cover[data-kind="video"]::after {
+  content: ""; width: 1.5rem; height: 1.5rem; background: var(--ot-muted); clip-path: polygon(18% 0, 100% 50%, 18% 100%);
+}
 .work-cover:has(.thumb-document) {
   background: var(--ot-surface-2);
   border-bottom: 1px solid var(--ot-line);
@@ -1113,7 +1128,7 @@ html[data-theme-resolved="dark"] .feed-grid > .feed-entry > .feed-card-actions {
   border-radius: .625rem;
   background: var(--ot-surface-2);
 }
-.work-detail-actions :is(button, #work-detail-open) {
+.work-detail-actions :is(button, #work-detail-open, #work-detail-download) {
   box-sizing: border-box;
   min-height: 2.625rem;
   padding: .375rem .75rem;
@@ -1134,6 +1149,8 @@ html[data-theme-resolved="dark"] .feed-grid > .feed-entry > .feed-card-actions {
 }
 .work-detail-actions #work-detail-share { background: var(--ot-surface); color: var(--ot-ink); }
 .work-detail-actions #work-detail-share:hover { background: var(--ot-surface-2); }
+.work-detail-actions #work-detail-download { justify-content: center; background: var(--ot-surface); }
+.work-detail-actions #work-detail-download:hover { background: var(--ot-surface-2); text-decoration: none; }
 
 @media (max-width: 45rem) {
   body.app-workspace:not(.chat-open) > main > #main-panel { padding-top: .875rem; }

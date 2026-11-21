@@ -14,7 +14,7 @@ import {
   applyBoardOperations, boardJson, dashboardJson, decodeBoard, decodeDashboard, decodeSlides, decodeStructured,
   normalizeBoard, normalizeDashboard, normalizeSlides, slidesJson,
 } from './structured.js'
-import { cleanFilename, exportFilename, exportHeaders, renderBoardSvg, renderDashboardPage, renderPage, renderSlidesPage, renderWebsitePage, sniffMime } from './render.js'
+import { cleanFilename, exportFilename, exportHeaders, renderBoardSvg, renderDashboardPage, renderPage, renderSlidesPage, renderWebsitePage, savedMediaFilename, sniffMime } from './render.js'
 import { exportOffice } from './office.js'
 import {decodeWorkbook,emptyWorkbook,normalizeWorkbook} from './workbook.js'
 export const PER_WORKSPACE = 50
@@ -376,7 +376,7 @@ export function createMedia(ctx, workspaceId, { title, data, filename, mime, key
     refuse(400, 'invalid', 'Upload a supported media file')
   }
   const used = sniffed
-  const name = cleanFilename(filename)
+  const name = savedMediaFilename(filename)
   const sha = createHash('sha256').update(data).digest('hex')
   const payload = { title: trimmed, kind: 'media', sha256: sha, mime: used, filename: name }
   const keyHash = digest('artifact:' + key)
@@ -487,7 +487,7 @@ export function replaceMedia(ctx, row, { title, data, filename, mime, revision }
   }
   const sniffed = sniffMime(data)
   if (!sniffed || !MEDIA_MIMES.has(sniffed)) refuse(400, 'invalid', 'Upload a supported media file')
-  const name = cleanFilename(filename)
+  const name = savedMediaFilename(filename)
   return store.transaction(() => {
     const hash = titleHash(newTitle)
     if (newTitle !== row.title && store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=? AND id!=?', row.workspace_id, hash, row.id)) {
@@ -571,7 +571,8 @@ export function exportBytes(row, featureDir, workspaceId, fromVersion = false) {
     const filename = fromVersion ? row.filename : row.media_filename
     const expected = fromVersion ? row.byte_count : row.media_bytes
     const payload = readMediaBytes(featureDir, workspaceId, digestHex, expected, mime)
-    return { payload, contentType: mime, filename: exportFilename(title, kind, revision, filename), headers: exportHeaders(mime, exportFilename(title, kind, revision, filename)) }
+    const name = exportFilename(title, kind, revision, filename)
+    return { payload, contentType: mime, filename: name, headers: exportHeaders(mime, name) }
   }
   let structuredKind = null, structured = null
   if (kind === 'slides') { structuredKind = 'slides'; structured = decodeSlides(row.slides_json) }
@@ -675,13 +676,13 @@ export function content(row, featureDir, { preview: asPreview = false } = {}) {
   if (kind === 'media' && !asPreview) {
     try {
       const payload = readMediaBytes(featureDir, row.workspace_id, row.media_sha256, row.media_bytes, row.media_mime)
-      const name = cleanFilename(row.media_filename || 'file')
+      const name = savedMediaFilename(row.media_filename)
       return {
         status: 200, raw: payload, inline: true,
         headers: {
           'content-type': row.media_mime,
           'content-security-policy': "default-src 'none'; sandbox; frame-ancestors 'self'; object-src 'none'",
-          'content-disposition': 'inline; filename="' + name + '"',
+          'content-disposition': 'inline; filename="' + cleanFilename(name) + '"',
         },
         filename: name,
       }

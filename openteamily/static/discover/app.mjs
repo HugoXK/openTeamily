@@ -8,6 +8,7 @@ const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const VIEWER_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/;
 const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
 const MATCH_KINDS = new Set(['title', 'summary', 'body', 'creator']);
+const MEDIA_LABELS = {image: '图片', audio: '音频', video: '视频'};
 const SEARCH_DELAY = 300;
 
 export function validSlug(value) {
@@ -185,7 +186,7 @@ export function attachFeedThumb(document, cover, preview) {
 }
 
 export function feedPreviewPath(item) {
-  if (!item || item.kind === 'image' || item.kind === 'model3d' || !validSlug(item.slug)) return '';
+  if (!item || Object.hasOwn(MEDIA_LABELS, item.kind) || item.kind === 'model3d' || !validSlug(item.slug)) return '';
   return '/w/' + item.slug + '/preview';
 }
 
@@ -237,6 +238,23 @@ function publicWorkPath(item) {
   return item.path === '/social' + path ? item.path : path;
 }
 
+function workMediaPath(item, legacyImage) {
+  if (!Object.hasOwn(MEDIA_LABELS, item.kind)) return '';
+  const workPath = publicWorkPath(item);
+  if (!workPath) return '';
+  const hasFile = item.file_available === true &&
+    (!item.file_mime || (typeof item.file_mime === 'string' && item.file_mime.startsWith(item.kind + '/')));
+  const oldImage = legacyImage && item.kind === 'image' && item.file_available === undefined;
+  return hasFile || oldImage ? workPath + '/file' : '';
+}
+
+function mediaFileSize(bytes) {
+  if (!Number.isSafeInteger(bytes) || bytes < 1) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return Math.round(bytes / 1024) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
 function workMatch(match) {
   if (!MATCH_KINDS.has(match?.kind) || typeof match.text !== 'string' || !match.text.trim()) return;
   const {text, start, end} = match;
@@ -251,19 +269,29 @@ function appendMatch(document, target, {text, start, end}) {
   target.append(text.slice(0, start), mark, text.slice(end));
 }
 
-export function renderFeedCard(document, item) {
+export function renderFeedCard(document, item, {legacyImage = false} = {}) {
   const card = document.createElement('a');
   card.className = 'feed-card';
   card.href = publicWorkPath(item) || '/discover';
-  const cover = document.createElement(item.kind === 'image' ? 'img' : 'div');
+  const cover = document.createElement('div');
   cover.className = 'work-cover';
   cover.dataset.kind = item.kind || 'work';
   cover.dataset.pattern = coverPattern(item.title || item.slug || '');
-  if (item.kind === 'image') {
-    cover.src = '/w/' + encodeURIComponent(item.slug) + '/file';
-    cover.alt = ''; cover.loading = 'lazy';
-  } else {
-    cover.setAttribute('aria-hidden', 'true');
+  cover.setAttribute('aria-hidden', 'true');
+  const imageFile = item.kind === 'image' && workMediaPath(item, legacyImage);
+  if (imageFile) {
+    const image = document.createElement('img');
+    image.className = 'work-cover-image';
+    image.alt = '';
+    image.loading = 'lazy';
+    image.decoding = 'async';
+    image.fetchPriority = 'low';
+    image.width = 320;
+    image.height = 200;
+    image.addEventListener('error', () => { image.hidden = true; });
+    image.src = imageFile;
+    cover.append(image);
+  } else if (!Object.hasOwn(MEDIA_LABELS, item.kind)) {
     attachFeedThumb(document, cover, item.preview);
   }
   const kind = document.createElement('p');
@@ -561,7 +589,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   const clearSearch = document.getElementById('feed-clear');
   const retryFeed = document.getElementById('feed-retry');
   const detail = Object.fromEntries([
-    'back', 'paper', 'title', 'meta', 'status', 'retry', 'preview', 'actions', 'open',
+    'back', 'paper', 'title', 'meta', 'status', 'retry', 'preview', 'actions', 'open', 'download',
     'like', 'collect', 'follow', 'comments', 'share', 'previous', 'next',
   ].map(name => [name, document.getElementById('work-detail-' + name)]));
   const share = Object.fromEntries(['dialog', 'url', 'status', 'copy', 'native', 'close']
@@ -595,6 +623,13 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function disposeWorkPreview() {
     activeWork?.model?.setSource('');
+    if (activeWork?.media) {
+      const player = activeWork.media;
+      activeWork.media = null;
+      player.pause?.();
+      player.removeAttribute('src');
+      player.load?.();
+    }
     detail.preview.replaceChildren();
   }
 
@@ -720,14 +755,24 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     detail.title.textContent = work.title || work.slug;
     detail.meta.textContent = detailMetaText(work);
     detail.open.href = publicWorkPath(work);
+    const file = workMediaPath(work, !nativeCatalog);
+    detail.download.hidden = !file;
+    if (file) {
+      detail.download.href = file;
+      detail.download.download = '';
+      const size = mediaFileSize(work.file_bytes);
+      detail.download.textContent = size ? '下载原文件 · ' + size : '下载原文件';
+    } else {
+      detail.download.removeAttribute('href');
+    }
     detail.actions.hidden = false;
     detail.paper.setAttribute('aria-busy', 'false');
     const key = JSON.stringify([work.slug, work.kind, work.title, work.updated, work.site_available === true,
-      work.kind === 'model3d' ? publicWorkPath(work) : '']);
+      work.kind === 'model3d' ? publicWorkPath(work) : file]);
     if (key !== entry.previewKey) {
       disposeWorkPreview();
       entry.previewKey = key;
-      entry.preview = renderWorkPreview(entry, work, key, inlinePreview);
+      entry.preview = renderWorkPreview(entry, work, key, inlinePreview, file);
     }
   }
 
@@ -1124,7 +1169,39 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return (item[flag] ? '取消' : '') + label + (action === 'like' ? ' · ' + (item.likes || 0) : '');
   }
 
-  async function renderWorkPreview(entry, item, key, inlinePreview) {
+  function renderMediaPreview(entry, item, file, stillShowing) {
+    const status = document.createElement('p');
+    status.className = 'work-media-status';
+    status.setAttribute('role', 'status');
+    const label = MEDIA_LABELS[item.kind];
+    if (!file) {
+      status.textContent = '这件作品暂无可用的' + label + '文件。';
+      detail.preview.append(status);
+      return;
+    }
+    const image = item.kind === 'image';
+    const player = document.createElement(image ? 'img' : item.kind);
+    player.className = 'work-detail-' + item.kind;
+    if (image) {
+      player.alt = item.title || '公开作品图片';
+      player.decoding = 'async';
+    } else {
+      player.controls = true;
+      player.preload = 'none';
+      player.setAttribute('aria-label', label + '预览 · ' + (item.title || item.slug));
+      if (item.kind === 'video') player.playsInline = true;
+      entry.media = player;
+    }
+    player.addEventListener('error', () => {
+      if (!stillShowing() || (!image && entry.media !== player)) return;
+      player.hidden = true;
+      status.textContent = '无法预览' + label + '，可以尝试下载原文件。';
+    });
+    player.src = file;
+    detail.preview.append(player, status);
+  }
+
+  async function renderWorkPreview(entry, item, key, inlinePreview, file) {
     const stillShowing = () => activeWorkEntry(entry) && entry.previewKey === key && entry.outcome !== 'denied';
     if (item.kind === 'website' && item.site_available === true) {
       const frame = document.createElement('iframe');
@@ -1142,15 +1219,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       entry.model.setSource(file);
       return;
     }
-    if (item.kind === 'image') {
-      const image = document.createElement('img');
-      image.src = '/w/' + item.slug + '/file';
-      image.alt = item.title || '公开作品图片';
-      image.className = 'work-detail-image';
-      image.addEventListener('error', () => {
-        if (stillShowing()) detail.preview.textContent = '暂时无法显示图片。';
-      });
-      detail.preview.append(image);
+    if (Object.hasOwn(MEDIA_LABELS, item.kind)) {
+      renderMediaPreview(entry, item, file, stillShowing);
       return;
     }
     detail.preview.textContent = FEED_DETAIL_LOADING;
@@ -1239,7 +1309,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       grid.replaceChildren();
     }
     for (const item of feedState.items.slice(start)) {
-      const card = renderFeedCard(document, item);
+      const card = renderFeedCard(document, item, {legacyImage: !nativeCatalog});
       const cover = typeof card.querySelector === 'function' ? card.querySelector('.work-cover') : null;
       hydrateThumb(cover, item);
       const entry = document.createElement('article');

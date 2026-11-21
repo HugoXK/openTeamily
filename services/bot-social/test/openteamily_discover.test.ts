@@ -17,6 +17,8 @@ const TRIANGLE_GLB = [
   "OlstMSwtMSwwXSwibWF4IjpbMSwxLDBdfV19ICAgJAAAAEJJTgAAAIC/AACAvwAAAAAAAIA/AACAvwAAAAAAAAAA",
   "AACAPwAAAAA=",
 ].join("");
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aX8AAAAASUVORK5CYII=", "base64");
+const WAV = Buffer.from("524946462800000057415645666d74201000000001000100401f0000401f000001000800646174610400000080818280", "hex");
 
 let S: Awaited<ReturnType<typeof startServer>>;
 before(async () => { S = await startServer(bulkAuth); });
@@ -505,6 +507,123 @@ test("public GLB downloads appear only after an explicit publish and disappear o
   await owner.ok("DELETE", "/v1/ot/listings/" + model.id);
   assert.equal((await fetch(publicPage)).status, 404);
   assert.equal((await fetch(publicFile)).status, 404);
+});
+
+test("public media uses explicit byte snapshots with typed metadata, seek ranges and revocation", async () => {
+  const [owner, visitor] = await Promise.all([home(S.base, "media-author"), home(S.base, "media-visitor")]);
+  const put = "/v1/ot/listings";
+  const payload = {kind: "work", work_kind: "media", ref: "media-fixture", slug: "ceramic-image", title: "陶土 <实拍>",
+    media_filename: "陶土照片.png", media_mime: "image/png", media_data: PNG.toString("base64")};
+  const image = S.base + "/w/ceramic-image";
+  const file = image + "/file";
+  assert.equal((await fetch(file)).status, 404);
+  for (const invalid of [
+    {work_kind: "website"}, {kind: "agent"}, {work_kind: "audio"}, {media_mime: "image/svg+xml"},
+    {media_filename: "../private.png"}, {media_filename: "bad\r\n.png"},
+    {media_mime: "image/gif"}, {media_data: "<svg onload=alert(1) />"}, {media_data: "aGVs bG8="},
+  ]) assert.equal((await owner.call("PUT", put, {...payload, ...invalid})).status, 400);
+  assert.equal((await fetch(image)).status, 404);
+
+  const published = await owner.ok("PUT", put, payload);
+  assert.equal(published.work_kind, "image", "the media alias is persisted with the searchable kind");
+  const feed = await visitor.ok("GET", "/v1/ot/discover?kind=work&work_kind=image&creator=" + encodeURIComponent(owner.handle));
+  assert.equal(feed.items[0].slug, "ceramic-image");
+  const detail = await visitor.ok("GET", "/v1/ot/discover/ceramic-image/detail");
+  const publicData = await (await fetch(image, {headers: {accept: "application/json"}})).json() as any;
+  const preview = await (await fetch(image + "?view=preview", {headers: {accept: "application/json"}})).json() as any;
+  for (const entry of [published, feed.items[0], detail.work, publicData, preview]) {
+    assert.deepEqual([entry.file_available, entry.file_mime, entry.file_bytes], [true, "image/png", PNG.length]);
+    assert.equal(entry.media_data, undefined);
+    assert.equal(entry.media_filename, undefined);
+  }
+  const guest = await (await fetch(image)).text();
+  assert.match(guest, /<img class="work-media" src="\/w\/ceramic-image\/file" alt="陶土 &lt;实拍&gt;"/);
+  assert.match(guest, /href="\/w\/ceramic-image\/file" download/);
+
+  const fetchFile = (range?: string, method = "GET", headers: Record<string, string> = {}) =>
+    fetch(file, {method, headers: {...headers, ...(range ? {range} : {})}});
+  const whole = await fetchFile();
+  assert.equal(whole.status, 200);
+  assert.equal(whole.headers.get("content-type"), "image/png");
+  assert.equal(whole.headers.get("cache-control"), "no-store");
+  assert.equal(whole.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(whole.headers.get("accept-ranges"), "bytes");
+  assert.equal(whole.headers.get("content-length"), String(PNG.length));
+  assert.match(whole.headers.get("content-disposition") ?? "", /^inline; filename="ceramic-image\.png"; filename\*=UTF-8''%E9/);
+  assert.deepEqual(Buffer.from(await whole.arrayBuffer()), PNG);
+  const head = await fetchFile("bytes=0-1", "HEAD");
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get("content-length"), String(PNG.length));
+  assert.equal(head.headers.get("content-range"), null);
+  assert.equal((await head.arrayBuffer()).byteLength, 0);
+  for (const [range, start, end] of [
+    ["bytes=3-8", 3, 8], ["bytes=8-", 8, PNG.length - 1], ["bytes=-4", PNG.length - 4, PNG.length - 1],
+    ["bytes=0-999999", 0, PNG.length - 1],
+  ] as const) {
+    const result = await fetchFile(range);
+    assert.equal(result.status, 206);
+    assert.equal(result.headers.get("content-length"), String(end - start + 1));
+    assert.equal(result.headers.get("content-range"), `bytes ${start}-${end}/${PNG.length}`);
+    assert.deepEqual(Buffer.from(await result.arrayBuffer()), PNG.subarray(start, end + 1));
+  }
+  for (const range of [`bytes=${PNG.length}-`, "bytes=8-2", "bytes=-0", "bytes=-"]) {
+    const result = await fetchFile(range);
+    assert.equal(result.status, 416);
+    assert.equal(result.headers.get("content-range"), `bytes */${PNG.length}`);
+  }
+  const stale = await fetchFile("bytes=0-1", "GET", {"if-range": '"stale"'});
+  assert.equal(stale.status, 200);
+  assert.deepEqual(Buffer.from(await stale.arrayBuffer()), PNG);
+
+  const audioPayload = {...payload, slug: "ceramic-audio", work_kind: "audio", media_filename: "recording", media_mime: "audio/wav",
+    media_data: WAV.toString("base64")};
+  assert.equal((await owner.call("PUT", put, {...audioPayload, media_data: PNG.toString("base64")})).status, 400);
+  assert.equal((await fetch(file)).status, 200, "invalid replacement leaves the old publish intact");
+  const audio = await owner.ok("PUT", put, audioPayload);
+  assert.equal(audio.id, published.id);
+  assert.equal((await fetch(file)).status, 404, "slug changes remove the old path");
+  const audioPage = S.base + "/w/ceramic-audio";
+  const audioGuest = await (await fetch(audioPage)).text();
+  assert.match(audioGuest, /media-src 'self'/);
+  assert.match(audioGuest, /<audio class="work-media" controls preload="none" src="\/w\/ceramic-audio\/file">/);
+  const audioBytes = await fetch(audioPage + "/file", {headers: {range: "bytes=-4"}});
+  assert.equal(audioBytes.status, 206);
+  assert.equal(audioBytes.headers.get("content-type"), "audio/wav");
+  assert.match(audioBytes.headers.get("content-disposition") ?? "", /filename\*=UTF-8''recording\.wav$/);
+  assert.deepEqual(Buffer.from(await audioBytes.arrayBuffer()), WAV.subarray(-4));
+  assert.equal((await visitor.call("DELETE", put + "/" + audio.id)).status, 404);
+  await owner.ok("DELETE", put + "/" + audio.id);
+  assert.equal((await fetch(audioPage)).status, 404);
+  assert.equal((await fetch(audioPage + "/file", {method: "HEAD"})).status, 404);
+  assert.equal((await fetch(audioPage + "/file", {headers: {range: "bytes=0-3"}})).status, 404);
+  assert.equal(S.platform.db.prepare("SELECT 1 FROM ot_listing_media WHERE listing_id=?").get(audio.id), undefined);
+});
+
+test("published media shares the GLB owner quota and replacing a publication releases the old bytes", async (t) => {
+  const server = await startServer({...bulkAuth, attachments: {ownerBudgetBytes: Buffer.from(TRIANGLE_GLB, "base64").length}});
+  t.after(() => server.stop());
+  const [owner, other] = await Promise.all([home(server.base, "media-quota-author"), home(server.base, "media-quota-other")]);
+  const put = "/v1/ot/listings";
+  const png = {kind: "work", ref: "public-image", slug: "quota-public-image", title: "A photo", work_kind: "image",
+    media_filename: "photo.png", media_mime: "image/png", media_data: PNG.toString("base64")};
+  const glb = {kind: "work", ref: "public-model", slug: "quota-public-model", title: "A model", work_kind: "model3d",
+    model_data: TRIANGLE_GLB};
+  const first = await owner.ok("PUT", put, png);
+  const over = await owner.call("PUT", put, glb);
+  assert.equal(over.status, 413);
+  assert.equal(over.data.error.code, "attachment_storage_full");
+  assert.equal((await fetch(server.base + "/w/quota-public-model")).status, 404);
+  await other.ok("PUT", put, {...png, slug: "quota-other-image"});
+  const replacement = await owner.ok("PUT", put, {...glb, ref: png.ref, slug: png.slug});
+  assert.equal(replacement.id, first.id);
+  const file = await fetch(server.base + "/w/quota-public-image/file");
+  assert.equal(file.headers.get("content-type"), "model/gltf-binary");
+  assert.equal(Buffer.from(await file.arrayBuffer()).toString("base64"), TRIANGLE_GLB);
+  assert.equal(server.platform.db.prepare("SELECT 1 FROM ot_listing_media WHERE listing_id=?").get(first.id), undefined);
+  assert.equal((await owner.call("PUT", put, {...png, ref: "another-image", slug: "quota-second-image"})).status, 413);
+  await owner.ok("PUT", put, {kind: "work", work_kind: "document", ref: png.ref, slug: png.slug, title: "Document instead"});
+  assert.equal((await fetch(server.base + "/w/quota-public-image/file")).status, 404);
+  await owner.ok("PUT", put, {...png, ref: "another-image", slug: "quota-second-image"});
 });
 
 test("work detail follows the filtered feed across page boundaries and timestamp ties", async (t) => {

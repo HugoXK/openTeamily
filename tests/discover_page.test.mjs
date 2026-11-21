@@ -949,12 +949,26 @@ test('following nobody from a shared URL shows the following empty note, not a b
 
 test('work covers use real same-origin published media, not invented screenshots', () => {
   const doc = fakeDocument();
-  const image = renderFeedCard(doc, {slug: 'real-photo', title: '<safe>', kind: 'image'});
-  const cover = image.children.find(node => node.className === 'work-cover');
-  assert.equal(cover.tagName, 'img');
-  assert.equal(cover.src, '/w/real-photo/file');
-  assert.equal(cover.loading, 'lazy');
-  assert.equal(cover.alt, '');
+  const photo = {slug: 'real-photo', path: '/social/w/real-photo', title: '<safe>',
+    kind: 'image', file_available: true, file_mime: 'image/png'};
+  const image = renderFeedCard(doc, photo);
+  const [cover] = classHits(image, 'work-cover');
+  const [photoImage] = classHits(cover, 'work-cover-image');
+  assert.equal(cover.tagName, 'div');
+  assert.equal(photoImage.tagName, 'img');
+  assert.equal(photoImage.src, '/social/w/real-photo/file');
+  assert.equal(photoImage.loading, 'lazy');
+  assert.equal(photoImage.decoding, 'async');
+  assert.equal(photoImage.fetchPriority, 'low');
+  assert.equal(photoImage.alt, '');
+  photoImage.handlers.error();
+  assert.equal(photoImage.hidden, true);
+  assert.equal(cover.dataset.kind, 'image', 'the fixed cover remains after an image fails');
+  assert.equal(classHits(renderFeedCard(doc, {...photo, file_available: false}), 'work-cover-image').length, 0);
+  assert.equal(classHits(renderFeedCard(doc, {...photo, file_mime: 'video/mp4'}), 'work-cover-image').length, 0);
+  assert.equal(classHits(renderFeedCard(doc, {...photo, slug: '../photo'}), 'work-cover-image').length, 0);
+  assert.equal(classHits(renderFeedCard(doc, {...photo, file_available: undefined}), 'work-cover-image').length, 0);
+  assert.equal(classHits(renderFeedCard(doc, {...photo, file_available: undefined}, {legacyImage: true}), 'work-cover-image').length, 1);
   const website = renderFeedCard(doc, {slug: 'real-site', title: 'Site', kind: 'website'});
   const fallback = website.children.find(node => node.className === 'work-cover');
   assert.equal(fallback.tagName, 'div');
@@ -1116,6 +1130,8 @@ test('thumbModel keeps only bounded text and validated shapes from the preview',
 test('feed covers load from the public work preview path, never for images or odd slugs', () => {
   assert.equal(feedPreviewPath({slug: 'public-note', kind: 'document'}), '/w/public-note/preview');
   assert.equal(feedPreviewPath({slug: 'photo-1', kind: 'image'}), '');
+  assert.equal(feedPreviewPath({slug: 'music-1', kind: 'audio'}), '');
+  assert.equal(feedPreviewPath({slug: 'movie-1', kind: 'video'}), '');
   assert.equal(feedPreviewPath({slug: '../x', kind: 'document'}), '');
   assert.equal(feedPreviewPath(null), '');
   assert.equal(attachFeedThumb({}, null, {type: 'document'}), false);
@@ -1509,7 +1525,61 @@ test('an image work uses the public media file without reading a text preview', 
   await classHits(cell, 'feed-detail-toggle')[0].handlers.click();
   const [image] = classHits(doc.getElementById('work-detail-preview'), 'work-detail-image');
   assert.equal(image.src, '/w/ci-fixture-doc/file');
+  assert.equal(doc.getElementById('work-detail-download').href, image.src);
   assert.equal(requests.some(path => path.endsWith('/preview')), false);
+});
+
+test('audio and video have no feed player but offer a real controllable player and original download in detail', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  for (const [kind, mime] of [['audio', 'audio/wav'], ['video', 'video/webm']]) {
+    const doc = feedDocument();
+    const work = detailFixture({kind, kind_label: '', path: '/social/w/ci-fixture-doc',
+      file_available: true, file_mime: mime, file_bytes: 4096});
+    const {fetcher, requests} = detailFetcher(work, () => assert.fail('media needs no text preview'));
+    await mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
+    const grid = doc.getElementById('feed-grid');
+    const [cover] = classHits(grid, 'work-cover');
+    assert.equal(cover.dataset.kind, kind);
+    assert.equal(cover.children.length, 0);
+    assert.equal(requests.some(path => path.endsWith('/file') || path.endsWith('/preview')), false);
+    await classHits(grid, 'feed-detail-toggle')[0].handlers.click();
+    const surface = doc.getElementById('work-detail-preview');
+    const [player] = classHits(surface, 'work-detail-' + kind);
+    const download = doc.getElementById('work-detail-download');
+    assert.equal(player.tagName, kind);
+    assert.equal(player.src, '/social/w/ci-fixture-doc/file');
+    assert.equal(player.controls, true);
+    assert.equal(player.preload, 'none');
+    assert.notEqual(player.autoplay, true);
+    if (kind === 'video') assert.equal(player.playsInline, true);
+    assert.equal(download.href, player.src);
+    assert.equal(download.download, '');
+    assert.match(download.textContent, /下载原文件 · 4 KB/);
+    player.handlers.error();
+    assert.equal(player.hidden, true);
+    assert.match(classHits(surface, 'work-media-status')[0].textContent, /可以尝试下载原文件/);
+    assert.equal(download.hidden, false);
+    let paused = false, unloaded = false;
+    player.pause = () => { paused = true; };
+    player.load = () => { unloaded = true; };
+    doc.getElementById('work-detail-back').handlers.click();
+    assert.equal(paused && unloaded, true);
+    assert.equal(surface.children.length, 0);
+  }
+});
+
+test('known missing video visibly reports unavailable without a player or download', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const {fetcher, requests} = detailFetcher(detailFixture({kind: 'video', file_available: false}),
+    () => assert.fail('known missing video needs no text or binary read'));
+  await mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
+  await classHits(doc.getElementById('feed-grid'), 'feed-detail-toggle')[0].handlers.click();
+  const preview = doc.getElementById('work-detail-preview');
+  assert.equal(classHits(preview, 'work-detail-video').length, 0);
+  assert.match(classHits(preview, 'work-media-status')[0].textContent, /暂无可用的视频文件/);
+  assert.equal(doc.getElementById('work-detail-download').hidden, true);
+  assert.equal(requests.some(path => path.endsWith('/file') || path.endsWith('/preview')), false);
 });
 
 test('a native plain-text snapshot appears verbatim and is bounded in the work detail', async () => {

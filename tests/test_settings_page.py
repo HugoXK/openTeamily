@@ -181,6 +181,18 @@ class SettingsPageTests(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertEqual(self.raw.call('GET', '/discover', query=query)['status'], 400)
 
+    def test_discover_can_play_media_from_its_own_origin(self):
+        headers = self.raw.call('GET', '/discover')['headers']
+        self.assertIn("media-src 'self'", headers['Content-Security-Policy'])
+        self.assertNotIn('blob:', headers['Content-Security-Policy'].split('media-src ', 1)[1])
+        self.assertIn('microphone=()', headers['Permissions-Policy'])
+
+    def test_discover_3d_engine_can_load_from_the_public_shell(self):
+        asset = self.raw.call('GET', '/shell/model3d-engine-0.187.0.mjs')
+        self.assertEqual(asset['status'], 200)
+        self.assertIn('javascript', asset['headers']['Content-Type'])
+        self.assertGreater(len(asset['body']), 256 * 1024)
+
     def test_platform_settings_api_stays_retired_without_disabling_login(self):
         self.assertEqual(self.client.call('GET', '/v1/settings')['status'], 410)
         update = self.client.call('POST', '/v1/settings', {'revision': 0, 'changes': {'appearance': 'dark'}})

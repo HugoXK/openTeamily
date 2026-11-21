@@ -321,6 +321,63 @@ test('native Discover passes the full work query and scoped cursor while returni
   ])
 })
 
+test('publishing media exports the saved revision and Discover only projects its public file metadata', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-discover-media-'))
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({token: 'fixture', server: SERVER}), {mode: 0o600})
+  const workspace = 'c'.repeat(32)
+  const artifactId = '6'.repeat(32)
+  const bytes = Buffer.from('saved-media-fixture')
+  let media = {}
+  let mismatch = false
+  const puts = []
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath, fetch: async (url, init) => {
+    const {pathname} = new URL(url)
+    if (pathname.endsWith('/mine')) return Response.json({listings: []})
+    if (init.method === 'PUT') {
+      const doc = JSON.parse(init.body)
+      puts.push(doc)
+      return Response.json({...doc, listed: true})
+    }
+    assert.equal(pathname, '/v1/ot/discover/media-preview/detail')
+    return Response.json({work: {
+      kind: 'work', listed: true, slug: 'media-preview', title: '作品预览', work_kind: 'video',
+      file_available: true, file_mime: media.mime, file_bytes: bytes.length, media_data: bytes.toString('base64'),
+      media_filename: 'private-original.mp4',
+    }})
+  }}))
+  const call = discover({dataDir: dir, async call(endpoint, input) {
+    if (endpoint === 'artifacts/v1') {
+      assert.deepEqual(input, {method: 'GET', path: `/v1/workspaces/${workspace}/artifacts/${artifactId}`})
+      return {body: {artifact: {kind: 'media', title: '作品预览', revision: 7, media}}}
+    }
+    assert.equal(endpoint, 'artifacts/chatAttachment')
+    assert.deepEqual(input, {workspace_id: workspace, artifact_id: artifactId, revision: 7})
+    return {attachment: {mime: mismatch ? 'image/gif' : media.mime, data: bytes.toString('base64')}}
+  }}).endpoints.v1
+  const publish = {method: 'POST', path: `/v1/workspaces/${workspace}/artifacts/${artifactId}/discover`,
+    body: {slug: 'media-preview', media_data: 'must-use-saved-bytes', media_mime: 'text/html'}}
+  for (const [kind, mime, filename] of [['image','image/png','photo.png'], ['audio','audio/ogg','song.ogg'], ['video','video/mp4','clip.mp4']]) {
+    media = {mime, filename}
+    assert.equal((await call(publish)).status, 201)
+    assert.deepEqual(puts.at(-1), {kind: 'work', ref: artifactId, slug: 'media-preview', title: '作品预览',
+      work_kind: kind, summary: '', snapshot: '', media_data: bytes.toString('base64'), media_mime: mime, media_filename: filename})
+  }
+  mismatch = true
+  assert.equal((await call(publish)).status, 409)
+  const detail = {method: 'GET', path: '/v1/discover/works/media-preview'}
+  const {work} = (await call(detail)).body
+  assert.equal(work.file_available, true)
+  assert.equal(work.file_mime, 'video/mp4')
+  assert.equal(work.file_bytes, bytes.length)
+  assert.equal(work.media_data, undefined)
+  assert.equal(work.media_filename, undefined)
+  media = {mime: 'text/html', filename: 'unsafe.html'}
+  assert.equal((await call(publish)).status, 400)
+  assert.equal((await call(detail)).body.work.file_available, undefined)
+  assert.equal(puts.length, 3)
+})
+
 test('publishing native works sends only saved display content to the public catalog', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ot-discover-published-text-'))
   const credentialsPath = join(dir, 'connector.json')

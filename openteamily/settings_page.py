@@ -164,17 +164,19 @@ class SettingsPage:
 
     def _asset(self, directory, name):
         # Never resolve user input into a filename. Reject symlinks, including the asset directory.
+        engine = directory == 'shell' and name.startswith('model3d-engine-') and name.endswith('.mjs')
+        limit = 1024 * 1024 if engine else 256 * 1024
         folder = self.root / directory
         root_fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root_fd)
             try:
                 info = os.fstat(fd)
-                if not stat.S_ISREG(info.st_mode) or info.st_size > 262144:
+                if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
                     raise OSError('Invalid asset')
                 with os.fdopen(fd, 'rb', closefd=False) as file:
-                    data = file.read(262145)
-                if len(data) > 262144:
+                    data = file.read(limit + 1)
+                if len(data) > limit:
                     raise OSError('Invalid asset')
                 return data
             finally:
@@ -273,6 +275,8 @@ class SettingsPage:
             return self.api(env, start_response)
         audio_page = path in ('/chat', '/chat/', '/meetings')
         csp = self.CSP + "; media-src 'self' blob:" if audio_page else self.CSP
+        if path == '/discover':
+            csp += "; media-src 'self'"
         if path in ('/chat', '/chat/', '/space', '/artifacts', '/discover'):
             csp = csp.replace("connect-src 'self'", "connect-src 'self' blob:").replace("img-src 'self'", "img-src 'self' blob:")
         microphone = '(self)' if audio_page else '()'

@@ -452,11 +452,13 @@
       </details>
       <details id="discover-panel" class="artifact-editor-panel" hidden>
         <summary>公开到发现页</summary>
-        <p class="note">发布后会出现在公开发现动态里。任何访问者都能通过公开链接查看作品和下载已发布的 3D 文件。</p>
+        <p class="note">发布后，任何人都能在发现页查看已保存的作品，并下载公开的图片、音频、视频和 3D 文件。</p>
         <p id="discover-status" class="note" role="status" hidden></p>
+        <a id="discover-public-link" target="_blank" rel="noopener" hidden>打开公开作品</a>
         <div id="discover-form" class="discover-form" role="group" aria-label="公开到发现页">
           <label for="discover-slug">公开短地址</label>
-          <input id="discover-slug" name="slug" maxlength="30" autocomplete="off" spellcheck="false" inputmode="latin">
+          <input type="text" id="discover-slug" name="slug" maxlength="30" autocomplete="off" spellcheck="false" inputmode="latin" placeholder="my-work" aria-describedby="discover-slug-hint">
+          <p id="discover-slug-hint" class="note">3–30 个小写字母、数字或连字符，以字母或数字开头和结尾。</p>
           <button type="button" id="publish-discover">发布到发现页</button>
           <button type="button" id="revoke-discover" hidden>从发现页撤回</button>
         </div>
