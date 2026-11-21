@@ -326,6 +326,8 @@ function idempotencyKey() {
   return globalThis.btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
+const DISCOVER_SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
+
 export function suggestedDiscoverSlug(title) {
   const slug = String(title || '')
     .toLowerCase()
@@ -333,7 +335,7 @@ export function suggestedDiscoverSlug(title) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 30)
     .replace(/-+$/g, '');
-  return /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug) ? slug : '';
+  return DISCOVER_SLUG.test(slug) ? slug : '';
 }
 
 export function kindBadge(kind) {
@@ -466,6 +468,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const editorLoading = document.getElementById('editor-loading');
   const main = document.getElementById('main');
   const editorPanels = new Map(['version', 'share', 'discover'].map(name => [name, document.getElementById(name + '-panel')]));
+  const discoverSlug = document.getElementById('discover-slug');
+  const discoverPublicLink = document.getElementById('discover-public-link');
+  const publishDiscover = document.getElementById('publish-discover');
+  const revokeDiscover = document.getElementById('revoke-discover');
   const mobileMenu = document.getElementById('mobile-editor-menu');
   const mobileMore = document.getElementById('mobile-editor-more');
   const mobileMarkdown = document.getElementById('mobile-editor-markdown');
@@ -494,7 +500,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   let editor = null;
   let catalog = null;
   let searchTimer = null;
-  let discoverSlugEdits = 0;
   let draftKind = 'document';
   let catalogKind = 'all';
   let catalogScope = 'all';
@@ -1999,7 +2004,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       document.getElementById(id).hidden = true;
     }
     for (const id of ['share-once', 'share-list', 'version-list']) document.getElementById(id).textContent = '';
-    document.getElementById('discover-slug').value = current?.id ? suggestedDiscoverSlug(current.title) : '';
+    discoverSlug.value = current?.id ? suggestedDiscoverSlug(current.title) : '';
+    if (editor) editor.discoverSlugEdited = false;
+    showDiscoverPublicLink('');
+    setDiscoverPending(false);
   }
 
   function showCatalog({preserve = false} = {}) {
@@ -2089,21 +2097,77 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     return {result, item, selection};
   }
 
+  function showDiscoverPublicLink(path) {
+    if (!discoverPublicLink) return;
+    discoverPublicLink.hidden = !path;
+    if (path) discoverPublicLink.href = path;
+    else discoverPublicLink.removeAttribute('href');
+  }
+
+  function setDiscoverPending(pending) {
+    if (publishDiscover) publishDiscover.disabled = pending;
+    if (revokeDiscover) revokeDiscover.disabled = pending;
+    if (discoverSlug) discoverSlug.disabled = pending;
+  }
+
+  function renderDiscoverListing(row, updateSlug = true) {
+    const slug = typeof row.slug === 'string' && DISCOVER_SLUG.test(row.slug) ? row.slug : '';
+    const listed = row.listed === true && Boolean(slug);
+    if (updateSlug) discoverSlug.value = slug || suggestedDiscoverSlug(current?.title);
+    if (revokeDiscover) revokeDiscover.hidden = !listed;
+    const path = '/w/' + slug;
+    showDiscoverPublicLink(listed ? (row.path === '/social' + path ? row.path : path) : '');
+    panelStatus('discover', listed ? '已公开到发现页。' : '尚未公开到发现页。');
+  }
+
   async function loadDiscover() {
-    const edits = discoverSlugEdits;
+    if (editor?.discoverWrite) return;
     const response = await readPanel('discover', '/discover');
     if (!response) return;
-    const {result, item} = response;
+    const {result, selection} = response;
     if (result.status !== 200) {
       panelStatus('discover', '无法读取公开状态。关闭后重新展开可重试。');
       return;
     }
-    const row = result.body.discover || {};
-    if (edits === discoverSlugEdits) {
-      document.getElementById('discover-slug').value = row.slug || suggestedDiscoverSlug(item.title);
+    renderDiscoverListing(result.body.discover || {}, !selection.discoverSlugEdited);
+  }
+
+  async function changeDiscoverListing(publish) {
+    const selection = editor;
+    if (!activeEditor(selection) || !current?.id || selection.discoverWrite) return;
+    const slug = discoverSlug.value.trim();
+    if (publish && !DISCOVER_SLUG.test(slug)) {
+      panelStatus('discover', '请输入符合要求的公开短地址。');
+      discoverSlug.focus();
+      return;
     }
-    document.getElementById('revoke-discover').hidden = !row.listed;
-    panelStatus('discover', row.listed ? ('已公开：/w/' + row.slug) : '尚未公开到发现页。');
+    selection.discoverWrite = true;
+    selection.reads.delete('discover');
+    setDiscoverPending(true);
+    panelStatus('discover', publish ? '正在发布作品…' : '正在撤回作品…');
+    const path = editorPath(selection) + (publish ? '/discover' : '/discover/revoke');
+    const result = await request('POST', path, publish ? {slug} : {}, undefined, selection.controller.signal)
+      .catch(() => ({status: 0, body: {}}));
+    if (!activeEditor(selection)) return;
+    selection.discoverWrite = false;
+    setDiscoverPending(false);
+    if (result.status === 200 || (publish && result.status === 201)) {
+      if (publish) selection.discoverSlugEdited = false;
+      if (result.body?.discover) renderDiscoverListing(result.body.discover, !selection.discoverSlugEdited);
+      else await loadDiscover();
+      if (!publish && activeEditor(selection)) panelStatus('discover', '已从发现页撤回。');
+      return;
+    }
+    const error = result.body?.error;
+    const messages = {
+      forbidden: '只有所有者或管理员可以将作品发布到发现页。',
+      conflict: '这个短地址已经在用。',
+      invalid: '请输入符合要求的公开短地址。',
+      attachment_type_blocked: '这个文件格式无法公开发布。',
+    };
+    const code = typeof error === 'string' ? error : error?.code;
+    const fallback = publish ? '无法发布到发现页，请重试。' : '无法从发现页撤回，请重试。';
+    panelStatus('discover', messageFor(error, publish && Object.hasOwn(messages, code) ? messages[code] : fallback));
   }
 
   async function loadShares() {
@@ -3667,54 +3731,17 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   // The publish controls live inside #editor-form; a nested <form> would be
   // dropped by the HTML parser and close the editor form early, so this is a
   // plain group with a button handler (Enter in the slug field publishes too).
-  const publishDiscover = document.getElementById('publish-discover');
-  const discoverSlug = document.getElementById('discover-slug');
-  discoverSlug?.addEventListener('input', () => { discoverSlugEdits += 1; });
-  if (publishDiscover) {
-    if (discoverSlug) discoverSlug.addEventListener('keydown', event => {
-      if (event.key === 'Enter') { event.preventDefault(); publishDiscover.click(); }
-    });
-    publishDiscover.addEventListener('click', async event => {
+  discoverSlug?.addEventListener('input', () => {
+    if (activeEditor(editor)) editor.discoverSlugEdited = true;
+  });
+  discoverSlug?.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.isComposing) {
       event.preventDefault();
-      if (!current || !current.id || !workspaceId()) {
-        show('error', '请先保存作品，再发布到发现页。');
-        return;
-      }
-      const selection = editor;
-      if (!activeEditor(selection)) return;
-      const slug = (document.getElementById('discover-slug').value || '').trim();
-      const result = await request('POST', editorPath(selection) + '/discover', {slug})
-        .catch(() => ({status: 0, body: {}}));
-      if (!activeEditor(selection)) return;
-      if (result.status !== 200 && result.status !== 201) {
-        const messages = {
-          forbidden: '只有所有者或管理员可以把作品公开到发现页。',
-          conflict: '这个短地址已经在用。',
-          invalid: '请输入可用的公开短地址。',
-        };
-        show('error', messages[result.body.error] || messageFor(result.body.error, '无法发布到发现页。'));
-        return;
-      }
-      show('ok', '已公开到发现页。');
-      await loadDiscover();
-    });
-  }
-  const revokeDiscover = document.getElementById('revoke-discover');
-  if (revokeDiscover) {
-    revokeDiscover.addEventListener('click', async () => {
-      const selection = editor;
-      if (!activeEditor(selection) || !current?.id) return;
-      const result = await request('POST', editorPath(selection) + '/discover/revoke', {})
-        .catch(() => ({status: 0, body: {}}));
-      if (!activeEditor(selection)) return;
-      if (result.status !== 200) {
-        show('error', messageFor(result.body.error, '无法从发现页撤回。'));
-        return;
-      }
-      show('ok', '已从发现页撤回。');
-      await loadDiscover();
-    });
-  }
+      publishDiscover?.click();
+    }
+  });
+  publishDiscover?.addEventListener('click', () => changeDiscoverListing(true));
+  revokeDiscover?.addEventListener('click', () => changeDiscoverListing(false));
 
   document.getElementById('create-share').addEventListener('click', async () => {
     if (!current || !current.id || !workspaceId()) {

@@ -8,7 +8,8 @@ import { workNotificationSummary, workNotificationTarget } from '../shell/work-n
 import { mountPublicDraft } from './public-draft.mjs';
 import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
-import { startChatReads, takeChatReads } from './startup.mjs';
+import { chatStartFromHash, startChatReads, takeChatReads } from './startup.mjs';
+import { confirmSignupSession, signupSessionError } from '../home/runtime-readiness.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel, conversationLabel, memberChoices, validMessage } from '../shell/chat-utils.mjs';
 import { createLookAvatar } from '../look/app.mjs';
@@ -360,18 +361,6 @@ export function composeGroupPayload(memberIds, title, agentIds = []) {
 function messageFor(error, fallback) {
   if (error && error.message) return error.message;
   return fallback;
-}
-
-function hashParams(hash = location.hash) {
-  const text = (hash || '').replace(/^#/, '');
-  const params = new URLSearchParams(text);
-  return {
-    workspace: params.get('workspace') || '',
-    agent: params.get('agent') || '',
-    conversation: params.get('conversation') || '',
-    message: params.get('message') || '',
-    social: params.get('social') || '',
-  };
 }
 
 const chatPathId = value => /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,79}$/.test(value || '');
@@ -3483,6 +3472,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (status.dataset.kind === 'loading' && status.textContent === '正在打开对话…') show('', '');
   }
 
+  function validStartupTranscript(body, wid, aid, cid) {
+    const {agent, conversation, items, has_newer} = body || {};
+    return agent && agent.id === aid && agent.workspace_id === wid && !agent.archived && !agent.native_deleted
+      && conversation && conversation.id === cid && conversation.agent_id === aid && conversation.workspace_id === wid
+      && has_newer === false && Array.isArray(items) && items.length <= Number(HISTORY_PAGE_SIZE)
+      && items.every(item => item?.workspace_id === wid && item.agent_id === aid && item.conversation_id === cid);
+  }
+
+  function ownedStartingTranscript(local, aid, cid) {
+    // Only an owned, exact, bounded transcript can replace the separate history read.
+    const body = local?.entry;
+    if (!validStartupTranscript(body, local?.space.id, aid, cid)) return;
+    return () => ({status: 200, body});
+  }
+
   function readStartupSnapshot(wid, aid, cid) {
     if (![wid, aid, cid].every(id => /^[a-f0-9]{32}$/.test(id))) return null;
     const maxAge = 1800;
@@ -3490,14 +3494,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const path = agentConversationPath(wid, aid, cid);
     const pending = request('GET', `${path}?limit=${HISTORY_PAGE_SIZE}&snapshot=1`,
       undefined, undefined, AbortSignal.timeout(maxAge)).then(result => {
-        const {agent, conversation, items, has_newer} = result.body;
-        // Use only a bounded view of the precise, already authorized candidate.
-        return result.status === 200 && agent?.id === aid && agent.workspace_id === wid &&
-          !agent.archived && !agent.native_deleted && conversation?.id === cid &&
-          conversation.agent_id === aid && conversation.workspace_id === wid && has_newer === false &&
-          Array.isArray(items) && items.length <= Number(HISTORY_PAGE_SIZE) &&
-          items.every(item => item?.workspace_id === wid && item.agent_id === aid && item.conversation_id === cid)
-          ? result : null;
+        return result.status === 200 && validStartupTranscript(result.body, wid, aid, cid) ? result : null;
       }).catch(() => null);
     return async () => {
       if (performance.now() >= expires) return null;
@@ -4268,7 +4265,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  async function openLinkedConversation(start, loadCurrent, parallelDirectory, nativeDirectory) {
+  async function openLinkedConversation(start, loadCurrent, parallelDirectory, nativeDirectory, startupSnapshot) {
     const owner = currentUser;
     const workspace = workspaceId();
     const link = {current: () => startupLink === link && link.open === socialOpen
@@ -4280,7 +4277,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : (/^[0-9a-f]{32}$/.test(start.message) ? start.message : '');
     const opened = start.social
       ? openSocialConversation(start.social, {acknowledge: !start.message, link})
-      : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link});
+      : openAgentConversation(start.agent, start.conversation, {acknowledge: !message, link, startupSnapshot});
     link.open = socialOpen;
     if (parallelDirectory) link.directory = loadSessions(link, {nativeDirectory});
     try {
@@ -4312,7 +4309,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if ((!space.owner_id && !viewer) || (space.owner_id && space.owner_id !== user.id)
       || (viewer && viewer !== user.username)) return null;
     const directory = body.chat;
-    return {space, agentId: body.personal_agent_id,
+    return {space, agentId: body.personal_agent_id, entry: body.entry,
       directory: Array.isArray(directory?.items) && Array.isArray(directory?.conversations) ? directory : null};
   }
 
@@ -4369,17 +4366,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const hash = location.hash;
     const pathname = location.pathname;
     const banner = document.getElementById('onboarding-banner');
-    const start = hashParams(hash);
+    const start = chatStartFromHash(hash);
     const publicIntent = publicAgentIntentFromHash(hash);
     let navigation = socialOpen;
     const loadCurrent = () => sequence === loadRequest && location.hash === hash && location.pathname === pathname;
     const bootCurrent = () => loadCurrent() && socialOpen === navigation;
     const read = (path, signal) => request('GET', path, undefined, undefined, signal).catch(() => ({status: 0, body: {}}));
     const {sessionRequest, localRequest} = takeChatReads(document)
-      || startChatReads(read, start.workspace, servedByDsbot && !publicIntent);
+      || startChatReads(read, start, servedByDsbot && !publicIntent);
     const session = await sessionRequest;
     if (!bootCurrent()) return;
-    if (session.status !== 200 || !session.body?.user?.id) {
+    const unconfirmedSignup = !confirmSignupSession(document.defaultView ?? globalThis, session);
+    if (session.status !== 200 || !session.body?.user?.id || unconfirmedSignup) {
       if (banner) banner.hidden = true;
       currentUser = null;
       chatSettings = null;
@@ -4408,7 +4406,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.getElementById('session-pane').hidden = true;
       document.body.classList.remove('chat-open');
       setSessionsOpen(false);
-      show('', '');
+      show(unconfirmedSignup ? 'error' : '', unconfirmedSignup ? signupSessionError : '');
       return;
     }
     if (currentUser && currentUser.id !== session.body.user.id) {
@@ -4517,12 +4515,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     if (hasLink && start.workspace) {
-      await openLinkedConversation(start, loadCurrent, true, openLocal ? local.directory : null);
+      const snapshot = openLocal && !start.social ? ownedStartingTranscript(local, start.agent, start.conversation) : undefined;
+      await openLinkedConversation(start, loadCurrent, true, openLocal ? local.directory : null, snapshot);
       return;
     }
     const openStartingAgent = async () => {
       const first = sessions.find(row => row.source === 'agent' && row.agent_id === start.agent);
-      if (first) await openAgentConversation(start.agent, first.id);
+      if (first) {
+        const startupSnapshot = openLocal ? ownedStartingTranscript(local, start.agent, first.id) : undefined;
+        await openAgentConversation(start.agent, first.id, {startupSnapshot});
+      }
       else openEmptyAgentChat(start.agent);
     };
     let openingAgent;

@@ -7,6 +7,9 @@ import { commentsLabel, mountWorkComments } from './comments.mjs';
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
 const VIEWER_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/;
 const CREATOR_HANDLE = /^[a-z0-9][a-z0-9._-]{1,79}$/i;
+const MATCH_KINDS = new Set(['title', 'summary', 'body', 'creator']);
+const MEDIA_LABELS = {image: '图片', audio: '音频', video: '视频'};
+const SEARCH_DELAY = 300;
 
 export function validSlug(value) {
   return typeof value === 'string' && SLUG.test(value);
@@ -54,7 +57,7 @@ export function catalogQuery(text = '', cursor = '', category = 'all', creator =
   return '/v1/discover/agents?' + params.toString();
 }
 
-export const FEED_CATEGORIES = ['网页', '图片', '音乐', '幻灯片', '视频', '3D 作品'];
+export const FEED_CATEGORIES = ['网页', '文档', '图片', '音乐', '幻灯片', '视频', '3D 作品', '白板', '看板', '电子表格'];
 
 export const CATALOG_CATEGORIES = AGENT_CATEGORIES.map(({label}) => label);
 
@@ -71,7 +74,9 @@ export const FEED_FOLLOWING_EMPTY_BODY = '你关注的人发布动态后会显�
 export const FEED_FOLLOWING_NOTE = '你关注的作者已公开的作品会显示在这里。';
 export const FEED_SEARCH_EMPTY_NOTE = '没有匹配的公开作品。';
 
-export const FEED_KINDS = ['', 'website', 'image', 'audio', 'slides', 'video', 'model3d'];
+export const FEED_KINDS = [
+  '', 'website', 'document', 'image', 'audio', 'slides', 'video', 'model3d', 'whiteboard', 'dashboard', 'spreadsheet',
+];
 
 export function feedQuery(query, cursor = '', kind = '', sort = 'latest', creator = '') {
   const params = new URLSearchParams({limit: '12'});
@@ -98,7 +103,7 @@ export function feedStateFromSearch(search) {
     tab,
     kind,
     sort: tab === 'activity' && !kind && !creator && params.get('sort') === 'popular' ? 'popular' : 'latest',
-    query: (params.get('q') || '').slice(0, 80),
+    query: (params.get('q') || '').slice(0, 80).trim(),
     ...(creator ? {creator} : {}),
   };
 }
@@ -157,7 +162,10 @@ export function coverPattern(title) {
   return String(hash % 8);
 }
 
-const KIND_LABELS = {document:'文档',website:'网页',slides:'幻灯片',audio:'音频',video:'视频',model3d:'3D 作品',whiteboard:'白板',dashboard:'看板',media:'媒体'};
+const KIND_LABELS = {
+  document: '文档', website: '网页', image: '图片', slides: '幻灯片', audio: '音频', video: '视频',
+  model3d: '3D 作品', whiteboard: '白板', dashboard: '看板', spreadsheet: '电子表格', media: '媒体',
+};
 
 // Native public works expose plain text. Other public previews can include a
 // structured thumbnail. Normalize both while keeping the listing body-free.
@@ -178,7 +186,7 @@ export function attachFeedThumb(document, cover, preview) {
 }
 
 export function feedPreviewPath(item) {
-  if (!item || item.kind === 'image' || item.kind === 'model3d' || !validSlug(item.slug)) return '';
+  if (!item || Object.hasOwn(MEDIA_LABELS, item.kind) || item.kind === 'model3d' || !validSlug(item.slug)) return '';
   return '/w/' + item.slug + '/preview';
 }
 
@@ -230,26 +238,70 @@ function publicWorkPath(item) {
   return item.path === '/social' + path ? item.path : path;
 }
 
-export function renderFeedCard(document, item) {
+function workMediaPath(item, legacyImage) {
+  if (!Object.hasOwn(MEDIA_LABELS, item.kind)) return '';
+  const workPath = publicWorkPath(item);
+  if (!workPath) return '';
+  const hasFile = item.file_available === true &&
+    (!item.file_mime || (typeof item.file_mime === 'string' && item.file_mime.startsWith(item.kind + '/')));
+  const oldImage = legacyImage && item.kind === 'image' && item.file_available === undefined;
+  return hasFile || oldImage ? workPath + '/file' : '';
+}
+
+function mediaFileSize(bytes) {
+  if (!Number.isSafeInteger(bytes) || bytes < 1) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return Math.round(bytes / 1024) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+function workMatch(match) {
+  if (!MATCH_KINDS.has(match?.kind) || typeof match.text !== 'string' || !match.text.trim()) return;
+  const {text, start, end} = match;
+  if (Number.isInteger(start) && Number.isInteger(end) && start >= 0 && start < end && end <= text.length) {
+    return match;
+  }
+}
+
+function appendMatch(document, target, {text, start, end}) {
+  const mark = document.createElement('mark');
+  mark.textContent = text.slice(start, end);
+  target.append(text.slice(0, start), mark, text.slice(end));
+}
+
+export function renderFeedCard(document, item, {legacyImage = false} = {}) {
   const card = document.createElement('a');
   card.className = 'feed-card';
   card.href = publicWorkPath(item) || '/discover';
-  const cover = document.createElement(item.kind === 'image' ? 'img' : 'div');
+  const cover = document.createElement('div');
   cover.className = 'work-cover';
   cover.dataset.kind = item.kind || 'work';
   cover.dataset.pattern = coverPattern(item.title || item.slug || '');
-  if (item.kind === 'image') {
-    cover.src = '/w/' + encodeURIComponent(item.slug) + '/file';
-    cover.alt = ''; cover.loading = 'lazy';
-  } else {
-    cover.setAttribute('aria-hidden', 'true');
+  cover.setAttribute('aria-hidden', 'true');
+  const imageFile = item.kind === 'image' && workMediaPath(item, legacyImage);
+  if (imageFile) {
+    const image = document.createElement('img');
+    image.className = 'work-cover-image';
+    image.alt = '';
+    image.loading = 'lazy';
+    image.decoding = 'async';
+    image.fetchPriority = 'low';
+    image.width = 320;
+    image.height = 200;
+    image.addEventListener('error', () => { image.hidden = true; });
+    image.src = imageFile;
+    cover.append(image);
+  } else if (!Object.hasOwn(MEDIA_LABELS, item.kind)) {
     attachFeedThumb(document, cover, item.preview);
   }
   const kind = document.createElement('p');
   kind.className = 'kind';
   kind.textContent = item.kind_label || KIND_LABELS[item.kind] || item.kind || '';
   const title = document.createElement('h3');
-  title.textContent = item.title || '';
+  const match = workMatch(item.match);
+  const titleMatch = match?.kind === 'title' && match.text === item.title;
+  if (titleMatch) appendMatch(document, title, match);
+  else title.textContent = item.title || '';
   const meta = document.createElement('p');
   meta.className = 'meta';
   const mark = document.createElement('span');
@@ -266,7 +318,14 @@ export function renderFeedCard(document, item) {
     likes.textContent = '♡ ' + (item.likes || 0);
     meta.append(likes);
   }
-  card.append(cover, kind, title, meta);
+  card.append(cover, kind, title);
+  if (match && !titleMatch) {
+    const excerpt = document.createElement('p');
+    excerpt.className = 'feed-search-excerpt';
+    appendMatch(document, excerpt, match);
+    card.append(excerpt);
+  }
+  card.append(meta);
   return card;
 }
 
@@ -515,12 +574,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   const feedState = {...initialFeed, items: [], cursor: '', loading: false};
   let feedRequest = 0;
+  let feedReader;
   let feedViewer;
+  let feedPages = 0;
+  let feedFailure;
+  let feedRestore;
+  let searchTimer;
+  let composingQuery = false;
+  const feedPositions = new Map();
   const feedActions = new Map();
   const commentButtons = new Map();
   const workTriggers = new Map();
+  const searchInput = document.getElementById('feed-query');
+  const clearSearch = document.getElementById('feed-clear');
+  const retryFeed = document.getElementById('feed-retry');
   const detail = Object.fromEntries([
-    'back', 'paper', 'title', 'meta', 'status', 'retry', 'preview', 'actions', 'open',
+    'back', 'paper', 'title', 'meta', 'status', 'retry', 'preview', 'actions', 'open', 'download',
     'like', 'collect', 'follow', 'comments', 'share', 'previous', 'next',
   ].map(name => [name, document.getElementById('work-detail-' + name)]));
   const share = Object.fromEntries(['dialog', 'url', 'status', 'copy', 'native', 'close']
@@ -554,7 +623,22 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   function disposeWorkPreview() {
     activeWork?.model?.setSource('');
+    if (activeWork?.media) {
+      const player = activeWork.media;
+      activeWork.media = null;
+      player.pause?.();
+      player.removeAttribute('src');
+      player.load?.();
+    }
     detail.preview.replaceChildren();
+  }
+
+  function restoreFeedPosition(position) {
+    const control = position.focusId && document.getElementById(position.focusId);
+    const target = position.trigger?.isConnected ? position.trigger :
+      workTriggers.get(position.slug) || (control && !control.hidden ? control : null);
+    initialView.scrollTop = position.scroll;
+    (target || document.getElementById('discover-title'))?.focus?.({preventScroll: true});
   }
 
   function closeWorkDetail({restore = true} = {}) {
@@ -564,15 +648,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (share.dialog.open) share.dialog.close();
     activeWork = null;
     setWorkView(false);
-    if (restore && feedReturn) {
-      const target = feedReturn.trigger?.isConnected
-        ? feedReturn.trigger : workTriggers.get(feedReturn.slug) || document.getElementById('discover-title');
-      initialView.scrollTop = feedReturn.scroll;
-      target?.focus?.({preventScroll: true});
-    } else {
-      initialView.scrollTop = 0;
-      document.getElementById('discover-title')?.focus?.({preventScroll: true});
-    }
+    restoreFeedPosition(restore && feedReturn ? feedReturn : {scroll: 0});
     feedReturn = null;
   }
 
@@ -598,6 +674,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   async function openWorkDetail(intent, {item, trigger, navigate = false} = {}) {
     if (!intent || !validSlug(intent.slug)) return;
+    cancelSearch();
     const existing = activeWork;
     if (!existing) {
       feedReturn = {scroll: initialView.scrollTop || 0, trigger, slug: intent.slug};
@@ -678,14 +755,24 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     detail.title.textContent = work.title || work.slug;
     detail.meta.textContent = detailMetaText(work);
     detail.open.href = publicWorkPath(work);
+    const file = workMediaPath(work, !nativeCatalog);
+    detail.download.hidden = !file;
+    if (file) {
+      detail.download.href = file;
+      detail.download.download = '';
+      const size = mediaFileSize(work.file_bytes);
+      detail.download.textContent = size ? '下载原文件 · ' + size : '下载原文件';
+    } else {
+      detail.download.removeAttribute('href');
+    }
     detail.actions.hidden = false;
     detail.paper.setAttribute('aria-busy', 'false');
     const key = JSON.stringify([work.slug, work.kind, work.title, work.updated, work.site_available === true,
-      work.kind === 'model3d' ? publicWorkPath(work) : '']);
+      work.kind === 'model3d' ? publicWorkPath(work) : file]);
     if (key !== entry.previewKey) {
       disposeWorkPreview();
       entry.previewKey = key;
-      entry.preview = renderWorkPreview(entry, work, key, inlinePreview);
+      entry.preview = renderWorkPreview(entry, work, key, inlinePreview, file);
     }
   }
 
@@ -828,13 +915,6 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
   });
 
-  function loadDiscoverRoute() {
-    const intent = workDetailFromSearch(location?.search);
-    if (intent) return Promise.all([loadFeed(), openWorkDetail(intent)]);
-    closeWorkDetail();
-    return loadFeed();
-  }
-
   function applyFeedChrome({restoreQuery = false} = {}) {
     for (const name of ['following', 'activity', 'collected']) {
       const button = document.getElementById('feed-tab-' + name);
@@ -856,10 +936,16 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       const node = document.getElementById('feed-kind-' + (kind || 'all'));
       if (node) node.setAttribute('aria-current', String(!popular && kind === feedState.kind));
     }
-    if (restoreQuery) {
-      const input = document.getElementById('feed-query');
-      if (input) input.value = feedState.query;
+    const filters = document.getElementById('feed-filters');
+    if (filters?.scrollWidth > filters.clientWidth) {
+      const selected = popular ? popularButton : document.getElementById('feed-kind-' + (feedState.kind || 'all'));
+      const strip = filters.getBoundingClientRect();
+      const chip = selected?.getBoundingClientRect();
+      if (chip?.right > strip.right) filters.scrollLeft += chip.right - strip.right;
+      if (chip?.left < strip.left) filters.scrollLeft += chip.left - strip.left;
     }
+    if (restoreQuery && searchInput) searchInput.value = feedState.query;
+    if (clearSearch) clearSearch.hidden = !searchInput?.value;
   }
 
   function feedUrl() {
@@ -867,25 +953,108 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return pathname + feedSearchText(feedState);
   }
 
-  function pushFeedUrl() {
-    if (catalogView || !history || typeof history.pushState !== 'function') return;
-    history.pushState(null, '', feedUrl());
+  function cancelSearch() {
+    clearTimeout(searchTimer);
+    searchTimer = undefined;
+  }
+
+  function rememberFeedPosition() {
+    if (!feedPages || feedRestore) return;
+    const key = feedSearchText(feedState);
+    const focused = document.activeElement;
+    const position = activeWork ? feedReturn : {
+      scroll: initialView.scrollTop || 0,
+      slug: focused?.closest?.('.feed-entry')?.dataset.slug,
+      focusId: focused?.id?.startsWith('feed-') && focused.id,
+    };
+    if (!position) return;
+    feedPositions.delete(key);
+    feedPositions.set(key, {
+      pageCount: feedPages, scroll: position.scroll, slug: position.slug, focusId: position.focusId,
+    });
+    if (feedPositions.size > 16) feedPositions.delete(feedPositions.keys().next().value);
+  }
+
+  async function readFeedPosition(position) {
+    if (!position || sessionPending) return loadFeed();
+    const restoring = {position};
+    feedRestore = restoring;
+    let loaded = await loadFeed();
+    for (let page = 1; page < position.pageCount && loaded && feedRestore === restoring && feedState.cursor; page++) {
+      loaded = await loadFeed({append: true});
+    }
+    if (feedRestore !== restoring) return;
+    feedRestore = null;
+    updateFeedStatus();
+    if (!activeWork) restoreFeedPosition(position);
+  }
+
+  function applyFeedFilters(changes) {
+    cancelSearch();
+    const current = feedSearchText(feedState);
+    const next = {...feedState, ...changes};
+    if (feedSearchText(next) === current) return;
+    rememberFeedPosition();
+    feedRestore = null;
+    Object.assign(feedState, changes);
+    applyFeedChrome({restoreQuery: true});
+    history?.pushState?.(null, '', feedUrl());
+    initialView.scrollTop = 0;
+    return loadFeed();
+  }
+
+  function searchText() {
+    return (searchInput?.value || '').trim().slice(0, 80);
+  }
+
+  function commitSearch() {
+    const query = searchText();
+    if (searchInput) searchInput.value = query;
+    if (clearSearch) clearSearch.hidden = !query;
+    return applyFeedFilters({query});
+  }
+
+  function scheduleSearch() {
+    cancelSearch();
+    if (clearSearch) clearSearch.hidden = !searchInput?.value;
+    if (!composingQuery && searchText() !== feedState.query) {
+      searchTimer = setTimeout(commitSearch, SEARCH_DELAY);
+    }
+  }
+
+  function clearFeedSearch() {
+    if (!searchInput) return;
+    searchInput.value = '';
+    searchInput.focus?.();
+    return commitSearch();
   }
 
   if (!catalogView && window && typeof window.addEventListener === 'function') {
+    if (history && 'scrollRestoration' in history) history.scrollRestoration = 'manual';
     window.addEventListener('popstate', () => {
+      cancelSearch();
       const next = feedStateFromSearch(location?.search);
-      const feedChanged = feedSearchText(next) !== feedSearchText(feedState);
+      const nextKey = feedSearchText(next);
+      const feedChanged = nextKey !== feedSearchText(feedState);
+      if (feedChanged) {
+        rememberFeedPosition();
+        feedRestore = null;
+      }
       Object.assign(feedState, {creator: '', ...next});
       applyFeedChrome({restoreQuery: true});
       const intent = workDetailFromSearch(location?.search);
-      if (!intent) {
+      if (feedChanged || !intent) {
         workComments.close();
         closeWorkDetail({restore: !feedChanged});
       }
       if (feedChanged) {
-        feedReturn = null;
-        return loadDiscoverRoute();
+        initialView.scrollTop = 0;
+        const position = feedPositions.get(nextKey);
+        const loaded = readFeedPosition(position);
+        if (!intent) return loaded;
+        const opened = openWorkDetail(intent);
+        if (position) feedReturn = position;
+        return Promise.all([loaded, opened]);
       }
       if (intent) return openWorkDetail(intent);
     });
@@ -896,15 +1065,17 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const followingEmpty = document.getElementById('feed-following-empty');
     const gridSection = document.getElementById('feed-activity-empty');
     const searchNote = document.getElementById('feed-search-note');
-    if (followingEmpty) followingEmpty.hidden = !(currentUser && feedState.tab === 'following' && !feedState.items.length && !feedState.loading);
+    if (followingEmpty) followingEmpty.hidden = !(currentUser && feedState.tab === 'following' &&
+      !feedState.query && !feedState.items.length && !feedState.loading && !feedFailure);
     if (gridSection) gridSection.hidden = false;
     if (searchNote) searchNote.hidden = true;
     if (!note) return;
-    if (feedState.loading) {
+    if (feedState.loading || feedFailure) {
       note.textContent = '';
       return;
     }
     if (feedState.tab !== 'activity' && !currentUser) note.textContent = '请先登录，再查看关注或收录作品。';
+    else if (feedState.query && !feedState.items.length) note.textContent = FEED_SEARCH_EMPTY_NOTE;
     else if (feedState.tab === 'following') note.textContent = FEED_FOLLOWING_NOTE;
     else if (feedState.tab === 'collected') note.textContent = '这里只展示你收录且仍公开的作品。';
     else note.textContent = (feedState.query || feedState.kind || feedState.creator) && !feedState.items.length
@@ -998,7 +1169,39 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return (item[flag] ? '取消' : '') + label + (action === 'like' ? ' · ' + (item.likes || 0) : '');
   }
 
-  async function renderWorkPreview(entry, item, key, inlinePreview) {
+  function renderMediaPreview(entry, item, file, stillShowing) {
+    const status = document.createElement('p');
+    status.className = 'work-media-status';
+    status.setAttribute('role', 'status');
+    const label = MEDIA_LABELS[item.kind];
+    if (!file) {
+      status.textContent = '这件作品暂无可用的' + label + '文件。';
+      detail.preview.append(status);
+      return;
+    }
+    const image = item.kind === 'image';
+    const player = document.createElement(image ? 'img' : item.kind);
+    player.className = 'work-detail-' + item.kind;
+    if (image) {
+      player.alt = item.title || '公开作品图片';
+      player.decoding = 'async';
+    } else {
+      player.controls = true;
+      player.preload = 'none';
+      player.setAttribute('aria-label', label + '预览 · ' + (item.title || item.slug));
+      if (item.kind === 'video') player.playsInline = true;
+      entry.media = player;
+    }
+    player.addEventListener('error', () => {
+      if (!stillShowing() || (!image && entry.media !== player)) return;
+      player.hidden = true;
+      status.textContent = '无法预览' + label + '，可以尝试下载原文件。';
+    });
+    player.src = file;
+    detail.preview.append(player, status);
+  }
+
+  async function renderWorkPreview(entry, item, key, inlinePreview, file) {
     const stillShowing = () => activeWorkEntry(entry) && entry.previewKey === key && entry.outcome !== 'denied';
     if (item.kind === 'website' && item.site_available === true) {
       const frame = document.createElement('iframe');
@@ -1016,15 +1219,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       entry.model.setSource(file);
       return;
     }
-    if (item.kind === 'image') {
-      const image = document.createElement('img');
-      image.src = '/w/' + item.slug + '/file';
-      image.alt = item.title || '公开作品图片';
-      image.className = 'work-detail-image';
-      image.addEventListener('error', () => {
-        if (stillShowing()) detail.preview.textContent = '暂时无法显示图片。';
-      });
-      detail.preview.append(image);
+    if (Object.hasOwn(MEDIA_LABELS, item.kind)) {
+      renderMediaPreview(entry, item, file, stillShowing);
       return;
     }
     detail.preview.textContent = FEED_DETAIL_LOADING;
@@ -1113,11 +1309,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       grid.replaceChildren();
     }
     for (const item of feedState.items.slice(start)) {
-      const card = renderFeedCard(document, item);
+      const card = renderFeedCard(document, item, {legacyImage: !nativeCatalog});
       const cover = typeof card.querySelector === 'function' ? card.querySelector('.work-cover') : null;
       hydrateThumb(cover, item);
       const entry = document.createElement('article');
       entry.className = 'feed-entry';
+      entry.dataset.slug = item.slug || '';
       entry.append(card);
       const actions = document.createElement('div');
       actions.className = 'feed-card-actions';
@@ -1146,37 +1343,55 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   function updateFeedStatus() {
-    document.getElementById('feed-activity-empty')?.setAttribute('aria-busy', String(feedState.loading));
+    document.getElementById('feed-activity-empty')?.setAttribute('aria-busy', String(Boolean(feedRestore || feedState.loading)));
     const count = document.getElementById('feed-count');
     if (count) {
-      if (feedState.loading && feedState.cursor) count.textContent = '正在加载更多作品…';
+      if (feedRestore) count.textContent = '正在恢复浏览位置…';
+      else if (feedState.loading && feedState.cursor) count.textContent = '正在加载更多作品…';
       else if (feedState.loading && !feedState.items.length) count.textContent = '正在加载作品…';
-      else count.textContent = feedState.items.length ? '已显示 ' + feedState.items.length + ' 件公开作品' : '';
+      else if (feedState.items.length) count.textContent =
+        '已显示 ' + feedState.items.length + (feedState.query ? ' 件匹配作品' : ' 件公开作品');
+      else count.textContent = '';
     }
     const more = document.getElementById('feed-more');
     if (more) {
       more.hidden = !feedState.cursor;
-      more.disabled = feedState.loading || Boolean(nativeCatalog && sessionPending);
+      more.disabled = feedState.loading || Boolean(feedRestore || (nativeCatalog && sessionPending));
     }
     applyFeedNote();
+  }
+
+  function setFeedError(message, retry) {
+    const error = document.getElementById('feed-error');
+    feedFailure = retry;
+    if (error) {
+      error.hidden = !message;
+      error.textContent = message;
+    }
+    if (retryFeed) retryFeed.hidden = !retry;
+  }
+
+  function mismatchedNativeFeed(viewer) {
+    if (!nativeCatalog) return false;
+    if (currentUser) return !matchesFeedViewer(viewer);
+    return !sessionPending && viewer !== null;
   }
 
   async function loadFeed({append = false, retainItems = false, retryViewer = true} = {}) {
     if (feedState.loading && append) return;
     const seq = ++feedRequest;
+    const scope = sessionRequest;
+    feedReader?.abort();
     if (!append) {
       if (!retainItems) feedState.items = [];
       feedState.cursor = '';
       feedViewer = undefined;
+      feedPages = 0;
     }
     const needsViewer = feedState.tab !== 'activity';
     const waitingForViewer = needsViewer && !currentUser;
     feedState.loading = !waitingForViewer || Boolean(sessionPending);
-    const error = document.getElementById('feed-error');
-    if (error) {
-      error.hidden = true;
-      error.textContent = '';
-    }
+    setFeedError('');
     if (append || retainItems) updateFeedStatus();
     else renderFeed();
     if (waitingForViewer) return;
@@ -1187,32 +1402,31 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const params = feedQuery(feedState.query, feedState.cursor, feedState.kind, sort, feedState.creator);
     const tab = feedState.tab === 'activity' ? 'all' : feedState.tab;
     const path = privateFeed ? `/v1/discover/me/works?${params}&tab=${tab}` : `/v1/discover/works?${params}`;
+    const reader = new AbortController();
+    feedReader = reader;
     let result;
-    try { result = await request('GET', path); }
+    try { result = await request('GET', path, undefined, undefined, reader.signal); }
     catch { result = {status: 0, body: {}}; }
-    if (seq !== feedRequest) return;
+    if (seq !== feedRequest || scope !== sessionRequest) return;
+    feedReader = null;
     feedState.loading = false;
     if (append && sort === 'popular' && result.status === 409 && result.body?.error?.code === 'popularity_expired') {
       return loadFeed();
     }
     if (result.status !== 200) {
-      if (error) {
-        error.hidden = false;
-        error.textContent = (result.body && result.body.error && result.body.error.message)
-          || '无法加载公开作品。';
-      }
+      const message = result.body?.error?.message || '无法加载公开作品。';
+      const position = feedRestore?.position;
+      const retry = position ? () => readFeedPosition(position) : () => loadFeed({append, retainItems});
+      setFeedError(message, retry);
       updateFeedStatus();
       return;
     }
     const name = result.body?.viewer_username;
     const nativeViewer = typeof name === 'string' && VIEWER_USERNAME.test(name) ? name : null;
-    const mismatch = nativeCatalog && currentUser && !matchesFeedViewer(nativeViewer);
+    const mismatch = mismatchedNativeFeed(nativeViewer);
     if (mismatch && (needsViewer || append)) {
       if (retryViewer) return loadFeed({retryViewer: false});
-      if (error) {
-        error.hidden = false;
-        error.textContent = '登录状态已变化，刷新页面后重试。';
-      }
+      setFeedError('登录状态已变化，重新检查后可再试。', () => load());
       updateFeedStatus();
       return;
     }
@@ -1230,8 +1444,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
     feedViewer = nativeCatalog ? nativeViewer : (privateFeed ? viewer : null);
     feedState.cursor = mismatch ? '' : result.body?.cursor || '';
+    if (!mismatch) feedPages++;
     renderFeed(start);
     if (mismatch && retryViewer) return loadFeed({retainItems: true, retryViewer: false});
+    if (mismatch) {
+      setFeedError('登录状态已变化，重新检查后可再试。', () => load());
+      updateFeedStatus();
+    }
+    return !mismatch;
   }
 
   function show(kind, text) {
@@ -1239,13 +1459,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     status.textContent = text;
   }
 
-  async function request(method, path, body, extraHeaders = {}) {
+  async function request(method, path, body, extraHeaders = {}, signal) {
     const headers = Object.assign(
       { Accept: 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie) }, extraHeaders);
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const response = await fetcher(path, {
       method, headers, credentials: 'same-origin',
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      ...(signal && {signal}),
     });
     let parsed = {};
     try { parsed = await response.json(); } catch { parsed = {}; }
@@ -1723,6 +1944,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const attempt = ++sessionRequest;
     currentUser = null;
     sessionState = 'pending';
+    cancelSearch();
+    composingQuery = false;
+    feedRestore = null;
+    feedPositions.clear();
+    feedReturn = null;
     workComments.setActor('');
     syncCatalogActions();
     if (remixDialog.open) remixDialog.close();
@@ -1752,6 +1978,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     const detailIntent = catalogView ? null : workDetailFromSearch(location?.search);
     const detailLoad = detailIntent ? openWorkDetail(detailIntent) : closeWorkDetail();
     if (!teamsView) mainPanel.hidden = false;
+    if (!catalogView) applyFeedChrome({restoreQuery: true});
     const feedLoad = catalogView ? null : loadFeed();
     const initialFeedRequest = feedRequest;
     const directoryLoad = agentsView ? loadCatalog() : null;
@@ -1763,8 +1990,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (!catalogView) {
       if (feedState.tab !== 'activity') return Promise.all([loadFeed(), detailLoad]);
       if (currentUser && !nativeCatalog) return Promise.all([loadFeed({retainItems: true}), detailLoad]);
-      if (nativeCatalog && currentUser && feedViewer !== undefined) {
-        if (!matchesFeedViewer(feedViewer)) return Promise.all([loadFeed({retainItems: true, retryViewer: false}), detailLoad]);
+      if (nativeCatalog && feedViewer !== undefined) {
+        if (mismatchedNativeFeed(feedViewer)) return Promise.all([loadFeed({retainItems: true, retryViewer: false}), detailLoad]);
         for (const [item, actions] of feedActions) addFeedEngagement(item, actions);
       }
       updateFeedStatus();
@@ -1854,58 +2081,60 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   for (const kind of FEED_KINDS) {
     const button = document.getElementById('feed-kind-' + (kind || 'all'));
     if (!button) continue;
-    button.addEventListener('click', () => {
-      feedState.kind = kind;
-      feedState.sort = 'latest';
-      applyFeedChrome();
-      pushFeedUrl();
-      return loadFeed();
-    });
+    button.addEventListener('click', () => applyFeedFilters({kind, sort: 'latest', query: searchText()}));
   }
   document.getElementById('feed-sort-popular')?.addEventListener('click', () => {
     if (feedState.tab !== 'activity') return;
-    if (feedState.sort === 'popular') {
-      if (!feedState.loading) return loadFeed();
-      return;
-    }
-    feedState.kind = '';
-    feedState.sort = 'popular';
-    applyFeedChrome();
-    pushFeedUrl();
-    return loadFeed();
+    const query = searchText();
+    if (feedState.sort === 'popular' && query === feedState.query && !feedState.loading && !feedRestore) return loadFeed();
+    return applyFeedFilters({kind: '', sort: 'popular', query});
   });
   document.getElementById('feed-creator-filter')?.addEventListener('click', () => {
-    feedState.creator = '';
-    applyFeedChrome();
-    pushFeedUrl();
+    const loaded = applyFeedFilters({creator: '', query: searchText()});
     document.getElementById('feed-tab-' + feedState.tab)?.focus?.();
-    return loadFeed();
+    return loaded;
   });
-  const feedSearch = document.getElementById('feed-search');
-  if (feedSearch) {
-    feedSearch.addEventListener('submit', event => {
-      event.preventDefault();
-      const input = document.getElementById('feed-query');
-      feedState.query = input ? (input.value || '').trim() : '';
-      pushFeedUrl();
-      return loadFeed();
-    });
-  }
+  document.getElementById('feed-search')?.addEventListener('submit', event => {
+    event.preventDefault();
+    if (composingQuery) return;
+    return commitSearch() || feedFailure?.();
+  });
+  searchInput?.addEventListener('input', scheduleSearch);
+  searchInput?.addEventListener('compositionstart', () => {
+    composingQuery = true;
+    cancelSearch();
+  });
+  searchInput?.addEventListener('compositionend', () => {
+    composingQuery = false;
+    scheduleSearch();
+  });
+  searchInput?.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || composingQuery || event.isComposing || (!searchInput.value && !feedState.query)) return;
+    event.preventDefault();
+    return clearFeedSearch();
+  });
+  clearSearch?.addEventListener('click', clearFeedSearch);
+  retryFeed?.addEventListener('click', () => {
+    const retry = feedFailure;
+    if (!retry) return;
+    const last = workTriggers.get(feedState.items.at(-1)?.slug);
+    (last || searchInput)?.focus?.({preventScroll: true});
+    return retry();
+  });
   const feedMore = document.getElementById('feed-more');
   if (feedMore) {
-    feedMore.addEventListener('click', () => {
-      if (!feedMore.disabled && feedState.cursor) loadFeed({append: true});
+    feedMore.addEventListener('click', async event => {
+      if (feedMore.disabled || !feedState.cursor) return;
+      const start = feedState.items.length;
+      const loaded = await loadFeed({append: true});
+      const next = feedState.items[start];
+      if (loaded && event?.detail === 0 && next) workTriggers.get(next.slug)?.focus?.();
     });
   }
   for (const tab of ['following', 'activity', 'collected']) {
     const button = document.getElementById('feed-tab-' + tab);
-    if (button) button.addEventListener('click', () => {
-      feedState.tab = tab;
-      if (tab !== 'activity') feedState.sort = 'latest';
-      applyFeedChrome();
-      pushFeedUrl();
-      return loadFeed();
-    });
+    if (button) button.addEventListener('click', () =>
+      applyFeedFilters({tab, sort: tab === 'activity' ? feedState.sort : 'latest', query: searchText()}));
   }
 
   document.getElementById('logout-form').addEventListener('submit', async event => {

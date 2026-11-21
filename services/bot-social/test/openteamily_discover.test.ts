@@ -2,6 +2,9 @@
 // and follow notifications. Fixture homes only.
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { bulkAuth, startServer } from "./helpers.js";
 import { home } from "./openteamily_helpers.js";
 
@@ -14,6 +17,8 @@ const TRIANGLE_GLB = [
   "OlstMSwtMSwwXSwibWF4IjpbMSwxLDBdfV19ICAgJAAAAEJJTgAAAIC/AACAvwAAAAAAAIA/AACAvwAAAAAAAAAA",
   "AACAPwAAAAA=",
 ].join("");
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aX8AAAAASUVORK5CYII=", "base64");
+const WAV = Buffer.from("524946462800000057415645666d74201000000001000100401f0000401f000001000800646174610400000080818280", "hex");
 
 let S: Awaited<ReturnType<typeof startServer>>;
 before(async () => { S = await startServer(bulkAuth); });
@@ -504,6 +509,123 @@ test("public GLB downloads appear only after an explicit publish and disappear o
   assert.equal((await fetch(publicFile)).status, 404);
 });
 
+test("public media uses explicit byte snapshots with typed metadata, seek ranges and revocation", async () => {
+  const [owner, visitor] = await Promise.all([home(S.base, "media-author"), home(S.base, "media-visitor")]);
+  const put = "/v1/ot/listings";
+  const payload = {kind: "work", work_kind: "media", ref: "media-fixture", slug: "ceramic-image", title: "陶土 <实拍>",
+    media_filename: "陶土照片.png", media_mime: "image/png", media_data: PNG.toString("base64")};
+  const image = S.base + "/w/ceramic-image";
+  const file = image + "/file";
+  assert.equal((await fetch(file)).status, 404);
+  for (const invalid of [
+    {work_kind: "website"}, {kind: "agent"}, {work_kind: "audio"}, {media_mime: "image/svg+xml"},
+    {media_filename: "../private.png"}, {media_filename: "bad\r\n.png"},
+    {media_mime: "image/gif"}, {media_data: "<svg onload=alert(1) />"}, {media_data: "aGVs bG8="},
+  ]) assert.equal((await owner.call("PUT", put, {...payload, ...invalid})).status, 400);
+  assert.equal((await fetch(image)).status, 404);
+
+  const published = await owner.ok("PUT", put, payload);
+  assert.equal(published.work_kind, "image", "the media alias is persisted with the searchable kind");
+  const feed = await visitor.ok("GET", "/v1/ot/discover?kind=work&work_kind=image&creator=" + encodeURIComponent(owner.handle));
+  assert.equal(feed.items[0].slug, "ceramic-image");
+  const detail = await visitor.ok("GET", "/v1/ot/discover/ceramic-image/detail");
+  const publicData = await (await fetch(image, {headers: {accept: "application/json"}})).json() as any;
+  const preview = await (await fetch(image + "?view=preview", {headers: {accept: "application/json"}})).json() as any;
+  for (const entry of [published, feed.items[0], detail.work, publicData, preview]) {
+    assert.deepEqual([entry.file_available, entry.file_mime, entry.file_bytes], [true, "image/png", PNG.length]);
+    assert.equal(entry.media_data, undefined);
+    assert.equal(entry.media_filename, undefined);
+  }
+  const guest = await (await fetch(image)).text();
+  assert.match(guest, /<img class="work-media" src="\/w\/ceramic-image\/file" alt="陶土 &lt;实拍&gt;"/);
+  assert.match(guest, /href="\/w\/ceramic-image\/file" download/);
+
+  const fetchFile = (range?: string, method = "GET", headers: Record<string, string> = {}) =>
+    fetch(file, {method, headers: {...headers, ...(range ? {range} : {})}});
+  const whole = await fetchFile();
+  assert.equal(whole.status, 200);
+  assert.equal(whole.headers.get("content-type"), "image/png");
+  assert.equal(whole.headers.get("cache-control"), "no-store");
+  assert.equal(whole.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(whole.headers.get("accept-ranges"), "bytes");
+  assert.equal(whole.headers.get("content-length"), String(PNG.length));
+  assert.match(whole.headers.get("content-disposition") ?? "", /^inline; filename="ceramic-image\.png"; filename\*=UTF-8''%E9/);
+  assert.deepEqual(Buffer.from(await whole.arrayBuffer()), PNG);
+  const head = await fetchFile("bytes=0-1", "HEAD");
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get("content-length"), String(PNG.length));
+  assert.equal(head.headers.get("content-range"), null);
+  assert.equal((await head.arrayBuffer()).byteLength, 0);
+  for (const [range, start, end] of [
+    ["bytes=3-8", 3, 8], ["bytes=8-", 8, PNG.length - 1], ["bytes=-4", PNG.length - 4, PNG.length - 1],
+    ["bytes=0-999999", 0, PNG.length - 1],
+  ] as const) {
+    const result = await fetchFile(range);
+    assert.equal(result.status, 206);
+    assert.equal(result.headers.get("content-length"), String(end - start + 1));
+    assert.equal(result.headers.get("content-range"), `bytes ${start}-${end}/${PNG.length}`);
+    assert.deepEqual(Buffer.from(await result.arrayBuffer()), PNG.subarray(start, end + 1));
+  }
+  for (const range of [`bytes=${PNG.length}-`, "bytes=8-2", "bytes=-0", "bytes=-"]) {
+    const result = await fetchFile(range);
+    assert.equal(result.status, 416);
+    assert.equal(result.headers.get("content-range"), `bytes */${PNG.length}`);
+  }
+  const stale = await fetchFile("bytes=0-1", "GET", {"if-range": '"stale"'});
+  assert.equal(stale.status, 200);
+  assert.deepEqual(Buffer.from(await stale.arrayBuffer()), PNG);
+
+  const audioPayload = {...payload, slug: "ceramic-audio", work_kind: "audio", media_filename: "recording", media_mime: "audio/wav",
+    media_data: WAV.toString("base64")};
+  assert.equal((await owner.call("PUT", put, {...audioPayload, media_data: PNG.toString("base64")})).status, 400);
+  assert.equal((await fetch(file)).status, 200, "invalid replacement leaves the old publish intact");
+  const audio = await owner.ok("PUT", put, audioPayload);
+  assert.equal(audio.id, published.id);
+  assert.equal((await fetch(file)).status, 404, "slug changes remove the old path");
+  const audioPage = S.base + "/w/ceramic-audio";
+  const audioGuest = await (await fetch(audioPage)).text();
+  assert.match(audioGuest, /media-src 'self'/);
+  assert.match(audioGuest, /<audio class="work-media" controls preload="none" src="\/w\/ceramic-audio\/file">/);
+  const audioBytes = await fetch(audioPage + "/file", {headers: {range: "bytes=-4"}});
+  assert.equal(audioBytes.status, 206);
+  assert.equal(audioBytes.headers.get("content-type"), "audio/wav");
+  assert.match(audioBytes.headers.get("content-disposition") ?? "", /filename\*=UTF-8''recording\.wav$/);
+  assert.deepEqual(Buffer.from(await audioBytes.arrayBuffer()), WAV.subarray(-4));
+  assert.equal((await visitor.call("DELETE", put + "/" + audio.id)).status, 404);
+  await owner.ok("DELETE", put + "/" + audio.id);
+  assert.equal((await fetch(audioPage)).status, 404);
+  assert.equal((await fetch(audioPage + "/file", {method: "HEAD"})).status, 404);
+  assert.equal((await fetch(audioPage + "/file", {headers: {range: "bytes=0-3"}})).status, 404);
+  assert.equal(S.platform.db.prepare("SELECT 1 FROM ot_listing_media WHERE listing_id=?").get(audio.id), undefined);
+});
+
+test("published media shares the GLB owner quota and replacing a publication releases the old bytes", async (t) => {
+  const server = await startServer({...bulkAuth, attachments: {ownerBudgetBytes: Buffer.from(TRIANGLE_GLB, "base64").length}});
+  t.after(() => server.stop());
+  const [owner, other] = await Promise.all([home(server.base, "media-quota-author"), home(server.base, "media-quota-other")]);
+  const put = "/v1/ot/listings";
+  const png = {kind: "work", ref: "public-image", slug: "quota-public-image", title: "A photo", work_kind: "image",
+    media_filename: "photo.png", media_mime: "image/png", media_data: PNG.toString("base64")};
+  const glb = {kind: "work", ref: "public-model", slug: "quota-public-model", title: "A model", work_kind: "model3d",
+    model_data: TRIANGLE_GLB};
+  const first = await owner.ok("PUT", put, png);
+  const over = await owner.call("PUT", put, glb);
+  assert.equal(over.status, 413);
+  assert.equal(over.data.error.code, "attachment_storage_full");
+  assert.equal((await fetch(server.base + "/w/quota-public-model")).status, 404);
+  await other.ok("PUT", put, {...png, slug: "quota-other-image"});
+  const replacement = await owner.ok("PUT", put, {...glb, ref: png.ref, slug: png.slug});
+  assert.equal(replacement.id, first.id);
+  const file = await fetch(server.base + "/w/quota-public-image/file");
+  assert.equal(file.headers.get("content-type"), "model/gltf-binary");
+  assert.equal(Buffer.from(await file.arrayBuffer()).toString("base64"), TRIANGLE_GLB);
+  assert.equal(server.platform.db.prepare("SELECT 1 FROM ot_listing_media WHERE listing_id=?").get(first.id), undefined);
+  assert.equal((await owner.call("PUT", put, {...png, ref: "another-image", slug: "quota-second-image"})).status, 413);
+  await owner.ok("PUT", put, {kind: "work", work_kind: "document", ref: png.ref, slug: png.slug, title: "Document instead"});
+  assert.equal((await fetch(server.base + "/w/quota-public-image/file")).status, 404);
+  await owner.ok("PUT", put, {...png, ref: "another-image", slug: "quota-second-image"});
+});
+
 test("work detail follows the filtered feed across page boundaries and timestamp ties", async (t) => {
   let now = Date.now();
   const server = await startServer({...bulkAuth, now: () => now});
@@ -577,6 +699,155 @@ test("work detail follows the filtered feed across page boundaries and timestamp
   assert.equal((await viewer.call("GET", detailPath(oldest.slug, "?work_kind=unknown"))).status, 400);
   assert.equal((await viewer.call("GET", detailPath(oldest.slug, "?q=trail&q=sketch"))).status, 400);
   assert.equal((await fetch(server.base + detailPath(oldest.slug))).status, 401);
+});
+
+test("public work search returns bounded excerpts and excludes hidden and revoked content", async () => {
+  const [author, reader] = await Promise.all([home(S.base, "body-search-author"), home(S.base, "body-search-reader")]);
+  await author.ok("PUT", "/v1/ot/profile", {display_name: "İnci ÇAĞLA"});
+  const publish = (slug: string, changes: Record<string, unknown>) =>
+    author.ok("PUT", "/v1/ot/listings", {kind: "work", ref: slug, slug, title: "Exhibition", ...changes});
+  const needle = "火星 coöperate";
+  const doc = await publish("body-search-document", {
+    summary: "A public digest", category: "research",
+    snapshot: "🚀 orbital notes ".repeat(310) + "火星\nCOÖPERATE " + "🚀 next ".repeat(140),
+  });
+  await publish("body-search-website", {
+    work_kind: "website", summary: "Summary accidentally includes hidden-site-marker",
+    site_html: `<head><title>tab-only-marker</title></head><main data-value="attribute-marker">
+      <h1>火星 <strong>co&#xF6;perate</strong></h1><!-- comment-marker -->
+      <script>script-marker</script><style>.obscured {display:none} main #collapsed {visibility:collapse}</style>
+      <p hidden>hidden-site-marker</p><p aria-hidden="true">aria-marker</p>
+      <div style="display: /*comment*/ none"><p>display-marker</p></div>
+      <div style="display&#58none">entity-style-marker</div><div class="obscured">stylesheet-class-marker</div>
+      <div id="collapsed">stylesheet-id-marker</div><dialog>closed-dialog-marker</dialog>
+      <template><p>template-marker</p></template><textarea>textarea-marker</textarea>
+    </main>`,
+  });
+  const spreadsheet = await publish("body-search-spreadsheet", {
+    work_kind: "spreadsheet", snapshot: "Sheet 1\nMetric\t" + "拼".repeat(80),
+  });
+  await publish("body-search-old-board", {work_kind: "whiteboard", snapshot: '{"unpublished":"structured-marker"}'});
+  await publish("body-search-old-array", {work_kind: "slides", snapshot: '["array-marker"]'});
+  await publish("body-search-braces", {snapshot: '{Labels: "Pioneer"} in a document', title: "Symbols"});
+  await author.ok("PUT", "/v1/ot/listings", {kind: "agent", ref: "body-search-agent", slug: "body-search-agent",
+    title: "Agent", snapshot: JSON.stringify({instructions: "agent-instructions-marker", quick_starts: ["火星 coöperate"]})});
+
+  const base = "/v1/ot/discover?kind=work&creator=" + encodeURIComponent(author.handle);
+  const find = (value: string, filter = "") => reader.ok("GET", base + "&q=" + encodeURIComponent(value) + filter);
+  const {items} = await find("火星   coöperate");
+  assert.deepEqual(new Set(items.map((item: any) => item.slug)), new Set([doc.slug, "body-search-website"]));
+  for (const item of items) {
+    const match = item.match;
+    assert.equal(match.kind, "body");
+    assert.ok(match.text.length <= 160);
+    assert.equal(match.text.slice(match.start, match.end).toLowerCase(), needle);
+    assert.equal(item.snapshot, undefined);
+    assert.equal(item.site_html, undefined);
+  }
+  assert.equal(items.find((item: any) => item.id === doc.id).match.text.startsWith("…"), true);
+  for (const hidden of ["tab-only", "attribute", "comment", "script", "hidden-site", "aria", "display", "entity-style",
+    "stylesheet-class", "stylesheet-id", "closed-dialog", "template", "textarea", "structured", "array", "agent-instructions"]) {
+    const result = await find(hidden + "-marker");
+    assert.deepEqual(result.items, [], hidden);
+  }
+  assert.equal((await find("exhibition")).items[0].match.kind, "title");
+  assert.equal((await find("PUBLIC DIGEST")).items[0].match.kind, "summary");
+  assert.equal((await find('"Pioneer"')).items[0].match.kind, "body");
+  assert.equal((await find("火星")).items.length, 2);
+  const {match} = (await find("çAĞLa")).items[0];
+  assert.equal(match.kind, "creator");
+  assert.equal(match.text.slice(match.start, match.end), "ÇAĞLA");
+  const longQuery = (await find("拼".repeat(80), "&work_kind=spreadsheet")).items[0];
+  assert.equal(longQuery.id, spreadsheet.id);
+  assert.equal(longQuery.match.end - longQuery.match.start, 80);
+  assert.deepEqual((await find(needle, "&tab=following")).items, []);
+  await reader.ok("POST", "/v1/ot/follows", {handle: author.handle});
+  assert.deepEqual((await find(needle, "&tab=following&category=research")).items.map((item: any) => item.id), [doc.id]);
+  await reader.ok("POST", `/v1/ot/listings/${doc.id}/collect`, {});
+  assert.deepEqual((await find(needle, "&tab=collected")).items.map((item: any) => item.id), [doc.id]);
+  const ranked = (await find(needle, "&sort=popular")).items;
+  assert.deepEqual(ranked.map((item: any) => item.match.kind), ["body", "body"]);
+  const filter = "?q=" + encodeURIComponent(needle) + "&creator=" + encodeURIComponent(author.handle);
+  const detail = await reader.ok("GET", `/v1/ot/discover/${items[0].slug}/detail${filter}`);
+  assert.equal(detail.next.slug, items[1].slug);
+  await author.ok("DELETE", `/v1/ot/listings/${doc.id}`);
+  assert.deepEqual((await find(needle)).items.map((item: any) => item.slug), ["body-search-website"]);
+  const updated = await publish("body-search-website", {
+    work_kind: "website", site_html: "<main>Replacement publication<span hidden>hidden again</span></main>",
+  });
+  assert.equal(updated.summary, "Replacement publication");
+  assert.deepEqual((await find(needle)).items, []);
+  assert.equal((await find("replacement")).items[0].match.kind, "body");
+});
+
+test("latest works use a compound scope-bound cursor across timestamp ties", async (t) => {
+  let now = Date.now();
+  const server = await startServer({...bulkAuth, now: () => now});
+  t.after(() => server.stop());
+  const [author, reader, other] = await Promise.all([
+    home(server.base, "keyset-author"), home(server.base, "keyset-reader"), home(server.base, "keyset-other"),
+  ]);
+  const publish = (slug: string) => author.ok("PUT", "/v1/ot/listings", {
+    kind: "work", work_kind: "document", ref: slug, slug, title: "Keyset exhibition", snapshot: "Shared body keyword",
+  });
+  const oldest = await publish("keyset-oldest");
+  now += 1_000;
+  const ties = await Promise.all([publish("keyset-one"), publish("keyset-two"), publish("keyset-three")]);
+  const expected = [...ties].sort((a, b) => b.id.localeCompare(a.id)).concat(oldest);
+  const feed = "/v1/ot/discover?kind=work&q=keyword";
+  const latest = feed + "&pagination=keyset&limit=1";
+  let page = await reader.ok("GET", latest);
+  assert.match(page.next_cursor, /^l\.[0-9]+\.otl_[0-9A-Z]{26}\.[a-f0-9]{24}$/);
+  const cursor = "&cursor=" + encodeURIComponent(page.next_cursor);
+  assert.equal((await other.call("GET", latest + cursor)).status, 400);
+  assert.equal((await reader.call("GET", latest + cursor + "&work_kind=document")).status, 400);
+  assert.equal((await reader.call("GET", latest + cursor + "&before=42")).status, 400);
+  assert.equal((await reader.call("GET", latest + cursor + "&sort=popular")).status, 400);
+  assert.equal((await reader.call("GET", latest + "&cursor=l.9007199254740992." + expected[0].id + "." + "a".repeat(24))).status, 400);
+  for (const item of expected) {
+    assert.deepEqual(page.items.map((entry: any) => entry.id), [item.id]);
+    if (item.id !== oldest.id) {
+      assert.ok(page.next_cursor);
+      page = await reader.ok("GET", latest + "&cursor=" + encodeURIComponent(page.next_cursor));
+    }
+  }
+  assert.equal(page.next_cursor, null);
+  const legacy = await reader.ok("GET", feed + "&limit=1");
+  assert.equal(legacy.next_before, now);
+  const prior = await reader.ok("GET", feed + "&before=" + legacy.next_before);
+  assert.deepEqual(prior.items.map((item: any) => item.id), [oldest.id]);
+});
+
+test("work search backfills only existing public rows when opening a legacy database", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "ot-discover-backfill-"));
+  let upgraded: typeof S | undefined;
+  t.after(async () => {
+    await upgraded?.stop();
+    rmSync(dir, {recursive: true, force: true});
+  });
+  const options = {...bulkAuth, dbPath: join(dir, "social.sqlite")};
+  const old = await startServer(options);
+  try {
+    const author = await home(old.base, "legacy-search-author");
+    const publish = (slug: string) => author.ok("PUT", "/v1/ot/listings", {
+      kind: "work", work_kind: "website", ref: slug, slug, title: "A previous publication",
+      site_html: "<article>backfill visible sample</article><p hidden>backfill hidden sample</p>",
+    });
+    await publish("legacy-search-public");
+    const withdrawn = await publish("legacy-search-withdrawn");
+    await author.ok("DELETE", `/v1/ot/listings/${withdrawn.id}`);
+    old.platform.db.exec("DROP TABLE ot_discover_work_search; DROP TABLE ot_discover_work_terms");
+  } finally {
+    await old.stop();
+  }
+  upgraded = await startServer(options);
+  const reader = await home(upgraded.base, "legacy-search-reader");
+  const feed = "/v1/ot/discover?kind=work&q=";
+  const {items} = await reader.ok("GET", feed + "visible%20sample");
+  assert.deepEqual(items.map((item: any) => item.slug), ["legacy-search-public"]);
+  assert.equal(items[0].match.kind, "body");
+  assert.deepEqual((await reader.ok("GET", feed + "hidden%20sample")).items, []);
+  assert.equal(upgraded.platform.db.prepare("SELECT COUNT(*) AS count FROM ot_discover_work_search").pluck().get(), 1);
 });
 
 test("guest work pages navigate directly between public works and keep the share entry", async (t) => {

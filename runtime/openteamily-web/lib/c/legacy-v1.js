@@ -5,9 +5,7 @@
 // Shared workspaces are Bot Social teams. The private workspace can also be
 // listed from the personal-agent binding in this user's runtime.
 import { createHash } from 'node:crypto'
-import {workbookText} from '../../features/artifacts/workbook.js'
-import {textLines} from '../../features/artifacts/model.js'
-import {sanitizeHtml} from '../../features/artifacts/render.js'
+import {structuredArtifactText} from '../../features/artifacts/catalog-search.js'
 import { CATEGORIES as agentCategories, LIMITS as agentLimits } from '../../features/agents/index.js'
 import { compatHandler } from '../b4/compat.js'
 import { Fault } from '../b4/http.js'
@@ -18,10 +16,17 @@ import { GLB_MIME } from '../glb.js'
 const HEX = /^[0-9a-f]{32}$/
 const PLATFORM_USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/
 const PUBLIC_LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/
+const LATEST_WORK_CURSOR = /^l\.(0|[1-9][0-9]{0,15})\.otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}\.[a-f0-9]{24}$/
+const DISCOVER_WORK_QUERY_LIMIT = 1024
 const DISCOVER_WORK = '/v1/discover/works/([a-z0-9][a-z0-9-]{1,28}[a-z0-9])'
 const WORK_COMMENT = 'otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}'
 const COMMENT_KEY = /^[A-Za-z0-9_-]{16,64}$/
 const PROFILE_HANDLE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/
+const DISCOVER_MEDIA_KINDS = new Map([
+  ['image/png', 'image'], ['image/jpeg', 'image'], ['image/gif', 'image'], ['image/webp', 'image'],
+  ['audio/mpeg', 'audio'], ['audio/ogg', 'audio'], ['audio/wav', 'audio'],
+  ['video/mp4', 'video'], ['video/webm', 'video'],
+])
 const WORK_LABELS = {
   document: '文档', spreadsheet:'电子表格', website: '网页', whiteboard: '白板', media: '媒体',
   image: '图片', audio: '音频', video: '视频', slides: '幻灯片', dashboard: '看板', model3d: '3D 作品',
@@ -150,8 +155,19 @@ function messageItem(row, me, env, workspaceId) {
   }
 }
 
+function workMatch(match) {
+  if (!match || !['title', 'summary', 'body', 'creator'].includes(match.kind)
+    || typeof match.text !== 'string' || match.text.length > 160
+    || !Number.isInteger(match.start) || !Number.isInteger(match.end)
+    || match.start < 0 || match.end <= match.start || match.end > match.text.length) return null
+  return {kind: match.kind, text: match.text, start: match.start, end: match.end}
+}
+
 function workItem(row) {
   const kind = row.work_kind || (row.kind === 'work' ? 'document' : row.kind)
+  const match = workMatch(row.match)
+  const fileAvailable = row.file_available === true && DISCOVER_MEDIA_KINDS.get(row.file_mime) === kind
+    && Number.isSafeInteger(row.file_bytes) && row.file_bytes > 0
   return {
     slug: row.slug,
     title: row.title,
@@ -167,7 +183,9 @@ function workItem(row) {
     following: !!row.following,
     own_work: !!row.own,
     comment_count: row.comment_count ?? 0,
+    ...(match ? {match} : {}),
     ...(kind === 'website' ? {site_available: row.site_available === true} : {}),
+    ...(fileAvailable ? {file_available: true, file_mime: row.file_mime, file_bytes: row.file_bytes} : {}),
   }
 }
 
@@ -478,11 +496,25 @@ function teamsRoutes(host) {
                 if (include === 'chat') result.personal_agent_id = localBinding.agent_id
                 if (!q.has('workspace') || q.get('workspace') === personal.id) {
                   if (include === 'chat') {
-                    const directory = await host.call('agents/v1', {
-                      method: 'GET', path: `/v1/workspaces/${personal.id}/agents?limit=100&include=conversations`,
-                    }).catch(() => null)
-                    if (directory?.status === 200 && Array.isArray(directory.body?.items) &&
-                        Array.isArray(directory.body.conversations)) result.chat = directory.body
+                    const agent = q.get('entry_agent')
+                    const conversation = q.get('entry_conversation')
+                    const entryRequested = q.get('workspace') === personal.id && q.getAll('workspace').length === 1 && HEX.test(agent || '')
+                      && q.getAll('entry_agent').length === 1
+                      && (conversation === null || (HEX.test(conversation) && q.getAll('entry_conversation').length === 1))
+                    if (entryRequested) {
+                      result.entry = await host.call('agents/startupEntry', {
+                        workspace_id: personal.id, agent_id: agent, conversation_id: conversation ?? undefined,
+                      }).catch(() => null)
+                    }
+                    // Exact conversation links can verify the same local owner
+                    // binding before loading the directory independently.
+                    if (q.get('directory') !== '0' || (entryRequested && conversation === null && !result.entry)) {
+                      const directory = await host.call('agents/v1', {
+                        method: 'GET', path: `/v1/workspaces/${personal.id}/agents?limit=100&include=conversations`,
+                      }).catch(() => null)
+                      if (directory?.status === 200 && Array.isArray(directory.body?.items) &&
+                          Array.isArray(directory.body.conversations)) result.chat = directory.body
+                    }
                   } else {
                     const order = q.get('order') === 'recent' ? '?order=recent' : ''
                     const catalog = await host.call('artifacts/v1', {
@@ -1173,17 +1205,24 @@ function discoverRoutes(host) {
     }
     const popular = sort === 'popular'
     const cursor = q.get('cursor')
+    if (q.getAll('cursor').length > 1) throw new Fault(400, 'invalid', '无效的发现分页。')
     if (popular && (kind !== 'work' || (cursor !== null && !/^[A-Za-z0-9_-]{32}\.[1-9][0-9]{0,2}$/.test(cursor)))) {
       throw new Fault(400, 'invalid', '无效的热门作品请求。')
     }
-    const pagination = popular ? {sort, cursor} : {before: cursor}
+    const keyset = kind === 'work' && !popular && (cursor === null || cursor.startsWith('l.'))
+    const position = cursor && keyset ? LATEST_WORK_CURSOR.exec(cursor) : null
+    if (cursor !== null && !popular && (keyset ? !position || !Number.isSafeInteger(Number(position[1])) : !/^[0-9]{1,16}$/.test(cursor))) {
+      throw new Fault(400, 'invalid', '无效的发现分页。')
+    }
+    const pagination = popular ? {sort, cursor} : keyset ? {pagination: 'keyset', cursor} : {before: cursor}
     const data = await bs.get('/v1/ot/discover' + qs({
       kind, tab: q.get('tab'), q: q.get('q'), work_kind: q.get('kind'),
       creator: q.get('creator'), category: q.get('category'),
       ...pagination, limit: q.get('limit'),
     }))
     const items = (data.items || []).map((row) => (kind === 'agent' ? agentItem(row) : workItem(row)))
-    return [200, {items, cursor: (popular ? data.next_cursor : data.next_before) ?? null, ...platformViewer(call)}]
+    const next = popular || keyset ? data.next_cursor : data.next_before
+    return [200, {items, cursor: next ?? null, ...platformViewer(call)}]
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
   const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path } : { listed: false })
@@ -1237,27 +1276,32 @@ function discoverRoutes(host) {
           const artifact = got?.body?.artifact
           if (!artifact) throw new Fault(404, 'not_found', 'Artifact not found')
           const prior = await workListing(bs, match[2])
-          const isModel = artifact.kind === 'media' && artifact.media?.mime === GLB_MIME
-          const kind = isModel ? 'model3d' :
-            ['document', 'website', 'whiteboard', 'media', 'slides', 'dashboard'].includes(artifact.kind) ? artifact.kind : 'document'
+          const mime = artifact.kind === 'media' ? artifact.media?.mime : undefined
+          const mediaKind = mime === GLB_MIME ? 'model3d' : DISCOVER_MEDIA_KINDS.get(mime)
+          if (artifact.kind === 'media' && !mediaKind) {
+            throw new Fault(400, 'attachment_type_blocked', '这个文件格式无法公开发布。')
+          }
+          const kind = mediaKind || artifact.kind
           const siteHtml = kind === 'website' && typeof artifact.body === 'string' && artifact.body.trim() ? artifact.body : null
-          const snapshot = artifact.kind === 'spreadsheet' && artifact.spreadsheet ? workbookText(artifact.spreadsheet) : String(artifact.body || '')
-          const summary = siteHtml ? textLines(sanitizeHtml(siteHtml), true).join('\n') : snapshot
-          let modelData
-          if (isModel) {
+          const snapshot = siteHtml ? '' : kind === 'document' ? String(artifact.body || '') : [...structuredArtifactText(artifact)].join('\n')
+          let file = {}
+          if (mediaKind) {
             const result = await host.call('artifacts/chatAttachment', {
               workspace_id: match[1], artifact_id: match[2], revision: artifact.revision,
             })
-            if (result?.attachment?.mime !== GLB_MIME || !result.attachment.data) {
-              throw new Fault(409, 'conflict', '3D 文件已更新，请刷新后重新发布。')
+            if (result?.attachment?.mime !== mime || typeof result.attachment.data !== 'string' || !result.attachment.data) {
+              throw new Fault(409, 'conflict', '作品文件已更新，请刷新后重新发布。')
             }
-            modelData = result.attachment.data
+            file = mediaKind === 'model3d' ? {model_data: result.attachment.data} : {
+              media_data: result.attachment.data, media_mime: mime,
+              media_filename: artifact.media.filename || result.attachment.title,
+            }
           }
           const data = await bs.put('/v1/ot/listings', {
             kind: 'work', ref: match[2], slug: body?.slug, title: String(artifact.title || body?.slug).slice(0, 80),
-            summary: summary.slice(0, 300), work_kind: kind,
-            ...(siteHtml ? {site_html: siteHtml} : {snapshot: snapshot.slice(0, 200000)}),
-            ...(isModel ? {model_data: modelData} : {}),
+            work_kind: kind,
+            ...(siteHtml ? {site_html: siteHtml} : {summary: snapshot.slice(0, 300), snapshot: snapshot.slice(0, 200000)}),
+            ...file,
           })
           return [prior ? 200 : 201, { discover: workMeta(data) }]
         })
@@ -1328,10 +1372,11 @@ function discoverRoutes(host) {
       },
     })),
     { method: 'GET', path: /^\/v1\/discover\/agents$/, handle: feed('agent') },
-    { method: 'GET', path: /^\/v1\/discover\/works$/, handle: feed('work') },
-    { method: 'GET', path: /^\/v1\/discover\/me\/works$/, handle: feed('work') },
+    { method: 'GET', path: /^\/v1\/discover\/works$/, queryLimit: DISCOVER_WORK_QUERY_LIMIT, handle: feed('work') },
+    { method: 'GET', path: /^\/v1\/discover\/me\/works$/, queryLimit: DISCOVER_WORK_QUERY_LIMIT, handle: feed('work') },
     {
       method: 'GET', path: new RegExp(`^${DISCOVER_WORK}$`),
+      queryLimit: DISCOVER_WORK_QUERY_LIMIT,
       async handle({ match, query }, call) {
         return wrap(async () => {
           const q = parseQuery(query)

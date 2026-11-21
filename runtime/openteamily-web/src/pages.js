@@ -3,7 +3,7 @@
 // <plugin>/pages (openteamily/static at build time). The platform gateway maps
 // a browser path such as /chat/ or /shell/app.css onto this route for the
 // signed-in owner's runtime only.
-import { readFile, realpath, stat } from 'node:fs/promises'
+import { readFile, readdir, realpath, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { extname, join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -29,6 +29,44 @@ const TYPES = {
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const MAX_PATH = 256
 const REVALIDATE_ASSETS = new Set(['.css', '.mjs', '.js'])
+const CHAT_PACKAGE_ROOTS = ['chat', 'home', 'look', 'memory', 'shell']
+const CHAT_PACKAGE_PATH = /^\/chat\/assets\/([a-f0-9]{32})(\/[^?#]+)$/
+const CHAT_ENTRY_RESOURCE = /((?:src|href)=")(\/(?:chat|home|look|memory|shell)\/[A-Za-z0-9._-]+\.(?:css|mjs|js))"/g
+
+function matchesValidator(request, etag) {
+  return (request.headers.get('if-none-match')?.split(',') ?? []).some(value => {
+    const tag = value.trim()
+    return tag === '*' || tag === etag || tag === 'W/' + etag
+  })
+}
+
+async function loadChatPackage(root) {
+  const assets = new Map()
+  const release = createHash('sha256')
+  for (const directory of CHAT_PACKAGE_ROOTS) {
+    const folder = await realpath(join(root, directory)).catch(() => null)
+    if (!folder?.startsWith(root + sep)) continue
+    const entries = await readdir(folder, {withFileTypes: true})
+    const files = entries.filter(entry => entry.isFile() && SEGMENT.test(entry.name) && !entry.name.includes('..'))
+      .map(entry => entry.name).sort()
+    const snapshot = await Promise.all(files.map(async name => {
+      const extension = extname(name).toLowerCase()
+      if (!Object.hasOwn(TYPES, extension) || extension === '.html') return null
+      const file = await realpath(join(folder, name))
+      if (!file.startsWith(folder + sep)) return null
+      const data = await readFile(file)
+      const digest = createHash('sha256').update(data).digest('hex')
+      return {path: '/' + directory + '/' + name, data, type: TYPES[extension], digest}
+    }))
+    for (const asset of snapshot) {
+      if (!asset) continue
+      const {path, data, type, digest} = asset
+      release.update(path + '\0' + digest + '\n')
+      assets.set(path, {data, type, etag: `"sha256-${digest}"`})
+    }
+  }
+  return {assets, base: '/chat/assets/' + release.digest('hex').slice(0, 32)}
+}
 
 // Resolve a browser page path to a file inside pagesDir, or null. Only plain
 // segments are accepted: no dot segments, no encoded separators, no hidden files.
@@ -60,7 +98,11 @@ export function markHtml(text, identity) {
 }
 
 export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
-  let root, localeModule, chatMessages
+  let root, localeModule, chatMessages, chatPackage
+  const packageFor = pageRoot => chatPackage ??= loadChatPackage(pageRoot).catch(() => {
+    chatPackage = undefined
+    return null
+  })
   return async (request) => {
     const url = new URL(request.url)
     const path = url.searchParams.get('path')
@@ -73,6 +115,17 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
     }
     try {
       const pageRoot = root ??= await realpath(pagesDir)
+      const packagedPath = CHAT_PACKAGE_PATH.exec(path)
+      if (packagedPath) {
+        const current = await packageFor(pageRoot)
+        const asset = current?.assets.get(packagedPath[2])
+        if (!asset) return notFound(identity)
+        const resource = current.base + packagedPath[2]
+        if (path !== resource) return new Response(null, {status: 302, headers: {location: resource, 'cache-control': 'no-store'}})
+        const headers = {'content-type': asset.type, 'cache-control': 'private, max-age=31536000, immutable',
+          etag: asset.etag, 'x-content-type-options': 'nosniff'}
+        return matchesValidator(request, asset.etag) ? new Response(null, {status: 304, headers}) : new Response(asset.data, {headers})
+      }
       const file = await realpath(join(pageRoot, ...parts))
       if (!file.startsWith(pageRoot + sep)) return notFound(identity)
       if (!(await stat(file)).isFile()) return notFound(identity)
@@ -92,6 +145,11 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
         const camera = audioPage && parts[0] === 'chat' ? '(self)' : '()'
         headers['permissions-policy'] = `camera=${camera}, microphone=${microphone}, geolocation=()`
         let html = await readFile(file, 'utf8')
+        if (parts.length === 2 && parts[0] === 'chat' && parts[1] === 'index.html') {
+          const current = await packageFor(pageRoot)
+          if (current) html = html.replace(CHAT_ENTRY_RESOURCE, (literal, prefix, asset) =>
+            current.assets.has(asset) ? prefix + current.base + asset + '"' : literal)
+        }
         if (getSystemLanguage && parts.length === 2 && parts[1] === 'index.html' && ['chat', 'settings'].includes(parts[0])) {
           localeModule ??= import(pathToFileURL(join(pageRoot, 'shell', 'system-locale.mjs')).href).catch(() => null)
           const renderer = await localeModule
@@ -118,11 +176,7 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
         // Package assets contain no account data. The browser still checks
         // this authenticated runtime for access and release bytes on reuse.
         headers['cache-control'] = 'private, no-cache'
-        const validators = request.headers.get('if-none-match')?.split(',') ?? []
-        if (validators.some(value => {
-          const tag = value.trim()
-          return tag === '*' || tag === etag || tag === 'W/' + etag
-        })) return new Response(null, { status: 304, headers })
+        if (matchesValidator(request, etag)) return new Response(null, { status: 304, headers })
       }
       return new Response(data, { status: 200, headers })
     } catch {

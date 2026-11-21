@@ -11,6 +11,13 @@ const MESSAGES = {
   quota: '本实例账户数量已达上限。',
 };
 
+const platformId = id => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id);
+
+function personalChatPath(target) {
+  const {workspace_id: workspace, agent_id: agent} = target || {};
+  return platformId(workspace) && platformId(agent) ? '/chat#workspace=' + workspace + '&agent=' + agent : '';
+}
+
 export async function registerAccount(username, password, fetcher = globalThis.fetch, view) {
   try {
     const response = await fetcher('/v1/auth/register', {
@@ -20,21 +27,29 @@ export async function registerAccount(username, password, fetcher = globalThis.f
     });
     if (response.status === 201) {
       const expectedName = username.trim().toLowerCase();
+      let personalChat = '', expectedId;
       // Let the destination's existing session read confirm the account when the
       // browser can pass a short-lived ID to the next same-tab document.
-      if (view) {
-        try {
-          const {user} = await response.json();
-          if (user?.username === expectedName && rememberSignupSession(view, user.id)) {
-            return {ok: true, pendingSession: true};
-          }
-        } catch {}
-      }
       try {
-        const session=await fetcher('/v1/auth/session',{method:'GET',credentials:'same-origin',mode:'same-origin',redirect:'error',headers:{Accept:'application/json'}});
-        const data=await session.json();
-        if(session.status===200&&data?.user?.id&&data.user.username===expectedName)return {ok:true};
-      }catch{}
+        const {user, personal_chat: target} = await response.json();
+        if (user?.username === expectedName && platformId(user.id)) {
+          expectedId = user.id;
+          personalChat = expectedId ? personalChatPath(target) : '';
+          if (rememberSignupSession(view, expectedId)) {
+            return {ok: true, pendingSession: true, ...(personalChat && {personalChat})};
+          }
+        }
+      } catch {}
+      try {
+        const session = await fetcher('/v1/auth/session', {
+          method: 'GET', credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
+          headers: {Accept: 'application/json'},
+        });
+        const {user} = await session.json();
+        if (session.status === 200 && user?.id && user.username === expectedName && (!expectedId || user.id === expectedId)) {
+          return {ok: true, ...(personalChat && {personalChat})};
+        }
+      } catch {}
       return {ok:false,created:true,message:signupSessionError};
     }
     const body = await response.json().catch(() => ({}));
@@ -66,7 +81,8 @@ export function mountRegistration(document, navigate, fetcher = globalThis.fetch
     const data=await response.json();
     if(attempted)return;
     if(response.status!==200||typeof data.registration_open!=='boolean')throw new Error('policy');
-    policy.textContent=data.registration_open?'本实例已开放注册。注册后可打开你的个人工作区。':'本实例尚未开放注册，请联系管理员。';
+    policy.textContent = !data.registration_open ? '本实例尚未开放注册，请联系管理员。'
+      : continuation ? '注册后将打开你访问的页面。' : '注册后可进入你的私人聊天。';
   }).catch(()=>{if(!attempted)policy.textContent='无法读取注册策略。请检查实例 HTTPS / 反向代理配置，或联系管理员。';});
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -78,8 +94,9 @@ export function mountRegistration(document, navigate, fetcher = globalThis.fetch
     password.value = '';
     button.disabled = result.ok || result.created === true;
     if (result.ok) {
-      status.textContent = result.pendingSession ? '账户已创建，正在打开个人工作区…' : '账户和登录会话已确认，正在初始化个人工作区…';
-      navigate(continuation ? '/login' + continuation : '/');
+      status.textContent = continuation ? '账户已创建，正在打开你访问的页面…'
+        : result.personalChat ? '账户已创建，正在打开私人聊天…' : '账户已创建，正在打开个人工作区…';
+      navigate(continuation ? '/login' + continuation : result.personalChat || '/');
     } else {
       status.textContent = result.message;
       password.focus();

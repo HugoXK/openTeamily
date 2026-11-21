@@ -164,17 +164,20 @@ class SettingsPage:
 
     def _asset(self, directory, name):
         # Never resolve user input into a filename. Reject symlinks, including the asset directory.
+        engine = directory == 'shell' and name.startswith('model3d-engine-') and name.endswith('.mjs')
+        chat_entry = directory == 'chat' and name == 'app.mjs'
+        limit = 1024 * 1024 if engine or chat_entry else 256 * 1024
         folder = self.root / directory
         root_fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root_fd)
             try:
                 info = os.fstat(fd)
-                if not stat.S_ISREG(info.st_mode) or info.st_size > 262144:
+                if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
                     raise OSError('Invalid asset')
                 with os.fdopen(fd, 'rb', closefd=False) as file:
-                    data = file.read(262145)
-                if len(data) > 262144:
+                    data = file.read(limit + 1)
+                if len(data) > limit:
                     raise OSError('Invalid asset')
                 return data
             finally:
@@ -227,16 +230,19 @@ class SettingsPage:
                     return False
                 if key == 'sort' and value != 'popular':
                     return False
-                if key == 'kind' and value not in ('website', 'image', 'audio', 'slides', 'video', 'model3d'):
+                if key == 'kind' and value not in ('document', 'website', 'whiteboard', 'image', 'audio', 'slides',
+                                                       'video', 'dashboard', 'spreadsheet', 'model3d'):
+                    return False
+                if key == 'creator' and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{1,79}', value):
                     return False
                 if key == 'q':
                     if len(value) > 80 or any(ord(ch) < 32 for ch in value):
                         return False
-                elif key not in ('feed', 'kind', 'sort', 'work', 'comments', 'share'):
+                elif key not in ('feed', 'kind', 'sort', 'creator', 'work', 'comments', 'share'):
                     return False
             panels = seen.intersection({'comments', 'share'})
             return (bool(seen)
-                    and not ('sort' in seen and seen.intersection({'feed', 'kind'}))
+                    and not ('sort' in seen and seen.intersection({'feed', 'kind', 'creator'}))
                     and len(panels) <= 1
                     and (not panels or 'work' in seen))
         if path == '/agents':
@@ -270,6 +276,8 @@ class SettingsPage:
             return self.api(env, start_response)
         audio_page = path in ('/chat', '/chat/', '/meetings')
         csp = self.CSP + "; media-src 'self' blob:" if audio_page else self.CSP
+        if path == '/discover':
+            csp += "; media-src 'self'"
         if path in ('/chat', '/chat/', '/space', '/artifacts', '/discover'):
             csp = csp.replace("connect-src 'self'", "connect-src 'self' blob:").replace("img-src 'self'", "img-src 'self' blob:")
         microphone = '(self)' if audio_page else '()'

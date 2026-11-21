@@ -489,6 +489,11 @@ class Lifecycle:
                 if job['operation_type'] == 'restart' and process_ref == row['process_ref']:
                     fail(409, 'invalid_observation', 'Restart requires a different process identity')
             status = 'failed' if observed == 'failed' else 'succeeded'
+            # A new process must establish its own gateway session. Invalidate
+            # the previous address/cookie before making this revision routable.
+            if (status == 'succeeded' and process_ref != row['process_ref']
+                    and db.execute("SELECT 1 FROM sqlite_master WHERE name='dsbot_upstreams' AND type='table'").fetchone()):
+                db.execute('DELETE FROM dsbot_upstreams WHERE instance_id=?', (iid,))
             db.execute('UPDATE instances SET observed=?,observed_revision=?,health=?,process_ref=?,error_code=? WHERE id=?',
                        (observed, revision, 'healthy' if observed == 'running' else 'unknown', process_ref if observed != 'failed' else row['process_ref'], error_code, iid))
             db.execute('UPDATE runtime_jobs SET status=?,error_code=?,finished=?,lease_hash=NULL WHERE id=?', (status, error_code, int(self.clock()), jid))

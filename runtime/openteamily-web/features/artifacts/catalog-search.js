@@ -84,8 +84,34 @@ export function catalogMatch(kind, value, needle) {
   }
 }
 
+export function* structuredArtifactText(artifact) {
+  switch (artifact.kind) {
+    case 'whiteboard':
+      for (const stroke of artifact.board?.strokes ?? []) {
+        if (stroke.type === 'text') yield stroke.text
+      }
+      break
+    case 'slides':
+      for (const slide of artifact.slides?.slides ?? []) {
+        yield [slide.title, ...slide.bullets].join(' ')
+      }
+      break
+    case 'dashboard':
+      for (const widget of artifact.dashboard?.widgets ?? []) {
+        if (widget.type === 'metric') yield [widget.title, widget.value, widget.note].join(' ')
+        else if (widget.type === 'bar') yield [widget.title, ...widget.labels, ...widget.values].join(' ')
+        else yield [widget.title, ...widget.columns, ...widget.rows.flat()].join(' ')
+      }
+      break
+    case 'spreadsheet':
+      if (artifact.spreadsheet) yield workbookText(artifact.spreadsheet)
+      break
+  }
+}
+
 function* artifactText(row) {
-  switch (publicKind(row)) {
+  const kind = publicKind(row)
+  switch (kind) {
     case 'document':
       yield row.body
       break
@@ -93,27 +119,17 @@ function* artifactText(row) {
       yield websiteText(row.body || '')
       break
     case 'whiteboard':
-      for (const stroke of decodeBoard(row.board_json)?.strokes ?? []) {
-        if (stroke.type === 'text') yield stroke.text
-      }
+      yield* structuredArtifactText({kind, board: decodeBoard(row.board_json)})
       break
     case 'slides':
-      for (const slide of decodeSlides(row.slides_json)?.slides ?? []) {
-        yield [slide.title, ...slide.bullets].join(' ')
-      }
+      yield* structuredArtifactText({kind, slides: decodeSlides(row.slides_json)})
       break
     case 'dashboard':
-      for (const widget of decodeDashboard(row.dashboard_json)?.widgets ?? []) {
-        if (widget.type === 'metric') yield [widget.title, widget.value, widget.note].join(' ')
-        else if (widget.type === 'bar') yield [widget.title, ...widget.labels, ...widget.values].join(' ')
-        else yield [widget.title, ...widget.columns, ...widget.rows.flat()].join(' ')
-      }
+      yield* structuredArtifactText({kind, dashboard: decodeDashboard(row.dashboard_json)})
       break
-    case 'spreadsheet': {
-      const workbook = decodeWorkbook(row.spreadsheet_json)
-      if (workbook) yield workbookText(workbook)
+    case 'spreadsheet':
+      yield* structuredArtifactText({kind, spreadsheet: decodeWorkbook(row.spreadsheet_json)})
       break
-    }
   }
 }
 

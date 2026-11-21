@@ -88,12 +88,12 @@ test('media upload is stored in this DS-Bot feature directory and is listed for 
   const created = await call('POST', base(), {
     _multipart: true,
     fields: { title: '封面', kind: 'media' },
-    files: { file: { filename: 'dot.png', content_type: 'image/png', data: PNG.toString('base64') } },
+    files: { file: { filename: '色块 验收.png', content_type: 'image/png', data: PNG.toString('base64') } },
   }, key())
   assert.equal(created.status, 201, JSON.stringify(created.body))
   const item = created.body.artifact
   assert.equal(item.kind, 'media')
-  assert.equal(item.media.filename, 'dot.png')
+  assert.equal(item.media.filename, '色块 验收.png')
   assert.equal(item.media.mime, 'image/png')
   const imageCatalog = await call('GET', base() + '?type=image&type=video')
   assert.deepEqual(imageCatalog.body.items.map(row => row.id), [item.id])
@@ -103,6 +103,9 @@ test('media upload is stored in this DS-Bot feature directory and is listed for 
   const file = await call('GET', base(`/${item.id}/file`))
   assert.equal(file.status, 200)
   assert.equal(file.download.content_type, 'image/png')
+  assert.equal(file.download.filename, '色块 验收.png')
+  const exported = await call('GET', base(`/${item.id}/export`))
+  assert.equal(exported.download.filename, '色块 验收.png')
   const files = await bot.endpoint('artifacts/files', { workspace_id: WS, q: '封面', limit: 20 })
   assert.equal(files.ok, true)
   assert.equal(files.value.items[0].id, item.id)

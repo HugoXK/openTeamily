@@ -548,10 +548,13 @@ class GatewayApp:
         if not isinstance(body['process_ref'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['process_ref']):
             raise GatewayError(400, 'invalid')
         with self.store.transaction() as db:
-            row = db.execute('SELECT process_ref, observed FROM instances WHERE id=? AND retired_at IS NULL', (iid,)).fetchone()
+            row = db.execute('SELECT process_ref, desired, observed, health, blocked, revision, observed_revision '
+                             'FROM instances WHERE id=? AND retired_at IS NULL', (iid,)).fetchone()
             if row is None or not Lifecycle.grants(db, manager, iid):
                 raise GatewayError(403, 'not_granted')
-            if row[1] != 'running' or row[0] != body['process_ref']:
+            if (row['process_ref'] != body['process_ref'] or row['observed_revision'] != row['revision']
+                    or row['desired'] != 'running' or row['observed'] != 'running'
+                    or row['health'] != 'healthy' or row['blocked']):
                 raise GatewayError(409, 'stale_process')
             try:
                 record_upstream(db, iid, body['address'], body['auth_cookie'], self.clock())
