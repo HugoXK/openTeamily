@@ -4,6 +4,7 @@ import { AGENT_FILE_ACCEPT, mountChatFiles, renderChatFile, sendPrivateAttachmen
 import { mountGroupTranslation } from './translation.mjs';
 import { mountChatCalls } from './calls.mjs';
 import { mountImageCreator } from './image-create.mjs';
+import { mountVideoCreator } from './video-create.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { stageMeetingFromChat } from '../shell/meeting-link.mjs';
@@ -4124,6 +4125,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   if (inChatForm) inChatForm.addEventListener('submit', async event => { event.preventDefault(); await searchCurrentConversation(); });
   const inChatMore = document.getElementById('conversation-search-more');
   if (inChatMore) inChatMore.addEventListener('click', () => searchCurrentConversation(true));
+  function renderDeliveredSocialMessage(scope, message) {
+    if (message && scope === sendScope() && !socialHistory?.readingHistory) {
+      const without = lastSocialItems.filter(item => item.id !== message.id);
+      renderSocialMessages([...without, message].sort((a,b) => a.seq - b.seq));
+    }
+    void loadSessions();
+  }
+
   attachmentSender = mountChatFiles(document, {
     context: () => {
       if (!servedByDsbot || !currentUser) return null;
@@ -4138,11 +4147,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     createKey: () => idempotencyKey('chat-file-'),
     sent(destination, message) {
       consumeReplyDraft(destination.scope, destination.reply);
-      if (destination.scope === sendScope() && !socialHistory?.readingHistory) {
-        const without = lastSocialItems.filter(item => item.id !== message.id);
-        renderSocialMessages([...without, message].sort((a,b) => a.seq - b.seq));
-      }
-      void loadSessions();
+      renderDeliveredSocialMessage(destination.scope, message);
     },
   });
   const filterButton = document.getElementById('session-filter');
@@ -4692,11 +4697,35 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     onOpen() { if (plus) plus.open = false; },
     notify: show,
   });
+  const videoCreator = mountVideoCreator(document, {
+    request, key: () => idempotencyKey('chat-video-'),
+    context() {
+      if (!servedByDsbot || !currentUser || !workspaceId()) return null;
+      if (currentSource === 'agent' && currentAgent) return {workspace: workspaceId(), scope: sendScope()};
+      if (currentSource !== 'social' || !currentConversation || currentConversation.public_agent || sendClosed()) return null;
+      return {workspace: workspaceId(), scope: sendScope(),
+        sendLabel: currentConversation.kind === 'group' ? '发送到群聊' : '发送到会话'};
+    },
+    async share(artifact, scope) {
+      if (sendScope() !== scope || currentSource !== 'social' || !currentConversation
+          || currentConversation.public_agent || sendClosed()) return {status: 409, body: {}};
+      const owner = currentUser.id;
+      const result = await request('POST', `${socialBase()}/${currentConversation.id}/messages`,
+        {artifact_id: artifact, artifact_revision: 1}, {'Idempotency-Key': 'share-video-' + artifact});
+      if ([200, 201].includes(result.status) && currentUser?.id === owner) {
+        renderDeliveredSocialMessage(scope, result.body.message);
+      }
+      return result;
+    },
+    onOpen() { if (plus) plus.open = false; },
+    notify: show,
+  });
   const attachInput = document.getElementById('chat-attachment');
   const defaultAccept = attachInput ? attachInput.getAttribute('accept') || '' : '';
   function syncPlusState() {
     syncMemoryRecall();
     imageCreator.sync();
+    videoCreator.sync();
     const social = currentSource === 'social' && Boolean(currentConversation);
     const shareable = social && !currentConversation.public_agent && currentConversation.direct?.open !== false;
     const workspace = workspaceId();

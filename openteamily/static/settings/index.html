@@ -390,6 +390,18 @@
         </div>
       </fieldset>
     </form>
+    <form id="video-api-form" method="post" action="/v1/model-api/video">
+      <fieldset id="video-api" class="settings-card" disabled>
+        <legend>视频模型</legend>
+        <p class="note">使用 Runway Gen-4.5 生成 5 秒视频。此密钥仅用于当前账号的视频任务。</p>
+        <label>视频 API 密钥 <input type="password" name="api_key" maxlength="4096" autocomplete="new-password"></label>
+        <p id="video-api-status" class="note" role="status"></p>
+        <div class="settings-form-actions">
+          <button type="submit" id="save-video-api">保存视频配置</button>
+          <button type="button" id="clear-video-api" hidden>移除视频密钥</button>
+        </div>
+      </fieldset>
+    </form>
     </div>
     <div data-settings-page="skill-configuration" hidden>
         <header class="settings-subhead">

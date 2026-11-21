@@ -7,6 +7,7 @@ export const KINDS = ['document', 'website', 'whiteboard', 'media']
 export const TITLE_MAX = 80
 export const BODY_MAX = 8000
 export const MAX_MEDIA_BYTES = 2 * 1024 * 1024
+export const MAX_GENERATED_VIDEO_BYTES = 8 * 1024 * 1024
 export const BOARD_JSON_MAX = 65536
 export const MAX_STROKES = 200
 export const MAX_POINTS = 400

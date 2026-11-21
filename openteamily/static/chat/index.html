@@ -345,12 +345,12 @@
     </section>
     <dialog id="image-create-dialog" class="chat-save-dialog" aria-labelledby="image-create-title">
       <form id="image-create-form">
-        <div class="image-create-head">
+        <div class="media-create-head">
           <h2 id="image-create-title">生成图片</h2>
           <button type="button" id="image-create-close">关闭</button>
         </div>
         <label>图片描述<textarea name="prompt" maxlength="2000" rows="3" required placeholder="描述你想画的内容、风格或颜色"></textarea></label>
-        <div class="image-create-controls">
+        <div class="media-create-controls">
           <label>图片比例
             <select name="shape">
               <option value="square">方形 1:1</option>
@@ -364,9 +364,37 @@
         <a id="image-create-settings" href="/settings/model-api#image-api" hidden>配置图片模型</a>
         <figure id="image-create-result" hidden>
           <img id="image-create-preview" alt="生成的图片">
-          <figcaption class="image-create-links">
+          <figcaption class="media-create-links">
             <a id="image-create-space">在资料空间打开</a>
             <button type="button" id="image-create-attach" disabled>添加到输入框</button>
+          </figcaption>
+        </figure>
+      </form>
+    </dialog>
+    <dialog id="video-create-dialog" class="chat-save-dialog" aria-labelledby="video-create-title">
+      <form id="video-create-form">
+        <div class="media-create-head">
+          <h2 id="video-create-title">生成视频</h2>
+          <button type="button" id="video-create-close">关闭</button>
+        </div>
+        <label>视频描述<textarea name="prompt" maxlength="1000" rows="3" required placeholder="描述画面、动作或镜头变化"></textarea></label>
+        <div class="media-create-controls">
+          <label>视频比例
+            <select name="shape">
+              <option value="landscape">横屏 16:9</option>
+              <option value="portrait">竖屏 9:16</option>
+            </select>
+          </label>
+          <button id="video-create-submit" type="submit" disabled>生成</button>
+        </div>
+        <p id="video-create-status" class="note" role="status"></p>
+        <a id="video-create-settings" href="/settings/model-api#video-api" hidden>配置视频模型</a>
+        <figure id="video-create-result" hidden>
+          <video id="video-create-preview" aria-label="生成的视频" controls playsinline preload="metadata"></video>
+          <figcaption class="media-create-links">
+            <a id="video-create-space">在资料空间打开</a>
+            <a id="video-create-download">下载视频</a>
+            <button type="button" id="video-create-send" hidden>发送到会话</button>
           </figcaption>
         </figure>
       </form>
@@ -493,7 +521,7 @@
                   <a href="/space?new=slides" data-create-artifact="slides" data-tone="slides" title="在资料空间新建幻灯片"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18 M5 4v10h14V4 M12 14v3 M8.5 21l3.5-4 3.5 4"/></svg><span>幻灯片</span></a>
                   <a href="/space?new=spreadsheet" data-create-artifact="spreadsheet" data-tone="table" title="在当前工作区新建电子表格"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z M4 9.5h16 M4 15h16 M10 4v16"/></svg><span>表格</span></a>
                   <button type="button" id="composer-image-create" disabled data-tone="image" title="根据描述生成图片" aria-haspopup="dialog"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v16H4z M4 16l5-5 4 4 2-2 5 5 M15 8.5h.01"/></svg><span>图片</span></button>
-                  <button type="button" disabled data-tone="camera" title="未接通：还没有在输入区直接生成视频的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z M12 16.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/></svg><span>视频</span><span class="plus-tag">未接通</span></button>
+                  <button type="button" id="composer-video-create" disabled data-tone="camera" title="根据描述生成视频" aria-haspopup="dialog"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z M12 16.5a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z"/></svg><span>视频</span></button>
                   <button type="button" disabled data-tone="music" title="未接通：还没有在输入区直接生成音乐的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l11-2v12 M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z M20 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg><span>音乐</span><span class="plus-tag">未接通</span></button>
                   <button type="button" disabled data-tone="cube" title="未接通：还没有在输入区直接生成 3D 的接口。"><svg class="plus-ico" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9Z M4 7.5l8 4.5 8-4.5 M12 12v9"/></svg><span>3D 模型</span><span class="plus-tag">未接通</span></button>
                 </div>

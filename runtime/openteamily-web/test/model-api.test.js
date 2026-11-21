@@ -113,3 +113,23 @@ test('feature factory publishes the in-process proxy override', async () => {
   assert.equal(await feature.endpoints.imageProvider({}, { internal: true }), null)
   delete globalThis[OVERRIDE]
 })
+
+test('Runway video key is sealed per account, revision checked and absent from HTTP responses', async () => {
+  const api = make()
+  const call = (method, body) => compatHandler(api.legacy)({method, path: '/v1/model-api/video', body})
+  const initial = await call('GET')
+  assert.deepEqual(initial.body.video_api, {provider: 'runway', model: 'gen4.5', has_api_key: false, revision: 0})
+  assert.equal(api.resolveVideo(), null)
+  assert.equal((await call('POST', {revision: 0, api_key: 'invalid token'})).status, 400)
+  const stored = await call('POST', {revision: 0, api_key: KEY})
+  assert.equal(stored.status, 200)
+  assert.equal(stored.body.video_api.has_api_key, true)
+  assert.equal(stored.body.video_api.revision, 1)
+  assert.equal(JSON.stringify(stored).includes(KEY), false)
+  assert.equal(JSON.stringify(api.store.read()).includes(KEY), false)
+  assert.deepEqual(api.resolveVideo(), {provider: 'runway', model: 'gen4.5', api_key: KEY})
+  assert.equal(make().resolveVideo(), null)
+  assert.equal((await call('POST', {revision: 0, api_key: null})).status, 409)
+  assert.equal((await call('POST', {revision: 1, api_key: null})).status, 200)
+  assert.equal(api.resolveVideo(), null)
+})

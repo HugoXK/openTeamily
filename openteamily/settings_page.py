@@ -71,6 +71,7 @@ class SettingsPage:
         '/chat/activity.mjs': ('chat', 'activity.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/chat/public-draft.mjs': ('chat', 'public-draft.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/video-create.mjs': ('chat', 'video-create.mjs', 'text/javascript; charset=utf-8'),
         '/chat/voice.mjs': ('chat', 'voice.mjs', 'text/javascript; charset=utf-8'),
         '/chat/mentions.mjs': ('chat', 'mentions.mjs', 'text/javascript; charset=utf-8'),
         '/chat/dsbot.mjs': ('chat', 'dsbot.mjs', 'text/javascript; charset=utf-8'),

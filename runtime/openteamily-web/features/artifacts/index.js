@@ -9,9 +9,26 @@ import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPAC
 import { IMPORT_TABLES, MIGRATIONS } from './schema.js'
 import { routes } from './routes.js'
 import { importMedia } from './media.js'
-import { emptyBoard, publicKind } from './model.js'
+import { emptyBoard, MAX_GENERATED_VIDEO_BYTES, MAX_MEDIA_BYTES, publicKind } from './model.js'
+import { sniffMime } from './render.js'
 import { exportOffice } from './office.js'
 import { decodeStructured } from './structured.js'
+
+function generatedMedia(ctx, input, call, type, extension, limit) {
+  if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+  const {workspace_id: workspace, job_id: id, data, title} = input ?? {}
+  if (!HEX32.test(workspace || '') || !HEX32.test(id || '')) refuse(400, 'invalid', 'Invalid generation')
+  const key = type + '-' + id
+  const saved = ctx.store.get('SELECT id FROM artifacts WHERE workspace_id=? AND key_hash=?', workspace, digest('artifact:' + key))
+  if (saved || data === undefined) return saved
+  const mime = type + '/' + extension
+  if (!Buffer.isBuffer(data) || !data.length || data.length > limit || sniffMime(data) !== mime) {
+    refuse(400, 'invalid', 'Invalid generated media')
+  }
+  const suffix = id.slice(0, 8)
+  const result = createMedia(ctx, workspace, {title: `${title} · ${suffix}`, data, filename: `${type}-${suffix}.${extension}`, mime, key})
+  return {id: result.body.artifact.id}
+}
 
 export { PER_WORKSPACE }
 
@@ -31,16 +48,11 @@ export default defineFeature({
       const result = createArtifact(ctx, input.workspace_id, input, input.idempotency_key)
       return { artifact: result.body.artifact }
     },
-    async generatedImage(input,call) {
-      if (!call?.internal) refuse(404,'not_found','Internal endpoint')
-      const {workspace_id:workspace,job_id:id,data,title} = input
-      if (!HEX32.test(workspace || '') || !HEX32.test(id || '')) refuse(400,'invalid','Invalid generation')
-      const key = 'image-' + id
-      const saved = ctx.store.get('SELECT id FROM artifacts WHERE workspace_id=? AND key_hash=?',workspace,digest('artifact:'+key))
-      if (saved || !data) return saved
-      const suffix = id.slice(0,8)
-      const result = createMedia(ctx,workspace,{title:`${title} · ${suffix}`,data,filename:`image-${suffix}.png`,mime:'image/png',key})
-      return {id:result.body.artifact.id}
+    async generatedImage(input, call) {
+      return generatedMedia(ctx, input, call, 'image', 'png', MAX_MEDIA_BYTES)
+    },
+    async generatedVideo(input, call) {
+      return generatedMedia(ctx, input, call, 'video', 'mp4', MAX_GENERATED_VIDEO_BYTES)
     },
     async saveChatMessage(input, call) {
       if (!call?.internal) refuse(403, 'forbidden', 'Save chat messages from their conversation')

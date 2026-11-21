@@ -99,6 +99,7 @@ const PATH_VIEWS = {
   '/settings/agent-access': 'agent-access',
   '/settings/connectors': 'connectors',
   '/settings/skill-configuration': 'skill-configuration',
+  '/settings/model-api': 'model-api',
 };
 
 const HASH_VIEWS = {
@@ -112,6 +113,7 @@ const HASH_VIEWS = {
   shortcuts: 'shortcuts',
   'model-api': 'model-api',
   'image-api': 'model-api',
+  'video-api': 'model-api',
   'skill-secrets': 'skill-configuration',
 };
 
@@ -441,6 +443,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const imageFields = document.getElementById('image-api');
   const imageStatus = document.getElementById('image-api-status');
   const removeImageKey = document.getElementById('clear-image-api');
+  const videoForm = document.getElementById('video-api-form');
+  const videoFields = document.getElementById('video-api');
+  const videoStatus = document.getElementById('video-api-status');
+  const removeVideoKey = document.getElementById('clear-video-api');
+  let videoConfig = null;
   let imageAccount = null;
   let imageRevision = null;
   let imageLoading = false;
@@ -506,6 +513,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (current) syncAppearanceExtras(document, current);
     if (view === 'model-api' && current && imageForm && imageRevision === null) void loadImageApi();
     if (view === 'model-api' && location.hash === '#image-api') imageFields?.scrollIntoView?.({block:'start'});
+    if (view === 'model-api' && current && videoConfig?.revision === null) void loadVideoApi();
+    if (view === 'model-api' && location.hash === '#video-api') videoFields?.scrollIntoView?.({block:'start'});
   }
 
   function refreshAppearance() {
@@ -552,6 +561,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const session = await request('GET', '/v1/auth/session');
     if (session.status === 401) {
       switchImageAccount(null);
+      switchVideoAccount(null);
       loginPanel.hidden = false;
       settingsPanel.hidden = true;
       show('', '');
@@ -562,7 +572,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(session.body.error, '无法读取会话。'));
       return;
     }
-    switchImageAccount(session.body.user.id ?? session.body.user.username);
+    const account = session.body.user.id ?? session.body.user.username;
+    switchImageAccount(account);
+    switchVideoAccount(account);
     const settings = await request('GET', '/v1/settings');
     if (settings.status !== 200) {
       show('error', messageFor(settings.body.error, '无法读取设置。'));
@@ -828,6 +840,61 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     void saveImageApi({base_url:base_url.value.trim(),model:model.value.trim(),...(secret ? {api_key:secret} : {})});
   });
   removeImageKey?.addEventListener('click',() => void saveImageApi({api_key:null}));
+
+  function switchVideoAccount(account) {
+    if (!videoForm || videoConfig?.account === account) return;
+    videoConfig = account === null ? null : {account, revision: null, busy: false};
+    videoForm.elements.api_key.value = '';
+    videoFields.disabled = true;
+    removeVideoKey.hidden = true;
+    videoStatus.textContent = '';
+  }
+
+  function fillVideoApi(config, message) {
+    videoConfig.revision = config.revision;
+    removeVideoKey.hidden = !config.has_api_key;
+    videoStatus.textContent = message || (config.has_api_key ? '视频密钥已保存。' : '尚未配置视频密钥。');
+    videoFields.disabled = false;
+  }
+
+  async function loadVideoApi(message) {
+    const config = videoConfig;
+    if (!config || config.busy) return;
+    config.busy = videoFields.disabled = true;
+    videoStatus.textContent = '正在读取视频配置…';
+    const response = await request('GET', '/v1/model-api/video').catch(() => ({status: 0, body: {}}));
+    if (config !== videoConfig) return;
+    config.busy = false;
+    if (response.status === 200 && response.body.video_api) fillVideoApi(response.body.video_api, message);
+    else videoStatus.textContent = '无法读取视频配置，请刷新后重试。';
+  }
+
+  async function saveVideoApi(api_key) {
+    const config = videoConfig;
+    if (!config || config.revision === null || config.busy) return;
+    config.busy = videoFields.disabled = true;
+    videoForm.elements.api_key.value = '';
+    videoStatus.textContent = '正在保存…';
+    const response = await request('POST', '/v1/model-api/video', {revision: config.revision, api_key})
+      .catch(() => ({status: 0, body: {}}));
+    if (config !== videoConfig) return;
+    config.busy = videoFields.disabled = false;
+    if (response.status === 200 && response.body.video_api) {
+      fillVideoApi(response.body.video_api, api_key === null ? '已移除视频密钥。' : '视频配置已保存。');
+    } else if (response.status === 409) {
+      await loadVideoApi('视频配置已在其他窗口更新，请重新输入密钥。');
+    } else {
+      videoStatus.textContent = messageFor(response.body.error, '无法保存视频配置，请重试。');
+    }
+  }
+
+  videoForm?.addEventListener('submit', event => {
+    event.preventDefault();
+    const secret = videoForm.elements.api_key.value.trim();
+    if (secret) void saveVideoApi(secret);
+    else videoStatus.textContent = '请输入视频 API 密钥。';
+  });
+  removeVideoKey?.addEventListener('click', () => void saveVideoApi(null));
 
   if (modelForm) {
     modelForm.addEventListener('submit', async event => {

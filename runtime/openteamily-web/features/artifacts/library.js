@@ -481,7 +481,7 @@ export function exportBytes(row, featureDir, workspaceId, fromVersion = false) {
     const digestHex = fromVersion ? row.sha256 : row.media_sha256
     const filename = fromVersion ? row.filename : row.media_filename
     const expected = fromVersion ? row.byte_count : row.media_bytes
-    const payload = readMediaBytes(featureDir, workspaceId, digestHex, expected)
+    const payload = readMediaBytes(featureDir, workspaceId, digestHex, expected, mime)
     return { payload, contentType: mime, filename: exportFilename(title, kind, revision, filename), headers: exportHeaders(mime, exportFilename(title, kind, revision, filename)) }
   }
   let structuredKind = null, structured = null
@@ -585,10 +585,10 @@ export function content(row, featureDir, { preview: asPreview = false } = {}) {
   const kind = publicKind(row)
   if (kind === 'media' && !asPreview) {
     try {
-      const payload = readMediaBytes(featureDir, row.workspace_id, row.media_sha256, row.media_bytes)
+      const payload = readMediaBytes(featureDir, row.workspace_id, row.media_sha256, row.media_bytes, row.media_mime)
       const name = cleanFilename(row.media_filename || 'file')
       return {
-        status: 200, raw: payload,
+        status: 200, raw: payload, inline: true,
         headers: {
           'content-type': row.media_mime,
           'content-security-policy': "default-src 'none'; sandbox; frame-ancestors 'self'; object-src 'none'",

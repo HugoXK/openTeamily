@@ -21,6 +21,8 @@ export const DEFAULT_POLICY_FILE = '/run/secrets/openteamily-model-http.json'
 export const OVERRIDE = Symbol.for('openteamily.model-api.override')
 const PURPOSE = 'openteamily.model-api.account'
 const IMAGE_PURPOSE = 'openteamily.model-api.image'
+const VIDEO_PURPOSE = 'openteamily.model-api.video'
+const VIDEO_MODEL = {provider: 'runway', model: 'gen4.5'}
 const DEFAULT_IMAGE_BASE = 'https://api.openai.com/v1'
 const DEFAULT_IMAGE_MODEL = 'gpt-image-1.5'
 
@@ -169,9 +171,41 @@ export function createModelApi({ dir, sealKey, env = process.env, clock = nowSec
     return {base_url:image.base_url,model:image.model,api_key:unseal(sealKey,IMAGE_PURPOSE,image.key_sealed)}
   }
 
+  function videoView(config = store.read().video) {
+    return {...VIDEO_MODEL, has_api_key: Boolean(config?.key_sealed), revision: config?.revision ?? 0}
+  }
+
+  function saveVideo(raw) {
+    const {revision, api_key} = bodyOf(raw, ['revision', 'api_key'])
+    if (!Number.isSafeInteger(revision) || revision < 0
+      || (api_key !== null && (!validApiKey(api_key) || !/^[!-~]+$/.test(api_key)))) {
+      fail(400, 'invalid', '请输入有效的 Runway API 密钥。')
+    }
+    return store.update(draft => {
+      const current = videoView(draft.video ?? null)
+      if (revision !== current.revision) fail(409, 'conflict', '配置已更新，请重新加载。', current)
+      draft.video = {
+        key_sealed: api_key === null ? null : seal(sealKey, VIDEO_PURPOSE, api_key),
+        revision: revision + 1,
+      }
+      return {video_api: videoView(draft.video)}
+    })
+  }
+
+  function resolveVideo() {
+    const video = store.read().video
+    if (!video?.key_sealed) return null
+    return {...VIDEO_MODEL, api_key: unseal(sealKey, VIDEO_PURPOSE, video.key_sealed)}
+  }
+
   return {
-    store, get, save, effective, resolveForProxy, resolveImage, policy,
+    store, get, save, effective, resolveForProxy, resolveImage, resolveVideo, policy,
     legacy: [
+      { method: 'GET', path: /^\/v1\/model-api\/video$/, handle: async ({query}) => {
+        if (query) fail(400, 'invalid', '无效的视频模型请求。')
+        return [200, {video_api: videoView()}]
+      } },
+      { method: 'POST', path: /^\/v1\/model-api\/video$/, handle: async ({body}) => [200, saveVideo(body)] },
       { method:'GET', path:/^\/v1\/model-api\/image$/, handle:async () => [200,{image_api:imageView()}] },
       { method:'POST', path:/^\/v1\/model-api\/image$/, handle:async ({body}) => [200,saveImage(body)] },
       { method: 'GET', path: /\/v1\/model-api/, handle: async ({ query }) => { if (query) fail(400, 'invalid', 'Invalid request'); return [200, get()] } },
