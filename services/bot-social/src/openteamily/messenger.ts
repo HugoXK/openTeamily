@@ -12,7 +12,10 @@ import { body, handleKey, intParam, OtContext, optText, params, query, text } fr
 import { shareTeam, requireMember } from "./teams.js";
 import { acceptedContact } from "./contacts.js";
 
-import { CHAT_FILE_BODY_LIMIT, CHAT_FILES_SCHEMA, attachmentView, decodeChatFile, readAttachment, saveAttachment } from "./chat-files.js";
+import {
+  CHAT_FILE_BODY_LIMIT, CHAT_FILES_SCHEMA, attachmentView, chatFileView, decodeChatFile, migrateChatFiles, readAttachment,
+  saveAttachment, type ChatFileMetadata,
+} from "./chat-files.js";
 
 export const MESSENGER_SCHEMA = `
 CREATE TABLE IF NOT EXISTS ot_group_announcements (
@@ -463,6 +466,7 @@ function replyContext(ot: OtContext, conversationId: string, seq: number) {
 }
 
 export function registerMessenger(app: FastifyInstance, ot: OtContext) {
+  migrateChatFiles(ot);
   // SQLite lower() folds ASCII only. Filenames can contain Unicode letters.
   ot.db.function("ot_attachment_title_matches", {deterministic: true}, (title: string, term: string) =>
     Number(title.toLowerCase().includes(term)));
@@ -919,7 +923,8 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     const q = query(req);
     assert(Object.keys(q).every(key => ["kind", "q", "cursor", "limit"].includes(key)),
       400, "invalid_request", "Unknown attachment search parameter");
-    assert(q.kind === "photo" || q.kind === "file", 400, "invalid_request", "Choose photo or file attachments");
+    assert(q.kind === "photo" || q.kind === "file" || q.kind === "resource",
+      400, "invalid_request", "Choose photo, file or resource attachments");
     const term = q.q === undefined ? "" : text(q.q, "q", {max: 80, multiline: true}).trim().toLowerCase();
     const rawLimit = q.limit ?? "20";
     const limit = Number(rawLimit);
@@ -935,15 +940,18 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     }
     assert(workspace || ordinaryDirect(conv) || conv.account_group === 1,
       404, "conversation_not_found", "no such personal conversation");
-    const rows = ot.all<{message_id: string; created_at: number; seq: number; title: string; mime: string; bytes: number}>(`
-      SELECT m.id AS message_id, m.created_at, m.seq, a.title, a.mime, a.bytes
+    const typeFilter = q.kind === "resource" ? "a.resource IS NOT NULL"
+      : q.kind === "photo" ? "a.mime LIKE 'image/%'" : "a.mime NOT LIKE 'image/%'";
+    const title = q.kind === "resource" ? "json_extract(a.resource, '$.title')" : "a.title";
+    const rows = ot.all<ChatFileMetadata & {message_id: string; created_at: number; seq: number}>(`
+      SELECT m.id AS message_id, m.created_at, m.seq, a.title, a.mime, a.bytes, a.resource
       FROM ot_messages m JOIN ot_message_attachments a ON a.message_id=m.id
       WHERE m.conversation_id=? AND m.seq<? AND m.retracted=0 AND ${VISIBLE_MESSAGE}
-        AND (a.mime LIKE 'image/%')=? AND (?='' OR ot_attachment_title_matches(a.title, ?))
-      ORDER BY m.seq DESC LIMIT ?`, conv.id, before, me.ownerId, Number(q.kind === "photo"), term, term, limit + 1);
+        AND ${typeFilter} AND (?='' OR ot_attachment_title_matches(${title}, ?))
+      ORDER BY m.seq DESC LIMIT ?`, conv.id, before, me.ownerId, term, term, limit + 1);
     return {
-      items: rows.slice(0, limit).map(({message_id, created_at, title, mime, bytes}) => ({
-        message_id, created_at, attachment: {title, mime, bytes},
+      items: rows.slice(0, limit).map(row => ({
+        message_id: row.message_id, created_at: row.created_at, attachment: chatFileView(row),
       })),
       next_cursor: rows.length > limit ? String(rows[limit - 1].seq) : null,
     };

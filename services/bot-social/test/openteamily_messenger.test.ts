@@ -643,6 +643,78 @@ test("attachment search is newest-first, case-insensitive and scoped to readable
   assert.equal((await reader.call("GET", files)).status, 404);
 });
 
+test("shared resource search preserves immutable revisions and metadata across scoped forwarding", async () => {
+  const [author, relay, recipient] = await Promise.all([
+    home(S.base, "resource-author"), home(S.base, "resource-relay"), home(S.base, "resource-recipient"),
+  ]);
+  const team = await teamOf(author, relay, recipient);
+  const workspace = (await relay.ok("GET", "/v1/ot/workspaces")).workspaces.find((row:any) => row.id === team.id).workspace_id;
+  const source = await author.ok("POST", "/v1/ot/conversations", {kind:"group", title:"Resource source",
+    team_id:team.id, members:[relay.handle]});
+  const target = await relay.ok("POST", "/v1/ot/conversations", {kind:"group", title:"Resource target",
+    team_id:team.id, members:[recipient.handle]});
+  const room = `/v1/ot/conversations/${source.id}`;
+  const scoped = (id: string) => `/v1/ot/workspaces/${workspace}/conversations/${id}`;
+  const resources = (id: string) => scoped(id) + "/attachments?kind=resource";
+  const bytes = Buffer.from("The fourth revision").toString("base64");
+  const original = {kind:"document", title:"RÉSUMÉ  /  计划", revision:4};
+  const newRevision = {kind:"document", title:"Résumé  /  更新", revision:5};
+  const upload = {title:"export-v4.txt", mime:"text/plain", data:bytes};
+  await author.ok("POST", room + "/messages", {workspace, attachment:{...upload,title:"Résumé only an upload.txt"}});
+  const first = await author.ok("POST", room + "/messages", {workspace, client_key:"resource-version-four",
+    body:"Original caption", attachment:{...upload,resource:original}});
+  const replay = await author.ok("POST", room + "/messages", {workspace, client_key:"resource-version-four",
+    attachment:{...upload,resource:newRevision}});
+  assert.equal(replay.id, first.id);
+  assert.deepEqual(replay.attachment, first.attachment);
+  await author.ok("PATCH", `/v1/ot/messages/${first.id}`, {body:"Edited caption"});
+  const second = await author.ok("POST", room + "/messages", {workspace, attachment:{...upload,title:"export-v5.txt",
+    data:Buffer.from("The fifth revision").toString("base64"),resource:newRevision}});
+  const pictureResource = {kind:"media", title:"Resource picture", revision:1};
+  const photo = await author.ok("POST", room + "/messages", {workspace, attachment:{title:"picture-v1.png", mime:"image/png",
+    data:"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jh28AAAAASUVORK5CYII=", resource:pictureResource}});
+
+  const term = "&q=" + encodeURIComponent("résumé");
+  const row = (message: any) => ({message_id:message.id, created_at:message.created_at, attachment:message.attachment});
+  const resourcePage = await relay.ok("GET", resources(source.id) + term + "&limit=1");
+  assert.deepEqual(resourcePage.items, [row(second)]);
+  assert.deepEqual(await relay.ok("GET", resources(source.id) + term + "&limit=1&cursor=" + resourcePage.next_cursor),
+    {items:[row(first)],next_cursor:null});
+  assert.deepEqual(first.attachment, {title:upload.title, mime:upload.mime, bytes:Buffer.from(bytes,"base64").length,resource:original});
+  assert.deepEqual(await relay.ok("GET", resources(source.id) + "&q=export"), {items:[],next_cursor:null});
+  assert.deepEqual(await relay.ok("GET", scoped(source.id) + "/attachments?kind=photo"), {items:[row(photo)],next_cursor:null});
+  assert.equal((await relay.ok("GET", scoped(source.id) + "/attachments?kind=file")).items.length, 3);
+  assert.equal((await recipient.call("GET", resources(source.id))).status, 404);
+
+  for (const resource of [null, {...original,kind:"unknown"}, {...original,title:"x".repeat(81)}, {...original,revision:0},
+    {...original,revision:"4"}, {...original,artifact_id:"private-artifact-id"}, {...original,workspace_id:workspace}]) {
+    assert.equal((await author.call("POST", room + "/messages", {workspace, attachment:{...upload,resource}})).status, 400);
+  }
+
+  const forwarding = {workspace, target_conversation_id:target.id, message_ids:[first.id], request_key:"forward-resource"};
+  await relay.ok("POST", room + "/forward", forwarding);
+  await relay.ok("POST", room + "/forward", forwarding);
+  const reference = {workspace, attachment_from:{conversation_id:source.id,message_id:first.id}};
+  const copied = await relay.ok("POST", `/v1/ot/conversations/${target.id}/messages`, reference);
+  const targetRows = (await recipient.ok("GET", resources(target.id))).items;
+  assert.equal(targetRows.length, 2);
+  assert.equal(targetRows[0].message_id, copied.id);
+  for (const item of targetRows) {
+    assert.notEqual(item.message_id, first.id);
+    assert.deepEqual(item.attachment, first.attachment);
+    assert.deepEqual(await recipient.ok("GET", `${scoped(target.id)}/messages/${item.message_id}/file`), upload);
+  }
+  assert.equal((await recipient.call("POST", `/v1/ot/conversations/${target.id}/messages`, reference)).status, 404);
+  await relay.ok("POST", `/v1/ot/messages/${second.id}/hide`, {conversation_id:source.id});
+  assert.deepEqual((await relay.ok("GET", resources(source.id) + term)).items, [row(first)]);
+  await author.ok("DELETE", `/v1/ot/messages/${first.id}`);
+  assert.deepEqual((await relay.ok("GET", resources(source.id) + term)).items, []);
+  assert.equal((await relay.call("POST", room + "/forward", {...forwarding,request_key:"retracted-resource"})).status, 409);
+
+  S.platform.db.prepare("UPDATE ot_message_attachments SET sealed=? WHERE message_id=?").run(Buffer.from("unreadable"), copied.id);
+  assert.deepEqual((await recipient.ok("GET", resources(target.id))).items, targetRows);
+});
+
 test("group translation sources require membership, exclude own media and check the exact revision", async () => {
   const reader = await home(S.base, "translation-reader");
   const author = await home(S.base, "translation-author");

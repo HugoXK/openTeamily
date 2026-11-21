@@ -265,8 +265,10 @@ function reply({status = 200, body = {}} = {}) {
 }
 
 async function openArtifactsPage({items = [], artifact, meetings = [], meetingsStatus = 200, meetingsError = null,
-                                  withKinds = false, workspaces = [{id: 'w1', name: 'Desk'}], tasks = [], saveReply = null} = {}) {
+                                  withKinds = false, workspaces = [{id: 'w1', name: 'Desk'}], tasks = [], saveReply = null,
+                                  native = false, extraRequest} = {}) {
   const {doc, elements, created, form} = fakeDocument();
+  if (native) doc.querySelector = selector => selector === 'meta[name="openteamily-served-by"][content="ds-bot"]' ? {} : null;
   if (withKinds) {
     doc.kindButtons = ['all', 'website', 'document', 'media', 'messages', 'meetings'].map((kind) => {
       const node = new FakeNode('button');
@@ -282,6 +284,8 @@ async function openArtifactsPage({items = [], artifact, meetings = [], meetingsS
   const fetcher = async (path, options = {}) => {
     const method = options.method || 'GET';
     calls.push({method, path, headers: options.headers || {}, body: options.body});
+    const extra = extraRequest?.(path, options);
+    if (extra) return extra;
     if (path === '/v1/auth/session') return reply({body: {user: {id: 'u1', username: 'alice'}}});
     if (path === '/v1/auth/providers') return reply({body: {items: []}});
     if (path === '/v1/workspaces?limit=100') return reply({body: {items: workspaces}});
@@ -357,6 +361,69 @@ async function openEditorOn(page, index = 0) {
   assert.ok(row, `the list must render artifact row ${index} first`);
   await row.children[0].dispatch('click');
 }
+
+test('Space sends the saved version to the selected private or group conversation', async () => {
+  const item = {id: 'a1', title: '交付原件', kind: 'document', revision: 4, created_by: 'alice'};
+  const socialPath = '/v1/workspaces/w1/social/conversations/shared-id/messages';
+  const privatePath = '/v1/workspaces/w1/agents/assistant/conversations/shared-id/messages';
+  const sends = [];
+  let staged;
+  const page = await openArtifactsPage({items: [item], native: true, extraRequest(path, options) {
+    if (path === '/v1/workspaces/w1/social/conversations?limit=100') return reply({body: {items: [
+      {id: 'shared-id', kind: 'group', title: '交付群', updated: 1},
+      {id: 'public', title: '公开会话', public_agent: true},
+      {id: 'closed', title: '已关闭单聊', direct: {open: false}},
+    ]}});
+    if (path === '/v1/workspaces/w1/agents?limit=100&include=conversations') return reply({body: {
+      items: [{id: 'assistant', name: '资料助手'}, {id: 'archived', name: '旧助手', archived: true}],
+      conversations: [{id: 'shared-id', agent_id: 'assistant', title: '项目讨论', updated: 2},
+        {id: 'old', agent_id: 'archived', title: '归档对话'}],
+    }});
+    if (path === privatePath || path === socialPath) {
+      sends.push({path, body: JSON.parse(options.body), key: options.headers['Idempotency-Key']});
+      if (sends.length === 1) return reply({status: 503});
+      if (path === privatePath) return new Promise(resolve => { staged = resolve; });
+      return reply({status: 201});
+    }
+  }});
+  try {
+    const menuItem = page.created.find(node => node.className === 'artifact-menu-send');
+    const dialog = page.elements.get('send-to-chat-dialog');
+    const list = page.elements.get('send-to-chat-list');
+    const confirm = page.elements.get('send-to-chat-confirm');
+    list.querySelectorAll = () => list.children.map(row => row.children[0]);
+    const open = async () => {
+      await menuItem.dispatch('click');
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(dialog.hidden, false);
+      return list.querySelectorAll('button');
+    };
+    const [privateChoice, groupChoice] = await open();
+    assert.deepEqual(list.querySelectorAll('button').map(button => button.textContent),
+      ['智能体 · 资料助手 · 项目讨论', '交付群']);
+    item.revision = 5;
+    await privateChoice.dispatch('click');
+    assert.match(page.elements.get('send-to-chat-lead').textContent, /智能体会读取这份附件/);
+    await confirm.dispatch('click');
+    assert.equal(dialog.hidden, false);
+    assert.match(page.elements.get('send-to-chat-error').textContent, /发送失败/);
+    const pending = confirm.dispatch('click');
+    assert.equal(confirm.disabled, true);
+    staged(reply({status: 202, body: {message: {id: 'staged'}}}));
+    await pending;
+    assert.equal(dialog.hidden, true, 'a durably staged private send closes without waiting for a model reply');
+    assert.deepEqual(sends[1], sends[0], 'retry retains the private destination and write identity');
+    assert.deepEqual(sends[0].body, {artifact_id: item.id, artifact_revision: 4});
+
+    const choices = await open();
+    await choices.find(button => button.textContent === groupChoice.textContent).dispatch('click');
+    await confirm.dispatch('click');
+    assert.equal(dialog.hidden, true);
+    assert.equal(sends[2].path, socialPath);
+    assert.equal(sends[2].body.artifact_revision, 5);
+    assert.notEqual(sends[2].key, sends[1].key);
+  } finally { page.close(); }
+});
 
 test('artifactDeletePrompt names the artifact and never echoes an empty title', () => {
   assert.deepEqual(artifactDeletePrompt({title: 'Doc'}), {

@@ -1451,6 +1451,7 @@ html[data-theme-resolved="dark"] { --ot-bubble-mine: var(--ot-accent-soft); }
 .attachment-search-jump .search-hit-head,
 .attachment-search-jump .search-hit-head strong { display: block; }
 .attachment-search-download { flex: none; padding: .5rem .375rem; font-size: .75rem; }
+.resource-search-meta { display: flex; flex-wrap: wrap; gap: 0 .5rem; }
 #conversation-search-more, #conversation-search-retry { align-self: center; }
 @media (max-width: 700px) {
   #conversation-search-panel { position: fixed; top: auto; left: .5rem; right: .5rem; bottom: .5rem; width: auto; max-height: 80vh; }

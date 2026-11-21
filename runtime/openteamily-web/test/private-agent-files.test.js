@@ -224,3 +224,80 @@ test('live replies reveal only the current native snapshot and keep the final re
   assert.deepEqual(await (await progress(fileConvo,`key=${fileKey}`)).json(),{state:'failed'})
   db.close()
 })
+
+test('a private saved-work share stages one revision, replies asynchronously and searches only its own thread', {timeout:3000}, async () => {
+  const db = new DatabaseSync(':memory:')
+  const runtime = createRuntime()
+  const uploaded = Promise.withResolvers()
+  const allowStaging = Promise.withResolvers()
+  const final = Promise.withResolvers()
+  const finished = Promise.withResolvers()
+  const asset = 'e'.repeat(32)
+  const resource = {kind:'website',title:'共享草稿 原标题',revision:2}
+  const bytes = Buffer.from('<h1>Saved revision 2</h1>')
+  let exports = 0
+  let turns = 0
+  runtime.readNativeAttachment = async ({ref}) => {
+    assert.deepEqual(ref,{id:'snapshot'})
+    return bytes
+  }
+  runtime.nativeTurn = async (_bot,sessionId,_prompt,_id,{files,onStaged}) => {
+    turns += 1
+    assert.deepEqual(files[0].resource,resource)
+    assert.deepEqual(files[0].data,bytes)
+    uploaded.resolve()
+    await allowStaging.promise
+    onStaged([{title:files[0].title,mime:files[0].mime,bytes:bytes.length,ref:{id:'snapshot'}}])
+    const text = await final.promise
+    finished.resolve()
+    return {text,sessionId,turnId:1}
+  }
+  const host = {runtime:async () => runtime, call:async (name, payload) => {
+    if (name !== 'artifacts/chatAttachment') return null
+    exports += 1
+    assert.deepEqual(payload,{workspace_id:workspace,artifact_id:asset,revision:2})
+    return {body:'共享草稿 原标题 · 版本 2',attachment:{title:'share-v2.txt',mime:'text/plain',data:bytes.toString('base64'),resource}}
+  }}
+  const {endpoints:e} = createAgents({db,host})
+  const {agent} = await e.create({workspace_id:workspace,name:'Reader',idempotency_key:'a'.repeat(20)})
+  const {conversation} = await e['conversation-create']({workspace_id:workspace,id:agent.id})
+  const {conversation:neighbor} = await e['conversation-create']({workspace_id:workspace,id:agent.id,title:'Other'})
+  const convo = `${root}/${agent.id}/conversations/${conversation.id}`
+  const other = convo.replace(conversation.id,neighbor.id)
+  const request = legacyRequest(e)
+  const key = 'resource-share-key-12345'
+  const send = (path = convo, revision = 2) => request(path+'/messages',{method:'POST',
+    headers:{'Content-Type':'application/json','Idempotency-Key':key},body:JSON.stringify({artifact_id:asset,artifact_revision:revision})})
+  assert.equal((await send(convo.replace(workspace,'b'.repeat(32)))).status,404)
+  assert.equal(exports,0)
+  const first = send()
+  await uploaded.promise
+  const retryBeforeStaging = send()
+  allowStaging.resolve()
+  const responses = await Promise.all([first,retryBeforeStaging])
+  assert.deepEqual(responses.map(response=>response.status),[202,202])
+  const [a,b] = await Promise.all(responses.map(response=>response.json()))
+  assert.equal(a.message.id,b.message.id)
+  assert.equal(a.reply.status,'running')
+  assert.equal(exports,1)
+  assert.equal(turns,1)
+  const attachment = a.message.attachments[0]
+  assert.deepEqual(attachment.resource,resource)
+  assert.equal(attachment.ref,undefined)
+  const query = new URLSearchParams({kind:'resource',q:'原标题'}).toString()
+  assert.deepEqual(await (await request(convo+'/attachments',{},query)).json(),{
+    items:[{message_id:a.message.id,created_at:a.message.created,attachment:{...attachment,id:a.message.id+':0'}}],
+    next_cursor:null,
+  })
+  assert.deepEqual(await (await request(other+'/attachments',{},query)).json(),{items:[],next_cursor:null})
+  assert.equal((await request(attachment.path.replace(conversation.id,neighbor.id))).status,404)
+  assert.deepEqual(Buffer.from(await (await request(attachment.path)).arrayBuffer()),bytes)
+  assert.equal((await send(convo,3)).status,409)
+  final.resolve('The saved version is ready')
+  await finished.promise
+  const replay = await send()
+  assert.equal(replay.status,201)
+  assert.equal((await replay.json()).reply.body,'The saved version is ready')
+  assert.equal(exports,1)
+  db.close()
+})

@@ -13,7 +13,7 @@ export function artifactTargetFromSearch(search) {
 import { bindDocumentEditor } from '../shell/rich-editor.mjs';
 import { mountSpreadsheet } from './spreadsheet.mjs';
 import {
-  renderThumb,
+  artifactKindLabel as kindLabel, renderThumb,
   websiteTitle, websiteStub, websitePrompt, saveableSocialMessage, saveableAgentMessage,
   socialSavePath, agentSavePath, defaultSaveTitle, describeWebsiteDispatch, conversationChatHref,
 } from '../shell/thumb.mjs';
@@ -285,6 +285,17 @@ export function conversationLabel(item) {
   return item.kind === 'dm' ? '单聊' : '群聊';
 }
 
+function agentConversations(directory, {includeArchived = false} = {}) {
+  const agents = new Map((directory.items || []).filter(agent => includeArchived || !agent.archived)
+    .map(agent => [agent.id, agent]));
+  return (directory.conversations || []).filter(row => agents.has(row.agent_id)).map(row => {
+    const agent = agents.get(row.agent_id);
+    const title = (row.title || '').trim();
+    const label = title && title !== agent.name ? agent.name + ' · ' + title : agent.name;
+    return {...row, source: 'agent', label};
+  });
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -357,16 +368,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       });
       box.appendChild(button);
     }
-  }
-
-  function kindLabel(kind, mime) {
-    if (kind === 'website') return '网站';
-    if (kind === 'media') return mime === 'model/gltf-binary' ? '3D 模型' : '媒体';
-    if (kind === 'whiteboard') return '白板';
-    if (kind === 'slides') return '幻灯片';
-    if (kind === 'dashboard') return '看板';
-    if (kind === 'spreadsheet') return '电子表格';
-    return '文档';
   }
 
   function strokeId() {
@@ -1137,43 +1138,53 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function openSendDialog(item) {
     if (!sendDialog || !workspaceId() || !canSendArtifactToChat(item)) return;
     const wid = workspaceId();
-    const state = {item, wid, destination: null, pending: false, keys: new Map()};
+    const state = {item: {...item}, wid, destination: null, pending: false, keys: new Map()};
     sendingArtifact = state;
     sendDialog.hidden = false;
     sendConfirm.disabled = true;
     const formats = {document:'Word 文档', website:'网页源码（文本）', whiteboard:'白板数据（JSON）',
       slides:'PowerPoint 文件', dashboard:'Excel 文件', spreadsheet:'Excel 工作簿', media:'媒体文件'};
-    sendLead.textContent = `「${item.title}」版本 ${item.revision} 将作为${formats[item.kind]}发送。请选择接收会话。`;
+    const lead = `「${item.title}」版本 ${item.revision} 将作为${formats[item.kind]}发送。`;
+    sendLead.textContent = lead + '请选择接收会话。';
     sendStatus();
     sendList.replaceChildren();
     sendEmpty.hidden = false;
     sendEmpty.textContent = '正在读取会话…';
     sendCancel?.focus();
-    const listed = await request('GET', `/v1/workspaces/${wid}/social/conversations?limit=100`)
-      .catch(() => ({status:0, body:{}}));
+    const native = servedByDsBot(document);
+    const base = `/v1/workspaces/${wid}`;
+    const get = suffix => request('GET', base + suffix).catch(() => ({status: 0, body: {}}));
+    const [social, directory] = await Promise.all([
+      get('/social/conversations?limit=100'),
+      native ? get('/agents?limit=100&include=conversations') : null,
+    ]);
     if (sendingArtifact !== state || workspaceId() !== wid) return;
-    if (listed.status !== 200) {
-      sendEmpty.textContent = messageFor(listed.body.error, '无法读取会话列表。');
-      return;
-    }
-    const items = (listed.body.items || []).filter(item => !item.public_agent && item.direct?.open !== false);
+    const socialItems = social.status === 200 ? (social.body.items || [])
+      .filter(row => !row.public_agent && row.direct?.open !== false)
+      .map(row => ({...row, source: 'social', label: conversationLabel(row)})) : [];
+    const privateItems = directory?.status === 200 ? agentConversations(directory.body) : [];
+    const items = [...socialItems, ...privateItems].sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    const incomplete = social.status !== 200 || (native && (directory?.status !== 200 || !Array.isArray(directory.body.conversations)));
     if (artifactSendOrigin?.wid === wid && artifactSendOrigin.item.id === item.id) {
-      state.destination = items.find(conversation => conversation.id === artifactSendOrigin.conversation) || null;
+      state.destination = socialItems.find(conversation => conversation.id === artifactSendOrigin.conversation) || null;
       sendConfirm.disabled = !state.destination;
     }
     sendEmpty.hidden = items.length > 0;
-    sendEmpty.textContent = '这个工作区还没有可发送的群或单聊。';
+    sendEmpty.textContent = incomplete ? '无法读取可发送的会话，请稍后重试。' : '这个工作区还没有可发送的会话。';
+    if (items.length && incomplete) sendStatus('部分会话无法加载。');
     for (const conversation of items) {
       const row = document.createElement('li');
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = conversationLabel(conversation);
+      button.dataset.chatSource = conversation.source;
+      button.textContent = conversation.source === 'agent' ? '智能体 · ' + conversation.label : conversation.label;
       button.setAttribute('aria-pressed', String(state.destination === conversation));
       button.addEventListener('click', () => {
         if (state.pending) return;
         state.destination = conversation;
         for (const option of sendList.querySelectorAll('button')) option.setAttribute('aria-pressed', String(option === button));
         sendConfirm.disabled = false;
+        sendLead.textContent = lead + (conversation.source === 'agent' ? '智能体会读取这份附件。' : '');
         sendStatus();
       });
       row.append(button);
@@ -1185,24 +1196,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const state = sendingArtifact;
     if (!state?.destination || state.pending || workspaceId() !== state.wid) return;
     const {wid, item, destination, keys} = state;
-    const key = keys.get(destination.id) || idempotencyKey();
-    keys.set(destination.id, key);
+    const isAgent = destination.source === 'agent';
+    const collection = isAgent ? `agents/${destination.agent_id}/conversations` : 'social/conversations';
+    const path = `/v1/workspaces/${wid}/${collection}/${destination.id}/messages`;
+    const key = keys.get(path) || idempotencyKey();
+    keys.set(path, key);
     state.pending = true;
     sendConfirm.disabled = true;
     sendConfirm.textContent = '正在发送…';
     if (sendCancel) sendCancel.disabled = true;
     sendStatus();
     try {
-      const result = await request('POST', `/v1/workspaces/${wid}/social/conversations/${destination.id}/messages`,
+      const result = await request('POST', path,
         {artifact_id: item.id, artifact_revision: item.revision}, {'Idempotency-Key': key});
       if (sendingArtifact !== state || workspaceId() !== wid) return;
-      if (result.status !== 200 && result.status !== 201) {
+      const accepted = isAgent ? [201, 202].includes(result.status) && result.body?.message?.id
+        : [200, 201].includes(result.status);
+      if (!accepted) {
         sendStatus(messageFor(result.body.error, '发送失败，请重试。'));
         return;
       }
       state.pending = false;
       closeSendDialog();
-      show('ok', '已发送到「' + conversationLabel(destination) + '」。');
+      show('ok', '已发送到「' + destination.label + '」。');
     } catch {
       if (sendingArtifact === state && workspaceId() === wid) sendStatus('未能确认发送结果，请选择同一会话重试。');
     } finally {
@@ -1257,7 +1273,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     send.textContent = '发送到聊天';
     if (canSendArtifactToChat(item)) {
       send.disabled = false;
-      send.title = '把此作品的保存版本发到群聊或单聊';
+      send.title = '把此作品的保存版本发到会话';
       send.addEventListener('click', () => {
         closeItemMenu();
         openSendDialog(item);
@@ -2332,12 +2348,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       get('/agents?limit=100&include=conversations'),
     ]);
     if (!current()) return;
-    const agentById = new Map((agents.body.items || []).map(agent => [agent.id, agent]));
     const conversations = [
       ...(social.body.items || []).map(row => ({...row, label: conversationLabel(row), social: true})),
-      ...(agents.body.conversations || []).filter(row => agentById.has(row.agent_id)).map(row => ({
-        ...row, label: agentById.get(row.agent_id).name + ' · ' + row.title,
-      })),
+      ...agentConversations(agents.body, {includeArchived: true}),
     ].sort((a, b) => (b.updated || 0) - (a.updated || 0));
     const incomplete = social.status !== 200 || agents.status !== 200 || !Array.isArray(agents.body.conversations);
     feedback(incomplete ? '部分会话无法加载。' : (conversations.length ? '' : '这个工作区还没有会话。'));

@@ -156,14 +156,17 @@ test('chat attachments export the selected saved version and require an internal
   const artifact = created.body.artifact
   const input = {workspace_id:WS,artifact_id:artifact.id,revision:1}
   assert.equal((await bot.endpoint('artifacts/chatAttachment',input)).error.code, 'forbidden')
-  await bot.call('artifacts','POST',base('/'+artifact.id),{revision:1,changes:{body:'Saved version two'}})
+  await bot.call('artifacts','POST',base('/'+artifact.id),{revision:1,changes:{title:'新标题',body:'Saved version two'}})
   const resolve = data => bot.features.table['artifacts/chatAttachment'](data,{internal:true})
   const snapshot = await resolve(input)
   const historical = await bot.call('artifacts','GET',base('/'+artifact.id+'/versions/1/export?format=docx'))
   assert.deepEqual(Buffer.from(snapshot.attachment.data,'base64'),Buffer.from(historical.download.data,'base64'))
   assert.equal(snapshot.body,'发给群聊 · 版本 1')
   assert.equal(snapshot.attachment.title,'发给群聊-v1.docx')
-  assert.notEqual((await resolve({...input,revision:2})).attachment.data,snapshot.attachment.data)
+  assert.deepEqual(snapshot.attachment.resource,{kind:'document',title:'发给群聊',revision:1})
+  const updated = (await resolve({...input,revision:2})).attachment
+  assert.deepEqual(updated.resource,{kind:'document',title:'新标题',revision:2})
+  assert.notEqual(updated.data,snapshot.attachment.data)
   await assert.rejects(resolve({...input,workspace_id:'f'.repeat(32)}),error=>error.status===404)
   await assert.rejects(resolve({...input,revision:3}),error=>error.status===404)
   const examples = [
@@ -179,6 +182,7 @@ test('chat attachments export the selected saved version and require an internal
     const {attachment} = await resolve({...input,artifact_id:result.body.artifact.id})
     assert.ok(attachment.title.endsWith('.' + suffix))
     assert.match(attachment.mime,mime)
+    assert.deepEqual(attachment.resource,{kind:result.body.artifact.kind,title:result.body.artifact.title,revision:1})
     if (suffix === 'txt') assert.doesNotMatch(Buffer.from(attachment.data,'base64').toString(), /<script>/)
   }
 })

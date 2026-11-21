@@ -2184,7 +2184,7 @@ test('new dialog and document-card surfaces use actual theme tokens, not undefin
 });
 
 
-test('conversation search lists this conversation photos and files from real attachment fields', async () => {
+test('conversation search lists photos, files and saved resource versions from real attachment fields', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   const restore = installChatGlobals({narrow: true});
@@ -2195,6 +2195,9 @@ test('conversation search lists this conversation photos and files from real att
   const photo = file('m-1', '现场照片.png', 'image/png');
   const report = file('m-2', '发布计划.pdf', 'application/pdf');
   const notes = file('m-3', '实施计划.txt', 'text/plain');
+  const resource = file('m-4', '发布计划.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  resource.attachment.resource = {kind: 'document', title: '发布计划原件', revision: 2};
+  resource.attachment.path += '?revision=2';
   const calls = [];
   let retry = true;
   try {
@@ -2204,6 +2207,7 @@ test('conversation search lists this conversation photos and files from real att
         const scope = Object.fromEntries(params);
         calls.push(scope);
         if (scope.kind === 'photo') return json(200, {items: [photo], next_cursor: null});
+        if (scope.kind === 'resource') return json(200, {items: [resource], next_cursor: null});
         if (scope.cursor && retry) {
           retry = false;
           return json(500, {});
@@ -2213,7 +2217,7 @@ test('conversation search lists this conversation photos and files from real att
       if (path.startsWith(base + '/messages?')) {
         const message = new URL(path, 'https://openteamily.test').searchParams.get('around');
         assert.ok(message, 'attachment browsing does not scan history pages');
-        const hit = [photo, report, notes].find(row => row.message_id === message);
+        const hit = [photo, report, notes, resource].find(row => row.message_id === message);
         return json(200, {items: [{id: message, user_id: bob, body: '', attachment: hit.attachment}], cursor: null});
       }
       return original(path);
@@ -2249,6 +2253,21 @@ test('conversation search lists this conversation photos and files from real att
     await fire(jump, 'click');
     const located = el('message-list').children.find(node => node.dataset.messageId === 'm-2');
     assert.equal(located.dataset.searchJump, 'true', 'a file outside the window loads and highlights its message');
+
+    await fire(el('conversation-search-tab-resources'), 'click');
+    assert.deepEqual(calls.at(-1), {kind: 'resource', q: '计划', limit: '20'});
+    assert.match(el('conversation-search-status').textContent, /已显示 1 份资料/);
+    const row = results.children[0];
+    assert.match(row.className, /resource-search-hit/);
+    const [resourceJump, resourceDownload] = row.children;
+    assert.ok(descendants(resourceJump).some(node => node.textContent === '发布计划原件'));
+    assert.ok(descendants(resourceJump).some(node => node.textContent === '文档 · 版本 2'));
+    assert.equal(resourceDownload.href, resource.attachment.path + '&download=1');
+    assert.equal(resourceDownload.download, '发布计划.docx');
+    await fire(resourceJump, 'click');
+    const originalShare = el('message-list').children.find(node => node.dataset.messageId === 'm-4');
+    assert.equal(originalShare.dataset.searchJump, 'true');
+    assert.ok(descendants(originalShare).some(node => node.textContent === '文档 · 版本 2'));
   } finally { restore(); }
 });
 
