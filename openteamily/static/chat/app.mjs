@@ -1279,10 +1279,126 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   let lastAgentItems = [];
+  const captureButton = document.getElementById('history-capture-open');
+  const captureDialog = document.getElementById('history-capture-dialog');
+  const captureList = document.getElementById('history-capture-list');
+  const captureQuery = document.getElementById('history-capture-query');
+  const captureMore = document.getElementById('history-capture-more');
+  const captureSubmit = document.getElementById('history-capture-submit');
+  const captureStatus = document.getElementById('history-capture-status');
+  const captureInbox = document.getElementById('history-capture-inbox');
+  let captureDraft = null;
+
+  function syncCaptureButton() {
+    if (!captureButton) return;
+    captureButton.hidden = !servedByDsbot || currentSource !== 'agent' || !currentConversation
+      || !lastAgentItems.some(item => item.role === 'user' && item.body?.trim() && /^[0-9a-f]{32}$/.test(item.id));
+  }
+
+  function syncCaptureSelection() {
+    const count = captureDraft.selected.size;
+    for (const choice of captureDraft.visible) choice.disabled = captureDraft.busy || (!choice.checked && count >= 12);
+    captureSubmit.disabled = !count || captureDraft.busy;
+    captureSubmit.textContent = captureDraft.busy ? '正在加入队列…' : count ? `提炼 ${count} 条消息` : '提炼所选消息';
+  }
+
+  function renderCaptureChoices() {
+    if (!captureDraft) return;
+    const query = captureQuery.value.trim().toLocaleLowerCase();
+    const rows = captureDraft.items.filter(item => item.body.toLocaleLowerCase().includes(query));
+    captureDraft.visible = [];
+    captureList.replaceChildren();
+    for (const item of rows.slice(0,captureDraft.limit)) {
+      const label = document.createElement('label');
+      const choice = document.createElement('input');
+      choice.type = 'checkbox';
+      choice.checked = captureDraft.selected.has(item.id);
+      choice.addEventListener('change', () => {
+        if (choice.checked) captureDraft.selected.add(item.id);
+        else captureDraft.selected.delete(item.id);
+        syncCaptureSelection();
+      });
+      const excerpt = document.createElement('span');
+      excerpt.textContent = item.body.length > 280 ? item.body.slice(0,280) + '…' : item.body;
+      label.append(choice,excerpt);
+      captureList.append(label);
+      captureDraft.visible.push(choice);
+    }
+    if (!rows.length) {
+      const empty = document.createElement('p');
+      empty.className = 'note';
+      empty.textContent = '没有找到匹配的消息。';
+      captureList.append(empty);
+    }
+    captureMore.hidden = rows.length <= captureDraft.limit;
+    syncCaptureSelection();
+  }
+
+  captureButton?.addEventListener('click', () => {
+    if (captureButton.hidden || !captureDialog) return;
+    const items = lastAgentItems.filter(item => item.role === 'user' && item.body?.trim() && /^[0-9a-f]{32}$/.test(item.id)).reverse();
+    if (!items.length) return;
+    captureDraft = {scope:sendScope(),items,selected:new Set(),limit:24,busy:false};
+    captureQuery.value = '';
+    captureStatus.textContent = '';
+    captureInbox.href = '/memory?' + new URLSearchParams({workspace:workspaceId(),page:'candidates'});
+    captureInbox.hidden = true;
+    document.getElementById('chat-more')?.setAttribute('aria-expanded','false');
+    renderCaptureChoices();
+    captureDialog.showModal();
+    captureQuery.focus();
+  });
+  captureQuery?.addEventListener('input', () => {
+    if (!captureDraft) return;
+    captureDraft.limit = 24;
+    renderCaptureChoices();
+  });
+  captureMore?.addEventListener('click', () => {
+    if (!captureDraft) return;
+    captureDraft.limit += 24;
+    renderCaptureChoices();
+  });
+  document.getElementById('history-capture-close')?.addEventListener('click', () => captureDialog.close());
+  captureDialog?.addEventListener('close', () => {
+    captureDraft = null;
+    document.getElementById('chat-more')?.focus();
+  });
+  document.getElementById('history-capture-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const draft = captureDraft;
+    if (!draft || draft.busy || !draft.selected.size || sendScope() !== draft.scope) return;
+    draft.busy = true;
+    syncCaptureSelection();
+    captureStatus.textContent = '';
+    const path = `${agentBase()}/conversations/${currentConversation.id}/memory/capture`;
+    try {
+      const result = await request('POST',path,{message_ids:[...draft.selected]});
+      if (captureDraft !== draft || sendScope() !== draft.scope) return;
+      if (result.status !== 202) {
+        captureStatus.textContent = messageFor(result.body.error,'无法提炼所选消息，请重试。');
+        return;
+      }
+      const {queued,skipped,full} = result.body;
+      captureStatus.textContent = [
+        queued ? `${queued} 条已加入后台提炼。` : '',
+        skipped ? `${skipped} 条已有处理记录。` : '',
+        full ? `队列已满，${full} 条可稍后重试。` : '',
+      ].filter(Boolean).join(' ');
+      captureInbox.hidden = !(queued || skipped);
+      if (!full) draft.selected.clear();
+      renderCaptureChoices();
+    } catch {
+      if (captureDraft === draft) captureStatus.textContent = '无法提炼所选消息，请重试。';
+    } finally {
+      if (captureDraft === draft) { draft.busy = false; syncCaptureSelection(); }
+    }
+  });
+
   function renderAgentMessages(items) {
     const list = document.getElementById('message-list');
     list.replaceChildren();
     lastAgentItems = items || [];
+    syncCaptureButton();
     document.getElementById('chat-empty').hidden = (items || []).length > 0;
     let pending = false;
     const pendingKeys = pendingMessageKeys();
@@ -2479,6 +2595,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
 
   function setSocialHeaderTools(social) {
+    if (social && captureButton) captureButton.hidden = true;
     const invite = document.getElementById('chat-invite');
     const publicChat = social ? currentConversation?.public_agent : null;
     showPublicChatState(publicChat);
@@ -3477,6 +3594,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentAgent = null;
     currentConversation = null;
     currentSource = 'agent';
+    syncCaptureButton();
     chatCalls.sync();
     voiceRecorder.refresh();
     clearVoicePlayers();

@@ -173,3 +173,51 @@ test('workspace capture waits for opt-in, proposes asynchronously and saves one 
     assert.deepEqual(await memory.endpoints.enqueueCapture({...source,message_id:'f'.repeat(32)}),{queued:false})
   } finally { memory.store.close(); rmSync(dir,{recursive:true,force:true}) }
 })
+
+test('selected history combines explicit context and remains separate from automatic capture', async () => {
+  const {default: memoryFeature} = await import('../features/memory/index.js')
+  const {mkdtempSync, rmSync} = await import('node:fs')
+  const {tmpdir} = await import('node:os')
+  const {join} = await import('node:path')
+  const {setTimeout: delay} = await import('node:timers/promises')
+  const dir = mkdtempSync(join(tmpdir(),'memory-history-'))
+  const first = '1'.repeat(32), second = '2'.repeat(32)
+  const scope = {workspace_id:WS,agent_id:'a'.repeat(32),conversation_id:'c'.repeat(32)}
+  const texts = ['这条约定用于项目荔枝。','它的周报固定写三项行动。']
+  let calls = 0
+  const memory = memoryFeature({dataDir:dir,featureDir:()=>dir,
+    async call(name,payload) {
+      assert.equal(name,'agents/captureSource')
+      assert.equal(payload.selected,true)
+      assert.equal(payload.workspace_id,WS)
+      return {title:'周报约定', text:payload.message_id===first ? texts[0] : texts[1]}
+    },
+    currentRuntime:()=>({async backgroundTextOnly(prompt) {
+      calls++
+      assert.deepEqual(JSON.parse(prompt.split('\n').at(-1)).messages,[{id:first,text:texts[0]},{id:second,text:texts[1]}])
+      return JSON.stringify([{source_id:second,title:'荔枝周报',body:'荔枝项目周报固定写三项行动。'}])
+    }}),
+  })
+  const path = base('/candidates')
+  const v1 = (method,tail='',body) => memory.endpoints.v1({method,path:path+tail,body})
+  const selection = {...scope,message_ids:[first,second]}
+  try {
+    assert.equal((await v1('GET')).body.enabled,false)
+    assert.deepEqual(await memory.endpoints.enqueueHistory(selection),{queued:2,skipped:0,full:0})
+    assert.deepEqual(await memory.endpoints.enqueueHistory(selection),{queued:0,skipped:2,full:0})
+    assert.equal((await v1('POST','',{enabled:false})).body.enabled,false)
+    assert.equal((await v1('GET')).body.queued,2)
+    let listing
+    for (let i=0; i<100; i++) {
+      listing = (await v1('GET')).body
+      if (listing.items.length) break
+      await delay(50)
+    }
+    assert.equal(calls,1)
+    assert.equal(listing.items.length,1)
+    assert.equal(listing.items[0].source.message_id,second)
+    assert.equal((await v1('POST','/'+second,{action:'ignore'})).body.ignored,true)
+    assert.equal((await v1('GET')).body.items.length,0)
+    assert.deepEqual(await memory.endpoints.enqueueHistory({...scope,message_ids:[second]}),{queued:0,skipped:1,full:0})
+  } finally { memory.store.close(); rmSync(dir,{recursive:true,force:true}) }
+})

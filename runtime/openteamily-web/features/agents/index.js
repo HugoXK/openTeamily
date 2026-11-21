@@ -406,9 +406,22 @@ export function createAgents({ db, host }) {
     async captureSource(p) {
       const agent = load(ws(p), p.agent_id)
       const convo = conversation(agent, p.conversation_id)
-      if (!ID.test(p.message_id || '') || agent.archived || !memoryEnabled(convo, await privateProfile(agent))) return null
+      if (!ID.test(p.message_id || '') || (p.selected !== true && (agent.archived || !memoryEnabled(convo, await privateProfile(agent))))) return null
       const row = one("SELECT text FROM agent_messages WHERE id=? AND conversation_id=? AND role='user' AND status IN ('sent','succeeded')",p.message_id,convo.id)
       return row ? {title:convo.title,text:row.text} : null
+    },
+    async captureHistory(p) {
+      const agent = load(ws(p), p.id)
+      const convo = conversation(agent, p.conversation_id)
+      const ids = p.message_ids
+      if (!Array.isArray(ids) || !ids.length || ids.length > 12 || new Set(ids).size !== ids.length
+          || !ids.every(id => typeof id === 'string' && ID.test(id))) fail('invalid', '请选择 1 到 12 条消息。', 400)
+      const messages = all(`SELECT id,text FROM agent_messages WHERE conversation_id=? AND role='user'
+        AND status IN ('sent','succeeded') AND id IN (${ids.map(() => '?').join(',')}) ORDER BY created,rowid`,convo.id,...ids)
+      if (messages.length !== ids.length || messages.some(row => !row.text.trim())) {
+        fail('invalid', '只能提炼当前私聊中你发出的文字消息。', 400)
+      }
+      return host.call('memory/enqueueHistory',{workspace_id:agent.workspace_id,agent_id:agent.id,conversation_id:convo.id,message_ids:messages.map(row => row.id)})
     },
     async setMemoryRecall(p) {
       const agent = load(ws(p), p.id)

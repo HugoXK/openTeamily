@@ -2301,3 +2301,25 @@ button.message-quote:hover { background: var(--ot-bg-accent); }
 #message-list .reply-memory-sources ol { padding-inline-start: 1.375rem; margin: .25rem 0 0; }
 #message-list .reply-memory-sources li { display: list-item; padding: 0; max-width: 100%; border: 0; background: none; box-shadow: none; }
 #message-list .reply-memory-sources a { display: inline-block; padding: .1875rem 0; color: var(--ot-ink); overflow-wrap: anywhere; }
+
+#history-capture-dialog {
+  width: min(36rem, calc(100% - 1.5rem));
+  max-height: calc(100dvh - 1.5rem);
+  padding: 1rem;
+  box-sizing: border-box;
+  border: 1px solid var(--ot-line);
+  border-radius: .875rem;
+  background: var(--ot-surface);
+  color: var(--ot-ink);
+}
+#history-capture-dialog::backdrop { background: rgba(20,27,23,.52); }
+#history-capture-dialog h2 { margin: 0 0 .5rem; font-size: 1.125rem; }
+#history-capture-dialog label { display: grid; gap: .25rem; }
+#history-capture-query { width: 100%; box-sizing: border-box; min-height: 2.5rem; }
+#history-capture-list { max-height: min(40dvh, 22rem); margin: .625rem 0; overflow: auto; border: 1px solid var(--ot-line); border-radius: .5rem; }
+#history-capture-list label { grid-template-columns: auto minmax(0, 1fr); gap: .625rem; align-items: start; padding: .625rem; border-bottom: 1px solid var(--ot-line); cursor: pointer; }
+#history-capture-list label:last-child { border-bottom: 0; }
+#history-capture-list span { overflow-wrap: anywhere; white-space: pre-wrap; }
+#history-capture-list input { width: auto; margin-top: .2rem; }
+#history-capture-dialog footer { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: .5rem; margin-top: .625rem; }
+#history-capture-dialog footer button { min-height: 2.75rem; }

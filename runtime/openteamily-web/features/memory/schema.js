@@ -54,6 +54,10 @@ CREATE TABLE memory_capture_items (
 CREATE INDEX memory_capture_pending ON memory_capture_items(state,available,id);
 CREATE INDEX memory_capture_workspace ON memory_capture_items(workspace_id,state,created);
 CREATE INDEX memory_capture_page ON memory_capture_items(workspace_id,page_id);
+`, `
+ALTER TABLE memory_capture_items ADD COLUMN origin TEXT NOT NULL DEFAULT 'auto' CHECK(origin IN ('auto','selected'));
+CREATE TABLE memory_capture_reviewed (message_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL);
+CREATE INDEX memory_capture_selected ON memory_capture_items(workspace_id,agent_id,conversation_id,origin,state,available);
 `]
 
 export const IMPORT_TABLES = {

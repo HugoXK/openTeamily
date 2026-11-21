@@ -59,6 +59,7 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
   const db = new DatabaseSync(':memory:')
   try {
     let profile = {name:'Ada',instructions:'Answer briefly.',recall:'all'}
+    let selectedHistory
     let personalization = {...scope, profile:{communication:'Use concise bullets.'}, preferences:['Use metric units.']}
     const {endpoints} = createAgents({db,host:{
       runtime:async () => runtime,
@@ -73,6 +74,7 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
         }
         if (endpoint === 'personal/get') return profile
         if (endpoint === 'memory/enqueueCapture') { candidateQueue.push(payload); return }
+        if (endpoint === 'memory/enqueueHistory') { selectedHistory = payload; return {queued:1} }
         assert.equal(endpoint,'skills/materialForScope')
       },
     }})
@@ -113,6 +115,12 @@ test('private DS-Bot chats persist scoped recall citations and honor the convers
     assert.doesNotMatch(prompts[1],/Reference notes|concise bullets|metric units/)
     assert.equal(recallRequests.length,1)
     assert.equal(await endpoints.captureSource(source),null)
+    assert.deepEqual(await endpoints.captureSource({...source,selected:true}),{title:'Plans',text:'When is the launch?'})
+    const submitHistory = ids => endpoints.v1({method:'POST',path:path+'/memory/capture',body:{message_ids:ids}})
+    assert.equal((await submitHistory([first.body.reply.id])).status,400)
+    assert.equal((await submitHistory([source.message_id,source.message_id])).status,400)
+    assert.equal((await submitHistory([source.message_id])).status,202)
+    assert.deepEqual(selectedHistory,{...scope,agent_id:agent.id,conversation_id:created.body.conversation.id,message_ids:[source.message_id]})
     assert.equal(candidateQueue.length,1)
     assert.equal(personalRequests.length,1)
 

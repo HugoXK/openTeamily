@@ -57,6 +57,11 @@ export function agentsV1({ endpoints, log }) {
         conversation_id: conversationId, message_id: messageId, title: body.title})
       return {status, body: {artifact}}
     }) },
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/memory/capture$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
+      if (req.method !== 'POST') throw new FeatureError(405, 'method', 'Only POST is supported')
+      const body = await req.json()
+      return {status:202, body:await call('captureHistory', {workspace_id:workspaceId,id,conversation_id:conversationId,message_ids:body.message_ids})}
+    }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
       if (req.method !== 'POST') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
       const body = await req.json(Math.ceil(PRIVATE_FILE_BYTES / 3) * 4 + PRIVATE_FILE_COUNT * 4 + 192*1024)
