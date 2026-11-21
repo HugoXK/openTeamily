@@ -19,6 +19,8 @@ from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
+from .lifecycle import RuntimeFault
+from .runtime_autoprovision import owned_instance
 from .security import digest
 
 ROUTES_FILE = Path(__file__).with_name('dsbot_routes.json')
@@ -42,6 +44,7 @@ CREATE TABLE IF NOT EXISTS dsbot_upstreams (
 
 SAFE_METHODS = ('GET', 'HEAD', 'OPTIONS')
 TOKEN = re.compile(r'[A-Za-z0-9_-]{43}')
+OWNER_USERNAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{2,63}')
 ADDRESS = re.compile(r'(\d{1,3}(?:\.\d{1,3}){3}):(\d{2,5})')
 COOKIE_NAME = re.compile(r'dsh-auth-[A-Za-z0-9._:%-]{1,200}')
 PAGE_SEGMENT = re.compile(r'[a-z0-9][a-z0-9-]{0,40}')
@@ -49,34 +52,58 @@ PAGE_SEGMENT = re.compile(r'[a-z0-9][a-z0-9-]{0,40}')
 
 # Browser and non-browser /v1 routes that the signed-in owner's DS-Bot now serves.
 # Kept in sync with openteamily/static/shell/dsbot-api.mjs `MOVED`. A path not listed
-# here stays on the platform (auth, skill-secrets, /v1/onboarding/automations, the
+# here stays on the platform (auth, the
 # Composio callback bounce page, workspace lists, C pages, automations/agents until B2).
 MOVED_APIS = (
+    (re.compile(r'^/v1/skills/(?:catalog|bindings|installed|packages(?:/import-[a-z0-9][a-z0-9-]{1,39}(?:/(?:revoke|versions(?:/[0-9.]+)?))?)?)$'), 'skills'),
+    (re.compile(r'^/v1/skill-secrets$'), 'skill-secrets'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/overview$'), 'overview'),
+    (re.compile(r'^/v1/team-templates$'), 'team-templates'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-templates/[a-z0-9-]{3,40}$'), 'team-templates'),
+    (re.compile(r'^/v1/contacts(?:/(?:lookup|otcpt_[A-Za-z0-9_-]{1,80}))?$'), 'social'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/notifications(?:/read)?$'), 'social'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/members(?:/[A-Za-z0-9._-]{1,80}(?:/(?:remove|suspend|unsuspend))?)?$'), 'members'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/invites(?:/[A-Za-z0-9._-]{1,80}/(?:revoke|freeze|unfreeze))?$'), 'invites'),
-    (re.compile(r'^/v1/invites/accept$'), 'invites'),
+    (re.compile(r'^/v1/invites/(?:accept|preview)$'), 'invites'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/join-requests(?:/[A-Za-z0-9._-]{1,80}/(?:approve|reject))?$'), 'invites'),
     (re.compile(r'^/v1/join-requests$'), 'invites'),
+    (re.compile(r'^/v1/skills/(?:scopes|readiness|runs)$'), 'skills'),
+    (re.compile(r'^/v1/runtime/(?:connections|tasks(?:/[0-9a-f]{32}/(?:cancel|artifact))?)$'), 'skills'),
+    (re.compile(r'^/v1/workspaces$'), 'teams'),
+    (re.compile(r'^/v1/teams$'), 'teams'),
     (re.compile(r'^/v1/team-directory$'), 'teams'),
     (re.compile(r'^/v1/team-directory/[A-Za-z0-9._-]{1,80}/join$'), 'teams'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/directory$'), 'teams'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/social/conversations(?:/[A-Za-z0-9._-]{1,80}(?:/[A-Za-z0-9._/-]{1,120})?)?$'), 'messenger'),
+    (re.compile(r'^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end)$'), 'messenger'),
+    (re.compile(r'^/v1/profile/(?:social|follow-work)$'), 'discover'),
     (re.compile(r'^/v1/discover/(?:agents|works|me/works)$'), 'discover'),
-    (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/engagement$'), 'discover'),
+    (re.compile(r'^/v1/discover/agents/[a-z0-9][a-z0-9-]{1,28}[a-z0-9]/start$'), 'discover'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
+    (re.compile(r'^/v1/discover/works/[a-z0-9][a-z0-9-]{1,28}[a-z0-9](?:/(?:engagement|comments(?:/otwc_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}/(?:like|remove))?))?$'), 'discover'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/discover(?:/revoke)?$'), 'discover'),
-    (re.compile(r'^/v1/automation-templates$'), 'automations'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:tick|[0-9a-f]{32}(?:/(?:remove|runs(?:/[0-9a-f]{32}(?:/(?:cancel|retry|artifact))?)?)?))?)?$'), 'automations'),
+    (re.compile(r'^/v1/(?:automation-templates|onboarding/automations)$'), 'automations'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations(?:/(?:tick|[0-9a-f]{32}))?$'), 'automations'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/automations/[0-9a-f]{32}/(?:run|remove|runs(?:/[0-9a-f]{32}(?:/(?:cancel|retry|artifact))?)?)$'), 'automations'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/api-keys(?:/[0-9a-f]{32}/revoke)?$'), 'agent-api'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents(?:/[0-9a-f]{32}(?:/(?:archive|conversations(?:/[0-9a-f]{32}(?:/messages(?:/[0-9a-f]{32}/artifact)?)?)?))?)?$'), 'agents'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/meetings(?:/[0-9a-f]{32}(?:/(?:remove|export))?)?$'), 'meetings'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory(?:/[0-9a-f]{32}(?:/(?:remove|export|dream(?:/[0-9a-f]{32})?|versions(?:/\d{1,8}(?:/restore)?)?))?)?$'), 'memory'),
-    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/(?:profile|graph|(?:actions|links|preferences)(?:/[0-9a-f]{32}(?:/remove)?)?)$'), 'memory'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents/[0-9a-f]{32}/conversations/[0-9a-f]{32}/memory/capture$'), 'agents'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/agents(?:/[0-9a-f]{32}(?:/(?:archive|conversations(?:/[0-9a-f]{32}(?:/(?:attachments|reply-progress|messages(?:/[0-9a-f]{32}/(?:artifact|files/[0-3]))?))?)?))?)?$'), 'agents'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:draft|speech|transcribe|share-recipients|shared(?:/[0-9a-f]{32}(?:/revoke)?)?|[0-9a-f]{32}(?:/(?:remove|export|shares))?))?$'), 'meetings'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory(?:/[0-9a-f]{32}(?:/(?:remove|export|share-group|dream(?:/[0-9a-f]{32})?|versions(?:/\d{1,8}(?:/restore)?)?))?)?$'), 'memory'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/actions/draft(?:/save)?$'), 'memory'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/memory/(?:candidates(?:/[0-9a-f]{32})?|profile(?:/dream)?|graph|(?:actions|links|preferences)(?:/[0-9a-f]{32}(?:/remove)?)?)$'), 'memory'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$'), 'search'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|(?:spreadsheet|slides)/draft)$'), 'artifacts'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$'), 'artifacts'),
     (re.compile(r'^/v1/settings$'), 'settings'),
     (re.compile(r'^/v1/notification-prefs$'), 'settings'),
     (re.compile(r'^/v1/onboarding(?:/(?:recommendations|picks|look))?$'), 'settings'),
-    (re.compile(r'^/v1/model-api$'), 'model-api'),
+    (re.compile(r'^/v1/model-api(?:/(?:image|video|music|model3d))?$'), 'model-api'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/images(?:/[0-9a-f]{32})?$'), 'images'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/videos(?:/[0-9a-f]{32})?$'), 'videos'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/music(?:/[0-9a-f]{32})?$'), 'music'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/websites(?:/[0-9a-f]{32})?$'), 'websites'),
+    (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/models-3d(?:/[0-9a-f]{32})?$'), 'model3d'),
     (re.compile(r'^/v1/composio$'), 'connectors'),
     (re.compile(r'^/v1/composio/key$'), 'connectors'),
     (re.compile(r'^/v1/composio/toolkits$'), 'connectors'),
@@ -88,73 +115,53 @@ MOVED_APIS = (
 # Nginx locations that send a moved /v1 API to the owner's DS-Bot. More-specific
 # platform exceptions (automations, composio callback) are emitted first.
 MOVED_API_LOCATIONS = (
+    'location ^~ /v1/skills/ { return 418; }',
+    'location = /v1/skill-secrets { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/overview$ { return 418; }',
+    'location = /v1/team-templates { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:team-templates|notifications)(?:/|$) { return 418; }',
     'location = /v1/invites/accept { return 418; }',
+    'location = /v1/invites/preview { return 418; }',
     'location = /v1/join-requests { return 418; }',
+    'location ~ ^/v1/skills/(?:scopes|readiness|runs)$ { return 418; }',
+    'location ^~ /v1/runtime/ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/[0-9a-f]{32}/discover(?:/revoke)?$ { return 418; }',
+    'location = /v1/workspaces { return 418; }',
+    'location = /v1/agent-homepages/start { return 410; }',
+    'location = /v1/teams { return 418; }',
     'location = /v1/team-directory { return 418; }',
     'location ^~ /v1/team-directory/ { return 418; }',
+    'location ~ ^/v1/meeting-calls/(?:create|preview|join|poll|signal|leave|end)$ { return 418; }',
+    'location = /v1/profile/social { return 418; }',
+    'location = /v1/profile/follow-work { return 418; }',
     'location ^~ /v1/discover/ { return 418; }',
+    'location ~ ^/v1/contacts(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:members|invites|join-requests|directory|social)(?:/|$) { return 418; }',
-    'location = /v1/onboarding/automations { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
     'location = /v1/composio/callback { proxy_pass http://__PLATFORM__; proxy_set_header Host $host; proxy_set_header X-OT-Gateway-Key ""; }',
     'location = /v1/settings { return 418; }',
     'location = /v1/notification-prefs { return 418; }',
     'location = /v1/onboarding { return 418; }',
     'location ^~ /v1/onboarding/ { return 418; }',
-    'location = /v1/model-api { return 418; }',
+    'location ~ ^/v1/model-api(?:/(?:image|video|music|model3d))?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/images(?:/[0-9a-f]{32})?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/videos(?:/[0-9a-f]{32})?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/music(?:/[0-9a-f]{32})?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/websites(?:/[0-9a-f]{32})?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/models-3d(?:/[0-9a-f]{32})?$ { return 418; }',
     'location = /v1/composio { return 418; }',
     'location ^~ /v1/composio/ { return 418; }',
     'location ^~ /v1/mcp/servers { return 418; }',
     'location = /v1/automation-templates { return 418; }',
+    'location = /v1/onboarding/automations { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/automations(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/agents(?:/|$) { return 418; }',
-    'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/[0-9a-f]{32}(?:/(?:remove|export))?)?$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/meetings(?:/(?:draft|speech|transcribe|share-recipients|shared(?:/[0-9a-f]{32}(?:/revoke)?)?|[0-9a-f]{32}(?:/(?:remove|export|shares))?))?$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/memory(?:/|$) { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/search/(?:messages|resources)$ { return 418; }',
+    'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts/(?:activity|(?:spreadsheet|slides)/draft)$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/artifacts(?:/[0-9a-f]{32}(?:/(?:remove|favorite|preview|file|export|restore|versions(?:/[0-9]{1,8}(?:/export)?)?|shares(?:/[0-9a-f]{32}(?:/revoke)?)?))?)?$ { return 418; }',
 )
 
-
-
-def owner_dsbot_ready(db, owner_id):
-    """True when this account has a healthy published DS-Bot the edge can route to."""
-    if not owner_id:
-        return False
-    try:
-        row = db.execute(
-            "SELECT 1 FROM instances i JOIN dsbot_upstreams u ON u.instance_id=i.id "
-            "WHERE i.owner_id=? AND i.desired='running' AND i.observed='running' AND i.health='healthy' "
-            "AND i.blocked=0 AND i.observed_revision=i.revision LIMIT 1",
-            (owner_id,)).fetchone()
-    except Exception:
-        return False
-    return row is not None
-
-
-def workspace_moved_to_dsbot(db, workspace_id, page, routes=None):
-    """True when `page` is in moved_pages and the workspace owner has a live DS-Bot.
-
-    Used by the legacy server scheduler so it does not fire the same automation
-    the owner's DS-Bot clock will run. Workspaces whose owner has no runtime
-    keep the server scheduler until one is published.
-    """
-    routes = routes or load_routes()
-    if page not in routes['moved_pages']:
-        return False
-    row = db.execute('SELECT owner_id FROM workspaces WHERE id=?', (workspace_id,)).fetchone()
-    return bool(row) and owner_dsbot_ready(db, row[0])
-
-
-def workspace_conversation_moved_to_dsbot(db, workspace_id, routes=None):
-    """True when agent/chat conversations already run on the owner's DS-Bot.
-
-    Flask must not queue a second ``runtime_connect`` infer for those
-    conversations (send, reconcile, or the leftover External Agent API
-    handler). Group replies stay on the platform until C pages move, so
-    they keep using the central infer path.
-    """
-    routes = routes or load_routes()
-    return any(workspace_moved_to_dsbot(db, workspace_id, page, routes)
-               for page in ('agents', 'chat'))
 
 
 def moved_api(path):
@@ -217,8 +224,12 @@ def target_for(uri, routes):
     if feature is not None:
         # Plugin legacy surface; authorize() keeps the session cookie swap.
         return '/api/openteamily/legacy?feature=' + quote(feature, safe='') + '&path=' + quote(path, safe='') + (('&query=' + quote(query, safe='')) if query else '')
+    if path == '/space' and 'artifacts' in routes['moved_pages']:
+        path = '/artifacts'
+    if path == '/profile/edit/' and 'profile' in routes['moved_pages']:
+        path = '/profile/edit'
     first = path.split('/')[1] if path != '/' else 'home'
-    if first in routes['moved_pages'] and not query:
+    if first in routes['moved_pages']:
         return PAGE_ROUTE + '?path=' + quote(path, safe='')
     return None
 
@@ -272,12 +283,39 @@ def gateway_call(uri, authorization):
 def _upstream_row(db, instance_id):
     row = db.execute(
         "SELECT i.id, u.address, u.auth_cookie FROM instances i JOIN dsbot_upstreams u ON u.instance_id=i.id "
-        "WHERE i.id=? AND i.desired='running' AND i.observed='running' AND i.health='healthy' "
+        "WHERE i.id=? AND i.retired_at IS NULL AND i.desired='running' AND i.observed='running' AND i.health='healthy' "
         "AND i.blocked=0 AND i.observed_revision=i.revision",
         (instance_id,)).fetchone()
     if row is None:
         raise GatewayError(503, 'dsbot_not_ready')
     return row
+
+
+def owner_runtime_readiness(db, user_id):
+    """The browser receives a state only, never the address or runtime cookie."""
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='dsbot_upstreams' AND type='table'").fetchone():
+        return 'unmanaged'
+    try:
+        iid = owned_instance(db, user_id)
+    except RuntimeFault:
+        return 'unavailable'
+    if iid is None:
+        return 'setup'
+    try:
+        _upstream_row(db, iid)
+    except GatewayError:
+        state = db.execute("""
+            SELECT i.desired, i.blocked, i.error_code, EXISTS (
+                SELECT 1 FROM runtime_auto_provisions p JOIN runtime_jobs j ON j.instance_id=p.instance_id
+                WHERE p.instance_id=i.id AND j.revision=i.revision
+                  AND j.operation_type='create' AND j.status IN ('queued','running')
+            ) AS creating
+            FROM instances i WHERE i.id=?
+        """, (iid,)).fetchone()
+        if state is None or state[1] or state[2]:
+            return 'unavailable'
+        return 'starting' if state[0] == 'running' or state[3] else 'unavailable'
+    return 'ready'
 
 
 def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_site, fetch_mode,
@@ -317,24 +355,26 @@ def authorize(db, *, cookie_header, session_cookie, method, uri, origin, fetch_s
     token = _cookies(cookie_header).get(session_cookie, '')
     if not TOKEN.fullmatch(token):
         raise GatewayError(401, 'unauthorized')
-    session = db.execute('SELECT user_id FROM sessions WHERE token_hash=? AND expires>?',
-                         (digest(token), now)).fetchone()
+    session = db.execute(
+        'SELECT sessions.user_id, users.username FROM sessions JOIN users ON users.id=sessions.user_id '
+        'WHERE sessions.token_hash=? AND sessions.expires>?', (digest(token), now),
+    ).fetchone()
     if session is None:
         raise GatewayError(401, 'unauthorized')
-    row = db.execute(
-        "SELECT i.id, u.address, u.auth_cookie FROM instances i JOIN dsbot_upstreams u ON u.instance_id=i.id "
-        "WHERE i.owner_id=? AND i.desired='running' AND i.observed='running' AND i.health='healthy' "
-        "AND i.blocked=0 AND i.observed_revision=i.revision ORDER BY i.created, i.id LIMIT 1",
-        (session[0],)).fetchone()
-    if row is None:
-        raise GatewayError(503, 'dsbot_not_ready')
+    try:
+        instance_id = owned_instance(db, session[0])
+    except RuntimeFault as error:
+        raise GatewayError(503, 'dsbot_not_ready') from error
+    row = _upstream_row(db, instance_id)
     address = validate_address(row[1])
+    username = session[1]
     return [
         ('X-OT-Upstream', address),
         ('X-OT-Upstream-Path', upstream_path),
         ('X-OT-Upstream-Origin', 'http://' + address),
         ('X-OT-Upstream-Cookie', row[2]),
         ('X-OT-Instance', row[0]),
+        ('X-OT-Owner-Username', username if OWNER_USERNAME.fullmatch(username) else ''),
     ]
 
 
@@ -350,16 +390,22 @@ def validate_address(address):
 
 
 def record_upstream(db, instance_id, address, auth_cookie, now):
-    """Manager side: remember where an instance listens and its DSH session cookie."""
+    """Manager side: remember where an active instance listens and its DSH session cookie."""
     if not re.fullmatch(r'[0-9a-f]{32}', instance_id or ''):
         raise ValueError('Invalid instance id')
     name, _, value = (auth_cookie or '').partition('=')
     if not COOKIE_NAME.fullmatch(name) or not re.fullmatch(r'[A-Za-z0-9._~-]{16,2048}', value):
         raise ValueError('Invalid DSH session cookie')
     ensure_schema(db)
-    db.execute('INSERT INTO dsbot_upstreams VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET '
-               'address=excluded.address, auth_cookie=excluded.auth_cookie, updated=excluded.updated',
-               (instance_id, validate_address(address), auth_cookie, int(now)))
+    updated = db.execute(
+        'INSERT INTO dsbot_upstreams(instance_id,address,auth_cookie,updated) '
+        'SELECT id,?,?,? FROM instances WHERE id=? AND retired_at IS NULL '
+        'ON CONFLICT(instance_id) DO UPDATE SET address=excluded.address, '
+        'auth_cookie=excluded.auth_cookie, updated=excluded.updated',
+        (validate_address(address), auth_cookie, int(now), instance_id),
+    )
+    if updated.rowcount != 1:
+        raise ValueError('Instance is not active')
 
 
 def exchange_launch_url(launch_url, address, timeout=10):
@@ -445,9 +491,15 @@ class GatewayApp:
             raise GatewayError(400, 'invalid')
         seal = bytes.fromhex(key)
         with self.store.transaction() as db:
-            row = db.execute('SELECT owner_id FROM instances WHERE id=?', (iid,)).fetchone()
+            row = db.execute('SELECT owner_id FROM instances WHERE id=? AND retired_at IS NULL', (iid,)).fetchone()
             if row is None or not Lifecycle.grants(db, manager, iid):
                 raise GatewayError(403, 'not_granted')
+            try:
+                destination = owned_instance(db, row[0])
+            except RuntimeFault as error:
+                raise GatewayError(409, 'import_destination') from error
+            if destination != iid:
+                raise GatewayError(409, 'import_destination')
             features = []
             for feature in dsbot_bundle.FEATURE_TABLES:
                 bundle = dsbot_bundle.build_with_secrets(db, self.store, row[0], feature, seal, int(self.clock()))
@@ -496,7 +548,7 @@ class GatewayApp:
         if not isinstance(body['process_ref'], str) or not re.fullmatch(r'[0-9a-f]{32}', body['process_ref']):
             raise GatewayError(400, 'invalid')
         with self.store.transaction() as db:
-            row = db.execute('SELECT process_ref, observed FROM instances WHERE id=?', (iid,)).fetchone()
+            row = db.execute('SELECT process_ref, observed FROM instances WHERE id=? AND retired_at IS NULL', (iid,)).fetchone()
             if row is None or not Lifecycle.grants(db, manager, iid):
                 raise GatewayError(403, 'not_granted')
             if row[1] != 'running' or row[0] != body['process_ref']:
@@ -625,10 +677,14 @@ __SOCIAL_LOCATION__
 __DSBOT_LOCATIONS__
   location @ot_dsbot {
     auth_request /_ot_authz;
+    error_page 401 = @ot_login;
+    error_page 500 = @ot_dsbot_error;
+    auth_request_set $ot_gateway_error $upstream_http_x_ot_gateway_error;
     auth_request_set $ot_upstream $upstream_http_x_ot_upstream;
     auth_request_set $ot_path $upstream_http_x_ot_upstream_path;
     auth_request_set $ot_origin $upstream_http_x_ot_upstream_origin;
     auth_request_set $ot_cookie $upstream_http_x_ot_upstream_cookie;
+    auth_request_set $ot_owner_username $upstream_http_x_ot_owner_username;
     proxy_pass http://$ot_upstream$ot_path;
     proxy_http_version 1.1;
     proxy_set_header Host $ot_upstream;
@@ -638,12 +694,21 @@ __DSBOT_LOCATIONS__
     proxy_set_header Sec-Fetch-Site "";
     proxy_set_header X-OT-Upstream "";
     proxy_set_header X-OT-Upstream-Cookie "";
+    proxy_set_header X-OT-Owner-Username $ot_owner_username;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection $ot_connection_upgrade;
     proxy_buffering off;
     proxy_read_timeout 3600s;
     proxy_redirect off;
     proxy_hide_header Set-Cookie;
+  }
+  location @ot_dsbot_error {
+    default_type application/json;
+    if ($ot_gateway_error != dsbot_not_ready) { return 500 '{"error":{"code":"runtime_route_failed"}}'; }
+    if ($http_sec_fetch_mode = navigate) { rewrite ^ /runtime-starting? last; }
+    add_header Cache-Control no-store always;
+    add_header Retry-After 3 always;
+    return 503 '{"error":{"code":"dsbot_not_ready"}}';
   }
   location ^~ /v1/gateway/ {
     auth_request /_ot_authz;
@@ -663,6 +728,7 @@ __DSBOT_LOCATIONS__
     proxy_set_header X-OT-Upstream "";
     proxy_set_header X-OT-Upstream-Cookie "";
     proxy_set_header X-OT-Upstream-Token "";
+    proxy_set_header X-OT-Owner-Username "";
     proxy_hide_header Set-Cookie;
     proxy_buffering off;
     proxy_read_timeout 120s;
@@ -671,7 +737,7 @@ __DSBOT_LOCATIONS__
   recursive_error_pages on;
   error_page 418 = @ot_dsbot;
   error_page 401 = @ot_login;
-  location @ot_login { return 302 /register/; }
+  location @ot_login { return 302 /login; }
   location / {
     proxy_pass http://__PLATFORM__;
     proxy_set_header Host $host;
@@ -682,6 +748,7 @@ __DSBOT_LOCATIONS__
 
 
 SOCIAL_UPSTREAM = re.compile(r'^[0-9A-Za-z.\-]+:\d{2,5}$')
+SOCIAL_SOCKET_PATH = '/run/openteamily-social/bot-social.sock'
 
 # Isolated OpenTeamily Bot Social is reached at /social/ on the existing public
 # origin. The prefix is stripped; the container sees /v1/... and /healthz.
@@ -701,11 +768,26 @@ def social_location(upstream):
         '    proxy_set_header X-OT-Gateway-Key "";\n'
         '    proxy_read_timeout 60s;\n'
         '    proxy_redirect off;\n'
+        '  }\n'
+        # Public agent homepages (/a/<slug>), works (/w/<slug>) and read-only shares
+        # (/share/<token>) on the site root are rendered by the dedicated Bot Social.
+        # Site cookies and credentials never reach it.
+        '  location ~ ^/(?:a|w|share)/ {\n'
+        '    limit_except GET HEAD { deny all; }\n'
+        f'    proxy_pass http://{upstream};\n'
+        '    proxy_http_version 1.1;\n'
+        '    proxy_set_header Host $host;\n'
+        '    proxy_set_header Cookie "";\n'
+        '    proxy_set_header Authorization "";\n'
+        '    proxy_set_header X-OT-Gateway-Key "";\n'
+        '    proxy_hide_header Set-Cookie;\n'
+        '    proxy_read_timeout 30s;\n'
+        '    proxy_redirect off;\n'
         '  }'
     )
 
 
-def nginx_config(routes, platform, listen, key_include=None, key=None, bot_social=None):
+def nginx_config(routes, platform, listen, key_include=None, key=None, bot_social=None, bot_social_socket=False):
     """Render the edge config.
 
     Production passes ``key_include``: the absolute path of an operator-owned nginx
@@ -732,15 +814,42 @@ def nginx_config(routes, platform, listen, key_include=None, key=None, bot_socia
         locations.append(f'  location ^~ {prefix} {{ return 418; }}')
     for line in MOVED_API_LOCATIONS:
         locations.append('  ' + line.replace('__PLATFORM__', platform))
+    if 'artifacts' in routes['moved_pages']:
+        locations.append('  location = /space { return 418; }')
     for page in sorted(routes['moved_pages']):
         if page == 'home':
             locations.append('  location = / { return 418; }')
         locations.append(f'  location = /{page} {{ return 418; }}')
         locations.append(f'  location ^~ /{page}/ {{ return 418; }}')
     social = social_location(bot_social) if bot_social else ''
-    return (NGINX_TEMPLATE.replace('__LISTEN__', str(listen)).replace('__PLATFORM__', platform)
+    configuration = (NGINX_TEMPLATE.replace('__LISTEN__', str(listen)).replace('__PLATFORM__', platform)
             .replace('__KEY_SETTING__', setting).replace('__DSBOT_LOCATIONS__', '\n'.join(locations))
             .replace('__SOCIAL_LOCATION__', social))
+    if not bot_social_socket:
+        return configuration
+    if not bot_social:
+        raise ValueError('The Bot Social socket requires a Bot Social upstream')
+    return configuration + f'''server {{
+  listen unix:{SOCIAL_SOCKET_PATH};
+  server_name _;
+  client_max_body_size 64m;
+  location = /v1/ot/ops {{ return 404; }}
+  location ^~ /v1/ot/ops/ {{ return 404; }}
+  location ^~ /v1/ot/ {{
+    proxy_pass http://{bot_social};
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For "";
+    proxy_set_header Forwarded "";
+    proxy_set_header Cookie "";
+    proxy_set_header X-OT-Gateway-Key "";
+    proxy_redirect off;
+    proxy_connect_timeout 2s;
+  }}
+  location / {{ return 404; }}
+}}
+'''
 
 
 def main(argv=None):
@@ -755,9 +864,12 @@ def main(argv=None):
     render.add_argument('--routes', default=str(ROUTES_FILE))
     render.add_argument('--bot-social', default=None,
                         help='host:port of the isolated OpenTeamily Bot Social (compose service, e.g. bot-social:8787). Adds /social/ on this origin.')
+    render.add_argument('--bot-social-socket', action='store_true',
+                        help='Also serve the account runtime collaboration API over the fixed Unix socket')
     args = parser.parse_args(argv)
     print(nginx_config(load_routes(args.routes), args.platform, args.listen,
-                       key_include=args.key_include, bot_social=args.bot_social), end='')
+                       key_include=args.key_include, bot_social=args.bot_social,
+                       bot_social_socket=args.bot_social_socket), end='')
 
 
 if __name__ == '__main__':

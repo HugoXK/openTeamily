@@ -11,13 +11,13 @@ import threading
 import unittest
 
 from openteamily.app import App, Config
+from openteamily.dsbot_gateway import ensure_schema, record_upstream
 from openteamily.lifecycle import Lifecycle, ManagerAuth, ManagerIdentity, RuntimePolicy
 from openteamily.operator_config import load_auto_provision, load_manager_auth
 from openteamily.runtime_autoprovision import AutoProvisionPolicy
 from openteamily.security import digest, opaque
 from openteamily.store import Store
 from tests.test_management import Client, ORIGIN
-from tests.test_runtime_connect import AgentClient
 
 
 class AutoProvisionTests(unittest.TestCase):
@@ -56,19 +56,17 @@ class AutoProvisionTests(unittest.TestCase):
         self.assertIn(result['status'], (200, 201), result)
         return result['body']['personal_agent']
 
-    def run_job(self, iid, observed, process_ref=None, issue=False):
+    def run_job(self, iid, observed, process_ref=None):
         claim = self.manager('POST', '/v1/internal/jobs/claim', {'instance_id': iid})
         self.assertEqual(claim['status'], 200, claim)
         body = claim['body']['claim']
         self.assertIsNotNone(body)
-        key = None
-        if issue:
-            key = self.manager('POST', f'/v1/internal/instances/{iid}/runtime-agent-key', {
-                'job_id': body['job']['id'], 'observed_revision': body['job']['revision'], 'lease': body['lease']})
-            self.assertEqual(key['status'], 200, key)
-            key = key['body']['runtime_key']
-        payload = {'job_id': body['job']['id'], 'observed_revision': body['job']['revision'],
-                   'lease': body['lease'], 'observed': observed}
+        lease = {'job_id': body['job']['id'], 'observed_revision': body['job']['revision'], 'lease': body['lease']}
+        bootstrap = self.manager('POST', f'/v1/internal/instances/{iid}/runtime-agent-bootstrap', lease)
+        self.assertEqual(bootstrap['status'], 200, bootstrap)
+        self.assertEqual(set(bootstrap['body']), {'agent_bootstrap'})
+        self.assertEqual(self.manager('POST', f'/v1/internal/instances/{iid}/runtime-agent-key', lease)['status'], 404)
+        payload = {**lease, 'observed': observed}
         if process_ref:
             payload['process_ref'] = process_ref
         result = self.manager('POST', f'/v1/internal/instances/{iid}/observe', payload)
@@ -76,7 +74,7 @@ class AutoProvisionTests(unittest.TestCase):
         # Receipt is for the claimed job even when the server queues a follow-up start.
         self.assertEqual(result['body']['job']['id'], body['job']['id'])
         self.assertEqual(result['body']['job']['status'], 'succeeded')
-        return body, key
+        return bootstrap['body']['agent_bootstrap']
 
     def count(self, sql, *args):
         with self.store.connect() as db:
@@ -124,6 +122,48 @@ class AutoProvisionTests(unittest.TestCase):
         ids = {item['id'] for item in self.listed()}
         self.assertEqual(ids, {iid, bob_state['instance_id']})
         self.assertTrue(all(item['provisioning'] == 'auto' for item in self.listed()))
+
+    def test_first_chat_waits_for_the_owners_confirmed_upstream(self):
+        self.make_app()
+        with self.store.transaction() as db:
+            ensure_schema(db)
+        alice, bob = self.user('alice', '127.0.0.1'), self.user('bob', '127.0.0.2')
+        path = '/v1/auth/runtime-readiness'
+        self.assertEqual(Client(self.app).call('GET', path)['status'], 401)
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'setup'})
+        provision = self.ensure(alice)['runtime_provisioning']
+        iid = provision['instance_id']
+        self.assertEqual(provision['readiness'], 'starting')
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'starting'})
+        self.run_job(iid, 'stopped')
+        self.run_job(iid, 'running', process_ref='a' * 32)
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'starting'})
+        with self.store.transaction() as db:
+            record_upstream(db, iid, '10.0.0.1:8788', 'dsh-auth-test=' + 'x' * 20, self.now)
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'ready'})
+        self.assertEqual(bob.call('GET', path)['body'], {'state': 'setup'})
+        with self.store.transaction() as db:
+            db.execute("UPDATE instances SET desired='stopped' WHERE id=?", (iid,))
+        self.assertEqual(alice.call('GET', path)['body'], {'state': 'unavailable'})
+
+    def test_auto_provision_returns_personal_bootstrap_without_minting_key(self):
+        self.make_app()
+        alice, bob = self.user('alice', '127.0.0.1'), self.user('bob', '127.0.0.2')
+        personal = self.ensure(alice)
+        other = self.ensure(bob)
+        iid = personal['runtime_provisioning']['instance_id']
+        created = self.run_job(iid, 'stopped')
+        started = self.run_job(iid, 'running', process_ref='a' * 32)
+        for bundle in (created, started):
+            self.assertEqual((bundle['instance_id'], bundle['feature']), (iid, 'agents'))
+            bindings = json.loads(bundle['tables']['personal_agents'])
+            self.assertEqual(len(bindings), 1)
+            self.assertEqual(bindings[0]['workspace_id'], personal['workspace']['id'])
+            self.assertEqual(bindings[0]['agent_id'], personal['agent']['id'])
+            self.assertNotIn(other['agent']['id'], bundle['tables']['workspace_agents'])
+        self.assertEqual(self.count('SELECT COUNT(*) FROM runtime_keys'), 0)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM instance_runtime_keys'), 0)
+        self.assertFalse((self.store.path.parent / 'instance-runtime.wrap').exists())
 
     def test_concurrent_ensure_creates_one_instance(self):
         self.make_app()
@@ -182,33 +222,22 @@ class AutoProvisionTests(unittest.TestCase):
         # Operator-enrolled instance is NOT visible to the auto manager.
         self.assertEqual(self.listed(), [])
 
-    def test_auto_start_dispatch_and_chat_states(self):
+
+    def test_workspace_create_reuses_personal_runtime(self):
         self.make_app()
         alice = self.user('alice', '127.0.0.1')
         personal = self.ensure(alice)
-        wid, aid = personal['workspace']['id'], personal['agent']['id']
         iid = personal['runtime_provisioning']['instance_id']
-        base = f'/v1/workspaces/{wid}/agents/{aid}/conversations'
-        cid = alice.call('GET', base)['body']['items'][0]['id']
-        sent = alice.call('POST', f'{base}/{cid}/messages', {'body': 'hi'}, {'HTTP_IDEMPOTENCY_KEY': 'autoprov-start-msg-001'})
-        self.assertEqual(sent['body']['reply']['error_code'], 'runtime_starting')
-        self.assertEqual(sent['body']['reply']['status'], 'queued')
-        create, _ = self.run_job(iid, 'stopped')
-        self.assertEqual(create['job']['operation_type'], 'create')
-        snap = alice.call('GET', f'/v1/instances/{iid}')['body']
-        snap = snap.get('instance', snap)
-        self.assertEqual((snap['desired'], snap['operation']['type']), ('running', 'start'))
-        start, key = self.run_job(iid, 'running', process_ref='c' * 32, issue=True)
-        self.assertEqual(start['job']['operation_type'], 'start')
-        container = AgentClient(self.app, key['token'])
-        self.assertIn(container.call('POST', '/v1/agent/connect', {'hostname': key['hostname']})['status'], (200, 201))
-        # Reconcile on read redispatches the waiting reply to Alice's own instance.
-        view = alice.call('GET', f'{base}/{cid}')
-        reply = [m for m in view['body']['items'] if m['role'] == 'assistant'][-1]
-        self.assertIsNone(reply['error_code'])
-        self.assertEqual(reply['dispatch']['instance_id'], iid)
-        tasks = container.call('GET', '/v1/agent/tasks')
-        self.assertEqual(len(tasks['body']['items']), 1)
+        wid = 'a' * 32
+        with self.store.transaction() as db:
+            owner_id = db.execute("SELECT id FROM users WHERE username='alice'").fetchone()[0]
+            db.execute('INSERT INTO workspaces VALUES(?,?,?,?,?,?)',
+                       (wid, owner_id, 'another workspace', self.now, 'key', 'request'))
+        result = alice.call('POST', f'/v1/workspaces/{wid}/instances', {},
+                            {'HTTP_IDEMPOTENCY_KEY': 'another-instance-key'})
+        self.assertEqual(result['status'], 200, result)
+        self.assertEqual(result['body']['instance']['id'], iid)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM instances'), 1)
 
     def test_failed_create_shows_unavailable(self):
         self.make_app()

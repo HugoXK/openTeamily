@@ -1,7 +1,6 @@
 // Works-library operations (legacy artifacts.py + app.py artifact_*), executed
-// inside this user's DS-Bot. Public share pages stay on the platform; this
-// module only stores and lists revocable share records, returning the same
-// /share/<token> path the existing UI already uses.
+// inside this user's DS-Bot. Share records live here; the public /share/<token>
+// page is rendered by the dedicated Bot Social from a published snapshot.
 import { createHash, randomBytes } from 'node:crypto'
 import { digest, HEX32, newId, nowSeconds, refuse, stableJson } from '../../featurekit/http.js'
 import {
@@ -15,6 +14,7 @@ import {
 } from './structured.js'
 import { cleanFilename, exportFilename, exportHeaders, renderBoardSvg, renderDashboardPage, renderPage, renderSlidesPage, renderWebsitePage, sniffMime } from './render.js'
 import { exportOffice } from './office.js'
+import {decodeWorkbook,emptyWorkbook,normalizeWorkbook} from './workbook.js'
 export const PER_WORKSPACE = 50
 export const MAX_VERSIONS = 100
 export const MAX_SHARES = 10
@@ -60,6 +60,7 @@ export function view(row, includeBody = true, { favorited } = {}) {
   else if (kind === 'whiteboard' && includeBody) data.board = decodeBoard(row.board_json) ?? emptyBoard()
   else if (kind === 'slides' && includeBody) data.slides = decodeSlides(row.slides_json) ?? emptySlides()
   else if (kind === 'dashboard' && includeBody) data.dashboard = decodeDashboard(row.dashboard_json) ?? emptyDashboard()
+  else if (kind === 'spreadsheet' && includeBody) data.spreadsheet = decodeWorkbook(row.spreadsheet_json) ?? emptyWorkbook()
   else if (includeBody && (kind === 'document' || kind === 'website')) data.body = row.body
   if (!includeBody) {
     const thumb = preview(row, { decodeBoard, decodeSlides, decodeDashboard })
@@ -96,12 +97,18 @@ export function attachDashboard(store, artifactId, dashboard) {
   return true
 }
 
+function attachWorkbook(store,id,workbook) {
+  store.run(`INSERT INTO artifact_spreadsheets VALUES(?,?) ON CONFLICT(artifact_id)
+    DO UPDATE SET workbook=excluded.workbook`,id,JSON.stringify(workbook))
+}
+
 export function recordVersion(store, row) {
   const kind = publicKind(row)
-  const storedKind = kind === 'slides' || kind === 'dashboard' ? 'document' : kind
+  const storedKind = ['slides','dashboard','spreadsheet'].includes(kind) ? 'document' : kind
   let body = ''
   if (kind === 'slides') body = row.slides_json || slidesJson(emptySlides()) || ''
   else if (kind === 'dashboard') body = row.dashboard_json || dashboardJson(emptyDashboard()) || ''
+  else if (kind === 'spreadsheet') body = row.spreadsheet_json
   else if (kind === 'document' || kind === 'website') body = row.body ?? ''
   store.run(
     'INSERT OR IGNORE INTO artifact_versions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -152,9 +159,10 @@ export function versionView(row, includeBody = true, store) {
 export function sameAsVersion(row, snapshot) {
   if (row.title !== snapshot.title) return false
   const currentKind = publicKind(row)
-  if (currentKind === 'slides' || currentKind === 'dashboard') {
+  if (['slides','dashboard','spreadsheet'].includes(currentKind)) {
     const [structuredKind, structured] = snapshot.kind === 'document' ? decodeStructured(snapshot.body) : [null, null]
     if (structuredKind !== currentKind) return false
+    if (currentKind === 'spreadsheet') return row.spreadsheet_json === JSON.stringify(structured)
     return currentKind === 'slides' ? row.slides_json === slidesJson(structured) : row.dashboard_json === dashboardJson(structured)
   }
   if (currentKind !== snapshot.kind) return false
@@ -196,13 +204,13 @@ function existingSource(store, workspaceId, source) {
   return null
 }
 
-export function createArtifact(ctx, workspaceId, input, key) {
+export function createArtifact(ctx, workspaceId, input, key, {reuseChatSource = false, reuseSource = false} = {}) {
   const { store, owner, featureDir } = ctx
   if (typeof workspaceId !== 'string' || !HEX32.test(workspaceId)) refuse(400, 'invalid', 'Provide a workspace_id')
   const title = input.title
   const content = input.body ?? ''
   const kind = input.kind ?? 'document'
-  let board, slides, dashboard
+  let board, slides, dashboard, spreadsheet
   if (kind === 'media') refuse(400, 'invalid', 'Upload media as multipart form data')
   if (kind === 'whiteboard') {
     board = normalizeBoard(input.board || emptyBoard())
@@ -213,6 +221,9 @@ export function createArtifact(ctx, workspaceId, input, key) {
   } else if (kind === 'dashboard') {
     dashboard = normalizeDashboard(input.dashboard || emptyDashboard())
     if (!dashboard || !dashboard.widgets.length || !validTitle(title) || (content && !validBody(content))) refuse(400, 'invalid', 'Provide a dashboard title and at least one widget')
+  } else if (kind === 'spreadsheet') {
+    spreadsheet = normalizeWorkbook(input.spreadsheet ?? emptyWorkbook())
+    if (!spreadsheet || !validTitle(title) || content) refuse(400,'invalid','请填写有效的表格标题和工作表。')
   } else if (kind !== 'document' && kind !== 'website' || !validTitle(title) || !validBody(content)) {
     refuse(400, 'invalid', 'Provide a document or website title and body')
   }
@@ -223,16 +234,28 @@ export function createArtifact(ctx, workspaceId, input, key) {
   if (board) payload.board = board
   if (slides) payload.slides = slides
   if (dashboard) payload.dashboard = dashboard
+  if (spreadsheet) payload.spreadsheet = spreadsheet
   const keyHash = digest('artifact:' + key)
   const requestHash = digest(stableJson(payload))
   return store.transaction(() => {
-    const prior = store.get('SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
-    if (prior) {
-      if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
-      return { status: 200, body: { artifact: view(load(store, workspaceId, prior.id)) } }
-    }
     const source = input.source
     const already = existingSource(store, workspaceId, source)
+    // Saved source snapshots survive later edits and title changes.
+    if (already && (reuseChatSource || reuseSource)) return { status: 200, body: { artifact: view(already) } }
+    const prior = store.get('SELECT * FROM artifacts WHERE workspace_id=? AND key_hash=?', workspaceId, keyHash)
+    if (prior) {
+      const row = load(store, workspaceId, prior.id)
+      // Older Bot Social saves used the same key without recording the source.
+      if (reuseChatSource && !source.agent_id && !row.chat_message_id && !row.source_kind && publicKind(row) === 'document') {
+        const first = store.get('SELECT body FROM artifact_versions WHERE artifact_id=? AND revision=1', row.id)
+        if (first?.body === bodyText) {
+          attachSource(store, row.id, workspaceId, row.created, source)
+          return { status: 200, body: { artifact: view(load(store, workspaceId, row.id)) } }
+        }
+      }
+      if (prior.request_hash !== requestHash) refuse(409, 'conflict', 'Idempotency key was used for a different request')
+      return { status: 200, body: { artifact: view(row) } }
+    }
     if (already) return { status: 200, body: { artifact: view(already) } }
     const hash = titleHash(trimmed)
     if (store.get('SELECT id FROM artifacts WHERE workspace_id=? AND title_hash=?', workspaceId, hash)) {
@@ -246,6 +269,7 @@ export function createArtifact(ctx, workspaceId, input, key) {
     store.run('INSERT INTO artifacts VALUES(?,?,?,?,?,?,1,?,?,?,?,?,?)',
       id, workspaceId, trimmed, hash, 'document', bodyText, now, now, owner, owner, keyHash, requestHash)
     attachKind(store, id, kind, { board, slides, dashboard })
+    if (spreadsheet) attachWorkbook(store,id,spreadsheet)
     attachSource(store, id, workspaceId, now, source)
     void featureDir
     return saved(store, workspaceId, id, 201)
@@ -299,7 +323,10 @@ export function updateArtifact(ctx, row, changes, revision) {
     refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
   }
   const kind = publicKind(row)
-  const allowed = kind === 'whiteboard' ? ['title', 'board', 'operations'] : kind === 'slides' ? ['title', 'slides'] : kind === 'dashboard' ? ['title', 'dashboard'] : kind === 'media' ? ['title'] : ['title', 'body']
+  const allowed = ['title', ...({
+    whiteboard:['board','operations'], slides:['slides'], dashboard:['dashboard'],
+    spreadsheet:['spreadsheet'], media:[],
+  }[kind] ?? ['body'])]
   if (Object.keys(changes).some((key) => !allowed.includes(key))) refuse(400, 'invalid', 'Unknown artifact field')
   if (revision !== row.revision) refuse(409, 'conflict', 'Document changed elsewhere; reload and retry', view(row))
   let title = row.title
@@ -307,6 +334,7 @@ export function updateArtifact(ctx, row, changes, revision) {
   let board = kind === 'whiteboard' ? decodeBoard(row.board_json) : null
   let slides = kind === 'slides' ? decodeSlides(row.slides_json) : null
   let dashboard = kind === 'dashboard' ? decodeDashboard(row.dashboard_json) : null
+  let workbook = kind === 'spreadsheet' ? decodeWorkbook(row.spreadsheet_json) : null
   if ('title' in changes) {
     if (!validTitle(changes.title)) refuse(400, 'invalid', 'Provide a document title and body')
     title = changes.title.trim()
@@ -331,10 +359,15 @@ export function updateArtifact(ctx, row, changes, revision) {
     dashboard = normalizeDashboard(changes.dashboard)
     if (!dashboard || !dashboard.widgets.length) refuse(400, 'invalid', 'Provide at least one valid dashboard widget')
   }
+  if ('spreadsheet' in changes) {
+    workbook = normalizeWorkbook(changes.spreadsheet)
+    if (!workbook) refuse(400,'invalid','工作表名称重复、包含非法字符，或表格超出容量。')
+  }
   let unchanged = title === row.title && content === row.body
   if (kind === 'whiteboard') unchanged = title === row.title && boardJson(board) === row.board_json
   else if (kind === 'slides') unchanged = title === row.title && slidesJson(slides) === row.slides_json
   else if (kind === 'dashboard') unchanged = title === row.title && dashboardJson(dashboard) === row.dashboard_json
+  else if (kind === 'spreadsheet') unchanged = title === row.title && JSON.stringify(workbook) === row.spreadsheet_json
   if (unchanged) return { status: 200, body: { artifact: view(row) } }
   return ctx.store.transaction(() => {
     guardVersions(store, row.id)
@@ -347,6 +380,7 @@ export function updateArtifact(ctx, row, changes, revision) {
     if (kind === 'whiteboard' && !attachBoard(store, row.id, board)) refuse(400, 'invalid', 'Provide a valid board')
     if (kind === 'slides' && !attachSlides(store, row.id, slides)) refuse(400, 'invalid', 'Provide valid slide content')
     if (kind === 'dashboard' && !attachDashboard(store, row.id, dashboard)) refuse(400, 'invalid', 'Provide valid dashboard content')
+    if (kind === 'spreadsheet') attachWorkbook(store,row.id,workbook)
     return saved(store, row.workspace_id, row.id, 200)
   })
 }
@@ -415,7 +449,11 @@ export function restoreArtifact(ctx, row, revision, to) {
       title, hash, content, row.revision + 1, nowSeconds(), owner, row.id)
     setRender(store, row.id, kind)
     const clear = (...tables) => { for (const table of tables) store.run(`DELETE FROM ${table} WHERE artifact_id=?`, row.id) }
-    if (kind === 'slides') {
+    if (kind !== 'spreadsheet') clear('artifact_spreadsheets')
+    if (kind === 'spreadsheet') {
+      attachWorkbook(store,row.id,structured)
+      clear('artifact_media','artifact_boards','artifact_slides','artifact_dashboards')
+    } else if (kind === 'slides') {
       if (!attachSlides(store, row.id, structured)) refuse(400, 'invalid', 'Provide valid slide content')
       clear('artifact_media', 'artifact_boards', 'artifact_dashboards')
     } else if (kind === 'dashboard') {
@@ -443,13 +481,17 @@ export function exportBytes(row, featureDir, workspaceId, fromVersion = false) {
     const digestHex = fromVersion ? row.sha256 : row.media_sha256
     const filename = fromVersion ? row.filename : row.media_filename
     const expected = fromVersion ? row.byte_count : row.media_bytes
-    const payload = readMediaBytes(featureDir, workspaceId, digestHex, expected)
+    const payload = readMediaBytes(featureDir, workspaceId, digestHex, expected, mime)
     return { payload, contentType: mime, filename: exportFilename(title, kind, revision, filename), headers: exportHeaders(mime, exportFilename(title, kind, revision, filename)) }
   }
   let structuredKind = null, structured = null
   if (kind === 'slides') { structuredKind = 'slides'; structured = decodeSlides(row.slides_json) }
   else if (kind === 'dashboard') { structuredKind = 'dashboard'; structured = decodeDashboard(row.dashboard_json) }
   else if (fromVersion && kind === 'document') [structuredKind, structured] = decodeStructured(row.body)
+  if (kind === 'spreadsheet' || structuredKind === 'spreadsheet') {
+    const result = exportOffice(row,'xlsx',fromVersion)
+    return {...result,headers:exportHeaders(result.contentType,result.filename)}
+  }
   if (structured) {
     const html = structuredKind === 'slides' ? renderSlidesPage(title, structured) : renderDashboardPage(title, structured)
     const name = exportFilename(title, structuredKind, revision)
@@ -543,10 +585,10 @@ export function content(row, featureDir, { preview: asPreview = false } = {}) {
   const kind = publicKind(row)
   if (kind === 'media' && !asPreview) {
     try {
-      const payload = readMediaBytes(featureDir, row.workspace_id, row.media_sha256, row.media_bytes)
+      const payload = readMediaBytes(featureDir, row.workspace_id, row.media_sha256, row.media_bytes, row.media_mime)
       const name = cleanFilename(row.media_filename || 'file')
       return {
-        status: 200, raw: payload,
+        status: 200, raw: payload, inline: true,
         headers: {
           'content-type': row.media_mime,
           'content-security-policy': "default-src 'none'; sandbox; frame-ancestors 'self'; object-src 'none'",

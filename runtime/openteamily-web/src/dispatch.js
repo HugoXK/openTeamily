@@ -1,3 +1,5 @@
+import { WEBSITE_HTML, WEBSITE_PREVIEW_CSP, WEBSITE_PREVIEW_PATH, websitePreviewRevision } from '../lib/website-preview.js'
+
 // POST /api/openteamily: one JSON channel for every OpenTeamily feature that has
 // moved into the user's DS-Bot. Endpoints come from features/<name>/index.js
 // (see src/features.js) as '<name>/<op>'.
@@ -92,6 +94,56 @@ export const LEGACY_PATH = '/api/openteamily/legacy'
 
 const FEATURE = /^[a-z][a-z0-9-]{0,39}$/
 const V1_PATH = /^\/v1\/[A-Za-z0-9/_.-]{1,240}$/
+const CHAT_FILE_POST = /^\/v1\/workspaces\/[0-9a-f]{32}\/social\/conversations\/[A-Za-z0-9._-]{1,80}\/messages$/
+const AGENT_FILE_POST = /^\/v1\/workspaces\/[0-9a-f]{32}\/agents\/[0-9a-f]{32}\/conversations\/[0-9a-f]{32}\/messages$/
+const CHAT_FILE_MAX = 8 * 1024 * 1024
+
+async function composeAttachments(request, agent) {
+  const form = await request.formData()
+  const files = form.getAll('file')
+  if (!files.length || files.length > (agent ? 4 : 1) || files.some(file => typeof file === 'string' || !file.size)) {
+    throw new Error('Select files')
+  }
+  if (files.reduce((size,file) => size + file.size, 0) > CHAT_FILE_MAX) {
+    throw Object.assign(new Error('Files must total 8 MiB or less'), {status:413})
+  }
+  const attachments = []
+  for (const file of files) {
+    attachments.push({title:file.name, mime:file.type, data:Buffer.from(await file.arrayBuffer()).toString('base64')})
+  }
+  return agent ? {body:form.get('body'), chat_language:form.get('chat_language'),
+    reply_language:form.get('reply_language'), attachments} : {attachment:attachments[0], reply_to:form.get('reply_to') ?? undefined}
+}
+
+function fileResponse(request, {data, content_type, filename, inline}) {
+  const safeName = filename.replace(/[^ -~]|["\\]/g, '_')
+  const utf8Name = encodeURIComponent(filename.toWellFormed()).replace(/['()*]/g, char => '%' + char.charCodeAt(0).toString(16))
+  const headers = {
+    'content-type': content_type,
+    'content-disposition': `${inline ? 'inline' : 'attachment'}; filename="${safeName}"; filename*=UTF-8''${utf8Name}`,
+    'cache-control': 'private, no-store',
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; sandbox",
+  }
+  const bytes = Buffer.from(data, 'base64')
+  if (inline) {
+    headers['accept-ranges'] = 'bytes'
+    // A single byte range is enough for native media playback and seeking.
+    const range = /^bytes=(\d*)-(\d*)$/.exec(request.headers.get('range') || '')
+    if (range && (range[1] || range[2])) {
+      const first = range[1] ? Number(range[1]) : Math.max(0, bytes.length - Number(range[2]))
+      const last = Math.min(bytes.length - 1, range[1] && range[2] ? Number(range[2]) : bytes.length - 1)
+      if (first >= bytes.length || first > last) {
+        return new Response(null, {status:416, headers:{...headers, 'content-range':`bytes */${bytes.length}`}})
+      }
+      headers['content-range'] = `bytes ${first}-${last}/${bytes.length}`
+      headers['content-length'] = String(last - first + 1)
+      return new Response(bytes.subarray(first, last + 1), {status:206, headers})
+    }
+  }
+  headers['content-length'] = String(bytes.length)
+  return new Response(bytes, {status:200, headers})
+}
 
 // Session-authenticated /v1 compatibility: the platform forwards a moved route
 // here with the original method and body. The answer is the legacy Flask shape
@@ -116,7 +168,15 @@ export function createLegacyDispatch({ endpoints }) {
       })
     }
     let body
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
+    const agentFiles = feature === 'agents' && AGENT_FILE_POST.test(path)
+    const socialFile = feature === 'messenger' && CHAT_FILE_POST.test(path)
+    if ((agentFiles || socialFile) && request.method === 'POST'
+      && request.headers.get('content-type')?.toLowerCase().startsWith('multipart/form-data;')) {
+      try { body = await composeAttachments(request, agentFiles) } catch (error) {
+        const large = error?.status === 413
+        return gatewayError(large ? 413 : 400, large ? 'attachment_too_large' : 'invalid', 'Provide nonempty files totaling up to 8 MiB')
+      }
+    } else if (request.method !== 'GET' && request.method !== 'HEAD') {
       const text = await request.text()
       if (text) {
         try { body = JSON.parse(text) } catch {
@@ -127,9 +187,29 @@ export function createLegacyDispatch({ endpoints }) {
       }
     }
     try {
-      const result = await handler({ method: request.method, path, query, body }, { request, host: null })
+      const idempotency_key = request.headers.get('idempotency-key') || undefined
+      const result = await handler({ method: request.method, path, query, body, idempotency_key }, { request, host: null })
       const status = Number(result?.status) || 200
-      return new Response(JSON.stringify(result?.body ?? {}), {
+      if (result?.download && status === 200) {
+        // The interactive document has its own opaque origin. No other
+        // artifacts or attachment responses can opt in to this policy.
+        if (feature === 'artifacts' && request.method === 'GET'
+            && WEBSITE_PREVIEW_PATH.test(path)
+            && websitePreviewRevision(new URLSearchParams(query)) !== null
+            && result.download.content_type === WEBSITE_HTML) {
+          return new Response(Buffer.from(result.download.data, 'base64'), {
+            headers: {
+              'content-type': WEBSITE_HTML,
+              'content-security-policy': WEBSITE_PREVIEW_CSP,
+              'cache-control': 'private, no-store',
+              'x-content-type-options': 'nosniff',
+              'referrer-policy': 'no-referrer',
+            },
+          })
+        }
+        return fileResponse(request, result.download)
+      }
+      return new Response(status === 204 ? null : JSON.stringify(result?.body ?? {}), {
         status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
       })
     } catch (error) {

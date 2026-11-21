@@ -3,6 +3,9 @@ import test from 'node:test'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { boot, deliverBundle, key, legacyBundles, volume, WS } from './helpers.js'
+import { attachRuntime, detachRuntime } from '../src/host.js'
+import { setSharedBotSocial } from '../lib/c/bot-social.js'
+import {waveBase64} from '../../../openteamily/static/meetings/audio.mjs'
 
 const base = (id = '', ws = WS) => `/v1/workspaces/${ws}/meetings${id ? '/' + id : ''}`
 const body = { title: '周会', attendees: ['alice', 'bob'], summary: '同步进度。', transcript: '讨论排期。', action_items: [{ text: '订会议室', owner: 'bob' }] }
@@ -55,6 +58,124 @@ test('meetings run inside this DS-Bot: create, idempotent replay, list, read, up
 
   assert.equal((await call('POST', base(meeting.id) + '/remove', {})).status, 200)
   assert.equal((await call('GET', base(meeting.id))).status, 404)
+})
+
+test('meeting shares publish only the saved summary and action items through the selected workspace', async t => {
+  const bot = await boot()
+  const call = (method, path, payload, sendKey) => bot.call('meetings',method,base(path),payload,sendKey)
+  const created = await call('POST','',body,key())
+  const meeting = created.body.meeting
+  const receiptId = 'd'.repeat(32)
+  const receipt = {id:receiptId,title:meeting.title,revision:1,started_at:meeting.started_at,
+    organizer:'组织者',summary:body.summary,action_items:[{...body.action_items[0],done:false}],shared:true}
+  const calls = []
+  let sent = false
+  setSharedBotSocial({async request(method,path,input) {
+    calls.push({method,path,input})
+    if (path.includes('/meeting-share-recipients')) return {items:[{id:'recipient-a',name:'参会人'}]}
+    if (path.endsWith('/revoke')) return {revoked:true}
+    if (method === 'POST') {
+      const replayed = sent
+      sent = true
+      return {meeting:receipt,replayed}
+    }
+    if (path.endsWith(receiptId)) return {meeting:receipt}
+    return {items:[receipt],cursor:null}
+  }})
+  t.after(() => setSharedBotSocial(undefined))
+  const path = `${meeting.id}/shares`
+  const recipients = {revision:1,conversation_id:'otc_group',recipient_ids:['recipient-a']}
+  const shareKey = key()
+  assert.equal((await call('POST',path,{...recipients,transcript:'never send this'},shareKey)).status,400)
+  assert.equal((await call('POST',path,{...recipients,revision:2},shareKey)).status,409)
+  assert.equal((await bot.call('meetings','POST',base(path,'b'.repeat(32)),recipients,shareKey)).status,404)
+  assert.equal(calls.length,0)
+  assert.deepEqual((await call('GET','share-recipients?conversation_id=otc_group')).body.items,[{id:'recipient-a',name:'参会人'}])
+  assert.equal(calls.at(-1).path,`/v1/ot/workspaces/${WS}/meeting-share-recipients?conversation_id=otc_group`)
+  assert.equal((await call('POST',path,recipients,shareKey)).status,201)
+  assert.deepEqual(calls.at(-1),{method:'POST',path:`/v1/ot/workspaces/${WS}/meeting-shares`,input:{
+    title:body.title,started_at:meeting.started_at,summary:body.summary,action_items:receipt.action_items,
+    source_id:meeting.id,client_key:shareKey,...recipients,
+  }})
+  assert.equal((await call('POST',path,recipients,shareKey)).status,200)
+  assert.equal((await call('GET',path)).body.items[0].id,receiptId)
+  assert.match(calls.at(-1).path,new RegExp('source_id='+meeting.id))
+  assert.equal((await call('GET','shared?limit=100')).body.items[0].id,receiptId)
+  assert.equal((await call('GET',`shared/${receiptId}`)).body.meeting.summary,body.summary)
+  assert.equal((await call('POST',`${meeting.id}/remove`,{})).status,200)
+  assert.equal((await call('GET','shared?sent=1')).body.items[0].id,receiptId)
+  assert.equal(calls.at(-1).path,`/v1/ot/workspaces/${WS}/meeting-shares?limit=20&sent=1`)
+  assert.deepEqual((await call('POST',`shared/${receiptId}/revoke`,{})).body,{revoked:true})
+  assert.equal((await call('GET','shared?source_id='+meeting.id)).status,400)
+})
+
+test('meeting speech prepares and uses the local provider in the signed-in runtime', async (t) => {
+  const bot = await boot()
+  const call = (method, path, body) => bot.call('meetings', method, base(path), body)
+  assert.equal((await call('GET', 'speech')).body.phase, 'unavailable')
+  let phase = 'unprepared'
+  let location = 'host-local'
+  let accepted = false
+  let calls = 0
+  const providerId = 'sensevoice-local'
+  const speech = {
+    snapshot: () => ({selection: {providerId}, providers: [{id: providerId, location, preparation: {phase}}]}),
+    prepare(id) { assert.equal(id, providerId); accepted = true },
+    resolve(spec) { return spec },
+    async transcribe(spec, signal) {
+      calls += 1
+      assert.equal(spec.providerId, providerId)
+      assert.equal(spec.audio.readUInt32LE(24), 16000)
+      assert.equal(spec.audio.readInt16LE(44), -32768)
+      assert.equal(signal.aborted, false)
+      return {text: ' 周四发布 ' }
+    },
+  }
+  attachRuntime({rt: {}, ctx: {get: name => name === 'speechToText' ? speech : undefined}})
+  t.after(detachRuntime)
+  const body = {audio_base64: waveBase64(new Float32Array([-1, 0, 1]))}
+  assert.equal((await call('POST', 'transcribe', body)).status, 409)
+  assert.deepEqual((await call('POST', 'speech', {})).body, {phase: 'checking', ready: false, progress: null})
+  assert.equal(accepted, true)
+  phase = 'ready'
+  assert.equal((await call('GET', 'speech')).body.ready, true)
+  assert.equal((await call('POST', 'transcribe', {audio_base64: 'AAAA'})).status, 400)
+  assert.equal((await call('POST', 'transcribe', {audio_base64: waveBase64(new Float32Array(240001))})).status, 400)
+  assert.deepEqual((await call('POST', 'transcribe', body)).body, {text: '周四发布'})
+  assert.equal(calls, 1)
+  location = 'cloud'
+  assert.equal((await call('POST', 'transcribe', body)).status, 503)
+  assert.equal(calls, 1)
+  assert.deepEqual((await call('GET', '')).body.items, [])
+})
+
+test('meeting draft uses only the native text inference service and never saves without a separate request', async (t) => {
+  const bot = await boot()
+  const call = (method, id, body) => bot.call('meetings', method, base(id), body)
+  const input = { title: '发布周会', attendees: ['小林'], transcript: '已决定周四上线。小林负责核对清单。' }
+  const prompts = []
+  let answer = '```json\n{"summary":"周四上线。","action_items":[{"text":"核对清单","owner":"小林","done":true}]}\n```'
+  assert.equal((await call('POST', 'draft', input)).status, 503)
+  attachRuntime({rt: {}, ctx: {}, textOnly: async prompt => { prompts.push(prompt); return answer }})
+  t.after(detachRuntime)
+  assert.equal((await call('POST', 'draft', {...input, transcript: ' '})).status, 400)
+  assert.equal((await call('GET', 'draft')).status, 400)
+  assert.equal(prompts.length, 0)
+  const generated = await call('POST', 'draft', input)
+  assert.equal(generated.status, 200)
+  assert.deepEqual(generated.body.draft, { summary: '周四上线。', action_items: [
+    {text: '核对清单', owner: '小林', done: false},
+  ]})
+  assert.deepEqual(JSON.parse(prompts[0].split('\n').at(-1)), input)
+  assert.deepEqual((await call('GET', '')).body.items, [])
+  answer = 'not JSON'
+  assert.equal((await call('POST', 'draft', input)).status, 502)
+  const transcript = '会议记录'.repeat(10000)
+  const saved = await bot.call('meetings', 'POST', base(), {...input, ...generated.body.draft, transcript}, key())
+  assert.equal(saved.status, 201)
+  assert.equal(saved.body.meeting.transcript, transcript)
+  assert.equal(((await bot.endpoint('meetings/search', {q: input.title})).value.items[0]).href,
+    `/meetings#workspace=${WS}&meeting=${saved.body.meeting.id}`)
 })
 
 test('meeting data persists in this volume only; another DS-Bot never sees it', async () => {

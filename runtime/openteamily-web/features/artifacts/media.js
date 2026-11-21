@@ -3,10 +3,12 @@
 import { chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, unlinkSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { HEX32, SHA256, MAX_MEDIA_BYTES } from './model.js'
+import { HEX32, SHA256, MAX_GENERATED_VIDEO_BYTES, MAX_MEDIA_BYTES } from './model.js'
+import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { refuse } from '../../featurekit/http.js'
 
 const { O_CREAT, O_EXCL, O_NOFOLLOW, O_RDONLY, O_WRONLY } = constants
+const GENERATED_LIMITS = {'video/mp4': MAX_GENERATED_VIDEO_BYTES, [GLB_MIME]: MAX_GLB_BYTES}
 
 export function mediaRoot(featureDir) {
   return join(featureDir, 'objects')
@@ -47,12 +49,13 @@ export function writeMedia(featureDir, workspaceId, payload) {
   return digestHex
 }
 
-export function readMediaBytes(featureDir, workspaceId, digestHex, expected) {
+export function readMediaBytes(featureDir, workspaceId, digestHex, expected, mime) {
   const path = mediaPath(featureDir, workspaceId, digestHex)
   const fd = openSync(path, O_RDONLY | O_NOFOLLOW)
   try {
     const info = fstatSync(fd)
-    if (!info.isFile() || info.size > MAX_MEDIA_BYTES) throw new Error('invalid media object')
+    const limit = Object.hasOwn(GENERATED_LIMITS, mime) ? GENERATED_LIMITS[mime] : MAX_MEDIA_BYTES
+    if (!info.isFile() || info.size > limit) throw new Error('invalid media object')
     if (expected != null && info.size !== expected) throw new Error('media size mismatch')
     const data = Buffer.alloc(info.size)
     const read = readSync(fd, data, 0, info.size, 0)
