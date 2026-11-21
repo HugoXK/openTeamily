@@ -182,6 +182,22 @@ class AutoProvisionTests(unittest.TestCase):
         self.assertEqual(self.listed(), [])
 
 
+    def test_workspace_create_reuses_personal_runtime(self):
+        self.make_app()
+        alice = self.user('alice', '127.0.0.1')
+        personal = self.ensure(alice)
+        iid = personal['runtime_provisioning']['instance_id']
+        wid = 'a' * 32
+        with self.store.transaction() as db:
+            owner_id = db.execute("SELECT id FROM users WHERE username='alice'").fetchone()[0]
+            db.execute('INSERT INTO workspaces VALUES(?,?,?,?,?,?)',
+                       (wid, owner_id, 'another workspace', self.now, 'key', 'request'))
+        result = alice.call('POST', f'/v1/workspaces/{wid}/instances', {},
+                            {'HTTP_IDEMPOTENCY_KEY': 'another-instance-key'})
+        self.assertEqual(result['status'], 200, result)
+        self.assertEqual(result['body']['instance']['id'], iid)
+        self.assertEqual(self.count('SELECT COUNT(*) FROM instances'), 1)
+
     def test_failed_create_shows_unavailable(self):
         self.make_app()
         alice = self.user('alice', '127.0.0.1')

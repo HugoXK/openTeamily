@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .security import digest, dummy_verify, opaque, password_hash, password_matches
 from .lifecycle import RuntimeFault, UNSUPPORTED
-from . import custom_mcp, skill_packages, agents, artifacts, automations, bot_social, composio, connected_tools, conversations, meetings, members, memory, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, runtime_connect, skill_secrets, social, team_templates, teams, skill_installs
+from . import custom_mcp, skill_packages, agents, artifacts, bot_social, composio, connected_tools, conversations, meetings, members, model_api, notifications, oidc, onboarding, personal, profiles, runtime_autoprovision, runtime_connect, skill_secrets, social, team_templates, teams, skill_installs
 
 
 
@@ -608,10 +608,6 @@ class App:
                 if method == 'POST' and not query:
                     return self.save_profile(db, session, now, env)
                 refuse(400, 'invalid', 'Invalid profile request')
-            if path == '/v1/onboarding/automations':
-                if method == 'POST' and not query:
-                    return self.create_onboarding_automations(db, session, now, env)
-                refuse(400, 'invalid', 'Invalid onboarding automation request')
             if path == '/v1/personal-agent':
                 if method == 'GET' and not query:
                     return self.personal_agent_get(db, session)
@@ -725,137 +721,6 @@ class App:
         return parsed['fields'], data, mime, filename, title
 
 
-    def memory_dispatch(self, db, session, method, query, now, env, workspace_id, target_id, removing):
-        workspace = members.load(db, workspace_id, session['user_id'])
-        if workspace is None:
-            refuse(404, 'not_found', 'Workspace not found')
-        actor = members.role_of(db, workspace, session['user_id'])
-        if target_id is None and method == 'GET':
-            try:
-                limit, cursor, args = self.pagination(query, allowed=('q',))
-            except APIError:
-                raise
-            except Exception:
-                refuse(400, 'invalid', 'Invalid pagination parameters')
-            needle = args.get('q', [''])[0].strip().casefold()
-            if len(needle) > 80:
-                refuse(400, 'invalid', 'Invalid memory request')
-            rows = memory.listing(db, workspace['id'], cursor, limit + 1, needle)
-            items = memory.decorate_many(db, rows[:limit], include_body=False)
-            return 200, {'items': items,
-                         'cursor': rows[limit - 1]['id'] if len(rows) > limit else None}, []
-        if target_id is None and method == 'POST' and not query:
-            return self.create_memory_page(db, workspace, session, now, env)
-        if target_id is None:
-            refuse(400, 'invalid', 'Invalid memory request')
-        row = memory.load(db, workspace['id'], target_id)
-        if row is None:
-            refuse(404, 'not_found', 'Memory page not found')
-        if removing:
-            if method != 'POST' or query:
-                refuse(400, 'invalid', 'Invalid memory request')
-            if not memory.can_edit(actor, session['user_id'], row):
-                refuse(403, 'forbidden', 'Not allowed to change this memory page')
-            self.body(env, [])
-            removed = memory.decorate(db, row, include_body=False)
-            db.execute('DELETE FROM memory_pages WHERE id=?', (row['id'],))
-            return 200, {'removed': removed}, []
-        if method == 'GET' and not query and not removing:
-            return 200, {'page': memory.decorate(db, row)}, []
-        if method != 'POST' or query or removing:
-            refuse(400, 'invalid', 'Invalid memory request')
-        return self.update_memory_page(db, workspace, session, actor, row, now, self.body(env, ['revision', 'changes']))
-
-
-    def create_memory_page(self, db, workspace, session, now, env):
-        body = self.body(env, ['title', 'body', 'topics'])
-        title, content = body.get('title'), body.get('body', '')
-        topics = memory.normalize_topics(body.get('topics') if 'topics' in body else [])
-        if not memory.valid_title(title) or not memory.valid_body(content) or topics is None:
-            refuse(400, 'invalid', 'Provide a memory page title and body')
-        title = title.strip()
-        key = env.get('HTTP_IDEMPOTENCY_KEY', '')
-        if not re.fullmatch(r'[A-Za-z0-9_-]{16,64}', key):
-            refuse(400, 'invalid', 'Supply a 16–64 character Idempotency-Key')
-        payload = {'title': title, 'body': content, 'topics': topics}
-        key_hash, request_hash = digest('memory:' + key), digest(
-            json.dumps(payload, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
-        )
-        prior = db.execute(
-            'SELECT * FROM memory_pages WHERE workspace_id=? AND key_hash=?', (workspace['id'], key_hash)
-        ).fetchone()
-        if prior:
-            if prior['request_hash'] != request_hash:
-                refuse(409, 'conflict', 'Idempotency key was used for a different request')
-            return 200, {'page': memory.decorate(db, memory.load(db, workspace['id'], prior['id']))}, []
-        title_digest = memory.title_hash(title)
-        if db.execute(
-            'SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=?', (workspace['id'], title_digest)
-        ).fetchone():
-            refuse(409, 'conflict', 'A memory page with this title already exists')
-        if (db.execute('SELECT COUNT(*) FROM memory_pages WHERE workspace_id=?', (workspace['id'],)).fetchone()[0]
-                >= self.config.max_memory_pages_per_workspace):
-            refuse(429, 'quota', 'Memory page capacity reached')
-        page_id = uuid4().hex
-        db.execute(
-            'INSERT INTO memory_pages VALUES(?,?,?,?,?,1,?,?,?,?,?,?)',
-            (page_id, workspace['id'], title, title_digest, content, now, now,
-             session['user_id'], session['user_id'], key_hash, request_hash),
-        )
-        memory.replace_topics(db, workspace['id'], page_id, topics)
-        memory.record_version(db, workspace['id'], page_id, 1, title, content, now, session['user_id'])
-        return 201, {'page': memory.decorate(db, memory.load(db, workspace['id'], page_id))}, []
-
-    def update_memory_page(self, db, workspace, session, actor, row, now, body):
-        if not memory.can_edit(actor, session['user_id'], row):
-            refuse(403, 'forbidden', 'Not allowed to change this memory page')
-        revision, changes = body.get('revision'), body.get('changes')
-        if type(revision) is not int or not 0 <= revision <= 2 ** 31 or not isinstance(changes, dict) or not changes:
-            refuse(400, 'invalid', 'Provide the current revision and a non-empty changes object')
-        if set(changes) - {'title', 'body', 'topics'}:
-            refuse(400, 'invalid', 'Unknown memory field')
-        if revision != row['revision']:
-            raise RuntimeFault(409, 'conflict', 'Memory page changed elsewhere; reload and retry',
-                               memory.decorate(db, row))
-        title = row['title']
-        content = row['body']
-        current_topics = memory.topics_for(db, [row['id']]).get(row['id'], [])
-        topics = current_topics
-        if 'title' in changes:
-            if not memory.valid_title(changes['title']):
-                refuse(400, 'invalid', 'Provide a memory page title and body')
-            title = changes['title'].strip()
-        if 'body' in changes:
-            if not memory.valid_body(changes['body']):
-                refuse(400, 'invalid', 'Provide a memory page title and body')
-            content = changes['body']
-        if 'topics' in changes:
-            topics = memory.normalize_topics(changes['topics'])
-            if topics is None:
-                refuse(400, 'invalid', 'Provide valid memory topics')
-        if title == row['title'] and content == row['body'] and topics == current_topics:
-            return 200, {'page': memory.decorate(db, row)}, []
-        title_digest = memory.title_hash(title)
-        if title != row['title'] and db.execute(
-            'SELECT id FROM memory_pages WHERE workspace_id=? AND title_hash=? AND id!=?',
-            (workspace['id'], title_digest, row['id']),
-        ).fetchone():
-            refuse(409, 'conflict', 'A memory page with this title already exists')
-        # Pages created before this slice have no snapshot yet; record what is
-        # about to be replaced so the first edit already has a version to show.
-        if not db.execute('SELECT 1 FROM memory_page_versions WHERE page_id=? LIMIT 1',
-                          (row['id'],)).fetchone():
-            memory.record_version(db, workspace['id'], row['id'], row['revision'],
-                                  row['title'], row['body'], row['updated'], row['updated_by'])
-        db.execute(
-            'UPDATE memory_pages SET title=?, title_hash=?, body=?, revision=?, updated=?, updated_by=? WHERE id=?',
-            (title, title_digest, content, row['revision'] + 1, now, session['user_id'], row['id']),
-        )
-        memory.record_version(db, workspace['id'], row['id'], row['revision'] + 1,
-                              title, content, now, session['user_id'])
-        if 'topics' in changes:
-            memory.replace_topics(db, workspace['id'], row['id'], topics)
-        return 200, {'page': memory.decorate(db, memory.load(db, workspace['id'], row['id']))}, []
 
 
     def workspace_instance(self, db, workspace_id, instance_id):
@@ -1028,77 +893,6 @@ class App:
             ],
         }
 
-    def create_onboarding_automations(self, db, session, now, env):
-        body = self.body(env, ['template_ids'])
-        template_ids = body.get('template_ids')
-        if (not isinstance(template_ids, list) or not 1 <= len(template_ids) <= 6
-                or any(not isinstance(item, str) or item not in automations.TEMPLATES or item == 'custom'
-                       for item in template_ids)
-                or len(set(template_ids)) != len(template_ids)):
-            refuse(400, 'invalid', 'Provide 1–6 known automation templates')
-        workspace = db.execute('SELECT * FROM workspaces WHERE owner_id=? ORDER BY id LIMIT 1',
-                               (session['user_id'],)).fetchone()
-        if workspace is None:
-            if (db.execute('SELECT COUNT(*) FROM workspaces WHERE owner_id=?',
-                           (session['user_id'],)).fetchone()[0] >= self.config.max_workspaces_per_user
-                    or db.execute('SELECT COUNT(*) FROM workspaces').fetchone()[0] >= self.config.max_workspaces):
-                refuse(429, 'quota', 'Workspace capacity reached')
-            workspace_id = uuid4().hex
-            db.execute('INSERT INTO workspaces VALUES(?,?,?,?,?,?)',
-                       (workspace_id, session['user_id'], '个人空间', now,
-                        digest('onboarding-space:' + session['user_id']), digest('个人空间')))
-            workspace = db.execute('SELECT * FROM workspaces WHERE id=?', (workspace_id,)).fetchone()
-        current = db.execute('SELECT COUNT(*) FROM automations WHERE workspace_id=?',
-                             (workspace['id'],)).fetchone()[0]
-        schedule = {'kind': 'daily', 'time': '09:00', 'time_zone': 'Asia/Shanghai'}
-        schedule_json = json.dumps(schedule, sort_keys=True, separators=(',', ':'))
-        participants = [{'user_id': session['user_id'], 'username': session['username']}]
-        participants_json = json.dumps(participants, sort_keys=True, separators=(',', ':'))
-        created, skipped = [], []
-        for template_id in template_ids:
-            template = automations.TEMPLATES[template_id]
-            title = template['title']
-            title_digest = digest(title.casefold())
-            key_hash = digest('onboarding-automation:' + session['user_id'] + ':' + template_id)
-            if (db.execute('SELECT id FROM automations WHERE workspace_id=? AND title_hash=?',
-                           (workspace['id'], title_digest)).fetchone()
-                    or db.execute('SELECT id FROM automations WHERE workspace_id=? AND key_hash=?',
-                                  (workspace['id'], key_hash)).fetchone()):
-                skipped.append({'template_id': template_id, 'title': title})
-                continue
-            if current + len(created) >= self.config.max_automations_per_workspace:
-                refuse(429, 'quota', 'Automation capacity reached')
-            prompt = automations.compile_prompt(template_id, '', 'ongoing', schedule,
-                                                [session['username']], [])
-            request_hash = digest(json.dumps({'template_id': template_id, 'title': title,
-                                              'schedule': schedule, 'participants': [session['username']]},
-                                             sort_keys=True, separators=(',', ':')))
-            automation_id = uuid4().hex
-            db.execute('INSERT INTO automations VALUES(?,?,?,?,?,?,?,?,0,1,?,?,?,?)',
-                       (automation_id, workspace['id'], title, title_digest, prompt, template_id,
-                        schedule_json, participants_json, now, now, key_hash, request_hash))
-            db.execute('INSERT INTO automation_editors VALUES(?,?,?,?,?)',
-                       (automation_id, '', 'ongoing', '[]', 1))
-            created.append({'id': automation_id, 'template_id': template_id, 'title': title})
-        return (201 if created else 200), {
-            'workspace': {'id': workspace['id'], 'name': workspace['name']},
-            'created': created, 'skipped': skipped}, []
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     def save_model_api(self, db, user_id, now, workspace, body, scope=None):
         revision, changes = body.get('revision'), body.get('changes')
         if type(revision) is not int or not 0 <= revision <= 2 ** 31 or not isinstance(changes, dict) or not changes:
@@ -1262,10 +1056,13 @@ class App:
         if match:
             if method == 'POST':
                 self.body(env, [])
-                created, result = runtime.create(owner, match[1], env.get('HTTP_IDEMPOTENCY_KEY', ''))
-                return 201 if created else 200, self.with_model_api(match[1], result), []
+                created, result = runtime.create(owner, match[1], env.get('HTTP_IDEMPOTENCY_KEY', ''),
+                                                 per_user=self.auto_provision.enabled)
+                return 201 if created else 200, self.with_model_api(result['instance']['workspace_id'], result), []
             limit, cursor, _ = self.pagination(query)
-            return 200, self.with_model_api(match[1], runtime.listing(owner, match[1], limit, cursor)), []
+            listed = runtime.listing(owner, match[1], limit, cursor)
+            runtime_workspace = listed['items'][0]['workspace_id'] if listed['items'] else match[1]
+            return 200, self.with_model_api(runtime_workspace, listed), []
         match = re.fullmatch(r'/v1/jobs/([0-9a-f]{32})', path)
         if match and method == 'GET' and not query:
             return 200, {'job': runtime.get_job(owner, match[1])}, []

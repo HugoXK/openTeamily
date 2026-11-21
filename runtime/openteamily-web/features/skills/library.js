@@ -38,8 +38,11 @@ export function skillLibrary(host, { boundName }) {
     if (scope === 'account') return { rt:s.rt, botId:await s.mainBot() }
     const m = /^(?:(automation):)?([0-9a-f]{32}):([0-9a-f]{32})$/.exec(scope || '')
     if (!m) throw new Fault(400,'invalid','Invalid skill scope')
-    const team = await sharedBotSocial(host).get('/v1/ot/teams/by-workspace/'+m[2])
-    if (!['owner','admin'].includes(team.role)) throw new Fault(403,'forbidden','Scope requires workspace administration')
+    const binding = await host.call('agents/personal-binding', {})
+    if (binding?.workspace_id !== m[2]) {
+      const team = await sharedBotSocial(host).get('/v1/ot/teams/by-workspace/'+m[2])
+      if (!['owner','admin'].includes(team.role)) throw new Fault(403,'forbidden','Scope requires workspace administration')
+    }
     if (m[1]) { await host.call('automations/get',{workspace_id:m[2],id:m[3]}); return { rt:s.rt, automation:true } }
     const { agent } = await host.call('agents/get',{workspace_id:m[2],id:m[3]})
     if (!agent.native_bot_id || agent.native_deleted) throw new Fault(409,'native_deleted','Native Bot unavailable')
@@ -74,12 +77,13 @@ export function skillLibrary(host, { boundName }) {
   const serial=fn => {const p=queue.then(fn,fn);queue=p.catch(()=>{});return p}
   const routes=[
     {method:'GET',path:/^\/v1\/skills\/scopes$/,handle:async()=>{
-      const {workspaces=[]}=await sharedBotSocial(host).get('/v1/ot/workspaces')
+      const listed = await host.call('teams/v1', {method:'GET',path:'/v1/workspaces?limit=100'})
+      if (listed.status !== 200) throw new Fault(listed.status, 'workspaces_unavailable', 'Could not list workspaces')
       const items=[{scope:'account',kind:'account',workspace_id:null,label:'我的账户'}]
-      for(const w of workspaces){
-        if(!['owner','admin'].includes(w.role))continue
-        const [agents,automations]=await Promise.all([host.call('agents/list',{workspace_id:w.workspace_id}),host.call('automations/list',{workspace_id:w.workspace_id})])
-        items.push(...agents.items.map(a=>({scope:w.workspace_id+':'+a.id,kind:'agent',workspace_id:w.workspace_id,id:a.id,label:w.name+' / '+a.name,administration:true})),...automations.items.map(a=>({scope:'automation:'+w.workspace_id+':'+a.id,kind:'automation',workspace_id:w.workspace_id,id:a.id,label:w.name+' / '+a.title,administration:true})))
+      for(const {id:workspaceId, role, name} of listed.body.items){
+        if(!['owner','admin'].includes(role))continue
+        const [agents,automations]=await Promise.all([host.call('agents/list',{workspace_id:workspaceId}),host.call('automations/list',{workspace_id:workspaceId})])
+        items.push(...agents.items.map(a=>({scope:workspaceId+':'+a.id,kind:'agent',workspace_id:workspaceId,id:a.id,label:name+' / '+a.name,administration:true})),...automations.items.map(a=>({scope:'automation:'+workspaceId+':'+a.id,kind:'automation',workspace_id:workspaceId,id:a.id,label:name+' / '+a.title,administration:true})))
       }
       return [200,{items}]
     }},
