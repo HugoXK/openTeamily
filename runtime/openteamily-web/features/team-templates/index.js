@@ -6,7 +6,7 @@ import { Fault } from '../../lib/b4/http.js'
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { sharedBotSocial, seg } from '../../lib/c/bot-social.js'
+import { sharedBotSocial } from '../../lib/c/bot-social.js'
 
 export const TEMPLATES = Object.freeze([
   { slug: 'product-squad', name: '产品研发小队', summary: '从需求到验收的三人小队。', agents: [
@@ -47,10 +47,12 @@ export default function teamTemplates(host) {
           })
           agents.push(created.agent)
         }
-        const group = await bs().post('/v1/ot/conversations', { kind: 'group', title: p?.title || tmpl.name, team_id: p?.team_id || undefined, members: p?.members ?? [] })
-        for (const agent of agents) {
-          await bs().put(`/v1/ot/conversations/${encodeURIComponent(group.id)}/agents/${encodeURIComponent(agent.id)}`, { name: agent.name, auto_reply: false })
-        }
+        const group = await bs().post('/v1/ot/conversations', {
+          kind: 'group', title: p?.title || tmpl.name, team_id: p?.team_id || undefined,
+          account_group: p?.account_group === true, members: p?.members ?? [],
+          agents: agents.map(agent => ({agent_ref:agent.id, name:agent.name})),
+          idempotency_key: p?.idempotency_key,
+        })
         return { template: publicView(tmpl), agents: agents.map((a) => ({ id: a.id, name: a.name, category: a.category })), conversation: group }
       },
   }
@@ -65,8 +67,10 @@ export default function teamTemplates(host) {
         if (body.title !== undefined && (typeof body.title !== 'string' || !body.title.trim() || body.title.length > 80)) throw new Fault(400, 'invalid', 'Invalid title')
         if (body.member_ids !== undefined && (!Array.isArray(body.member_ids) || body.member_ids.length > 49)) throw new Fault(400, 'invalid', 'Invalid members')
         const task = async () => {
-          const team = await bs().get('/v1/ot/teams/by-workspace/' + match[1])
-          if (!['owner', 'admin'].includes(team.role)) throw new Fault(403, 'forbidden', 'Only owners and admins can apply templates')
+          const binding = await host.call?.('agents/personal-binding', {})
+          const personal = binding?.workspace_id === match[1]
+          const team = personal ? null : await bs().get('/v1/ot/teams/by-workspace/' + match[1])
+          if (team && !['owner', 'admin'].includes(team.role)) throw new Fault(403, 'forbidden', 'Only owners and admins can apply templates')
           const key = createHash('sha256').update(match[1] + ':' + idempotency_key).digest('hex')
           const fingerprint = JSON.stringify([match[2], body.title || '', [...(body.member_ids || [])].sort()])
           const requests = load()
@@ -74,13 +78,17 @@ export default function teamTemplates(host) {
             if (requests[key].fingerprint !== fingerprint) throw new Fault(409, 'conflict', 'Idempotency key already used')
             return [200, requests[key].result]
           }
-          const { members = [] } = await bs().get('/v1/ot/teams/' + encodeURIComponent(team.id) + '/members')
-          const handles = (body.member_ids || []).map(id => {
-            const member = members.find(m => !m.suspended && [m.platform_user_id, m.owner_id, m.handle].includes(id))
-            if (!member) throw new Fault(400, 'invalid', 'Every member must belong to this workspace')
-            return member.handle
-          })
-          const result = await endpoints.apply({ workspace_id: match[1], team_id: team.id, slug: match[2], title: body.title, members: handles })
+          let handles = body.member_ids || []
+          if (handles.length && team) {
+            const {members = []} = await bs().get('/v1/ot/teams/' + encodeURIComponent(team.id) + '/members')
+            handles = handles.map(id => {
+              const member = members.find(m => !m.suspended && [m.platform_user_id, m.owner_id, m.handle].includes(id))
+              if (!member) throw new Fault(400, 'invalid', 'Every member must belong to this workspace')
+              return member.handle
+            })
+          }
+          const result = await endpoints.apply({workspace_id:match[1], team_id:team?.id, account_group:personal, slug:match[2],
+            title:body.title, members:handles, idempotency_key:key})
           const out = { conversation: { ...result.conversation, workspace_id: match[1] }, created_agents: result.agents.map(a => a.id) }
           requests[key] = { fingerprint, result: out }
           writeFileSync(file + '.tmp', JSON.stringify(requests), { mode: 0o600 }); renameSync(file + '.tmp', file)

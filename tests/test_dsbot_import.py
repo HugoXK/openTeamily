@@ -1,6 +1,6 @@
 """Manager job that writes per-user import bundles and the runtime seal key."""
 import json
-import os
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,8 +16,10 @@ class FakeRunner:
         self.running = True
         self.consume = True
         self.files = set()
+        self.unreadable = set()
+        self.received = {}
 
-    def run(self, args, heartbeat=lambda: None, timeout=10):
+    def run(self, args, heartbeat=lambda: None, timeout=10, stdin=None):
         self.calls.append(args)
         if args[:3] == ['inspect', '-f', '{{.State.Running}}']:
             return ('true\n' if self.running else 'false\n'), ''
@@ -26,23 +28,18 @@ class FakeRunner:
             if marker in self.files:
                 return '', ''
             raise ManagerError('exec_failed')
-        if args[0] == 'exec' and args[-2:] == ['-p', '/data/openteamily/import']:
-            return '', ''
-        if args[0] == 'cp':
-            dest = args[-1].split(':', 1)[-1]
+        if args[:4] == ['exec', '-i', '-u', '1000:1000'] and args[-4] == 'receive-bundle':
+            filename, checksum, marker = args[-3:]
+            raw = stdin.read()
+            if hashlib.sha256(raw).hexdigest() != checksum:
+                raise ManagerError('exec_failed')
+            dest = f'/data/openteamily/import/{filename}'
             self.files.add(dest)
-            return '', ''
-        if args[0] == 'exec' and 'chown' in args:
-            return '', ''
-        if args[0] == 'exec' and 'sh' in args:
-            cmd = args[-1]
-            # `touch /data/openteamily/import/.copied-<feature>-v1`
-            for part in cmd.split():
-                if part.startswith('/data/openteamily/import/.copied-'):
-                    self.files.add(part)
-                    if self.consume:
-                        suffix = part.rsplit('/', 1)[-1][len('.copied-'):]
-                        self.files.discard('/data/openteamily/import/' + suffix + '.bundle')
+            self.unreadable.discard(dest)
+            self.received[filename] = json.loads(raw)
+            self.files.add(f'/data/openteamily/import/{marker}')
+            if self.consume:
+                self.files.discard(dest)
             return '', ''
         raise ManagerError('unexpected')
 
@@ -78,16 +75,14 @@ class FakeClient:
         ]}
 
 
+def receives(runner):
+    return [c for c in runner.calls if c[:4] == ['exec', '-i', '-u', '1000:1000'] and 'receive-bundle' in c]
+
+
 class ImportJobTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        # GitHub runners and local macOS users are not uid 1000; ownership is
-        # covered by the manager code, not this copy/retry unit test.
-        if os.geteuid() != 1000:
-            patcher = mock.patch('openteamily.manager.dsbot_import.os.fchown')
-            patcher.start()
-            self.addCleanup(patcher.stop)
 
     def test_writes_bundles_once_and_reuses_the_seal_key(self):
         engine, client = FakeEngine(self.tmp.name), FakeClient()
@@ -95,7 +90,8 @@ class ImportJobTests(unittest.TestCase):
         first = dsbot_import.deliver(engine, client, iid)
         self.assertEqual(first['status'], 'delivered')
         self.assertEqual(client.seen[1], '11' * 32)
-        self.assertTrue(any(c[0] == 'cp' for c in engine.runner.calls))
+        self.assertEqual(engine.runner.received['settings-v1.bundle']['feature'], 'settings')
+        self.assertFalse(any(c[0] == 'cp' for c in engine.runner.calls))
         self.assertIn('automations-v1.bundle', first['features'])
         self.assertIn('agents-v1.bundle', first['features'])
         self.assertIn('artifacts-v1.bundle', first['features'])
@@ -111,7 +107,7 @@ class ImportJobTests(unittest.TestCase):
         iid = '1' * 32
         first = dsbot_import.deliver(engine, client, iid)
         self.assertEqual(first['status'], 'delivered')
-        self.assertTrue(any(c[0] == 'cp' for c in engine.runner.calls))
+        self.assertTrue(receives(engine.runner))
         self.assertTrue(any('.copied-settings-v1' in f for f in engine.runner.files))
 
         # The runtime rejected the bundle, so the files are still present. A copy
@@ -119,14 +115,51 @@ class ImportJobTests(unittest.TestCase):
         engine.runner.calls.clear()
         again = dsbot_import.deliver(engine, client, iid)
         self.assertEqual(again['status'], 'delivered')
-        self.assertTrue(any(c[0] == 'cp' for c in engine.runner.calls), 'rejected bundle is copied again')
+        self.assertEqual(len(receives(engine.runner)), len(dsbot_import.FEATURES), 'rejected bundles are copied again')
 
         # Once the runtime consumes the bundles (verified import), the retry stops.
         engine.runner.files = {f for f in engine.runner.files if not f.endswith('.bundle')}
         engine.runner.calls.clear()
         settled = dsbot_import.deliver(engine, client, iid)
         self.assertEqual(settled['status'], 'already-imported')
-        self.assertFalse(any(c[0] == 'cp' for c in engine.runner.calls))
+        self.assertFalse(receives(engine.runner))
+
+    def test_redelivers_a_bundle_the_runtime_has_not_consumed(self):
+        engine, client = FakeEngine(self.tmp.name), FakeClient()
+        iid = '1' * 32
+        engine.runner.consume = False  # keep the bundles so the delivery check can see them
+        dsbot_import.deliver(engine, client, iid)
+        bundle = '/data/openteamily/import/agents-v1.bundle'
+        engine.runner.unreadable.add(bundle)
+        # Every other bundle was verified and consumed; only agents is still there.
+        engine.runner.files = {f for f in engine.runner.files if not f.endswith('.bundle')} | {bundle}
+        engine.runner.calls.clear()
+        retry = dsbot_import.deliver(engine, client, iid)
+        self.assertEqual(retry['features'], ['agents-v1.bundle'])
+        self.assertNotIn(bundle, engine.runner.unreadable)
+        # The re-sent bundle is imported and removed by the runtime; then it settles.
+        engine.runner.consume = True
+        engine.runner.files.discard(bundle)
+        self.assertEqual(dsbot_import.deliver(engine, client, iid)['status'], 'already-imported')
+
+    def test_legacy_delivered_markers_are_not_copy_receipts(self):
+        engine, client = FakeEngine(self.tmp.name), FakeClient()
+        iid = '1' * 32
+        dsbot_import.deliver(engine, client, iid)
+        # An older manager wrote `.delivered-`; only `.copied-` is a copy receipt.
+        engine.runner.files = {f.replace('/.copied-', '/.delivered-') for f in engine.runner.files}
+        engine.runner.calls.clear()
+        retry = dsbot_import.deliver(engine, client, iid)
+        self.assertEqual(sorted(retry['features']), sorted(f'{name}-v1.bundle' for name in dsbot_import.FEATURES))
+        self.assertEqual(dsbot_import.deliver(engine, client, iid)['status'], 'already-imported')
+
+    def test_skips_a_historical_runtime_without_writing_a_bundle(self):
+        engine, client = FakeEngine(self.tmp.name), FakeClient()
+        iid = '1' * 32
+        with mock.patch.object(client, 'dsbot_import', side_effect=ManagerError('import_destination')):
+            result = dsbot_import.deliver(engine, client, iid)
+        self.assertEqual(result['status'], 'import_skipped')
+        self.assertEqual(engine.runner.received, {})
 
     def test_refuses_when_the_runtime_is_down(self):
         engine, client = FakeEngine(self.tmp.name), FakeClient()

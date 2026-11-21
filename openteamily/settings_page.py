@@ -14,7 +14,9 @@ from . import discover
 
 class SettingsPage:
     ASSETS = {
+        '/login': ('home', 'index.html', 'text/html; charset=utf-8'),
         '/register': ('register', 'index.html', 'text/html; charset=utf-8'),
+        '/register/': ('register', 'index.html', 'text/html; charset=utf-8'),
         '/register/app.mjs': ('register', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/register/app.css': ('register', 'app.css', 'text/css; charset=utf-8'),
         '/settings': ('settings', 'index.html', 'text/html; charset=utf-8'),
@@ -38,6 +40,9 @@ class SettingsPage:
         '/new/team': ('team', 'index.html', 'text/html; charset=utf-8'),
         '/team/app.mjs': ('team', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/team/app.css': ('team', 'app.css', 'text/css; charset=utf-8'),
+        '/contacts': ('contacts', 'index.html', 'text/html; charset=utf-8'),
+        '/contacts/app.mjs': ('contacts', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/contacts/app.css': ('contacts', 'app.css', 'text/css; charset=utf-8'),
         '/members': ('members', 'index.html', 'text/html; charset=utf-8'),
         '/members/app.mjs': ('members', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/members/app.css': ('members', 'app.css', 'text/css; charset=utf-8'),
@@ -49,6 +54,7 @@ class SettingsPage:
         '/agents/app.mjs': ('agents', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/agents/app.css': ('agents', 'app.css', 'text/css; charset=utf-8'),
         '/memory': ('memory', 'index.html', 'text/html; charset=utf-8'),
+        '/memory/candidates.mjs': ('memory', 'candidates.mjs', 'text/javascript; charset=utf-8'),
         '/memory/app.mjs': ('memory', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/memory/rich.mjs': ('memory', 'rich.mjs', 'text/javascript; charset=utf-8'),
         '/memory/app.css': ('memory', 'app.css', 'text/css; charset=utf-8'),
@@ -56,11 +62,16 @@ class SettingsPage:
         '/shell/app.mjs': ('shell', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/shell/rich-editor.mjs': ('shell', 'rich-editor.mjs', 'text/javascript; charset=utf-8'),
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-skills.mjs': ('shell', 'dsbot-skills.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/activity.mjs': ('chat', 'activity.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/voice.mjs': ('chat', 'voice.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/mentions.mjs': ('chat', 'mentions.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/dsbot.mjs': ('chat', 'dsbot.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.css': ('chat', 'app.css', 'text/css; charset=utf-8'),
         '/messenger': ('messenger', 'index.html', 'text/html; charset=utf-8'),
         '/messenger/app.mjs': ('messenger', 'app.mjs', 'text/javascript; charset=utf-8'),
@@ -70,6 +81,7 @@ class SettingsPage:
         '/discover/app.css': ('discover', 'app.css', 'text/css; charset=utf-8'),
         '/meetings': ('meetings', 'index.html', 'text/html; charset=utf-8'),
         '/meetings/app.mjs': ('meetings', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/meetings/audio.mjs': ('meetings', 'audio.mjs', 'text/javascript; charset=utf-8'),
         '/meetings/app.css': ('meetings', 'app.css', 'text/css; charset=utf-8'),
         '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/edit': ('profile', 'index.html', 'text/html; charset=utf-8'),
@@ -102,7 +114,7 @@ class SettingsPage:
         '/home/app.mjs': ('home', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/home/app.css': ('home', 'app.css', 'text/css; charset=utf-8'),
     }
-    PREFIXES = ('/register', '/settings', '/automations', '/team', '/new', '/members', '/artifacts', '/space', '/agents', '/memory', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
+    PREFIXES = ('/register', '/settings', '/automations', '/team', '/new', '/contacts', '/members', '/artifacts', '/space', '/agents', '/memory', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")
@@ -217,10 +229,13 @@ class SettingsPage:
                                                  ('Content-Length', '9')])
                 return [] if env.get('REQUEST_METHOD') == 'HEAD' else [b'Not found']
             return self.api(env, start_response)
+        audio_page = path in ('/chat', '/chat/', '/meetings')
+        csp = self.CSP + "; media-src 'self' blob:" if audio_page else self.CSP
+        microphone = '(self)' if audio_page else '()'
         headers = [('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff'),
-                   ('Content-Security-Policy', self.CSP), ('Referrer-Policy', 'no-referrer'),
+                   ('Content-Security-Policy', csp), ('Referrer-Policy', 'no-referrer'),
                    ('Cross-Origin-Resource-Policy', 'same-origin'),
-                   ('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')]
+                   ('Permissions-Policy', f'camera=(), microphone={microphone}, geolocation=()')]
         content_type = 'text/plain; charset=utf-8'
         status, data = '404 Not Found', b'Not found'
         origin = self.api.config.origin
