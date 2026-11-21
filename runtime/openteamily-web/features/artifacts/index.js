@@ -5,12 +5,13 @@
 // public /share/<token> pages are rendered by Bot Social (snapshot published here).
 import { defineFeature } from '../../featurekit/feature.js'
 import { HEX32, digest, refuse } from '../../featurekit/http.js'
-import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, search } from './library.js'
+import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, search, uniqueTitle } from './library.js'
 import { IMPORT_TABLES, MIGRATIONS } from './schema.js'
 import { routes } from './routes.js'
 import { importMedia } from './media.js'
-import { emptyBoard, MAX_GENERATED_VIDEO_BYTES, MAX_MEDIA_BYTES, publicKind } from './model.js'
+import { emptyBoard, MAX_GENERATED_VIDEO_BYTES, MAX_MEDIA_BYTES, publicKind, validTitle } from './model.js'
 import { sniffMime } from './render.js'
+import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { exportOffice } from './office.js'
 import { decodeStructured } from './structured.js'
 
@@ -56,6 +57,21 @@ export default defineFeature({
     async generatedMusic(input, call) {
       return generatedMedia(ctx, input, call, 'music', 'audio/mpeg', 'mp3', MAX_MEDIA_BYTES)
     },
+    async generatedModel3d(input, call) {
+      return generatedMedia(ctx, input, call, 'model3d', GLB_MIME, 'glb', MAX_GLB_BYTES)
+    },
+    async generatedWebsite(input, call) {
+      if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+      const {workspace_id: workspace, job_id: id, title, body} = input ?? {}
+      if (!HEX32.test(workspace || '') || !HEX32.test(id || '')) refuse(400, 'invalid', 'Invalid generation')
+      const key = 'website-' + id
+      const saved = ctx.store.get('SELECT id FROM artifacts WHERE workspace_id=? AND key_hash=?', workspace, digest('artifact:' + key))
+      if (saved || body === undefined) return saved
+      if (!validTitle(title)) refuse(400, 'invalid', 'Invalid website title')
+      const name = uniqueTitle(ctx.store, workspace, title.trim(), id)
+      const result = createArtifact(ctx, workspace, {kind: 'website', title: name, body}, key)
+      return {id: result.body.artifact.id}
+    },
     async saveChatMessage(input, call) {
       if (!call?.internal) refuse(403, 'forbidden', 'Save chat messages from their conversation')
       const { workspace_id: workspace, conversation_id, message_id, agent_id, conversation_title, body } = input
@@ -64,6 +80,17 @@ export default defineFeature({
       const key = agent_id ? 'msg-save-' + digest(message_id).slice(0, 48)
         : ('msg-save-' + message_id).replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64)
       const result = createArtifact(ctx, workspace, {kind: 'document', title, body, source}, key, {reuseChatSource: true})
+      return {status: result.status, artifact: result.body.artifact}
+    },
+    async saveAutomationRun(input, call) {
+      if (!call?.internal) refuse(403, 'forbidden', 'Save results from their automation run')
+      const { workspace_id: workspace, automation_id, automation_title, run_id, body } = input ?? {}
+      if (![workspace, automation_id, run_id].every(id => typeof id === 'string' && HEX32.test(id)) || !validTitle(automation_title)) {
+        refuse(400, 'invalid', 'Invalid automation result')
+      }
+      const source = {kind: 'automation_run', id: run_id, automation_id, automation_title}
+      const title = uniqueTitle(ctx.store, workspace, `${automation_title} · 运行结果`, run_id)
+      const result = createArtifact(ctx, workspace, {kind: 'document', title, body, source}, 'automation-run-' + run_id, {reuseSource: true})
       return {status: result.status, artifact: result.body.artifact}
     },
     async chatAttachment(input, call) {
@@ -91,7 +118,7 @@ export default defineFeature({
           mime: 'application/json', extension: 'json'}
       } else {
         const result = exportBytes(row, ctx.featureDir, workspace, fromVersion)
-        const extensions = {'image/jpeg':'jpg', 'audio/mpeg':'mp3'}
+        const extensions = {'image/jpeg':'jpg', 'audio/mpeg':'mp3', [GLB_MIME]: 'glb'}
         const extension = extensions[result.contentType] || result.contentType.split('/').at(-1)
         file = {payload: result.payload, mime: kind === 'website' ? 'text/plain' : result.contentType,
           extension: kind === 'website' ? 'txt' : extension}
@@ -101,6 +128,7 @@ export default defineFeature({
       const title = row.title.replace(/[.\/\\]/g, '_').trim()
       return {body: `${row.title} · 版本 ${revision}`, attachment: {
         title: `${title}-v${revision}.${file.extension}`, mime: file.mime, data: bytes.toString('base64'),
+        resource: {kind,title:row.title,revision},
       }}
     },
     async files(payload) {
