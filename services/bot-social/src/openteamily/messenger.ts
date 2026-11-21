@@ -5,7 +5,7 @@
 // that DS-Bot and posted back here. Automatic (un-@'d) group replies are capped at 3 per hour per
 // conversation (#346). OpenTeamily semantics; not Teamily parity.
 import { createHash } from "node:crypto";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { assert } from "../errors.js";
 import { newId } from "../ids.js";
 import { body, handleKey, intParam, OtContext, optText, params, query, text } from "./core.js";
@@ -434,6 +434,9 @@ function replyContext(ot: OtContext, conversationId: string, seq: number) {
 }
 
 export function registerMessenger(app: FastifyInstance, ot: OtContext) {
+  // SQLite lower() folds ASCII only. Filenames can contain Unicode letters.
+  ot.db.function("ot_attachment_title_matches", {deterministic: true}, (title: string, term: string) =>
+    Number(title.toLowerCase().includes(term)));
   const conversationCols = new Set(ot.all<{name: string}>("PRAGMA table_info(ot_conversations)").map(col => col.name));
   if (!conversationCols.has("account_group")) ot.run("ALTER TABLE ot_conversations ADD COLUMN account_group INTEGER NOT NULL DEFAULT 0");
   if (!conversationCols.has("activity_revision")) ot.run("ALTER TABLE ot_conversations ADD COLUMN activity_revision INTEGER NOT NULL DEFAULT 0");
@@ -869,6 +872,45 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     });
     return reply.status(201).send(result);
   });
+  const listAttachments = async (req: FastifyRequest, reply: FastifyReply) => {
+    reply.header("cache-control", "private, no-store");
+    const me = ot.me(req);
+    const {workspace, id} = params(req);
+    const conv = workspace ? workspaceConversation(ot, workspace, id, me.ownerId).conv : memberOf(ot, id, me.ownerId);
+    const q = query(req);
+    assert(Object.keys(q).every(key => ["kind", "q", "cursor", "limit"].includes(key)),
+      400, "invalid_request", "Unknown attachment search parameter");
+    assert(q.kind === "photo" || q.kind === "file", 400, "invalid_request", "Choose photo or file attachments");
+    const term = q.q === undefined ? "" : text(q.q, "q", {max: 80, multiline: true}).trim().toLowerCase();
+    const rawLimit = q.limit ?? "20";
+    const limit = Number(rawLimit);
+    assert(typeof rawLimit === "string" && /^[0-9]{1,2}$/.test(rawLimit) && limit >= 1 && limit <= 50,
+      400, "invalid_request", "Attachment search limit must be 1–50");
+    const before = q.cursor === undefined ? Number.MAX_SAFE_INTEGER : Number(q.cursor);
+    assert(q.cursor === undefined || (typeof q.cursor === "string" && /^[1-9][0-9]{0,15}$/.test(q.cursor) && Number.isSafeInteger(before)),
+      400, "invalid_request", "Invalid attachment cursor");
+    if (fixedPublicThread(conv)) {
+      assert(!workspace, 404, "conversation_not_found", "no such conversation in this workspace");
+      // Published agent conversations support text only.
+      return {items: [], next_cursor: null};
+    }
+    assert(workspace || ordinaryDirect(conv) || conv.account_group === 1,
+      404, "conversation_not_found", "no such personal conversation");
+    const rows = ot.all<{message_id: string; created_at: number; seq: number; title: string; mime: string; bytes: number}>(`
+      SELECT m.id AS message_id, m.created_at, m.seq, a.title, a.mime, a.bytes
+      FROM ot_messages m JOIN ot_message_attachments a ON a.message_id=m.id
+      WHERE m.conversation_id=? AND m.seq<? AND m.retracted=0 AND ${VISIBLE_MESSAGE}
+        AND (a.mime LIKE 'image/%')=? AND (?='' OR ot_attachment_title_matches(a.title, ?))
+      ORDER BY m.seq DESC LIMIT ?`, conv.id, before, me.ownerId, Number(q.kind === "photo"), term, term, limit + 1);
+    return {
+      items: rows.slice(0, limit).map(({message_id, created_at, title, mime, bytes}) => ({
+        message_id, created_at, attachment: {title, mime, bytes},
+      })),
+      next_cursor: rows.length > limit ? String(rows[limit - 1].seq) : null,
+    };
+  };
+  app.get("/v1/ot/workspaces/:workspace/conversations/:id/attachments", listAttachments);
+  app.get("/v1/ot/conversations/:id/attachments", listAttachments);
   app.get("/v1/ot/workspaces/:workspace/conversations/:id/messages/:message/file", async req => {
     const me = ot.me(req);
     const {workspace, id, message} = params(req);

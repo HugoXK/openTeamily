@@ -1,6 +1,6 @@
 import { decodeVoice, mountVoiceRecorder } from './voice.mjs';
 import { mountAgentMentions } from './mentions.mjs';
-import { AGENT_FILE_ACCEPT, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
+import { AGENT_FILE_ACCEPT, chatFileDownload, mountChatFiles, renderChatFile, sendPrivateAttachmentMessage } from './files.mjs';
 import { mountGroupTranslation } from './translation.mjs';
 import { mountChatCalls } from './calls.mjs';
 import { mountImageCreator } from './image-create.mjs';
@@ -1021,11 +1021,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return new Set((pendingSends.get(sendScope())?.jobs || []).map(job => job.key));
   }
 
-  async function request(method, path, body, extra) {
+  async function request(method, path, body, extra, signal) {
     const headers = {'Accept': 'application/json', 'X-CSRF-Token': csrfCookie(document.cookie), ...(extra || {})};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     const response = await fetcher(path, {
-      method, headers, credentials: 'same-origin',
+      method, headers, credentials: 'same-origin', signal,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     let parsed = {};
@@ -2765,6 +2765,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentConversation = null;
     currentAgent = agent;
     currentSource = 'agent';
+    closeInChatSearch({restoreScroll: false, focus: false});
     publicDraft.enter(sendScope());
     stopPolling();
     setSocialHistory(null);
@@ -2821,8 +2822,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!currentConversation || currentConversation.id !== result.body.conversation.id) {
       const autoReplyNotice = document.getElementById('group-agent-auto-reply-status');
       if (autoReplyNotice) autoReplyNotice.hidden = true;
-      const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
-      const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
+      closeInChatSearch({restoreScroll: false, focus: false});
     }
     currentConversation = result.body.conversation;
     publicDraft.enter(sendScope());
@@ -2878,8 +2878,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return true;
     }
     if (!currentConversation || currentConversation.id !== updated.id) {
-      const panel = document.getElementById('conversation-search-panel'); if (panel) panel.hidden = true;
-      const hits = document.getElementById('conversation-search-results'); if (hits) hits.replaceChildren();
+      closeInChatSearch({restoreScroll: false, focus: false});
     }
     currentConversation = updated;
     publicDraft.enter(sendScope(), Boolean(updated.public_agent));
@@ -3831,7 +3830,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     stopPolling();
     closeSearchPanel();
     closeComposeDialog();
-    const inChatPanel = document.getElementById('conversation-search-panel'); if (inChatPanel) inChatPanel.hidden = true;
+    closeInChatSearch({restoreScroll: false, focus: false});
     writeHash({workspace: workspaceId()});
     applyChatIdentity(document, '聊天');
     showPublicChatState(null);
@@ -3874,21 +3873,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (result.status !== 200) throw new Error('无法搜索当前会话。');
     return result.body;
   });
-  async function searchCurrentConversation(append = false) {
-    const conversation = currentConversation;
-    const query = (document.getElementById('conversation-search-query').value || '').trim();
-    if (!conversation || !query) return;
-    const wid = workspaceId();
-    const state = await inChatSearch.load(query, conversation.id, {append});
-    if (workspaceId() !== wid || !currentConversation || currentConversation.id !== conversation.id) return;
-    const list = document.getElementById('conversation-search-results'); list.replaceChildren();
-    for (const hit of state.hits) {
-      list.append(searchHitRow(hit, (document.getElementById('conversation-search-query').value || '').trim()));
-    }
-    document.getElementById('conversation-search-status').textContent = state.error || (state.hits.length ? '已显示 ' + state.hits.length + ' 条消息' : '没有找到匹配的消息。试试其他关键词。');
-    document.getElementById('conversation-search-more').hidden = !state.cursor;
-  }
-  async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status')) {
+  async function jumpToMessage(messageId, notice = document.getElementById('conversation-search-status'), isCurrent = () => true) {
+    if (!isCurrent()) return false;
     const list = document.getElementById('message-list');
     const findTarget = () => Array.from(list.children || []).find(node => node.dataset.messageId === messageId);
     let target = findTarget();
@@ -3898,7 +3884,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       try {
         const query = new URLSearchParams({around: messageId, limit: '50'});
         const result = await historyPage(state, query);
-        if (!result || jump !== historyJump) return;
+        if (!result || jump !== historyJump || !isCurrent()) return false;
         if (result.status === 200 && result.body.items?.some(item => item.id === messageId)) {
           setSocialHistory({...state, cursor: result.body.cursor ?? null,
             readingHistory: true, loading: false});
@@ -3908,7 +3894,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           if (notice) notice.textContent = '';
         }
       } catch {
-        if (socialHistory !== state || jump !== historyJump) return;
+        if (socialHistory !== state || jump !== historyJump || !isCurrent()) return false;
       }
     }
     if (!target) {
@@ -3922,13 +3908,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     setTimeout(() => { delete target.dataset.searchJump; }, SEARCH_JUMP_HIGHLIGHT_MS);
     return true;
   }
-  function searchHitRow(hit, query) {
+  function searchHitRow(hit, view) {
     const li = document.createElement('li');
     li.className = 'search-hit';
     li.tabIndex = 0;
     li.setAttribute('role', 'button');
     li.setAttribute('aria-label', '跳到这条消息');
-    const jump = () => jumpToMessage(hit.messageId);
+    const jump = () => jumpToMessage(hit.messageId, inChatStatus, () => currentSearchView(view));
     li.addEventListener('click', jump);
     li.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
@@ -3947,65 +3933,72 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     head.append(name, when);
     const text = document.createElement('span');
     text.className = 'search-hit-text';
-    text.append(...highlightParts(hit.snippet || hit.preview || '', query).map(part => {
+    text.append(...highlightParts(hit.snippet || hit.preview || '', view.query).map(part => {
       if (!part.match) return document.createTextNode(part.text);
       const mark = document.createElement('mark'); mark.textContent = part.text; return mark;
     }));
     li.append(avatar, head, text);
     return li;
   }
-  // The conversation search covers three scopes of the SAME conversation. The
-  // photo and file scopes read the attachment fields the message rows already
-  // carry (social.py MESSAGE_ROWS -> attachment{id,title,kind,revision,path}),
-  // paged through the existing messages endpoint; no second list is invented.
-  const CONVERSATION_SCOPE_NOTES = {
-    messages: '· 搜索当前会话里你有权查看的消息。',
-    photos: '· 只读取当前会话消息里已有的图片附件。',
-    files: '· 只读取当前会话消息里已有的文件附件。',
+  const CONVERSATION_SCOPES = {
+    messages: {placeholder: '搜索当前会话', note: '搜索当前会话中的消息。'},
+    photos: {placeholder: '搜索照片文件名', note: '搜索当前会话中的照片。', kind: 'photo', noun: '照片', unit: '张'},
+    files: {placeholder: '搜索文件名', note: '搜索当前会话中的文件。', kind: 'file', noun: '文件', unit: '个'},
   };
-  const ATTACHMENT_PAGE_LIMIT = 100; // the messages endpoint caps limit at 100
-  const ATTACHMENT_MAX_PAGES = 50;
+  const inChatPanel = document.getElementById('conversation-search-panel');
+  const inChatQuery = document.getElementById('conversation-search-query');
+  const inChatResults = document.getElementById('conversation-search-results');
+  const inChatStatus = document.getElementById('conversation-search-status');
+  const inChatMore = document.getElementById('conversation-search-more');
+  const inChatRetry = document.getElementById('conversation-search-retry');
   let conversationScope = 'messages';
+  let searchedChat = '';
+  let inChatView;
+  let searchDelay;
+  const conversationQuery = () => inChatQuery.value.trim();
+  const currentSearchView = view => Boolean(view && inChatView === view && !inChatPanel.hidden
+    && view.chat === sendScope() && view.scope === conversationScope && view.query === conversationQuery());
+
+  function clearConversationSearch() {
+    clearTimeout(searchDelay);
+    inChatView?.controller?.abort();
+    inChatView = null;
+    void inChatSearch.load('');
+    inChatResults.replaceChildren();
+    inChatResults.scrollTop = 0;
+    inChatResults.setAttribute('aria-busy', 'false');
+    inChatStatus.textContent = '';
+    inChatMore.hidden = true;
+    inChatMore.disabled = false;
+    inChatRetry.hidden = true;
+  }
+
   function setConversationScope(tab) {
     conversationScope = tab;
-    for (const name of ['messages', 'photos', 'files']) {
-      const button = document.getElementById('conversation-search-tab-' + name);
-      if (button) button.setAttribute('aria-selected', String(name === tab));
+    for (const name of Object.keys(CONVERSATION_SCOPES)) {
+      document.getElementById('conversation-search-tab-' + name)?.setAttribute('aria-selected', String(name === tab));
     }
-    const note = document.getElementById('conversation-search-scope-note');
-    if (note) note.textContent = CONVERSATION_SCOPE_NOTES[tab] || CONVERSATION_SCOPE_NOTES.messages;
-    const more = document.getElementById('conversation-search-more');
-    if (more) more.hidden = true;
+    const {placeholder, note} = CONVERSATION_SCOPES[tab];
+    inChatQuery.placeholder = placeholder;
+    document.getElementById('conversation-search-query-label').textContent = placeholder;
+    document.getElementById('conversation-search-scope-note').textContent = note;
   }
-  async function conversationAttachments(conversation) {
-    const items = [];
-    let cursor = '';
-    let truncated = false;
-    for (let page = 0; page < ATTACHMENT_MAX_PAGES; page += 1) {
-      const params = new URLSearchParams({limit: String(ATTACHMENT_PAGE_LIMIT)});
-      if (cursor) params.set('cursor', cursor);
-      const result = await request('GET', `/v1/workspaces/${workspaceId()}/social/conversations/${conversation.id}/messages?${params}`);
-      if (result.status !== 200) throw new Error('读不到当前会话的附件。');
-      items.push(...(result.body.items || []));
-      cursor = result.body.cursor || '';
-      if (!cursor) return {items, truncated: false};
-      truncated = true;
-    }
-    return {items, truncated};
-  }
-  function attachmentHitRow(item) {
+
+  function attachmentHitRow(item, view, photo) {
+    const {attachment} = item;
+    const title = attachment.title || (photo ? '未命名照片' : '未命名文件');
     const li = document.createElement('li');
-    li.className = 'search-hit';
-    li.tabIndex = 0;
-    li.setAttribute('role', 'button');
-    li.setAttribute('aria-label', '跳到这条消息');
-    const jump = () => jumpToMessage(item.id);
-    li.addEventListener('click', jump);
-    li.addEventListener('keydown', event => {
-      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); jump(); }
+    li.className = 'attachment-search-hit';
+    const jump = document.createElement('button');
+    jump.type = 'button';
+    jump.className = 'search-hit attachment-search-jump';
+    jump.setAttribute('aria-label', '跳到原消息，' + title);
+    jump.addEventListener('click', async () => {
+      const located = await jumpToMessage(item.message_id, inChatStatus, () => currentSearchView(view));
+      if (!located || !currentSearchView(view)) return;
+      searchScrollSnapshot = null;
+      if (globalThis.matchMedia?.('(max-width: 700px)').matches) closeInChatSearch({restoreScroll: false, focus: false});
     });
-    const attachment = item.attachment || {};
-    const photo = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
     const avatar = document.createElement('span');
     avatar.className = 'search-hit-avatar';
     avatar.setAttribute('aria-hidden', 'true');
@@ -4013,75 +4006,102 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const head = document.createElement('span');
     head.className = 'search-hit-head';
     const name = document.createElement('strong');
-    name.textContent = attachment.title || (photo ? '未命名照片' : '未命名文件');
+    name.textContent = title;
+    name.title = title;
+    head.append(name);
     const when = document.createElement('time');
-    when.textContent = item.created ? formatSessionTime(item.created) : '';
-    head.append(name, when);
-    const text = document.createElement('span');
-    text.className = 'search-hit-text';
-    text.textContent = (photo ? '照片' : '文件') + ' · 点开回到这条消息';
-    li.append(avatar, head, text);
+    when.className = 'search-hit-text';
+    when.textContent = formatSessionTime(item.created_at);
+    jump.append(avatar, head, when);
+    li.append(jump);
+    const download = chatFileDownload(document, attachment);
+    if (download) {
+      download.className = 'attachment-search-download';
+      li.append(download);
+    }
     return li;
   }
-  async function searchCurrentAttachments(scope) {
-    const conversation = currentConversation;
-    const list = document.getElementById('conversation-search-results');
-    const status = document.getElementById('conversation-search-status');
-    if (!list || !status) return;
-    list.replaceChildren();
-    if (!conversation) { status.textContent = '请先打开一个会话。'; return; }
-    if (currentSource !== 'social') {
-      status.textContent = '智能体会话的消息数据里没有附件字段，读不到照片和文件。';
-      return;
+
+  async function searchAttachmentPage(view, {kind, noun, unit}) {
+    const conversation = currentConversation.id;
+    const base = currentSource === 'social' ? socialBase() : agentBase() + '/conversations';
+    const params = new URLSearchParams({kind, q: view.query, limit: '20'});
+    if (view.cursor) params.set('cursor', view.cursor);
+    view.controller = new AbortController();
+    const result = await request('GET', `${base}/${conversation}/attachments?${params}`, undefined, undefined, view.controller.signal);
+    if (!currentSearchView(view)) return;
+    if (result.status !== 200) throw new Error('读不到当前会话的附件，请重试。');
+    for (const item of result.body.items || []) {
+      if (!item.message_id || !item.attachment?.id) continue;
+      const id = JSON.stringify([item.message_id, item.attachment.id]);
+      if (view.seen.has(id)) continue;
+      view.seen.add(id);
+      inChatResults.append(attachmentHitRow(item, view, kind === 'photo'));
     }
-    status.textContent = '正在读取当前会话的附件…';
-    const wid = workspaceId();
-    let found;
-    try {
-      found = await conversationAttachments(conversation);
-    } catch (failure) {
-      if (currentConversation && currentConversation.id === conversation.id) {
-        status.textContent = failure.message || '读不到当前会话的附件。';
-      }
-      return;
-    }
-    if (workspaceId() !== wid || !currentConversation || currentConversation.id !== conversation.id) return;
-    if (conversationScope !== scope) return;
-    const photos = scope === 'photos';
-    const hits = found.items.filter(item => {
-      const attachment = item.attachment;
-      if (!attachment) return false;
-      const image = attachment.kind === 'image' || String(attachment.mime || '').startsWith('image/');
-      return photos ? image : !image;
-    });
-    for (const item of hits) list.append(attachmentHitRow(item));
-    if (hits.length) {
-      status.textContent = (photos ? '已显示 ' + hits.length + ' 张照片' : '已显示 ' + hits.length + ' 个文件')
-        + (found.truncated ? ' · 只读取了最近 ' + (ATTACHMENT_PAGE_LIMIT * ATTACHMENT_MAX_PAGES) + ' 条消息' : '');
+    const next = result.body.next_cursor;
+    view.cursor = typeof next === 'string' && next !== view.cursor ? next : '';
+    inChatStatus.textContent = view.seen.size ? `已显示 ${view.seen.size} ${unit}${noun}`
+      : view.query ? `没有找到匹配的${noun}。` : `这个会话里还没有${noun}。`;
+  }
+
+  async function searchCurrentConversation(append = false) {
+    if (!currentConversation || inChatPanel.hidden) return;
+    if (append) {
+      if (!currentSearchView(inChatView) || !inChatView.cursor || inChatView.loading) return;
     } else {
-      status.textContent = photos ? '这个会话里还没有照片。' : '这个会话里还没有文件。';
+      clearConversationSearch();
+      const query = conversationQuery();
+      if (conversationScope === 'messages' && !query) return;
+      inChatView = {chat: sendScope(), scope: conversationScope, query, cursor: '', seen: new Set()};
+    }
+    const view = inChatView;
+    const scope = CONVERSATION_SCOPES[view.scope];
+    const noun = scope.noun || '消息';
+    view.loading = true;
+    inChatResults.setAttribute('aria-busy', 'true');
+    inChatStatus.textContent = append ? '正在加载更多…' : `正在搜索${noun}…`;
+    inChatMore.disabled = true;
+    inChatRetry.hidden = true;
+    try {
+      if (scope.kind) {
+        await searchAttachmentPage(view, scope);
+      } else {
+        const state = await inChatSearch.load(view.query, currentConversation.id, {append});
+        if (!currentSearchView(view)) return;
+        if (state.error) throw new Error(state.error);
+        inChatResults.replaceChildren(...state.hits.map(hit => searchHitRow(hit, view)));
+        view.cursor = state.cursor;
+        inChatStatus.textContent = state.hits.length ? `已显示 ${state.hits.length} 条消息` : '没有找到匹配的消息。试试其他关键词。';
+      }
+      if (currentSearchView(view)) inChatMore.hidden = !view.cursor;
+    } catch {
+      if (!currentSearchView(view)) return;
+      inChatStatus.textContent = append ? '无法加载更多，请重试。' : `无法搜索${noun}，请重试。`;
+      view.retryAppend = append;
+      inChatMore.hidden = true;
+      inChatRetry.hidden = false;
+    } finally {
+      if (currentSearchView(view)) {
+        view.loading = false;
+        view.controller = null;
+        inChatMore.disabled = false;
+        inChatResults.setAttribute('aria-busy', 'false');
+      }
     }
   }
-  for (const scope of ['messages', 'photos', 'files']) {
-    const button = document.getElementById('conversation-search-tab-' + scope);
-    if (!button) continue;
-    button.addEventListener('click', async () => {
+
+  for (const scope of Object.keys(CONVERSATION_SCOPES)) {
+    document.getElementById('conversation-search-tab-' + scope)?.addEventListener('click', () => {
+      if (scope === conversationScope) return;
       setConversationScope(scope);
-      const list = document.getElementById('conversation-search-results');
-      if (scope === 'messages') {
-        const query = (document.getElementById('conversation-search-query').value || '').trim();
-        if (query) await searchCurrentConversation();
-        else { if (list) list.replaceChildren(); document.getElementById('conversation-search-status').textContent = ''; }
-        return;
-      }
-      await searchCurrentAttachments(scope);
+      return searchCurrentConversation();
     });
   }
   const groupInfoToggle = document.getElementById('group-info-toggle');
   if (groupInfoToggle) {
     groupInfoToggle.addEventListener('click', () => {
       const open = groupInfoToggle.getAttribute('aria-expanded') !== 'true';
-      if (open) document.getElementById('conversation-search-panel').hidden = true;
+      if (open) closeInChatSearch({restoreScroll: false, focus: false});
       setGroupInfoOpen(open);
     });
     document.getElementById('group-info-close').addEventListener('click', () => { setGroupInfoOpen(false); groupInfoToggle.focus(); });
@@ -4110,32 +4130,47 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   }
   let searchScrollSnapshot = null;
   const inChatOpen = document.getElementById('conversation-search-open');
-  if (inChatOpen) inChatOpen.addEventListener('click', () => {
+  inChatOpen?.addEventListener('click', () => {
     if (!currentConversation) { show('error', '请先打开一个会话。'); return; }
     setGroupInfoOpen(false);
-    if (document.getElementById('conversation-search-panel').hidden) {
-      searchScrollSnapshot = {conversation: currentConversation.id, top: document.getElementById('message-scroller').scrollTop};
+    if (!inChatPanel.hidden) { inChatQuery.focus(); return; }
+    const chat = sendScope();
+    if (searchedChat !== chat) {
+      searchedChat = chat;
+      inChatQuery.value = '';
+      setConversationScope('messages');
     }
-    document.getElementById('conversation-search-panel').hidden = false;
-    const field = document.getElementById('conversation-search-query'); if (field) field.focus();
+    searchScrollSnapshot = {chat, top: document.getElementById('message-scroller').scrollTop};
+    inChatPanel.hidden = false;
+    inChatQuery.focus();
+    return searchCurrentConversation();
   });
-  const inChatClose = document.getElementById('conversation-search-close');
-  function closeInChatSearch() {
-    document.getElementById('conversation-search-panel').hidden = true;
-    if (searchScrollSnapshot && currentConversation && currentConversation.id === searchScrollSnapshot.conversation) {
+  function closeInChatSearch({restoreScroll = true, focus = true} = {}) {
+    inChatPanel.hidden = true;
+    clearConversationSearch();
+    if (restoreScroll && searchScrollSnapshot?.chat === sendScope()) {
       document.getElementById('message-scroller').scrollTop = searchScrollSnapshot.top;
     }
     searchScrollSnapshot = null;
-    if (inChatOpen) inChatOpen.focus();
+    if (focus) {
+      const opener = inChatOpen?.checkVisibility?.() === false ? document.getElementById('chat-more') : inChatOpen;
+      opener?.focus();
+    }
   }
-  if (inChatClose) inChatClose.addEventListener('click', closeInChatSearch);
+  document.getElementById('conversation-search-close')?.addEventListener('click', () => closeInChatSearch());
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !document.getElementById('conversation-search-panel').hidden) closeInChatSearch();
+    if (event.key === 'Escape' && !inChatPanel.hidden) closeInChatSearch();
   });
-  const inChatForm = document.getElementById('conversation-search-form');
-  if (inChatForm) inChatForm.addEventListener('submit', async event => { event.preventDefault(); await searchCurrentConversation(); });
-  const inChatMore = document.getElementById('conversation-search-more');
-  if (inChatMore) inChatMore.addEventListener('click', () => searchCurrentConversation(true));
+  document.getElementById('conversation-search-form')?.addEventListener('submit', event => {
+    event.preventDefault();
+    return searchCurrentConversation();
+  });
+  inChatQuery.addEventListener('input', event => {
+    clearConversationSearch();
+    if (!event.isComposing) searchDelay = setTimeout(() => void searchCurrentConversation(), 200);
+  });
+  inChatMore.addEventListener('click', () => searchCurrentConversation(true));
+  inChatRetry.addEventListener('click', () => searchCurrentConversation(inChatView?.retryAppend || false));
   function renderDeliveredSocialMessage(scope, message) {
     if (message && scope === sendScope() && !socialHistory?.readingHistory) {
       const without = lastSocialItems.filter(item => item.id !== message.id);

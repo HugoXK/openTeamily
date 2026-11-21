@@ -22,13 +22,14 @@ const publicConversation = (row, workspaceId, agentId) => ({
   id: row.id, native_bot_id: row.native_bot_id || null, native_session_id: row.native_session_id || null, workspace_id: workspaceId, agent_id: agentId, title: row.title, created: row.created, updated: row.updated, preview: row.preview ?? '', unread_count: 0,
   ...(typeof row.memory_recall === 'boolean' ? {memory_recall:row.memory_recall,memory_scope:row.memory_scope} : {}),
 })
+const publicFile = ({title,mime,bytes}, index, workspaceId, agentId, conversationId, messageId) => ({
+  title,mime,bytes,path:`/v1/workspaces/${workspaceId}/agents/${agentId}/conversations/${conversationId}/messages/${messageId}/files/${index}`,
+})
 const publicMessage = (row, workspaceId, agentId) => {
   const status = row.status === 'sent' ? 'succeeded' : row.status
   let meta = row.meta
   if (typeof meta === 'string') try { meta = JSON.parse(meta) } catch { meta = {} }
-  const attachments = (meta?.files || []).map(({title,mime,bytes}, index) => ({
-    title,mime,bytes,path:`/v1/workspaces/${workspaceId}/agents/${agentId}/conversations/${row.conversation_id}/messages/${row.id}/files/${index}`,
-  }))
+  const attachments = (meta?.files || []).map((file, index) => publicFile(file, index, workspaceId, agentId, row.conversation_id, row.id))
   return {
     ...(attachments.length ? {attachments} : {}),
     ...(meta?.clientKey ? {client_key:meta.clientKey} : {}),
@@ -43,6 +44,22 @@ const publicMessage = (row, workspaceId, agentId) => {
 export function agentsV1({ endpoints, log }) {
   const call = (name, payload) => endpoints[name](payload)
   const routes = [
+    { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/attachments$`),
+      handle: wrap(async (req, workspaceId, id, conversationId) => {
+        if (req.method !== 'GET') throw new FeatureError(405, 'method', 'Only GET is supported')
+        for (const name of req.query.keys()) {
+          if (!['kind','q','cursor','limit'].includes(name) || req.query.getAll(name).length !== 1) {
+            throw new FeatureError(400, 'invalid', 'Invalid attachment search parameter')
+          }
+        }
+        const limit = req.query.get('limit') ?? '20'
+        if (!/^[0-9]{1,2}$/.test(limit)) throw new FeatureError(400, 'invalid', 'Invalid attachment search limit')
+        const result = await call('listAttachments', {workspace_id:workspaceId,id,conversation_id:conversationId,
+          kind:req.query.get('kind'),q:req.query.get('q') ?? '',cursor:req.query.get('cursor') ?? '',limit:Number(limit)})
+        return {body:{items:result.items.map(({message_id,created_at,slot,...file}) => ({
+          message_id,created_at,attachment:{id:`${message_id}:${slot}`,...publicFile(file,slot,workspaceId,id,conversationId,message_id)},
+        })),next_cursor:result.next_cursor}}
+      }) },
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages/${HEX}/files/([0-3])$`),
       handle: wrap(async (req, workspaceId, id, conversationId, messageId, index) => {
         if (req.method !== 'GET') throw new FeatureError(405, 'method', 'Only GET is supported')

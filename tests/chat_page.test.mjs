@@ -1931,17 +1931,33 @@ test('conversation search lists this conversation photos and files from real att
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   const restore = installChatGlobals({narrow: true});
-  const attachment = (id, title, kind, mime) => ({id: id.repeat(32), title, kind, mime, revision: 1,
-    path: '/v1/workspaces/ws-1/artifacts/' + id.repeat(32) + '/file'});
-  const rows = [
-    // Real uploads all land as kind 'media'; the mime is what separates photos.
-    {id: 'm-1', user_id: bob, body: '', created: '2026-01-01T00:00:00Z', attachment: attachment('a', 'pixel.png', 'media', 'image/png')},
-    {id: 'm-2', user_id: bob, body: '', created: '2026-01-01T00:01:00Z', attachment: attachment('b', 'plan.pdf', 'media', 'application/pdf')},
-  ];
+  const base = '/v1/workspaces/ws-1/social/conversations/conv-1';
+  const file = (id, title, mime) => ({message_id: id, created_at: 1767225600, attachment: {
+    id, title, mime, bytes: 200, path: base + '/messages/' + id + '/file',
+  }});
+  const photo = file('m-1', '现场照片.png', 'image/png');
+  const report = file('m-2', '发布计划.pdf', 'application/pdf');
+  const notes = file('m-3', '实施计划.txt', 'text/plain');
+  const calls = [];
+  let retry = true;
   try {
     await mount(doc, {fetcher: async path => {
-      if (path.startsWith('/v1/workspaces/ws-1/social/conversations/conv-1/messages?')) {
-        return json(200, {items: rows, cursor: null});
+      if (path.startsWith(base + '/attachments?')) {
+        const params = new URL(path, 'https://openteamily.test').searchParams;
+        const scope = Object.fromEntries(params);
+        calls.push(scope);
+        if (scope.kind === 'photo') return json(200, {items: [photo], next_cursor: null});
+        if (scope.cursor && retry) {
+          retry = false;
+          return json(500, {});
+        }
+        return json(200, scope.cursor ? {items: [notes], next_cursor: null} : {items: [report], next_cursor: 'page-2'});
+      }
+      if (path.startsWith(base + '/messages?')) {
+        const message = new URL(path, 'https://openteamily.test').searchParams.get('around');
+        assert.ok(message, 'attachment browsing does not scan history pages');
+        const hit = [photo, report, notes].find(row => row.message_id === message);
+        return json(200, {items: [{id: message, user_id: bob, body: '', attachment: hit.attachment}], cursor: null});
       }
       return original(path);
     }});
@@ -1949,39 +1965,79 @@ test('conversation search lists this conversation photos and files from real att
     await fire(el('conversation-search-open'), 'click');
     await fire(el('conversation-search-tab-photos'), 'click');
     assert.equal(el('conversation-search-tab-photos').getAttribute('aria-selected'), 'true');
-    const photos = el('conversation-search-results').children;
-    assert.equal(photos.length, 1, 'only the image attachment is a photo');
-    assert.ok(descendants(photos[0]).some(node => node.textContent === 'pixel.png'));
+    const results = el('conversation-search-results');
+    assert.equal(results.children.length, 1);
+    assert.ok(descendants(results.children[0]).some(node => node.textContent === '现场照片.png'));
+    assert.equal(descendants(results.children[0]).some(node => node.tagName === 'IMG'), false);
     assert.match(el('conversation-search-status').textContent, /已显示 1 张照片/);
-    await fire(photos[0], 'click');
+    await fire(results.children[0].children[0], 'click');
     const jumped = el('message-list').children.find(node => node.dataset.messageId === 'm-1');
     assert.equal(jumped.dataset.searchJump, 'true', 'a photo hit jumps back to its message and highlights it');
+    el('conversation-search-query').value = '计划';
     await fire(el('conversation-search-tab-files'), 'click');
-    const files = el('conversation-search-results').children;
-    assert.equal(files.length, 1, 'the document attachment is a file, not a photo');
-    assert.ok(descendants(files[0]).some(node => node.textContent === 'plan.pdf'));
+    assert.deepEqual(calls, [{kind: 'photo', q: '', limit: '20'}, {kind: 'file', q: '计划', limit: '20'}]);
+    assert.equal(results.children.length, 1);
+    const [jump, download] = results.children[0].children;
+    assert.ok(descendants(jump).some(node => node.textContent === '发布计划.pdf'));
+    assert.equal(download.href, report.attachment.path + '?download=1');
+    assert.equal(download.download, '发布计划.pdf');
     assert.match(el('conversation-search-status').textContent, /已显示 1 个文件/);
-    await fire(files[0], 'click');
+    await fire(el('conversation-search-more'), 'click');
+    assert.equal(results.children.length, 1, 'a failed next page preserves results');
+    assert.equal(el('conversation-search-retry').hidden, false);
+    await fire(el('conversation-search-retry'), 'click');
+    assert.equal(results.children.length, 2);
+    assert.equal(el('conversation-search-more').hidden, true);
+    assert.equal(calls[3].cursor, 'page-2');
+    await fire(jump, 'click');
     const located = el('message-list').children.find(node => node.dataset.messageId === 'm-2');
     assert.equal(located.dataset.searchJump, 'true', 'a file outside the window loads and highlights its message');
   } finally { restore(); }
 });
 
-test('the photos and files tabs say what is missing instead of inventing an empty conversation', async () => {
+test('attachment search ignores stale tabs and queries and gives an explicit retry and empty state', async () => {
   const {doc, el} = fakeChatDocument(chatHtml());
   const {fetcher: original} = sessionFetcher();
   const restore = installChatGlobals({narrow: true});
+  const delayed = [];
+  let failed = true;
   try {
-    await mount(doc, {fetcher: async path => {
-      if (path.startsWith('/v1/workspaces/ws-1/social/conversations/conv-1/messages?')) {
-        return json(500, {error: {code: 'internal', message: 'nope'}});
+    await mount(doc, {fetcher: async (path, options) => {
+      if (path.includes('/attachments?')) {
+        const params = new URL(path, 'https://openteamily.test').searchParams;
+        if (params.get('kind') === 'photo' || params.get('q') === 'old') {
+          return new Promise(resolve => delayed.push({resolve, signal: options.signal}));
+        }
+        if (failed) {
+          failed = false;
+          return json(500, {});
+        }
+        return json(200, {items: [], next_cursor: null});
       }
       return original(path);
     }});
     await fire(el('conversation-list'), 'click', {target: sessionRows(el)[0]});
     await fire(el('conversation-search-open'), 'click');
-    await fire(el('conversation-search-tab-photos'), 'click');
-    assert.match(el('conversation-search-status').textContent, /读不到当前会话的附件/);
+    const photos = fire(el('conversation-search-tab-photos'), 'click');
+    await fire(el('conversation-search-tab-files'), 'click');
+    assert.equal(delayed[0].signal.aborted, true);
+    assert.match(el('conversation-search-status').textContent, /无法搜索文件/);
+    delayed[0].resolve(json(200, {items: [], next_cursor: null}));
+    await photos;
+    assert.match(el('conversation-search-status').textContent, /无法搜索文件/);
+    await fire(el('conversation-search-retry'), 'click');
+    assert.match(el('conversation-search-status').textContent, /还没有文件/);
+
+    const submit = () => fire(el('conversation-search-form'), 'submit', {preventDefault() {}});
+    const query = el('conversation-search-query');
+    query.value = 'old';
+    const old = submit();
+    query.value = 'new';
+    await submit();
+    assert.equal(delayed[1].signal.aborted, true);
+    delayed[1].resolve(json(200, {items: [{message_id: 'm', attachment: {id: 'm', title: 'old'}}]}));
+    await old;
+    assert.match(el('conversation-search-status').textContent, /没有找到匹配的文件/);
     assert.equal(el('conversation-search-results').children.length, 0);
   } finally { restore(); }
 });

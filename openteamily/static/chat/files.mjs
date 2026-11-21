@@ -38,6 +38,17 @@ function mediaElement(document, mime, url, title, pending) {
   return null;
 }
 
+export function chatFileDownload(document, attachment) {
+  if (!attachment.path) return null;
+  const title = attachment.title || '附件';
+  const link = document.createElement('a');
+  link.href = attachment.path + (attachment.bytes === undefined ? '' : '?download=1');
+  if (attachment.bytes !== undefined) link.download = title;
+  link.textContent = '下载';
+  link.setAttribute('aria-label', '下载' + title);
+  return link;
+}
+
 export function renderChatFile(document, attachment, {pending = false} = {}) {
   const card = document.createElement('article');
   card.className = 'chat-file';
@@ -57,14 +68,8 @@ export function renderChatFile(document, attachment, {pending = false} = {}) {
     info.append(size);
   }
   details.append(info);
-  if (!pending && attachment.path) {
-    const link = document.createElement('a');
-    link.href = attachment.path + (attachment.bytes === undefined ? '' : '?download=1');
-    if (attachment.bytes !== undefined) link.download = title;
-    link.textContent = '下载';
-    link.setAttribute('aria-label', '下载' + title);
-    details.append(link);
-  }
+  const download = pending ? null : chatFileDownload(document, attachment);
+  if (download) details.append(download);
   card.append(details);
   if (!pending && attachment.path && attachment.mime === 'model/gltf-binary') {
     card.classList.add('chat-file-model3d');

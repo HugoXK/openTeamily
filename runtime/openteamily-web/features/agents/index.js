@@ -11,7 +11,7 @@ import { importPending } from '../../src/pending-import.js'
 import { createHash } from 'node:crypto'
 import { openDatabase, newId } from '../../src/store.js'
 import { agentsV1 } from './v1.js'
-import { privateFiles, fingerprintAttachments } from './files.js'
+import { PRIVATE_FILE_COUNT, privateFiles, fingerprintAttachments } from './files.js'
 import { importOfficialBundle } from './migrate.js'
 import { rank, noteBlock, personalizationBlock } from '../chat/recall.js'
 
@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS agent_conversation_memory (
 CREATE TABLE IF NOT EXISTS agent_messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK(role IN ('user','assistant')), text TEXT NOT NULL, status TEXT NOT NULL, created INTEGER NOT NULL, meta TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS agent_messages_by_conversation ON agent_messages(conversation_id, created, id);
+CREATE INDEX IF NOT EXISTS agent_messages_with_files ON agent_messages(conversation_id, created)
+  WHERE role='user' AND json_type(meta,'$.files')='array';
 `
 
 export function fail(code, message, status) { throw Object.assign(new Error(message), { code: `agents/${code}`, status }) }
@@ -577,6 +579,34 @@ export function createAgents({ db, host }) {
       const service = await host.runtime()
       if (typeof service.readNativeAttachment !== 'function') fail('runtime-unavailable', 'Attachment store unavailable', 503)
       return {title:file.title, mime:file.mime, data:await service.readNativeAttachment(file)}
+    },
+    async listAttachments(p) {
+      const agent = load(ws(p), p.id)
+      const convo = conversation(agent, p.conversation_id)
+      const { kind, q, cursor, limit } = p
+      if (!['photo','file'].includes(kind) || typeof q !== 'string' || q.length > 80 || CONTROL.test(q)
+          || !Number.isInteger(limit) || limit < 1 || limit > 50
+          || typeof cursor !== 'string' || (cursor && !/^[0-9a-f]{32}\.[0-3]$/.test(cursor))) {
+        fail('invalid', 'Invalid attachment search', 400)
+      }
+      const [messageId, slot] = cursor.split('.')
+      const anchor = cursor ? one("SELECT created,rowid AS position FROM agent_messages WHERE conversation_id=? AND id=? AND role='user'", convo.id, messageId) : null
+      if (cursor && !anchor) fail('invalid', 'Invalid attachment cursor', 400)
+      const rows = all(`SELECT m.id AS message_id, m.created AS created_at, CAST(f.key AS INTEGER) AS slot,
+          json_extract(f.value,'$.title') AS title, json_extract(f.value,'$.mime') AS mime,
+          json_extract(f.value,'$.bytes') AS bytes
+        FROM agent_messages m CROSS JOIN json_each(m.meta,'$.files') f
+        WHERE m.conversation_id=? AND m.role='user' AND json_type(m.meta,'$.files')='array'
+          AND f.type='object' AND CAST(f.key AS INTEGER) BETWEEN 0 AND ?
+          AND title IS NOT NULL AND mime IS NOT NULL AND (substr(mime,1,6)='image/')=?
+          AND instr(ot_search_fold(title),ot_search_fold(?))>0
+          AND (? IS NULL OR (m.created,m.rowid,-CAST(f.key AS INTEGER)) < (?,?,?))
+        ORDER BY m.created DESC,m.rowid DESC,slot ASC LIMIT ?`,
+        convo.id, PRIVATE_FILE_COUNT - 1, kind === 'photo' ? 1 : 0, q.trim(),
+        anchor?.created ?? null, anchor?.created ?? null, anchor?.position ?? null, -Number(slot ?? 0), limit + 1)
+      const items = rows.slice(0, limit)
+      const last = items.at(-1)
+      return {items, next_cursor: rows.length > limit ? `${last.message_id}.${last.slot}` : null}
     },
 
     async importHistory(bundle) {

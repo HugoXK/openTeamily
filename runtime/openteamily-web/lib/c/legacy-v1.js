@@ -116,6 +116,12 @@ function conversationItem(row, me, env, workspaceId) {
   }
 }
 
+function attachmentItem({ title, mime, bytes }, workspaceId, conversationId, messageId) {
+  return { title, mime, bytes, id: messageId,
+    path: `/v1/workspaces/${workspaceId}/social/conversations/${seg(conversationId)}/messages/${seg(messageId)}/file`,
+  }
+}
+
 function messageItem(row, me, env, workspaceId) {
   const author = row.author || { handle: null, owner_id: row.author_id, display_name: row.agent_name }
   const agent = row.author_kind === 'agent' || author.kind === 'agent'
@@ -137,9 +143,7 @@ function messageItem(row, me, env, workspaceId) {
     ...(row.forwarded_from ? {forwarded_from: row.forwarded_from} : {}),
     ...(row.reply_jobs?.length ? {reply_jobs: row.reply_jobs} : {}),
     ...(row.group_memory_refs?.length ? {group_memory_refs:row.group_memory_refs} : {}),
-    ...(row.attachment ? { attachment: {...row.attachment, id: row.id,
-      path: `/v1/workspaces/${workspaceId}/social/conversations/${seg(row.conversation_id)}/messages/${seg(row.id)}/file`,
-    } } : {}),
+    ...(row.attachment ? { attachment: attachmentItem(row.attachment, workspaceId, row.conversation_id, row.id) } : {}),
     ...(agent ? { role: 'agent', agent_id: row.agent_ref || author.agent_ref, agent_name: row.agent_name || author.name, source: 'runtime_infer' } : {}),
   }
 }
@@ -830,6 +834,29 @@ function messengerExtraRoutes(host, wakeReplies) {
         const result = await bs.post(conv(conversation) + '/messages/' + seg(message) + '/agent-retry', {job_id: body?.job_id})
         wakeReplies()
         return [200, result]
+      }),
+    },
+    {
+      method: 'GET', path: re('\\/attachments'), queryLimit: 1024,
+      handle: ({ match, query }) => wrap(async () => {
+        const [, workspace, conversation] = match
+        const params = parseQuery(query)
+        for (const name of params.keys()) {
+          if (!['kind', 'q', 'cursor', 'limit'].includes(name) || params.getAll(name).length !== 1) {
+            throw new Fault(400, 'invalid', '无效的附件搜索参数。')
+          }
+        }
+        const binding = await host.call('agents/personal-binding', {})
+        const path = binding?.workspace_id === workspace ? conv(conversation)
+          : `/v1/ot/workspaces/${workspace}/conversations/${seg(conversation)}`
+        const data = await client(host).get(path + '/attachments' + qs(Object.fromEntries(params)))
+        return [200, {
+          items: (data.items || []).map(row => ({
+            message_id: row.message_id, created_at: unix(row.created_at),
+            attachment: attachmentItem(row.attachment, workspace, conversation, row.message_id),
+          })),
+          next_cursor: data.next_cursor ?? null,
+        }]
       }),
     },
     {

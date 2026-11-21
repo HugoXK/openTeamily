@@ -155,3 +155,34 @@ test('member history forwards older, around and search cursors to Bot Social', a
     for (const [key,value] of new URL(path+query,SERVER).searchParams) assert.equal(sent.searchParams.get(key),value)
   }
 })
+
+test('attachment search uses the owner binding and existing chat download metadata', async () => {
+  const dir = fixture()
+  const workspace = 'a'.repeat(32)
+  const team = 'b'.repeat(32)
+  const item = {message_id: 'otm_1', created_at: 1730000000123, attachment: {title: 'Photo.png', mime: 'image/png', bytes: 100}}
+  const response = () => ({items: [item], next_cursor: '9'})
+  const f = fake({
+    'GET /v1/ot/conversations/otc_1/attachments': response,
+    [`GET /v1/ot/workspaces/${team}/conversations/otc_1/attachments`]: response,
+  })
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
+  const feature = messenger({dataDir: dir, async call(endpoint) {
+    assert.equal(endpoint, 'agents/personal-binding')
+    return {workspace_id: workspace}
+  }}).endpoints
+  const base = workspace => `/v1/workspaces/${workspace}/social/conversations/otc_1`
+  const query = new URLSearchParams({kind:'photo', q:'照片'.repeat(40), cursor:'14', limit:'5'})
+  for (const scope of [workspace, team]) {
+    const page = await feature.v1({method:'GET', path:`${base(scope)}/attachments?${query}`})
+    assert.equal(page.status, 200)
+    assert.deepEqual(page.body, {items: [{message_id:'otm_1',created_at:1730000000,
+      attachment:{...item.attachment, id:'otm_1', path:`${base(scope)}/messages/otm_1/file`}}],next_cursor:'9'})
+    const upstream = new URL(f.calls.at(-1).path, SERVER)
+    assert.equal(upstream.pathname, scope === workspace ? '/v1/ot/conversations/otc_1/attachments'
+      : `/v1/ot/workspaces/${team}/conversations/otc_1/attachments`)
+    assert.deepEqual([...upstream.searchParams], [...query])
+  }
+  assert.equal((await feature.v1({method:'GET',path:`${base(workspace)}/attachments?kind=photo&kind=file`})).status, 400)
+  assert.equal(f.calls.length, 2)
+})
