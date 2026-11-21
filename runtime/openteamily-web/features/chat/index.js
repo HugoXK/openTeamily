@@ -3,7 +3,6 @@
 // Private chat now delegates to the same mapped native Bot as its workspace agent.
 // Former plugin:<id> Main-Bot parts and local rows are retained and adopted once.
 import { openDatabase, fail } from '../../src/store.js'
-import { rank, noteBlock } from './recall.js'
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL);
@@ -14,28 +13,12 @@ CREATE TABLE IF NOT EXISTS chat_state (key TEXT PRIMARY KEY, value TEXT NOT NULL
 `
 const ID = /^[0-9a-f]{32}$/
 
-export function composePrompt({ text, profile, notes }) {
-  const parts = []
-  if (profile?.instructions) parts.push(`(Owner's standing instructions for ${profile.name}: ${profile.instructions})`)
-  if (notes) parts.push(notes)
-  parts.push(text)
-  return parts.join('\n\n')
-}
-
 export default function chat(host) {
   let db
   const database = async () => {
     if (!db) { db = await openDatabase(host, 'chat.sqlite3'); db.exec(SCHEMA) }
     return db
   }
-  async function recall(text, profile) {
-    if (profile?.recall === 'off') return { notes: '', refs: [] }
-    let pages = []
-    try { pages = await host.call('memory/pages', {}) } catch (error) { if (error?.code !== 'openteamily/not-found') throw error }
-    const hits = rank(text, Array.isArray(pages) ? pages : [])
-    return { notes: noteBlock(hits, text), refs: hits.map(({ page, score }) => ({ id: page.id, revision: page.revision ?? 1, title: page.title ?? '', score: Number(score.toFixed(3)) })) }
-  }
-
   const feature = {
     pages: ['chat'],
     endpoints: {
@@ -63,19 +46,17 @@ export default function chat(host) {
     }
     return {...await linked,id:scope.agent_id}
   }
-  for (const name of ['conversations','create','messages','send','rename','remove']) {
+  for (const name of ['conversations','create','open','messages','send','rename','remove']) {
     feature.endpoints[name] = async (p = {}) => {
       const scope = await binding(p)
       const payload = {...p,...scope}
       if (name === 'conversations') return host.call('agents/conversations',payload)
       if (name === 'create') return (await host.call('agents/conversation-create',payload)).conversation
+      if (name === 'open') return host.call('agents/openConversation',payload)
       if (name === 'messages') return host.call('agents/messages',payload)
       if (name === 'send') {
-        const profile = await host.call('personal/get',{})
-        const {notes,refs} = await recall(p.text,profile)
-        const context = composePrompt({text:'',profile,notes}).trim()
-        const out = await host.call('agents/send',{...payload,context})
-        return {user_message_id:out.message.id,reply:{...out.reply,meta:{...out.reply.meta,memory_refs:refs}}}
+        const out = await host.call('agents/send',{...payload,return_failed:true})
+        return {user_message_id:out.message.id,message:out.message,reply:out.reply}
       }
       fail('chat/native-operation-required','Use canonical agent conversation management; retained legacy rows were not altered')
     }

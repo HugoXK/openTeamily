@@ -40,6 +40,8 @@ try {
     'run', '--detach', '--name', server, '--network', 'none',
     '--user', '1000:1000',
     '--read-only',
+    '--memory', '1536m',
+    '--cpus', '1',
     '--tmpfs', '/tmp:rw,noexec,nosuid,size=67108864',
     '--mount', `type=volume,src=${data},dst=/data`,
     '-e', 'DSH_TELEMETRY_DISABLED=1',
@@ -75,16 +77,9 @@ try {
   const processOwner = docker(['exec', server, 'stat', '-c', '%u:%g', '/proc/1']).stdout.trim()
   assert.equal(processOwner, '1000:1000', 'PID 1 must run as 1000:1000')
 
-  // The management task loop is shipped in the image and started by launch.mjs.
-  // This smoke does not inject a runtime key or a management server, so the
-  // loop must no-op. That is not a proof of real model inference.
-  const loopFile = docker(['exec', server, 'test', '-f', '/opt/openteamily/runtime/flybot-image/agent-loop.mjs'], { allowFailure: true })
-  assert.equal(loopFile.status, 0, 'image must ship agent-loop.mjs next to launch.mjs')
-  assert.match(
-    combined,
-    /agent-loop: no runtime key file; skip management task loop/,
-    'launch must start the management task loop, which no-ops without a key file',
-  )
+  const imageRuntime = '/opt/openteamily/runtime/flybot-image'
+  docker(['exec', server, 'test', '-f', imageRuntime + '/agent-bootstrap.mjs'])
+  docker(['exec', server, 'test', '!', '-e', imageRuntime + '/agent-loop.mjs'])
 
   const profileJson = docker(['exec', server, 'node', '--input-type=module', '-e',
     "import { readFileSync } from 'node:fs'; process.stdout.write(readFileSync('/data/profiles/web/package.json','utf8'))",
@@ -129,8 +124,14 @@ try {
       assert.ok(response.ok && body.ok, endpoint + ': ' + JSON.stringify(body.error))
       return body.value
     }
+    const speech = await call('/api/openteamily', 'meetings/v1', {
+      method: 'GET', path: '/v1/workspaces/' + 'a'.repeat(32) + '/meetings/speech',
+    })
+    assert.equal(speech.status, 200)
+    assert.ok(['checking', 'unprepared'].includes(speech.body?.phase), JSON.stringify(speech.body))
+    assert.equal(speech.body.ready, false, 'a fresh offline volume must wait for model preparation')
     const slug = 'deploy-accept-00000000'
-    const content = '# CI native skill\nRead these instructions.'
+    const content = ${JSON.stringify('# CI native skill\nRead these instructions.')}
     const saved = await call('/api/openteamily', 'skills/save', { name: slug, content })
     assert.equal(saved.attached, true)
     assert.ok(saved.name.length <= 32)
@@ -138,17 +139,20 @@ try {
     assert.equal(state.capabilities.find(c => c.name === saved.name)?.content, content)
     assert.ok(state.bots.some(bot => bot.capabilities?.includes(saved.name)))
     assert.ok((await call('/api/openteamily', 'skills/list')).items.some(c => c.name === saved.name))
-    const { createHash } = await import('node:crypto')
-    const bound = await call('/api/openteamily', 'skills/sync', { items: [{
-      id: '0123456789abcdef'.repeat(2), content,
-      digest: createHash('sha256').update(content).digest('hex'),
-    }] })
-    assert.equal(bound.attached.length, 1)
-    assert.ok(bound.attached[0].length <= 32)
+    const skills = (method, path, body) => call('/api/openteamily', 'skills/v1', {method, path:'/v1/skills/' + path, body})
+    const catalogue = await skills('GET','catalog')
+    assert.equal(catalogue.status, 200)
+    const item = catalogue.body.items.find(skill => skill.id === 'meeting-notes')
+    const bind = enabled => skills('POST','bindings',{enabled,scope:'account',skill_id:item.id,
+      digest:item.digest,version:item.version,permissions:['model_context']})
+    assert.equal((await bind(true)).status, 200)
+    const bound = await call('/api/bot', 'state')
+    assert.equal(bound.capabilities.find(c => c.name === 'ot-bound-meeting-notes')?.content, item.content.trim())
+    assert.ok(bound.bots.some(bot => bot.capabilities?.includes('ot-bound-meeting-notes')))
     await call('/api/openteamily', 'skills/remove', { name: slug })
-    await call('/api/openteamily', 'skills/sync', { items: [] })
+    assert.equal((await bind(false)).status, 200)
     const revoked = await call('/api/bot', 'state')
-    assert.ok(revoked.bots.every(bot => !bot.capabilities?.includes(saved.name) && !bot.capabilities?.includes(bound.attached[0])))
+    assert.ok(revoked.bots.every(bot => !bot.capabilities?.includes(saved.name) && !bot.capabilities?.includes('ot-bound-meeting-notes')))
 
     const flybot = await fetch('http://${address}:8080/api/flybot', {
       method: 'POST',

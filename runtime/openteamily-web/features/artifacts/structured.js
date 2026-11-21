@@ -1,5 +1,6 @@
 // Whiteboard, slides and dashboard content (legacy artifacts.py
 // normalize_*/decode_*/*_json), validated inside the user's DS-Bot.
+import { normalizeWorkbook, WORKBOOK_SCHEMA } from './workbook.js'
 import { stableJson } from '../../featurekit/http.js'
 import {
   BOARD_JSON_MAX, BOARD_MAX, BOARD_MIN, COLOR, DASHBOARD_BARS_MAX, DASHBOARD_CELL_MAX, DASHBOARD_MAX_WIDGETS, DASHBOARD_SCHEMA,
@@ -139,11 +140,16 @@ export function slidesJson(deck) {
   return text.length > 65536 ? null : text
 }
 
-function decodeJsonObject(raw, schema) {
+function parseObject(raw) {
   if (!raw || typeof raw !== 'string' || !raw.trimStart().startsWith('{')) return null
   let value
   try { value = JSON.parse(raw) } catch { return null }
-  return isObject(value) && value.schema === schema ? value : null
+  return isObject(value) ? value : null
+}
+
+function decodeJsonObject(raw, schema) {
+  const value = parseObject(raw)
+  return value?.schema === schema ? value : null
 }
 export const decodeSlides = (raw) => { const v = decodeJsonObject(raw, SLIDES_SCHEMA); return v ? normalizeSlides(v) : null }
 
@@ -195,12 +201,19 @@ export function dashboardJson(value) {
 }
 export const decodeDashboard = (raw) => { const v = decodeJsonObject(raw, DASHBOARD_SCHEMA); return v ? normalizeDashboard(v) : null }
 
+const structuredKinds = new Map([
+  [SLIDES_SCHEMA, ['slides', normalizeSlides]],
+  [DASHBOARD_SCHEMA, ['dashboard', normalizeDashboard]],
+  [WORKBOOK_SCHEMA, ['spreadsheet', normalizeWorkbook]],
+])
+
 export function decodeStructured(raw) {
-  const deck = decodeSlides(raw)
-  if (deck) return ['slides', deck]
-  const dashboard = decodeDashboard(raw)
-  if (dashboard) return ['dashboard', dashboard]
-  return [null, null]
+  const value = parseObject(raw)
+  const decoder = structuredKinds.get(value?.schema)
+  if (!decoder) return [null, null]
+  const [kind, normalize] = decoder
+  const structured = normalize(value)
+  return structured ? [kind, structured] : [null, null]
 }
 
 export const decoders = { decodeBoard, decodeSlides, decodeDashboard }

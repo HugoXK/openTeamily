@@ -1,8 +1,6 @@
 import { mountImportedSkills } from './imports.mjs';
 import { mountSkillExecution } from './execution.mjs';
-import { csrfCookie } from '../agents/app.mjs';
-import { dsbotServed } from '../chat/dsbot.mjs';
-import { syncSkillsToDsBot } from '../shell/dsbot-skills.mjs';
+import { csrfCookie } from '../home/runtime-readiness.mjs';
 // Original content packages are loaded from the authenticated catalogue; no fake page-local installation.
 // The binding lifecycle below decides what a runtime may load. The reader's own
 // library membership ("我的技能库") is a separate per-account record: it never grants
@@ -73,18 +71,6 @@ export async function writeInstalled(skillId, wanted, options = {}) {
 export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThis), read, write, catalogue: given} = {}) {
   const list = document.getElementById('skills-list'), input = document.getElementById('skills-search');
   if (!list || !input) return null;
-  if (dsbotServed(document)) {
-    // Served by the user's own DS-Bot: every successful install/binding change is
-    // materialized there right away (the chat page also syncs on load).
-    const base = fetcher;
-    const sync = () => syncSkillsToDsBot(base, {'X-CSRF-Token': csrfCookie(document.cookie)}).catch(() => null);
-    fetcher = async (path, init = {}) => {
-      const response = await base(path, init);
-      if ((init.method || 'GET') !== 'GET' && /^\/v1\/skills\/(bindings|installed)(?:$|[/?])/.test(String(path)) && response.ok) sync();
-      return response;
-    };
-    sync();
-  }
   const error = document.getElementById('skills-error');
   const scope = document.getElementById('skills-scope');
   const permission = document.getElementById('skills-permission');
@@ -120,7 +106,9 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
       const status = document.createElement('p');
       const binding = bindings.find(b => b.scope === selected && b.skill_id === skill.id);
       if(binding)item.className+=' is-installed';
-      status.textContent = binding && (binding.version!==skill.version || binding.digest!==skill.digest) ? '版本已变化；请阅读新内容并重新安装' : binding ? (binding.last_loaded_task ? '已安装；历史任务已有加载回执（新任务重新校验）' : '已安装；等待下次推理任务加载') : '未安装';
+      status.textContent = binding && (binding.version!==skill.version || binding.digest!==skill.digest)
+        ? '版本已更新，请阅读新内容并重新安装'
+        : binding ? '已安装，可在所选范围内使用' : '未安装';
       const details = document.createElement('details'), summary = document.createElement('summary');summary.textContent='查看真实技能内容 · '+skill.version;
       const content = document.createElement('pre');content.style.whiteSpace='pre-wrap';content.textContent=skill.content;
       const digest = document.createElement('small');digest.textContent='SHA-256: '+skill.digest;
@@ -133,8 +121,9 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
         const wantedScope=selected;busy=true;error.textContent='';render();
         try {
           await request('POST','/v1/skills/bindings',{skill_id:skill.id,version:skill.version,digest:skill.digest,scope:wantedScope,enabled:!binding,permissions:['model_context']});
+          if (permission) permission.checked = false;
           bindings=(await request('GET','/v1/skills/bindings')).items || [];
-          error.textContent=binding ? '已撤销绑定；新任务不可再加载该技能。已发往模型的内容无法撤回。' : '内容与绑定已安装；下次任务须通过运行时摘要校验及加载回执后才算已加载。';
+          error.textContent=binding ? '已卸载。' : '已安装到所选范围。';
         } catch(e) {error.textContent=e.message || '网络错误，结果未知，请刷新检查。';}
         finally {busy=false;render();}
       });
@@ -172,7 +161,7 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
           busy=true;render();
           try{
             await request('POST','/v1/skills/bindings',{skill_id:skill.id,version:skill.version,digest:skill.digest,scope:scope.value,enabled:true,permissions:['model_context']});
-            bindings=(await request('GET','/v1/skills/bindings')).items||[];permission.checked=false;error.textContent='新版本绑定已保存；等待实际任务加载，不复用旧版本回执。';
+            bindings=(await request('GET','/v1/skills/bindings')).items||[];permission.checked=false;error.textContent='已安装当前版本。';
             await execution.refresh();
           }catch(e){error.textContent=e.message||'绑定结果未知，请刷新核对。';}
           finally{busy=false;render();}
@@ -185,12 +174,18 @@ export function mountSkills(document, {fetcher = globalThis.fetch.bind(globalThi
   }
   async function load() {
     try {
-      const results = await Promise.all([request('GET','/v1/skills/catalog'),request('GET','/v1/skills/bindings')]);
-      const fetched=results[0].items || [];catalogue=fetched.length ? fetched : (given || []);bindings=results[1].items || [];
-      try {
-        installedSet.clear();
-        for (const value of await account.read()) installedSet.add(value);
-      } catch(e) {error.textContent=e.message || '读取我的技能库失败，请刷新重试。';}
+      const readLibrary = async () => {
+        try { return await account.read(); }
+        catch (e) { error.textContent = e.message || '读取我的技能库失败，请刷新重试。'; return []; }
+      };
+      const [catalogueResult, bindingResult, saved] = await Promise.all([
+        request('GET','/v1/skills/catalog'), request('GET','/v1/skills/bindings'), readLibrary(),
+      ]);
+      const fetched = catalogueResult.items || [];
+      catalogue = fetched.length ? fetched : (given || []);
+      bindings = bindingResult.items || [];
+      installedSet.clear();
+      for (const value of saved) installedSet.add(value);
       render();
       if (!scope) return;
       const options=new Map();

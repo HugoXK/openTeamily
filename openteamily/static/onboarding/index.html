@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <title>工作背景 · OpenTeamily</title>
+  <title>新手引导 · OpenTeamily</title>
   <link rel="stylesheet" href="/shell/app.css">
   <link rel="stylesheet" href="/onboarding/app.css">
   <script type="module" src="/shell/app.mjs"></script>
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/onboarding/app.mjs"></script>
 </head>
-<body class="app-workspace">
+<body class="app-workspace app-primary">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
@@ -34,7 +34,7 @@
         <p id="account-identity" class="account-identity"></p>
         <a href="/profile" role="menuitem" aria-label="查看我的资料">查看我的资料</a>
         <a href="/team" role="menuitem">创建团队</a>
-        <a href="/onboarding" role="menuitem" title="打开已有的工作背景页。对照账户菜单写的是「新手引导」，因为第 2 至 4 步尚未接通，入口名称与落点保持一致。">工作背景</a>
+        <a href="/onboarding" role="menuitem" aria-current="page">新手引导</a>
         <div class="account-sub">
           <button type="button" id="help-menu-button" aria-expanded="false" aria-controls="help-menu">帮助</button>
           <div id="help-menu" hidden>
@@ -66,20 +66,14 @@
   </section>
   <section id="main-panel" hidden>
     <header class="page-top onboarding-top">
-      <h1 class="visually-hidden">工作背景</h1>
+      <h1 class="visually-hidden">新手引导 · 工作背景</h1>
       <p id="whoami" class="visually-hidden"></p>
-      <p id="onboarding-step-label" class="onboarding-step-label">第 1 步，共 4 步</p>
+      <p id="onboarding-step-label" class="onboarding-step-label" aria-live="polite">第 1 步，共 4 步</p>
       <ol class="onboarding-progress" aria-hidden="true"><li data-bar="1"></li><li data-bar="2"></li><li data-bar="3"></li><li data-bar="4"></li></ol>
     </header>
-    <section class="onboarding-steps" aria-labelledby="onboarding-steps-title">
-      <h2 id="onboarding-steps-title">开始使用</h2>
-      <p class="note">这三步只看本账户的真实数据；判不出来的步骤会直接写明原因，不会先打勾。</p>
-      <ul id="onboarding-checklist" class="onboarding-checklist"></ul>
-      <p id="onboarding-ready" class="note" hidden></p>
-    </section>
     <form id="onboarding-form" class="onboarding-card" data-step="1">
-      <h2>聊聊你的工作</h2>
-      <p class="note">选择你的行业和角色，让工作区从一开始就有合适的背景。</p>
+      <h2 tabindex="-1">聊聊你的工作</h2>
+      <p class="note">选择行业和角色，获得更贴合你工作的任务建议。</p>
       <div class="onboarding-row-head">
         <h3 id="industry-heading">你的行业</h3>
         <label class="industry-list-pick"><span class="visually-hidden">你的行业</span>
@@ -100,18 +94,16 @@
       </fieldset>
       <p id="onboarding-meta" class="note"></p>
       <div class="onboarding-actions">
-        <button type="button" id="onboarding-skip" class="secondary">暂时跳过</button>
+        <button type="button" id="onboarding-skip" class="secondary">跳过引导</button>
         <button type="submit" id="onboarding-save">继续 <span aria-hidden="true">→</span></button>
       </div>
     </form>
     <section id="onboarding-steps" class="onboarding-card" hidden>
       <div class="onboarding-step" data-step="2">
-        <h2>连接你在用的应用</h2>
-        <p class="note">连接后，你的 Personal Agent 能更好地帮你。下面每行是你工作区里真实读到的连接状态：配置了自己的 Composio key 并在<a href="/settings/connectors">设置 → 应用连接器</a>里授权过的应用显示「已连接」；读不到连接列表的写「未接入」，不会当成「未连接」。</p>
-        <p id="onboarding-reality" class="note"></p>
+        <h2 tabindex="-1">连接你在用的应用</h2>
+        <p class="note">已授权的应用会显示「已连接」。显示「未接入」时，可以到<a href="/settings/connectors">应用连接器</a>查看状态。</p>
         <h3 class="onboarding-group">常用应用</h3>
         <ul id="onboarding-apps" class="app-rows"></ul>
-        <p class="onboarding-hint"><span aria-hidden="true">ⓘ</span> 不会代你连接任何账号；以后可在设置 → 应用连接器查看。</p>
         <div class="onboarding-actions">
           <button type="button" class="secondary" data-go="1">← 上一步</button>
           <button type="button" class="secondary onboarding-later" data-go="3">暂时跳过</button>
@@ -119,16 +111,16 @@
         </div>
       </div>
       <form id="onboarding-picks-form" class="onboarding-step" data-step="3">
-        <h2>我们能帮你分担些什么？</h2>
-        <p class="note">选几件想交给 Agent 的事。建议按你的行业给出（OpenTeamily 自拟文案）；选择会被保存，但不会自动创建任务或例行任务。</p>
+        <h2 tabindex="-1">想让智能体分担什么？</h2>
+        <p class="note">最多保存 6 项偏好。要创建自动化，请在下方选择模板并确认创建。</p>
         <div id="onboarding-picks" class="pick-groups"></div>
         <fieldset class="onboarding-automation-choices">
           <legend>可选：创建暂停的自动化</legend>
-          <p class="note">以下是可创建的真实模板，与上方保存的偏好分开选择（默认不选）。只有点击“创建选中模板（暂停）”才会创建；保存、跳过和完成引导都不会创建。</p>
+          <p class="note">在你的个人工作区创建，默认暂停。到自动化页面后可以试跑、调时间或启用。</p>
           <div id="onboarding-automation-templates" class="pick-list"></div>
-          <p class="note">创建到你拥有的工作区；没有时新建个人空间。每日 09:00（北京时间），但默认暂停，需到自动化页检查并手动启用。不会连接应用或自动执行。</p>
           <button type="button" id="create-onboarding-automations" class="secondary">创建选中模板（暂停）</button>
           <p id="onboarding-automation-status" role="status" aria-live="polite"></p>
+          <ul id="onboarding-automation-links"></ul>
           <a href="/automations">查看并配置自动化</a>
         </fieldset>
         <div class="onboarding-actions">
@@ -137,19 +129,12 @@
         </div>
       </form>
       <form id="onboarding-look-form" class="onboarding-step" data-step="4">
-        <h2><span id="onboarding-ready-name"></span>你的工作区已准备就绪</h2>
-        <p class="note">自定义你的 Personal Agent 形象。只保存选择，不生成图片。</p>
+        <h2 tabindex="-1"><span id="onboarding-ready-name"></span>选一个智能体形象</h2>
+        <p class="note">形象会显示在你的个人智能体聊天中。</p>
         <div class="look-layout">
           <figure class="look-preview" aria-hidden="true">
-            <svg id="look-avatar" viewBox="0 0 120 120" width="132" height="132">
-              <rect class="look-bg" x="6" y="6" width="108" height="108" rx="28"/>
-              <rect class="look-head" x="30" y="34" width="60" height="50" rx="14"/>
-              <rect class="look-hat" x="34" y="22" width="52" height="14" rx="7"/>
-              <g class="look-face"><circle cx="48" cy="57" r="4.5"/><circle cx="72" cy="57" r="4.5"/><path d="M50 70q10 7 20 0" fill="none" stroke-width="3.5" stroke-linecap="round"/></g>
-              <g class="look-glasses" fill="none" stroke-width="3"><circle cx="48" cy="57" r="8"/><circle cx="72" cy="57" r="8"/><path d="M56 57h8"/></g>
-              <rect class="look-hand" x="86" y="74" width="16" height="20" rx="4"/>
-            </svg>
-            <figcaption id="look-caption">Personal Agent</figcaption>
+            <span id="look-avatar"></span>
+            <figcaption id="look-caption">个人智能体</figcaption>
           </figure>
           <div id="onboarding-look" class="look-options"></div>
         </div>
@@ -157,7 +142,7 @@
         <div class="onboarding-actions">
           <button type="button" class="secondary" data-go="3">← 上一步</button>
           <button type="submit" class="secondary">保存形象</button>
-          <a class="onboarding-enter" href="/chat" id="onboarding-enter">进入 OpenTeamily <span aria-hidden="true">→</span></a>
+          <button type="button" id="onboarding-enter">完成并开始聊天</button>
         </div>
       </form>
       <p id="onboarding-steps-meta" class="note"></p>
