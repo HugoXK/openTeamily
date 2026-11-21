@@ -45,6 +45,39 @@ function activity(req, workspaceId) {
   return { body: artifactId ? {version, revision: rows.find((row) => row.id === artifactId)?.revision ?? null} : {version} }
 }
 
+const FILE_TYPES = new Set([
+  'document', 'website', 'image', 'video', 'audio', 'model3d',
+  'whiteboard', 'spreadsheet', 'slides', 'dashboard', 'messages',
+])
+
+function catalogQuery(query) {
+  const types = new Set(query.getAll('type'))
+  const creators = new Set(query.getAll('creator'))
+  const sessions = new Set(query.getAll('session'))
+  const single = new URLSearchParams(query)
+  for (const key of ['type', 'creator', 'session']) single.delete(key)
+  const { limit, cursor, args } = pagination(single, ['q', 'scope', 'kind', 'order', 'updated_since', 'updated_before'])
+  const needle = (args.get('q') ?? '').trim().toLocaleLowerCase('en-US')
+  const scope = args.get('scope') ?? 'all'
+  const kind = args.get('kind') ?? 'all'
+  const order = args.get('order') ?? 'id'
+  const since = catalogTime(args.get('updated_since'))
+  const before = catalogTime(args.get('updated_before'))
+  const validLabel = (value, max) => value.length > 0 && value.length <= max && !/[\x00-\x1f\x7f]/.test(value)
+  if (needle.length > 80 || !['all', 'favorites', 'mine', 'memory'].includes(scope) ||
+      !['all', 'document', 'website', 'whiteboard', 'slides', 'dashboard', 'spreadsheet', 'media', 'messages'].includes(kind) ||
+      !['id', 'recent'].includes(order) || [...types].some(type => !FILE_TYPES.has(type)) ||
+      [...creators].some(value => !validLabel(value, 100)) || [...sessions].some(value => !validLabel(value, 128)) ||
+      (since !== null && before !== null && since >= before)) refuse(400, 'invalid', 'Invalid artifact request')
+  return {limit, cursor, filters: {needle, scope, kind, recent: order === 'recent', types, creators, sessions, since, before}}
+}
+
+function catalogTime(value) {
+  if (value === null) return null
+  if (!/^-?[0-9]{1,12}$/.test(value)) refuse(400, 'invalid', 'Invalid artifact dates')
+  return Number(value)
+}
+
 export async function dispatch(req, workspaceId, artifactId, action) {
   const context = ctx(req)
   if (!artifactId && req.method === 'GET') {
@@ -52,18 +85,11 @@ export async function dispatch(req, workspaceId, artifactId, action) {
       if (req.query.size !== 1 || req.query.get('facets') !== '1') refuse(400, 'invalid', 'Invalid artifact request')
       return { body: catalogFacets(req.store, workspaceId) }
     }
-    const { limit, cursor, args } = pagination(req.query, ['q', 'scope', 'kind', 'order'])
-    const needle = (args.get('q') ?? '').trim().toLocaleLowerCase('en-US')
-    const scope = args.get('scope') ?? 'all'
-    const kind = args.get('kind') ?? 'all'
-    const order = args.get('order') ?? 'id'
-    if (needle.length > 80 || !['all', 'favorites', 'mine', 'memory'].includes(scope) ||
-        !['all', 'document', 'website', 'whiteboard', 'slides', 'dashboard', 'spreadsheet', 'media', 'messages'].includes(kind) ||
-        !['id', 'recent'].includes(order)) refuse(400, 'invalid', 'Invalid artifact request')
+    const {limit, cursor, filters} = catalogQuery(req.query)
     const { rows: activityRows, version } = workspaceActivity(req, workspaceId)
     const favorites = new Set(activityRows.filter((row) => row.favorited).map((row) => row.id))
     const rows = listing(req.store, workspaceId, cursor, limit + 1, {
-      needle, scope, kind, favorites, recent: order === 'recent', owner: req.owner, ownerUsername: req.ownerUsername,
+      ...filters, favorites, owner: req.owner, ownerUsername: req.ownerUsername,
     })
     const items = rows.slice(0, limit).map((row) => view(row, false, { favorited: favorites.has(row.id) }))
     return { body: { items, cursor: rows.length > limit ? rows[limit - 1].id : null, activity_version: version } }

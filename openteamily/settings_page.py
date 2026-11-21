@@ -80,7 +80,6 @@ class SettingsPage:
         '/shell/public-work-link.mjs': ('shell', 'public-work-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/team-invite-link.mjs': ('shell', 'team-invite-link.mjs', 'text/javascript; charset=utf-8'),
         '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
-        '/shell/dsbot-skills.mjs': ('shell', 'dsbot-skills.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
         '/chat/activity.mjs': ('chat', 'activity.mjs', 'text/javascript; charset=utf-8'),

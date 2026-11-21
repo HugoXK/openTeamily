@@ -43,17 +43,38 @@ const CATALOG_PAGE_SIZE = 20;
 const CATALOG_READ_LIMIT = 100;
 const CATALOG_CURSOR = /^[a-f0-9]{32}$/;
 
-export function listQuery(search, {kind = 'all', scope = 'all'} = {}) {
+const FILE_TYPES = {
+  云文档: 'document',
+  电子表格: 'spreadsheet',
+  幻灯片: 'slides',
+  看板: 'dashboard',
+  网页: 'website',
+  图片: 'image',
+  视频: 'video',
+  音频: 'audio',
+  '3D 模型': 'model3d',
+  白板: 'whiteboard',
+  消息: 'messages',
+};
+
+export const FILE_TYPE_LABELS = Object.keys(FILE_TYPES);
+
+export function listQuery(search, {
+  kind = 'all', scope = 'all', types = [], creators = [], sessions = [], updated = {},
+} = {}) {
   const needle = (search || '').trim();
   const parameters = [];
   if (needle) parameters.push('q=' + encodeURIComponent(needle));
   if (kind !== 'all') parameters.push('kind=' + encodeURIComponent(kind));
   if (scope !== 'all') parameters.push('scope=' + encodeURIComponent(scope));
+  const filterTypes = types.filter(label => Object.hasOwn(FILE_TYPES, label)).map(label => FILE_TYPES[label]);
+  for (const [name, values] of [['type', filterTypes], ['creator', creators], ['session', sessions]]) {
+    for (const value of [...new Set(values)].sort()) parameters.push(name + '=' + encodeURIComponent(value));
+  }
+  if (Number.isSafeInteger(updated.since)) parameters.push('updated_since=' + updated.since);
+  if (Number.isSafeInteger(updated.before)) parameters.push('updated_before=' + updated.before);
   return parameters.length ? '?' + parameters.join('&') : '';
 }
-
-export const FILE_TYPE_LABELS = ['云文档', 'Markdown', 'DOCX', 'PDF', '电子表格', '幻灯片',
-  'Web 应用', '网页', '图片', '视频', '音频', '3D 模型', '白板', '消息'];
 
 const isModel3d = item => item?.kind === 'media' && item.media?.mime === 'model/gltf-binary';
 
@@ -68,23 +89,54 @@ export function artifactMatchesType(item, type) {
   if (type === '白板') return item.kind === 'whiteboard';
   if (type === '电子表格') return item.kind === 'spreadsheet';
   if (type === '幻灯片') return item.kind === 'slides';
+  if (type === '看板') return item.kind === 'dashboard';
   if (type === '消息') return !!(item.source && item.source.kind === 'agent_message');
   return false;
 }
 
-export function artifactMatchesModified(item, window, now = Date.now()) {
-  if (!window || window === 'any' || window === 'custom') return true;
-  const updated = Number(item && item.updated ? item.updated : 0) * 1000;
-  if (!updated) return false;
-  const day = 24 * 60 * 60 * 1000;
+function localDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || '');
+  if (!match) return null;
+  const [year, month, day] = match.slice(1).map(Number);
+  if (year < 1) return null;
+  const date = new Date(0);
+  date.setFullYear(year, month - 1, day);
+  date.setHours(0, 0, 0, 0);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day ? date : null;
+}
+
+function localDayAfter(date) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + 1);
+  next.setHours(0, 0, 0, 0);
+  return next.getTime() / 1000;
+}
+
+export function artifactModifiedBounds(window, now = Date.now(), {start, end} = {}) {
+  if (window === 'custom') {
+    const from = localDate(start);
+    const through = localDate(end);
+    if (!from || !through || through < from) return null;
+    return {since: from.getTime() / 1000, before: localDayAfter(through)};
+  }
   if (window === 'today') {
     const start = new Date(now);
     start.setHours(0, 0, 0, 0);
-    return updated >= start.getTime();
+    return {since: start.getTime() / 1000, before: localDayAfter(start)};
   }
   const days = {d7: 7, d30: 30, d90: 90};
-  if (days[window]) return updated >= now - days[window] * day;
-  return true;
+  return Object.hasOwn(days, window) ? {since: Math.ceil(now / 1000 - days[window] * 86400)} : {};
+}
+
+function artifactWithinBounds(item, {since, before}) {
+  if (since == null && before == null) return true;
+  const updated = Number(item?.updated);
+  return item?.updated != null && Number.isFinite(updated) &&
+    (since == null || updated >= since) && (before == null || updated < before);
+}
+
+export function artifactMatchesModified(item, window, now = Date.now(), range) {
+  return artifactWithinBounds(item, artifactModifiedBounds(window, now, range) || {});
 }
 
 export function visibleArtifacts(items, options = {}) {
@@ -92,10 +144,9 @@ export function visibleArtifacts(items, options = {}) {
   const scope = options.scope || 'all';
   const username = options.username || '';
   const types = options.types || [];
-  const modified = options.modified || 'any';
   const creators = options.creators || [];
   const sessions = options.sessions || [];
-  const now = options.now == null ? Date.now() : options.now;
+  const updated = options.updated ?? artifactModifiedBounds(options.modified, options.now ?? Date.now(), options.range) ?? {};
   if (kind === 'meetings') return [];
   let rows = [...(items || [])];
   if (scope === 'favorites') rows = rows.filter(item => item.favorited);
@@ -113,7 +164,7 @@ export function visibleArtifacts(items, options = {}) {
   if (types.length) {
     rows = rows.filter((item) => types.some((type) => artifactMatchesType(item, type)));
   }
-  rows = rows.filter((item) => artifactMatchesModified(item, modified, now));
+  rows = rows.filter((item) => artifactWithinBounds(item, updated));
   if (creators.length) rows = rows.filter((item) => creators.includes(item.created_by));
   if (sessions.length) {
     rows = rows.filter((item) => item.source && sessions.includes(item.source.conversation_id));
@@ -406,6 +457,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   const pageMore = document.getElementById('more-artifacts');
   const pageFooter = document.getElementById('artifact-pagination');
   const pageNote = document.getElementById('artifact-pagination-note');
+  const filterButton = document.getElementById('filter-button');
+  const filterPanel = document.getElementById('filter-panel');
+  const filterReset = document.getElementById('filter-reset');
+  const filterDates = document.getElementById('custom-range');
+  const dateStart = document.getElementById('filter-date-start');
+  const dateEnd = document.getElementById('filter-date-end');
+  const dateMessage = document.getElementById('filter-date-message');
   let currentUser = null;
   let workspaceLoad = 0;
   let current = null;
@@ -418,7 +476,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   let catalogLayout = 'grid';
   let meetingScope = 'all';
   let filterTypes = [];
-  let filterModified = 'any';
+  let filterUpdated = {};
   let filterCreators = [];
   let filterSessions = [];
   let facets = null;
@@ -1053,29 +1111,107 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     renderCatalog();
   }
 
-  function closeFilterPanel() {
-    const panel = document.getElementById('filter-panel');
-    const button = document.getElementById('filter-button');
-    if (panel) panel.hidden = true;
-    if (button) button.setAttribute('aria-expanded', 'false');
+  function closeFilterPanel({focus = false} = {}) {
+    if (!filterPanel || filterPanel.hidden) return;
+    filterPanel.hidden = true;
+    filterButton?.setAttribute('aria-expanded', 'false');
+    if (focus) filterButton?.focus();
   }
 
-  function readFilters() {
-    filterTypes = [...document.querySelectorAll('input[name="file-type"]:checked')].map((input) => input.value);
-    const modified = document.querySelector('input[name="modified"]:checked');
-    filterModified = modified ? modified.value : 'any';
-    const customNote = document.getElementById('custom-range-note');
-    if (customNote) customNote.hidden = filterModified !== 'custom';
-    filterCreators = [...document.querySelectorAll('input[name="creator"]:checked')].map((input) => input.value);
-    filterSessions = [...document.querySelectorAll('input[name="session"]:checked')].map((input) => input.value);
+  const dateMode = () => document.querySelector('#filter-panel input[name="modified"]:checked')?.value || 'any';
+  const appliedFilters = () => filterTypes.length + filterCreators.length + filterSessions.length +
+    Number(filterUpdated.since != null || filterUpdated.before != null);
+
+  function renderFilterControls() {
+    const count = appliedFilters();
+    if (filterButton) filterButton.textContent = count ? `筛选 · ${count}` : '筛选';
+    if (filterReset) filterReset.disabled = !count && dateMode() === 'any';
+  }
+
+  function readFilterDates() {
+    const mode = dateMode();
+    const start = dateStart?.value;
+    const end = dateEnd?.value;
+    const bounds = artifactModifiedBounds(mode, Date.now(), {start, end});
+    const invalid = mode === 'custom' && Boolean(start && end && !bounds);
+    if (filterDates) filterDates.hidden = mode !== 'custom';
+    for (const field of [dateStart, dateEnd]) {
+      if (invalid) field?.setAttribute('aria-invalid', 'true');
+      else field?.removeAttribute('aria-invalid');
+    }
+    if (dateMessage) dateMessage.textContent = invalid ? '请选择有效日期，结束日期不能早于开始日期。' :
+      bounds ? '包含开始和结束日期。' : '选好开始和结束日期后应用筛选。';
+    if (bounds) filterUpdated = bounds;
+  }
+
+  function clearFilters() {
+    for (const input of document.querySelectorAll('#filter-panel input[type="checkbox"]')) input.checked = false;
+    for (const input of document.querySelectorAll('#filter-panel input[name="modified"]')) input.checked = input.value === 'any';
+    if (dateStart) dateStart.value = '';
+    if (dateEnd) dateEnd.value = '';
+    filterTypes = [];
+    filterCreators = [];
+    filterSessions = [];
+    filterUpdated = {};
+    readFilterDates();
+    renderFilterControls();
+  }
+
+  function refreshFilters(previous) {
+    renderFilterControls();
+    if (nativeCatalog && catalogQuery() !== previous) return loadList({reuse: true});
+    if (!nativeCatalog) renderCatalog({preserve: true});
+  }
+
+  function applyFilters({dates = false} = {}) {
+    const previous = catalogQuery();
+    const selected = name => [...document.querySelectorAll(`#filter-panel input[name="${name}"]:checked`)].map(input => input.value);
+    filterTypes = selected('file-type');
+    filterCreators = selected('creator');
+    filterSessions = selected('session');
+    if (dates) readFilterDates();
+    return refreshFilters(previous);
   }
 
   function matchingArtifacts() {
+    if (nativeCatalog) {
+      if (catalogKind === 'meetings') return [];
+      return catalogScope === 'favorites' ? allItems.filter(item => item.favorited) : allItems;
+    }
     return visibleArtifacts(allItems, {
-      kind: catalogKind, scope: nativeCatalog && catalogScope === 'mine' ? 'all' : catalogScope,
+      kind: catalogKind, scope: catalogScope,
       username: currentUser?.username,
-      types: filterTypes, modified: filterModified, creators: filterCreators, sessions: filterSessions,
+      types: filterTypes, updated: filterUpdated, creators: filterCreators, sessions: filterSessions,
     });
+  }
+
+  function renderFacetInputs(box, name, choices, selected) {
+    if (!box) return;
+    const signature = JSON.stringify(choices);
+    if (box.dataset.choiceSignature === signature) {
+      for (const label of box.children) {
+        const input = label.children[0];
+        input.checked = selected.includes(input.value);
+      }
+      return;
+    }
+    const focused = document.activeElement?.name === name ? document.activeElement.value : null;
+    const nodes = choices.map(({id, label}) => {
+      const row = document.createElement('label');
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.name = name;
+      input.value = id;
+      input.checked = selected.includes(id);
+      row.appendChild(input);
+      row.appendChild(document.createTextNode(' ' + label));
+      return row;
+    });
+    box.replaceChildren(...nodes);
+    box.dataset.choiceSignature = signature;
+    if (focused !== null) {
+      nodes.find(row => row.children[0].value === focused)?.children[0].focus();
+    }
   }
 
   function renderFilterChoices() {
@@ -1086,41 +1222,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     const currentFacets = facets?.workspace === workspaceId() && facets.account === currentUser ? facets : null;
     const loadedNames = allItems.map(item => item.created_by).filter(Boolean);
     const names = [...new Set([...(currentFacets?.creators || []), ...loadedNames, ...filterCreators])].sort();
-    if (creatorBox) {
-      creatorBox.replaceChildren();
-      for (const name of names) {
-        const label = document.createElement('label');
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.name = 'creator';
-        input.value = name;
-        input.checked = filterCreators.includes(name);
-        input.addEventListener('change', () => { readFilters(); renderCatalog(); });
-        label.appendChild(input);
-        label.appendChild(document.createTextNode(' ' + name));
-        creatorBox.appendChild(label);
-      }
-    }
+    renderFacetInputs(creatorBox, 'creator', names.map(id => ({id, label: id})), filterCreators);
     if (creatorEmpty) creatorEmpty.hidden = names.length > 0;
     const sessions = currentFacets?.sessions?.slice() ?? sessionFilterChoices(allItems);
     for (const id of filterSessions) {
       if (!sessions.some(session => session.id === id)) sessions.push({id, label: '对话'});
     }
-    if (sessionBox) {
-      sessionBox.replaceChildren();
-      for (const session of sessions) {
-        const label = document.createElement('label');
-        const input = document.createElement('input');
-        input.type = 'checkbox';
-        input.name = 'session';
-        input.value = session.id;
-        input.checked = filterSessions.includes(session.id);
-        input.addEventListener('change', () => { readFilters(); renderCatalog(); });
-        label.appendChild(input);
-        label.appendChild(document.createTextNode(' ' + session.label));
-        sessionBox.appendChild(label);
-      }
-    }
+    renderFacetInputs(sessionBox, 'session', sessions, filterSessions);
     if (sessionEmpty) sessionEmpty.hidden = sessions.length > 0;
   }
 
@@ -1296,8 +1404,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     empty.hidden = !isEmpty;
     if (!isEmpty) return;
     const noWorkspace = emptyMessage && emptyMessage.textContent === '还没有工作区。';
-    const noMatches = !noWorkspace && Boolean(search.value.trim() || filterTypes.length ||
-      filterModified !== 'any' || filterCreators.length || filterSessions.length);
+    const noMatches = !noWorkspace && Boolean(search.value.trim() || appliedFilters());
     const showMeetings = catalogKind === 'meetings' && !noWorkspace;
     const showStarred = catalogScope === 'favorites' && !showMeetings && !noWorkspace && !noMatches;
     const showMemory = catalogScope === 'memory' && !showMeetings && !noWorkspace && !noMatches;
@@ -2068,7 +2175,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   }
 
   function catalogQuery() {
-    return listQuery(search.value, nativeCatalog ? {kind: catalogKind, scope: catalogScope} : undefined);
+    return listQuery(search.value, nativeCatalog ? {
+      kind: catalogKind,
+      scope: catalogScope,
+      types: filterTypes,
+      creators: filterCreators,
+      sessions: filterSessions,
+      updated: filterUpdated,
+    } : undefined);
   }
 
   function sameSelection(page) {
@@ -2297,6 +2411,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       currentUser = null;
       catalog = null;
       facets = null;
+      clearFilters();
       allItems = [];
       listStatus();
       loginPanel.hidden = false;
@@ -2427,6 +2542,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     facets = null;
     filterCreators = [];
     filterSessions = [];
+    renderFilterControls();
     if (catalogKind === 'meetings' || artifactTargetFromSearch(document.defaultView?.location?.search)) syncViewUrl();
     void loadList();
   });
@@ -2552,7 +2668,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       closeNewMenu();
-      closeFilterPanel();
+      closeFilterPanel({focus: true});
     }
   });
 
@@ -2605,16 +2721,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       applyDirectoryCollapsed(document, false);
     });
   }
-  const filterButton = document.getElementById('filter-button');
-  if (filterButton) {
+  if (filterButton && filterPanel) {
     filterButton.addEventListener('click', (event) => {
       event.stopPropagation();
-      const panel = document.getElementById('filter-panel');
-      if (!panel) return;
-      const open = panel.hidden;
-      panel.hidden = !open;
-      filterButton.setAttribute('aria-expanded', open ? 'true' : 'false');
-      if (open) void loadFacets();
+      if (!filterPanel.hidden) {
+        closeFilterPanel();
+        return;
+      }
+      filterPanel.hidden = false;
+      filterButton.setAttribute('aria-expanded', 'true');
+      void loadFacets();
     });
   }
   for (const button of document.querySelectorAll('.filter-accordion')) {
@@ -2630,9 +2746,16 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
       }
     });
   }
-  for (const input of document.querySelectorAll('#filter-panel input[name="file-type"], #filter-panel input[name="modified"]')) {
-    input.addEventListener('change', () => { readFilters(); renderCatalog(); });
-  }
+  filterPanel?.addEventListener('change', ({target}) => {
+    if (['file-type', 'creator', 'session', 'modified', 'modified-start', 'modified-end'].includes(target?.name)) {
+      return applyFilters({dates: target.name.startsWith('modified')});
+    }
+  });
+  filterReset?.addEventListener('click', () => {
+    const previous = catalogQuery();
+    clearFilters();
+    return refreshFilters(previous);
+  });
   document.addEventListener('click', (event) => {
     const wrap = document.querySelector('.filter-wrap');
     if (wrap && !wrap.contains(event.target)) closeFilterPanel();
@@ -3450,8 +3573,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
     workspaceSelect.textContent = '';
     catalog = null;
     facets = null;
-    filterCreators = [];
-    filterSessions = [];
+    clearFilters();
     allItems = [];
     meetingItems = [];
     meetingLoadedFor = '';
@@ -3462,6 +3584,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), ac
 
   const view = document.defaultView;
   const initial = viewFromSearch(view && view.location && view.location.search);
+  readFilterDates();
+  renderFilterControls();
   applyView(initial.kind, initial.scope, {sync: false});
   if (view) {
     view.addEventListener('popstate', () => {

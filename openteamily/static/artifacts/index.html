@@ -114,50 +114,60 @@
       <div class="filter-wrap">
         <button type="button" id="filter-button" aria-expanded="false" aria-haspopup="dialog" aria-controls="filter-panel">筛选</button>
         <div id="filter-panel" role="dialog" aria-label="筛选" hidden>
-          <p class="filter-heading">筛选</p>
-          <div class="filter-section" data-section="types">
-            <button type="button" class="filter-accordion" aria-expanded="false">文件类型</button>
-            <div class="filter-body type-grid" hidden>
-              <label><input type="checkbox" name="file-type" value="云文档"> 云文档</label>
-              <label><input type="checkbox" name="file-type" value="Markdown"> Markdown</label>
-              <label><input type="checkbox" name="file-type" value="DOCX"> DOCX</label>
-              <label><input type="checkbox" name="file-type" value="PDF"> PDF</label>
-              <label><input type="checkbox" name="file-type" value="电子表格"> 电子表格</label>
-              <label><input type="checkbox" name="file-type" value="幻灯片"> 幻灯片</label>
-              <label><input type="checkbox" name="file-type" value="Web 应用"> Web 应用</label>
-              <label><input type="checkbox" name="file-type" value="网页"> 网页</label>
-              <label><input type="checkbox" name="file-type" value="图片"> 图片</label>
-              <label><input type="checkbox" name="file-type" value="视频"> 视频</label>
-              <label><input type="checkbox" name="file-type" value="音频"> 音频</label>
-              <label><input type="checkbox" name="file-type" value="3D 模型"> 3D 模型</label>
-              <label><input type="checkbox" name="file-type" value="白板"> 白板</label>
-              <label><input type="checkbox" name="file-type" value="消息"> 消息</label>
-            </div>
+          <div class="filter-heading">
+            <span>筛选</span>
+            <button type="button" id="filter-reset" class="secondary" disabled>清除筛选</button>
           </div>
-          <div class="filter-section" data-section="modified">
-            <button type="button" class="filter-accordion" aria-expanded="false">修改时间</button>
-            <div class="filter-body" hidden>
-              <label><input type="radio" name="modified" value="any" checked> 不限时间</label>
-              <label><input type="radio" name="modified" value="today"> 今天</label>
-              <label><input type="radio" name="modified" value="d7"> 最近 7 天</label>
-              <label><input type="radio" name="modified" value="d30"> 最近 30 天</label>
-              <label><input type="radio" name="modified" value="d90"> 最近 90 天</label>
-              <label><input type="radio" name="modified" value="custom"> 自定义范围</label>
-              <p id="custom-range-note" class="note" hidden>对照里没有打开自定义范围的字段，这里不能按自定义日期筛选。</p>
+          <div class="filter-options">
+            <div class="filter-section" data-section="types">
+              <button type="button" class="filter-accordion" aria-expanded="false">文件类型</button>
+              <div class="filter-body type-grid" hidden>
+                <label><input type="checkbox" name="file-type" value="云文档"> 云文档</label>
+                <label><input type="checkbox" name="file-type" value="电子表格"> 电子表格</label>
+                <label><input type="checkbox" name="file-type" value="幻灯片"> 幻灯片</label>
+                <label><input type="checkbox" name="file-type" value="看板"> 看板</label>
+                <label><input type="checkbox" name="file-type" value="网页"> 网页</label>
+                <label><input type="checkbox" name="file-type" value="图片"> 图片</label>
+                <label><input type="checkbox" name="file-type" value="视频"> 视频</label>
+                <label><input type="checkbox" name="file-type" value="音频"> 音频</label>
+                <label><input type="checkbox" name="file-type" value="3D 模型"> 3D 模型</label>
+                <label><input type="checkbox" name="file-type" value="白板"> 白板</label>
+                <label><input type="checkbox" name="file-type" value="消息"> 消息</label>
+              </div>
             </div>
-          </div>
-          <div class="filter-section" data-section="creators">
-            <button type="button" class="filter-accordion" aria-expanded="false">创建人</button>
-            <div class="filter-body" hidden>
-              <p id="filter-creator-empty" class="note">暂无可筛选的创建人</p>
-              <div id="filter-creator-list"></div>
+            <div class="filter-section" data-section="modified">
+              <button type="button" class="filter-accordion" aria-expanded="false">修改时间</button>
+              <div class="filter-body" hidden>
+                <label><input type="radio" name="modified" value="any" checked> 不限时间</label>
+                <label><input type="radio" name="modified" value="today"> 今天</label>
+                <label><input type="radio" name="modified" value="d7"> 最近 7 天</label>
+                <label><input type="radio" name="modified" value="d30"> 最近 30 天</label>
+                <label><input type="radio" name="modified" value="d90"> 最近 90 天</label>
+                <label><input type="radio" name="modified" value="custom"> 自定义范围</label>
+                <div id="custom-range" hidden>
+                  <label for="filter-date-start">开始日期
+                    <input id="filter-date-start" name="modified-start" type="date" min="0001-01-01" max="9999-12-31" aria-describedby="filter-date-message">
+                  </label>
+                  <label for="filter-date-end">结束日期
+                    <input id="filter-date-end" name="modified-end" type="date" min="0001-01-01" max="9999-12-31" aria-describedby="filter-date-message">
+                  </label>
+                  <p id="filter-date-message" class="note" role="status">选好开始和结束日期后应用筛选。</p>
+                </div>
+              </div>
             </div>
-          </div>
-          <div class="filter-section" data-section="sessions">
-            <button type="button" class="filter-accordion" aria-expanded="false">来源会话</button>
-            <div class="filter-body" hidden>
-              <p id="filter-session-empty" class="note">没有匹配的会话</p>
-              <div id="filter-session-list"></div>
+            <div class="filter-section" data-section="creators">
+              <button type="button" class="filter-accordion" aria-expanded="false">创建人</button>
+              <div class="filter-body" hidden>
+                <p id="filter-creator-empty" class="note">暂无可筛选的创建人</p>
+                <div id="filter-creator-list"></div>
+              </div>
+            </div>
+            <div class="filter-section" data-section="sessions">
+              <button type="button" class="filter-accordion" aria-expanded="false">来源会话</button>
+              <div class="filter-body" hidden>
+                <p id="filter-session-empty" class="note">没有匹配的会话</p>
+                <div id="filter-session-list"></div>
+              </div>
             </div>
           </div>
         </div>

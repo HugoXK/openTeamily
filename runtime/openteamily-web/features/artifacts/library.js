@@ -3,6 +3,7 @@
 // page is rendered by the dedicated Bot Social from a published snapshot.
 import { createHash, randomBytes } from 'node:crypto'
 import { digest, HEX32, newId, nowSeconds, refuse, stableJson } from '../../featurekit/http.js'
+import { GLB_MIME } from '../../lib/glb.js'
 import {
   emptyBoard, emptyDashboard, emptySlides, MEDIA_MIMES, preview, PREFIX_LEN, publicKind, ROW_JOINS, ROW_SELECT, SHARE_CSP, sourceView,
   TITLE_MAX, titleHash, TOKEN, validBody, validTitle,
@@ -38,12 +39,20 @@ export function load(store, workspaceId, id) {
   return row && named(row, usernames(store))
 }
 
-function filteredPage(store, boundary, bindings, order, limit, { needle, scope, kind, owner, ownerUsername, favorites }) {
-  const hasFilters = scope !== 'all' || kind !== 'all'
-  const columns = hasFilters
+function matchesFileTypes(row, kind, types) {
+  if (types.has('messages') && row.chat_message_id) return true
+  if (kind === 'document' && row.chat_message_id) return false
+  if (kind !== 'media') return types.has(kind)
+  if (row.media_mime === GLB_MIME) return types.has('model3d')
+  return types.has(row.media_mime.split('/', 1)[0])
+}
+
+function filteredPage(store, { boundary, bindings, order, metadata }, limit, filters, user) {
+  const { needle, scope, kind, owner, ownerUsername, favorites, types, creators, sessions } = filters
+  const columns = metadata
     ? `SELECT a.id, a.title, a.created_by, u.username, u.is_owner, m.render, md.mime AS media_mime,
        b.board <> '' AS board_json, sl.deck <> '' AS slides_json, d.dashboard <> '' AS dashboard_json,
-       x.workbook <> '' AS spreadsheet_json, s.source_kind, cs.message_id AS chat_message_id
+       x.workbook <> '' AS spreadsheet_json, s.source_kind, cs.message_id AS chat_message_id, cs.conversation_id
        ${ROW_JOINS} LEFT JOIN ot_users u ON u.id=a.created_by `
     : 'SELECT a.id, a.title FROM artifacts a '
   const candidates = store.all(columns + boundary + order, ...bindings)
@@ -54,7 +63,11 @@ function filteredPage(store, boundary, bindings, order, limit, { needle, scope, 
     if (scope === 'mine' && row.created_by !== owner && !row.is_owner &&
         (!ownerUsername || row.username !== ownerUsername)) continue
     if (scope === 'memory' && (row.chat_message_id || row.source_kind !== 'agent_task')) continue
-    if (kind === 'messages' ? !row.chat_message_id : kind !== 'all' && publicKind(row) !== kind) continue
+    const artifactKind = kind !== 'all' || types.size ? publicKind(row) : null
+    if (kind === 'messages' ? !row.chat_message_id : kind !== 'all' && artifactKind !== kind) continue
+    if (types.size && !matchesFileTypes(row, artifactKind, types)) continue
+    if (creators.size && !creators.has(user(row.created_by))) continue
+    if (sessions.size && !sessions.has(row.conversation_id)) continue
     ids.push(row.id)
     if (ids.length >= limit) break
   }
@@ -76,11 +89,22 @@ export function listing(store, workspaceId, cursor, limit, filters) {
     boundary += ' AND a.id>?'
     bindings.push(cursor)
   }
-  const rows = filters.needle || filters.scope !== 'all' || filters.kind !== 'all'
-    ? filteredPage(store, boundary, bindings, order, limit, filters)
+  if (filters.since !== null) {
+    boundary += ' AND a.updated>=?'
+    bindings.push(filters.since)
+  }
+  if (filters.before !== null) {
+    boundary += ' AND a.updated<?'
+    bindings.push(filters.before)
+  }
+  const metadata = filters.scope !== 'all' || filters.kind !== 'all' ||
+    filters.types.size || filters.creators.size || filters.sessions.size
+  const names = filters.creators.size ? usernames(store) : null
+  const rows = filters.needle || metadata
+    ? filteredPage(store, {boundary, bindings, order, metadata}, limit, filters, names)
     : store.all(ROW_SELECT + boundary + order + ' LIMIT ?', ...bindings, limit)
   if (!rows.length) return rows
-  const user = usernames(store)
+  const user = names || usernames(store)
   return rows.map((row) => named(row, user))
 }
 

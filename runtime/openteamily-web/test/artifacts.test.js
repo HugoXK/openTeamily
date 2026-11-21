@@ -95,6 +95,9 @@ test('media upload is stored in this DS-Bot feature directory and is listed for 
   assert.equal(item.kind, 'media')
   assert.equal(item.media.filename, 'dot.png')
   assert.equal(item.media.mime, 'image/png')
+  const imageCatalog = await call('GET', base() + '?type=image&type=video')
+  assert.deepEqual(imageCatalog.body.items.map(row => row.id), [item.id])
+  assert.deepEqual((await call('GET', base() + '?type=model3d')).body.items, [])
   const objects = join(bot.vol.data, 'openteamily', 'features', 'artifacts', 'objects', WS)
   assert.ok(existsSync(objects))
   const file = await call('GET', base(`/${item.id}/file`))
@@ -207,13 +210,22 @@ test('Space recent pages, scopes and facets include matches beyond the first pag
   assert.deepEqual(ids(await list('scope=mine&kind=messages')), [message])
   assert.deepEqual(ids(await list('scope=mine&kind=website')), [])
   assert.deepEqual(ids(await list('order=recent&cursor=' + other)), [])
+  const matched = await list('order=recent&scope=favorites&type=website&type=messages&creator=qa-friend&creator=qa-owner&updated_since=1&updated_before=3&limit=1')
+  assert.deepEqual(ids(matched), [message])
+  assert.deepEqual(ids(await list('order=recent&scope=favorites&type=website&type=messages&creator=qa-friend&creator=qa-owner&updated_since=1&updated_before=3&cursor=' + matched.body.cursor)), [old])
+  assert.deepEqual(ids(await list('type=document&updated_since=2&updated_before=3')), [memory])
+  assert.deepEqual(ids(await list('type=messages&updated_since=2&updated_before=3&session=' + 'c'.repeat(32) +
+    '&session=' + 'e'.repeat(32) + '&q=对话')), [message])
+  assert.deepEqual(ids(await list('creator=qa-friend&updated_since=-86400&updated_before=2')), [old])
   assert.deepEqual((await list('facets=1')).body, {
     creators: ['qa-friend','qa-owner'], sessions: [{id: 'c'.repeat(32), label: '产品周会'}],
   })
   assert.deepEqual((await list('facets=1', otherSpace)).body, {
     creators: ['qa-other'], sessions: [{id: 'e'.repeat(32), label: '内部讨论'}],
   })
-  for (const bad of ['facets=1&q=x', 'facets=1&facets=1', 'kind=wrong', 'scope=foreign', 'order=title']) {
+  for (const bad of ['facets=1&q=x', 'facets=1&facets=1', 'kind=wrong', 'scope=foreign', 'order=title',
+    'type=pdf', 'creator=', 'session=%0A', 'updated_since=NotADate', 'updated_since=2.5',
+    'updated_since=3&updated_before=2', 'updated_since=2&updated_since=3']) {
     assert.equal((await list(bad)).status, 400)
   }
   const edited = await call('POST', base('/' + old), {revision: 1, changes: {title: '更新后的站点'}})
