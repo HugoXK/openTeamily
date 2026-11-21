@@ -50,6 +50,24 @@ CREATE TABLE IF NOT EXISTS ot_messages (
   created_at INTEGER NOT NULL, edited_at INTEGER, retracted INTEGER NOT NULL DEFAULT 0, pinned_by TEXT, forwarded_author TEXT,
   UNIQUE (conversation_id, seq), UNIQUE (conversation_id, author_id, client_key)
 );
+CREATE TABLE IF NOT EXISTS ot_group_memories (
+  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE,
+  author_id TEXT NOT NULL, client_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
+  title TEXT NOT NULL, body TEXT NOT NULL, source_message_id TEXT NOT NULL REFERENCES ot_messages(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL, removed INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(conversation_id,author_id,client_key)
+);
+CREATE INDEX IF NOT EXISTS ot_group_memories_room ON ot_group_memories(conversation_id,removed,created_at DESC);
+CREATE TABLE IF NOT EXISTS ot_group_memory_sources (
+  memory_id TEXT NOT NULL REFERENCES ot_group_memories(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL, revision INTEGER NOT NULL,
+  PRIMARY KEY(memory_id,message_id)
+);
+CREATE TABLE IF NOT EXISTS ot_group_memory_references (
+  message_id TEXT NOT NULL REFERENCES ot_messages(id) ON DELETE CASCADE,
+  memory_id TEXT NOT NULL REFERENCES ot_group_memories(id) ON DELETE CASCADE,
+  PRIMARY KEY(message_id,memory_id)
+);
 CREATE TABLE IF NOT EXISTS ot_forward_requests (
   owner_id TEXT NOT NULL, request_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
   conversation_id TEXT NOT NULL REFERENCES ot_conversations(id) ON DELETE CASCADE, forwarded INTEGER NOT NULL,
@@ -187,6 +205,33 @@ function memberOf(ot: OtContext, convId: string, ownerId: string) {
   return conv;
 }
 
+function requireMemoryGroup(ot: OtContext, cid: string, viewer: string) {
+  const conv = memberOf(ot, cid, viewer);
+  assert(conv.kind === "group" && !fixedPublicThread(conv), 404, "not_found", "该会话没有群记忆。");
+  if (conv.team_id) requireMember(ot, conv.team_id, viewer);
+  return conv;
+}
+
+const ACTIVE_MEMORIES = `g.removed=0 AND NOT EXISTS (
+  SELECT 1 FROM ot_group_memory_sources s LEFT JOIN ot_messages m ON m.id=s.message_id
+  WHERE s.memory_id=g.id AND (m.id IS NULL OR m.retracted=1 OR m.revision<>s.revision))`;
+
+function activeMemories(ot: OtContext, cid: string) {
+  return ot.all<any>(`SELECT g.* FROM ot_group_memories g WHERE g.conversation_id=? AND ${ACTIVE_MEMORIES}
+    ORDER BY g.created_at DESC,g.id DESC LIMIT 40`,cid);
+}
+
+function groupMemoryView(ot: OtContext, row: any, group: any, viewer: string) {
+  return {id:row.id,title:row.title,body:row.body,source_message_id:row.source_message_id,
+    author:ot.profileView(row.author_id).display_name,created_at:row.created_at,
+    can_remove:row.author_id===viewer || group.created_by===viewer};
+}
+
+function messageMemories(ot: OtContext, m: any) {
+  return ot.all<{id:string;title:string}>(`SELECT g.id,g.title FROM ot_group_memory_references r
+    JOIN ot_group_memories g ON g.id=r.memory_id WHERE r.message_id=? AND g.conversation_id=? AND ${ACTIVE_MEMORIES}`,m.id,m.conversation_id);
+}
+
 function workspaceTeam(ot: OtContext, workspace: string, ownerId: string) {
   assert(/^[0-9a-f]{32}$/.test(workspace), 400, "invalid_request", "Invalid workspace");
   const match = ot.get<{id: string}>("SELECT id FROM ot_teams WHERE workspace_id=?", workspace);
@@ -235,6 +280,7 @@ const messageView = (ot: OtContext, m: any, viewer?: string) => ({
   mentions: JSON.parse(m.mentions), ...(viewer ? {reply_jobs: replyJobViews(ot, m, viewer)} : {}), reply_to: m.reply_to, pinned: !!m.pinned_by,
   ...(viewer && m.reply_to && !m.retracted ? {reply_preview: replyPreview(ot, m, viewer)} : {}),
   ...(m.forwarded_author && !m.retracted ? {forwarded_from: {author: m.forwarded_author}} : {}),
+  ...(m.author_kind === "agent" && !m.retracted ? {group_memory_refs:messageMemories(ot,m)} : {}),
   attachment: m.retracted ? undefined : attachmentView(ot, m.id),
   voice: m.retracted ? undefined : ot.get<{mime: string}>("SELECT mime FROM ot_voice_messages WHERE message_id=?", m.id),
   reactions: ot.all<any>("SELECT emoji, COUNT(*) AS n, SUM(owner_id = ?) AS me FROM ot_reactions WHERE message_id = ? GROUP BY emoji", viewer ?? "", m.id).map((r) => ({ emoji: r.emoji, count: r.n, mine: !!r.me })),
@@ -985,6 +1031,97 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     });
   });
 
+  app.post("/v1/ot/conversations/:id/memory-sources", async req => {
+    const viewer = ot.me(req).ownerId;
+    const conv = requireMemoryGroup(ot,params(req).id,viewer);
+    const input = body(req);
+    if (input.workspace_id === undefined) {
+      assert(conv.account_group === 1,404,"not_found","该群聊不在个人工作区。");
+    } else {
+      const workspace = text(input.workspace_id,"workspace_id",{min:32,max:32});
+      assert(workspaceTeam(ot,workspace,viewer).id === conv.team_id,404,"not_found","该群聊不在当前工作区。");
+    }
+    const membership = ot.get<{since:number}>(`SELECT MAX(member.created_at,COALESCE(team_member.created_at,0)) AS since
+      FROM ot_conversation_members member LEFT JOIN ot_team_members team_member ON team_member.team_id=? AND team_member.owner_id=member.owner_id
+      WHERE member.conversation_id=? AND member.owner_id=?`,conv.team_id,conv.id,viewer)!.since;
+    const readable = `FROM ot_messages m WHERE m.conversation_id=? AND ${VISIBLE_MESSAGE}
+      AND m.author_kind='member' AND m.retracted=0 AND trim(m.body)<>''
+      AND NOT EXISTS (SELECT 1 FROM ot_message_attachments a WHERE a.message_id=m.id)
+      AND NOT EXISTS (SELECT 1 FROM ot_voice_messages v WHERE v.message_id=m.id)`;
+    const select = `SELECT m.id,m.seq,m.body,m.revision,m.author_id ${readable}`;
+    let rows: {id:string;seq:number;body:string;revision:number;author_id:string}[];
+    let cursor = conv.last_seq;
+    if (input.after !== undefined) {
+      assert(input.message_ids === undefined && Number.isSafeInteger(input.after) && input.after >= 0,
+        400,"invalid_request","无效的群记忆游标。");
+      rows = ot.all(`${select} AND m.seq>? AND m.created_at>=? ORDER BY m.seq LIMIT 13`,conv.id,viewer,input.after,membership);
+      if (rows.length > 12) {
+        rows.pop();
+        cursor = rows[rows.length - 1].seq;
+      }
+    } else {
+      const ids = input.message_ids;
+      assert(Array.isArray(ids) && ids.length<=12 && new Set(ids).size===ids.length &&
+        ids.every(id=>typeof id==="string" && /^[A-Za-z0-9._-]{1,80}$/.test(id)),400,"invalid_request","请选择有效的群聊消息。");
+      rows = ids.length ? ot.all(`${select} AND m.id IN (${ids.map(()=>"?").join(",")}) ORDER BY m.seq`,conv.id,viewer,...ids) : [];
+    }
+    return {cursor,membership,items:rows.map(row=>({
+      id:row.id,revision:row.revision,title:conv.title,author:ot.profileView(row.author_id).display_name || "群成员",text:row.body,
+    }))};
+  });
+
+  app.get("/v1/ot/conversations/:id/memories", async req => {
+    const viewer = ot.me(req).ownerId;
+    const conv = requireMemoryGroup(ot,params(req).id,viewer);
+    return {items:activeMemories(ot,conv.id).map(row => groupMemoryView(ot,row,conv,viewer))};
+  });
+  app.post("/v1/ot/conversations/:id/memories", async (req,reply) => {
+    const viewer = ot.me(req).ownerId;
+    const draft = body(req);
+    const title = text(draft.title,"title",{min:1,max:80});
+    const content = text(draft.body,"body",{min:1,max:8000,multiline:true});
+    const key = text(draft.client_key,"client_key",{min:16,max:80});
+    const primary = text(draft.source_message_id,"source_message_id",{min:1,max:80});
+    assert(Array.isArray(draft.sources) && draft.sources.length >= 1 && draft.sources.length <= 12,400,"invalid_request","请选择群聊来源。");
+    const keys = new Map<string,number>();
+    for (const source of draft.sources) {
+      const id = text(source?.id,"source_id",{min:1,max:80});
+      assert(Number.isSafeInteger(source?.revision) && source.revision > 0 && !keys.has(id),400,"invalid_request","无效的来源版本。");
+      keys.set(id,source.revision);
+    }
+    assert(keys.has(primary),400,"invalid_request","请提供主来源消息。");
+    const fingerprint = createHash("sha256").update(JSON.stringify([title,content,primary,[...keys].sort()])).digest("hex");
+    const result = ot.tx(() => {
+      const conv = requireMemoryGroup(ot,params(req).id,viewer);
+      const prior = ot.get<any>("SELECT * FROM ot_group_memories WHERE conversation_id=? AND author_id=? AND client_key=?",conv.id,viewer,key);
+      if (prior) {
+        assert(prior.fingerprint === fingerprint && ot.get(
+          `SELECT 1 FROM ot_group_memories g WHERE g.id=? AND ${ACTIVE_MEMORIES}`, prior.id),
+          409,"conflict","这个版本已移除或原消息已更新。");
+        return {status:200,item:groupMemoryView(ot,prior,conv,viewer)};
+      }
+      for (const [id,revision] of keys) {
+        const row = ot.get<any>("SELECT revision,author_kind,retracted FROM ot_messages WHERE id=? AND conversation_id=?",id,conv.id);
+        requireVisibleMessage(ot,id,viewer);
+        assert(row && row.revision===revision && row.author_kind==="member" && !row.retracted,409,"conflict","原消息已更新，请重新提炼。");
+      }
+      assert(activeMemories(ot,conv.id).length < 40,429,"quota","群记忆已满，请先移除一条旧记忆。");
+      const id = newId("otgm");
+      ot.run("INSERT INTO ot_group_memories VALUES(?,?,?,?,?,?,?,?,?,0)",id,conv.id,viewer,key,fingerprint,title,content,primary,ot.now());
+      for (const [source,revision] of keys) ot.run("INSERT INTO ot_group_memory_sources VALUES(?,?,?)",id,source,revision);
+      return {status:201,item:groupMemoryView(ot,ot.get("SELECT * FROM ot_group_memories WHERE id=?",id),conv,viewer)};
+    });
+    return reply.status(result.status).send({item:result.item});
+  });
+  app.delete("/v1/ot/conversations/:id/memories/:memory", async req => {
+    const viewer = ot.me(req).ownerId;
+    const conv = requireMemoryGroup(ot,params(req).id,viewer);
+    const row = ot.get<any>("SELECT * FROM ot_group_memories WHERE conversation_id=? AND id=?",conv.id,params(req).memory);
+    assert(row && (row.author_id===viewer || conv.created_by===viewer),404,"not_found","无法移除这条群记忆。");
+    ot.run("UPDATE ot_group_memories SET removed=1 WHERE id=?",row.id);
+    return {removed:true};
+  });
+
   /** Messages the caller's agents should answer: @mentions of the agent, or any member message in a group
    *  where the agent has auto-reply on. `after` is a global cursor (`cursor` in the answer). */
   app.get("/v1/ot/agent-inbox", async (req) => {
@@ -1003,6 +1140,18 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
     SELECT m.*, a.agent_ref AS my_agent, a.name AS my_agent_name, a.auto_reply AS my_auto, a.auto_reply_after_seq AS auto_after_seq
     FROM pending m JOIN ot_conversation_agents a ON a.conversation_id=m.conversation_id AND a.owner_id=?
     ORDER BY m.rowseq, a.agent_ref`, after, me.ownerId, me.ownerId, limit * 4, me.ownerId);
+    const roomNotes = new Map<string, {id:string;title:string;body:string}[]>();
+    const memories = (cid:string) => {
+      if (!roomNotes.has(cid)) {
+        let list: {id:string;title:string;body:string}[] = [];
+        try {
+          requireMemoryGroup(ot,cid,me.ownerId);
+          list = activeMemories(ot,cid).map(({id,title,body})=>({id,title,body:body.slice(0,1500)}));
+        } catch { /* Membership may have changed since the agent inbox was assembled. */ }
+        roomNotes.set(cid,list);
+      }
+      return roomNotes.get(cid);
+    };
     const managed = query(req).managed === "1";
     const jobs = managed ? ot.all<ReplyJob & {conversation_id: string; conversation_title: string; seq: number}>(
       REPLY_JOB_SOURCE + ` WHERE j.owner_id=? AND j.status='queued' AND j.updated_at>?
@@ -1011,7 +1160,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const message = ot.get<any>("SELECT * FROM ot_messages WHERE id=?", job.message_id);
       return {job_id: job.id, attempt: job.attempt, conversation_id: job.conversation_id,
         conversation_title: job.conversation_title, agent_ref: job.agent_ref, agent_name: job.agent_name,
-        mode: "mention", message: messageView(ot, message), context: replyContext(ot, job.conversation_id, job.seq)};
+        mode: "mention", message: messageView(ot, message), context: replyContext(ot, job.conversation_id, job.seq), group_memories:memories(job.conversation_id)};
     }) : [];
     let cursor = after;
     const items: any[] = [];
@@ -1042,7 +1191,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const mentioned = agentMentioned(mentions, {owner_id: me.ownerId, agent_ref: m.my_agent, name: m.my_agent_name});
       if (!mentioned && (!m.my_auto || m.seq <= m.auto_after_seq)) continue;
       items.push({ conversation_id: m.conversation_id, conversation_title: conv.title, agent_ref: m.my_agent, agent_name: m.my_agent_name,
-        mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: replyContext(ot, m.conversation_id, m.seq) });
+        mode: mentioned ? "mention" : "auto", message: messageView(ot, m), context: replyContext(ot, m.conversation_id, m.seq), group_memories:memories(m.conversation_id) });
     }
     return managed ? { cursor, items, jobs } : { cursor, items };
   });
@@ -1096,9 +1245,21 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       const used = ot.get<any>("SELECT COUNT(*) AS n FROM ot_messages WHERE conversation_id = ? AND author_kind = 'agent' AND reply_mode = ? AND created_at > ?", conv.id, mode, since).n;
       assert(used < (mode === "auto" ? AUTO_PER_HOUR : MENTION_PER_HOUR), 429, "agent_reply_limit", mode === "auto" ? "automatic agent replies are limited to 3 per hour in a group" : "agent reply limit reached");
       if (b.reply_to) assert(ot.get("SELECT 1 FROM ot_messages WHERE id = ? AND conversation_id = ?", String(b.reply_to), conv.id), 400, "invalid_request", "reply_to is not in this conversation");
+      const clientKey = job ? `job:${job.id}` : b.client_key ? text(b.client_key, "client_key", { min: 1, max: 80 }) : null;
+      const prior = clientKey && ot.get<any>("SELECT * FROM ot_messages WHERE conversation_id=? AND author_id=? AND client_key=?",conv.id,me.ownerId,clientKey);
+      if (prior) return prior;
+      const refs = b.group_memory_ids ?? [];
+      assert(Array.isArray(refs) && refs.length<=3 && refs.every(id=>typeof id==="string") && new Set(refs).size===refs.length,
+        400,"invalid_request","无效的群记忆引用。");
+      if (refs.length) {
+        requireMemoryGroup(ot,conv.id,me.ownerId);
+        const allowed = new Set(activeMemories(ot,conv.id).map(item=>item.id));
+        assert(refs.every(id=>allowed.has(id)),409,"group_memory_changed","群记忆已更新，请重新生成回复。");
+      }
       const response = insertMessage(ot, conv, { author: me.ownerId, kind: "agent", agentRef: agent.agent_ref,
         agentName: agent.name, body: bodyText, mentions: [], replyTo: originalId, replyMode: mode,
-        clientKey: job ? `job:${job.id}` : b.client_key ? text(b.client_key, "client_key", { min: 1, max: 80 }) : null });
+        clientKey });
+      for (const id of refs) ot.run("INSERT OR IGNORE INTO ot_group_memory_references VALUES(?,?)",response.id,id);
       if (job) ot.run("UPDATE ot_agent_reply_jobs SET status='replied',updated_at=? WHERE id=?", ot.now(), job.id);
       return response;
     });

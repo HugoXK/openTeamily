@@ -1,3 +1,4 @@
+import { rank } from '../chat/recall.js'
 // Memory pages (legacy app.py memory_* + memory.py): page CRUD, bounded
 // revision history with restore, Markdown export and the "做梦" duplicate-
 // paragraph consolidation, all executed inside the user's DS-Bot.
@@ -256,6 +257,36 @@ export const routes = [
 export function allPages(store, payload) {
   const workspace = recallWorkspace(payload)
   return store.all('SELECT id, workspace_id, revision, title, body, updated FROM memory_pages WHERE workspace_id=? ORDER BY updated DESC, id LIMIT 500', workspace)
+}
+
+export async function recallAcrossWorkspaces(store, host, payload) {
+  recallWorkspace(payload)
+  const query = payload?.query
+  if (typeof query !== 'string' || query.length > 4000 || !query.trim()) return []
+  const [binding, teams] = await Promise.all([
+    host.call('agents/personal-binding',{}).catch(() => null),
+    host.call('teams/activeWorkspaces',{}).catch(() => []),
+  ])
+  const workspaces = new Map()
+  if (/^[0-9a-f]{32}$/.test(binding?.workspace_id || '')) workspaces.set(binding.workspace_id,'个人工作区')
+  for (const team of teams) {
+    if (/^[0-9a-f]{32}$/.test(team?.id || '')) workspaces.set(team.id,team.name)
+  }
+  if (!workspaces.size) return []
+  const ids = JSON.stringify([...workspaces.keys()])
+  const pages = store.all(`SELECT id,workspace_id,revision,title,body FROM memory_pages
+    WHERE workspace_id IN (SELECT value FROM json_each(?))`,ids)
+  const actions = store.all(`SELECT a.id,a.workspace_id,a.revision,a.title,a.notes,a.status,a.due_at,p.title AS linked_title
+    FROM memory_actions a LEFT JOIN memory_pages p ON p.id=a.memory_page_id AND p.workspace_id=a.workspace_id
+    WHERE a.workspace_id IN (SELECT value FROM json_each(?))`,ids)
+  for (const action of actions) {
+    const due = action.due_at === null ? '' : ' · 截止 ' + new Date(action.due_at*1000).toISOString().slice(0,10)
+    const linked = action.linked_title ? ' · 关联记忆 ' + action.linked_title : ''
+    const facts = '行动项 / Action item · ' + (action.status === 'done' ? '已完成 / done' : '待完成 / open') + due + linked
+    pages.push({...action,kind:'action',facts,body:[action.notes,facts].filter(Boolean).join('\n')})
+  }
+  for (const page of pages) page.workspace_name = workspaces.get(page.workspace_id)
+  return rank(query,pages,{limit:6})
 }
 
 export function search(store, needle, limit) {

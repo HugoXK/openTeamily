@@ -835,42 +835,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
   const memoryRecall = document.getElementById('agent-memory-recall');
   const memoryDrafts = new Map();
-  const memoryWrites = new Set();
-  const recallEnabled = scope => currentConversation?.memory_recall ?? memoryDrafts.get(scope)
-    ?? currentAgent?.memory_recall_default ?? true;
+  const memoryWrites = new Map();
+  const recallMode = scope => currentConversation?.memory_scope ?? memoryDrafts.get(scope)
+    ?? ((currentConversation?.memory_recall ?? currentAgent?.memory_recall_default ?? true) ? 'workspace' : 'off');
 
   function syncMemoryRecall(scope = sendScope()) {
     if (!memoryRecall) return;
     const visible = servedByDsbot && currentSource === 'agent' && Boolean(currentAgent);
     memoryRecall.hidden = !visible;
     if (!visible) return;
-    const enabled = recallEnabled(scope);
-    memoryRecall.setAttribute('aria-pressed', String(enabled));
-    const label = enabled ? '记忆已开启' : '记忆已关闭';
-    if (memoryRecall.textContent !== label) memoryRecall.textContent = label;
+    memoryRecall.value = memoryWrites.get(scope) ?? recallMode(scope);
     memoryRecall.disabled = memoryWrites.has(scope) || Boolean(pendingSends.get(scope)?.jobs.some(job => !job.failed));
   }
 
-  memoryRecall?.addEventListener('click', async () => {
+  memoryRecall?.addEventListener('change', async () => {
     if (memoryRecall.hidden || memoryRecall.disabled) return;
     const scope = sendScope();
-    const enabled = !recallEnabled(scope);
+    const mode = memoryRecall.value;
     if (!currentConversation) {
-      memoryDrafts.set(scope, enabled);
+      memoryDrafts.set(scope,mode);
       syncMemoryRecall(scope);
       return;
     }
     const path = `${agentBase()}/conversations/${currentConversation.id}`;
-    memoryWrites.add(scope);
+    memoryWrites.set(scope,mode);
     renderPendingSend();
     try {
-      const result = await request('POST', path, {memory_recall:enabled});
+      const result = await request('POST',path,{memory_scope:mode});
       if (sendScope() !== scope) return;
-      if (result.status !== 200 || result.body.memory_recall !== enabled) throw new Error();
-      currentConversation.memory_recall = enabled;
-      show('ok', enabled ? '已开启后续消息的记忆检索。' : '已关闭后续消息的记忆检索。', {announceOnly: true});
+      if (result.status !== 200 || result.body.memory_scope !== mode) throw new Error();
+      currentConversation.memory_scope = mode;
+      currentConversation.memory_recall = result.body.memory_recall;
+      show('ok', mode === 'off' ? '已关闭后续消息的记忆检索。' : mode === 'workspace'
+        ? '后续消息将参考本工作区的记忆。' : '后续消息将参考可访问工作区里的记忆和行动项。', {announceOnly:true});
     } catch {
-      if (sendScope() === scope) show('error', '记忆开关未保存，请重试。');
+      if (sendScope() === scope) show('error','记忆范围未保存，请重试。');
     } finally {
       memoryWrites.delete(scope);
       if (sendScope() === scope) renderPendingSend();
@@ -997,11 +996,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     actions.append(retry, discard);
     if (reply) bubble.append(quoteBlock(reply));
     bubble.append(body);
+    const previews = [];
+    const urls = document.defaultView?.URL;
     for (const file of files) {
-      bubble.append(renderChatFile(document, {title: file.name, mime: file.type, bytes: file.size}, {pending: true}));
+      const path = file.type?.startsWith('image/') && urls?.createObjectURL ? urls.createObjectURL(file) : '';
+      if (path) previews.push(path);
+      bubble.append(renderChatFile(document, {title:file.name,mime:file.type,bytes:file.size,path}, {pending:true}));
     }
     bubble.append(status, actions);
-    const job = {key, message, files, bubble, status, actions, retry, failed: false,
+    const job = {key, message, files, previews, bubble, status, actions, retry, failed: false,
       state: queue.active ? '等待发送…' : '正在发送…'};
     retry.addEventListener('click', () => {
       if (!job.failed || job.retry.disabled) return;
@@ -1020,7 +1023,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function removeSendJob(queue, job) {
     queue.jobs = queue.jobs.filter(item => item !== job);
     job.bubble.remove();
+    for (const url of job.previews) document.defaultView.URL.revokeObjectURL(url);
     if (!queue.jobs.length && !queue.active && pendingSends.get(queue.scope) === queue) pendingSends.delete(queue.scope);
+  }
+
+  function clearPendingSends() {
+    for (const queue of pendingSends.values()) {
+      for (const job of queue.jobs) removeSendJob(queue,job);
+    }
+    pendingSends.clear();
   }
 
   function pendingMessageKeys() {
@@ -1250,13 +1261,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   function memorySources(item) {
     if (item.role !== 'assistant' || item.status !== 'succeeded') return null;
     const wid = workspaceId();
-    const refs = Array.isArray(item.memory_refs)
-      ? item.memory_refs.filter(ref => ref?.workspace_id === wid && /^[0-9a-f]{32}$/.test(ref.id)) : [];
-    const links = refs.map(ref => {
-      const params = new URLSearchParams({workspace:wid, page:ref.id});
-      if (Number.isSafeInteger(ref.revision) && ref.revision > 0) params.set('revision', String(ref.revision));
-      return [params, ref.title || '记忆页'];
-    });
+    const refs = Array.isArray(item.memory_refs) ? item.memory_refs : [];
+    const links = [];
+    for (const ref of refs) {
+      if (!/^[0-9a-f]{32}$/.test(ref?.id || '') || !/^[0-9a-f]{32}$/.test(ref.workspace_id || '')) continue;
+      const workspace = workspaces.find(entry => entry.id === ref.workspace_id);
+      if (ref.workspace_id !== wid && !workspace) continue;
+      const params = new URLSearchParams({workspace:ref.workspace_id,page:ref.id});
+      let title = ref.title || '记忆页';
+      if (ref.kind === 'action') {
+        params.set('page','todos');
+        params.set('action',ref.id);
+        title = '行动 · ' + title;
+      } else if (Number.isSafeInteger(ref.revision) && ref.revision > 0) params.set('revision',String(ref.revision));
+      if (ref.workspace_id !== wid && workspace?.name) title += ' · ' + workspace.name;
+      links.push([params,title]);
+    }
     if (item.memory_profile_workspace === wid) {
       links.push([new URLSearchParams({workspace:wid, page:'profile'}), '我的资料与偏好']);
     }
@@ -1903,6 +1923,126 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return rows;
   }
 
+  const groupMemoryDialog = document.getElementById('group-memory-dialog');
+  const groupMemoryStatus = document.getElementById('group-memory-status');
+  const groupMemoryList = document.getElementById('group-memory-list');
+  const groupMemoryAuto = document.getElementById('group-memory-auto');
+  const groupMemoryAutoStatus = document.getElementById('group-memory-auto-status');
+  let groupMemoryView = null;
+
+  function groupMemoryButton(label, action) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', action);
+    return button;
+  }
+
+  const groupMemoryActive = view => groupMemoryDialog?.open && groupMemoryView === view && sendScope() === view.scope;
+  groupMemoryAuto?.addEventListener('click', async () => {
+    const view = groupMemoryView;
+    if (!groupMemoryActive(view) || typeof view.autoCapture !== 'boolean') return;
+    const enabled = !view.autoCapture;
+    groupMemoryAuto.setAttribute('aria-checked', String(enabled));
+    groupMemoryAuto.disabled = true;
+    groupMemoryAutoStatus.textContent = '';
+    const result = await request('POST', `${view.path}/auto-capture`,{enabled})
+      .catch(() => ({status:0,body:{}}));
+    if (!groupMemoryActive(view)) return;
+    if (result.status === 200) view.autoCapture = result.body.enabled === true;
+    else groupMemoryAutoStatus.textContent = messageFor(result.body.error,'设置保存失败，请重试。');
+    groupMemoryAuto.setAttribute('aria-checked', String(view.autoCapture));
+    groupMemoryAuto.disabled = false;
+  });
+
+  async function openGroupMemory(highlight) {
+    if (!servedByDsbot || currentSource !== 'social' ||
+        currentConversation?.kind !== 'group' || currentConversation.public_agent) return;
+    const view = {scope:sendScope(), path:`${socialBase()}/${currentConversation.id}/shared-memory`};
+    groupMemoryView = view;
+    const active = () => groupMemoryActive(view);
+    groupMemoryAuto.disabled = true;
+    groupMemoryAuto.setAttribute('aria-checked','false');
+    groupMemoryAutoStatus.textContent = '';
+    document.getElementById('group-memory-inbox').href = '/memory?'+new URLSearchParams({workspace:workspaceId(),page:'candidates'});
+    groupMemoryList.replaceChildren();
+    groupMemoryStatus.textContent = '正在读取群记忆…';
+    if (!groupMemoryDialog.open) groupMemoryDialog.showModal();
+    const result = await request('GET', view.path).catch(() => ({status:0,body:{}}));
+    if (!active()) return;
+    if (result.status !== 200) {
+      groupMemoryStatus.textContent = messageFor(result.body.error,'群记忆加载失败，请重试。');
+      return;
+    }
+    view.autoCapture = result.body.auto_capture === true;
+    groupMemoryAuto.setAttribute('aria-checked',String(view.autoCapture));
+    groupMemoryAuto.disabled = false;
+    const items = result.body.items || [];
+    const selected = items.find(item => item.id === highlight);
+    groupMemoryStatus.textContent = highlight && !selected ? '这条群记忆已失效或被移除。'
+      : items.length ? '' : '还没有共享的记忆。';
+    const rows = items.map(item => {
+      const row = document.createElement('li');
+      const title = document.createElement('h3');
+      title.textContent = item.title;
+      const body = document.createElement('p');
+      body.className = 'group-memory-body';
+      body.textContent = item.body;
+      const author = document.createElement('p');
+      author.className = 'note';
+      author.textContent = item.author;
+      const actions = document.createElement('div');
+      actions.className = 'group-memory-actions';
+      const source = groupMemoryButton('查看原消息', async () => {
+        groupMemoryDialog.close();
+        setGroupInfoOpen(false);
+        if (await jumpToMessage(item.source_message_id, null) === false && sendScope() === view.scope) {
+          show('error', '这条原消息已无法查看。');
+        }
+      });
+      actions.append(source);
+      if (item.can_remove) {
+        const remove = groupMemoryButton('移除', () => {
+          const confirm = groupMemoryButton('确认移除', async () => {
+            confirm.disabled = cancel.disabled = true;
+            const result = await request('POST', `${view.path}/${encodeURIComponent(item.id)}/remove`, {})
+              .catch(() => ({status:0,body:{}}));
+            if (!active()) return;
+            if (result.status === 200) await openGroupMemory();
+            else {
+              confirm.disabled = cancel.disabled = false;
+              groupMemoryStatus.textContent = messageFor(result.body.error,'移除失败，请重试。');
+            }
+          });
+          const cancel = groupMemoryButton('取消', () => {
+            actions.replaceChildren(source, remove);
+            remove.focus();
+          });
+          actions.replaceChildren(source, confirm, cancel);
+          confirm.focus();
+        });
+        actions.append(remove);
+      }
+      row.append(title, author, body, actions);
+      return row;
+    });
+    groupMemoryList.replaceChildren(...rows);
+    if (selected) {
+      const row = rows[items.indexOf(selected)];
+      row.tabIndex = -1;
+      row.focus();
+    }
+  }
+
+  function renderGroupMemoryRefs(refs) {
+    const block = document.createElement('div');
+    block.className = 'group-memory-refs';
+    const label = document.createElement('span');
+    label.textContent = '参考群记忆';
+    block.append(label, ...refs.map(ref => groupMemoryButton(ref.title, () => openGroupMemory(ref.id))));
+    return block;
+  }
+
   function renderSocialMessages(items, {keepScroll = Boolean(socialHistory?.readingHistory), refresh = false} = {}) {
     const translateRoom = currentConversation?.kind === 'group' || (currentConversation?.kind === 'dm' && chatPreferences.auto_translate === true);
     autoTranslation.open(servedByDsbot && currentUser && translateRoom && !currentConversation?.public_agent
@@ -1947,6 +2087,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (!item.retracted && item.reply_preview) li.append(quoteBlock(item.reply_preview, true));
       li.append(body, time);
       if (!item.retracted && item.reply_jobs?.length) li.insertBefore(renderReplyJobs(item), time);
+      if (!item.retracted && item.group_memory_refs?.length) li.insertBefore(renderGroupMemoryRefs(item.group_memory_refs), time);
       if (!mine) autoTranslation.add(item,li,body);
       if (item.voice && !item.retracted) li.insertBefore(voicePlayer(item), time);
       if (item.attachment?.bytes !== undefined && !item.retracted) {
@@ -2555,6 +2696,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!toggle || !panel) return;
     const group = Boolean(conversation && conversation.kind === 'group' && !conversation.public_agent);
     if (groupInvite.open && (!group || !inviteMatches(inviteTarget))) groupInvite.close();
+    if (groupMemoryDialog?.open && (!group || groupMemoryView?.scope !== sendScope())) groupMemoryDialog.close();
+    const memoryOpen = document.getElementById('group-memory-open');
+    if (memoryOpen) memoryOpen.hidden = !group || !servedByDsbot;
     toggle.hidden = !group;
     if (!group) {
       panel.hidden = true;
@@ -3274,7 +3418,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (servedByDsbot) workspaceEvents.start(null);
       autoTranslation.open(null);
       attachmentSender?.reset();
-      pendingSends.clear();
+      clearPendingSends();
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
@@ -3295,7 +3439,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     if (currentUser && currentUser.id !== session.body.user.id) {
       attachmentSender?.reset();
-      pendingSends.clear();
+      clearPendingSends();
       memoryDrafts.clear();
       memoryWrites.clear();
       replyDrafts.clear();
@@ -3926,6 +4070,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       setGroupInfoOpen(false);
       document.getElementById('conversation-search-open').click();
     });
+    document.getElementById('group-memory-open')?.addEventListener('click', () => openGroupMemory());
     document.getElementById('group-info-tab-agents').addEventListener('click', () => setGroupInfoTab('agents'));
     document.getElementById('group-info-tab-people').addEventListener('click', () => setGroupInfoTab('people'));
     document.getElementById('group-info-pin').addEventListener('click', async () => {
@@ -4337,7 +4482,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         base: social ? socialBase() : `${agentBase()}/conversations`,
         conversationId: currentConversation?.id, jobs: [], active: false,
         createKey: currentConversation ? null : idempotencyKey('chat-'),
-        memoryRecall: memoryDrafts.get(scope),
+        memoryScope: memoryDrafts.get(scope),
       };
       pendingSends.set(scope, queue);
     }
@@ -4370,7 +4515,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
           if (!queue.conversationId) {
             feedback('正在创建对话…');
             const body = {title: '新对话'};
-            if (queue.memoryRecall !== undefined) body.memory_recall = queue.memoryRecall;
+            if (queue.memoryScope !== undefined) body.memory_scope = queue.memoryScope;
             const created = await request('POST', queue.base, body, {'Idempotency-Key': queue.createKey});
             const conversation = created.body.conversation;
             if (![200, 201].includes(created.status) || !conversation?.id) {

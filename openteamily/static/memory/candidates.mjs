@@ -21,6 +21,7 @@ export function mountCandidates(document, {request, workspaceId}) {
   let generation = 0;
   let selected = null;
   let enabled = false;
+  let groupCapture = false;
   let loading = false;
   let writing = false;
   let timer;
@@ -45,7 +46,7 @@ export function mountCandidates(document, {request, workspaceId}) {
 
   function refresh() {
     clearTimeout(timer);
-    if (workspace && (enabled || status.dataset.pending === 'true')) timer = setTimeout(() => void load(), 7000);
+    if (workspace && (enabled || groupCapture || status.dataset.pending === 'true')) timer = setTimeout(() => void load(), 7000);
   }
 
   async function load() {
@@ -57,21 +58,28 @@ export function mountCandidates(document, {request, workspaceId}) {
       if (generation !== token || writing) return;
       if (result.status !== 200) throw new Error();
       enabled = result.body.enabled === true;
+      groupCapture = result.body.group_capture === true;
       toggle.disabled = false;
       toggle.setAttribute('aria-pressed', String(enabled));
-      toggle.textContent = enabled ? '自动提炼已开启' : '开启自动提炼';
+      toggle.textContent = enabled ? '私聊提炼已开启' : '开启私聊提炼';
       const items = result.body.items || [];
       const queue = result.body.queued || 0;
       status.dataset.pending = String(queue > 0);
       status.textContent = queue > 0 ? `正在提炼 · ${queue} 条消息`
-        : items.length ? '' : enabled ? '暂无待核对的建议。' : '开启后，新私聊可能生成记忆建议。';
+        : items.length ? '' : groupCapture || enabled ? '暂无待核对的建议。' : '可在此开启私聊提炼，或前往群记忆开启群聊提炼。';
       list.replaceChildren(...items.map(item => {
         const row = node('li');
         const button = node('button', '核对建议');
         button.type = 'button';
         button.setAttribute('aria-label', '核对建议 · ' + item.title);
         button.addEventListener('click', () => open(item));
-        row.append(node('strong', item.title), node('p', item.body), button);
+        row.append(node('strong', item.title));
+        if (item.source?.kind === 'group') {
+          const provenance = node('small', (item.source.automatic ? '群聊自动提炼 · ' : '群聊提炼 · ') + (item.source.title || '群聊'));
+          provenance.className = 'note';
+          row.append(provenance);
+        }
+        row.append(node('p', item.body), button);
         return row;
       }));
     } catch {
@@ -154,9 +162,10 @@ export function mountCandidates(document, {request, workspaceId}) {
     loading = false;
     writing = false;
     enabled = false;
+    groupCapture = false;
     toggle.disabled = true;
     toggle.setAttribute('aria-pressed','false');
-    toggle.textContent = '开启自动提炼';
+    toggle.textContent = '开启私聊提炼';
     status.dataset.pending = 'false';
     status.textContent = scope ? '正在加载记忆建议…' : '';
     list.replaceChildren();

@@ -167,6 +167,7 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'), 'discover')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/messages/{aid}/files/0'), 'agents')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/profile/dream'), 'memory')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/{aid}/share-group'), 'memory')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/memory/candidates/{aid}'), 'memory')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/social/conversations/otc_01/memory/capture'), 'messenger')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/agents/{aid}/conversations/{aid}/memory/capture'), 'agents')

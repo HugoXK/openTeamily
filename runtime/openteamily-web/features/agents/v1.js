@@ -20,7 +20,7 @@ function wrap(fn) {
 const publicAgent = (agent) => ({ ...agent, archived: agent.archived ? 1 : 0, homepage: agent.homepage ?? { visibility: 'restricted' } })
 const publicConversation = (row, workspaceId, agentId) => ({
   id: row.id, native_bot_id: row.native_bot_id || null, native_session_id: row.native_session_id || null, workspace_id: workspaceId, agent_id: agentId, title: row.title, created: row.created, updated: row.updated, preview: row.preview ?? '', unread_count: 0,
-  ...(typeof row.memory_recall === 'boolean' ? {memory_recall: row.memory_recall} : {}),
+  ...(typeof row.memory_recall === 'boolean' ? {memory_recall:row.memory_recall,memory_scope:row.memory_scope} : {}),
 })
 const publicMessage = (row, workspaceId, agentId) => {
   const status = row.status === 'sent' ? 'succeeded' : row.status
@@ -74,7 +74,7 @@ export function agentsV1({ endpoints, log }) {
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
       if (req.method === 'POST') {
         const body = await req.json()
-        return {body:await call('setMemoryRecall', {workspace_id:workspaceId,id,conversation_id:conversationId,memory_recall:body.memory_recall})}
+        return {body:await call('setMemoryRecall', {workspace_id:workspaceId,id,conversation_id:conversationId,memory_recall:body.memory_recall,memory_scope:body.memory_scope})}
       }
       if (req.method !== 'GET') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
       const { agent, conversation, items } = await call('openConversation', { workspace_id: workspaceId, id, conversation_id: conversationId })
@@ -87,7 +87,7 @@ export function agentsV1({ endpoints, log }) {
       }
       if (req.method === 'POST') {
         const body = await req.json()
-        const result = await call('conversation-create', { workspace_id: workspaceId, id, title: body.title, memory_recall: body.memory_recall,
+        const result = await call('conversation-create', { workspace_id: workspaceId, id, title: body.title, memory_recall: body.memory_recall,memory_scope:body.memory_scope,
           idempotency_key: req.headers.get('idempotency-key') })
         return { status: result.status ?? 201, body: { conversation: publicConversation(result.conversation, workspaceId, id) } }
       }

@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS agent_conversations (id TEXT PRIMARY KEY, agent_id TE
 CREATE INDEX IF NOT EXISTS agent_conversations_by_agent ON agent_conversations(agent_id, updated DESC, id);
 CREATE TABLE IF NOT EXISTS agent_conversation_memory (
   conversation_id TEXT PRIMARY KEY REFERENCES agent_conversations(id) ON DELETE CASCADE,
-  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)));
+  enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+  scope TEXT NOT NULL DEFAULT 'workspace' CHECK(scope IN ('workspace','workspaces')));
 CREATE TABLE IF NOT EXISTS agent_messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK(role IN ('user','assistant')), text TEXT NOT NULL, status TEXT NOT NULL, created INTEGER NOT NULL, meta TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS agent_messages_by_conversation ON agent_messages(conversation_id, created, id);
@@ -68,6 +69,9 @@ export function view(row) {
 
 export function createAgents({ db, host }) {
   db.exec(SCHEMA)
+  if (!db.prepare('PRAGMA table_info(agent_conversation_memory)').all().some(column => column.name === 'scope')) {
+    db.exec("ALTER TABLE agent_conversation_memory ADD COLUMN scope TEXT NOT NULL DEFAULT 'workspace' CHECK(scope IN ('workspace','workspaces'))")
+  }
   db.exec(`UPDATE agent_messages SET status='failed',
     meta=json_remove(json_set(meta,'$.error','agents/interrupted'),'$.nativePending')
     WHERE role='assistant' AND status='running' AND json_extract(meta,'$.nativePending')=1;
@@ -104,14 +108,30 @@ export function createAgents({ db, host }) {
     try { return (await host.call('personal/get', {})) || {recall:'off'} } catch { return {recall:'off'} }
   }
 
-  function memoryEnabled(convo, profile) {
-    const setting = one('SELECT enabled FROM agent_conversation_memory WHERE conversation_id=?', convo.id)
-    return setting ? Boolean(setting.enabled) : profile?.recall !== 'off'
+  function memoryMode(convo, profile) {
+    const setting = one('SELECT enabled,scope FROM agent_conversation_memory WHERE conversation_id=?', convo.id)
+    if (setting) return setting.enabled ? setting.scope : 'off'
+    return profile?.recall === 'off' ? 'off' : 'workspace'
   }
 
-  function setMemoryEnabled(id, enabled) {
-    if (typeof enabled !== 'boolean') fail('invalid', '记忆开关必须为布尔值。', 400)
-    run('INSERT INTO agent_conversation_memory(conversation_id,enabled) VALUES(?,?) ON CONFLICT(conversation_id) DO UPDATE SET enabled=excluded.enabled', id, Number(enabled))
+  function memorySetting(mode) {
+    return {memory_recall:mode !== 'off', memory_scope:mode}
+  }
+
+  function requestedMemoryMode(p) {
+    const {memory_recall:enabled,memory_scope:scope} = p
+    if (enabled !== undefined && typeof enabled !== 'boolean') fail('invalid', '记忆开关必须为布尔值。', 400)
+    if (scope === undefined) return enabled === undefined ? undefined : enabled ? 'workspace' : 'off'
+    if (!['workspace','workspaces','off'].includes(scope) || (enabled !== undefined && enabled !== (scope !== 'off'))) {
+      fail('invalid', '请选择有效的记忆检索范围。', 400)
+    }
+    return scope
+  }
+
+  function setMemoryMode(id, mode) {
+    run(`INSERT INTO agent_conversation_memory(conversation_id,enabled,scope) VALUES(?,?,?)
+      ON CONFLICT(conversation_id) DO UPDATE SET enabled=excluded.enabled,scope=excluded.scope`,
+    id,Number(mode !== 'off'),mode === 'workspaces' ? mode : 'workspace')
   }
 
   async function privateContext(agent, convo, text, extra = '') {
@@ -119,20 +139,25 @@ export function createAgents({ db, host }) {
     const instructions = profile?.instructions ? `Owner’s standing instructions for ${profile.name}: ${profile.instructions}` : ''
     const query = text.slice(0, 4000)
     const workspace = agent.workspace_id
-    const readMemory = async name => {
-      try { return await host.call(name, {workspace_id:workspace}) } catch { return null }
+    const readMemory = async (name, params = {}) => {
+      try { return await host.call(name, {workspace_id:workspace,...params}) } catch { return null }
     }
-    const remember = memoryEnabled(convo, profile)
-    const [pages, personal] = remember
-      ? await Promise.all([query ? readMemory('memory/pages') : null, readMemory('memory/personal')])
-      : []
-    const hits = Array.isArray(pages) ? rank(query, pages.filter(page => page?.workspace_id === workspace)) : []
-    const base = [instructions, noteBlock(hits, query), extra].filter(Boolean).join('\n\n')
+    const mode = memoryMode(convo,profile)
+    const remember = mode !== 'off'
+    const hitsForTurn = async () => {
+      if (!query) return []
+      if (mode === 'workspaces') return (await readMemory('memory/recallAcrossWorkspaces',{query})) || []
+      const pages = await readMemory('memory/pages')
+      return Array.isArray(pages) ? rank(query,pages.filter(page => page?.workspace_id === workspace)) : []
+    }
+    const [hits, personal] = remember ? await Promise.all([hitsForTurn(),readMemory('memory/personal')]) : [[],null]
+    const base = [instructions, noteBlock(hits, query, mode === 'workspaces'), extra].filter(Boolean).join('\n\n')
     const remaining = CONTEXT_LIMIT - base.length - (base ? 2 : 0)
     const personalization = personal?.workspace_id === workspace ? personalizationBlock(personal, Math.min(8_000, remaining)) : ''
     return {
       context: [base, personalization].filter(Boolean).join('\n\n'),
-      refs: hits.map(({page}) => ({id:page.id, workspace_id:workspace, revision:page.revision, title:page.title})),
+      refs: hits.map(({page}) => ({id:page.id, workspace_id:page.workspace_id, revision:page.revision, title:page.title,
+        ...(page.kind === 'action' ? {kind:'action'} : {})})),
       personalWorkspace: personalization ? workspace : undefined,
       remember,
     }
@@ -377,7 +402,7 @@ export function createAgents({ db, host }) {
     async 'conversation-create'(p) {
       const agent = load(ws(p), p.id)
       const title = typeof p.title === 'string' && p.title.trim() ? p.title.trim().slice(0, 120) : agent.name
-      if (p.memory_recall !== undefined && typeof p.memory_recall !== 'boolean') fail('invalid', '记忆开关必须为布尔值。', 400)
+      const memoryModeChoice = requestedMemoryMode(p)
       const key = p.idempotency_key
       if (key != null && (typeof key !== 'string' || !IDEM.test(key))) fail('invalid', 'Invalid conversation create key', 400)
       const id = key ? sha(`conversation:${agent.id}:${key}`).slice(0,32) : newId()
@@ -385,13 +410,13 @@ export function createAgents({ db, host }) {
       db.exec('BEGIN')
       try {
         const inserted = run('INSERT OR IGNORE INTO agent_conversations VALUES(?,?,?,?,?)', id, agent.id, title, stamp, stamp)
-        if (inserted.changes && p.memory_recall !== undefined) setMemoryEnabled(id, p.memory_recall)
+        if (inserted.changes && memoryModeChoice !== undefined) setMemoryMode(id,memoryModeChoice)
         db.exec('COMMIT')
       } catch (error) { db.exec('ROLLBACK'); throw error }
       const row = conversation(agent, id)
       if (row.title !== title) fail('conflict', 'Conversation create key was used for a different title', 409)
       const mapping = await native.session(agent, `agent:${agent.id}:${row.id}`, row.title)
-      return { status: 201, conversation: { ...row, ...mapping, memory_recall: memoryEnabled(row, await privateProfile(agent)) } }
+      return { status: 201, conversation: { ...row, ...mapping, ...memorySetting(memoryMode(row,await privateProfile(agent))) } }
     },
     async openConversation(p) {
       const agent = load(ws(p), p.id)
@@ -399,14 +424,14 @@ export function createAgents({ db, host }) {
       const {native_name, ...mapping} = await native.session(agent, `agent:${agent.id}:${row.id}`, row.title)
       return {
         agent: view({...load(agent.workspace_id, agent.id), native_bot_id: mapping.native_bot_id, native_name}),
-        conversation: {...row, ...mapping, memory_recall: memoryEnabled(row, await privateProfile(agent))},
+        conversation: {...row, ...mapping, ...memorySetting(memoryMode(row,await privateProfile(agent)))},
         items: conversationMessages(row.id),
       }
     },
     async captureSource(p) {
       const agent = load(ws(p), p.agent_id)
       const convo = conversation(agent, p.conversation_id)
-      if (!ID.test(p.message_id || '') || (p.selected !== true && (agent.archived || !memoryEnabled(convo, await privateProfile(agent))))) return null
+      if (!ID.test(p.message_id || '') || (p.selected !== true && (agent.archived || memoryMode(convo,await privateProfile(agent)) === 'off'))) return null
       const row = one("SELECT text FROM agent_messages WHERE id=? AND conversation_id=? AND role='user' AND status IN ('sent','succeeded')",p.message_id,convo.id)
       return row ? {title:convo.title,text:row.text} : null
     },
@@ -426,8 +451,10 @@ export function createAgents({ db, host }) {
     async setMemoryRecall(p) {
       const agent = load(ws(p), p.id)
       const convo = conversation(agent, p.conversation_id)
-      setMemoryEnabled(convo.id, p.memory_recall)
-      return {memory_recall: p.memory_recall}
+      const mode = requestedMemoryMode(p)
+      if (mode === undefined) fail('invalid', '请选择记忆检索范围。', 400)
+      setMemoryMode(convo.id,mode)
+      return memorySetting(mode)
     },
     async searchMessages(p) {
       const workspaceId = ws(p)

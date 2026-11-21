@@ -242,6 +242,7 @@
         <p id="group-info-count" class="group-info-count"></p>
       </div>
       <button type="button" id="group-info-search" class="group-info-row group-info-search">搜索聊天记录</button>
+      <button type="button" id="group-memory-open" class="group-info-row" aria-haspopup="dialog" hidden>群记忆</button>
       <section class="group-info-card" aria-labelledby="group-info-notice-heading">
         <div class="group-info-card-head"><h3 id="group-info-notice-heading">群公告</h3><button type="button" class="group-info-link" id="group-announcement-open">查看 / 编辑</button></div>
         <p class="group-info-sub" id="group-announcement-preview" style="white-space:pre-wrap">正在读取公告…</p>
@@ -342,6 +343,24 @@
       <button type="button" id="selection-meeting" disabled>整理会议纪要</button>
       <button type="button" id="forward-cancel">取消</button>
     </section>
+    <dialog id="group-memory-dialog" class="chat-save-dialog" aria-labelledby="group-memory-title">
+      <div class="group-memory-head">
+        <h2 id="group-memory-title">群记忆</h2>
+        <form method="dialog"><button type="submit" autofocus>关闭</button></form>
+      </div>
+      <section class="group-memory-settings" aria-label="自动提炼群记忆">
+        <div class="group-info-toggle-row">
+          <span><strong>自动提炼新群消息</strong><small>生成仅自己可见的记忆建议，审核后可保存或分享。</small></span>
+          <button type="button" role="switch" class="group-info-switch" id="group-memory-auto" aria-label="自动提炼新群消息" aria-checked="false" disabled></button>
+        </div>
+        <div class="group-memory-settings-footer">
+          <a id="group-memory-inbox">查看记忆建议</a>
+          <p id="group-memory-auto-status" class="note" role="status"></p>
+        </div>
+      </section>
+      <p id="group-memory-status" class="note" role="status"></p>
+      <ul id="group-memory-list"></ul>
+    </dialog>
     <dialog id="group-capture-dialog" class="chat-save-dialog" aria-labelledby="group-capture-title">
       <form id="group-capture-form">
         <h2 id="group-capture-title">提炼群聊记忆</h2>
@@ -505,7 +524,11 @@
           </div>
           <button type="button" id="composer-emoji-open" title="插入表情" aria-haspopup="dialog"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M8 9h1 M15 9h1 M7 14a6 6 0 0 0 10 0"/></svg><span class="sr-only">表情</span></button>
           <button type="button" id="voice-record" aria-label="录制语音" title="录制语音" hidden><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0V6Z M5 11v2a7 7 0 0 0 14 0v-2 M12 20v3"/></svg><span class="sr-only">录制语音</span></button>
-          <button type="button" id="agent-memory-recall" aria-label="自动使用记忆" aria-pressed="true" title="为后续回复参考当前工作区的记忆、个人资料和偏好" hidden>记忆已开启</button>
+          <select id="agent-memory-recall" aria-label="记忆检索范围" title="跨工作区时，智能体可参考你仍有权访问的工作区记忆和行动项" hidden>
+            <option value="workspace">记忆 · 本工作区</option>
+            <option value="workspaces">记忆 · 跨工作区</option>
+            <option value="off">记忆 · 关闭</option>
+          </select>
           <button id="chat-send" type="submit" class="composer-send" aria-label="发送" title="发送"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14 M13 6l6 6-6 6"/></svg></button>
         </div>
       </div>
