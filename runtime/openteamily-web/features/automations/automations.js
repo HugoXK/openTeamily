@@ -38,7 +38,6 @@ export function dsBotTurn(host) {
 }
 
 export const MAX_AUTOMATIONS = 100
-export const MAX_RUNS = 200
 export const TICK_MS = 15_000
 const SCOPES = new Set(['once', 'ongoing'])
 const REMINDER = 'reminder'
@@ -62,7 +61,9 @@ CREATE TABLE IF NOT EXISTS ot_automation_runs (
  workspace_id TEXT NOT NULL, due_at INTEGER NOT NULL, started INTEGER NOT NULL, finished INTEGER,
  status TEXT NOT NULL CHECK(status IN ('queued','succeeded','failed','skipped')), error_code TEXT,
  dispatch TEXT NOT NULL, attempt_of TEXT, claimed_at INTEGER, UNIQUE(automation_id, due_at));
-CREATE INDEX IF NOT EXISTS ot_automation_run_list ON ot_automation_runs(automation_id, id);
+CREATE INDEX IF NOT EXISTS ot_automation_runs_recent ON ot_automation_runs(automation_id, started DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ot_automation_runs_status_recent ON ot_automation_runs(status, automation_id, started DESC, id DESC);
+DROP INDEX IF EXISTS ot_automation_run_list;
 CREATE TABLE IF NOT EXISTS ot_automation_retries (
  run_id TEXT NOT NULL, key_hash TEXT NOT NULL, new_run_id TEXT NOT NULL, created INTEGER NOT NULL,
  PRIMARY KEY(run_id, key_hash));
@@ -233,8 +234,6 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   }
 
   function insertRun(row, due, attemptOf = null) {
-    const count = one('SELECT COUNT(*) AS n FROM ot_automation_runs WHERE automation_id=?', row.id).n
-    if (count >= MAX_RUNS) return null
     const id = newId()
     run(`INSERT INTO ot_automation_runs
       (id,automation_id,workspace_id,due_at,started,finished,status,error_code,dispatch,attempt_of)
@@ -243,7 +242,7 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
   }
 
   const hasActiveRun = (id) => Boolean(one("SELECT 1 FROM ot_automation_runs WHERE automation_id=? AND status='queued'", id))
-  const nextAdHocSlot = (id) => Math.min(0, one('SELECT MIN(due_at) AS m FROM ot_automation_runs WHERE automation_id=?', id).m ?? 0) - 1
+  const nextAdHocSlot = (id) => (one('SELECT MIN(due_at) AS slot FROM ot_automation_runs WHERE automation_id=? AND due_at<0', id).slot ?? 0) - 1
 
   // Evaluate every enabled automation (optionally one workspace) and fire due slots.
   function tick(workspaceId = null) {
@@ -415,7 +414,8 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
     if (cursor && !HEX32.test(cursor)) refuse(400, 'invalid', 'Invalid pagination parameters')
     const status = payload.status ?? ''
     if (status && !['queued', 'running', 'succeeded', 'failed', 'skipped'].includes(status)) refuse(400, 'invalid', 'Invalid run status')
-    const after = cursor && loadRun(row, cursor)
+    const after = cursor && one('SELECT started,id FROM ot_automation_runs WHERE automation_id=? AND id=?', row.id, cursor)
+    if (cursor && !after) refuse(404, 'not_found', 'Automation run not found')
     const params = [row.id]
     let filter = 'automation_id=?'
     if (status) {
@@ -453,7 +453,6 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       if (hasActiveRun(row.id)) refuse(409, 'already_running', '这条自动化正在运行。')
       // Keep manual runs and scheduled slots distinct.
       const id = insertRun(row, nextAdHocSlot(row.id))
-      if (!id) refuse(429, 'quota', 'Automation run capacity reached')
       run('INSERT INTO ot_automation_manual_runs VALUES(?,?,?)', row.id, keyHash, id)
       return { status: 202, id }
     })
@@ -487,7 +486,6 @@ export function createAutomations({ db, turn, clock = nowSec, tickMs = TICK_MS, 
       if (item.status !== 'failed') refuse(409, 'conflict', 'Only a failed run can be retried')
       if (hasActiveRun(row.id)) refuse(409, 'already_running', '这条自动化正在运行。')
       const id = insertRun(row, nextAdHocSlot(row.id), item.id)
-      if (!id) refuse(429, 'quota', 'Automation run capacity reached')
       run('INSERT INTO ot_automation_retries VALUES(?,?,?,?)', item.id, keyHash, id, clock())
       return { status: 201, id }
     })

@@ -1,4 +1,4 @@
-import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
+import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 
 export function csrfCookie(source) {
@@ -182,6 +182,15 @@ export function meetingTargetFromSearch(search) {
 
 function editorTargetFromSearch(search) {
   return meetingTargetFromSearch(search) || automationTargetFromSearch(search);
+}
+
+function ownedPersonalCatalogue(result, user) {
+  const body = result?.body;
+  const personal = Array.isArray(body?.items) && body.items.length === 1 ? body.items[0] : null;
+  if (result?.status !== 200 || personal?.kind !== 'personal' || !/^[0-9a-f]{32}$/.test(personal.id) ||
+      !user.username || body.viewer_username !== user.username ||
+      (personal.owner_id != null && personal.owner_id !== user.id)) return null;
+  return result;
 }
 
 function meetingSourceFromResponse(body, target, username) {
@@ -452,10 +461,14 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const sourcePanel = document.getElementById('meeting-action-source');
   const tabs = document.querySelectorAll('.tabs [data-category]');
   const workspaceStatus = document.getElementById('workspace-status');
+  const templateRetry = document.getElementById('automation-template-retry');
+  const editorOptions = document.getElementById('automation-editor-options');
+  const native = servedByDsBot(document);
   let currentUser = null;
   let loadRequest = 0;
   let templates = [];
-  let templateState = 'loading';
+  let templateState = 'idle';
+  let templateRequest = null;
   let current = null;
   let meetingSource = null;
   let draftSave = null;
@@ -999,14 +1012,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (available.some(item => item.id === selected)) select.value = selected;
   }
 
-  async function loadTemplates(seq) {
+  function loadTemplates(seq = loadRequest) {
+    if (templateState === 'ready') return Promise.resolve();
+    if (templateRequest?.seq === seq) return templateRequest.promise;
     templateState = 'loading';
-    const catalog = await request('GET', '/v1/automation-templates').catch(() => ({status: 0}));
-    if (seq !== loadRequest) return;
-    templateState = catalog.status === 200 ? 'ready' : 'failed';
-    templates = catalog.status === 200 ? (catalog.body.items || []) : [];
-    fillTemplates();
-    if (category !== 'mine' && !listPanel.hidden) await loadList();
+    const promise = request('GET', '/v1/automation-templates').catch(() => null).then(catalog => {
+      if (seq !== loadRequest) return;
+      templateRequest = null;
+      const items = catalog?.status === 200 && catalog.body?.items;
+      templateState = Array.isArray(items) ? 'ready' : 'failed';
+      templates = templateState === 'ready' ? items : [];
+      if (!form.hidden) fillTemplates();
+    });
+    templateRequest = {seq, promise};
+    return promise;
   }
 
   function renderMeetingSource(source) {
@@ -1075,6 +1094,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     syncRunControls();
     renderManualRunNote();
     loadRuns();
+    if ((!item?.id && !source) || editorOptions?.open) void loadTemplates();
     if (source && heading) heading.focus();
   }
 
@@ -1096,7 +1116,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (result.status === 200 && item?.id === target.automation && item.workspace_id === target.workspace) {
       show('', '');
       openEditor(item);
-      return;
+      return true;
     }
     show('error', [403, 404].includes(result.status) ? '这条自动化已不可用。' : '暂时无法打开自动化。');
     if (linkRetry) {
@@ -1128,7 +1148,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (source) {
       show('', '');
       openEditor(meetingActionDraft(source, user.username), source);
-      return;
+      return true;
     }
     const obsolete = showMeetingSourceError(result.status);
     if (linkRetry) {
@@ -1144,22 +1164,37 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  async function loadList() {
+  async function loadList({startup} = {}) {
     const id = workspaceId();
     if (!id) return;
     const seq = ++listRequest;
     const list = document.getElementById('automation-list');
     const empty = document.getElementById('list-empty');
     if (category === 'work' || category === 'life') {
-      empty.textContent = {
-        loading: '正在加载模板…', failed: '无法加载模板。', ready: '没有匹配的模板。',
-      }[templateState];
-      renderCatalog(
-        catalogItems(templates, category, search.value),
-        list,
-        empty,
-        item => openEditor(draftFromTemplate(item, currentUser && currentUser.username)),
-      );
+      const render = () => {
+        const loading = templateState === 'idle' || templateState === 'loading';
+        empty.textContent = {
+          idle: '正在加载模板…', loading: '正在加载模板…', failed: '无法加载模板。', ready: '没有匹配的模板。',
+        }[templateState];
+        if (templateRetry) templateRetry.hidden = templateState !== 'failed';
+        renderCatalog(catalogItems(templates, category, search.value), list, empty,
+          item => openEditor(draftFromTemplate(item, currentUser && currentUser.username)));
+        setBusy(list, loading);
+        setBusy(empty, loading);
+      };
+      render();
+      if (templateState === 'idle' || templateState === 'loading') {
+        await loadTemplates();
+        if (seq === listRequest && !listPanel.hidden && workspaceId() === id) render();
+      }
+      return;
+    }
+    if (templateRetry) templateRetry.hidden = true;
+    const projected = startup?.workspace === id && category === 'mine' && !search.value.trim() ? startup.items : null;
+    if (projected) {
+      empty.textContent = '这个分类下还没有自动化。';
+      setBusy(empty, false);
+      renderList(projected, list, empty, item => openEditor(item));
       return;
     }
     setBusy(list, true);
@@ -1196,14 +1231,21 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function load() {
     const seq = ++loadRequest;
     const target = editorTargetFromSearch(readSearch());
+    const wantedTemplate = !target && templateFromSearch(readSearch());
     discardMeetingDraft();
     newButton.disabled = true;
     workspaceStatus.textContent = '';
     if (linkRetry) linkRetry.hidden = true;
-    const session = await request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const sessionRequest = request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+    const initialCatalogue = native && !target && !wantedTemplate && category === 'mine' && !search.value.trim()
+      ? request('GET', '/v1/workspaces?scope=personal&include=automations').catch(() => null) : null;
+    const session = await sessionRequest;
     if (seq !== loadRequest) return;
     if (session.status === 401) {
       currentUser = null;
+      templates = [];
+      templateState = 'idle';
+      templateRequest = null;
       runSubmissions.clear();
       watchedRuns.clear();
       stopRunPoll();
@@ -1221,6 +1263,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentUser = session.body.user;
     if (previousViewer && previousViewer !== viewerId()) {
       editorRequest += 1;
+      templates = [];
+      templateState = 'idle';
+      templateRequest = null;
       runSubmissions.clear();
       watchedRuns.clear();
       stopRunPoll();
@@ -1228,8 +1273,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     document.getElementById('whoami').textContent = currentUser.username;
-    const catalog = loadTemplates(seq);
-    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100');
+    const catalog = wantedTemplate ? loadTemplates(seq) : null;
+    const personalRequest = initialCatalogue?.then(result => ownedPersonalCatalogue(result, session.body.user));
+    let {initial: space, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces?limit=100', personalRequest);
     if (target?.workspace && !space.body?.items?.some(item => item.id === target.workspace) && supplemental) {
       const shared = await supplemental;
       if (shared.status === 200) space = shared;
@@ -1238,7 +1284,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (seq !== loadRequest) return;
     if (space.status !== 200) {
       show('error', messageFor(space.body.error, '无法读取工作区。'));
-      return catalog;
+      return;
     }
     const items = space.body.items || [];
     fillWorkspaces(items);
@@ -1246,26 +1292,42 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.getElementById('automation-list').textContent = '';
       document.getElementById('list-empty').hidden = false;
       document.getElementById('list-empty').textContent = '还没有工作区。';
-      return catalog;
+      return;
     }
     newButton.disabled = false;
     document.getElementById('list-empty').textContent = '这个分类下还没有自动化。';
     form.hidden = true;
     listPanel.hidden = false;
     mainPanel.classList.remove('is-editing');
-    let opening;
-    if (target?.workspace && items.some(item => item.id === target.workspace)) {
-      workspaceSelect.value = target.workspace;
-      opening = target.meeting ? openMeetingDraft(target, seq) : openLinkedAutomation(target, seq);
-    } else if (target) {
-      show('error', meetingTargetFromSearch(readSearch()) ? '会议行动项链接已不可用。' : '这条自动化链接已不可用。');
-    }
     void supplemental?.then(result => {
       if (seq !== loadRequest) return;
       if (result.status === 200) fillWorkspaces(result.body.items);
       else workspaceStatus.textContent = '团队工作区暂时无法加载。';
     });
-    await Promise.all([loadList(), catalog, opening]);
+    if (target?.workspace && items.some(item => item.id === target.workspace)) {
+      workspaceSelect.value = target.workspace;
+      const opening = target.meeting ? openMeetingDraft(target, seq) : openLinkedAutomation(target, seq);
+      const selected = editorRequest;
+      if (await opening || seq !== loadRequest || selected !== editorRequest || !form.hidden) return;
+    } else if (target) {
+      show('error', meetingTargetFromSearch(readSearch()) ? '会议行动项链接已不可用。' : '这条自动化链接已不可用。');
+    }
+    if (catalog) {
+      const selected = editorRequest;
+      await catalog;
+      if (seq !== loadRequest || selected !== editorRequest || !form.hidden) return;
+      const template = templates.find(item => item.id === wantedTemplate);
+      if (template) {
+        openEditor(draftFromTemplate(template, currentUser.username));
+        return;
+      }
+    }
+    const projectedWorkspace = space.body.items?.[0]?.id;
+    const projectedItems = space.body.automations?.items;
+    const startup = personalRequest && space === await personalRequest && Array.isArray(projectedItems) &&
+      projectedItems.every(item => item?.workspace_id === projectedWorkspace && /^[0-9a-f]{32}$/.test(item.id))
+      ? {workspace: projectedWorkspace, items: projectedItems} : null;
+    if (seq === loadRequest) await loadList({startup});
   }
 
   document.getElementById('login-form').addEventListener('submit', async event => {
@@ -1296,6 +1358,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     loadList();
   });
   linkRetry?.addEventListener('click', () => load());
+  templateRetry?.addEventListener('click', () => {
+    void loadTemplates();
+    return loadList();
+  });
+  editorOptions?.addEventListener('toggle', () => {
+    if (editorOptions.open && !form.hidden) void loadTemplates();
+  });
   search.addEventListener('input', () => loadList());
   runHistoryButton?.addEventListener('click', () => {
     if (runPanel?.hidden) void loadRuns({focus: true});
@@ -1525,14 +1594,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await load();
   });
 
-  return load().then(() => {
-    const view = document.defaultView;
-    const wanted = templateFromSearch(view && view.location && view.location.search);
-    if (!wanted || editorTargetFromSearch(readSearch()) || mainPanel.hidden || !workspaceId() || !form.hidden) return;
-    const template = templates.find(item => item.id === wanted);
-    if (!template) return;
-    openEditor(draftFromTemplate(template, currentUser && currentUser.username));
-  });
+  return load();
 }
 
 if (globalThis.document && globalThis.document.getElementById('editor-form')) {

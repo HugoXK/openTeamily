@@ -159,6 +159,68 @@ test('a due schedule fires inside DS-Bot once per slot and records the DS-Bot re
   assert.equal(feature.tick().length, 1, 'next day fires again')
 })
 
+test('automations keep running after 200 historical runs and preserve keyset history and artifact sources', async () => {
+  const at = zonedEpoch('UTC', 2027, 1, 4, 9, 0)
+  const {e, feature} = fixture(null, at, async source => ({status: 201, artifact: {source}}))
+  const {automation} = e['automations/create']({workspace_id: W, title: '长期运行', template_id: 'reminder',
+    schedule: {kind: 'daily', time: '09:00', time_zone: 'UTC'}, participants: ['alice'], idempotency_key: 'g'.repeat(16)})
+  const context = {workspace_id: W, id: automation.id}
+  const insert = feature.db.prepare(`INSERT INTO ot_automation_runs
+    (id,automation_id,workspace_id,due_at,started,finished,status,error_code,dispatch)
+    VALUES(?,?,?,?,?,?,?,?,?)`)
+  const prior = []
+  feature.db.exec('BEGIN')
+  for (let i = 1; i <= 240; i++) {
+    const id = i.toString(16).padStart(32, '0')
+    const start = at - 1000 + Math.floor(i / 4)
+    const status = i % 3 === 0 ? 'failed' : 'succeeded'
+    const due = i % 2 === 0 ? -i : at - 86400 - i
+    const resultText = 'Historical output ' + i
+    prior.push({id, started: start, status, resultText})
+    const dispatch = JSON.stringify({backend: 'ds-bot', result: {text: resultText}})
+    insert.run(id, automation.id, W, due, start, start + 1, status, status === 'failed' ? 'runtime_failed' : null, dispatch)
+  }
+  feature.db.exec('COMMIT')
+
+  const [scheduled] = feature.tick()
+  assert.equal(scheduled?.trigger, 'scheduled')
+  await feature.inflight.get(scheduled.id)
+  assert.equal(feature.tick().length, 0)
+
+  const manualRequest = {...context, idempotency_key: 'm'.repeat(16)}
+  const manual = e['automations/runNow'](manualRequest)
+  assert.equal(manual.status, 202)
+  await feature.inflight.get(manual.run.id)
+  assert.equal(e['automations/runNow'](manualRequest).run.id, manual.run.id)
+
+  const retryRequest = {...context, run_id: prior[2].id, idempotency_key: 'r'.repeat(16)}
+  const retry = e['automations/retry'](retryRequest)
+  assert.equal(retry.status, 201)
+  await feature.inflight.get(retry.run.id)
+  assert.equal(e['automations/retry'](retryRequest).run.id, retry.run.id)
+
+  const [oldest] = prior
+  const archived = await e['automations/saveRun']({...context, run_id: oldest.id})
+  assert.deepEqual(archived.artifact.source, {
+    workspace_id: W, automation_id: automation.id, automation_title: automation.title, run_id: oldest.id, body: oldest.resultText,
+  })
+  const newest = [scheduled.id, manual.run.id, retry.run.id].map(run_id => e['automations/run']({...context, run_id}).run)
+  assert.deepEqual(newest.map(row => row.status), ['succeeded', 'succeeded', 'succeeded'])
+  const readAll = status => {
+    const items = []
+    let cursor
+    do {
+      const page = e['automations/runs']({...context, limit: 19, status, cursor})
+      items.push(...page.items.map(run => run.id))
+      cursor = page.cursor
+    } while (cursor)
+    return items
+  }
+  const ordered = [...prior, ...newest].sort((a, b) => b.started - a.started || b.id.localeCompare(a.id))
+  assert.deepEqual(readAll(), ordered.map(run => run.id))
+  assert.deepEqual(readAll('failed'), ordered.filter(run => run.status === 'failed').map(run => run.id))
+})
+
 test('manual execution queues only the named automation and leaves its scheduled slot free', async () => {
   let finishTurn
   const calls = []

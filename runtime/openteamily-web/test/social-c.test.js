@@ -80,6 +80,42 @@ test('personal workspace can include its native catalog and never reads a linked
   assert.deepEqual(gateway.body.catalog, catalog)
 })
 
+test('the automation snapshot reads the personal list for the authenticated gateway viewer', async () => {
+  const workspace = 'a'.repeat(32)
+  const calls = []
+  let available = true
+  const items = [{id: 'd'.repeat(32), workspace_id: workspace, title: '晨报'}]
+  const endpoint = teams({ call: async (name, payload) => {
+    if (name === 'agents/personal-binding') return {workspace_id: workspace, agent_id: 'b'.repeat(32)}
+    assert.equal(name, 'automations/list')
+    calls.push(payload)
+    if (!available) throw new Error('unavailable')
+    return {items}
+  } }).endpoints.v1
+  const request = {headers: new Headers({'x-ot-owner-username': 'account-test'})}
+  const get = (suffix = '', call = {request}) => endpoint({method: 'GET',
+    path: '/v1/workspaces?scope=personal&include=automations' + suffix}, call)
+  for (const suffix of ['', '&workspace=' + workspace, '&username=other-owner']) {
+    const result = await get(suffix)
+    assert.equal(result.status, 200)
+    assert.equal(result.body.viewer_username, 'account-test')
+    assert.equal(result.body.items[0].id, workspace)
+    assert.deepEqual(result.body.automations, {items})
+  }
+  assert.deepEqual(calls, Array(3).fill({workspace_id: workspace, category: 'mine', username: 'account-test'}))
+  for (const suffix of ['&workspace=' + 'c'.repeat(32), '&workspace=' + workspace + '&workspace=' + workspace,
+    '&include=automations']) {
+    assert.equal((await get(suffix)).body.automations, undefined)
+  }
+  assert.equal((await get('', {})).body.automations, undefined)
+  assert.equal(calls.length, 3)
+  available = false
+  const fallback = await get()
+  assert.equal(fallback.status, 200)
+  assert.equal(fallback.body.items[0].id, workspace)
+  assert.equal(fallback.body.automations, undefined)
+})
+
 test('the Chat snapshot reads only the local owner’s workspace and directory', async t => {
   const workspace = 'a'.repeat(32)
   const agent = 'b'.repeat(32)

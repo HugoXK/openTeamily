@@ -210,16 +210,16 @@ async function mountList(items) {
   return {list: elements.get('automation-list'), calls};
 }
 
-test('personal automations are available while the team workspaces and templates load', async () => {
+test('personal automations are available while team workspaces load', async () => {
   const {doc, elements} = fakeDocument();
-  const {promise: catalog, resolve: resolveCatalog} = Promise.withResolvers();
   const {promise: teams, resolve: resolveTeams} = Promise.withResolvers();
   const respond = body => ({status: 200, json: async () => body});
+  const calls = [];
   const fetcher = async path => {
+    calls.push(path);
     if (path === '/v1/auth/session') return respond({user: {username: 'alice'}});
     if (path === '/v1/workspaces?scope=personal') return respond({items: [{id: 'ws1', name: '个人工作区'}]});
     if (path === '/v1/workspaces?limit=100') return teams;
-    if (path === '/v1/automation-templates') return catalog;
     if (path === '/v1/workspaces/ws1/automations?category=mine') {
       return respond({items: [{id: 'a1', title: '每日简报', schedule: {kind: 'now'}}]});
     }
@@ -232,6 +232,7 @@ test('personal automations are available while the team workspaces and templates
     await flush();
     assert.equal(elements.get('new-automation').disabled, false);
     assert.match(elements.get('automation-list').textContent, /每日简报/);
+    assert.equal(calls.includes('/v1/automation-templates'), false);
     resolveTeams(respond({items: [{id: 'team', name: '团队'}]}));
     await flush();
     const picker = elements.get('workspace');
@@ -239,9 +240,128 @@ test('personal automations are available while the team workspaces and templates
     assert.deepEqual(picker.options.map(option => option.value), ['ws1', 'team']);
   } finally {
     resolveTeams(respond({items: []}));
-    resolveCatalog(respond({items: []}));
     await mounted;
     if (saved === undefined) delete globalThis.document; else globalThis.document = saved;
+  }
+});
+
+const projectedWorkspace = 'a'.repeat(32);
+const projectedOwner = 'b'.repeat(32);
+const projectedAutomation = 'c'.repeat(32);
+const projectedPath = '/v1/workspaces?scope=personal&include=automations';
+const projectedPersonal = {id: projectedWorkspace, owner_id: projectedOwner, name: '个人工作区', kind: 'personal'};
+
+test('native startup overlaps authentication and the owned list, then requests templates on demand', async t => {
+  const {doc, elements} = fakeDocument();
+  const previousDocument = globalThis.document;
+  globalThis.document = doc;
+  t.after(() => { globalThis.document = previousDocument; });
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const work = new FakeNode('button'); work.dataset.category = 'work';
+  const life = new FakeNode('button'); life.dataset.category = 'life';
+  doc.querySelectorAll = selector => selector === '.tabs [data-category]' ? [work, life] : [];
+  const {promise: session, resolve: authenticate} = Promise.withResolvers();
+  const {promise: teams, resolve: finishTeams} = Promise.withResolvers();
+  const {promise: catalog, resolve: finishTemplates} = Promise.withResolvers();
+  const calls = [];
+  const fetcher = async path => {
+    calls.push(path);
+    if (path === '/v1/auth/session') return session;
+    if (path === projectedPath) return respond({items: [projectedPersonal], viewer_username: 'alice',
+      automations: {items: [{id: projectedAutomation, workspace_id: projectedWorkspace, title: '合并加载的日报'}]}});
+    if (path === '/v1/workspaces?limit=100') return teams;
+    if (path === '/v1/automation-templates') return catalog;
+    throw new Error('unexpected ' + path);
+  };
+  const mounted = mount(doc, {fetcher});
+  try {
+    await flush();
+    assert.deepEqual(calls, ['/v1/auth/session', projectedPath]);
+    assert.equal(elements.get('automation-list')?.textContent || '', '');
+    authenticate(respond({user: {id: projectedOwner, username: 'alice'}}));
+    await mounted;
+    assert.match(elements.get('automation-list').textContent, /合并加载的日报/);
+    assert.deepEqual(calls, ['/v1/auth/session', projectedPath, '/v1/workspaces?limit=100']);
+    const workOpen = work.handlers.click[0]();
+    const lifeOpen = life.handlers.click[0]();
+    assert.match(elements.get('list-empty').textContent, /加载模板/);
+    assert.equal(calls.filter(path => path === '/v1/automation-templates').length, 1);
+    finishTemplates(respond({items: [
+      {id: 'daily_brief', title: '工作简报', category: 'work'},
+      {id: 'habit_reminder', title: '生活提醒', category: 'life'},
+    ]}));
+    await Promise.all([workOpen, lifeOpen]);
+    assert.match(elements.get('automation-list').textContent, /生活提醒/);
+    assert.doesNotMatch(elements.get('automation-list').textContent, /工作简报/);
+    await work.handlers.click[0]();
+    assert.match(elements.get('automation-list').textContent, /工作简报/);
+    assert.equal(calls.filter(path => path === '/v1/automation-templates').length, 1);
+    finishTeams(respond({items: [{id: 'team', name: '团队工作区'}]}));
+    await flush();
+    assert.equal(elements.get('workspace').value, projectedWorkspace);
+  } finally {
+    authenticate(respond({user: {id: projectedOwner, username: 'alice'}}));
+    finishTemplates(respond({items: []}));
+    finishTeams(respond({items: []}));
+    await mounted;
+  }
+});
+
+test('native startup falls back on a different viewer or an out-of-workspace automation row', async t => {
+  for (const viewer of ['someone-else', 'alice']) await t.test(viewer, async scenario => {
+    const {doc, elements} = fakeDocument();
+    const previousDocument = globalThis.document;
+    globalThis.document = doc;
+    scenario.after(() => { globalThis.document = previousDocument; });
+    doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+    const calls = [];
+    const listPath = `/v1/workspaces/${projectedWorkspace}/automations?category=mine`;
+    await mount(doc, {fetcher: async path => {
+      calls.push(path);
+      if (path === '/v1/auth/session') return respond({user: {id: projectedOwner, username: 'alice'}});
+      if (path === projectedPath) return respond({items: [projectedPersonal], viewer_username: viewer,
+        automations: {items: [{id: projectedAutomation,
+          workspace_id: viewer === 'alice' ? 'f'.repeat(32) : projectedWorkspace, title: '不能显示的日报'}]}});
+      if (path === '/v1/workspaces?scope=personal' || path === '/v1/workspaces?limit=100') {
+        return respond({items: [projectedPersonal]});
+      }
+      if (path === listPath) return respond({items: [{id: projectedAutomation, title: '正常读取的日报'}]});
+      throw new Error('unexpected ' + path);
+    }});
+    assert.equal(calls.includes('/v1/workspaces?scope=personal'), viewer !== 'alice');
+    assert.equal(calls.filter(path => path === listPath).length, 1);
+    assert.match(elements.get('automation-list').textContent, /正常读取的日报/);
+    assert.doesNotMatch(elements.get('automation-list').textContent, /不能显示的日报/);
+  });
+});
+
+test('an explicit template link opens its draft while the shared directory is still loading', async t => {
+  const {doc, elements} = fakeDocument();
+  doc.defaultView = {location: {search: '?template=daily_brief'}};
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const previousDocument = globalThis.document;
+  globalThis.document = doc;
+  t.after(() => { globalThis.document = previousDocument; });
+  const {promise: teams, resolve: finishTeams} = Promise.withResolvers();
+  const calls = [];
+  try {
+    await mount(doc, {fetcher: async path => {
+      calls.push(path);
+      if (path === '/v1/auth/session') return respond({user: {id: projectedOwner, username: 'alice'}});
+      if (path === '/v1/workspaces?scope=personal') return respond({items: [projectedPersonal]});
+      if (path === '/v1/workspaces?limit=100') return teams;
+      if (path === '/v1/automation-templates') return respond({items: [{id: 'daily_brief', title: '日报模板', category: 'work'}]});
+      throw new Error('unexpected ' + path);
+    }});
+    assert.equal(elements.get('editor-form').hidden, false);
+    assert.equal(elements.get('editor-form').elements.title.value, '日报模板');
+    assert.equal(elements.get('editor-form').elements.template_id.value, 'daily_brief');
+    assert.equal(calls.filter(path => path === '/v1/automation-templates').length, 1);
+    assert.equal(calls.includes(projectedPath), false);
+    assert.equal(calls.some(path => path.endsWith('/automations?category=mine')), false);
+  } finally {
+    finishTeams(respond({items: []}));
+    await flush();
   }
 });
 
@@ -291,6 +411,8 @@ test('an exact onboarding link opens before unrelated loads and an explicit paus
     assert.equal(elements.get('editor-form').elements.enabled.checked, false);
     assert.match(elements.get('manual-run-note').textContent, /仍保持暂停/);
     assert.equal(calls.filter(([method]) => method === 'POST').length, 0);
+    assert.equal(calls.some(([, target]) => target.endsWith('/automations?category=mine')), false);
+    assert.equal(calls.some(([, target]) => target === '/v1/automation-templates'), false);
     await elements.get('run-filter-succeeded').handlers.click[0]();
     assert.equal(view.location.search, entry + '&runs=succeeded');
     await elements.get('tick-automation').handlers.click[0]();
@@ -302,6 +424,7 @@ test('an exact onboarding link opens before unrelated loads and an explicit paus
     assert.deepEqual(calls.filter(([method]) => method === 'POST'), [['POST', path + '/run']]);
     await elements.get('cancel-editor').handlers.click[0]();
     assert.equal(view.location.search, '');
+    assert.equal(calls.filter(([, target]) => target.endsWith('/automations?category=mine')).length, 1);
   } finally {
     resolveTeams(respond({items: []}));
     resolveTemplates(respond({items: []}));
