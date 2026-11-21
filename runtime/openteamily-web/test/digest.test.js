@@ -5,7 +5,6 @@ import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
-import digestFeature from '../features/digest/index.js'
 import { setSharedBotSocial } from '../lib/c/bot-social.js'
 import { ownerId } from '../featurekit/v1.js'
 import { boot } from './helpers.js'
@@ -57,6 +56,7 @@ const prefBody = (changes = {}) => ({ workspace_id: WS, cadence: 'daily', hour_u
 
 test('digest opens its own database next to the DS-Bot volume and creates both tables once', async t => {
   const app = await bot(t)
+  await ok(app, 'digest/get', { workspace_id: WS })
   assert.ok(app.features.loaded.includes('digest'), JSON.stringify(app.features.failed))
   const file = join(app.vol.data, 'openteamily', 'features', 'digest', 'digest.sqlite3')
   assert.ok(existsSync(file), 'digest.sqlite3 is missing')
@@ -275,6 +275,7 @@ test('an unreachable workspace directory fails closed instead of guessing the ca
   const dir = mkdtempSync(join(tmpdir(), 'ot-digest-standalone-'))
   const offline = async () => { throw Object.assign(new Error('Bot Social is offline'), { code: 'social/offline' }) }
   const host = { dataDir: dir, featureDir: () => dir, log: () => {}, identity: {}, call: offline }
+  const { default: digestFeature } = await import('../features/digest/index.js')
   const feature = await digestFeature(host)
   await assert.rejects(feature.endpoints.get({ workspace_id: WS }), error => error.code === 'workspace/unavailable')
   await assert.rejects(feature.endpoints.set(prefBody()), error => error.code === 'workspace/unavailable')
