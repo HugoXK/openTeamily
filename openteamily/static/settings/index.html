@@ -376,6 +376,20 @@
       </fieldset>
       <button type="submit" id="save-model-api">保存模型 API</button>
     </form>
+    <form id="image-api-form" method="post" action="/v1/model-api/image">
+      <fieldset id="image-api" class="settings-card" disabled>
+        <legend>图片生成</legend>
+        <p class="note">使用支持图片生成的 OpenAI 兼容 HTTPS API。密钥仅用于这个账号的图片任务。</p>
+        <label>接口地址 <input type="url" name="base_url" maxlength="512" autocomplete="off" required></label>
+        <label>图片模型 <input type="text" name="model" maxlength="128" autocomplete="off" required></label>
+        <label>图片 API 密钥 <input type="password" name="api_key" maxlength="4096" autocomplete="new-password" placeholder="留空保留已保存密钥"></label>
+        <p id="image-api-status" class="note" role="status"></p>
+        <div class="settings-form-actions">
+          <button type="submit" id="save-image-api">保存图片配置</button>
+          <button type="button" id="clear-image-api" hidden>移除图片密钥</button>
+        </div>
+      </fieldset>
+    </form>
     </div>
     <div data-settings-page="skill-configuration" hidden>
         <header class="settings-subhead">

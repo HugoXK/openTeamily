@@ -5,7 +5,7 @@
 // public /share/<token> pages are rendered by Bot Social (snapshot published here).
 import { defineFeature } from '../../featurekit/feature.js'
 import { HEX32, digest, refuse } from '../../featurekit/http.js'
-import { createArtifact, exportBytes, listFiles, load, PER_WORKSPACE, search } from './library.js'
+import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, search } from './library.js'
 import { IMPORT_TABLES, MIGRATIONS } from './schema.js'
 import { routes } from './routes.js'
 import { importMedia } from './media.js'
@@ -30,6 +30,17 @@ export default defineFeature({
       const input = payload ?? {}
       const result = createArtifact(ctx, input.workspace_id, input, input.idempotency_key)
       return { artifact: result.body.artifact }
+    },
+    async generatedImage(input,call) {
+      if (!call?.internal) refuse(404,'not_found','Internal endpoint')
+      const {workspace_id:workspace,job_id:id,data,title} = input
+      if (!HEX32.test(workspace || '') || !HEX32.test(id || '')) refuse(400,'invalid','Invalid generation')
+      const key = 'image-' + id
+      const saved = ctx.store.get('SELECT id FROM artifacts WHERE workspace_id=? AND key_hash=?',workspace,digest('artifact:'+key))
+      if (saved || !data) return saved
+      const suffix = id.slice(0,8)
+      const result = createMedia(ctx,workspace,{title:`${title} · ${suffix}`,data,filename:`image-${suffix}.png`,mime:'image/png',key})
+      return {id:result.body.artifact.id}
     },
     async saveChatMessage(input, call) {
       if (!call?.internal) refuse(403, 'forbidden', 'Save chat messages from their conversation')
