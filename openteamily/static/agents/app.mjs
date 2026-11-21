@@ -141,6 +141,7 @@ export function statusLabel(message) {
   if (message.status === 'queued' && message.error_code === 'no_agent') return '等待已连接的运行时。';
   if (message.status === 'queued') return '排队中。';
   if (message.status === 'running') return '生成中。';
+  if (message.status === 'failed' && message.error_code === 'session/attachment-invalid') return '当前模型无法处理这个附件。';
   if (message.status === 'failed') return '回复失败' + (message.error_code ? '（' + message.error_code + '）' : '') + '。';
   if (message.status === 'cancelled') return '已取消。';
   return message.body || '';
