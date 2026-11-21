@@ -44,7 +44,7 @@ const publicMessage = (row, workspaceId, agentId) => {
   }
 }
 
-export function agentsV1({ endpoints, log }) {
+export function agentsV1({ endpoints, chatDirectory, log }) {
   const call = (name, payload) => endpoints[name](payload)
   const routes = [
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/reply-progress$`),
@@ -157,20 +157,21 @@ export function agentsV1({ endpoints, log }) {
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents(?:/${HEX})?$`), handle: wrap(async (req, workspaceId, id) => {
       if (!id && req.method === 'GET') {
         const includeArchived = req.query.get('include_archived') === '1'
-        const includeConversations = req.query.get('include') === 'conversations'
+        const cursor = req.query.get('cursor') || ''
+        const limit = Math.min(Math.max(Number(req.query.get('limit') || 20), 1), 100)
+        if (req.query.get('include') === 'conversations') {
+          const page = await chatDirectory(workspaceId, {includeArchived, cursor, limit: Math.floor(limit) || 0})
+          const {items: conversations} = await call('conversationSummaries', {
+            workspace_id: workspaceId, agent_ids: page.items.map(item => item.id),
+          })
+          return {body: {items: page.items.map(chatAgent), cursor: page.cursor, conversations}}
+        }
         const active = await call('list', { workspace_id: workspaceId })
         const archived = includeArchived ? await call('list', { workspace_id: workspaceId, archived: true }) : { items: [] }
         const rows = [...active.items, ...archived.items].sort((a, b) => a.id.localeCompare(b.id))
-        const cursor = req.query.get('cursor') || ''
-        const limit = Math.min(Math.max(Number(req.query.get('limit') || 20), 1), 100)
         const sliced = rows.filter((row) => row.id > cursor).slice(0, limit + 1)
-        const items = sliced.slice(0, limit).map(includeConversations ? chatAgent : publicAgent)
-        const body = { items, cursor: sliced.length > limit ? sliced[limit - 1].id : null }
-        if (includeConversations) {
-          const directory = await call('conversationSummaries', { workspace_id: workspaceId, agent_ids: items.map(item => item.id) })
-          body.conversations = directory.items
-        }
-        return { status: 200, body }
+        const items = sliced.slice(0, limit).map(publicAgent)
+        return {body: {items, cursor: sliced.length > limit ? sliced[limit - 1].id : null}}
       }
       if (!id && req.method === 'POST') {
         const body = await req.json()

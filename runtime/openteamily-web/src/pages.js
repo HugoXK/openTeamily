@@ -61,8 +61,14 @@ export function createPageHandler({ pagesDir, identity, getSystemLanguage }) {
   let root, localeModule, chatMessages
   return async (request) => {
     const url = new URL(request.url)
-    const parts = resolvePagePath(url.searchParams.get('path'))
+    const path = url.searchParams.get('path')
+    const parts = resolvePagePath(path)
     if (!parts) return notFound(identity)
+    if (path === '/messenger' || path === '/messenger/' || path === '/messenger/index.html') {
+      return new Response(null, { status: 302, headers: {
+        location: '/chat', 'cache-control': 'no-store', [SERVED_BY_HEADER]: `ds-bot; instance=${identity.instanceId}`,
+      } })
+    }
     try {
       const pageRoot = root ??= await realpath(pagesDir)
       const file = await realpath(join(pageRoot, ...parts))
