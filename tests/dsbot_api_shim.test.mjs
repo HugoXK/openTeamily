@@ -10,10 +10,15 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.deepEqual(movedTarget(`/v1/workspaces/${WS}/meetings?limit=20`, ORIGIN),
     { feature: 'meetings', path: `/v1/workspaces/${WS}/meetings?limit=20` });
   assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/export`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/draft`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/speech`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/transcribe`, ORIGIN).feature, 'meetings');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/meetings/${ID}/draft`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory?q=x`, ORIGIN).feature, 'memory');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${ID}/versions/3/restore`, ORIGIN).feature, 'memory');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${ID}/dream/${ID}`, ORIGIN).feature, 'memory');
-  for (const rest of ['actions', `actions/${ID}/remove`, 'links', 'graph', 'profile', `preferences/${ID}/remove`]) {
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${ID}/share-group`, ORIGIN).feature, 'memory');
+  for (const rest of ['actions', `actions/${ID}/remove`, 'links', 'graph', 'profile', 'profile/dream', 'candidates', `candidates/${ID}`, `preferences/${ID}/remove`]) {
     assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/${rest}`, ORIGIN).feature, 'memory', rest);
   }
   assert.equal(movedTarget(`/v1/workspaces/${WS}/memory/bogus`, ORIGIN), null);
@@ -23,8 +28,11 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget('/v1/automation-templates', ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/tick`, ORIGIN).feature, 'automations');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/${ID}`, ORIGIN).feature, 'automations');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/${ID}/run`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/automations/${ID}/runs/${ID}/retry`, ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents?limit=100`, ORIGIN).feature, 'agents');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/memory/capture`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/archive`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/conversations/${ID}/messages`, ORIGIN).feature, 'agents');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/agents/${ID}/api-keys`, ORIGIN).feature, 'agent-api');
@@ -43,7 +51,7 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/mcp/servers/${ID}`, ORIGIN).feature, 'connectors');
   assert.equal(movedTarget('/v1/composio/callback', ORIGIN), null);
   assert.equal(movedTarget('/v1/skill-secrets', ORIGIN).feature, 'skill-secrets');
-  assert.equal(movedTarget('/v1/onboarding/automations', ORIGIN), null);
+  assert.equal(movedTarget('/v1/onboarding/automations', ORIGIN).feature, 'automations');
   assert.equal(movedTarget(`https://evil.example/v1/workspaces/${WS}/meetings`, ORIGIN), null);
 });
 
@@ -62,10 +70,14 @@ test('members, team, messenger and discover /v1 routes go to the C features', ()
   assert.equal(movedTarget(`/v1/workspaces/${WS}/directory`, ORIGIN).feature, 'teams');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations?limit=20`, ORIGIN).feature, 'messenger');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations/otc_01/messages`, ORIGIN).feature, 'messenger');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/social/conversations/otc_01/memory/capture`, ORIGIN).feature, 'messenger');
+  for (const action of ['create', 'preview', 'join', 'poll', 'signal', 'leave', 'end']) {
+    assert.equal(movedTarget('/v1/meeting-calls/' + action, ORIGIN).feature, 'messenger');
+  }
   assert.equal(movedTarget('/v1/discover/agents?q=x', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/me/works?tab=following', ORIGIN).feature, 'discover');
   assert.equal(movedTarget('/v1/discover/works/my-essay/engagement', ORIGIN).feature, 'discover');
-  // Workspace list/create and team creation go to the user's DS-Bot via Bot Social.
+  // Workspace lists and team creation use the DS-Bot teams feature.
   assert.equal(movedTarget('/v1/auth/session', ORIGIN), null);
   assert.equal(movedTarget('/v1/workspaces?limit=100', ORIGIN).feature, 'teams');
   assert.equal(movedTarget(`/v1/workspaces/${WS}`, ORIGIN), null);
@@ -117,7 +129,7 @@ test('a missing moved feature fails closed instead of falling back to /v1', asyn
   };
   install(win);
   const response = await win.fetch('/v1/settings', { method: 'GET' });
-  assert.ok([502, 503].includes(response.status), `expected 502/503, got ${response.status}`);
+  assert.equal(response.status, 503);
   assert.equal((await response.json()).error.code, 'moved_to_dsbot');
   assert.deepEqual(calls, ['/b/api/openteamily']);
 });

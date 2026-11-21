@@ -1,3 +1,4 @@
+import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
 import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
 
@@ -59,7 +60,10 @@ function element(tag, className, text) {
 }
 
 function show(document, kind, text) {
-  const status = document.getElementById('home-status');
+  const signedIn = document.getElementById('main-panel')?.hidden === false;
+  const status = document.getElementById(signedIn ? 'home-status' : 'status');
+  const other = document.getElementById(signedIn ? 'status' : 'home-status');
+  if (other) other.textContent = '';
   if (!status) return;
   status.dataset.kind = kind || '';
   status.textContent = text || '';
@@ -73,6 +77,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   const greeting = document.getElementById('home-greeting');
   if (!loginPanel || !mainPanel || !form || !workspaceSelect) return null;
 
+  const view = document.defaultView ?? globalThis;
+  const pendingKey = 'ot-pending-meeting';
+  const meetingFromLink = meetingCodeFromHash(view.location?.hash);
+  if (meetingFromLink) {
+    try { view.sessionStorage.setItem(pendingKey, meetingFromLink); } catch {}
+  }
   let currentUser = null;
   let workspaces = [];
   let personal = null;
@@ -264,6 +274,23 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
         show(document, 'error', (session.body.error && session.body.error.message) || '无法读取会话。');
         return;
       }
+      let meeting = meetingFromLink;
+      try {
+        meeting ||= view.sessionStorage.getItem(pendingKey);
+        view.sessionStorage.removeItem(pendingKey);
+      } catch {}
+      const target = meetingHref(meeting);
+      if (target) {
+        view.location.replace(target);
+        return;
+      }
+      if (globalThis.location?.pathname === '/login') {
+        const params = new URLSearchParams((globalThis.location.hash || '').slice(1));
+        const slug = params.get('public-agent') || params.get('start');
+        globalThis.location.replace(slug && /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(slug)
+          ? '/chat#public-agent=' + slug : '/');
+        return;
+      }
       currentUser = session.body.user;
       loginPanel.hidden = true;
       mainPanel.hidden = false;
@@ -313,7 +340,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       password: form.elements.password.value,
     });
     if (result.status !== 200) {
-      show(document, 'error', (result.body.error && result.body.error.message) || '无法登录。');
+      show(document, 'error', result.status === 401 ? '用户名或密码不正确。'
+        : (result.body.error && result.body.error.message) || '无法登录。');
       return;
     }
     form.reset();

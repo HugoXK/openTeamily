@@ -1,5 +1,5 @@
 // Shared memory helpers: who the actor is, usernames, snippets, topics.
-import { CONTROL, digest, validLongText } from '../../featurekit/http.js'
+import { CONTROL, digest, refuse, validLongText } from '../../featurekit/http.js'
 
 export const TITLE_MAX = 80
 export const BODY_MAX = 8000
@@ -8,6 +8,12 @@ export const TOPIC_MAX = 40
 export const TOPICS_PER_PAGE = 8
 export const MAX_PAGES = 100
 export const casefold = (value) => String(value).toLocaleLowerCase('en-US')
+
+export function recallWorkspace(payload) {
+  const id = payload?.workspace_id
+  if (typeof id !== 'string' || !/^[0-9a-f]{32}$/.test(id)) refuse(400, 'invalid', 'Workspace ID required')
+  return id
+}
 
 export function snippet(body) {
   const text = String(body ?? '').split(/\s+/).filter(Boolean).join(' ')
@@ -60,13 +66,22 @@ export function replaceTopics(store, workspaceId, pageId, names) {
   for (const name of names) store.run('INSERT INTO memory_page_topics(page_id, workspace_id, name, name_hash) VALUES(?,?,?,?)', pageId, workspaceId, name, digest(casefold(name)))
 }
 
+export const captureSourceView = row => ({
+  agent_id:row.agent_id || undefined, conversation_id:row.conversation_id, message_id:row.source_message_id || row.id,
+  ...(row.source_message_id ? {kind:'group', ...(row.origin === 'auto' ? {automatic:true} : {})} : {}),
+  title:row.source_title, excerpt:row.excerpt,
+})
+
 export function pageView(store, row, { includeBody = true, topics, user = usernames(store) } = {}) {
   const data = {
     id: row.id, workspace_id: row.workspace_id, title: row.title, revision: row.revision,
     created: row.created, updated: row.updated, created_by: user(row.created_by), updated_by: user(row.updated_by),
   }
-  if (includeBody) data.body = row.body
-  else data.preview = snippet(row.body)
+  if (includeBody) {
+    data.body = row.body
+    const source = store.get('SELECT * FROM memory_capture_items WHERE workspace_id=? AND page_id=?', row.workspace_id,row.id)
+    if (source) data.source = captureSourceView(source)
+  } else data.preview = snippet(row.body)
   data.topics = topics ?? topicsFor(store, [row.id])[row.id] ?? []
   return data
 }
