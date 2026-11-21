@@ -116,7 +116,7 @@ test('only public HTTPS endpoints are accepted, including the private-address li
     'https://user:password@hooks.example.test/e',
     'https://hooks.example.test/e#fragment',
     'https://hooks.example.test/e\nInjected: yes',
-    'https://hooks.example.test/' + 'a' * 2100,
+    'https://hooks.example.test/' + 'a'.repeat(2100),
     'https://127.0.0.1/e', 'https://127.15.0.9/e',
     'https://10.0.0.1/e', 'https://10.255.255.254/e',
     'https://172.16.0.1/e', 'https://172.31.255.255/e',
@@ -148,13 +148,13 @@ test('kinds must come from the kinds Bot Social emits today; unknown kinds are r
     })).subscription
     assert.deepEqual(created.kinds, [kind])
   }
-  for (const kinds of (
+  for (const kinds of [
     [],
     ['artifact.created'],
     ['artifact.shared', 'not.a.kind'],
     'artifact.shared',
-    [123]
-  )) {
+    [123],
+  ]) {
     await refused(bot, 'create', { name: 'Bad kinds', endpoint: ENDPOINT, kinds }, 'events/invalid')
   }
   // All fourteen kinds can be subscribed at once; the stored list cannot be
@@ -187,7 +187,9 @@ test('filters normalize to a stable JSON and only accept scalar values or an "in
   assert.equal(stored[0].filters, stored[1].filters)
   assert.equal(stored[0].filters, '{"active":true,"actor_id":"alice","retries":3,"severity":{"in":["high","critical"]}}')
 
-  for (const filters of (
+  const manyKeys = {}
+  for (let index = 0; index < 21; index += 1) manyKeys['k' + index] = 'x'
+  for (const filters of [
     'not-an-object',
     { key: ['x'] },
     { key: { other: ['x'] } },
@@ -196,8 +198,8 @@ test('filters normalize to a stable JSON and only accept scalar values or an "in
     { ['k'.repeat(65)]: 'x' },
     { key: 'x'.repeat(257) },
     { key: { nested: true } },
-    Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`k${index}`, 'x']))
-  )) {
+    manyKeys,
+  ]) {
     await refused(bot, 'create', { name: 'Bad filters', endpoint: ENDPOINT, kinds: ['artifact.shared'], filters }, 'events/invalid')
   }
 })
@@ -262,7 +264,9 @@ test('matching intersects kind and filters, excludes disabled rows and never lea
   } finally {
     store.close()
   }
-  assert.deepEqual((await value(bot, 'matches', { event: { kind: 'artifact.shared' } })).items.map((item) => item.id).sort(), [filtered.id, unfiltered.id].sort())
+  assert.deepEqual((await value(bot, 'matches', {
+    event: { kind: 'artifact.shared', actor_id: 'u1', severity: 'high', active: true },
+  })).items.map((item) => item.id).sort(), [filtered.id, unfiltered.id].sort())
   assert.ok(!(await value(bot, 'list', {})).items.some((item) => item.id === 'foreign-row'))
   await refused(bot, 'get', { id: 'foreign-row' }, 'events/not-found')
 
