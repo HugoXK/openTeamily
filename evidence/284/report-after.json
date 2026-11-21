@@ -1,0 +1,758 @@
+{
+  "slug": "ev284after",
+  "reuse": {
+    "theme": "dsh-client-ui-theme — token names only: the page maps --dsw-alias-* (shellTokens in themes.js) and resolves our dark arm to documentElement.dataset.themeResolved=dark; body[data-ds-dark-theme] is set by the dsh host, absent in these standalone pages (fact darkAttr), so no parallel palette is invented",
+    "viewports": "none — dsh ships no px breakpoint constant (only prefers-reduced-motion/transparency); 1440x900 + 390x844 are the owner rule, kept as-is",
+    "hmr": "none — not needed for static before/after shots"
+  },
+  "generated_at": "2026-11-21T17:47:54.606Z",
+  "sides": [
+    {
+      "name": "after",
+      "url": "http://127.0.0.1:8742"
+    }
+  ],
+  "images": [
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__768x1024__settings__notif-default.png",
+      "route": "/settings",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "notif-default",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 86986
+      },
+      "sha256": "3c0f635840c0862ce88c1a9488aeb1f38fe48272e2c3bffc1bc8a49b7aa1cbe6",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 385
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 简体中文 › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分 › ",
+        "textLength": 385,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__768x1024__settings__notif-mentions-off.png",
+      "route": "/settings",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "notif-mentions-off",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 86894
+      },
+      "sha256": "6e7eb03bb4b1db0d4a8aa925c7c0619c7dc65aeec7047b34f87ed7059236cd74",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 385
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 简体中文 › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分 › ",
+        "textLength": 385,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__768x1024__settings__notif-artifacts-off.png",
+      "route": "/settings",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "notif-artifacts-off",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 86887
+      },
+      "sha256": "9d3087944e06e9a7b90cd1dda37c6d41fabc38fcff0a436db7c61da02c698849",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 385
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 简体中文 › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分 › ",
+        "textLength": 385,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__light__768x1024__settings__notif-save-failed.png",
+      "route": "/settings",
+      "locale": "zh-CN",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "notif-save-failed",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 87364
+      },
+      "sha256": "bd2204d0e224794d5d9920c92290b53d667b02027b2240a580ad5af931402325",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 398
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 简体中文 › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分 › ",
+        "textLength": 398,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 500 (Internal Server Error)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__768x1024__settings__notif-default.png",
+      "route": "/settings",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "notif-default",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 85155
+      },
+      "sha256": "d29dd54bf134cbd216aee6921d8b2e272c652ec28de360b26c5d4dc21949f17f",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 385
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 简体中文 › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分 › ",
+        "textLength": 385,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__768x1024__settings__notif-mentions-off.png",
+      "route": "/settings",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "notif-mentions-off",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 85005
+      },
+      "sha256": "259a3329aeee0cb06cd533a48fc4d4ea0ae304f10eaa7f0cfc7e0637aaf1ea5a",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 385
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 简体中文 › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分 › ",
+        "textLength": 385,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__768x1024__settings__notif-artifacts-off.png",
+      "route": "/settings",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "notif-artifacts-off",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 84988
+      },
+      "sha256": "0a46df81a7d838083a1ccecb13a9b8b9f0c16e55fea3ed22db422757d82d9b32",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 385
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 简体中文 › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分 › ",
+        "textLength": 385,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/zh-CN__dark__768x1024__settings__notif-save-failed.png",
+      "route": "/settings",
+      "locale": "zh-CN",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "notif-save-failed",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 86113
+      },
+      "sha256": "f8c1720a088618fbb1b642e15c3f633f422ffadf0aa05571bf285ae390ab5fcb",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "zh-CN",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 398
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "zh-CN",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 简体中文 › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分 › ",
+        "textLength": 398,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 500 (Internal Server Error)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__768x1024__settings__notif-default.png",
+      "route": "/settings",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "notif-default",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 86618
+      },
+      "sha256": "33a50d98a38a593664ed0ed70441bb6886b42acd39562381b271a65b14ee7943",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 388
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 English › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分",
+        "textLength": 388,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__768x1024__settings__notif-mentions-off.png",
+      "route": "/settings",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "notif-mentions-off",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 86529
+      },
+      "sha256": "1443cb46cb65776a0d650de0549073dbf181f897288930551eb3ad51ba10c2f0",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 388
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 English › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分",
+        "textLength": 388,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__768x1024__settings__notif-artifacts-off.png",
+      "route": "/settings",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "notif-artifacts-off",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 86520
+      },
+      "sha256": "71061302db9719c538e663886a624eab803b14dc4b34cafa3c2eca15a23dd159",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 388
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 English › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分",
+        "textLength": 388,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__light__768x1024__settings__notif-save-failed.png",
+      "route": "/settings",
+      "locale": "en",
+      "theme": "light",
+      "viewport": "768x1024",
+      "state": "notif-save-failed",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 86992
+      },
+      "sha256": "5d5acde2e76fb636f2ac3e5467de79c94b6b1a091d142ef84be53d32fa31e6a7",
+      "diagnostics": {
+        "themeResolved": "light",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 401
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "en",
+        "theme": "light",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 浅色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 English › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分",
+        "textLength": 401,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 500 (Internal Server Error)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__768x1024__settings__notif-default.png",
+      "route": "/settings",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "notif-default",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 84680
+      },
+      "sha256": "dadb7c97e4153ceb5921781935f3bfc5096826e359b0bb5697401b9962848c0b",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 388
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 English › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分",
+        "textLength": 388,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__768x1024__settings__notif-mentions-off.png",
+      "route": "/settings",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "notif-mentions-off",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 84552
+      },
+      "sha256": "8d9bacc738aaf9ad1ed5fe24d6ecaabb346e714fed5f2d4398d2b4244f0bcc4c",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 388
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 English › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分",
+        "textLength": 388,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__768x1024__settings__notif-artifacts-off.png",
+      "route": "/settings",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "notif-artifacts-off",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 84537
+      },
+      "sha256": "2c14a989d53e189a1b78a60a4df6fbcde14cfd6a61ad8f2be4ca4140ba9f97de",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 388
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 English › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分",
+        "textLength": 388,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)"
+      ]
+    },
+    {
+      "arm": "after",
+      "file": "after/en__dark__768x1024__settings__notif-save-failed.png",
+      "route": "/settings",
+      "locale": "en",
+      "theme": "dark",
+      "viewport": "768x1024",
+      "state": "notif-save-failed",
+      "png": {
+        "width": 768,
+        "height": 1024,
+        "bytes": 85650
+      },
+      "sha256": "475adddf8bf4be2c416c9e3bbef96bcfae06eeafb8751a049ba54c29c0c8083c",
+      "diagnostics": {
+        "themeResolved": "dark",
+        "language": "en",
+        "accountMenuOpen": false,
+        "helpMenuOpen": false,
+        "textLength": 401
+      },
+      "facts": {
+        "vp": "768x1024",
+        "scrollWidth": 768,
+        "lang": "en",
+        "theme": "dark",
+        "darkAttr": "none",
+        "dswBgBase": "",
+        "btMain": "",
+        "textStart": "跳到主要内容 首页 聊天 智能体 技能 自动化 记忆 作品 会议 发现 联系人 我 深色 下载 QA 设置 qa284rp2 成员 账户与资料 账户与资料 › AI 与智能体设置 语言 English › Agent 渠道 › Agent API 在本实例之外使用你的 agent：网站、API、AI 客户端 › 模型 API 平台默认或你自己的配置，不用积分",
+        "textLength": 401,
+        "visibleDialogs": 0,
+        "probes": []
+      },
+      "console": [
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 410 (Gone)",
+        "error: Failed to load resource: the server responded with a status of 500 (Internal Server Error)"
+      ]
+    }
+  ],
+  "failures": []
+}
