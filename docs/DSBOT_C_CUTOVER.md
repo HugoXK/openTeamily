@@ -38,9 +38,9 @@ It takes a consistent platform snapshot and manager-attested identities:
 * receipts are keyed by a canonical SHA-256 digest of `{accounts,workspaces}`.
   The same digest is idempotent; a conflict rolls back the Social transaction.
 
-`GET/POST /v1/workspaces` and `POST /v1/teams` still remain platform metadata
-and do not auto-bind a Social team. Team wizard invite generation still
-requires the verified link first. Unmapped or conflicting workspaces stay
+`GET/POST /v1/workspaces` and `POST /v1/teams` are served by the user's DS-Bot
+from Bot Social (`/v1/ot/workspaces`): creating a workspace creates its Social
+team with a server-generated `workspace_id`. Unmapped or conflicting workspaces stay
 `409 membership_migration_required` or `membership_migration_conflict`.
 
 ### Operator procedure (after this SHA is deployed)
@@ -89,8 +89,10 @@ claimed or obtain model access, and reconciliation cannot publish duplicate
 replies. Rows remain for audit; in-flight old runtimes must be stopped/recreated
 at deployment before testing the new inbox. Native group agents use the per-user
 Social inbox and DS-Bot chatTurn, not platform runtime_tasks.
-Unsupported legacy messenger subroutes fail on DS-Bot rather than falling back
-to Flask (including legacy manual agent-reply endpoints not yet ported).
+All legacy messenger subroutes (pin, reactions, edit/retract, delete, save,
+forward, group agents, manual agent replies) are served by `messenger/v1` on
+the DS-Bot. The platform's central group-reply, task queue and scheduler code
+has been deleted; old clients get `410 moved_to_dsbot`.
 
 ## Deploy and proof
 

@@ -1,11 +1,13 @@
 // Artifact model (legacy openteamily/artifacts.py): constants, validation,
 // public views and text-only thumbnails, executed inside the user's DS-Bot.
+import {decodeWorkbook} from './workbook.js'
 import { CONTROL, digest, validLongText } from '../../featurekit/http.js'
 
 export const KINDS = ['document', 'website', 'whiteboard', 'media']
 export const TITLE_MAX = 80
 export const BODY_MAX = 8000
 export const MAX_MEDIA_BYTES = 2 * 1024 * 1024
+export const MAX_GENERATED_VIDEO_BYTES = 8 * 1024 * 1024
 export const BOARD_JSON_MAX = 65536
 export const MAX_STROKES = 200
 export const MAX_POINTS = 400
@@ -47,7 +49,7 @@ export const ROW_SELECT = `SELECT a.*, m.render AS render, s.source_kind AS sour
  md.mime AS media_mime, md.byte_count AS media_bytes, md.sha256 AS media_sha256, md.filename AS media_filename,
  b.board AS board_json, cs.message_id AS chat_message_id, cs.conversation_id AS chat_conversation_id,
  cs.agent_id AS chat_agent_id, cs.conversation_title AS chat_conversation_title,
- sl.deck AS slides_json, d.dashboard AS dashboard_json
+ sl.deck AS slides_json, d.dashboard AS dashboard_json, x.workbook AS spreadsheet_json
  FROM artifacts a
  LEFT JOIN artifact_meta m ON m.artifact_id=a.id
  LEFT JOIN artifact_sources s ON s.artifact_id=a.id
@@ -55,13 +57,15 @@ export const ROW_SELECT = `SELECT a.*, m.render AS render, s.source_kind AS sour
  LEFT JOIN artifact_boards b ON b.artifact_id=a.id
  LEFT JOIN artifact_chat_sources cs ON cs.artifact_id=a.id
  LEFT JOIN artifact_slides sl ON sl.artifact_id=a.id
- LEFT JOIN artifact_dashboards d ON d.artifact_id=a.id `
+ LEFT JOIN artifact_dashboards d ON d.artifact_id=a.id
+ LEFT JOIN artifact_spreadsheets x ON x.artifact_id=a.id `
 
 export function publicKind(row) {
   if (row.media_mime) return 'media'
   if (row.board_json) return 'whiteboard'
   if (row.slides_json) return 'slides'
   if (row.dashboard_json) return 'dashboard'
+  if (row.spreadsheet_json) return 'spreadsheet'
   return row.render === 'website' ? 'website' : 'document'
 }
 
@@ -122,6 +126,11 @@ export function textLines(body, html = false) {
 export function preview(row, { decodeBoard, decodeSlides, decodeDashboard }) {
   const kind = publicKind(row)
   if (kind === 'media') return null
+  if (kind === 'spreadsheet') {
+    const workbook = decodeWorkbook(row.spreadsheet_json)
+    const first = workbook?.sheets[0]
+    return {type:'document',lines:first ? [first.name,...first.rows.slice(0,3).map(row=>row.join(' '))].map(previewText).filter(Boolean) : []}
+  }
   if (kind === 'whiteboard') {
     const board = decodeBoard(row.board_json) ?? emptyBoard()
     const shapes = board.strokes.slice(0, PREVIEW_STROKES).map((stroke) => {

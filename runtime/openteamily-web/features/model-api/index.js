@@ -21,6 +21,18 @@ export default function modelApi(host) {
     endpoints: {
       get: async () => api.get(),
       save: async payload => api.save(payload),
+      imageProvider: async (_payload,call) => {
+        if (!call?.internal) throw Object.assign(new Error('Internal endpoint'),{code:'model-api/not-found'})
+        return api.resolveImage()
+      },
+      videoProvider: async (_payload, call) => {
+        if (!call?.internal) throw Object.assign(new Error('Internal endpoint'), {code: 'model-api/not-found'})
+        return api.resolveVideo()
+      },
+      musicProvider: async (_payload, call) => {
+        if (!call?.internal) throw Object.assign(new Error('Internal endpoint'), {code: 'model-api/not-found'})
+        return api.resolveMusic()
+      },
       v1: compatHandler(api.legacy),
     },
   }

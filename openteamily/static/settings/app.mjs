@@ -99,6 +99,7 @@ const PATH_VIEWS = {
   '/settings/agent-access': 'agent-access',
   '/settings/connectors': 'connectors',
   '/settings/skill-configuration': 'skill-configuration',
+  '/settings/model-api': 'model-api',
 };
 
 const HASH_VIEWS = {
@@ -111,6 +112,9 @@ const HASH_VIEWS = {
   'send-shortcut': 'shortcuts',
   shortcuts: 'shortcuts',
   'model-api': 'model-api',
+  'image-api': 'model-api',
+  'video-api': 'model-api',
+  'music-api': 'model-api',
   'skill-secrets': 'skill-configuration',
 };
 
@@ -429,6 +433,80 @@ function messageFor(error, fallback) {
   return fallback;
 }
 
+function mountMediaApi(document, request, type, noun) {
+  const id = type + '-api';
+  const form = document.getElementById(id + '-form');
+  if (!form) return null;
+  const fields = document.getElementById(id);
+  const status = document.getElementById(id + '-status');
+  const remove = document.getElementById('clear-' + id);
+  const keyInput = form.elements.api_key;
+  const endpoint = '/v1/model-api/' + type;
+  const responseKey = type + '_api';
+  let config = null;
+
+  function fill(view, message) {
+    config.revision = view.revision;
+    remove.hidden = !view.has_api_key;
+    status.textContent = message || (view.has_api_key ? noun + '密钥已保存。' : '尚未配置' + noun + '密钥。');
+    fields.disabled = false;
+  }
+
+  async function load(message) {
+    const active = config;
+    if (!active || active.busy) return;
+    active.busy = fields.disabled = true;
+    status.textContent = '正在读取' + noun + '配置…';
+    const response = await request('GET', endpoint).catch(() => ({status: 0, body: {}}));
+    if (active !== config) return;
+    active.busy = false;
+    if (response.status === 200 && response.body[responseKey]) fill(response.body[responseKey], message);
+    else status.textContent = '无法读取' + noun + '配置，请刷新后重试。';
+  }
+
+  async function save(api_key) {
+    const active = config;
+    if (!active || active.revision === null || active.busy) return;
+    active.busy = fields.disabled = true;
+    keyInput.value = '';
+    status.textContent = '正在保存…';
+    const response = await request('POST', endpoint, {revision: active.revision, api_key})
+      .catch(() => ({status: 0, body: {}}));
+    if (active !== config) return;
+    active.busy = fields.disabled = false;
+    if (response.status === 200 && response.body[responseKey]) {
+      fill(response.body[responseKey], api_key === null ? '已移除' + noun + '密钥。' : noun + '配置已保存。');
+    } else if (response.status === 409) {
+      await load(noun + '配置已在其他窗口更新，请重新输入密钥。');
+    } else {
+      status.textContent = messageFor(response.body.error, '无法保存' + noun + '配置，请重试。');
+    }
+  }
+
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const secret = keyInput.value.trim();
+    if (secret) void save(secret);
+    else status.textContent = '请输入' + noun + ' API 密钥。';
+  });
+  remove.addEventListener('click', () => void save(null));
+
+  return {
+    setAccount(account) {
+      if (config?.account === account) return;
+      config = account === null ? null : {account, revision: null, busy: false};
+      keyInput.value = '';
+      fields.disabled = true;
+      remove.hidden = true;
+      status.textContent = '';
+    },
+    render(hash) {
+      if (config?.revision === null) void load();
+      if (hash === '#' + id) fields.scrollIntoView?.({block: 'start'});
+    },
+  };
+}
+
 export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = {}) {
   const status = document.getElementById('status');
   const loginPanel = document.getElementById('login-panel');
@@ -436,6 +514,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const whoami = document.getElementById('whoami');
   const form = document.getElementById('settings-form');
   const modelForm = document.getElementById('model-api-form');
+  const imageForm = document.getElementById('image-api-form');
+  const imageFields = document.getElementById('image-api');
+  const imageStatus = document.getElementById('image-api-status');
+  const removeImageKey = document.getElementById('clear-image-api');
+  const mediaApis = [
+    mountMediaApi(document, request, 'video', '视频'),
+    mountMediaApi(document, request, 'music', '音乐'),
+  ].filter(Boolean);
+  let imageAccount = null;
+  let imageRevision = null;
+  let imageLoading = false;
+  let imageSaving = false;
   let revision = 0;
   let current = null;
   let modelRevision = 0;
@@ -495,6 +585,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const view = settingsViewFromLocation(location.pathname, location.hash);
     applySettingsView(document, view);
     if (current) syncAppearanceExtras(document, current);
+    if (view === 'model-api' && current && imageForm && imageRevision === null) void loadImageApi();
+    if (view === 'model-api' && location.hash === '#image-api') imageFields?.scrollIntoView?.({block:'start'});
+    if (view === 'model-api') for (const api of mediaApis) api.render(location.hash);
   }
 
   function refreshAppearance() {
@@ -540,6 +633,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function load() {
     const session = await request('GET', '/v1/auth/session');
     if (session.status === 401) {
+      switchImageAccount(null);
+      for (const api of mediaApis) api.setAccount(null);
       loginPanel.hidden = false;
       settingsPanel.hidden = true;
       show('', '');
@@ -550,6 +645,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(session.body.error, '无法读取会话。'));
       return;
     }
+    const account = session.body.user.id ?? session.body.user.username;
+    switchImageAccount(account);
+    for (const api of mediaApis) api.setAccount(account);
     const settings = await request('GET', '/v1/settings');
     if (settings.status !== 200) {
       show('error', messageFor(settings.body.error, '无法读取设置。'));
@@ -759,6 +857,63 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     });
   }
 
+  function switchImageAccount(account) {
+    if (!imageForm || imageAccount === account) return;
+    imageAccount = account;
+    imageRevision = null;
+    imageLoading = imageSaving = false;
+    imageForm.reset?.();
+    imageFields.disabled = true;
+    removeImageKey.hidden = true;
+    imageStatus.textContent = '';
+  }
+
+  function fillImageApi(config,message) {
+    imageRevision = config.revision;
+    imageForm.elements.base_url.value = config.base_url;
+    imageForm.elements.model.value = config.model;
+    imageForm.elements.api_key.value = '';
+    removeImageKey.hidden = !config.api_key_set;
+    imageStatus.textContent = message || (config.api_key_set ? '图片密钥已保存。' : '尚未配置图片密钥。');
+    imageFields.disabled = false;
+  }
+
+  async function loadImageApi() {
+    if (imageLoading) return;
+    const account = imageAccount;
+    imageLoading = true;
+    imageStatus.textContent = '正在读取图片配置…';
+    const response = await request('GET','/v1/model-api/image').catch(() => ({status:0,body:{}}));
+    if (account !== imageAccount) return;
+    imageLoading = false;
+    if (response.status === 200 && response.body.image_api) fillImageApi(response.body.image_api);
+    else imageStatus.textContent = '无法读取图片配置，请刷新后重试。';
+  }
+
+  async function saveImageApi(changes) {
+    if (imageRevision === null || imageLoading || imageSaving) return;
+    const account = imageAccount;
+    imageSaving = imageFields.disabled = true;
+    imageStatus.textContent = '正在保存…';
+    const response = await request('POST','/v1/model-api/image',{revision:imageRevision,changes})
+      .catch(() => ({status:0,body:{}}));
+    if (account !== imageAccount) return;
+    imageSaving = imageFields.disabled = false;
+    imageForm.elements.api_key.value = '';
+    if (response.status === 200 && response.body.image_api) {
+      fillImageApi(response.body.image_api,changes.api_key === null ? '已移除图片密钥。' : '图片配置已保存。');
+    } else if (response.status === 409) await loadImageApi();
+    else imageStatus.textContent = messageFor(response.body.error,'无法保存图片配置，请重试。');
+  }
+
+  imageForm?.addEventListener('submit',event => {
+    event.preventDefault();
+    const {base_url,model,api_key} = imageForm.elements;
+    const secret = api_key.value.trim();
+    void saveImageApi({base_url:base_url.value.trim(),model:model.value.trim(),...(secret ? {api_key:secret} : {})});
+  });
+  removeImageKey?.addEventListener('click',() => void saveImageApi({api_key:null}));
+
   if (modelForm) {
     modelForm.addEventListener('submit', async event => {
       event.preventDefault();
@@ -792,6 +947,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     current = null;
     revision = 0;
+    switchImageAccount(null);
+    for (const api of mediaApis) api.setAccount(null);
     await load();
   });
 

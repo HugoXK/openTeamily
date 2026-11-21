@@ -20,6 +20,13 @@ export const POLICY_ENV = 'OPENTEAMILY_MODEL_HTTP_POLICY_FILE'
 export const DEFAULT_POLICY_FILE = '/run/secrets/openteamily-model-http.json'
 export const OVERRIDE = Symbol.for('openteamily.model-api.override')
 const PURPOSE = 'openteamily.model-api.account'
+const IMAGE_PURPOSE = 'openteamily.model-api.image'
+const FIXED_PROVIDERS = {
+  video: {provider: 'runway', model: 'gen4.5', name: 'Runway', label: '视频'},
+  music: {provider: 'elevenlabs', model: 'music_v2_5', name: 'ElevenLabs', label: '音乐'},
+}
+const DEFAULT_IMAGE_BASE = 'https://api.openai.com/v1'
+const DEFAULT_IMAGE_MODEL = 'gpt-image-1.5'
 
 // Operator exact-HTTP policy (same document as #375's model-http.json). A
 // missing file means no public HTTP endpoint is allowed; a malformed,
@@ -133,9 +140,87 @@ export function createModelApi({ dir, sealKey, env = process.env, clock = nowSec
     }
   }
 
+  function imageView(row = store.read().image) {
+    return {base_url:row?.base_url ?? DEFAULT_IMAGE_BASE,model:row?.model ?? DEFAULT_IMAGE_MODEL,
+      api_key_set:Boolean(row?.key_sealed),revision:row?.revision ?? 0}
+  }
+
+  function saveImage(raw) {
+    const {revision,changes} = bodyOf(raw,['revision','changes'])
+    if (!Number.isSafeInteger(revision) || !isObject(changes) || !Object.keys(changes).length) fail(400,'invalid','请填写图片模型配置。')
+    bodyOf(changes,['base_url','model','api_key'])
+    return store.update(draft => {
+      const current = imageView(draft.image ?? null)
+      if (revision !== current.revision) fail(409,'conflict','配置已更新，请重新加载。',current)
+      const base_url = String(changes.base_url ?? current.base_url).trim().replace(/\/+$/,'')
+      const model = String(changes.model ?? current.model).trim()
+      if (!base_url.startsWith('https://') || !validBaseUrl(base_url,policy) || !validModel(model)) {
+        fail(400,'invalid','请填写支持图片生成的 HTTPS 接口地址和模型名。')
+      }
+      const api_key = changes.api_key
+      if (api_key !== undefined && api_key !== null && !validApiKey(api_key)) fail(400,'invalid','请输入有效的图片 API 密钥。')
+      const key_sealed = api_key === undefined ? (draft.image?.key_sealed ?? null)
+        : api_key === null ? null : seal(sealKey,IMAGE_PURPOSE,api_key)
+      draft.image = {base_url,model,key_sealed,revision:revision+1}
+      return {image_api:imageView(draft.image)}
+    })
+  }
+
+  function resolveImage() {
+    const image = store.read().image
+    if (!image?.key_sealed || !image.base_url.startsWith('https://') ||
+      !validBaseUrl(image.base_url,policy) || !validModel(image.model)) return null
+    return {base_url:image.base_url,model:image.model,api_key:unseal(sealKey,IMAGE_PURPOSE,image.key_sealed)}
+  }
+
+  function mediaView(kind, config = store.read()[kind]) {
+    const {provider, model} = FIXED_PROVIDERS[kind]
+    return {provider, model, has_api_key: Boolean(config?.key_sealed), revision: config?.revision ?? 0}
+  }
+
+  function saveMedia(kind, raw) {
+    const {revision, api_key} = bodyOf(raw, ['revision', 'api_key'])
+    if (!Number.isSafeInteger(revision) || revision < 0
+      || (api_key !== null && (!validApiKey(api_key) || !/^[!-~]+$/.test(api_key)))) {
+      fail(400, 'invalid', `请输入有效的 ${FIXED_PROVIDERS[kind].name} API 密钥。`)
+    }
+    return store.update(draft => {
+      const current = mediaView(kind, draft[kind] ?? null)
+      if (revision !== current.revision) fail(409, 'conflict', '配置已更新，请重新加载。', current)
+      draft[kind] = {
+        key_sealed: api_key === null ? null : seal(sealKey, 'openteamily.model-api.' + kind, api_key),
+        revision: revision + 1,
+      }
+      return {[kind + '_api']: mediaView(kind, draft[kind])}
+    })
+  }
+
+  function resolveMedia(kind) {
+    const config = store.read()[kind]
+    if (!config?.key_sealed) return null
+    const {provider, model} = FIXED_PROVIDERS[kind]
+    return {provider, model, api_key: unseal(sealKey, 'openteamily.model-api.' + kind, config.key_sealed)}
+  }
+
+  const mediaRoutes = Object.entries(FIXED_PROVIDERS).flatMap(([kind, {label}]) => {
+    const path = new RegExp(`^/v1/model-api/${kind}$`)
+    return [
+      {method: 'GET', path, handle: async ({query}) => {
+        if (query) fail(400, 'invalid', `无效的${label}模型请求。`)
+        return [200, {[kind + '_api']: mediaView(kind)}]
+      }},
+      {method: 'POST', path, handle: async ({body}) => [200, saveMedia(kind, body)]},
+    ]
+  })
+
   return {
-    store, get, save, effective, resolveForProxy, policy,
+    store, get, save, effective, resolveForProxy, resolveImage, policy,
+    resolveVideo: () => resolveMedia('video'),
+    resolveMusic: () => resolveMedia('music'),
     legacy: [
+      ...mediaRoutes,
+      { method:'GET', path:/^\/v1\/model-api\/image$/, handle:async () => [200,{image_api:imageView()}] },
+      { method:'POST', path:/^\/v1\/model-api\/image$/, handle:async ({body}) => [200,saveImage(body)] },
       { method: 'GET', path: /\/v1\/model-api/, handle: async ({ query }) => { if (query) fail(400, 'invalid', 'Invalid request'); return [200, get()] } },
       { method: 'POST', path: /\/v1\/model-api/, handle: async ({ body }) => [200, save(body)] },
     ],

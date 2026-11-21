@@ -144,19 +144,50 @@ export function registerCore(app: FastifyInstance, ot: OtContext) {
     ot.me(req);
     return ot.profileView(ot.ownerByHandle(params(req).handle));
   });
+  // Notifications are account-owned. A workspace view includes team-scoped and
+  // account-wide events, never another team's private conversation events.
+  const notificationScope = (req: any, owner: string, source: any) => {
+    const wid = source.workspace_id;
+    if (source.personal === true || source.personal === "1") {
+      assert(wid === undefined, 400, "invalid_request", "Choose one notification scope");
+      return {sql: ` AND (
+        json_extract(data,'$.conversation_id') IN (
+          SELECT c.id FROM ot_conversations c JOIN ot_conversation_members m ON m.conversation_id=c.id
+          WHERE m.owner_id=? AND c.team_id IS NULL)
+        OR (json_extract(data,'$.workspace_id') IS NULL AND json_extract(data,'$.team_id') IS NULL
+          AND json_extract(data,'$.conversation_id') IS NULL))`, args:[owner]};
+    }
+    if (wid === undefined) return { sql: "", args: [] as any[] };
+    assert(typeof wid === "string" && /^[0-9a-f]{32}$/.test(wid), 400, "invalid_request", "invalid workspace");
+    const team = ot.get<any>("SELECT t.id FROM ot_teams t JOIN ot_team_members m ON m.team_id=t.id WHERE t.workspace_id=? AND m.owner_id=? AND m.suspended=0", wid, owner);
+    assert(team, 404, "not_found", "workspace not found");
+    return { sql: ` AND (json_extract(data,'$.workspace_id') = ? OR json_extract(data,'$.team_id') = ?
+      OR json_extract(data,'$.conversation_id') IN (SELECT id FROM ot_conversations WHERE team_id=?)
+      OR (json_extract(data,'$.workspace_id') IS NULL AND json_extract(data,'$.team_id') IS NULL AND json_extract(data,'$.conversation_id') IS NULL))`, args: [wid, team.id, team.id] };
+  };
   app.get("/v1/ot/notifications", async (req) => {
-    const me = ot.me(req);
-    const after = intParam(query(req).after, "after", 0);
-    const limit = intParam(query(req).limit, "limit", 50, 200);
-    const rows = ot.all<any>("SELECT * FROM ot_notifications WHERE owner_id = ? AND seq > ? ORDER BY seq LIMIT ?", me.ownerId, after, limit);
-    const unread = ot.get<any>("SELECT COUNT(*) AS n FROM ot_notifications WHERE owner_id = ? AND read_at IS NULL", me.ownerId).n;
+    const me = ot.me(req), q = query(req);
+    const after = intParam(q.after, "after", 0);
+    const limit = intParam(q.limit, "limit", 50, 200);
+    const scope = notificationScope(req, me.ownerId, q);
+    const rows = ot.all<any>("SELECT * FROM ot_notifications WHERE owner_id = ? AND seq > ?" + scope.sql + (q.unread === "1" ? " AND read_at IS NULL" : "") + " ORDER BY seq LIMIT ?", me.ownerId, after, ...scope.args, limit);
+    const unread = ot.get<any>("SELECT COUNT(*) AS n FROM ot_notifications WHERE owner_id = ? AND read_at IS NULL" + scope.sql, me.ownerId, ...scope.args).n;
     return { unread, notifications: rows.map((r) => ({ seq: r.seq, id: r.id, kind: r.kind, data: JSON.parse(r.data), created_at: r.created_at, read: r.read_at !== null })) };
   });
   app.post("/v1/ot/notifications/read", async (req) => {
-    const me = ot.me(req);
-    const upTo = Number(body(req).up_to);
-    assert(Number.isSafeInteger(upTo) && upTo >= 0, 400, "invalid_request", "up_to must be a sequence number");
-    const r = ot.run("UPDATE ot_notifications SET read_at = ? WHERE owner_id = ? AND seq <= ? AND read_at IS NULL", ot.now(), me.ownerId, upTo);
-    return { marked: r.changes };
+    const me = ot.me(req), b = body(req), scope = notificationScope(req, me.ownerId, b);
+    let suffix = "", args: any[] = [];
+    if (b.all === true && b.notification_id === undefined) { /* all visible */ }
+    else if (typeof b.notification_id === "string" && b.all === undefined) {
+      const row = ot.get<any>("SELECT id FROM ot_notifications WHERE owner_id=? AND id=?" + scope.sql, me.ownerId, b.notification_id, ...scope.args);
+      assert(row, 404, "not_found", "notification not found"); suffix = " AND id=?"; args = [b.notification_id];
+    } else {
+      const upTo = Number(b.up_to);
+      assert(Number.isSafeInteger(upTo) && upTo >= 0, 400, "invalid_request", "provide notification_id, all or up_to");
+      suffix = " AND seq<=?"; args = [upTo];
+    }
+    const r = ot.run("UPDATE ot_notifications SET read_at=? WHERE owner_id=? AND read_at IS NULL" + scope.sql + suffix, ot.now(), me.ownerId, ...scope.args, ...args);
+    const unread = ot.get<any>("SELECT COUNT(*) AS n FROM ot_notifications WHERE owner_id=? AND read_at IS NULL" + scope.sql, me.ownerId, ...scope.args).n;
+    return { marked: r.changes, unread };
   });
 }

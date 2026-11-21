@@ -89,6 +89,9 @@ test("approval invites and the team directory queue join requests for owners and
   const q2 = await A.ok("GET", `/v1/ot/teams/${team.id}/join-requests`);
   await A.ok("POST", `/v1/ot/teams/${team.id}/join-requests/${q2.requests[0].id}`, { decision: "approve" });
   assert.equal((await C.ok("GET", "/v1/ot/directory?q=guild")).teams[0].membership, "member");
+  await A.ok("PATCH", `/v1/ot/teams/${team.id}/members/${C.handle}`, { suspended: true });
+  assert.equal((await C.ok("GET", "/v1/ot/directory?q=guild")).teams[0].membership, "suspended");
+  await A.ok("PATCH", `/v1/ot/teams/${team.id}/members/${C.handle}`, { suspended: false });
   const cn = await C.ok("GET", "/v1/ot/notifications");
   assert.ok(cn.notifications.some((x: any) => x.kind === "team.join_decided" && x.data.decision === "approve"));
   await C.ok("POST", "/v1/ot/notifications/read", { up_to: cn.notifications.at(-1).seq });

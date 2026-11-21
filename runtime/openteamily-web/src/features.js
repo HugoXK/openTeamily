@@ -70,6 +70,8 @@ export async function loadFeatures({ dir, identity, dataDir, log = console.error
   try {
     names = readdirSync(dir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort()
   } catch { return { table, loaded, failed } }
+  // Agents' trusted import adopts retained private-chat rows before accepting its bundle.
+  names.sort((a,b) => Number(b === 'chat') - Number(a === 'chat') || a.localeCompare(b))
   for (const name of names) {
     if (!FEATURE_NAME.test(name)) { failed.push({ name, error: 'invalid name' }); continue }
     try {

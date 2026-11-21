@@ -1,6 +1,7 @@
 // Stream C messenger feature and group-agent replies from this user's own DS-Bot (fake Bot Social).
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -64,12 +65,18 @@ test('agent inbox items become native DS-Bot turns posted back as the agent; cur
   const turns = []
   const services = { chatTurn: async (key, text, id) => { turns.push({ key, id, text }); return { text: 'A useful reply' } } }
   const stateFile = join(dir, 'inbox.json')
-  const r = createAgentReplier({ bs, host: { currentRuntime: () => services }, stateFile })
+  const r = createAgentReplier({ bs, host: {
+    currentRuntime: () => services,
+    async call(endpoint, payload) {
+      assert.equal(endpoint, 'agents/turn')
+      return services.chatTurn(payload.key, payload.text, payload.request_id)
+    },
+  }, stateFile })
   assert.deepEqual(await r.once(), { replied: 1, cursor: 41 })
-  assert.equal(turns[0].key, 'social:otc_9:helper')
+  assert.equal(turns[0].key, 'social:otc_9')
   const post = f.calls.find((c) => c.method === 'POST')
   assert.equal(post.path, '/v1/ot/conversations/otc_9/agent-messages')
-  assert.deepEqual(post.body, { agent_ref: 'helper', body: 'A useful reply', reply_to: 'otm_5', mode: 'auto', client_key: 'r:otm_5' })
+  assert.deepEqual(post.body, { agent_ref: 'helper', body: 'A useful reply', reply_to: 'otm_5', mode: 'auto', client_key: 'r:' + createHash('sha256').update(JSON.stringify(['otm_5', 'helper'])).digest('hex') })
   assert.equal(JSON.parse(readFileSync(stateFile, 'utf8')).cursor, 41)
   assert.deepEqual(await r.once(), { replied: 0, cursor: 41 })
   assert.equal(turns.length, 1)
@@ -82,4 +89,69 @@ test('without a DS-Bot runtime nothing is fetched or answered', async () => {
   const r = createAgentReplier({ bs, host: { currentRuntime: () => null }, stateFile: join(dir, 's.json') })
   assert.deepEqual(await r.once(), { skipped: 'runtime' })
   assert.equal(f.calls.length, 0)
+})
+
+test('the group settings route patches only the requested automatic-reply preference', async () => {
+  const dir = fixture()
+  const f = fake({'PATCH /v1/ot/conversations/otc_1/agents/helper': body => body})
+  setSharedBotSocial(createBotSocial({ server: SERVER, credentialsPath: join(dir, 'bot', 'flybot-social.json'), fetch: f.fetch }))
+  const e = messenger({dataDir: dir}).endpoints
+  const path = '/v1/workspaces/' + 'a'.repeat(32) + '/social/conversations/otc_1/agents/helper/auto-reply'
+  const result = await e.v1({method:'POST',path,body:{auto_reply:true}})
+  assert.deepEqual(result.body, {auto_reply:true})
+  assert.equal(result.status, 200)
+  assert.deepEqual(f.calls.at(-1), {method:'PATCH',path:'/v1/ot/conversations/otc_1/agents/helper',body:{auto_reply:true}})
+  const invalid = await e.v1({method:'POST',path,body:{auto_reply:'false'}})
+  assert.equal(invalid.status, 400)
+})
+
+
+test('legacy chat forwards explicitly selected group agents to Bot Social', async () => {
+  const dir = fixture()
+  const f = fake({'POST /v1/ot/conversations/otc_1/messages': body => ({id: 'm1', body: body.body})})
+  setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath: join(dir, 'bot', 'flybot-social.json'), fetch: f.fetch}))
+  const e = messenger({dataDir: dir}).endpoints
+  const targets = [{owner_id:'owner-a', agent_id:'helper'}]
+  const path = '/v1/workspaces/' + 'a'.repeat(32) + '/social/conversations/otc_1/messages'
+  const result = await e.v1({method:'POST',path,body:{body:'Question',agent_mentions:targets}})
+  assert.equal(result.status, 201)
+  assert.deepEqual(f.calls.at(-1).body.agent_mentions, targets)
+})
+
+
+test('voice recording and playback proxy through the member messenger', async () => {
+  const dir = fixture()
+  const voice = {mime:'audio/webm', data:'GkXfowAAAAAAAAAA'}
+  const f = fake({
+    'POST /v1/ot/conversations/otc_1/messages': body => ({id:'m1',voice:{mime:body.voice.mime}}),
+    'GET /v1/ot/conversations/otc_1/messages/m1/voice': () => voice,
+  })
+  setSharedBotSocial(createBotSocial({server:SERVER, credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
+  const feature = messenger({dataDir:dir}).endpoints
+  const path = '/v1/workspaces/' + 'a'.repeat(32) + '/social/conversations/otc_1/messages'
+  const sent = await feature.v1({method:'POST',path,body:{voice}})
+  assert.equal(sent.status,201)
+  assert.deepEqual(sent.body.message.voice,{mime:voice.mime})
+  assert.deepEqual(f.calls.at(-1).body.voice,voice)
+  const fetched = await feature.v1({method:'GET',path:path+'/m1/voice'})
+  assert.deepEqual(fetched,{status:200,body:voice})
+})
+
+
+test('member history forwards older, around and search cursors to Bot Social', async () => {
+  const dir = fixture()
+  const f = fake({'GET /v1/ot/conversations/otc_1/messages': () => ({
+    messages:[{id:'m1',seq:9,body:'Search phrase'}],next_before:9,has_newer:true,
+  })})
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath:join(dir,'bot','flybot-social.json'),fetch:f.fetch}))
+  const feature=messenger({dataDir:dir}).endpoints
+  const path='/v1/workspaces/' + 'a'.repeat(32) + '/social/conversations/otc_1/messages'
+  for (const query of ['?before=20&limit=50','?around=m1&limit=50','?q=Search%20phrase&before=20']) {
+    const page=await feature.v1({method:'GET',path:path+query})
+    assert.equal(page.status,200)
+    assert.equal(page.body.cursor,9)
+    assert.equal(page.body.has_newer,true)
+    const sent=new URL(f.calls.at(-1).path,SERVER)
+    for (const [key,value] of new URL(path+query,SERVER).searchParams) assert.equal(sent.searchParams.get(key),value)
+  }
 })
