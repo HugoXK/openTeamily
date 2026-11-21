@@ -61,11 +61,13 @@ export function searchWithCategory(search, slug) {
 
 export function readAgentForm(form) {
   const data = new FormData(form);
+  const quickStarts = data.get('quick_starts');
   return {
     name: (data.get('name') || '').trim(),
     summary: (data.get('summary') || '').trim(),
     instructions: data.get('instructions') || '',
     category: AGENT_CATEGORY_SLUGS.has(data.get('category')) ? data.get('category') : null,
+    ...(typeof quickStarts === 'string' ? {quick_starts: quickStarts.split(/\r?\n/).map(line => line.trim()).filter(Boolean)} : {}),
   };
 }
 
@@ -132,9 +134,34 @@ export function statusLabel(message) {
   if (message.status === 'queued' && message.error_code === 'no_agent') return '等待已连接的运行时。';
   if (message.status === 'queued') return '排队中。';
   if (message.status === 'running') return '生成中。';
+  if (message.status === 'failed' && message.error_code === 'session/attachment-invalid') return '当前模型无法处理这个附件。';
   if (message.status === 'failed') return '回复失败' + (message.error_code ? '（' + message.error_code + '）' : '') + '。';
   if (message.status === 'cancelled') return '已取消。';
   return message.body || '';
+}
+
+// The template endpoint reports a handful of known refusals; keep those in the
+// page's language and leave anything else in the server's own words.
+export function teamTemplateFailure(status, body) {
+  const message = body && body.error && body.error.message ? String(body.error.message) : '';
+  if (/Only workspace owners and admins/i.test(message)) return '只有工作区所有者或管理员可以创建 AI 团队。';
+  if (/Template not found/i.test(message)) return '没有找到这个团队模板。';
+  if (/Idempotency/i.test(message)) return '这次请求的幂等键无效，请重试。';
+  if (/Conversation (member limit|capacity) reached/i.test(message)) return '群会话或成员配额已满，先清理旧群会话再试。';
+  return message || '无法用这个模板建团队。';
+}
+
+export function templateAgentText(template) {
+  const names = (template && template.agents ? template.agents : []).map((agent) => agent.name).filter(Boolean);
+  return names.length ? '含 ' + names.length + ' 个智能体：' + names.join('、') : '';
+}
+
+function teamTemplateKey() {
+  const bytes = new Uint8Array(18);
+  globalThis.crypto.getRandomValues(bytes);
+  let text = '';
+  for (const value of bytes) text += String.fromCharCode(value);
+  return globalThis.btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
 function messageFor(error, fallback) {
@@ -167,6 +194,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let selectedCategory = categoryFromSearch(globalThis.location && globalThis.location.search);
   let selectedCreator = '';
   let memberNames = new Map();
+  let teamTemplates = [];
+  let teamTemplatesLoaded = false;
 
   function renderCategoryFilter() {
     for (const button of categoryButtons) {
@@ -212,6 +241,82 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     let parsed = {};
     try { parsed = await response.json(); } catch { parsed = {}; }
     return {status: response.status, body: parsed};
+  }
+
+  function renderTeamTemplates() {
+    const list = document.getElementById('team-template-list');
+    const empty = document.getElementById('teams-empty');
+    if (!list) return;
+    list.replaceChildren();
+    for (const template of teamTemplates) {
+      const card = document.createElement('li');
+      card.className = 'team-template-card';
+      card.dataset.slug = template.slug;
+      const name = document.createElement('h3');
+      name.textContent = template.name || template.slug;
+      const summary = document.createElement('p');
+      summary.className = 'summary';
+      summary.textContent = template.summary || '';
+      const members = document.createElement('p');
+      members.className = 'note';
+      members.textContent = templateAgentText(template);
+      const apply = document.createElement('button');
+      apply.type = 'button';
+      apply.className = 'primary';
+      apply.textContent = '用这个模板建团队';
+      apply.dataset.slug = template.slug;
+      if (!canManage(actor)) {
+        apply.disabled = true;
+        apply.title = '只有工作区所有者或管理员可以创建 AI 团队';
+      }
+      apply.addEventListener('click', () => applyTeamTemplate(template, apply));
+      card.append(name, summary, members, apply);
+      list.append(card);
+    }
+    if (empty) empty.hidden = teamTemplates.length > 0;
+  }
+
+  async function loadTeamTemplates() {
+    if (teamTemplatesLoaded) return;
+    const listed = await request('GET', '/v1/team-templates');
+    if (listed.status !== 200) {
+      const empty = document.getElementById('teams-empty');
+      if (empty) {
+        empty.hidden = false;
+        empty.textContent = '模板列表没有加载出来：' + messageFor(listed.body.error, '服务端没有返回模板。');
+      }
+      return;
+    }
+    teamTemplates = listed.body.items || [];
+    teamTemplatesLoaded = true;
+    renderTeamTemplates();
+  }
+
+  async function applyTeamTemplate(template, button) {
+    if (!canManage(actor) || button.disabled) return;
+    const id = workspaceId();
+    if (!id) {
+      show('error', '先选择一个工作区，再用模板建团队。');
+      return;
+    }
+    button.disabled = true;
+    const previous = button.textContent;
+    button.textContent = '正在建团队…';
+    try {
+      const result = await request('POST', `/v1/workspaces/${id}/team-templates/${template.slug}`, {},
+        {'Idempotency-Key': teamTemplateKey()});
+      if ((result.status !== 200 && result.status !== 201) || !result.body.conversation) {
+        show('error', teamTemplateFailure(result.status, result.body));
+        return;
+      }
+      const href = '/chat#workspace=' + encodeURIComponent(id) + '&social=' + encodeURIComponent(result.body.conversation.id);
+      show('ok', '团队已建好，正在打开群会话。');
+      if (globalThis.location && typeof globalThis.location.assign === 'function') globalThis.location.assign(href);
+      else if (globalThis.location) globalThis.location.href = href;
+    } finally {
+      button.disabled = false;
+      button.textContent = previous;
+    }
   }
 
   function workspaceId() {
@@ -427,8 +532,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (editForm.elements.category) {
       editForm.elements.category.value = AGENT_CATEGORY_SLUGS.has(agent.category) ? agent.category : '';
     }
+    const starts = editForm.elements.quick_starts;
+    if (starts) starts.value = (agent.quick_starts || []).join('\n');
     const writable = canManage(actor);
-    for (const field of ['name', 'summary', 'instructions', 'category']) {
+    for (const field of ['name', 'summary', 'instructions', 'category', 'quick_starts']) {
       if (editForm.elements[field]) editForm.elements[field].disabled = !writable;
     }
     document.getElementById('archive-button').hidden = !writable;
@@ -441,7 +548,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (openChat) {
       openChat.href = '/chat#workspace=' + encodeURIComponent(workspaceId()) + '&agent=' + encodeURIComponent(agent.id);
     }
-    renderHomepage(agent, writable);
+    const homepage = document.getElementById('homepage-panel');
+    const manageHome = document.getElementById('manage-public-homepage');
+    if (homepage) homepage.hidden = !writable;
+    if (manageHome) manageHome.href = '/discover?' + new URLSearchParams({
+      tab:'agents', workspace:workspaceId(), agent:agent.id,
+    }) + '#catalog-manage';
     if (runtimePanel) loadRuntime();
     loadApiKeys(agent, writable);
   }
@@ -481,33 +593,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       }
       return li;
     }));
-  }
-
-  function renderHomepage(agent, writable, tokenPath) {
-    const panel = document.getElementById('homepage-panel');
-    const status = document.getElementById('homepage-status');
-    const wrap = document.getElementById('homepage-link-wrap');
-    const link = document.getElementById('homepage-link');
-    if (!panel) return;
-    panel.hidden = false;
-    const home = agent.homepage || {visibility: 'restricted'};
-    const publicHome = home.visibility === 'public';
-    document.getElementById('publish-homepage').hidden = !writable;
-    document.getElementById('revoke-homepage').hidden = !writable || !publicHome;
-    document.getElementById('publish-homepage').textContent = publicHome ? '更换链接' : '发布链接';
-    if (tokenPath) {
-      status.textContent = '链接只显示这一次，请立即复制。撤回后旧链接会失效。';
-      wrap.hidden = false;
-      link.textContent = tokenPath;
-    } else if (publicHome) {
-      status.textContent = '已发布公开主页。完整链接只在发布时显示一次，这里只保留前缀 ' + (home.prefix || '') + '。';
-      wrap.hidden = true;
-      link.textContent = '';
-    } else {
-      status.textContent = '当前仅工作区成员可见。';
-      wrap.hidden = true;
-      link.textContent = '';
-    }
   }
 
   async function loadRuntime() {
@@ -755,11 +840,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     show('ok', '已保存到作品库。');
   });
 
+  function invalidQuickStarts(starts) {
+    if (!starts || (starts.length <= 5 && starts.every(line => line.length <= 80))) return false;
+    show('error', '快捷开场最多 5 条，每条不超过 80 字。');
+    return true;
+  }
+
   createForm.addEventListener('submit', async event => {
     event.preventDefault();
     const id = workspaceId();
     const form = event.currentTarget;
     const values = readAgentForm(form);
+    if (invalidQuickStarts(values.quick_starts)) return;
     if (!values.name) {
       show('error', '请填写名称。');
       return;
@@ -785,6 +877,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!canManage(actor)) return;
     const id = workspaceId();
     const values = readAgentForm(event.currentTarget);
+    if (invalidQuickStarts(values.quick_starts)) return;
     values.revision = Number(event.currentTarget.elements.revision.value);
     const result = await request(
       'POST',
@@ -815,7 +908,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '无法归档。'));
       return;
     }
-    show('ok', '已归档，默认目录里不再显示，公开主页链接也已失效。');
+    show('ok', '已归档。如已公开，可在发现页的「发布管理」中取消发布。');
     const homepagePanel = document.getElementById('homepage-panel');
     if (homepagePanel) homepagePanel.hidden = true;
     await loadWorkspace();
@@ -832,31 +925,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentAgent = null;
     currentConversation = null;
     stopPolling();
-  });
-
-  document.getElementById('publish-homepage').addEventListener('click', async () => {
-    if (!canManage(actor) || !currentAgent) return;
-    const result = await request('POST', `${agentBase()}/homepage`, {});
-    if (result.status !== 201) {
-      show('error', messageFor(result.body.error, '无法发布公开主页。'));
-      return;
-    }
-    currentAgent = result.body.agent;
-    fillEdit(currentAgent);
-    renderHomepage(currentAgent, true, result.body.agent.homepage.path);
-    show('ok', '已发布公开主页链接。');
-  });
-
-  document.getElementById('revoke-homepage').addEventListener('click', async () => {
-    if (!canManage(actor) || !currentAgent) return;
-    const result = await request('POST', `${agentBase()}/homepage/revoke`, {});
-    if (result.status !== 200) {
-      show('error', messageFor(result.body.error, '无法撤回公开主页。'));
-      return;
-    }
-    currentAgent = result.body.agent;
-    fillEdit(currentAgent);
-    show('ok', '已撤回公开主页，旧链接失效。');
   });
 
   document.getElementById('logout-form').addEventListener('submit', async event => {
@@ -899,11 +967,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       document.getElementById('list-panel').hidden = false;
       document.getElementById('teams-panel').hidden = true;
     });
-    tabTeams.addEventListener('click', () => {
+    tabTeams.addEventListener('click', async () => {
       tabAgents.setAttribute('aria-selected', 'false');
       tabTeams.setAttribute('aria-selected', 'true');
       document.getElementById('list-panel').hidden = true;
       document.getElementById('teams-panel').hidden = false;
+      await loadTeamTemplates();
     });
   }
 

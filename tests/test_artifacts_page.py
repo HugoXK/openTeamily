@@ -41,10 +41,15 @@ class ArtifactsPageTests(unittest.TestCase):
         self.assertRegex(html, r'<img id="media-image"[^>]*src="data:image/')
         self.assertIn('让智能体搭建网站', html)
         self.assertIn('保存聊天中的消息', html)
+        self.assertIn('id="empty-agent-website"', html)
+        self.assertNotIn('id="empty-agent-website" disabled', html)
+        self.assertIn('id="new-agent-website"', html)
+        self.assertIn('id="new-save-message"', html)
+        self.assertIn('id="empty-save-message"', html)
         self.assertIn('暂无收藏', html)
         self.assertIn('没有匹配的作品', html)
         self.assertIn('还没有会议纪要', html)
-        self.assertIn('这里只列这个工作区已有的会议纪要，不生成、不录音。', html)
+        self.assertIn('id="new-meeting-in-space"', html)
         self.assertNotIn('还没有会议作品接口', html)
         self.assertIn('id="meetings-error"', html)
         self.assertIn('这个工作区的会议纪要，最新的在前。', html)
@@ -52,14 +57,15 @@ class ArtifactsPageTests(unittest.TestCase):
         self.assertIn('>我的会议</h1>', html)
         self.assertIn('data-tone="wave"', html)
         self.assertIn('id="empty-meetings"', html)
-        self.assertIn('aria-label="通知"', html)
+        self.assertIn('aria-label="作品通知"', html)
         self.assertIn('id="artifact-notify"', html)
+        self.assertIn('<dialog id="artifact-notifications"', html)
         self.assertIn('Websites', html)
         self.assertIn('id="filter-panel"', html)
         self.assertIn('自定义范围', html)
         self.assertIn('暂无可筛选的创建人', html)
         self.assertIn('没有匹配的会话', html)
-        self.assertIn('未实现', html)
+        self.assertNotIn('还没有作品通知接口', html)
         self.assertIn('id="new-menu"', html)
         self.assertIn('id="new-slides"', html)
         self.assertIn('id="slides-editor"', html)
@@ -101,7 +107,13 @@ class ArtifactsPageTests(unittest.TestCase):
         self.assertIn('#artifact-notify svg', css)
         js = script['body'].decode()
         self.assertIn('is-meetings', js)
+        self.assertIn('websitePrompt', js)
+        self.assertIn('openWebsiteBriefDialog', js)
+        self.assertIn('openSaveMessageDialog', js)
         self.assertNotIn('Teamily Wiki', js)
+        thumb = self.raw.call('GET', '/shell/thumb.mjs')
+        self.assertEqual(thumb['status'], 200)
+        self.assertIn('describeWebsiteDispatch', thumb['body'].decode())
         self.assertIn('text/javascript', script['headers']['Content-Type'])
         self.assertEqual(self.raw.call('GET', '/artifacts/missing')['status'], 404)
 
@@ -126,20 +138,17 @@ class ArtifactsPageTests(unittest.TestCase):
         self.assertEqual(self.raw.call('POST', '/artifacts')['status'], 405)
         self.assertEqual(self.raw.call('POST', '/space')['status'], 405)
 
-    def test_wrapper_still_exposes_the_artifacts_api(self):
-        workspace = self.client.call('POST', '/v1/workspaces', {'name': 'Desk'},
-                                     {'HTTP_IDEMPOTENCY_KEY': 'artifact-page-space-0001'})
-        self.assertEqual(workspace['status'], 201, workspace)
-        wid = workspace['body']['workspace']['id']
+    def test_artifact_api_is_moved_to_dsbot(self):
+        path = f"/v1/workspaces/{'a' * 32}/artifacts"
+        listed = self.client.call('GET', path)
+        self.assertEqual(listed['status'], 410)
+        self.assertEqual(listed['body']['error']['code'], 'moved_to_dsbot')
         created = self.client.call(
-            'POST', f'/v1/workspaces/{wid}/artifacts',
-            {'title': 'Brief', 'body': 'Hello'},
+            'POST', path, {'title': 'Brief', 'body': 'Hello'},
             {'HTTP_IDEMPOTENCY_KEY': 'artifact-page-create-0001'},
         )
-        self.assertEqual(created['status'], 201, created)
-        listed = self.client.call('GET', f'/v1/workspaces/{wid}/artifacts')
-        self.assertEqual(listed['status'], 200)
-        self.assertEqual([item['title'] for item in listed['body']['items']], ['Brief'])
+        self.assertEqual(created['status'], 410)
+        self.assertEqual(created['body']['error']['code'], 'moved_to_dsbot')
 
 
 if __name__ == '__main__':

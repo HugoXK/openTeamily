@@ -1,4 +1,10 @@
+import { meetingCodeFromHash, meetingHref } from '../shell/meeting-link.mjs';
+import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/public-agent-link.mjs';
+import { publicWorkIntentFromHash } from '../shell/public-work-link.mjs';
+import { teamInviteFromHash, teamInviteHash } from '../shell/team-invite-link.mjs';
+import { spaceHref } from '../shell/thumb.mjs';
 import { createLookAvatar } from '../look/app.mjs';
+import { csrfCookie, signupSessionError, takeSignupSession, waitForRuntime } from './runtime-readiness.mjs';
 
 export const KIND_LABELS = {
   document: '文档', website: '网站', slides: '幻灯片', dashboard: '看板',
@@ -40,11 +46,6 @@ export function meetingMeta(item) {
   return actions ? `${actions} 个行动项 · ${done} 已完成` : '没有行动项';
 }
 
-function csrfCookie(source) {
-  const match = /(?:^|;\s*)(?:__Host-ot_csrf|ot_dev_csrf)=([^;]+)/.exec(source || '');
-  return match ? decodeURIComponent(match[1]) : '';
-}
-
 function hashWorkspace() {
   const hash = (globalThis.location && globalThis.location.hash) || '';
   return new URLSearchParams(hash.replace(/^#/, '')).get('workspace') || '';
@@ -58,7 +59,10 @@ function element(tag, className, text) {
 }
 
 function show(document, kind, text) {
-  const status = document.getElementById('home-status');
+  const signedIn = document.getElementById('main-panel')?.hidden === false;
+  const status = document.getElementById(signedIn ? 'home-status' : 'status');
+  const other = document.getElementById(signedIn ? 'status' : 'home-status');
+  if (other) other.textContent = '';
   if (!status) return;
   status.dataset.kind = kind || '';
   status.textContent = text || '';
@@ -72,12 +76,19 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   const greeting = document.getElementById('home-greeting');
   if (!loginPanel || !mainPanel || !form || !workspaceSelect) return null;
 
+  const view = document.defaultView ?? globalThis;
+  const pendingKey = 'ot-pending-meeting';
+  const meetingFromLink = meetingCodeFromHash(view.location?.hash);
+  if (meetingFromLink) {
+    try { view.sessionStorage.setItem(pendingKey, meetingFromLink); } catch {}
+  }
   let currentUser = null;
   let workspaces = [];
   let personal = null;
   let profile = null;
   let selectedId = '';
   let loading = false;
+  let overviewVersion = 0;
 
   async function request(method, path, body) {
     const headers = {Accept: 'application/json'};
@@ -114,17 +125,20 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     const lookAvatar = createLookAvatar(personal.look, document);
     if (lookAvatar) avatar.append(lookAvatar);
     else avatar.textContent = (agent.name || 'P').trim().slice(0, 1).toUpperCase();
-    const context = document.getElementById('home-context');
-    if (context) {
-      const bits = [profile && profile.industry, profile && profile.role].filter(Boolean);
-      context.hidden = !bits.length;
-      context.textContent = bits.length ? '工作背景：' + bits.join(' · ') : '';
-    }
+    renderPersonalContext();
     const workspaceId = personal.workspace && personal.workspace.id;
     const chat = document.getElementById('home-personal-chat');
     const agents = document.getElementById('home-personal-agents');
     if (chat && workspaceId) chat.href = '/chat#workspace=' + encodeURIComponent(workspaceId) + '&agent=' + encodeURIComponent(agent.id);
     if (agents) agents.href = '/agents';
+  }
+
+  function renderPersonalContext() {
+    const context = document.getElementById('home-context');
+    if (!context) return;
+    const bits = [profile?.industry, profile?.role].filter(Boolean);
+    context.hidden = !bits.length;
+    context.textContent = bits.length ? '工作背景：' + bits.join(' · ') : '';
   }
 
   function renderWorkspaceSelect() {
@@ -135,6 +149,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       return option;
     }));
     workspaceSelect.value = selectedId;
+    workspaceSelect.disabled = !workspaces.length;
   }
 
   function conversationLink(item) {
@@ -175,7 +190,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     list.replaceChildren(...(items || []).map((item) => {
       const li = element('li');
       const link = element('a', 'home-row');
-      link.href = '/space';
+      link.href = spaceHref(selectedId, item && item.id);
       const title = element('strong', '', item.title);
       const meta = element('span', 'home-row-note', kindLabel(item.kind));
       const when = element('time', 'home-row-time', formatWhen(item.updated, now));
@@ -223,7 +238,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
 
   async function loadOverview() {
     if (!selectedId) return;
-    const result = await request('GET', `/v1/workspaces/${selectedId}/overview?limit=5`);
+    const version = ++overviewVersion;
+    const result = await request('GET', `/v1/workspaces/${selectedId}/overview?limit=5`).catch(() => ({status: 0, body: {}}));
+    if (version !== overviewVersion) return;
     if (result.status !== 200) {
       show(document, 'error', (result.body.error && result.body.error.message) || '无法加载首页摘要。');
       return;
@@ -234,49 +251,175 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
     renderStats(result.body.counts || null);
     const quickChat = document.querySelector('.home-actions a[href="/chat"]');
     if (quickChat) quickChat.href = '/chat#workspace=' + encodeURIComponent(selectedId);
+    const spaceLinks = document.querySelectorAll('a[href^="/space"]');
+    for (const link of spaceLinks) {
+      if (link.classList.contains('home-row')) continue;
+      link.href = spaceHref(selectedId);
+    }
     const notifications = document.getElementById('home-notifications');
     const unread = Number(result.body.unread_notifications) || 0;
     if (notifications) {
       notifications.hidden = unread === 0;
       notifications.textContent = `有 ${unread} 条未读通知，打开聊天查看`;
     }
+    show(document, '', '');
+  }
+
+  async function continuePublicActivity({target, backPath, loadingText, errorText, retryId}) {
+    const hash = view.location.hash;
+    const stillCurrent = () => view.location.pathname === '/login' && view.location.hash === hash;
+    loginPanel.hidden = true;
+    mainPanel.hidden = true;
+    show(document, 'loading', loadingText);
+    try {
+      const personal = await initializePersonalAgent();
+      if (!stillCurrent() || !personal) return;
+      const ready = await request('GET', '/v1/workspaces?scope=personal');
+      if (!stillCurrent()) return;
+      if (ready.status === 200 && ready.body?.items?.length) {
+        view.location.replace(target);
+        return;
+      }
+    } catch {}
+    if (!stillCurrent()) return;
+    show(document, 'error', errorText);
+    const status = document.getElementById('status');
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.id = retryId;
+    retry.className = 'public-agent-action';
+    retry.textContent = '重试';
+    retry.addEventListener('click', () => void load());
+    const back = document.createElement('a');
+    back.href = backPath;
+    back.className = 'public-agent-action';
+    back.textContent = '返回公开页面';
+    status.append(retry, back);
+  }
+
+  async function initializePersonalAgent() {
+    const result = await request('POST', '/v1/personal-agent').catch(() => null);
+    const agent = result?.body?.personal_agent;
+    const provisioning = agent?.runtime_provisioning;
+    if (agent && (!provisioning || ['ready', 'unmanaged'].includes(provisioning.readiness))) return agent;
+
+    loginPanel.hidden = true;
+    mainPanel.hidden = true;
+    let state;
+    if (provisioning?.readiness === 'starting') {
+      show(document, 'loading', '正在启动你的专属智能体。就绪后会自动继续。');
+      state = await waitForRuntime(() => request('GET', '/v1/auth/runtime-readiness'));
+      if (state === 'ready' || state === 'unmanaged') return agent;
+      if (state === 'signed-out') {
+        view.location.replace('/login' + view.location.hash);
+        return null;
+      }
+    }
+    const message = provisioning?.state === 'capacity'
+      ? '当前运行容量已满，请稍后重试。'
+      : state === 'timeout' ? '你的专属智能体仍在启动，请稍后再试。'
+        : '暂时无法打开你的工作区，请重试。';
+    show(document, 'error', message);
+    const retry = element('button', 'public-agent-action', '重试');
+    retry.type = 'button';
+    retry.id = 'runtime-startup-retry';
+    retry.addEventListener('click', () => void load());
+    document.getElementById('status')?.append(retry);
+    return null;
   }
 
   async function load() {
     if (loading) return;
     loading = true;
     try {
-      const session = await request('GET', '/v1/auth/session');
-      if (session.status === 401) {
+      const session = await request('GET', '/v1/auth/session').catch(() => ({status: 0, body: {}}));
+      const expectedSignup = [200, 401].includes(session.status) ? takeSignupSession(view) : null;
+      const unconfirmedSignup = expectedSignup && session.body.user?.id !== expectedSignup;
+      if (session.status === 401 || unconfirmedSignup) {
         currentUser = null;
         loginPanel.hidden = false;
         mainPanel.hidden = true;
-        show(document, '', '');
+        const hash = view.location?.pathname === '/login' ? view.location.hash : '';
+        const intent = publicAgentIntentFromHash(hash);
+        const work = publicWorkIntentFromHash(hash);
+        const continuation = teamInviteHash(teamInviteFromHash(hash)) ||
+          (intent ? publicAgentContinuation(intent) : work?.continuation);
+        const register = loginPanel.querySelector?.('.login-register-button');
+        if (register && continuation) register.href = '/register' + continuation;
+        show(document, unconfirmedSignup ? 'error' : '', unconfirmedSignup ? signupSessionError : '');
         return;
       }
       if (session.status !== 200 || !session.body.user) {
         show(document, 'error', (session.body.error && session.body.error.message) || '无法读取会话。');
         return;
       }
+      let meeting = meetingFromLink;
+      try {
+        meeting ||= view.sessionStorage.getItem(pendingKey);
+      } catch {}
+      const target = meetingHref(meeting);
+      if (target) {
+        if (!await initializePersonalAgent()) return;
+        try { view.sessionStorage.removeItem(pendingKey); } catch {}
+        view.location.replace(target);
+        return;
+      }
+      try { view.sessionStorage.removeItem(pendingKey); } catch {}
+      if (view.location?.pathname === '/login') {
+        const hash = view.location.hash;
+        const invite = teamInviteFromHash(hash);
+        const intent = publicAgentIntentFromHash(hash);
+        const work = publicWorkIntentFromHash(hash);
+        if (invite) {
+          if (await initializePersonalAgent() && view.location.hash === hash) {
+            view.location.replace('/members' + teamInviteHash(invite));
+          }
+        } else if (intent) {
+          await continuePublicActivity({
+            target: '/chat' + publicAgentContinuation(intent), backPath: '/a/' + intent.slug,
+            loadingText: '正在打开公开智能体…', errorText: '聊天尚未准备好。', retryId: 'public-agent-login-retry',
+          });
+        } else if (work) {
+          await continuePublicActivity({
+            target: work.target, backPath: '/w/' + work.slug,
+            loadingText: work.panel === 'comments' ? '正在打开作品评论…' : '正在打开作品…',
+            errorText: '暂时无法打开作品。', retryId: 'public-work-login-retry',
+          });
+        } else {
+          view.location.replace('/');
+        }
+        return;
+      }
       currentUser = session.body.user;
       loginPanel.hidden = true;
-      mainPanel.hidden = false;
+      personal = await initializePersonalAgent();
+      if (!personal) return;
       greeting.textContent = `欢迎回来，${currentUser.username}`;
-      // Personal initialization creates the first workspace: do not race its listing.
-      const personalResult=await request('POST', '/v1/personal-agent');
-      const [listed, onboarding] = await Promise.all([
-        request('GET', '/v1/workspaces?limit=100'),
-        request('GET', '/v1/onboarding'),
-      ]);
-      personal = [200,201].includes(personalResult.status) ? personalResult.body.personal_agent : null;
-      profile = onboarding.status === 200 ? onboarding.body.onboarding : null;
-      workspaces = listed.status === 200 ? (listed.body.items || []) : [];
+      workspaceSelect.disabled = true;
       const banner = document.getElementById('home-onboarding');
-      if (banner) banner.hidden = Boolean(onboarding.status === 200 && onboarding.body.onboarding
-        && onboarding.body.onboarding.completed);
+      if (banner) banner.hidden = true;
+      profile = null;
+      // The authenticated personal binding is already usable. Optional dashboard
+      // and onboarding reads no longer hold back opening the first chat.
+      renderPersonal();
+      mainPanel.hidden = false;
+      show(document, '', '');
+      const activeUser = currentUser;
+      void request('GET', '/v1/onboarding').then(onboarding => {
+        if (currentUser !== activeUser || onboarding.status !== 200) return;
+        profile = onboarding.body.onboarding;
+        if (banner) banner.hidden = Boolean(profile?.completed);
+        renderPersonalContext();
+      }).catch(() => {});
+      const listed = await request('GET', '/v1/workspaces?limit=100').catch(() => ({status: 0, body: {}}));
+      if (currentUser !== activeUser) return;
+      if (listed.status !== 200) {
+        show(document, 'error', '暂时无法加载工作区列表。');
+        return;
+      }
+      workspaces = listed.body.items || [];
       if (!workspaces.length) {
         show(document, '', '还没有工作区。先创建一个团队或工作区。');
-        renderPersonal();
         return;
       }
       const wanted = hashWorkspace();
@@ -286,9 +429,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       if (!workspaces.some((space) => space.id === selectedId)) selectedId = workspaces[0].id;
       renderWorkspaceSelect();
       setHash(selectedId);
-      renderPersonal();
       await loadOverview();
-      show(document, '', '');
     } finally {
       loading = false;
     }
@@ -307,7 +448,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
       password: form.elements.password.value,
     });
     if (result.status !== 200) {
-      show(document, 'error', (result.body.error && result.body.error.message) || '无法登录。');
+      show(document, 'error', result.status === 401 ? '用户名或密码不正确。'
+        : (result.body.error && result.body.error.message) || '无法登录。');
       return;
     }
     form.reset();
@@ -317,8 +459,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis), no
   const logout = document.getElementById('logout-form');
   if (logout) logout.addEventListener('submit', async (event) => {
     event.preventDefault();
-    await request('POST', '/v1/auth/logout', {});
-    await load();
+    const result = await request('POST', '/v1/auth/logout', {});
+    if (result.status !== 200) return;
+    currentUser = null;
+    overviewVersion++;
+    // A slow dashboard read may still be in flight after the page is usable.
+    view.location.replace('/');
   });
 
   load();

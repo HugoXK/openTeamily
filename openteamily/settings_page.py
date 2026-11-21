@@ -14,7 +14,12 @@ from . import discover
 
 class SettingsPage:
     ASSETS = {
+        '/login': ('home', 'index.html', 'text/html; charset=utf-8'),
+        '/runtime-starting': ('home', 'runtime-starting.html', 'text/html; charset=utf-8'),
+        '/home/runtime-starting.mjs': ('home', 'runtime-starting.mjs', 'text/javascript; charset=utf-8'),
+        '/home/runtime-readiness.mjs': ('home', 'runtime-readiness.mjs', 'text/javascript; charset=utf-8'),
         '/register': ('register', 'index.html', 'text/html; charset=utf-8'),
+        '/register/': ('register', 'index.html', 'text/html; charset=utf-8'),
         '/register/app.mjs': ('register', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/register/app.css': ('register', 'app.css', 'text/css; charset=utf-8'),
         '/settings': ('settings', 'index.html', 'text/html; charset=utf-8'),
@@ -27,6 +32,7 @@ class SettingsPage:
         '/settings/agent-access': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/connectors': ('settings', 'index.html', 'text/html; charset=utf-8'),
         '/settings/skill-configuration': ('settings', 'index.html', 'text/html; charset=utf-8'),
+        '/settings/custom-mcp.mjs': ('settings', 'custom-mcp.mjs', 'text/javascript; charset=utf-8'),
         '/settings/connected-tools.mjs': ('settings', 'connected-tools.mjs', 'text/javascript; charset=utf-8'),
         '/settings/app.mjs': ('settings', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/settings/app.css': ('settings', 'app.css', 'text/css; charset=utf-8'),
@@ -37,45 +43,69 @@ class SettingsPage:
         '/new/team': ('team', 'index.html', 'text/html; charset=utf-8'),
         '/team/app.mjs': ('team', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/team/app.css': ('team', 'app.css', 'text/css; charset=utf-8'),
+        '/contacts': ('contacts', 'index.html', 'text/html; charset=utf-8'),
+        '/contacts/app.mjs': ('contacts', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/contacts/app.css': ('contacts', 'app.css', 'text/css; charset=utf-8'),
         '/members': ('members', 'index.html', 'text/html; charset=utf-8'),
         '/members/app.mjs': ('members', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/members/app.css': ('members', 'app.css', 'text/css; charset=utf-8'),
-        '/runtimes': ('runtimes', 'index.html', 'text/html; charset=utf-8'),
-        '/runtimes/app.mjs': ('runtimes', 'app.mjs', 'text/javascript; charset=utf-8'),
-        '/runtimes/app.css': ('runtimes', 'app.css', 'text/css; charset=utf-8'),
         '/artifacts': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/artifacts/app.mjs': ('artifacts', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/artifacts/notifications.mjs': ('artifacts', 'notifications.mjs', 'text/javascript; charset=utf-8'),
         '/artifacts/app.css': ('artifacts', 'app.css', 'text/css; charset=utf-8'),
         '/space': ('artifacts', 'index.html', 'text/html; charset=utf-8'),
         '/agents': ('agents', 'index.html', 'text/html; charset=utf-8'),
         '/agents/app.mjs': ('agents', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/agents/app.css': ('agents', 'app.css', 'text/css; charset=utf-8'),
         '/memory': ('memory', 'index.html', 'text/html; charset=utf-8'),
+        '/memory/candidates.mjs': ('memory', 'candidates.mjs', 'text/javascript; charset=utf-8'),
         '/memory/app.mjs': ('memory', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/memory/rich.mjs': ('memory', 'rich.mjs', 'text/javascript; charset=utf-8'),
         '/memory/app.css': ('memory', 'app.css', 'text/css; charset=utf-8'),
-        '/install/flybot.sh': ('install', 'flybot.sh', 'text/plain; charset=utf-8'),
-        '/install/flybot.ps1': ('install', 'flybot.ps1', 'text/plain; charset=utf-8'),
         '/shell/app.css': ('shell', 'app.css', 'text/css; charset=utf-8'),
         '/shell/app.mjs': ('shell', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/system-locale.mjs': ('shell', 'system-locale.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/system-locale-catalog.mjs': ('shell', 'system-locale-catalog.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/system-locale-chat.mjs': ('shell', 'system-locale-chat.mjs', 'text/javascript; charset=utf-8'),
         '/shell/rich-editor.mjs': ('shell', 'rich-editor.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/model3d-preview.mjs': ('shell', 'model3d-preview.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/model3d-viewer.mjs': ('shell', 'model3d-viewer.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/model3d-engine-0.187.0.mjs': ('shell', 'model3d-engine-0.187.0.mjs', 'text/javascript; charset=utf-8'),
         '/shell/thumb.mjs': ('shell', 'thumb.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/meeting-link.mjs': ('shell', 'meeting-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/work-notification.mjs': ('shell', 'work-notification.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/public-agent-composer.mjs': ('shell', 'public-agent-composer.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/public-agent-link.mjs': ('shell', 'public-agent-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/public-agent-share.mjs': ('shell', 'public-agent-share.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/public-work-link.mjs': ('shell', 'public-work-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/team-invite-link.mjs': ('shell', 'team-invite-link.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
+        '/shell/dsbot-skills.mjs': ('shell', 'dsbot-skills.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/activity.mjs': ('chat', 'activity.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/public-draft.mjs': ('chat', 'public-draft.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/video-create.mjs': ('chat', 'video-create.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/voice.mjs': ('chat', 'voice.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/mentions.mjs': ('chat', 'mentions.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/dsbot.mjs': ('chat', 'dsbot.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.css': ('chat', 'app.css', 'text/css; charset=utf-8'),
         '/messenger': ('messenger', 'index.html', 'text/html; charset=utf-8'),
         '/messenger/app.mjs': ('messenger', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/messenger/app.css': ('messenger', 'app.css', 'text/css; charset=utf-8'),
         '/discover': ('discover', 'index.html', 'text/html; charset=utf-8'),
         '/discover/app.mjs': ('discover', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/discover/comments.mjs': ('discover', 'comments.mjs', 'text/javascript; charset=utf-8'),
         '/discover/app.css': ('discover', 'app.css', 'text/css; charset=utf-8'),
         '/meetings': ('meetings', 'index.html', 'text/html; charset=utf-8'),
         '/meetings/app.mjs': ('meetings', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/meetings/audio.mjs': ('meetings', 'audio.mjs', 'text/javascript; charset=utf-8'),
         '/meetings/app.css': ('meetings', 'app.css', 'text/css; charset=utf-8'),
         '/profile': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/edit': ('profile', 'index.html', 'text/html; charset=utf-8'),
         '/profile/app.mjs': ('profile', 'app.mjs', 'text/javascript; charset=utf-8'),
+        '/profile/social.mjs': ('profile', 'social.mjs', 'text/javascript; charset=utf-8'),
         '/onboarding': ('onboarding', 'index.html', 'text/html; charset=utf-8'),
         '/onboarding/app.mjs': ('onboarding', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/onboarding/app.css': ('onboarding', 'app.css', 'text/css; charset=utf-8'),
@@ -91,7 +121,6 @@ class SettingsPage:
         '/look/app.css': ('look', 'app.css', 'text/css; charset=utf-8'),
         '/skills': ('skills', 'index.html', 'text/html; charset=utf-8'),
         '/skills/imports.mjs': ('skills', 'imports.mjs', 'text/javascript; charset=utf-8'),
-        '/shell/workspace-events.mjs': ('shell', 'workspace-events.mjs', 'text/javascript; charset=utf-8'),
         '/skills/execution.mjs': ('skills', 'execution.mjs', 'text/javascript; charset=utf-8'),
         '/skills/app.mjs': ('skills', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/skills/app.css': ('skills', 'app.css', 'text/css; charset=utf-8'),
@@ -104,7 +133,7 @@ class SettingsPage:
         '/home/app.mjs': ('home', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/home/app.css': ('home', 'app.css', 'text/css; charset=utf-8'),
     }
-    PREFIXES = ('/register', '/settings', '/automations', '/team', '/new', '/members', '/runtimes', '/artifacts', '/space', '/agents', '/memory', '/install', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
+    PREFIXES = ('/register', '/settings', '/automations', '/team', '/new', '/contacts', '/members', '/artifacts', '/space', '/agents', '/memory', '/shell', '/chat', '/messenger', '/discover', '/onboarding', '/profile', '/meetings', '/download', '/guide', '/about', '/skills', '/home', '/help', '/terms', '/privacy', '/docs')
     CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
            "img-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'self'; "
            "frame-ancestors 'none'; object-src 'none'")
@@ -121,37 +150,6 @@ class SettingsPage:
     def config(self, value):
         self.api.config = value
 
-
-    def _bundle(self, env, start_response):
-        from .flybot_bundle import build
-        headers = [('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff'),
-                   ('Content-Security-Policy', self.CSP), ('Referrer-Policy', 'no-referrer'),
-                   ('Cross-Origin-Resource-Policy', 'same-origin'),
-                   ('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')]
-        origin = self.api.config.origin
-        if (env.get('HTTP_HOST') != urlsplit(origin).netloc
-                or env.get('HTTP_ORIGIN', origin) != origin
-                or env.get('HTTP_SEC_FETCH_SITE', '') not in ('', 'same-origin', 'none')):
-            data = b'Same-origin request required'
-            status, content_type = '403 Forbidden', 'text/plain; charset=utf-8'
-        elif env.get('REQUEST_METHOD') not in ('GET', 'HEAD'):
-            data = b'Use GET or HEAD'
-            status, content_type = '405 Method Not Allowed', 'text/plain; charset=utf-8'
-            headers.append(('Allow', 'GET, HEAD'))
-        elif env.get('QUERY_STRING'):
-            data = b'Queries not supported'
-            status, content_type = '400 Bad Request', 'text/plain; charset=utf-8'
-        else:
-            try:
-                data = build()
-                status, content_type = '200 OK', 'application/octet-stream'
-            except OSError:
-                data = b'UI asset unavailable'
-                status, content_type = '503 Service Unavailable', 'text/plain; charset=utf-8'
-        headers += [('Content-Type', content_type), ('Content-Length', str(len(data))),
-                    ('Content-Disposition', 'attachment; filename="flybot.pyz"')]
-        start_response(status, headers)
-        return [] if env.get('REQUEST_METHOD') == 'HEAD' else [data]
 
     def _asset(self, directory, name):
         # Never resolve user input into a filename. Reject symlinks, including the asset directory.
@@ -202,7 +200,34 @@ class SettingsPage:
             template = query[len('template='):] if query.startswith('template=') else ''
             return template in TEMPLATES and template != 'custom'
         if path == '/discover':
-            return query in ('tab=agents', 'tab=agents&section=groups')
+            if query in ('tab=agents', 'tab=agents&section=groups'):
+                return True
+            # Feed filters and work detail links use the same management page.
+            seen = set()
+            for key, value in parse_qsl(query, keep_blank_values=True):
+                if key in seen or not value:
+                    return False
+                seen.add(key)
+                if key == 'work' and not re.fullmatch(r'[a-z0-9][a-z0-9-]{1,28}[a-z0-9]', value):
+                    return False
+                if key in ('comments', 'share') and value != '1':
+                    return False
+                if key == 'feed' and value not in ('following', 'collected'):
+                    return False
+                if key == 'sort' and value != 'popular':
+                    return False
+                if key == 'kind' and value not in ('website', 'image', 'audio', 'slides', 'video', 'model3d'):
+                    return False
+                if key == 'q':
+                    if len(value) > 80 or any(ord(ch) < 32 for ch in value):
+                        return False
+                elif key not in ('feed', 'kind', 'sort', 'work', 'comments', 'share'):
+                    return False
+            panels = seen.intersection({'comments', 'share'})
+            return (bool(seen)
+                    and not ('sort' in seen and seen.intersection({'feed', 'kind'}))
+                    and len(panels) <= 1
+                    and (not panels or 'work' in seen))
         if path == '/agents':
             slug = query[len('category='):] if query.startswith('category=') else ''
             return slug in discover.AGENT_CATEGORY_SLUGS
@@ -224,8 +249,6 @@ class SettingsPage:
 
     def __call__(self, env, start_response):
         path = env.get('PATH_INFO', '')
-        if path == '/install/flybot.pyz':
-            return self._bundle(env, start_response)
         if path not in self.ASSETS:
             if self._unknown_page(path):
                 start_response('404 Not Found', [('Content-Type', 'text/plain; charset=utf-8'),
@@ -233,10 +256,15 @@ class SettingsPage:
                                                  ('Content-Length', '9')])
                 return [] if env.get('REQUEST_METHOD') == 'HEAD' else [b'Not found']
             return self.api(env, start_response)
+        audio_page = path in ('/chat', '/chat/', '/meetings')
+        csp = self.CSP + "; media-src 'self' blob:" if audio_page else self.CSP
+        if path in ('/chat', '/chat/', '/space', '/artifacts', '/discover'):
+            csp = csp.replace("connect-src 'self'", "connect-src 'self' blob:").replace("img-src 'self'", "img-src 'self' blob:")
+        microphone = '(self)' if audio_page else '()'
         headers = [('Cache-Control', 'no-store'), ('X-Content-Type-Options', 'nosniff'),
-                   ('Content-Security-Policy', self.CSP), ('Referrer-Policy', 'no-referrer'),
+                   ('Content-Security-Policy', csp), ('Referrer-Policy', 'no-referrer'),
                    ('Cross-Origin-Resource-Policy', 'same-origin'),
-                   ('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')]
+                   ('Permissions-Policy', f'camera=(), microphone={microphone}, geolocation=()')]
         content_type = 'text/plain; charset=utf-8'
         status, data = '404 Not Found', b'Not found'
         origin = self.api.config.origin
