@@ -69,6 +69,10 @@ export function renderChatFile(document, attachment, {pending = false} = {}) {
   const title = attachment.resource?.title || attachment.title || '附件';
   const media = mediaElement(document, attachment.mime, attachment.path, title, pending);
   if (media) card.append(media);
+  if (attachment.sticker === true && media) {
+    card.classList.add('chat-file-sticker');
+    return card;
+  }
   const details = document.createElement('div');
   details.className = 'chat-file-details';
   const info = document.createElement('span');

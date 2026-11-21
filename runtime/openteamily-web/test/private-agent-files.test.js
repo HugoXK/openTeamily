@@ -59,6 +59,59 @@ const createRuntime = () => {
   }
 }
 
+test('a private sticker appears as soon as staged and its message survives library removal', async t => {
+  const db = new DatabaseSync(':memory:')
+  t.after(() => db.close())
+  const runtime = createRuntime()
+  const stickerId = 'b'.repeat(32)
+  const data = Buffer.from('R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=', 'base64')
+  const finished = Promise.withResolvers()
+  let available = true
+  let modelCalls = 0
+  let lookups = 0
+  runtime.readNativeAttachment = async () => data
+  runtime.nativeTurn = async (_bot, sessionId, prompt, _key, {files,onStaged}) => {
+    modelCalls += 1
+    assert.match(prompt, /贴纸/)
+    assert.equal(files[0].mime, 'image/gif')
+    assert.deepEqual(files[0].data, data)
+    onStaged([{title:'heart.gif',mime:'image/gif',bytes:data.length,ref:{id:'file'}}])
+    await finished.promise
+    return {text:'收到',sessionId,turnId:1}
+  }
+  const {endpoints} = createAgents({db,host:{
+    runtime:async () => runtime,
+    async call(name, payload) {
+      if (name !== 'stickers/attachment') return {}
+      lookups += 1
+      assert.equal(payload.id,stickerId)
+      if (!available) throw Object.assign(new Error('Sticker removed'), {status:404,code:'not_found'})
+      return {attachment:{title:'heart.gif',mime:'image/gif',data:data.toString('base64')}}
+    },
+  }})
+  const {agent} = await endpoints.create({workspace_id:workspace,name:'Stickers',idempotency_key:'agent-sticker-12345'})
+  const {conversation} = await endpoints['conversation-create']({workspace_id:workspace,id:agent.id,memory_recall:false})
+  const request = legacyRequest(endpoints)
+  const path = `${root}/${agent.id}/conversations/${conversation.id}`
+  const key = 'sticker-send-fixture-123'
+  const response = await request(path + '/messages', jsonPost(key, {body:'',sticker_id:stickerId}))
+  assert.equal(response.status,202)
+  const receipt = await response.json()
+  assert.equal(receipt.message.attachments[0].sticker,true)
+  available = false
+  const replay = await request(path + '/messages', jsonPost(key, {body:'',sticker_id:stickerId}))
+  assert.equal(replay.status,202)
+  assert.equal((await replay.json()).message.id,receipt.message.id)
+  finished.resolve()
+  const items = await endpoints.send({workspace_id:workspace,id:agent.id,conversation_id:conversation.id,sticker_id:stickerId,idempotency_key:key})
+  assert.equal(items.reply.text,'收到')
+  assert.equal(modelCalls,1)
+  assert.equal(lookups,1)
+  const file = await request(receipt.message.attachments[0].path)
+  assert.equal(file.status,200)
+  assert.deepEqual(Buffer.from(await file.arrayBuffer()),data)
+})
+
 test('startup snapshots are bounded, scoped and cannot materialize native conversations', async t => {
   const db = new DatabaseSync(':memory:')
   t.after(() => db.close())

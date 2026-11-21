@@ -26,9 +26,10 @@ const publicConversation = (row, workspaceId, agentId) => ({
   archived: row.archived_at != null, archived_at: row.archived_at ?? null, title_edited: row.initial_title != null,
   ...(typeof row.memory_recall === 'boolean' ? {memory_recall:row.memory_recall,memory_scope:row.memory_scope} : {}),
 })
-const publicFile = ({title,mime,bytes,resource}, index, workspaceId, agentId, conversationId, messageId) => ({
+const publicFile = ({title,mime,bytes,resource,sticker}, index, workspaceId, agentId, conversationId, messageId) => ({
   title,mime,bytes,path:`/v1/workspaces/${workspaceId}/agents/${agentId}/conversations/${conversationId}/messages/${messageId}/files/${index}`,
   ...(resource ? {resource} : {}),
+  ...(sticker === true ? {sticker:true} : {}),
 })
 const publicMessage = (row, workspaceId, agentId) => {
   const status = row.status === 'sent' ? 'succeeded' : row.status
@@ -122,9 +123,9 @@ export function agentsV1({ endpoints, chatDirectory, log }) {
         text:body.body ?? body.text,reply_language:replyLanguage,attachments:body.attachments,
         idempotency_key:req.headers.get('idempotency-key'),return_failed:true}
       const project = result => publicPair(result, workspaceId, id)
-      if (body.artifact_id !== undefined) {
+      if (body.artifact_id !== undefined || body.sticker_id !== undefined) {
         const staged = Promise.withResolvers()
-        const sending = call('send', {...payload,artifact_id:body.artifact_id,artifact_revision:body.artifact_revision,
+        const sending = call('send', {...payload,artifact_id:body.artifact_id,artifact_revision:body.artifact_revision,sticker_id:body.sticker_id,
           onAccepted:result => staged.resolve({status:202,body:project(result)})})
         return Promise.race([staged.promise,sending.then(result => ({status:201,body:project(result)}))])
       }

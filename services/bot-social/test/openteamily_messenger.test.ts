@@ -531,6 +531,60 @@ test("chat files are idempotent and readable only by active members of the corre
   assert.deepEqual(await teammate.ok("GET", filePath(forwardedTo.id, forwarded.id)), file);
 });
 
+test("sticker messages preserve their image badge and replay only the sender's visible scoped receipt", async () => {
+  const [sender, reader, outsider] = await Promise.all([
+    home(S.base,"sticker-sender"), home(S.base,"sticker-reader"), home(S.base,"sticker-outsider"),
+  ]);
+  const team = await teamOf(sender,reader);
+  const otherTeam = await teamOf(sender,outsider);
+  const {workspaces} = await sender.ok("GET","/v1/ot/workspaces");
+  const workspace = workspaces.find((row: any) => row.id === team.id).workspace_id;
+  const otherWorkspace = workspaces.find((row: any) => row.id === otherTeam.id).workspace_id;
+  const group = await sender.ok("POST","/v1/ot/conversations",{kind:"group",title:"Sticker group",team_id:team.id,members:[reader.handle]});
+  const copy = await sender.ok("POST","/v1/ot/conversations",{kind:"group",title:"Sticker copies",team_id:team.id,members:[reader.handle]});
+  const room = `/v1/ot/conversations/${group.id}`;
+  const post = room + "/messages";
+  const scoped = `/v1/ot/workspaces/${workspace}/conversations/${group.id}`;
+  const data = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+  const attachment = {title:"欢呼.gif",mime:"image/gif",data,sticker:true};
+  const key = "sent-sticker-key-1";
+  const replay = {workspace,client_key:key,sticker_replay:true};
+  assert.equal((await sender.call("POST",post,replay)).status,404);
+  assert.equal((await sender.call("POST",post,{...replay,body:"Do not send"})).status,400);
+  assert.equal((await sender.call("POST",post,{workspace,attachment:{sticker:true,title:"not-a-sticker.txt",
+    mime:"text/plain",data:Buffer.from("Text").toString("base64")}})).status,400);
+  const {id,attachment:sticker} = await sender.ok("POST",post,{workspace,client_key:key,attachment});
+  assert.deepEqual(sticker,{title:attachment.title,mime:attachment.mime,bytes:Buffer.from(data,"base64").length,sticker:true});
+  const receipt = await sender.call("POST",post,replay);
+  assert.equal(receipt.status,200);
+  assert.equal(receipt.data.id,id);
+  assert.deepEqual(receipt.data.attachment,sticker);
+  assert.equal((await sender.call("POST",post,{...replay,workspace:otherWorkspace})).status,404);
+  assert.equal((await reader.call("POST",post,replay)).status,404);
+  assert.equal((await outsider.call("POST",post,replay)).status,404);
+  assert.equal((await sender.call("POST",post,{...replay,direct:true})).status,404);
+  assert.deepEqual((await reader.ok("GET",post)).messages.map((message: any) => message.attachment),[sticker]);
+  assert.deepEqual((await reader.ok("GET",scoped+"/attachments?kind=photo")).items[0].attachment,sticker);
+  const forwarded = await sender.ok("POST",`/v1/ot/conversations/${copy.id}/messages`,{
+    workspace,attachment_from:{conversation_id:group.id,message_id:id},
+  });
+  assert.deepEqual(forwarded.attachment,sticker);
+  const bytes = await reader.ok("GET",`${scoped}/messages/${id}/file`);
+  assert.equal(bytes.data,data);
+  await sender.ok("POST",post,{workspace,client_key:"plain-text-key",body:"This is text"});
+  assert.equal((await sender.call("POST",post,{...replay,client_key:"plain-text-key"})).status,404);
+  await sender.ok("DELETE",`/v1/ot/messages/${id}`);
+  assert.equal((await sender.call("POST",post,replay)).status,404);
+
+  const dm = await sender.ok("POST","/v1/ot/conversations",{kind:"dm",peer:reader.handle});
+  const direct = `/v1/ot/conversations/${dm.id}/messages`;
+  const directSent = await sender.ok("POST",direct,{direct:true,client_key:key,attachment});
+  const directReplay = await sender.call("POST",direct,{direct:true,client_key:key,sticker_replay:true});
+  assert.equal(directReplay.status,200);
+  assert.equal(directReplay.data.id,directSent.id);
+  assert.equal((await reader.call("POST",direct,{direct:true,client_key:key,sticker_replay:true})).status,404);
+});
+
 test("team reply progress uses both memberships and drops work when access is removed", async () => {
   const [sender, worker, reader, outsider] = await Promise.all([
     home(S.base, "team-reply-sender"), home(S.base, "team-reply-worker"),

@@ -123,8 +123,9 @@ function conversationItem(row, me, env, workspaceId) {
   }
 }
 
-function attachmentItem({ title, mime, bytes, resource }, workspaceId, conversationId, messageId) {
+function attachmentItem({ title, mime, bytes, resource, sticker }, workspaceId, conversationId, messageId) {
   return { title, mime, bytes, id: messageId, ...(resource ? {resource} : {}),
+    ...(sticker === true ? {sticker:true} : {}),
     path: `/v1/workspaces/${workspaceId}/social/conversations/${seg(conversationId)}/messages/${seg(messageId)}/file`,
   }
 }
@@ -870,7 +871,21 @@ function messengerRoutes(host, wakeReplies) {
           const bs = client(host)
           const scope = await messengerScope(host, bs, match[1], match[2])
           let attachment
-          if (body?.artifact_id !== undefined) {
+          let stickerReplay = false
+          if (body?.sticker_id !== undefined) {
+            if (typeof body.sticker_id !== 'string' || !HEX.test(body.sticker_id) || !idempotency_key ||
+                body.artifact_id !== undefined || body.attachment !== undefined || body.voice !== undefined ||
+                scope.conversation?.public_agent) {
+              throw new Fault(400, 'invalid', '请选择一张可发送到此会话的贴纸。')
+            }
+            try {
+              const snapshot = await host.call('stickers/attachment', {id:body.sticker_id})
+              attachment = {...snapshot.attachment,sticker:true}
+            } catch (error) {
+              if (error?.status !== 404) throw error
+              stickerReplay = true
+            }
+          } else if (body?.artifact_id !== undefined) {
             if (body.voice || body.attachment || scope.conversation?.public_agent) {
               throw new Fault(400, 'invalid', '请选择可以接收附件的群聊或单聊。')
             }
@@ -883,7 +898,12 @@ function messengerRoutes(host, wakeReplies) {
             attachment = {title,mime,data}
           }
           const me = await meOf(bs, env)
-          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, { body: body?.body, voice: body?.voice, attachment, workspace: match[1], direct: accountConversation(scope.conversation), client_key: idempotency_key, mentions: body?.mentions, agent_mentions: body?.agent_mentions, reply_to: body?.reply_to })
+          const data = await bs.post(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages`, {
+            workspace: match[1], direct: accountConversation(scope.conversation), client_key: idempotency_key,
+            ...(stickerReplay ? {sticker_replay:true} : {
+              body:body?.body,voice:body?.voice,attachment,mentions:body?.mentions,agent_mentions:body?.agent_mentions,reply_to:body?.reply_to,
+            }),
+          })
           if (data.reply_jobs?.some(job => job.status === 'queued')) wakeReplies()
           return [201, { message: messageItem({ ...data, conversation_id: match[2] }, me, env, match[1]) }]
         })

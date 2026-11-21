@@ -56,7 +56,7 @@ export function apply(ctx, config = {}) {
   }), 'openteamily-web: external agent api')
   ctx.effect(() => ctx.connection.fetch.register({
     path: LEGACY_PATH,
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE'],
     requestBody: 'buffered',
     fetch: createLegacyDispatch({ endpoints: async () => (await features).table }),
   }), 'openteamily-web: legacy /v1')

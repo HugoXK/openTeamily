@@ -791,8 +791,27 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const conversationPins = new Map();
   let pinReceipt = 0;
   let sessionTransition = null;
-  const messageUtilities = mountMessageUtilities(document, {request, notify: show, composerContext: () => currentConversation ? {wid: workspaceId(), cid: currentConversation.id, source: currentSource} : null, context: () => currentSource === 'social' && currentConversation && !currentConversation.public_agent ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null});
   let currentSource = 'agent';
+  const loadStickers = deferModule('./stickers.mjs');
+  let stickerPicker;
+  const stickerSaves = new Map();
+  const messageUtilities = mountMessageUtilities(document, {
+    request, notify: show,
+    composerContext: () => currentConversation || currentSource === 'agent' && currentAgent
+      ? {wid:workspaceId(), cid:currentConversation?.id, source:currentSource, scope:sendScope()} : null,
+    context: () => currentSource === 'social' && currentConversation && !currentConversation.public_agent
+      ? {wid: workspaceId(), cid: currentConversation.id, kind: currentConversation.kind} : null,
+    stickersAvailable: () => Boolean(stickerContext()),
+    async activateStickers() {
+      const target = stickerContext();
+      if (!target) return;
+      const {mountChatStickers} = await loadStickers();
+      if (target.scope !== stickerContext()?.scope) return;
+      stickerPicker ||= mountChatStickers(document, {request, context:stickerContext, send:sendSticker});
+      return stickerPicker.open();
+    },
+    closeStickers: () => stickerPicker?.close(),
+  });
   const autoTranslation = mountGroupTranslation(document,{request});
   const callContext = () => {
     if (!servedByDsbot || currentSource !== 'social' || !currentConversation || currentConversation.public_agent || currentConversation.direct?.open === false) return null;
@@ -1072,6 +1091,65 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       : Boolean(currentAgent?.archived || currentAgent?.native_deleted || currentConversation?.archived || currentConversation?.open === false));
   }
 
+  function stickerContext() {
+    if (!servedByDsbot || !currentUser || sendClosed() || currentConversation?.public_agent) return null;
+    if (currentSource === 'agent' ? !currentAgent : !currentConversation) return null;
+    return {owner:currentUser.id, scope:sendScope()};
+  }
+
+  function syncStickers() {
+    stickerPicker?.sync();
+    const scope = stickerContext()?.scope;
+    for (const [controller, origin] of stickerSaves) {
+      if (origin !== scope) controller.abort();
+    }
+  }
+
+  function resetStickerSurface() {
+    for (const controller of stickerSaves.keys()) controller.abort();
+    stickerPicker?.close();
+    const dialog = document.getElementById('composer-emoji-dialog');
+    if (dialog?.open) dialog.close();
+  }
+
+  function renderMessageFile(attachment) {
+    const card = renderChatFile(document, attachment);
+    const target = stickerContext();
+    if (!target || !['image/png','image/jpeg','image/gif','image/webp'].includes(attachment.mime)
+        || !attachment.bytes || attachment.bytes > 8 * 1024 * 1024 || !attachment.path) return card;
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.dataset.saveSticker = '1';
+    save.textContent = uiLabel('存为贴纸', 'Save as sticker');
+    save.addEventListener('click', async () => {
+      if (target.scope !== stickerContext()?.scope || save.disabled) return;
+      save.disabled = true;
+      const controller = new AbortController();
+      stickerSaves.set(controller, target.scope);
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
+      const scopedRequest = (...args) => {
+        if (target.scope !== stickerContext()?.scope) throw new Error('Sticker source changed');
+        return request(...args);
+      };
+      let result;
+      try {
+        const {saveChatSticker} = await loadStickers();
+        signal.throwIfAborted();
+        result = await saveChatSticker({request:scopedRequest, attachment, signal});
+      } catch {} finally {
+        stickerSaves.delete(controller);
+      }
+      if (target.scope !== stickerContext()?.scope || controller.signal.aborted) return;
+      const saved = [200, 201].includes(result?.status) && Boolean(result.body?.sticker?.id);
+      save.disabled = saved;
+      if (saved) save.textContent = uiLabel('已存为贴纸', 'Sticker saved');
+      show(saved ? 'ok' : 'error', saved ? uiLabel('已保存到贴纸库。', 'Saved to your stickers.')
+        : uiLabel('无法保存贴纸，请重试。', 'Couldn’t save the sticker. Try again.'), {announceOnly:saved});
+    });
+    card.append(save);
+    return card;
+  }
+
   function setAgentStarterStatus(message) {
     if (starterStatus.hidden && !message) return;
     starterStatus.textContent = message;
@@ -1151,6 +1229,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('chat-form').hidden = currentSource === 'agent' && currentConversation?.archived === true;
     document.getElementById('chat-body').disabled = closed;
     document.getElementById('chat-send').disabled = closed || memoryWrites.has(scope);
+    syncStickers();
     syncPrivateThreadControls();
     syncMemoryRecall(scope);
     const replying = queue?.replying;
@@ -1193,7 +1272,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     job.retry.disabled = sendClosed() || memoryWrites.has(sendScope());
   }
 
-  function makeSendJob(queue, message, files, reply) {
+  function makeSendJob(queue, message, files, reply, sticker) {
     const key = idempotencyKey(queue.social ? 'socialmsg-' : files.length ? 'agent-files-' : 'msg-');
     const bubble = document.createElement('li');
     bubble.className = queue.social ? 'mine' : 'user';
@@ -1215,6 +1294,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     actions.append(retry, discard);
     if (reply) bubble.append(quoteBlock(reply));
     bubble.append(body);
+    if (sticker) bubble.append(renderChatFile(document, {...sticker,sticker:true}, {pending:true}));
     const previews = [];
     const urls = document.defaultView?.URL;
     for (const file of files) {
@@ -1260,6 +1340,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     privateThreadWrites.clear();
     privateThreadReceipts.clear();
     closePrivateThreadDialogs();
+    resetStickerSurface();
   }
 
   function pendingMessageKeys() {
@@ -2142,7 +2223,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       if (partial) replyView = {bubble, heading, body};
     }
     bubble.append(body);
-    for (const attachment of item.attachments || []) bubble.append(renderChatFile(document, attachment));
+    for (const attachment of item.attachments || []) bubble.append(renderMessageFile(attachment));
     const sources = memorySources(item);
     if (sources) bubble.append(sources);
     if (item.role === 'assistant' && saveableAgentMessage(item)) {
@@ -3140,7 +3221,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         const model = models.get(item.id);
         const reuse = item.attachment.mime === 'model/gltf-binary'
           && model?.dataset.model3dSource === item.attachment.path;
-        li.insertBefore(reuse ? model : renderChatFile(document, item.attachment), time);
+        li.insertBefore(reuse ? model : renderMessageFile(item.attachment), time);
       } else if (item.attachment && !item.retracted) {
         const card = document.createElement('article');
         card.className = 'stream-artifact';
@@ -5377,6 +5458,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   });
   function clearChatScope() {
     closePrivateThreadDialogs();
+    resetStickerSurface();
     clearSessionTransition();
     cancelStartupLink();
     stopReplyProgress();
@@ -6130,6 +6212,25 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', '请输入 1–4000 字符的消息。');
       return;
     }
+    queueChatMessage(message, files, reply);
+  }
+
+  function sendSticker(sticker, target) {
+    const active = stickerContext();
+    if (!active || target?.scope !== active.scope || target.owner !== active.owner ||
+        !PRIVATE_THREAD_ID.test(sticker?.id ?? '') || sticker.path !== `/v1/stickers/${sticker.id}/file`) return false;
+    const social = currentSource === 'social';
+    const reply = social ? replyDrafts.get(active.scope) : undefined;
+    const message = social ? {} : messagePayload('', chatLanguage);
+    if (reply) message.reply_to = reply.message_id;
+    queueChatMessage({...message,sticker_id:sticker.id}, [], reply, sticker);
+    return true;
+  }
+
+  function queueChatMessage(message, files, reply, sticker) {
+    const field = document.getElementById('chat-body');
+    const social = currentSource === 'social';
+    const scope = sendScope();
     let queue = pendingSends.get(scope);
     if (!queue) {
       queue = {
@@ -6141,13 +6242,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       };
       pendingSends.set(scope, queue);
     }
-    const job = makeSendJob(queue, message, files, reply);
+    const job = makeSendJob(queue, message, files, reply, sticker);
     if (!social && chatSettings && !chatSettings.ready) job.preferences = chatSettings;
     queue.jobs.push(job);
-    field.value = '';
-    publicDraft.persist();
-    field.focus({preventScroll: true});
-    if (social) agentMentions.clear();
+    if (!sticker) {
+      field.value = '';
+      publicDraft.persist();
+      field.focus({preventScroll: true});
+      if (social) agentMentions.clear();
+    }
     consumeReplyDraft(scope, reply);
     if (files.length) attachmentSender.clearDraft(scope, files);
     show('', '');
@@ -6193,7 +6296,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
             feedback(uiLabel('正在加载聊天偏好…', 'Loading chat preferences…'));
             await job.preferences.promise;
             if (pendingSends.get(queue.scope) !== queue || queue.owner !== currentUser?.id) return;
-            job.message = messagePayload(job.message.body, chatLanguage);
+            job.message = {...job.message,...messagePayload(job.message.body, chatLanguage)};
             job.preferences = null;
           }
           if (!queue.conversationId) {

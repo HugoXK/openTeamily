@@ -13,6 +13,7 @@ export const API_ROUTE = `${MOUNT}/api/openteamily`;
 export const MOVED = [
   [/^\/v1\/skills\/(?:catalog|bindings|installed|packages(?:\/import-[a-z0-9][a-z0-9-]{1,39}(?:\/(?:revoke|versions(?:\/[0-9.]+)?))?)?)$/, 'skills'],
   [/^\/v1\/skill-secrets$/, 'skill-secrets'],
+  [/^\/v1\/stickers(?:\/[0-9a-f]{32}(?:\/file)?)?$/, 'stickers'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/overview$/, 'overview'],
   [/^\/v1\/team-templates$/, 'team-templates'],
   [/^\/v1\/workspaces\/[0-9a-f]{32}\/team-templates\/[a-z0-9-]{3,40}$/, 'team-templates'],
@@ -186,6 +187,7 @@ export function install(win = globalThis.window) {
     const target = movedTarget(isRequest ? input.url : String(input), origin);
     if (!target) return original(input, init);
     const method = init.method || (isRequest ? input.method : 'GET');
+    if (target.feature === 'stickers' && target.path.split('?')[0].endsWith('/file')) return original(input, init);
     const headers = init.headers || (isRequest ? input.headers : undefined);
     const body = init.body !== undefined ? init.body : (isRequest && method !== 'GET' ? await input.clone().text() : undefined);
     return viaDsBot(target, method, headers, body, init.signal ?? (isRequest ? input.signal : undefined),
@@ -194,7 +196,7 @@ export function install(win = globalThis.window) {
   win.document.addEventListener('click', async (event) => {
     const anchor = event.target && event.target.closest ? event.target.closest('a[href]') : null;
     const target = anchor ? movedTarget(anchor.getAttribute('href'), origin) : null;
-    if (!target || (['messenger', 'agents'].includes(target.feature) && anchor.hasAttribute('download'))) return;
+    if (!target || (['messenger', 'agents', 'stickers'].includes(target.feature) && anchor.hasAttribute('download'))) return;
     event.preventDefault();
     const response = await viaDsBot(target, 'GET');
     if (!response.ok) {

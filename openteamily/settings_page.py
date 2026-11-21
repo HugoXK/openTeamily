@@ -96,6 +96,7 @@ class SettingsPage:
         '/shell/dsbot-api.mjs': ('shell', 'dsbot-api.mjs', 'text/javascript; charset=utf-8'),
         '/chat': ('chat', 'index.html', 'text/html; charset=utf-8'),
         '/chat/utilities.mjs': ('chat', 'utilities.mjs', 'text/javascript; charset=utf-8'),
+        '/chat/stickers.mjs': ('chat', 'stickers.mjs', 'text/javascript; charset=utf-8'),
         '/chat/activity.mjs': ('chat', 'activity.mjs', 'text/javascript; charset=utf-8'),
         '/chat/app.mjs': ('chat', 'app.mjs', 'text/javascript; charset=utf-8'),
         '/chat/startup.mjs': ('chat', 'startup.mjs', 'text/javascript; charset=utf-8'),

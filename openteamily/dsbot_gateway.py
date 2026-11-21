@@ -57,6 +57,7 @@ PAGE_SEGMENT = re.compile(r'[a-z0-9][a-z0-9-]{0,40}')
 MOVED_APIS = (
     (re.compile(r'^/v1/skills/(?:catalog|bindings|installed|packages(?:/import-[a-z0-9][a-z0-9-]{1,39}(?:/(?:revoke|versions(?:/[0-9.]+)?))?)?)$'), 'skills'),
     (re.compile(r'^/v1/skill-secrets$'), 'skill-secrets'),
+    (re.compile(r'^/v1/stickers(?:/[0-9a-f]{32}(?:/file)?)?$'), 'stickers'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/overview$'), 'overview'),
     (re.compile(r'^/v1/team-templates$'), 'team-templates'),
     (re.compile(r'^/v1/workspaces/[0-9a-f]{32}/team-templates/[a-z0-9-]{3,40}$'), 'team-templates'),
@@ -119,6 +120,7 @@ MOVED_APIS = (
 MOVED_API_LOCATIONS = (
     'location ^~ /v1/skills/ { return 418; }',
     'location = /v1/skill-secrets { return 418; }',
+    'location ~ ^/v1/stickers(?:/[0-9a-f]{32}(?:/file)?)?$ { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/overview$ { return 418; }',
     'location = /v1/team-templates { return 418; }',
     'location ~ ^/v1/workspaces/[0-9a-f]{32}/(?:team-templates|notifications)(?:/|$) { return 418; }',

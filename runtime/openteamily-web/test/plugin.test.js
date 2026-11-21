@@ -53,7 +53,7 @@ test('registers exact authenticated routes on the shared /api channel', () => {
   assert.deepEqual(ctx.routes.get(PAGE_PATH).methods, ['GET'])
   assert.deepEqual(ctx.routes.get(API_PATH).methods, ['POST'])
   assert.deepEqual(ctx.routes.get(GATEWAY_PATH).methods, ['GET', 'POST'])
-  assert.deepEqual(ctx.routes.get(LEGACY_PATH).methods, ['GET', 'POST', 'PUT', 'DELETE'])
+  assert.deepEqual(ctx.routes.get(LEGACY_PATH).methods, ['GET', 'HEAD', 'POST', 'PUT', 'DELETE'])
   for (const path of ctx.routes.keys()) assert.ok(path.startsWith('/api/'), 'DSH authenticates /api only')
 })
 

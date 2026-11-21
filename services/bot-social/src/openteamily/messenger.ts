@@ -821,6 +821,21 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
   app.post("/v1/ot/conversations/:id/messages", {bodyLimit: CHAT_FILE_BODY_LIMIT}, async (req, reply) => {
     const me = ot.me(req);
     const b = body(req);
+    if (b.sticker_replay !== undefined) {
+      assert(b.sticker_replay === true &&
+        Object.keys(b).every(key => ["sticker_replay", "client_key", "direct", "workspace"].includes(key)) &&
+        (b.direct === undefined || typeof b.direct === "boolean"), 400, "invalid_request", "Invalid sticker replay");
+      const clientKey = text(b.client_key, "client_key", {min: 1, max: 80});
+      const {id} = params(req);
+      const conv = b.direct === true ? accountConversation(ot, id, me.ownerId)
+        : workspaceConversation(ot, text(b.workspace, "workspace", {min: 32, max: 32}), id, me.ownerId).conv;
+      const previous = ot.get<any>(`SELECT m.* FROM ot_messages m
+        JOIN ot_message_attachments a ON a.message_id=m.id AND a.sticker=1
+        WHERE m.conversation_id=? AND m.author_id=? AND m.author_kind='member'
+          AND m.client_key=? AND m.retracted=0 AND ${VISIBLE_MESSAGE}`, conv.id, me.ownerId, clientKey, me.ownerId);
+      assert(previous, 404, "message_not_found", "Sticker message not found");
+      return reply.status(200).send(messageView(ot, previous, me.ownerId));
+    }
     const sourceConversation = b.attachment_from === undefined ? null : text(b.attachment_from?.conversation_id, "conversation_id", {min: 1, max: 80});
     const sourceMessage = sourceConversation ? text(b.attachment_from?.message_id, "message_id", {min: 1, max: 80}) : null;
     assert(Number(b.voice !== undefined) + Number(b.attachment !== undefined) + Number(Boolean(sourceMessage)) <= 1,
@@ -965,7 +980,7 @@ export function registerMessenger(app: FastifyInstance, ot: OtContext) {
       : q.kind === "photo" ? "a.mime LIKE 'image/%'" : "a.mime NOT LIKE 'image/%'";
     const title = q.kind === "resource" ? "json_extract(a.resource, '$.title')" : "a.title";
     const rows = ot.all<ChatFileMetadata & {message_id: string; created_at: number; seq: number}>(`
-      SELECT m.id AS message_id, m.created_at, m.seq, a.title, a.mime, a.bytes, a.resource
+      SELECT m.id AS message_id, m.created_at, m.seq, a.title, a.mime, a.bytes, a.resource, a.sticker
       FROM ot_messages m JOIN ot_message_attachments a ON a.message_id=m.id
       WHERE m.conversation_id=? AND m.seq<? AND m.retracted=0 AND ${VISIBLE_MESSAGE}
         AND ${typeFilter} AND (?='' OR ot_attachment_title_matches(${title}, ?))
