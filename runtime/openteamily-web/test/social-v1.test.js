@@ -47,9 +47,15 @@ function fakeSocial() {
     if (path === '/v1/ot/teams/ott_1/invites' && init.method === 'POST') {
       return ok(201, { code: 'invite-code-once', invite: { id: 'oti_1', team_id: 'ott_1', role: 'member', expires_at: 1_700_086_400_000, max_uses: 10, use_count: 0, revoked: false, frozen: false, requires_approval: false, created_at: 1_700_000_000_000 } })
     }
+    if (path === '/v1/ot/meeting-calls/join') {
+      const code = body.code === 'full' ? 'call_full' : 'call_already_joined'
+      return ok(409, { error: { code, message: code } })
+    }
     if (path === '/v1/ot/invites/accept') return ok(200, { status: 'pending', team_id: 'ott_1', request_id: 'otjr_1' })
+    if (path === '/v1/ot/invites/preview') return ok(200, { usable: body.code !== 'expired-invite-code',
+      team: { id: 'ott_1', name: 'Studio', owner: me, summary: 'Private team summary' }, role: 'member', requires_approval: true })
     if (path === '/v1/ot/directory' || path.startsWith('/v1/ot/directory?')) return ok(200, { teams: [{ id: 'ott_1', workspace_id: WS, name: 'Studio', summary: 's', member_count: 2, membership: null }] })
-    if (path === '/v1/ot/conversations' && init.method === 'GET') {
+    if (path === '/v1/ot/conversations?scope=member&team_id=ott_1' && init.method === 'GET') {
       return ok(200, { conversations: [{ id: 'otc_1', kind: 'dm', title: 'Bea', members: [{ handle: 'bea.home', display_name: 'Bea', owner_id: 'own_bea' }, { handle: 'ann.home', display_name: 'Ann', owner_id: 'own_ann', platform_user_id: 'b'.repeat(32) }], unread: 1, read_seq: 2, updated_at: 1_700_000_200_000, last_message: { body: 'hi', retracted: false } }] })
     }
     if (path === '/v1/ot/conversations' && init.method === 'POST') return ok(201, { id: 'otc_2', kind: 'dm', title: 'Bea', members: [{ handle: 'bea.home', display_name: 'Bea', owner_id: 'own_bea' }], unread: 0, updated_at: 1_700_000_200_000 })
@@ -57,6 +63,11 @@ function fakeSocial() {
       return ok(200, { messages: [{ id: 'otm_1', author_id: 'own_bea', author_kind: 'member', author: { handle: 'bea.home', owner_id: 'own_bea', display_name: 'Bea' }, body: 'hi', created_at: 1_700_000_200_000, retracted: false }], read_seq: 2, last_seq: 3 })
     }
     if (path === '/v1/ot/conversations/otc_1') return ok(200, { id: 'otc_1', kind: 'dm', title: 'Bea', members: [{ handle: 'bea.home', display_name: 'Bea', owner_id: 'own_bea' }], unread: 0, updated_at: 1_700_000_200_000 })
+    if (path === '/v1/ot/conversations/otc_group') return ok(200, { id: 'otc_group', kind: 'group', team_id: 'ott_1' })
+    if (path === '/v1/ot/conversations/otc_other') return ok(200, { id: 'otc_other', kind: 'group', team_id: 'ott_other' })
+    if (path === '/v1/ot/conversations/otc_group/members' && init.method === 'POST') return ok(200, {
+      id: 'otc_group', kind: 'group', team_id: 'ott_1', members: [{ handle: 'bea.home', owner_id: 'own_bea' }],
+    })
     if (path === '/v1/ot/discover?kind=work' || path.startsWith('/v1/ot/discover?')) {
       return ok(200, { items: [{ id: 'otl_1', slug: 'my-essay', kind: 'work', work_kind: 'document', title: 'Essay', creator: { handle: 'ann.home', display_name: 'Ann' }, updated_at: 1_700_000_000_000, path: '/w/my-essay', likes: 3, liked: false, collected: false, following: false, own: true }] })
     }
@@ -97,6 +108,33 @@ test('invite create returns the one-time token; accept maps a pending request to
   const accepted = await invites(host).endpoints.v1({ method: 'POST', path: '/v1/invites/accept', body: { token: 'invite-code-once' } })
   assert.equal(accepted.status, 202)
   assert.equal(accepted.body.join_request.status, 'pending')
+})
+
+test('invite preview uses the signed-in connector and exposes only the name and join requirements', async () => {
+  const { host, social } = setup()
+  const endpoint = invites(host).endpoints.v1
+  const preview = token => endpoint({ method: 'POST', path: '/v1/invites/preview', body: { token } })
+  assert.deepEqual((await preview('another-invite-code')).body, {
+    invitation: { team_name: 'Studio', role: 'member', requires_approval: true },
+  })
+  assert.equal((await preview('expired-invite-code')).status, 410)
+  assert.equal((await preview('https://external.test/')).status, 400)
+  assert.equal(social.calls.filter(row => row.path === '/v1/ot/invites/preview').length, 2)
+  assert.ok(!social.calls.some(row => row.path === '/v1/ot/invites/accept'))
+})
+
+test('group invite sends one batch for the currently scoped workspace', async () => {
+  const { social, host } = setup()
+  const endpoint = messenger(host).endpoints.v1
+  const path = id => `/v1/workspaces/${WS}/social/conversations/${id}/members`
+  const payload = { method: 'POST', body: { member_ids: ['bea.home'] } }
+  const wrongTeam = await endpoint({ ...payload, path: path('otc_other') })
+  assert.equal(wrongTeam.status, 404)
+  const result = await endpoint({ ...payload, path: path('otc_group') })
+  assert.equal(result.status, 200)
+  assert.equal(result.body.conversation.members[0].username, 'bea')
+  assert.deepEqual(social.calls.filter(call => call.method === 'POST'),
+    [{ method: 'POST', path: '/v1/ot/conversations/otc_group/members', body: { handles: ['bea.home'], team_id: 'ott_1' } }])
 })
 
 test('directory and messenger v1 keep workspace ids and unix-second timestamps', async () => {
@@ -184,4 +222,15 @@ test('browser-style embedded query reaches discover and writes reject query stri
   const blocked = await invites(host).endpoints.v1({ method: 'POST', path: `/v1/workspaces/${WS}/invites?x=1`, body: {} })
   assert.equal(blocked.status, 400)
   assert.equal((await teams(host).endpoints.v1({ method: 'GET', path: '/v1/team-directory?q=x', query: 'q=y' })).status, 400)
+})
+
+test('video meeting conflicts retain the reason shown in the browser', async () => {
+  const { social, host } = setup()
+  const join = (code) => messenger(host).endpoints.v1({method: 'POST', path: '/v1/meeting-calls/join', body: {code}})
+  for (const [input, reason] of [['full', 'call_full'], ['already', 'call_already_joined']]) {
+    const response = await join(input)
+    assert.equal(response.status, 409)
+    assert.equal(response.body.error.code, reason)
+  }
+  assert.deepEqual(social.calls.map(call => call.path), Array(2).fill('/v1/ot/meeting-calls/join'))
 })

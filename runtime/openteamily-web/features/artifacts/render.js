@@ -1,6 +1,8 @@
 // Rendering and export of artifacts (legacy artifacts.py render_*,
 // sanitize_html, export_*): HTML/SVG generated inside the user's DS-Bot.
+import { GLB_MIME, validGlb } from '../../lib/glb.js'
 import { BODY_MAX, SAFE_FILENAME, emptyBoard, emptyDashboard, emptySlides, publicKind, unescapeHtml } from './model.js'
+import {decodeWorkbook,emptyWorkbook} from './workbook.js'
 import { decodeBoard, decodeDashboard, decodeSlides } from './structured.js'
 
 export const escapeText = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -190,10 +192,22 @@ export function renderMediaPage(row) {
     + '<body><article><h1>' + heading + '</h1><p>' + escapeText(row.media_filename || 'file') + ' · ' + escapeText(row.media_mime || '') + '</p></article></body></html>'
 }
 
+function renderWorkbookPage(title,workbook) {
+  const heading = escapeText(title)
+  const sheets = workbook.sheets.map(sheet => {
+    const rows = sheet.rows.map(row => '<tr>'+row.map(cell=>'<td>'+escapeText(cell)+'</td>').join('')+'</tr>').join('')
+    return '<section><h2>'+escapeText(sheet.name)+'</h2><table>'+rows+'</table></section>'
+  }).join('')
+  return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'
+    + heading + '</title><style>body{margin:2rem;font:1rem system-ui}section{overflow:auto}table{border-collapse:collapse}td{border:1px solid #cfd9d4;padding:.4rem .65rem;white-space:pre-wrap}</style></head><body><h1>'
+    + heading + '</h1>' + sheets + '</body></html>'
+}
+
 export function renderPage(row) {
   const kind = publicKind(row)
   if (kind === 'slides') return renderSlidesPage(row.title, decodeSlides(row.slides_json) ?? emptySlides())
   if (kind === 'dashboard') return renderDashboardPage(row.title, decodeDashboard(row.dashboard_json) ?? emptyDashboard())
+  if (kind === 'spreadsheet') return renderWorkbookPage(row.title,decodeWorkbook(row.spreadsheet_json) ?? emptyWorkbook())
   if (kind === 'website') return renderWebsitePage(row.title, row.body)
   if (kind === 'whiteboard') return renderWhiteboardPage(row.title, decodeBoard(row.board_json) ?? emptyBoard())
   if (kind === 'media') return renderMediaPage(row)
@@ -235,7 +249,9 @@ export function sniffMime(data) {
   if (at(0, '\xff\xd8\xff')) return 'image/jpeg'
   if (at(0, 'GIF87a') || at(0, 'GIF89a')) return 'image/gif'
   if (at(0, 'RIFF') && at(8, 'WEBP')) return 'image/webp'
-  if (at(0, 'ID3') || at(0, '\xff\xfb') || at(0, '\xff\xf3')) return 'audio/mpeg'
+  // MPEG Layer III frame sync, excluding the reserved MPEG version.
+  if (at(0, 'ID3') || (data[0] === 0xff && (data[1] & 0xe6) === 0xe2 && (data[1] & 0x18) !== 0x08)) return 'audio/mpeg'
+  if (at(0, 'glTF') && validGlb(data)) return GLB_MIME
   if (at(0, 'OggS')) return 'audio/ogg'
   if (at(0, 'RIFF') && at(8, 'WAVE')) return 'audio/wav'
   if (at(4, 'ftyp') && ['isom', 'iso2', 'mp41', 'mp42', 'M4A ', 'avc1'].some((brand) => at(8, brand))) return 'video/mp4'

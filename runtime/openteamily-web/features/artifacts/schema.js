@@ -92,6 +92,12 @@ CREATE TABLE IF NOT EXISTS artifact_chat_sources (
   created INTEGER NOT NULL,
   conversation_title TEXT,
   UNIQUE(workspace_id, message_id));
+`, `
+CREATE TABLE artifact_spreadsheets (
+  artifact_id TEXT PRIMARY KEY REFERENCES artifacts(id) ON DELETE CASCADE,
+  workbook TEXT NOT NULL);
+`, `
+CREATE INDEX IF NOT EXISTS artifact_workspace_recent ON artifacts(workspace_id, updated DESC, id);
 `]
 
 export const IMPORT_TABLES = {

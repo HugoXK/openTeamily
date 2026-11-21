@@ -131,6 +131,7 @@ test('saving an authorized chat message creates one private versioned document w
   assert.equal(old.ok, true)
   setSharedBotSocial({async request(method, path) {
     assert.equal(method, 'GET')
+    if (path === '/v1/ot/teams/by-workspace/' + WS) return {id:'ott_product'}
     if (path.endsWith('/' + oldId)) return {body: 'Older saved text', revision: 1, title: 'Product team'}
     assert.equal(path, `/v1/ot/workspaces/${WS}/conversations/${sharedConversation}/messages/${sharedId}`)
     return {body: text, revision, title: 'Product team'}

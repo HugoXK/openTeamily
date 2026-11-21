@@ -98,6 +98,75 @@ test('onboarding: create 201 then update 200, steps and look validation', async 
   assert.deepEqual((await f.endpoints.look()).look, look)
 })
 
+test('the wizard resumes saved steps, completes atomically, and remains scoped to its volume', async () => {
+  const dir = dataDir()
+  let f = feature(dir)
+  const read = () => call(f, 'GET', '/v1/onboarding')
+  const advance = body => call(f, 'POST', '/v1/onboarding/progress', body)
+  const storedSteps = async () => (await read()).body.progress
+  const look = { color: '天空蓝', expression: '微笑', headwear: '无', glasses: '无', hand: '咖啡杯' }
+  assert.deepEqual(await storedSteps(), {step: 1, completed: false})
+  assert.equal((await advance({step: 3})).status, 409)
+  assert.equal((await advance({step: 3, completed: true})).status, 400)
+  assert.equal((await call(f, 'POST', '/v1/onboarding/look', {look, finish: true})).status, 409)
+  assert.equal((await read()).body.steps.look, null)
+
+  const profile = {industry: '教育', role: '研究员', completed: false}
+  const saved = await call(f, 'POST', '/v1/onboarding', profile)
+  assert.equal(saved.status, 201)
+  assert.deepEqual(saved.body.progress, {step: 2, completed: false})
+  assert.ok(saved.body.automation_templates.length)
+  assert.ok(saved.body.steps.recommendations.length)
+  assert.equal((await call(f, 'POST', '/v1/onboarding', profile)).body.onboarding.revision, 1)
+  assert.equal((await advance({step: 4})).status, 409)
+  assert.equal((await advance({step: 3})).status, 200)
+  f = feature(dir)
+  assert.deepEqual(await storedSteps(), {step: 3, completed: false})
+  const picks = [saved.body.steps.recommendations[0].key]
+  const next = await call(f, 'POST', '/v1/onboarding/picks', {picks})
+  assert.deepEqual(next.body.progress, {step: 4, completed: false})
+  assert.deepEqual((await advance({step: 3})).body.progress, {step: 4, completed: false})
+  const draftLook = await call(f, 'POST', '/v1/onboarding/look', {look})
+  assert.deepEqual(draftLook.body.progress, {step: 4, completed: false})
+  const finalLook = {...look, expression: '专注'}
+  assert.equal((await call(f, 'POST', '/v1/onboarding/look', {look: {...look, color: 'pink'}, finish: true})).status, 400)
+  const finished = await call(f, 'POST', '/v1/onboarding/look', {look: finalLook, finish: true})
+  assert.equal(finished.status, 200)
+  assert.deepEqual(finished.body.progress, {step: 4, completed: true})
+  f = feature(dir)
+  const resumed = await read()
+  assert.deepEqual(resumed.body.progress, {step: 4, completed: true})
+  assert.deepEqual(resumed.body.steps.look, finalLook)
+  assert.deepEqual(resumed.body.steps.picks, picks)
+  assert.equal(resumed.body.onboarding.completed, true)
+  assert.deepEqual((await call(f, 'GET', '/v1/settings')).body.personal_look, finalLook)
+  assert.deepEqual((await call(f, 'POST', '/v1/onboarding', profile)).body.progress, {step: 4, completed: true})
+  const other = feature()
+  assert.deepEqual((await call(other, 'GET', '/v1/onboarding')).body.progress, {step: 1, completed: false})
+  assert.equal((await call(other, 'GET', '/v1/settings')).body.personal_look, undefined)
+  assert.deepEqual((await call(other, 'POST', '/v1/onboarding/progress', {completed: true})).body.progress, {step: 4, completed: true})
+  assert.equal((await call(other, 'GET', '/v1/onboarding')).body.onboarding, null)
+})
+
+test('older onboarding rows resume at their saved work and the native prefetch identifies its viewer', async () => {
+  const f = feature()
+  f.store.write({onboarding: {industry:'教育', role:'研究员', completed:1, revision:3, created:1, updated:2}})
+  assert.deepEqual((await call(f, 'GET', '/v1/onboarding')).body.progress, {step: 2, completed: false})
+  const authenticated = await compat(f)({method:'GET', path:'/v1/onboarding'}, {
+    request: new Request('https://example.test', {headers:{'x-ot-owner-username':'wizard.qa'}}),
+  })
+  assert.equal(authenticated.body.viewer_username, 'wizard.qa')
+  assert.equal((await call(f, 'GET', '/v1/onboarding')).body.viewer_username, undefined)
+  f.store.update(state => { state.onboarding_steps = {picks:[], look:null, updated:3} })
+  assert.deepEqual((await call(f, 'GET', '/v1/onboarding')).body.progress, {step: 4, completed: false})
+  f.store.update(state => {
+    state.onboarding_steps.look = { color: '天空蓝', expression: '微笑', headwear: '无', glasses: '无', hand: '咖啡杯' }
+  })
+  assert.deepEqual((await call(f, 'GET', '/v1/onboarding')).body.progress, {step: 4, completed: true})
+  f.store.write({onboarding: {industry:'', role:'', completed:1, revision:1, created:1, updated:1}})
+  assert.deepEqual((await call(f, 'GET', '/v1/onboarding')).body.progress, {step: 4, completed: true})
+})
+
 test('compat: unknown routes are not moved, writes refuse queries, bad requests 400', async () => {
   const f = feature()
   assert.equal((await call(f, 'GET', '/v1/memory/pages')).status, 404)

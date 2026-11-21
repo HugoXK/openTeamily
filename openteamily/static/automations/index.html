@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
   <title>自动化 · OpenTeamily</title>
   <link rel="stylesheet" href="/shell/app.css">
@@ -11,7 +11,7 @@
   <script type="module" src="/shell/dsbot-api.mjs"></script>
   <script type="module" src="/automations/app.mjs"></script>
 </head>
-<body class="app-workspace">
+<body class="app-workspace app-primary">
   <a class="skip-link" href="#main">跳到主要内容</a>
   <nav class="app-rail" aria-label="应用导航">
     <a class="brand-mark" href="/" title="OpenTeamily 首页" aria-label="OpenTeamily"><svg class="brand-glyph" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M20.8 8.4a8.3 8.3 0 1 0 .4 13.2"/><circle cx="16" cy="16" r="1.7" fill="currentColor"/><circle cx="22.4" cy="16.2" r="3.05" fill="currentColor"/></svg></a>
@@ -26,7 +26,7 @@
     <a href="/discover" title="发现" aria-label="发现"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z m4 5-2 6-6 2 2-6 6-2Z"/></svg><span class="rail-label">发现</span></a>
     <span class="rail-spacer"></span>
     <a href="/profile" class="rail-signed-in" hidden title="我的资料" aria-label="我"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7a4 4 0 1 0 8 0 4 4 0 0 0-8 0 M4 21v-2a8 8 0 0 1 16 0v2"/></svg><span class="rail-label">我</span></a>
-    <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换浅色或深色。会写入已有外观设置；按钮在深色下显示「深色」。点击后的标签变化未经 Teamily 核实。">浅色</button>
+    <button type="button" id="appearance-toggle" class="rail-link rail-signed-in" hidden title="切换外观">浅色</button>
     <a href="/download" title="下载" aria-label="下载"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12 m-5-5 5 5 5-5 M4 16v5h16v-5"/></svg><span class="rail-label">下载</span></a>
     <div class="account-slot" hidden>
       <button type="button" id="account-menu-button" class="account-trigger" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu" title="账户菜单">账户</button>
@@ -54,6 +54,7 @@
     </div>
   </nav>
   <p id="status" role="status"></p>
+  <button type="button" id="automation-link-retry" hidden>重新打开自动化</button>
   <main id="main">
   <section id="login-panel" hidden>
     <h2>登录</h2>
@@ -96,8 +97,16 @@
     <form id="editor-form" method="post" action="/v1/workspaces" hidden>
       <header class="editor-head">
         <button type="button" id="cancel-editor">‹ 自动化</button>
-        <h1 id="editor-heading">新建自动化</h1>
+        <button type="button" id="show-run-history" aria-controls="run-panel" hidden>运行记录</button>
+        <h1 id="editor-heading" tabindex="-1">新建自动化</h1>
       </header>
+      <section id="meeting-action-source" aria-labelledby="meeting-action-source-heading" hidden>
+        <h2 id="meeting-action-source-heading">会议行动项</h2>
+        <p id="meeting-action-source-title"></p>
+        <p id="meeting-action-source-text"></p>
+        <p id="meeting-action-source-owner" class="note" hidden></p>
+        <a id="meeting-action-source-link">查看会议</a>
+      </section>
       <fieldset class="task-details">
         <legend>任务</legend>
         <label>名称 <input type="text" name="title" maxlength="80" required autocomplete="off" placeholder="例如：每周整理会议纪要"></label>
@@ -159,6 +168,7 @@
           <label>参与的智能体 <input type="text" name="agents" maxlength="512" autocomplete="off" placeholder="名称，以逗号分隔"></label>
         </div>
       </details>
+      <p id="manual-run-note" class="note" hidden></p>
       <div class="editor-actions">
         <button type="submit" id="save-automation">保存</button>
         <button type="button" id="tick-automation" hidden>运行一次</button>
@@ -166,18 +176,30 @@
       </div>
     </form>
     <section id="run-panel" hidden>
-      <h2>运行记录</h2>
-      <p class="note">结果来自已连接的 FlyBot 代理。假提供方给出的文本不能当成真实模型已经验证。</p>
-      <nav class="run-filters" aria-label="运行状态">
-        <button type="button" id="run-filter-all" data-run-filter="all" aria-current="true">全部</button>
-        <button type="button" id="run-filter-succeeded" data-run-filter="succeeded" aria-current="false">成功</button>
-        <button type="button" id="run-filter-failed" data-run-filter="failed" aria-current="false">失败</button>
-      </nav>
+      <h2 id="run-heading" tabindex="-1">运行记录</h2>
+      <p id="manual-run-status" class="note" role="status" aria-live="polite"></p>
+      <div class="run-history-tools">
+        <nav class="run-filters" aria-label="运行状态">
+          <button type="button" id="run-filter-all" data-run-filter="all" aria-current="true">全部</button>
+          <button type="button" id="run-filter-succeeded" data-run-filter="succeeded" aria-current="false">成功</button>
+          <button type="button" id="run-filter-failed" data-run-filter="failed" aria-current="false">失败</button>
+        </nav>
+        <nav class="run-pages" id="run-pages" aria-label="运行记录分页" hidden>
+          <button type="button" id="run-newer">较新记录</button>
+          <button type="button" id="run-older">更早记录</button>
+        </nav>
+      </div>
       <ul id="run-list"></ul>
       <p id="run-empty" class="empty-state" hidden>还没有运行记录。</p>
       <p id="run-filter-empty" class="empty-state" hidden>没有符合这个筛选的运行记录。</p>
     </section>
   </section>
   </main>
+  <nav class="mobile-primary-nav" aria-label="主导航">
+    <a href="/chat"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 4h16v12H9l-5 4V4Z"/></svg>聊天</a>
+    <a href="/space"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5Z M3 12l9 5 9-5 M3 16l9 5 9-5"/></svg>作品</a>
+    <a href="/automations" aria-current="page"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 5h3v3H4z M11 6h9 M4 11h3v3H4z M11 12h9 M4 17h3v3H4z M11 18h9"/></svg>自动化</a>
+    <a href="/settings"><svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 6h16 M4 12h16 M4 18h16 M9 4v4 M15 10v4 M9 16v4"/></svg>设置</a>
+  </nav>
 </body>
 </html>

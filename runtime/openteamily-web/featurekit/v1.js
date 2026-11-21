@@ -1,6 +1,6 @@
 // Legacy /v1 compatibility for features moved into this DS-Bot, exposed through
 // the stable feature extension point as the endpoint '<feature>/v1':
-//   POST /api/openteamily {endpoint: 'meetings/v1', payload: {method, path, body?, idempotency_key?}}
+//   POST /api/openteamily {endpoint: 'meetings/v1', payload: {method, path, query?, body?, idempotency_key?}}
 // -> {status, body} (legacy JSON shape) or {status, download: {content_type, filename, encoding, data}}.
 // The browser half (openteamily/static/shell/dsbot-api.mjs) translates a page's
 // legacy fetch calls into this envelope only when the page itself was served by
@@ -11,6 +11,7 @@ import { FeatureError } from './http.js'
 
 export const BODY_LIMIT = 2 * 1024 * 1024
 const METHODS = new Set(['GET', 'POST'])
+const USERNAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/
 
 export function parseTarget(raw) {
   if (typeof raw !== 'string' || raw.length < 4 || raw.length > 4096 || !raw.startsWith('/v1/')) return null
@@ -41,13 +42,19 @@ export function createV1Endpoint({ feature, routes, context }) {
       throw Object.assign(new Error('payload object required'), { code: `${feature}/invalid` })
     }
     const method = String(payload.method ?? 'GET').toUpperCase()
-    const target = parseTarget(payload.path)
+    let path = payload.path
+    // Ordinary download navigation reaches the gateway with path and query split.
+    if (typeof path === 'string' && !path.includes('?') && typeof payload.query === 'string' && payload.query) {
+      path += '?' + payload.query
+    }
+    const target = parseTarget(path)
     if (!METHODS.has(method) || !target) return { status: 404, body: { error: { code: 'not_found', message: 'Not found' } } }
     const found = matchRoute(routes, target.path)
     if (!found) return { status: 404, body: { error: { code: 'not_moved', message: 'This route is not served by DS-Bot yet' } } }
     const headers = new Headers()
     if (typeof payload.idempotency_key === 'string') headers.set('idempotency-key', payload.idempotency_key)
     const raw = payload.body
+    const username = call?.request?.headers?.get('x-ot-owner-username') ?? process.env.OPENTEAMILY_OWNER_USERNAME ?? ''
     const req = {
       ...context,
       method,
@@ -55,6 +62,7 @@ export function createV1Endpoint({ feature, routes, context }) {
       query: target.query,
       queryString: target.query.toString(),
       headers,
+      ownerUsername: USERNAME.test(username) ? username : '',
       params: found.params,
       signal: call?.request?.signal,
       now: Math.floor(Date.now() / 1000),
@@ -75,6 +83,7 @@ export function createV1Endpoint({ feature, routes, context }) {
           download: {
             content_type: result.headers?.['content-type'] ?? 'application/octet-stream',
             filename: result.filename ?? /filename="([^"]+)"/.exec(result.headers?.['content-disposition'] ?? '')?.[1] ?? 'download',
+            ...(result.inline ? {inline:true} : {}),
             encoding: 'base64',
             data: bytes.toString('base64'),
           },

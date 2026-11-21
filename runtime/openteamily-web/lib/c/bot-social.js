@@ -8,12 +8,15 @@
 // mode 0600). The token is read on use, sent only as a Bearer header to that exact server, and
 // never returned, logged or put in an error message.
 import { nativeGroupClient } from './native-groups.js'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { request as httpRequest } from 'node:http'
 import { join } from 'node:path'
 
 export const serverKey = (url) => String(url ?? '').trim().replace(/\/+$/, '').toLowerCase()
 
 const fault = (code, message, status) => Object.assign(new Error(message), { code, ...(status ? { status } : {}) })
+const LOCAL_DIR = '/run/openteamily-social'
+const PUBLIC_ORIGIN = process.env.OPENTEAMILY_PUBLIC_ORIGIN?.replace(/\/+$/, '')
 
 async function defaultServer() {
   try {
@@ -26,11 +29,41 @@ function readJson(path) {
   try { return JSON.parse(readFileSync(path, 'utf8')) } catch { return undefined }
 }
 
+function requestOnSocket(socketPath, host, path, { method, headers, body, signal }) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({
+      socketPath, path, method, signal, agent: false, headers: { ...headers, host },
+    }, response => {
+      const status = response.statusCode
+      if (status >= 300 && status < 400) {
+        response.resume()
+        reject(new Error('Unexpected Bot Social redirect'))
+        return
+      }
+      resolve({
+        status,
+        ok: status >= 200 && status < 300,
+        async json() {
+          const chunks = []
+          for await (const chunk of response.setEncoding('utf8')) chunks.push(chunk)
+          return JSON.parse(chunks.join(''))
+        },
+      })
+    })
+    req.once('error', reject)
+    req.end(body)
+  })
+}
+
 /**
  * createBotSocial({ dataDir, server?, credentialsPath?, fetch? })
  * server: string | async () => string; defaults to the manager-delivered config.
  */
-export function createBotSocial({ dataDir, server, credentialsPath, fetch: fetchImpl = globalThis.fetch, timeoutMs = 15_000 } = {}) {
+export function createBotSocial({
+  dataDir, server, credentialsPath, fetch: fetchImpl = globalThis.fetch, timeoutMs = 15_000,
+  localSocket = existsSync(LOCAL_DIR) ? join(LOCAL_DIR, 'bot-social.sock') : null,
+  localServer = PUBLIC_ORIGIN && PUBLIC_ORIGIN + '/social',
+} = {}) {
   const credsPath = credentialsPath ?? join(process.env.DSH_HOME?.trim() || dataDir || '/data', 'bot', 'flybot-social.json')
   const resolveServer = async () => (typeof server === 'function' ? server() : server ?? defaultServer())
 
@@ -44,25 +77,32 @@ export function createBotSocial({ dataDir, server, credentialsPath, fetch: fetch
     return { base: String(base).replace(/\/+$/, ''), token: creds.token, home: creds.home ?? null }
   }
 
-  async function request(method, path, body) {
+  async function request(method, path, body, {signal} = {}) {
     const { base, token } = await connection()
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     timer.unref?.()
     let res
+    let data
     try {
-      res = await fetchImpl(base + path, {
+      const options = {
         method,
         headers: { authorization: `Bearer ${token}`, accept: 'application/json', ...(body !== undefined ? { 'content-type': 'application/json' } : {}) },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller.signal,
+        signal: signal ? AbortSignal.any([controller.signal,signal]) : controller.signal,
         redirect: 'error',
-      })
+      }
+      // The socket belongs to this site's Bot Social. An overridden workspace
+      // server must keep using its own origin and credentials.
+      res = localSocket && base === localServer && path.startsWith('/v1/ot/')
+        ? await requestOnSocket(localSocket, new URL(base).host, path, options)
+        : await fetchImpl(base + path, options)
+      try { data = await res.json() } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error
+      }
     } catch {
       throw fault('social/unreachable', 'Bot Social could not be reached')
     } finally { clearTimeout(timer) }
-    let data
-    try { data = await res.json() } catch { data = undefined }
     if (!res.ok) {
       const code = typeof data?.error?.code === 'string' ? data.error.code.slice(0, 60) : `http_${res.status}`
       const message = typeof data?.error?.message === 'string' ? data.error.message.slice(0, 300) : `Bot Social answered ${res.status}`
@@ -74,7 +114,7 @@ export function createBotSocial({ dataDir, server, credentialsPath, fetch: fetch
   return {
     connection,
     request,
-    get: (path) => request('GET', path),
+    get: (path,options) => request('GET',path,undefined,options),
     post: (path, body = {}) => request('POST', path, body),
     put: (path, body = {}) => request('PUT', path, body),
     patch: (path, body = {}) => request('PATCH', path, body),

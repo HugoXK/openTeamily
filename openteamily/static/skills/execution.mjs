@@ -1,8 +1,9 @@
 // Original persisted skill execution UI. Provider calls happen only in the authenticated runtime.
 export const readinessLabels = {
-  ready:'运行时声明支持技能加载，模型已配置。仍需实际任务成功及摘要回执才算本次验证通过。',
-  runtime_offline:'没有自己的在线运行时。请连接或重启 FlyBot；不会改用其他人的运行时。',
-  runtime_upgrade_required:'当前在线运行时未声明支持技能格式。下载当前 FlyBot，停止旧进程，用原 key-file 重启后刷新。',
+  ready:'你的 DS-Bot 已就绪，可以试用已安装的技能。',
+  no_model:'当前范围尚未配置可用模型，请检查模型设置。',
+  runtime_offline:'你的 DS-Bot 暂未就绪，请稍后刷新。',
+  runtime_upgrade_required:'当前 DS-Bot 版本不支持此技能，请联系管理员更新。',
   model_missing:'当前范围尚未配置可用模型。请先保存模型配置；不会伪造结果。',
   provider_unsupported:'当前模型不是此运行时支持的 OpenAI-compatible 接口。请调整配置。',
   delegated_runtime:'该智能体绑定了别人的运行时，个人技能不能传给它。请由管理员调整绑定或选择自己的范围。',

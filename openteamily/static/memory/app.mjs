@@ -1,4 +1,6 @@
+import {mountCandidates, sourceHref} from './candidates.mjs';
 import { domToMarkdown, renderMarkdown, safeHref } from './rich.mjs';
+import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
 export function recentlyUpdatedCount(pages, now = Date.now(), days = 7) {
   const since = now / 1000 - days * 86400;
   return (pages || []).filter((page) => Number(page.updated || 0) >= since).length;
@@ -317,12 +319,14 @@ export function matchingMemoryPages(items, needle) {
 export function memoryPageFromSearch(search) {
   const value = new URLSearchParams(search || '').get('page');
   if (value === 'profile') return 'profile';
+  if (value === 'candidates') return 'candidates';
   if (value === 'todos') return 'actions';
   return 'overview';
 }
 
 export function queryForMemoryPage(view) {
   if (view === 'profile') return '?page=profile';
+  if (view === 'candidates') return '?page=candidates';
   if (view === 'actions') return '?page=todos';
   return '';
 }
@@ -373,11 +377,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const newPageButton = document.getElementById('new-page');
   const listPanel = document.getElementById('list-panel');
   let currentUser = null;
-  let workspaces = [];
+  let sessionRequest = 0;
   let currentPage = null;
   let currentAction = null;
   let pageChoices = [];
   let workspaceRequest = 0;
+  let pageRequest = 0;
   let currentView = 'overview';
   let listFilter = 'all';
   let topicFilter = '';
@@ -412,6 +417,191 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     globalThis.crypto.getRandomValues(bytes);
     return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
   }
+
+  const actionDrafts = new Map();
+  const actionDraftOpener = document.getElementById('dream-actions');
+  const actionDraftPanel = document.getElementById('action-draft-panel');
+  const actionDraftSources = document.getElementById('action-draft-sources');
+  const actionDraftItems = document.getElementById('action-draft-items');
+  const actionDraftGenerate = document.getElementById('action-draft-generate');
+  const actionDraftSave = document.getElementById('action-draft-save');
+  let actionDraftPageScope = '';
+
+  function actionDraftScope() {
+    const id = workspaceId();
+    return currentUser?.id && id ? currentUser.id + ':' + id : '';
+  }
+
+  function actionDraftState() {
+    return actionDrafts.get(actionDraftScope());
+  }
+
+  function updateActionDraftControls(state) {
+    const blocked = Boolean(state.busy || state.saveAttempt);
+    const choices = Array.from(actionDraftSources.children).map(label => label.children[0]);
+    for (const box of choices) box.disabled = blocked || (!box.checked && state.selected.size >= 5);
+    actionDraftGenerate.disabled = blocked || !choices.some(box => box.checked);
+    actionDraftSave.disabled = Boolean(state.busy) ||
+      (!state.saveAttempt && (!state.items.some(item => item.selected)
+        || state.items.some(item => item.selected && (!item.title.trim() || item.title.trim().length > 80))));
+    actionDraftSave.textContent = state.saveAttempt && !state.busy ? '重新保存所选行动' : '保存所选行动';
+  }
+
+  function renderActionDrafts() {
+    if (!actionDraftPanel) return;
+    const scope = actionDraftScope();
+    const state = actionDrafts.get(scope);
+    const pagesReady = scope && actionDraftPageScope === scope;
+    const opened = currentView === 'actions' && Boolean(state?.open);
+    actionDraftOpener.disabled = !pagesReady && !state;
+    actionDraftOpener.setAttribute('aria-expanded', String(opened));
+    actionDraftPanel.hidden = !opened;
+    actionDraftSources.replaceChildren();
+    actionDraftItems.replaceChildren();
+    if (!opened) return;
+
+    const pages = pagesReady ? pageChoices : [];
+    if (pagesReady) {
+      const available = new Set(pages.map(page => page.id));
+      for (const id of state.selected) if (!available.has(id)) state.selected.delete(id);
+    }
+    document.getElementById('action-draft-empty').hidden = !pagesReady || pages.length > 0;
+    for (const page of [...pages].sort((a, b) => (b.updated || 0) - (a.updated || 0))) {
+      const label = document.createElement('label');
+      const pick = document.createElement('input');
+      pick.type = 'checkbox';
+      pick.value = page.id;
+      pick.checked = state.selected.has(page.id);
+      pick.addEventListener('change', () => {
+        if (actionDraftState() !== state || pick.disabled) return;
+        if (pick.checked) state.selected.add(page.id);
+        else state.selected.delete(page.id);
+        updateActionDraftControls(state);
+      });
+      label.append(pick, document.createTextNode(page.title));
+      actionDraftSources.append(label);
+    }
+    const locked = Boolean(state.busy || state.saveAttempt);
+    for (const item of state.items) {
+      const row = document.createElement('li');
+      const include = document.createElement('label');
+      include.className = 'action-draft-pick';
+      const pick = document.createElement('input');
+      pick.type = 'checkbox';
+      pick.checked = item.selected;
+      pick.disabled = locked;
+      pick.addEventListener('change', () => {
+        if (actionDraftState() !== state || pick.disabled) return;
+        item.selected = pick.checked;
+        updateActionDraftControls(state);
+      });
+      include.append(pick, document.createTextNode('保存此行动'));
+      const heading = document.createElement('label');
+      const title = document.createElement('input');
+      title.type = 'text';
+      title.maxLength = 80;
+      title.value = item.title;
+      title.disabled = locked;
+      title.addEventListener('input', () => {
+        if (actionDraftState() !== state || title.disabled) return;
+        item.title = title.value;
+        updateActionDraftControls(state);
+      });
+      heading.append(document.createTextNode('标题'), title);
+      const label = document.createElement('label');
+      const source = document.createElement('select');
+      source.disabled = locked;
+      for (const page of state.sources) {
+        const option = document.createElement('option');
+        option.value = page.id;
+        option.textContent = page.title;
+        source.append(option);
+      }
+      source.value = item.memory_page_id;
+      source.addEventListener('change', () => {
+        if (actionDraftState() === state && !source.disabled) item.memory_page_id = source.value;
+      });
+      label.append(document.createTextNode('关联记忆页'), source);
+      row.append(include, heading, label);
+      actionDraftItems.append(row);
+    }
+    document.getElementById('action-draft-review').hidden = !state.items.length;
+    document.getElementById('action-draft-status').textContent = state.message;
+    updateActionDraftControls(state);
+  }
+
+  actionDraftOpener?.addEventListener('click', () => {
+    const scope = actionDraftScope();
+    if (!scope) return;
+    let state = actionDrafts.get(scope);
+    if (!state) actionDrafts.set(scope, state = {selected:new Set(), items:[], sources:[], message:''});
+    state.open = !state.open;
+    renderActionDrafts();
+  });
+  document.getElementById('action-draft-close')?.addEventListener('click', () => {
+    const state = actionDraftState();
+    if (state) state.open = false;
+    renderActionDrafts();
+    actionDraftOpener.focus?.();
+  });
+  document.getElementById('action-draft-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const state = actionDraftState();
+    const workspace = workspaceId();
+    if (!state?.open || actionDraftGenerate.disabled || actionDraftPageScope !== actionDraftScope()) return;
+    const sources = pageChoices.filter(page => state.selected.has(page.id)).map(({id, revision}) => ({id, revision}));
+    if (!sources.length || sources.length > 5) return;
+    const fingerprint = JSON.stringify(sources);
+    if (state.generateAttempt?.fingerprint !== fingerprint) state.generateAttempt = {fingerprint, key:randomKey()};
+    state.busy = true;
+    state.message = '正在根据所选记忆页生成行动建议…';
+    renderActionDrafts();
+    const result = await request('POST', `/v1/workspaces/${workspace}/memory/actions/draft`, {sources},
+      {'Idempotency-Key':state.generateAttempt.key}).catch(() => ({status:0, body:{}}));
+    state.busy = false;
+    if (result.status === 200 && Array.isArray(result.body.sources) && Array.isArray(result.body.suggestions)) {
+      state.generateAttempt = null;
+      state.sources = result.body.sources;
+      state.items = result.body.suggestions.map(item => ({...item, selected:true}));
+      state.message = state.items.length ? '' : '所选记忆页中没有明确的下一步行动。';
+    } else {
+      if (result.status >= 400 && result.status < 500 && result.status !== 429) state.generateAttempt = null;
+      state.message = messageFor(result.body.error, '无法生成行动建议，请重试。');
+    }
+    if (actionDraftState() === state) renderActionDrafts();
+  });
+  actionDraftSave?.addEventListener('click', async () => {
+    const state = actionDraftState();
+    const workspace = workspaceId();
+    if (!state?.open || actionDraftSave.disabled) return;
+    if (!state.saveAttempt) {
+      const chosen = state.items.filter(item => item.selected);
+      const revisions = new Map(state.sources.map(page => [page.id, page.revision]));
+      const items = chosen.map(({title, memory_page_id}) => ({
+        title:title.trim(), memory_page_id, source_revision:revisions.get(memory_page_id),
+      }));
+      state.saveAttempt = {chosen, items, key:randomKey()};
+    }
+    const attempt = state.saveAttempt;
+    state.busy = true;
+    state.message = '正在保存所选行动…';
+    renderActionDrafts();
+    const result = await request('POST', `/v1/workspaces/${workspace}/memory/actions/draft/save`, {items:attempt.items},
+      {'Idempotency-Key':attempt.key}).catch(() => ({status:0, body:{}}));
+    state.busy = false;
+    const confirmed = [200, 201].includes(result.status) && Array.isArray(result.body.items);
+    if (confirmed) {
+      state.saveAttempt = null;
+      state.items = state.items.filter(item => !attempt.chosen.includes(item));
+      state.message = `已保存 ${attempt.items.length} 条行动。`;
+    } else {
+      if (result.status >= 400 && result.status < 500) state.saveAttempt = null;
+      state.message = messageFor(result.body.error, '无法确认保存结果，请重试保存。');
+    }
+    if (actionDraftState() !== state) return;
+    renderActionDrafts();
+    if (confirmed) await loadActions();
+  });
 
   function visiblePages(items) {
     const rows = [...(items || [])];
@@ -549,40 +739,157 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  function syncPageUrl() {
+  function syncViewUrl() {
     const view = document.defaultView;
-    if (!view || !view.history || !view.history.replaceState) return;
-    const path = (view.location && view.location.pathname) || '/memory';
-    view.history.replaceState({}, '', path + queryForMemoryPage(currentView));
+    const params = new URLSearchParams(queryForMemoryPage(currentView));
+    const id = workspaceId();
+    if (/^[0-9a-f]{32}$/.test(id)) params.set('workspace', id);
+    const query = params.toString();
+    view?.history?.replaceState?.({}, '', (view.location?.pathname || '/memory') + (query ? '?' + query : ''));
   }
 
   let profileRevision = null;
   let profileRequest = 0;
+  const profileFields = {professional:'职业背景', work_style:'工作方式', communication:'沟通与写作'};
+  const profileInputs = Object.fromEntries(Object.keys(profileFields).map(field => [field, document.getElementById('profile-' + field)]));
+  const profileForm = document.getElementById('memory-profile-form');
+  const profileSave = document.getElementById('save-memory-profile');
+  const profileStatus = document.getElementById('memory-profile-status');
+  const profileDream = document.getElementById('dream-profile');
+  const profilePreview = document.getElementById('profile-dream-dialog');
+  const profileApply = document.getElementById('profile-dream-apply');
+  let profileSuggestion = null;
+
+  const profileDraft = () => ({revision:profileRevision,
+    ...Object.fromEntries(Object.entries(profileInputs).map(([field, input]) => [field, input?.value || '']))});
+
+  function closeProfilePreview() {
+    profileSuggestion = null;
+    if (profilePreview?.open) profilePreview.close();
+    if (profileDream) profileDream.disabled = profileRevision === null || Boolean(profileSave?.disabled);
+  }
+
+  function showProfilePreview(operation, changes) {
+    const list = document.getElementById('profile-dream-changes');
+    list.replaceChildren();
+    for (const {field, text} of changes) {
+      const section = document.createElement('section');
+      section.className = 'profile-dream-change';
+      const label = document.createElement('label');
+      const choice = document.createElement('input');
+      choice.type = 'checkbox';
+      choice.checked = true;
+      label.append(choice, document.createTextNode(profileFields[field]));
+      const comparison = document.createElement('div');
+      comparison.className = 'profile-dream-comparison';
+      for (const [heading, value] of [['当前内容', operation.draft[field]], ['建议内容', text]]) {
+        const block = document.createElement('div');
+        const title = document.createElement('strong');
+        title.textContent = heading;
+        const paragraph = document.createElement('p');
+        paragraph.textContent = value || '（空）';
+        block.append(title, paragraph);
+        comparison.append(block);
+      }
+      operation.choices.push({field, text, choice});
+      choice.addEventListener('change', () => {
+        profileApply.disabled = !operation.choices.some(entry => entry.choice.checked);
+      });
+      section.append(label, comparison);
+      list.append(section);
+    }
+    profileApply.disabled = false;
+    profilePreview.showModal();
+    document.getElementById('profile-dream-title').focus();
+  }
+
+  profileDream?.addEventListener('click', async () => {
+    if (profileRevision === null || profileDream.disabled || !profilePreview) return;
+    const wid = workspaceId();
+    const owner = currentUser?.id;
+    const operation = {draft:profileDraft(), choices:[]};
+    const isCurrent = () => profileSuggestion === operation && currentUser?.id === owner && workspaceId() === wid;
+    profileSuggestion = operation;
+    profileDream.disabled = true;
+    profileStatus.textContent = '正在整理资料…';
+    try {
+      const result = await request('POST', `/v1/workspaces/${wid}/memory/profile/dream`, operation.draft);
+      if (!isCurrent()) return;
+      if (result.status !== 200) {
+        profileStatus.textContent = messageFor(result.body.error, '资料整理失败，请重试。');
+        return;
+      }
+      const changes = result.body.changes || [];
+      if (!changes.length) {
+        profileStatus.textContent = '当前资料已整理妥当。';
+        return;
+      }
+      profileStatus.textContent = '';
+      showProfilePreview(operation, changes);
+    } catch {
+      if (isCurrent()) profileStatus.textContent = '资料整理失败，请重试。';
+    } finally {
+      if (profileSuggestion === operation && !profilePreview.open) closeProfilePreview();
+    }
+  });
+
+  function cancelProfilePreview() {
+    closeProfilePreview();
+    profileDream?.focus();
+  }
+  document.getElementById('profile-dream-cancel')?.addEventListener('click', cancelProfilePreview);
+  profilePreview?.addEventListener('cancel', event => {
+    event.preventDefault();
+    cancelProfilePreview();
+  });
+  profileApply?.addEventListener('click', () => {
+    if (!profileSuggestion || profileApply.disabled) return;
+    for (const {field, text, choice} of profileSuggestion.choices) {
+      if (choice.checked) profileInputs[field].value = text;
+    }
+    closeProfilePreview();
+    profileStatus.textContent = '已应用到编辑框，保存后生效。';
+    profileSave?.focus();
+  });
+  profileForm?.addEventListener('input', () => {
+    if (profileSuggestion && !profilePreview?.open) {
+      closeProfilePreview();
+      profileStatus.textContent = '';
+    }
+  });
+
   async function loadMemoryProfile() {
     profileRevision = null;
     const token = ++profileRequest, wid = workspaceId();
-    const save = document.getElementById('save-memory-profile'); if (save) save.disabled = true;
+    if (profileSave) profileSave.disabled = true;
+    closeProfilePreview();
+    for (const input of Object.values(profileInputs)) if (input) input.value = '';
     if (!wid) return;
-    const result = await request('GET', `/v1/workspaces/${wid}/memory/profile`);
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/profile`).catch(() => ({status:0, body:{}}));
     if (token !== profileRequest || workspaceId() !== wid) return;
     const status = document.getElementById('memory-profile-status');
-    if (result.status !== 200) { if (status) status.textContent = '无法读取画像。'; return; }
+    if (result.status !== 200 || !result.body.profile) {
+      if (status) status.textContent = '无法读取画像。';
+      return;
+    }
     const profile = result.body.profile;
     profileRevision = profile.revision;
-    if (save) save.disabled = false;
-    for (const field of ['professional', 'work_style', 'communication']) {
-      const input = document.getElementById('profile-' + field); if (input) input.value = profile[field];
-    }
+    if (profileSave) profileSave.disabled = false;
+    if (profileDream) profileDream.disabled = false;
+    for (const [field, input] of Object.entries(profileInputs)) if (input) input.value = profile[field];
     if (status) status.textContent = '';
   }
+  const candidates = mountCandidates(document, {request, workspaceId});
+
   function showView(name, {sync = true} = {}) {
     currentView = name || 'overview';
+    closeProfilePreview();
     if (editor) editor.hidden = true;
     if (actionEditor) actionEditor.hidden = true;
     const workspace = document.getElementById('list-panel');
     if (workspace) workspace.dataset.view = currentView;
     const title = document.getElementById('view-title');
-    const labels = {overview: '总览', profile: '我的资料', actions: '下一步行动'};
+    const labels = {overview: '总览', profile: '我的资料', actions: '下一步行动', candidates:'记忆建议'};
     if (title) title.textContent = labels[currentView] || '总览';
     const overview = document.getElementById('overview-panel');
     const side = document.getElementById('memory-side');
@@ -592,13 +899,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (side) side.hidden = currentView !== 'overview';
     if (actions) actions.hidden = currentView !== 'actions';
     if (profile) profile.hidden = currentView !== 'profile';
+    renderActionDrafts();
+    candidates.show(currentView === 'candidates');
     if (currentView === 'profile') loadMemoryProfile();
     if (currentView === 'profile') loadPreferences();
     for (const button of document.querySelectorAll('.memory-views [data-view]')) {
       if (button.getAttribute('data-view') === currentView) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     }
-    if (sync) syncPageUrl();
+    if (sync) syncViewUrl();
   }
 
   function unusedTitle(base) {
@@ -862,10 +1171,29 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     renderPageLinks();
   }
 
+  function fillWorkspaces(items) {
+    const previous = workspaceId();
+    workspaceSelect.replaceChildren();
+    for (const space of items) {
+      const option = document.createElement('option');
+      option.value = space.id;
+      option.textContent = space.name;
+      workspaceSelect.appendChild(option);
+    }
+    if (items.some(item => item.id === previous)) workspaceSelect.value = previous;
+    if (!workspaceSelect.value && items[0]) workspaceSelect.value = items[0].id;
+  }
+
   async function loadSession() {
+    const seq = ++sessionRequest;
     const session = await request('GET', '/v1/auth/session');
+    if (seq !== sessionRequest) return;
     if (session.status !== 200 || !session.body.user) {
       currentUser = null;
+      actionDrafts.clear();
+      actionDraftPageScope = '';
+      renderActionDrafts();
+      candidates.show(false);
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       editor.hidden = true;
@@ -873,25 +1201,52 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       await renderProviders();
       return;
     }
+    if (currentUser?.id !== session.body.user.id) {
+      actionDrafts.clear();
+      actionDraftPageScope = '';
+    }
     currentUser = session.body.user;
     loginPanel.hidden = true;
     mainPanel.hidden = false;
     const whoami = document.getElementById('whoami');
     whoami.dataset.username = currentUser.username;
     whoami.textContent = '已登录：' + currentUser.username;
-    const prefs = await request('GET', '/v1/settings');
-    if (prefs.status === 200) applyTheme(prefs.body.settings);
-    const listed = await request('GET', '/v1/workspaces');
-    workspaces = listed.status === 200 && listed.body.items ? listed.body.items : [];
-    workspaceSelect.replaceChildren();
-    for (const space of workspaces) {
-      const option = document.createElement('option');
-      option.value = space.id;
-      option.textContent = space.name;
-      workspaceSelect.appendChild(option);
+    void request('GET', '/v1/settings').then(prefs => {
+      if (seq === sessionRequest && prefs.status === 200) applyTheme(prefs.body.settings);
+    }).catch(() => {});
+    const linked = new URLSearchParams(document.defaultView?.location?.search || '');
+    const workspace = linked.get('workspace'), pageId = linked.get('page');
+    const scopedLink = /^[0-9a-f]{32}$/.test(workspace || '');
+    const deepLink = scopedLink && /^[0-9a-f]{32}$/.test(pageId || '');
+    const actionId = linked.get('action');
+    const deepAction = scopedLink && pageId === 'todos' && /^[0-9a-f]{32}$/.test(actionId || '');
+    const linkedRevision = linked.get('revision');
+    const revision = /^[1-9][0-9]{0,7}$/.test(linkedRevision || '') ? Number(linkedRevision) : undefined;
+    let {initial, supplemental} = await readWorkspaceChoices(request, '/v1/workspaces');
+    if (scopedLink && !initial.body.items?.some(item => item.id === workspace) && supplemental) {
+      const shared = await supplemental;
+      if (shared.status === 200) initial = shared;
+      supplemental = null;
     }
-    if (!workspaceSelect.value && workspaces[0]) workspaceSelect.value = workspaces[0].id;
-    await loadWorkspace();
+    if (seq !== sessionRequest) return;
+    const workspaces = initial.status === 200 ? (initial.body.items || []) : [];
+    fillWorkspaces(workspaces);
+    const missingWorkspace = scopedLink && !workspaces.some(item => item.id === workspace);
+    if (scopedLink && !missingWorkspace) workspaceSelect.value = workspace;
+    if (missingWorkspace) currentView = 'overview';
+    if (initial.status !== 200) show('error', '无法读取工作区，请刷新重试。');
+    void supplemental?.then(result => {
+      if (seq === sessionRequest && result.status === 200) fillWorkspaces(result.body.items);
+    });
+    const openingPage = deepLink && !missingWorkspace;
+    const openingAction = deepAction && !missingWorkspace;
+    const directory = loadWorkspace({syncView: !openingPage && !openingAction && !missingWorkspace});
+    if (openingPage || openingAction) {
+      await Promise.all([directory, openingAction ? openAction(actionId) : openPage(pageId,revision)]);
+    } else {
+      await directory;
+      if (missingWorkspace && seq === sessionRequest) show('error', '无法打开此工作区的记忆。');
+    }
   }
 
   async function renderProviders() {
@@ -916,10 +1271,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
   }
 
-  async function loadWorkspace() {
+  async function loadWorkspace({syncView = true} = {}) {
     closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     const seq = ++workspaceRequest;
+    actionDraftPageScope = '';
     newPageButton.disabled = true;
     currentPage = null;
     currentAction = null;
@@ -927,7 +1283,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     editor.hidden = true;
     if (actionEditor) actionEditor.hidden = true;
     listPanel.hidden = false;
-    showView(currentView);
+    showView(currentView, {sync:syncView});
     if (!id) {
       pageChoices = [];
       renderDirectory();
@@ -948,6 +1304,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     pageChoices = listed.body.items || [];
+    actionDraftPageScope = actionDraftScope();
+    renderActionDrafts();
     renderDirectory();
     renderRecent(pageChoices);
     fillPageSelect(document.getElementById('new-action-page'), '');
@@ -963,6 +1321,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // While a page or action is open the directory column stays visible (as in
   // the recorded editor); only the overview/side/actions/profile panels hide.
   function showPageMode() {
+    closeProfilePreview();
+    candidates.show(false);
     listPanel.hidden = false;
     listPanel.dataset.view = 'page';
     for (const id of ['overview-panel', 'memory-side', 'actions-panel', 'profile-panel']) {
@@ -1123,8 +1483,6 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const dreamStatus = document.getElementById('dream-status');
   let dreamSuggestion = null;
 
-  // Only the wording lives here: the suggestion itself must survive the update so
-  // 接受 / 忽略 still knows which row they are talking about.
   function resetDream(summary = '', status = '') {
     if (dreamSummary) dreamSummary.textContent = summary;
     if (dreamStatus) dreamStatus.textContent = status;
@@ -1134,20 +1492,34 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const pageId = currentPage && currentPage.id;
     const wid = workspaceId();
     if (!pageId || !wid || !dreamSuggestion) return;
-    const result = await request('POST', `/v1/workspaces/${wid}/memory/${pageId}/dream/${dreamSuggestion.id}`, {action});
+    const suggestion = dreamSuggestion;
+    const originalBody = editor.elements.body.value;
+    if (action === 'accept' && originalBody !== (currentPage.body || '')) {
+      resetDream(suggestion.summary, '请先保存编辑中的正文，然后重新生成建议。');
+      return;
+    }
+    const result = await request('POST', `/v1/workspaces/${wid}/memory/${pageId}/dream/${suggestion.id}`, {action});
+    if (workspaceId() !== wid || currentPage?.id !== pageId || dreamSuggestion !== suggestion) return;
     if (result.status !== 200) {
       if (dreamStatus) dreamStatus.textContent = messageFor(result.body.error, '整理建议没有保存成功。');
       return;
     }
-    if (action === 'accept' && result.body.page) {
-      currentPage = result.body.page;
-      editor.elements.body.value = currentPage.body || '';
-      loadRichBody(currentPage.body || '');
-      document.getElementById('editor-meta').textContent =
-        `修订 ${currentPage.revision} · 作者 ${currentPage.created_by} · 最近更新 ${currentPage.updated_by}`;
-      const applied = result.body.applied || {};
-      resetDream(applied.removed ? '已合并：删掉了一段重复正文。' : '接受时这一页已经没有重复段落，正文未改动。',
-                 '这次整理留在这一页的历史里。');
+    dreamSuggestion = null;
+    if (result.body.suggestion?.status === 'accepted' && result.body.page) {
+      const title = editor.elements.title.value;
+      const topics = editor.elements.topics.value;
+      const editedBody = editor.elements.body.value !== originalBody ? editor.elements.body.value : null;
+      applyPageToEditor(result.body.page);
+      editor.elements.title.value = title;
+      editor.elements.topics.value = topics;
+      if (editedBody !== null) {
+        editor.elements.body.value = editedBody;
+        loadRichBody(editedBody);
+      }
+      rememberPage(currentPage);
+      syncPageUrl();
+      if (historyPanel && !historyPanel.hidden) void loadPageHistory();
+      resetDream('已合并重复段落。', editedBody === null ? '原文可在历史中查看。' : '已保留编辑框中尚未保存的内容。');
       return;
     }
     resetDream('', '已忽略，原文没有改动。');
@@ -1159,6 +1531,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!pageId || !wid) return;
     if (dreamPanel) dreamPanel.hidden = false;
     const result = await request('POST', `/v1/workspaces/${wid}/memory/${pageId}/dream`, {});
+    if (workspaceId() !== wid || currentPage?.id !== pageId) return;
     if (result.status !== 200) {
       if (dreamStatus) dreamStatus.textContent = messageFor(result.body.error, '这一页暂时不能整理。');
       return;
@@ -1169,32 +1542,86 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     dreamSuggestion = result.body.suggestion;
-    resetDream(dreamSuggestion.summary, '接受会真的合并；忽略不会改动原文。');
-    dreamSuggestion = result.body.suggestion;
+    resetDream(dreamSuggestion.summary, '接受后会保存一份合并后的新版本。');
   });
   for (const [id, action] of [['dream-accept', 'accept'], ['dream-ignore', 'ignore']]) {
     const button = document.getElementById(id);
     if (button) button.addEventListener('click', () => dreamDecide(action));
   }
 
-  async function openPage(pageId) {
+  const groupShareButton = document.getElementById('memory-share-group');
+  const groupShareDialog = document.getElementById('memory-share-dialog');
+  const groupShareStatus = document.getElementById('memory-share-status');
+  const groupShareSubmit = document.getElementById('memory-share-submit');
+  let groupShare = null;
+  groupShareButton?.addEventListener('click', () => {
+    if (currentPage?.source?.kind !== 'group') return;
+    groupShare = {user:currentUser?.id, workspace:workspaceId(), page:currentPage, pending:false};
+    document.getElementById('memory-share-title').textContent = currentPage.title;
+    document.getElementById('memory-share-body').textContent = currentPage.body;
+    groupShareStatus.textContent = '';
+    groupShareSubmit.disabled = false;
+    groupShareDialog.showModal();
+  });
+  document.getElementById('memory-share-cancel')?.addEventListener('click', () => groupShareDialog.close());
+  groupShareDialog?.addEventListener('close', () => {
+    if (!groupShareDialog.open) groupShare = null;
+  });
+  document.getElementById('memory-share-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const draft = groupShare;
+    if (!draft || draft.pending) return;
+    if (draft.user !== currentUser?.id || draft.workspace !== workspaceId() ||
+        draft.page.id !== currentPage?.id || draft.page.revision !== currentPage.revision) {
+      groupShareDialog.close();
+      return;
+    }
+    draft.pending = groupShareSubmit.disabled = true;
+    groupShareStatus.textContent = '正在分享…';
+    const result = await request('POST', `/v1/workspaces/${draft.workspace}/memory/${draft.page.id}/share-group`,
+      {revision:draft.page.revision}).catch(() => ({status:0,body:{}}));
+    if (groupShare !== draft || !groupShareDialog.open) return;
+    draft.pending = groupShareSubmit.disabled = false;
+    if (result.status !== 200) {
+      groupShareStatus.textContent = messageFor(result.body.error,'分享失败，请重试。');
+      return;
+    }
+    groupShareDialog.close();
+    show('ok', '已分享到来源群。');
+  });
+
+  async function openPage(pageId, revision) {
+    if (groupShareDialog?.open) groupShareDialog.close();
     closeDeleteConfirm({restoreFocus: false});
     closePageHistory({restoreFocus: false});
     hideGraphHoverCard(document.getElementById('graph-hover-card'));
     const id = workspaceId();
     if (!id) return;
     const seq = workspaceRequest;
+    const token = ++pageRequest;
     const seen = await request('GET', `/v1/workspaces/${id}/memory/${pageId}`);
-    if (seq !== workspaceRequest) return;
+    if (seq !== workspaceRequest || token !== pageRequest) return;
     if (seen.status !== 200 || !seen.body.page) {
       show('error', messageFor(seen.body.error, '无法打开记忆页。'));
       return;
     }
-    showPage(seen.body.page);
+    const page = seen.body.page;
+    showPage(page, revision);
+    if (revision && revision !== page.revision && historyPanel) {
+      const preview = historyPreviewToken;
+      await openPageHistory();
+      if (seq === workspaceRequest && token === pageRequest && currentPage?.id === pageId
+          && !historyPanel.hidden && preview === historyPreviewToken) await previewPageVersion(revision);
+    }
   }
 
-  function showPage(page) {
+  function showPage(page, revision) {
     currentPage = page;
+    const source = document.getElementById('memory-page-chat-source');
+    const href = sourceHref(workspaceId(), page.source);
+    if (source) source.hidden = !href;
+    if (groupShareButton) groupShareButton.hidden = !href || page.source.kind !== 'group';
+    if (href) document.getElementById('memory-page-chat-link').href = href;
     currentAction = null;
     if (dreamPanel) dreamPanel.hidden = true;
     dreamSuggestion = null;
@@ -1217,6 +1644,15 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
 
     renderPageLinks();
     syncExportButton();
+    syncPageUrl(revision);
+  }
+
+  function syncPageUrl(revision) {
+    const id = workspaceId();
+    if (!/^[0-9a-f]{32}$/.test(id) || !/^[0-9a-f]{32}$/.test(currentPage?.id || '')) return;
+    const params = new URLSearchParams({workspace:id, page:currentPage.id});
+    if (revision) params.set('revision', String(revision));
+    document.defaultView?.history?.replaceState?.({}, '', '/memory?' + params.toString());
   }
 
   function rememberPage(page) {
@@ -1229,12 +1665,18 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const historyOpen = document.getElementById('page-history-open');
   let historySelection = 0;
   let historyTokens = 0;
+  let historyPreviewToken = 0;
 
   function closePageHistory({restoreFocus = true} = {}) {
     if (!historyPanel || historyPanel.hidden) return;
     historyPanel.hidden = true;
+    historyTokens += 1;
+    historyPreviewToken += 1;
     historySelection = 0;
-    if (restoreFocus && historyOpen) historyOpen.focus();
+    if (restoreFocus) {
+      syncPageUrl();
+      historyOpen?.focus();
+    }
   }
 
   function applyPageToEditor(page) {
@@ -1299,8 +1741,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   async function previewPageVersion(revision) {
     const wid = workspaceId();
     if (!wid || !currentPage) return;
-    const result = await request('GET', `/v1/workspaces/${wid}/memory/${currentPage.id}/versions/${revision}`);
-    if (workspaceId() !== wid) return;
+    const id = currentPage.id;
+    const token = ++historyPreviewToken;
+    const result = await request('GET', `/v1/workspaces/${wid}/memory/${id}/versions/${revision}`);
+    if (workspaceId() !== wid || currentPage?.id !== id || token !== historyPreviewToken) return;
     const status = document.getElementById('page-history-status');
     if (result.status !== 200 || !result.body.version) {
       if (status) status.textContent = '这一版没有读取成功。';
@@ -1313,6 +1757,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('page-history-preview-body').textContent = version.body || '（空白正文）';
     const preview = document.getElementById('page-history-preview');
     if (preview) preview.hidden = false;
+    syncPageUrl(revision);
     if (status) status.textContent = '';
   }
 
@@ -1332,6 +1777,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     applyPageToEditor(result.body.page);
+    syncPageUrl();
     historySelection = 0;
     const preview = document.getElementById('page-history-preview');
     if (preview) preview.hidden = true;
@@ -1350,7 +1796,10 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     closeDeleteConfirm({restoreFocus: false});
     const id = workspaceId();
     if (!id) return;
+    const seq = workspaceRequest;
+    const token = ++pageRequest;
     const seen = await request('GET', `/v1/workspaces/${id}/memory/actions/${actionId}`);
+    if (seq !== workspaceRequest || token !== pageRequest) return;
     if (seen.status !== 200 || !seen.body.action) {
       show('error', messageFor(seen.body.error, '无法打开下一步行动。'));
       return;
@@ -1392,25 +1841,44 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     currentUser = null;
+    candidates.show(false);
     currentPage = null;
     currentAction = null;
+    closeProfilePreview();
     syncExportButton();
     show('ok', '已退出登录。');
     await loadSession();
   });
 
-  const profileForm = document.getElementById('memory-profile-form');
   if (profileForm) profileForm.addEventListener('submit', async event => {
     event.preventDefault();
-    if (profileRevision === null) return;
+    const save = document.getElementById('save-memory-profile');
+    if (profileRevision === null || save?.disabled) return;
     const wid = workspaceId();
-    const payload = {revision: profileRevision};
-    for (const field of ['professional', 'work_style', 'communication']) payload[field] = document.getElementById('profile-' + field).value;
-    const status = document.getElementById('memory-profile-status');
-    const result = await request('POST', `/v1/workspaces/${wid}/memory/profile`, payload);
-    if (workspaceId() !== wid) return;
-    if (result.status !== 200) { status.textContent = result.status === 409 ? '画像已在别处更新，请重新打开后重试。' : '画像未保存。'; return; }
-    profileRevision = result.body.profile.revision; status.textContent = '画像已保存。';
+    const token = profileRequest;
+    const isCurrent = () => wid === workspaceId() && token === profileRequest;
+    const payload = profileDraft();
+    const status = profileStatus;
+    if (save) save.disabled = true;
+    closeProfilePreview();
+    status.textContent = '正在保存…';
+    try {
+      const result = await request('POST', `/v1/workspaces/${wid}/memory/profile`, payload);
+      if (!isCurrent()) return;
+      if (result.status !== 200 || !result.body.profile) {
+        status.textContent = result.status === 409 ? '画像已在别处更新，请重新打开后重试。' : '画像未保存，请重试。';
+        return;
+      }
+      profileRevision = result.body.profile.revision;
+      status.textContent = '画像已保存。';
+    } catch {
+      if (isCurrent()) status.textContent = '画像未保存，请重试。';
+    } finally {
+      if (isCurrent()) {
+        if (save) save.disabled = false;
+        if (profileDream) profileDream.disabled = false;
+      }
+    }
   });
   // 「偏好」 lives in the 我的资料 view. Rows come from and go back to the
   // workspace store per user, so a reload or a new conversation reads the same
@@ -1532,9 +2000,9 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     invalidateMemoryProfile();
     const historyFocus = {restoreFocus: false};
     closePageHistory(historyFocus);
+    const input = document.getElementById('preference-input');
+    if (input) input.value = '';
     await loadWorkspace();
-    if (currentView === 'profile') await loadMemoryProfile();
-    if (currentView === 'profile') await loadPreferences();
   });
   document.getElementById('search').addEventListener('input', () => renderDirectory());
   document.getElementById('search').addEventListener('keydown', (event) => {
@@ -1696,6 +2164,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     }
     closeDeleteConfirm({restoreFocus: false});
     currentPage = saved.body.page;
+    if (!historySelection) syncPageUrl();
     rememberPage(currentPage);
     syncExportButton();
     editor.elements.topics.value = formatTopics(currentPage.topics);
