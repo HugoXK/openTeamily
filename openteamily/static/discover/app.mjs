@@ -348,8 +348,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   let currentUser = null;
   let sessionRequest = 0;
   let sessionPending;
+  let sessionState = 'pending';
   let workspaceListState = 'loading';
   let catalog = [];
+  const catalogViewers = new WeakMap();
+  const catalogActions = new Map();
   let cursor = '';
   let activeQuery = '';
   let activeCategory = categoryFromSearch(location?.search);
@@ -386,7 +389,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (agentFilters) agentFilters.hidden = !agentsView;
     const createAgent = document.getElementById('catalog-create-agent');
     const createTeam = document.getElementById('catalog-create-team');
-    if (createAgent) createAgent.hidden = !agentsView;
+    if (createAgent) createAgent.hidden = !agentsView || !currentUser;
     if (createTeam) createTeam.hidden = !teamsView;
     const query = document.getElementById('catalog-query');
     if (query) {
@@ -567,6 +570,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     feedReturn = null;
   }
 
+  function activeWorkEntry(entry) {
+    return activeWork === entry && entry.scope === sessionRequest;
+  }
+
+  function matchesNativeViewer(name, account = currentUser) {
+    return typeof name === 'string' && VIEWER_USERNAME.test(name) && name === account?.username;
+  }
+
   function setAdjacent(entry, name, neighbor) {
     const slug = validSlug(neighbor?.slug) && neighbor.slug !== entry.slug ? neighbor.slug : '';
     entry[name] = slug;
@@ -594,7 +605,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     disposeWorkPreview();
     workComments.close();
     if (share.dialog.open) share.dialog.close();
-    const entry = {slug: intent.slug, item: null, intent};
+    const entry = {slug: intent.slug, item: null, intent, scope: sessionRequest, outcome: 'loading'};
     activeWork = entry;
     setWorkView(true);
     initialView.scrollTop = 0;
@@ -603,61 +614,127 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     detail.status.textContent = '正在加载作品…';
     detail.retry.hidden = true;
     detail.actions.hidden = true;
+    detail.comments.hidden = true;
     detail.paper.setAttribute('aria-busy', 'true');
     setAdjacent(entry, 'previous');
     setAdjacent(entry, 'next');
+    setWorkEngagement(entry);
     detail.title.focus?.({preventScroll: true});
 
-    if (sessionPending) await sessionPending;
-    if (activeWork !== entry) return;
-    const signedIn = Boolean(currentUser);
-    const path = signedIn
-      ? '/v1/discover/works/' + intent.slug + workDetailQuery(feedState)
-      : '/w/' + intent.slug;
-    const result = await request('GET', path).catch(() => ({status: 0}));
-    if (activeWork !== entry) return;
-    detail.paper.setAttribute('aria-busy', 'false');
-    const work = signedIn ? result.body?.work : result.body;
-    if (result.status !== 200 || work?.slug !== intent.slug) {
-      detail.status.textContent = result.status === 404 ? '这件作品已下架或不可访问。' : '无法打开作品，请重试。';
-      detail.retry.hidden = result.status === 404;
-      return;
+    const checkingSession = sessionPending;
+    const publicRead = !currentUser ? loadPublicWork(entry) : null;
+    if (checkingSession) await checkingSession;
+    if (!activeWorkEntry(entry)) return;
+    const viewer = currentUser;
+    if (!viewer) {
+      const result = await publicRead;
+      if (!activeWorkEntry(entry)) return;
+      if (!entry.item) return failWorkDetail(entry, result.status);
+      return finishWorkDetail(entry, null);
     }
 
+    const path = '/v1/discover/works/' + intent.slug + workDetailQuery(feedState);
+    const readScopedWork = () => request('GET', path).catch(() => ({status: 0}));
+    const wrongViewer = result => nativeCatalog && result.status === 200 &&
+      !matchesNativeViewer(result.body?.viewer_username, viewer);
+    let result = await readScopedWork();
+    if (!activeWorkEntry(entry) || currentUser !== viewer) return;
+    // The scoped request can have used a different account while the session was changing.
+    if (wrongViewer(result)) result = await readScopedWork();
+    if (!activeWorkEntry(entry) || currentUser !== viewer) return;
+    if (result.status === 404) return failWorkDetail(entry, 404);
+    if (result.status !== 200 || result.body?.work?.slug !== entry.slug || wrongViewer(result)) {
+      failWorkDetail(entry, result.status);
+      return publicRead;
+    }
+
+    entry.outcome = 'confirmed';
+    showWork(entry, result.body.work);
+    return finishWorkDetail(entry, viewer, result.body);
+  }
+
+  async function loadPublicWork(entry) {
+    const path = '/w/' + entry.slug + (nativeCatalog ? '?view=preview' : '');
+    const result = await request('GET', path).catch(() => ({status: 0}));
+    if (!activeWorkEntry(entry) || entry.outcome === 'confirmed' || entry.outcome === 'denied') return result;
+    const work = result.body;
+    if (result.status !== 200 || work?.slug !== entry.slug ||
+        typeof work.title !== 'string' || typeof work.kind !== 'string') return result;
+
+    showWork(entry, work, work.preview);
+    if (entry.outcome === 'unavailable') failWorkDetail(entry, 0);
+    else if (entry.outcome === 'loading') detail.status.textContent = '';
+    return result;
+  }
+
+  function showWork(entry, work, inlinePreview) {
     entry.item = work;
     detail.title.textContent = work.title || work.slug;
     detail.meta.textContent = detailMetaText(work);
-    detail.status.textContent = '';
     detail.open.href = publicWorkPath(work);
-    detail.comments.textContent = commentsLabel(work.comment_count);
     detail.actions.hidden = false;
-    renderWorkEngagement(entry);
-    setAdjacent(entry, 'previous', result.body?.previous);
-    setAdjacent(entry, 'next', result.body?.next);
-    const preview = renderWorkPreview(entry);
-    if (intent.comments) return Promise.all([preview, workComments.open(work, detail.comments)]);
-    if (intent.share) openWorkShare();
-    await preview;
+    detail.paper.setAttribute('aria-busy', 'false');
+    const key = JSON.stringify([work.slug, work.kind, work.title, work.updated, work.site_available === true,
+      work.kind === 'model3d' ? publicWorkPath(work) : '']);
+    if (key !== entry.previewKey) {
+      disposeWorkPreview();
+      entry.previewKey = key;
+      entry.preview = renderWorkPreview(entry, work, key, inlinePreview);
+    }
   }
 
-  function renderWorkEngagement(entry) {
+  function finishWorkDetail(entry, viewer, {previous, next} = {}) {
+    entry.ready = true;
+    entry.viewer = viewer;
+    detail.status.textContent = '';
+    detail.retry.hidden = true;
+    detail.comments.hidden = false;
+    detail.comments.textContent = commentsLabel(entry.item.comment_count);
+    setWorkEngagement(entry);
+    setAdjacent(entry, 'previous', previous);
+    setAdjacent(entry, 'next', next);
+    if (entry.intent.comments) return Promise.all([entry.preview, workComments.open(entry.item, detail.comments)]);
+    if (entry.intent.share) openWorkShare();
+    return entry.preview;
+  }
+
+  function failWorkDetail(entry, status) {
+    entry.outcome = status === 404 ? 'denied' : 'unavailable';
+    detail.paper.setAttribute('aria-busy', 'false');
+    if (entry.outcome === 'denied') {
+      disposeWorkPreview();
+      entry.item = null;
+      detail.title.textContent = '作品详情';
+      detail.meta.textContent = '';
+      detail.actions.hidden = true;
+    }
+    detail.status.textContent = entry.outcome === 'denied'
+      ? '这件作品已下架或不可访问。'
+      : entry.item ? '公开预览可用。无法加载互动功能，请重试。' : '无法打开作品，请重试。';
+    detail.retry.hidden = entry.outcome === 'denied';
+  }
+
+  function setWorkEngagement(entry) {
+    const canEngage = Boolean(entry.viewer && entry.viewer === currentUser);
     for (const [action, flag, label] of engagement) {
       const button = detail[action];
-      button.hidden = !currentUser || (action === 'follow' && entry.item.own_work);
-      button.disabled = Boolean(entry.saving);
-      button.textContent = engagementLabel(entry.item, action, flag, label);
-      button.setAttribute('aria-pressed', String(Boolean(entry.item[flag])));
+      button.hidden = !canEngage || (action === 'follow' && entry.item.own_work);
+      button.disabled = !canEngage || Boolean(entry.saving);
+      if (canEngage) {
+        button.textContent = engagementLabel(entry.item, action, flag, label);
+        button.setAttribute('aria-pressed', String(Boolean(entry.item[flag])));
+      }
     }
   }
 
   async function updateWorkEngagement(action, flag) {
     const entry = activeWork;
-    if (!entry?.item || entry.saving || !currentUser) return;
+    if (!entry?.item || entry.saving || !entry.viewer || entry.viewer !== currentUser) return;
     const me = currentUser;
     const enabled = !entry.item[flag];
     entry.saving = action;
     detail.status.textContent = '';
-    renderWorkEngagement(entry);
+    setWorkEngagement(entry);
     const result = await request('POST', '/v1/discover/works/' + entry.slug + '/engagement', {action, enabled})
       .catch(() => ({status: 0}));
     if (currentUser !== me) return;
@@ -682,7 +759,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     }
     if (activeWork !== entry) return;
     if (result.status !== 200) detail.status.textContent = '操作未保存，请重试。';
-    renderWorkEngagement(entry);
+    setWorkEngagement(entry);
   }
 
   function openWorkShare() {
@@ -726,7 +803,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     });
   }
   detail.retry.addEventListener('click', () => activeWork && openWorkDetail(activeWork.intent));
-  detail.comments.addEventListener('click', () => activeWork?.item && workComments.open(activeWork.item, detail.comments));
+  detail.comments.addEventListener('click', () => {
+    if (activeWork?.ready && activeWorkEntry(activeWork)) return workComments.open(activeWork.item, detail.comments);
+  });
   detail.share.addEventListener('click', openWorkShare);
   for (const [action, flag] of engagement) {
     detail[action].addEventListener('click', () => updateWorkEngagement(action, flag));
@@ -907,8 +986,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     return (item[flag] ? '取消' : '') + label + (action === 'like' ? ' · ' + (item.likes || 0) : '');
   }
 
-  async function renderWorkPreview(entry) {
-    const item = entry.item;
+  async function renderWorkPreview(entry, item, key, inlinePreview) {
+    const stillShowing = () => activeWorkEntry(entry) && entry.previewKey === key && entry.outcome !== 'denied';
     if (item.kind === 'website' && item.site_available === true) {
       const frame = document.createElement('iframe');
       frame.className = 'work-detail-site';
@@ -931,14 +1010,14 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       image.alt = item.title || '公开作品图片';
       image.className = 'work-detail-image';
       image.addEventListener('error', () => {
-        if (activeWork === entry) detail.preview.textContent = '暂时无法显示图片。';
+        if (stillShowing()) detail.preview.textContent = '暂时无法显示图片。';
       });
       detail.preview.append(image);
       return;
     }
     detail.preview.textContent = FEED_DETAIL_LOADING;
-    const result = await cachedPreview(item);
-    if (activeWork !== entry) return;
+    const result = inlinePreview === undefined ? await cachedPreview(item) : {ok: true, preview: inlinePreview};
+    if (!stillShowing()) return;
     if (!result.ok) { detail.preview.textContent = FEED_DETAIL_UNREADABLE; return; }
     if (!result.preview) { detail.preview.textContent = FEED_DETAIL_NO_TEXT; return; }
     const lines = detailExcerpt(result.preview);
@@ -953,7 +1032,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     detail.preview.replaceChildren(list);
   }
 
-  function bindWorkDetail(entry, card, item) {
+  function bindWorkDetail(actions, card, item) {
     if (!validSlug(item.slug)) return;
     const options = {item, navigate: true};
     const intent = {slug: item.slug};
@@ -969,12 +1048,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     button.textContent = FEED_DETAIL_MORE;
     button.setAttribute('aria-controls', 'work-detail');
     button.addEventListener('click', () => openWorkDetail(intent, {...options, trigger: button}));
-    entry.append(button);
+    actions.append(button);
     workTriggers.set(item.slug, card);
   }
 
   function matchesFeedViewer(viewer) {
-    return Boolean(currentUser && viewer && (nativeCatalog ? viewer === currentUser.username : viewer === currentUser));
+    return nativeCatalog ? matchesNativeViewer(viewer) : Boolean(currentUser && viewer === currentUser);
   }
 
   function addFeedEngagement(item, actions) {
@@ -986,7 +1065,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       if (action === 'follow' && item.own_work) continue;
       const button = document.createElement('button');
       button.type = 'button';
-      button.textContent = engagementLabel(item, action, flag, label);
+      button.textContent = action === 'like' ? '点赞 · ' + (item.likes || 0) : action === 'follow' ? '关注' : label;
+      button.setAttribute('aria-label', engagementLabel(item, action, flag, label));
       button.setAttribute('aria-pressed', String(Boolean(item[flag])));
       const isCurrent = () => viewer === currentUser && feedActions.get(item) === actions;
       button.addEventListener('click', async () => {
@@ -1028,6 +1108,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       entry.className = 'feed-entry';
       entry.append(card);
       const actions = document.createElement('div');
+      actions.className = 'feed-card-actions';
       if (validSlug(item.slug)) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -1043,9 +1124,9 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         const controls = {element: actions, viewer: null};
         feedActions.set(item, controls);
         addFeedEngagement(item, controls);
+        bindWorkDetail(actions, card, item);
         entry.append(actions);
       }
-      bindWorkDetail(entry, card, item);
       grid.append(entry);
     }
     grid.dataset.empty = feedState.items.length ? 'false' : 'true';
@@ -1226,11 +1307,11 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   }
 
   async function openRemix(item) {
-    if (!currentUser) {
-      show('error', '请登录后复制智能体。');
+    if (!canUseCatalogItem(item)) {
+      if (sessionState === 'guest') show('error', '请登录后复制智能体。');
       return;
     }
-    const entry = {slug: item.slug, key: reuseKey(), template: null};
+    const entry = {slug: item.slug, key: reuseKey(), template: null, viewer: currentUser};
     remix = entry;
     remixName.value = item.name;
     document.getElementById('catalog-remix-summary').textContent = item.summary || '';
@@ -1244,7 +1325,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     if (!remixDialog.open) remixDialog.showModal();
     try {
       const result = await request('GET', '/v1/discover/agents/' + entry.slug + '/remix');
-      if (remix !== entry || !remixDialog.open) return;
+      if (remix !== entry || !remixDialog.open || currentUser !== entry.viewer) return;
       if (result.status !== 200) throw new Error(messageFor(result.body.error, '无法读取发布内容。'));
       const template = result.body.template;
       entry.template = template;
@@ -1265,7 +1346,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function submitRemix(event) {
     event.preventDefault();
     const entry = remix;
-    if (remixLoading || !entry?.template || !remixWorkspace.value) return;
+    if (remixLoading || !entry?.template || entry.viewer !== currentUser || !remixWorkspace.value) return;
     remixLoading = true;
     remixSubmit.disabled = true;
     remixStatus.textContent = '正在创建副本…';
@@ -1273,6 +1354,7 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       const result = await request('POST', '/v1/discover/agents/' + entry.slug + '/remix', {
         revision: entry.template.revision, workspace_id: remixWorkspace.value, name: remixName.value.trim(),
       }, {'Idempotency-Key': entry.key});
+      if (remix !== entry || currentUser !== entry.viewer) return;
       if (![200, 201].includes(result.status)) {
         if (result.body.error?.code === 'listing_changed') {
           entry.template = null;
@@ -1286,16 +1368,78 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     } catch (error) {
       if (remix === entry) remixStatus.textContent = error.message;
     } finally {
-      remixLoading = false;
-      syncRemixWorkspaces();
+      if (remix === entry && currentUser === entry.viewer) {
+        remixLoading = false;
+        syncRemixWorkspaces();
+      }
     }
   }
 
-  function renderCatalog(items) {
+  function canUseCatalogItem(item) {
+    const viewer = catalogViewers.get(item);
+    return Boolean(currentUser && catalogActions.has(item) && validSlug(item.slug) &&
+      (nativeCatalog ? matchesNativeViewer(viewer) : viewer === sessionRequest));
+  }
+
+  async function confirmCatalogViewer(page) {
+    if (page.session) await page.session;
+    const viewer = currentUser;
+    if (!viewer || page.scope !== sessionRequest || page.catalog !== catalog ||
+        matchesNativeViewer(page.viewer, viewer) || !matchesNativeViewer(viewer.username, viewer)) return;
+    const response = await request('GET', page.path).catch(() => ({status: 0}));
+    if (viewer !== currentUser || page.scope !== sessionRequest || page.catalog !== catalog ||
+        response.status !== 200 || !matchesNativeViewer(response.body?.viewer_username, viewer)) return;
+    const verified = new Map(catalogItems(response.body).filter(item => validSlug(item?.slug)).map(item => [item.slug, item]));
+    for (const item of page.items) {
+      const match = verified.get(item.slug);
+      if (!match) continue;
+      catalogViewers.set(item, viewer.username);
+      item.chat_enabled = match.chat_enabled;
+      item.own_agent = match.own_agent;
+    }
+    syncCatalogActions();
+  }
+
+  function syncCatalogActions() {
+    for (const [item, actions] of catalogActions) {
+      const viewer = canUseCatalogItem(item) ? currentUser : null;
+      const guest = sessionState === 'guest' && validSlug(item.slug);
+      if (actions.viewer === viewer && actions.guest === guest) continue;
+      actions.viewer = viewer;
+      actions.guest = guest;
+      const holder = actions.element;
+      holder.replaceChildren();
+      holder.hidden = !viewer && !guest;
+      if (holder.hidden) continue;
+      const use = document.createElement('button');
+      use.type = 'button';
+      use.className = 'catalog-use';
+      use.textContent = '复制';
+      use.setAttribute('aria-label', '复制智能体：' + (item.name || item.slug));
+      use.addEventListener('click', () => openRemix(item));
+      if (viewer && item.chat_enabled && !item.own_agent) {
+        const chat = document.createElement('a');
+        chat.href = '/chat#public-agent=' + item.slug;
+        chat.className = 'catalog-chat';
+        chat.textContent = '聊天';
+        chat.setAttribute('aria-label', '和 ' + (item.name || item.slug) + ' 聊天');
+        chat.addEventListener('click', event => {
+          if (currentUser !== viewer || !canUseCatalogItem(item)) event.preventDefault();
+        });
+        holder.append(chat);
+      }
+      holder.append(use);
+    }
+  }
+
+  function renderCatalog(items, start = 0) {
     const list = document.getElementById('discover-list');
-    list.replaceChildren();
+    if (!start) {
+      list.replaceChildren();
+      catalogActions.clear();
+    }
     document.getElementById('discover-empty').hidden = items.length > 0;
-    for (const item of items) {
+    for (const item of items.slice(start)) {
       const li = document.createElement('li');
       const card = document.createElement('article');
       const avatar = document.createElement('span');
@@ -1340,31 +1484,21 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
         meta.append(creator);
       }
       if (meta.childElementCount) copy.append(meta);
-      const use = document.createElement('button');
-      use.type = 'button';
-      use.className = 'catalog-use';
-      use.textContent = '复制';
-      use.setAttribute('aria-label', '复制智能体：' + (item.name || item.slug));
-      use.addEventListener('click', () => openRemix(item));
-      card.append(avatar, copy);
-      if (item.chat_enabled && !item.own_agent && validSlug(item.slug)) {
-        const actions = document.createElement('div');
-        actions.className = 'catalog-agent-actions';
-        const chat = document.createElement('a');
-        chat.href = '/chat#public-agent=' + item.slug;
-        chat.className = 'catalog-chat';
-        chat.textContent = '聊天';
-        chat.setAttribute('aria-label', '和 ' + (item.name || item.slug) + ' 聊天');
-        actions.append(chat, use);
-        card.append(actions);
-      } else card.append(use);
+      const actions = document.createElement('div');
+      actions.className = 'catalog-agent-actions';
+      actions.hidden = true;
+      catalogActions.set(item, {element: actions, viewer: null, guest: false});
+      card.append(avatar, copy, actions);
       li.append(card);
       list.append(li);
     }
+    syncCatalogActions();
   }
 
   async function loadCatalog(append = false) {
     const seq = ++catalogRequest;
+    const scope = sessionRequest;
+    const checkingSession = sessionPending;
     if (!append) {
       applyCatalogFilters();
       activeQuery = document.getElementById('catalog-query').value.trim();
@@ -1381,18 +1515,33 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
     count.textContent = append ? '正在加载更多…' : '正在加载…';
     document.getElementById('catalog-panel').setAttribute('aria-busy', 'true');
     try {
-      const listed = await request('GET', catalogQuery(activeQuery, cursor, activeCategory, activeCreator?.handle));
-      if (seq !== catalogRequest) return;
+      const path = catalogQuery(activeQuery, cursor, activeCategory, activeCreator?.handle);
+      const listed = await request('GET', path);
+      if (seq !== catalogRequest || scope !== sessionRequest) return;
+      if (listed.status === 401 && checkingSession) {
+        await checkingSession;
+        if (seq !== catalogRequest || scope !== sessionRequest) return;
+        if (currentUser) return loadCatalog(append);
+      }
       if (listed.status !== 200) throw new Error(messageFor(listed.body.error, '无法加载公共目录。'));
-      const incoming = catalogItems(listed.body);
+      const viewer = nativeCatalog ? listed.body.viewer_username : scope;
       const known = new Set(catalog.map(item => item.slug));
-      catalog.push(...incoming.filter(item => !known.has(item.slug)));
+      const start = catalog.length;
+      for (const item of catalogItems(listed.body)) {
+        if (!item || typeof item !== 'object' || known.has(item.slug)) continue;
+        known.add(item.slug);
+        catalogViewers.set(item, viewer);
+        catalog.push(item);
+      }
       cursor = listed.body.cursor || '';
-      renderCatalog(catalog);
+      renderCatalog(catalog, start);
       more.hidden = !cursor;
       document.getElementById('discover-empty').textContent = activeQuery || activeCategory !== 'all' || activeCreator
         ? '没有匹配的智能体。' : '暂无公开智能体。';
       count.textContent = '已显示 ' + catalog.length + ' 个智能体' + (cursor ? '，还有更多' : '');
+      if (nativeCatalog && catalog.length > start) {
+        void confirmCatalogViewer({path, viewer, scope, session: checkingSession, catalog, items: catalog.slice(start)});
+      }
     } catch (failure) {
       if (seq !== catalogRequest) return;
       error.hidden = false;
@@ -1561,7 +1710,12 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
   async function load() {
     const attempt = ++sessionRequest;
     currentUser = null;
+    sessionState = 'pending';
     workComments.setActor('');
+    syncCatalogActions();
+    if (remixDialog.open) remixDialog.close();
+    remix = null;
+    remixLoading = false;
     manageRequest++;
     document.getElementById('catalog-manage').hidden = true;
     if (agentsView) {
@@ -1569,20 +1723,25 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       workspaceSelect.replaceChildren();
       renderManage([]);
     }
-    document.getElementById('whoami').textContent = '';
+    const whoami = document.getElementById('whoami');
+    whoami.textContent = '';
     showDiscoverView();
     const sessionLoad = request('GET', '/v1/auth/session').catch(() => ({status: 0})).then(session => {
       if (attempt !== sessionRequest) return;
       sessionPending = null;
       currentUser = session.status === 200 ? session.body?.user || null : null;
+      sessionState = currentUser ? 'signed-in' : session.status === 401 ? 'guest' : 'failed';
+      whoami.textContent = currentUser?.username || '';
       workComments.setActor(currentUser?.id || currentUser?.username || '');
+      applyCatalogChrome();
+      syncCatalogActions();
     });
     sessionPending = sessionLoad;
-    const feedLoad = catalogView ? null : loadFeed();
-    const initialFeedRequest = feedRequest;
     const detailIntent = catalogView ? null : workDetailFromSearch(location?.search);
     const detailLoad = detailIntent ? openWorkDetail(detailIntent) : closeWorkDetail();
-    if (!catalogView) mainPanel.hidden = false;
+    if (!teamsView) mainPanel.hidden = false;
+    const feedLoad = catalogView ? null : loadFeed();
+    const initialFeedRequest = feedRequest;
     const directoryLoad = agentsView ? loadCatalog() : null;
     await sessionLoad;
     if (attempt !== sessionRequest) return;
@@ -1605,9 +1764,8 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
       return;
     }
     document.getElementById('catalog-manage').hidden = !agentsView;
-    document.getElementById('whoami').textContent = currentUser.username;
     if (agentsView) {
-      const listed = await request('GET', '/v1/workspaces?limit=100');
+      const listed = await request('GET', '/v1/workspaces?limit=100').catch(() => ({status: 0}));
       if (attempt !== sessionRequest) return;
       workspaceListState = listed.status === 200 ? 'ready' : 'failed';
       const workspaces = workspaceListState === 'ready' ? (listed.body.items || []) : [];

@@ -46,6 +46,7 @@ const LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
 const RESERVED = new Set(["settings", "team", "members", "v1", "discover", "agents", "chat", "messenger", "space", "artifacts", "memory", "automations", "runtimes", "profile", "download", "install", "shell", "share", "a", "d", "api", "login", "logout", "search", "w", "works", "feed"]);
 const REF = /^[A-Za-z0-9._:-]{1,80}$/;
 const SNAPSHOT_MAX = 200_000;
+const WORK_PREVIEW_MAX = 2_000;
 const MODEL_MIME = "model/gltf-binary";
 const MAX_SITE_BYTES = 32 * 1024;
 const SITE_POLICY = [
@@ -95,6 +96,17 @@ const listingView = (ot: OtContext, l: any, viewer: string | null, withSnapshot 
   ...(l.kind === "work" ? {comment_count: workCommentCount(ot, l.id), site_available: publishedSiteAvailable(ot, l)} : {}),
   ...(withSnapshot ? { snapshot: l.snapshot ?? null } : {}),
 });
+
+function publicListingView(ot: OtContext, listing: any) {
+  const view = listingView(ot, listing, null, true);
+  const {handle, display_name, bio} = view.creator;
+  return {...view, creator: {handle, display_name, bio}};
+}
+
+function workExcerpt(listing: {snapshot: string | null; summary: string}, hasSite: boolean) {
+  const excerpt = String(listing.snapshot || "").slice(0, WORK_PREVIEW_MAX);
+  return hasSite || excerpt.startsWith("{") ? listing.summary || "" : excerpt;
+}
 
 function escapeHtml(value: string) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -305,6 +317,22 @@ type FeedScope = { where: string; args: unknown[] };
 type WorkAnchor = { id: string; updated_at: number };
 type WorkNeighbor = { slug: string; title: string };
 const PUBLIC_WORK_SCOPE: FeedScope = {where: "l.listed = 1 AND l.kind = 'work'", args: []};
+
+function publicWorkPreview(ot: OtContext, slug: string) {
+  assert(SLUG.test(slug), 404, "listing_not_found", "no such work");
+  const work = ot.get<any>(`SELECT ${LISTING_CARD_COLUMNS}, substr(l.snapshot, 1, ?) AS snapshot
+    FROM ot_listings l WHERE l.slug = ? AND ${PUBLIC_WORK_SCOPE.where}`, WORK_PREVIEW_MAX, slug);
+  assert(work, 404, "listing_not_found", "no such work");
+  const {creator, title, work_kind, updated_at, path, likes, collections, comment_count, site_available} =
+    listingView(ot, work, null);
+  const author = creator.handle?.replace(/^@/, "").replace(/\.home$/, "") || creator.display_name;
+  return {
+    slug, title, kind: work_kind || "document", author,
+    updated: Math.floor(updated_at > 1e12 ? updated_at / 1000 : updated_at),
+    path, likes, collections, comment_count, site_available,
+    preview: workExcerpt(work, site_available === true),
+  };
+}
 
 function discoverScope(ot: OtContext, input: Record<string, unknown>, viewer: string) {
   const kind = one(input.kind, "kind");
@@ -608,15 +636,19 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   app.get("/v1/ot/public/listings/:slug", async (req, reply) => {
     const l = listedBySlug(ot, params(req).slug);
     reply.header("Cache-Control", "no-store");
-    return listingView(ot, l, null, true);
+    return publicListingView(ot, l);
   });
   const sendPublic = async (req: any, reply: any, kind: "agent" | "work") => {
     reply.header("Cache-Control", "no-store");
-    const l = listedBySlug(ot, params(req).slug);
-    assert(l.kind === kind, 404, "listing_not_found", "no such listing");
-    const view = listingView(ot, l, null, true);
+    reply.header("Vary", "Accept");
+    const slug = params(req).slug;
     const accept = String(req.headers.accept || "");
-    if (accept.includes("application/json") && !accept.includes("text/html")) return view;
+    const json = accept.includes("application/json") && !accept.includes("text/html");
+    if (json && kind === "work" && query(req).view === "preview") return publicWorkPreview(ot, slug);
+    const l = listedBySlug(ot, slug);
+    assert(l.kind === kind, 404, "listing_not_found", "no such listing");
+    const view = publicListingView(ot, l);
+    if (json) return view;
     reply.header("Content-Type", "text/html; charset=utf-8");
     return reply.send(publicPage(ot, l, view));
   };
@@ -652,8 +684,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   app.get("/w/:slug/preview", async (req) => {
     const l = listedBySlug(ot, params(req).slug);
     assert(l.kind === "work", 404, "listing_not_found", "no such listing");
-    const snapshot = l.snapshot ? String(l.snapshot).slice(0, 2000) : "";
-    return { preview: snapshot.startsWith("{") || publishedSiteAvailable(ot, l) ? (l.summary || "") : snapshot };
+    return { preview: workExcerpt(l, publishedSiteAvailable(ot, l)) };
   });
 
   // Public homepage "start a conversation": a signed-in visitor talks to the creator's

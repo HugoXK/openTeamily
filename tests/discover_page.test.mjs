@@ -191,17 +191,22 @@ test('DS-Bot paints the public catalog before session, then enables the already 
   await flush();
   assert.equal(el('main-panel').hidden, false);
   assert.equal(el('catalog-manage').hidden, true);
+  assert.equal(el('whoami').textContent, '');
   const [card] = el('feed-grid').children;
-  const [comments] = card.children[1].children;
-  assert.equal(card.children[1].children.length, 1);
+  const [comments, details] = card.children[1].children;
+  assert.equal(card.children[1].className, 'feed-card-actions');
+  assert.equal(card.children[1].children.length, 2);
   assert.equal(comments.className, 'feed-comments-toggle');
+  assert.equal(details.className, 'feed-detail-toggle');
   session.resolve(commentResponse({user: {id: 'owner', username: 'alice'}}));
   await loaded;
   assert.equal(el('feed-grid').children[0], card, 'session did not remove or rebuild the visible card');
-  const [like, collect, stillComments] = card.children[1].children;
+  assert.equal(el('whoami').textContent, 'alice');
+  const [like, collect, stillComments, stillDetails] = card.children[1].children;
   assert.equal(like.attributes['aria-pressed'], 'true');
   assert.equal(collect.attributes['aria-pressed'], 'true');
   assert.equal(stillComments, comments, 'the owner has no follow control');
+  assert.equal(stillDetails, details, 'the detail control remains last');
   assert.deepEqual(requests, ['/v1/auth/session', '/v1/discover/works?limit=12&sort=popular']);
 });
 
@@ -282,11 +287,11 @@ test('the platform page keeps public cards visible while signed-in viewer flags 
   const grid = doc.getElementById('feed-grid');
   await flush();
   const [publicCard] = grid.children;
-  assert.equal(publicCard.children[1].children.length, 1);
+  assert.equal(publicCard.children[1].children.length, 2);
   session.resolve(commentResponse({user: {id: 'owner', username: 'alice'}}));
   await flush();
   assert.equal(grid.children[0], publicCard);
-  assert.equal(publicCard.children[1].children.length, 1);
+  assert.equal(publicCard.children[1].children.length, 2);
   viewerFeed.resolve(commentResponse({items: [{...work, liked: true}]}));
   await loaded;
   const [like] = grid.children[0].children[1].children;
@@ -311,18 +316,19 @@ test('the signed-in native feed refreshes once when a different account provided
   const more = doc.getElementById('feed-more');
   await flush();
   const [publicCard] = grid.children;
-  assert.equal(publicCard.children[1].children.length, 1);
+  assert.equal(publicCard.children[1].children.length, 2);
   assert.equal(more.disabled, true);
   session.resolve(commentResponse({user: {username: 'bobby'}}));
   await flush();
   assert.equal(grid.children[0], publicCard);
-  assert.equal(publicCard.children[1].children.length, 1);
+  assert.equal(publicCard.children[1].children.length, 2);
   assert.equal(more.hidden, true);
   refresh.resolve(commentResponse({items: [{...work, liked: false, own_work: false}], viewer_username: 'bobby', cursor: 'new-cursor'}));
   await loaded;
   const [like, , follow] = grid.children[0].children[1].children;
   assert.equal(like.attributes['aria-pressed'], 'false');
-  assert.equal(follow.textContent, '关注作者');
+  assert.equal(follow.textContent, '关注');
+  assert.equal(follow.attributes['aria-label'], '关注作者');
   assert.equal(more.disabled, false);
   assert.equal(more.hidden, false);
   assert.deepEqual(requests, ['/v1/auth/session', '/v1/discover/works?limit=12', '/v1/discover/works?limit=12']);
@@ -343,6 +349,79 @@ test('the native feed discards private rows with an unproven viewer after a sing
   assert.equal(doc.getElementById('feed-grid').children.length, 0);
   assert.match(doc.getElementById('feed-error').textContent, /登录状态已变化/);
   assert.equal(requests.length, 3);
+});
+
+test('public agent cards and profile links render while account actions are waiting for the session', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  const requests = [];
+  const loaded = mount(doc, {location: {search: '?tab=agents'}, fetcher: async path => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/v1/discover/agents?limit=12') return commentResponse({
+      viewer_username: 'alice', items: [{slug: 'writing-demo', name: 'Writing', chat_enabled: true}],
+    });
+    if (path === '/v1/workspaces?limit=100') return commentResponse({items: []});
+    throw new Error(path);
+  }});
+  const el = id => doc.getElementById(id);
+  await flush();
+  assert.equal(el('main-panel').hidden, false);
+  const [row] = el('discover-list').children;
+  assert.equal(classHits(row, 'catalog-profile')[0].href, '/a/writing-demo');
+  assert.equal(classHits(row, 'catalog-use').length, 0);
+  assert.equal(classHits(row, 'catalog-chat').length, 0);
+  assert.equal(el('catalog-manage').hidden, true);
+  assert.equal(el('catalog-create-agent').hidden, true);
+
+  session.resolve(commentResponse({user: {id: 'owner', username: 'alice'}}));
+  await loaded;
+  assert.equal(el('discover-list').children[0], row);
+  assert.equal(classHits(row, 'catalog-use').length, 1);
+  assert.equal(classHits(row, 'catalog-chat')[0].href, '/chat#public-agent=writing-demo');
+  assert.equal(el('catalog-manage').hidden, false);
+  assert.deepEqual(requests, ['/v1/auth/session', '/v1/discover/agents?limit=12', '/v1/workspaces?limit=100']);
+});
+
+test('a late wrong-viewer catalog recheck leaves the selected search and actions intact', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = fakeDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  const verification = Promise.withResolvers();
+  const requests = [];
+  const initial = '/v1/discover/agents?limit=12';
+  const loaded = mount(doc, {location: {search: '?tab=agents'}, fetcher: async path => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/v1/workspaces?limit=100') return commentResponse({items: []});
+    if (path === initial) {
+      if (requests.filter(url => url === initial).length === 2) return verification.promise;
+      return commentResponse({viewer_username: 'other', items: [{slug: 'writing-demo', name: 'Writing', chat_enabled: true}]});
+    }
+    if (path === initial + '&q=math') {
+      return commentResponse({viewer_username: 'alice', items: [{slug: 'math-demo', name: 'Math', chat_enabled: true, own_agent: true}]});
+    }
+    throw new Error(path);
+  }});
+  await flush();
+  session.resolve(commentResponse({user: {id: 'owner', username: 'alice'}}));
+  await loaded;
+  assert.equal(classHits(doc.getElementById('discover-list'), 'catalog-chat').length, 0);
+  const query = doc.getElementById('catalog-query');
+  query.value = 'math';
+  await doc.getElementById('catalog-search').handlers.submit({preventDefault() {}});
+  verification.resolve(commentResponse({viewer_username: 'alice', items: [{slug: 'writing-demo', name: 'Writing', chat_enabled: true}]}));
+  await flush();
+
+  const list = doc.getElementById('discover-list');
+  assert.equal(classHits(list, 'catalog-profile')[0].href, '/a/math-demo');
+  assert.equal(classHits(list, 'catalog-chat').length, 0);
+  assert.equal(classHits(list, 'catalog-use').length, 1);
+  assert.equal(query.value, 'math');
+  assert.equal(requests.filter(url => url === initial).length, 2);
 });
 
 test('anonymous catalog search/clear/paging use public GETs and never publish on browse', async () => {
@@ -371,7 +450,7 @@ test('anonymous catalog search/clear/paging use public GETs and never publish on
   assert.equal(profile.href, '/a/fixture-one');
   assert.equal(profile.textContent, 'Fixture');
   assert.equal(card.children[1].children[1].textContent, '<script>not HTML</script>');
-  assert.equal(card.children[2].textContent, '复制');
+  assert.equal(classHits(card, 'catalog-use')[0].textContent, '复制');
   await el('catalog-more').handlers.click();
   assert.equal(el('discover-list').children.length, 2);
   assert.equal(el('catalog-more').hidden, true);
@@ -620,7 +699,9 @@ test('signed-in feed persists like/collect/follow and loads real private tabs', 
   const grid = doc.getElementById('feed-grid');
   await grid.children[0].children[1].children[0].handlers.click();
   assert.equal(state.liked, true);
-  assert.match(grid.children[0].children[1].children[0].textContent, /取消点赞.*1/);
+  const [liked] = grid.children[0].children[1].children;
+  assert.equal(liked.textContent, '点赞 · 1');
+  assert.equal(liked.attributes['aria-label'], '取消点赞 · 1');
   await grid.children[0].children[1].children[1].handlers.click();
   assert.equal(state.collected, true);
   await grid.children[0].children[1].children[2].handlers.click();
@@ -930,7 +1011,7 @@ async function setupRemix({status = 201, workspaceStatus = 200, workspaces = [{i
   const navigation = [];
   await mount(doc, {fetcher, location:{search:'?tab=agents',assign:url=>navigation.push(url)}});
   const el = id => doc.getElementById(id);
-  const use = el('discover-list').children[0].children[0].children.find(node=>node.className==='catalog-use');
+  const use = classHits(el('discover-list'), 'catalog-use')[0];
   return {calls, el, use, navigation};
 }
 
@@ -1152,6 +1233,103 @@ test('work navigation keeps the signed-in feed context and sharing copies the ca
   await doc.getElementById('work-share-copy').handlers.click();
   assert.deepEqual(copies, ['https://management.test/w/second-work']);
   assert.equal(doc.getElementById('work-share-status').textContent, '已复制链接。');
+});
+
+test('the native direct excerpt paints before auth and is retained through a mismatched viewer reply', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  const scoped = Promise.withResolvers();
+  const work = detailFixture();
+  const next = detailFixture({slug: 'next-work'});
+  const publicPath = '/w/' + work.slug + '?view=preview';
+  const privatePath = '/v1/discover/works/' + work.slug;
+  const requests = [];
+  const loaded = mount(doc, {location: {search: '?work=' + work.slug}, fetcher: async (path, options) => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/v1/discover/works?limit=12') return commentResponse({viewer_username: 'alice', items: []});
+    if (path === publicPath) {
+      assert.equal(options.headers.Accept, 'application/json');
+      return commentResponse({...work, preview: '正文预览'});
+    }
+    if (path === privatePath) return requests.filter(url => url === privatePath).length < 2
+      ? commentResponse({viewer_username: 'bobby', work: {...work, liked: true}, next}) : scoped.promise;
+    throw new Error(path);
+  }});
+  const el = id => doc.getElementById('work-detail-' + id);
+  await flush();
+  assert.deepEqual(requests, ['/v1/auth/session', publicPath, '/v1/discover/works?limit=12']);
+  const [preview] = classHits(el('preview'), 'feed-detail-lines');
+  assert.equal(preview.children[0].textContent, '正文预览');
+  assert.equal(el('title').textContent, work.title);
+  assert.equal(el('open').href, '/w/' + work.slug);
+  assert.equal(el('actions').hidden, false);
+  for (const action of ['comments', 'like', 'collect', 'follow']) assert.equal(el(action).hidden, true);
+  assert.equal(el('next').disabled, true);
+  await el('comments').handlers.click();
+
+  session.resolve(commentResponse({user: {id: 'owner', username: 'alice'}}));
+  await flush();
+  assert.equal(requests.filter(url => url === privatePath).length, 2);
+  assert.equal(el('like').hidden, true);
+  assert.equal(el('next').disabled, true);
+  scoped.resolve(commentResponse({viewer_username: 'alice', work: {...work, liked: false}, next}));
+  await loaded;
+  assert.equal(classHits(el('preview'), 'feed-detail-lines')[0], preview);
+  assert.equal(el('comments').hidden, false);
+  assert.equal(el('like').hidden, false);
+  assert.equal(el('like').attributes['aria-pressed'], 'false');
+  assert.equal(el('next').disabled, false);
+});
+
+test('a failed public detail cannot block the native scoped work or its preview', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const work = detailFixture();
+  const publicPath = '/w/' + work.slug;
+  const requests = [];
+  await mount(doc, {location: {search: '?work=' + work.slug}, fetcher: async path => {
+    requests.push(path);
+    if (path === '/v1/auth/session') return commentResponse({user: {id: 'owner', username: 'alice'}});
+    if (path === publicPath + '?view=preview') return commentResponse({}, 503);
+    if (path === publicPath + '/preview') return commentResponse({preview: 'Normal scoped preview'});
+    if (path === '/v1/discover/works/' + work.slug) return commentResponse({viewer_username: 'alice', work});
+    if (path === '/v1/discover/works?limit=12') return commentResponse({viewer_username: 'alice', items: []});
+    throw new Error(path);
+  }});
+  const preview = doc.getElementById('work-detail-preview');
+  assert.equal(classHits(preview, 'feed-detail-lines')[0].children[0].textContent, 'Normal scoped preview');
+  assert.equal(doc.getElementById('work-detail-like').hidden, false);
+  assert.equal(requests.filter(path => path === publicPath + '/preview').length, 1);
+});
+
+test('an authoritative withdrawal clears the optimistic public preview and actions', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  doc.querySelector = selector => selector.includes('openteamily-served-by') ? {} : null;
+  const session = Promise.withResolvers();
+  const work = detailFixture();
+  const loaded = mount(doc, {location: {search: '?work=' + work.slug}, fetcher: async path => {
+    if (path === '/v1/auth/session') return session.promise;
+    if (path === '/w/' + work.slug + '?view=preview') return commentResponse({...work, preview: 'Was public'});
+    if (path === '/v1/discover/works/' + work.slug) return commentResponse({}, 404);
+    if (path === '/v1/discover/works?limit=12') return commentResponse({viewer_username: 'alice', items: []});
+    throw new Error(path);
+  }});
+  const el = id => doc.getElementById('work-detail-' + id);
+  await flush();
+  assert.equal(el('actions').hidden, false);
+  assert.equal(classHits(el('preview'), 'feed-detail-lines').length, 1);
+  session.resolve(commentResponse({user: {id: 'owner', username: 'alice'}}));
+  await loaded;
+
+  assert.equal(classHits(el('preview'), 'feed-detail-lines').length, 0);
+  assert.equal(el('actions').hidden, true);
+  assert.equal(el('retry').hidden, true);
+  assert.match(el('status').textContent, /下架或不可访问/);
 });
 
 test('an older detail response cannot overwrite a newer work', async () => {

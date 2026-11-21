@@ -1111,6 +1111,12 @@ function workCommentItem(row) {
   }
 }
 
+function discoverViewer(call) {
+  // The platform gateway sets this header from the session that selected this runtime.
+  const viewer = call?.request?.headers?.get('x-ot-owner-username')
+  return typeof viewer === 'string' && PLATFORM_USERNAME.test(viewer) ? {viewer_username: viewer} : {}
+}
+
 function discoverRoutes(host) {
   const env = process.env
   const feed = (kind) => async ({ query }, call) => wrap(async () => {
@@ -1132,13 +1138,7 @@ function discoverRoutes(host) {
       ...pagination, limit: q.get('limit'),
     }))
     const items = (data.items || []).map((row) => (kind === 'agent' ? agentItem(row) : workItem(row)))
-    const response = { items, cursor: (popular ? data.next_cursor : data.next_before) ?? null }
-    // The platform gateway sets this header from the session that selected this runtime.
-    const viewer = call?.request?.headers?.get('x-ot-owner-username')
-    if (kind === 'work' && typeof viewer === 'string' && PLATFORM_USERNAME.test(viewer)) {
-      response.viewer_username = viewer
-    }
-    return [200, response]
+    return [200, {items, cursor: (popular ? data.next_cursor : data.next_before) ?? null, ...discoverViewer(call)}]
   })
   const workListing = async (bs, artifactId) => ((await bs.get('/v1/ot/listings/mine')).listings || []).find((l) => l.kind === 'work' && l.ref === artifactId)
   const workMeta = (row) => (row && row.listed ? { listed: true, slug: row.slug, updated: unix(row.updated_at), path: row.path } : { listed: false })
@@ -1252,7 +1252,7 @@ function discoverRoutes(host) {
     { method: 'GET', path: /^\/v1\/discover\/me\/works$/, handle: feed('work') },
     {
       method: 'GET', path: new RegExp(`^${DISCOVER_WORK}$`),
-      async handle({ match, query }) {
+      async handle({ match, query }, call) {
         return wrap(async () => {
           const q = parseQuery(query)
           if ([...q.keys()].some(key => !['tab', 'q', 'kind', 'sort'].includes(key) || q.getAll(key).length !== 1)) {
@@ -1262,7 +1262,7 @@ function discoverRoutes(host) {
           const data = await client(host).get(`/v1/ot/discover/${match[1]}/detail` + qs(filters))
           if (data?.work?.kind !== 'work' || data.work.listed !== true) throw new Fault(404, 'not_found', '找不到公开作品。')
           const adjacent = row => row ? {slug: row.slug, title: row.title} : null
-          return [200, {work: workItem(data.work), previous: adjacent(data.previous), next: adjacent(data.next)}]
+          return [200, {work: workItem(data.work), previous: adjacent(data.previous), next: adjacent(data.next), ...discoverViewer(call)}]
         })
       },
     },

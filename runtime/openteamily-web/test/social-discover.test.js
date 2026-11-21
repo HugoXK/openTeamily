@@ -10,11 +10,17 @@ import { createDispatch } from '../src/dispatch.js'
 
 const SERVER = 'https://social.example.test'
 
-test('the legacy native work feed attributes viewer flags to the trusted request account', async () => {
+test('native Discover feeds and work detail bind the viewer to the trusted request account', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ot-discover-viewer-'))
   const credentialsPath = join(dir, 'connector.json')
   writeFileSync(credentialsPath, JSON.stringify({ token: 'ot-fake-token', server: SERVER }), { mode: 0o600 })
-  const fetch = async () => Response.json({items: [], viewer_username: 'service-value'})
+  const fetch = async url => new URL(url).pathname.endsWith('/detail')
+    ? Response.json({
+      work: {kind: 'work', listed: true, slug: 'trusted-work', title: 'Work', liked: true},
+      previous: null, next: {slug: 'next-work', title: 'Next'},
+      viewer_username: 'service-value',
+    })
+    : Response.json({items: [], viewer_username: 'service-value'})
   setSharedBotSocial(createBotSocial({server: SERVER, credentialsPath, fetch}))
   const dispatch = createDispatch({endpoints: {'discover/v1': discover({dataDir: dir}).endpoints.v1}})
   async function viewer(path, header) {
@@ -32,7 +38,11 @@ test('the legacy native work feed attributes viewer flags to the trusted request
   assert.equal(await viewer('/v1/discover/me/works?tab=collected', 'trusted.viewer'), 'trusted.viewer')
   assert.equal(await viewer('/v1/discover/works', 'not a username'), undefined)
   assert.equal(await viewer('/v1/discover/works'), undefined)
-  assert.equal(await viewer('/v1/discover/agents', 'trusted.viewer'), undefined)
+  assert.equal(await viewer('/v1/discover/agents', 'trusted.viewer'), 'trusted.viewer')
+  assert.equal(await viewer('/v1/discover/agents'), undefined)
+  assert.equal(await viewer('/v1/discover/works/trusted-work?tab=collected', 'trusted.viewer'), 'trusted.viewer')
+  assert.equal(await viewer('/v1/discover/works/trusted-work?tab=following', 'bad name'), undefined)
+  assert.equal(await viewer('/v1/discover/works/trusted-work'), undefined)
 })
 
 test('discover endpoints publish only the whitelisted projection and browse the shared feed', async () => {
