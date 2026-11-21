@@ -58,6 +58,8 @@ test('moved meeting routes go to the meetings feature of the user\'s own DS-Bot'
   assert.equal(movedTarget(`/v1/workspaces/${WS}/images/${ID}`, ORIGIN).feature, 'images');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/videos/${ID}`, ORIGIN).feature, 'videos');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/music/${ID}`, ORIGIN).feature, 'music');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/websites`, ORIGIN).feature, 'websites');
+  assert.equal(movedTarget(`/v1/workspaces/${WS}/websites/${ID}`, ORIGIN).feature, 'websites');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/models-3d/${ID}`, ORIGIN).feature, 'model3d');
   assert.equal(movedTarget(`/v1/workspaces/${WS}/images/wrong`, ORIGIN), null);
   assert.equal(movedTarget(`/v1/composio/connections/${ID}/disconnect`, ORIGIN).feature, 'connectors');

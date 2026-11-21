@@ -287,8 +287,8 @@
         <textarea id="document-source" aria-label="文档 Markdown 源码" maxlength="8000" rows="16" hidden></textarea>
         <p id="document-length" class="note" hidden></p>
       </section>
-      <label id="body-label">正文
-        <textarea name="body" maxlength="8000" rows="16"></textarea>
+      <label id="body-label">网页 HTML
+        <textarea name="body" maxlength="8000" rows="16" spellcheck="false"></textarea>
       </label>
       <div id="media-editor" hidden>
         <label id="media-file-picker">文件 <input id="media-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp,audio/mpeg,audio/ogg,audio/wav,video/mp4,video/webm"></label>
@@ -375,7 +375,11 @@
         <canvas id="board-canvas" width="800" height="600"></canvas>
       </div>
       <p id="editor-source" class="note" hidden></p>
-      <iframe id="website-preview" title="网站预览" sandbox hidden></iframe>
+      <div id="website-preview-controls" hidden>
+        <button type="button" id="website-preview-toggle" aria-controls="website-preview" aria-pressed="false">打开互动预览</button>
+        <p id="website-preview-status" class="note" role="status" hidden></p>
+      </div>
+      <iframe id="website-preview" title="网站预览" sandbox referrerpolicy="no-referrer" hidden></iframe>
       <section id="version-panel" hidden>
         <h2>版本与导出</h2>
         <p class="note">每次保存会留下一版，可以导出或恢复到某一版。恢复会生成新的修订，不会改写历史。</p>

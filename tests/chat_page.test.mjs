@@ -1527,10 +1527,14 @@ test('composer + attach shortcuts narrow the file picker without widening it', (
 
 test('composer + creation grid opens real editors and generation dialogs', () => {
   const html = readFileSync(new URL('../openteamily/static/chat/index.html', import.meta.url), 'utf8');
-  for (const kind of ['website', 'document', 'slides', 'spreadsheet']) {
+  for (const kind of ['document', 'slides', 'spreadsheet']) {
     assert.ok(html.includes(`href="/space?new=${kind}" data-create-artifact="${kind}"`),kind);
   }
   for (const id of ['meeting_prep', 'daily_brief', 'expert_research', 'advance_goals']) assert.ok(html.includes(`/automations?template=${id}`), id);
+  assert.match(html, /id="composer-website-create"[^>]+aria-haspopup="dialog"/);
+  assert.match(html, /id="website-create-manual" href="\/space\?new=website"/);
+  assert.match(html, /id="website-create-prompt" name="prompt" maxlength="1600"/);
+  assert.match(html, /<iframe id="website-create-preview"[^>]+sandbox="allow-scripts" referrerpolicy="no-referrer" hidden/);
   assert.match(html, /id="composer-video-create"[^>]+aria-haspopup="dialog"/);
   assert.match(html, /<video id="video-create-preview"[^>]+controls/);
   assert.match(html, /id="composer-music-create"[^>]+aria-haspopup="dialog"/);
@@ -1538,6 +1542,73 @@ test('composer + creation grid opens real editors and generation dialogs', () =>
   assert.match(html, /id="composer-model3d-create"[^>]+aria-haspopup="dialog"/);
   assert.match(html, /<select name="source">\s*<option value="text">根据描述<\/option>\s*<option value="image">根据参考图<\/option>/);
   assert.match(html, /id="model3d-create-open-preview"[^>]+aria-expanded="false"/);
+});
+
+test('website creation preserves the chat draft, recovers a saved job, and tears down its lazy preview', async () => {
+  const {mountWebsiteCreator} = await import('../openteamily/static/chat/video-create.mjs');
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const widget = name => el('website-create-' + name);
+  const dialog = widget('dialog');
+  const iframe = widget('preview');
+  const prompt = widget('prompt');
+  prompt.maxLength = 1600;
+  widget('form').elements = {prompt};
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; return fire(dialog, 'close'); };
+  Object.defineProperty(iframe, 'src', {set(url) { this.setAttribute('src', url); }});
+
+  const workspace = alice;
+  const artifact = bob;
+  const jobsPath = `/v1/workspaces/${workspace}/websites`;
+  const artifactPath = `/v1/workspaces/${workspace}/artifacts/${artifact}`;
+  const calls = [];
+  let job = null;
+  let finishPreview;
+  mountWebsiteCreator(doc, {
+    context: () => ({workspace, scope: 'chat-1', sendLabel: '发送到会话'}),
+    key: () => 'website-request',
+    onOpen() {},
+    async request(method, path, body, headers) {
+      calls.push({method, path, body, headers});
+      if (path === jobsPath && method === 'GET') return {status: 200, body: {configured: true, job}};
+      if (path === jobsPath && method === 'POST') {
+        job = {id: 'c'.repeat(32), prompt: body.prompt, state: 'queued', artifact_id: null};
+        return {status: 202, body: {job}};
+      }
+      if (path === artifactPath) return new Promise(resolve => { finishPreview = resolve; });
+      throw new Error('unexpected ' + path);
+    },
+  }).sync();
+
+  const trigger = el('composer-website-create');
+  el('chat-body').value = '未发送的聊天草稿';
+  await fire(trigger, 'click');
+  assert.equal(prompt.value, el('chat-body').value);
+  assert.equal(widget('manual').href, '/space?new=website#workspace=' + workspace);
+  prompt.value = '  产品展示网站  ';
+  await fire(widget('form'), 'submit', {preventDefault() {}});
+  assert.match(widget('status').textContent, /排队/);
+  assert.equal(el('chat-body').value, '未发送的聊天草稿');
+  assert.deepEqual(calls[1], {
+    method: 'POST', path: jobsPath, body: {prompt: '产品展示网站'}, headers: {'Idempotency-Key': 'website-request'},
+  });
+  await dialog.close();
+  job = {...job, state: 'succeeded', artifact_id: artifact};
+  await fire(trigger, 'click');
+  assert.match(widget('status').textContent, /私密保存/);
+  assert.equal(widget('space').href, `/space?workspace=${workspace}&artifact=${artifact}`);
+  assert.equal(widget('result').hidden, false);
+  assert.equal(iframe.hidden, true);
+  assert.equal(calls.length, 3);
+
+  const preview = fire(widget('open-preview'), 'click');
+  finishPreview({status: 200, body: {artifact: {revision: 3}}});
+  await preview;
+  assert.equal(iframe.getAttribute('src'), artifactPath + '/preview?revision=3');
+  assert.equal(iframe.hidden, false);
+  await dialog.close();
+  assert.equal(iframe.getAttribute('src'), undefined);
+  assert.equal(iframe.hidden, true);
 });
 
 // Media shared in a chat is uploaded to the workspace library before the

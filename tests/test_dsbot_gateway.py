@@ -181,6 +181,8 @@ class GatewayTest(unittest.TestCase):
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/images/{aid}'), 'images')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/videos/{aid}'), 'videos')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/music/{aid}'), 'music')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/websites'), 'websites')
+        self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/websites/{aid}'), 'websites')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/models-3d/{aid}'), 'model3d')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/shares/{aid}/revoke'), 'artifacts')
         self.assertEqual(gw.moved_api(f'/v1/workspaces/{ws}/artifacts/{aid}/discover'), 'discover')

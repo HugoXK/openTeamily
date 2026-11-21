@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS ot_listing_models (
   owner_id TEXT NOT NULL, content BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ot_listing_models_owner ON ot_listing_models(owner_id);
+CREATE TABLE IF NOT EXISTS ot_listing_sites (
+  listing_id TEXT PRIMARY KEY REFERENCES ot_listings(id) ON DELETE CASCADE,
+  html TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ot_likes (listing_id TEXT NOT NULL REFERENCES ot_listings(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (listing_id, owner_id));
 CREATE TABLE IF NOT EXISTS ot_collections (listing_id TEXT NOT NULL REFERENCES ot_listings(id) ON DELETE CASCADE, owner_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (listing_id, owner_id));
 CREATE TABLE IF NOT EXISTS ot_follows (follower_id TEXT NOT NULL, creator_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (follower_id, creator_id), CHECK (follower_id <> creator_id));
@@ -42,6 +46,17 @@ const RESERVED = new Set(["settings", "team", "members", "v1", "discover", "agen
 const REF = /^[A-Za-z0-9._:-]{1,80}$/;
 const SNAPSHOT_MAX = 200_000;
 const MODEL_MIME = "model/gltf-binary";
+const MAX_SITE_BYTES = 32 * 1024;
+const SITE_POLICY = [
+  "sandbox allow-scripts", "frame-ancestors 'self'", "default-src 'none'",
+  "script-src 'unsafe-inline'", "style-src 'unsafe-inline'", "img-src data:", "font-src data:", "media-src data:",
+  "connect-src 'none'", "object-src 'none'", "frame-src 'none'", "worker-src 'none'", "base-uri 'none'", "form-action 'none'",
+].join("; ");
+
+function publishedSiteAvailable(ot: OtContext, l: { id: string; listed: number; work_kind: string | null }) {
+  return Boolean(l.listed && l.work_kind === "website"
+    && ot.get("SELECT 1 FROM ot_listing_sites WHERE listing_id = ?", l.id));
+}
 
 function engagement(ot: OtContext, l: any, viewer: string) {
   const has = (table: string) => !!ot.get(`SELECT 1 FROM ${table} WHERE listing_id = ? AND owner_id = ?`, l.id, viewer);
@@ -76,7 +91,7 @@ const listingView = (ot: OtContext, l: any, viewer: string | null, withSnapshot 
   id: l.id, slug: l.slug, kind: l.kind, title: l.title, summary: l.summary, category: l.category, work_kind: l.work_kind,
   creator: ot.profileView(l.owner_id), listed: !!l.listed, chat_enabled: l.kind === "agent" && !!l.chat_enabled, updated_at: l.updated_at, created_at: l.created_at,
   path: listingPath(ot, l), ...(viewer ? engagement(ot, l, viewer) : { likes: ot.get<any>("SELECT COUNT(*) AS n FROM ot_likes WHERE listing_id = ?", l.id).n, collections: ot.get<any>("SELECT COUNT(*) AS n FROM ot_collections WHERE listing_id = ?", l.id).n, liked: false, collected: false, following: false, own: false }),
-  ...(l.kind === "work" ? {comment_count: workCommentCount(ot, l.id)} : {}),
+  ...(l.kind === "work" ? {comment_count: workCommentCount(ot, l.id), site_available: publishedSiteAvailable(ot, l)} : {}),
   ...(withSnapshot ? { snapshot: l.snapshot ?? null } : {}),
 });
 
@@ -101,7 +116,9 @@ function publishedQuickStarts(listing: {id: string; kind: string; snapshot: stri
 function publicPage(ot: OtContext, l: any, view: any) {
   const creator = view.creator?.display_name || view.creator?.handle || "";
   const title = String(view.title || view.slug);
-  const policy = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';";
+  const site = l.kind === "work" && view.site_available === true;
+  const policy = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';"
+    + (site ? " frame-src 'self';" : "");
   if (l.kind === "work") {
     const download = l.work_kind === "model3d" ? `<p><a href="/w/${l.slug}/file">下载 GLB</a></p>` : "";
     const comments = workCommentsPage(ot, l, null, {limit: "4"});
@@ -114,9 +131,11 @@ function publicPage(ot: OtContext, l: any, view: any) {
     const adjacent = (work: WorkNeighbor | null, rel: "prev" | "next", label: string) => work
       ? `<a rel="${rel}" href="/w/${encodeURIComponent(work.slug)}" title="${escapeHtml(work.title)}">${label}</a>`
       : `<span aria-disabled="true">${label}</span>`;
-    const content = l.snapshot && !String(l.snapshot).startsWith("{")
-      ? `<pre>${escapeHtml(String(l.snapshot).slice(0, 20_000))}</pre>`
-      : (view.summary ? `<p>${escapeHtml(view.summary)}</p>` : "");
+    const content = site
+      ? `<iframe class="work-site-frame" src="/w/${encodeURIComponent(l.slug)}/site" title="${escapeHtml(title)} 的互动预览" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>`
+      : l.snapshot && !String(l.snapshot).startsWith("{")
+        ? `<pre>${escapeHtml(String(l.snapshot).slice(0, 20_000))}</pre>`
+        : (view.summary ? `<p>${escapeHtml(view.summary)}</p>` : "");
     return `<!DOCTYPE html>
 <html lang="zh-CN"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -129,6 +148,8 @@ body{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0
 a{color:#24594b;text-underline-offset:.18em}
 a:focus-visible{outline:2px solid #176750;outline-offset:3px}
 h1{overflow-wrap:anywhere}
+body.interactive-work{max-width:64rem}
+.work-site-frame{display:block;box-sizing:border-box;width:100%;height:clamp(26rem,72vh,56rem);border:1px solid #cbdad3;border-radius:.6rem;background:#fff}
 .work-nav{display:flex;flex-wrap:wrap;gap:.5rem;margin:1rem 0}
 .work-nav>*{display:inline-flex;align-items:center;min-height:2.75rem;padding:.35rem .85rem;border:1px solid #cbdad3;border-radius:.6rem}
 .work-nav a{background:#edf6ee}
@@ -136,7 +157,7 @@ h1{overflow-wrap:anywhere}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f6f6;padding:1rem;border-radius:8px}
 .comments{margin:2rem 0}.comments ul{padding:0;list-style:none}.comments pre{font:inherit;margin:.3rem 0 .8rem}
 </style>
-</head><body>
+</head><body${site ? ' class="interactive-work"' : ""}>
 <p class="meta">作品${creator ? " · " + escapeHtml(creator) : ""}</p>
 <h1>${escapeHtml(title)}</h1>
 <nav class="work-nav" aria-label="浏览公开作品">
@@ -390,7 +411,14 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
     assert(workKind === null || WORK_KINDS.includes(workKind), 400, "invalid_request", "unknown work kind");
     if (workKind !== "model3d") assert(b.model_data === undefined, 400, "invalid_request", "only a 3D work accepts a GLB file");
     const model = workKind === "model3d" ? decodeChatFile({title: "model.glb", mime: MODEL_MIME, data: b.model_data}).data : null;
-    const snapshot = b.snapshot == null ? null : text(b.snapshot, "snapshot", { max: SNAPSHOT_MAX, multiline: true });
+    const site = b.site_html;
+    if (site !== undefined) {
+      assert(workKind === "website" && typeof site === "string" && site.trim().length > 0,
+        400, "invalid_request", "site_html requires a website work and non-empty HTML");
+      assert(Buffer.byteLength(site, "utf8") <= MAX_SITE_BYTES, 413, "site_too_large", "site_html exceeds 32 KiB");
+    }
+    const snapshot = site !== undefined || b.snapshot == null
+      ? null : text(b.snapshot, "snapshot", { max: SNAPSHOT_MAX, multiline: true });
     const existing = ot.get<any>("SELECT * FROM ot_listings WHERE owner_id = ? AND kind = ? AND ref = ?", me.ownerId, b.kind, b.ref);
     assert(b.chat_enabled === undefined || (b.kind === "agent" && typeof b.chat_enabled === "boolean"),
       400, "invalid_request", "chat_enabled must be a boolean on an agent listing");
@@ -420,6 +448,12 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       } else if (existing?.work_kind === "model3d") {
         ot.run("DELETE FROM ot_listing_models WHERE listing_id = ?", id);
       }
+      if (site !== undefined) {
+        ot.run(`INSERT INTO ot_listing_sites (listing_id, html) VALUES (?,?)
+          ON CONFLICT(listing_id) DO UPDATE SET html=excluded.html`, id, site);
+      } else if (existing?.work_kind === "website") {
+        ot.run("DELETE FROM ot_listing_sites WHERE listing_id = ?", id);
+      }
       if (!existing || !existing.listed) {
         for (const f of ot.all<any>("SELECT follower_id FROM ot_follows WHERE creator_id = ? LIMIT 5000", me.ownerId)) {
           ot.notify(f.follower_id, "discover.published", { listing_id: id, slug, kind: b.kind, title, creator: ot.profileView(me.ownerId) });
@@ -435,6 +469,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       const r = ot.run("UPDATE ot_listings SET listed = 0, chat_enabled = 0, updated_at = ? WHERE id = ? AND owner_id = ?", ot.now(), id, me.ownerId);
       assert(r.changes === 1, 404, "listing_not_found", "no such listing of yours");
       ot.run("DELETE FROM ot_listing_models WHERE listing_id = ?", id);
+      ot.run("DELETE FROM ot_listing_sites WHERE listing_id = ?", id);
     });
     return { unlisted: true };
   });
@@ -557,11 +592,24 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
       .header("Content-Security-Policy", "default-src 'none'; sandbox")
       .send(model.content);
   });
+  app.get("/w/:slug/site", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const l = listedBySlug(ot, params(req).slug);
+    assert(l.kind === "work" && l.work_kind === "website",
+      404, "listing_not_found", "no such public website");
+    const site = ot.get<{html: string}>("SELECT html FROM ot_listing_sites WHERE listing_id = ?", l.id);
+    assert(site, 404, "listing_not_found", "no such public website");
+    return reply.type("text/html; charset=utf-8")
+      .header("Content-Security-Policy", SITE_POLICY)
+      .header("X-Content-Type-Options", "nosniff")
+      .header("Referrer-Policy", "no-referrer")
+      .send(site.html);
+  });
   app.get("/w/:slug/preview", async (req) => {
     const l = listedBySlug(ot, params(req).slug);
     assert(l.kind === "work", 404, "listing_not_found", "no such listing");
     const snapshot = l.snapshot ? String(l.snapshot).slice(0, 2000) : "";
-    return { preview: snapshot.startsWith("{") ? (listingView(ot, l, null).summary || "") : snapshot };
+    return { preview: snapshot.startsWith("{") || publishedSiteAvailable(ot, l) ? (l.summary || "") : snapshot };
   });
 
   // Public homepage "start a conversation": a signed-in visitor talks to the creator's

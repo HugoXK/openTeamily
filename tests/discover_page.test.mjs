@@ -1154,3 +1154,25 @@ test('comment permalinks open a published work missing from the feed without wai
   await mounted;
   assert.equal(doc.getElementById('feed-comments-dialog').open, true);
 });
+
+test('published interactive websites load a same-origin isolated frame only inside the work detail', async () => {
+  const {mount} = await import('../openteamily/static/discover/app.mjs');
+  const doc = feedDocument();
+  const item = detailFixture({
+    kind: 'website', title: '互动作品', site_available: true, path: '/social/w/ci-fixture-doc',
+  });
+  const {fetcher} = detailFetcher(item, () => commentResponse({preview: '公开简介'}));
+  await mount(doc, {fetcher, location: {search: '', pathname: '/discover'}});
+  const grid = doc.getElementById('feed-grid');
+  const reader = doc.getElementById('work-detail-preview');
+  assert.equal(classHits(grid, 'work-detail-site').length, 0);
+  assert.equal(reader.children.length, 0);
+  await classHits(grid, 'feed-detail-toggle')[0].handlers.click();
+  const [frame] = classHits(reader, 'work-detail-site');
+  assert.equal(frame.src, '/w/ci-fixture-doc/site');
+  assert.equal(frame.attributes.sandbox, 'allow-scripts');
+  assert.equal(frame.attributes.referrerpolicy, 'no-referrer');
+  assert.match(frame.title, /互动作品/);
+  doc.getElementById('work-detail-back').handlers.click();
+  assert.equal(classHits(reader, 'work-detail-site').length, 0);
+});

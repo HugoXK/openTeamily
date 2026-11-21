@@ -2363,8 +2363,8 @@ button.message-quote:hover { background: var(--ot-bg-accent); }
   cursor: pointer;
 }
 .chat-save-dialog .media-create-toggle input { width: auto; }
-:is(#image-create-status, #video-create-status, #music-create-status, #model3d-create-status) { margin: 0; }
-:is(#image-create-result, #video-create-result, #music-create-result, #model3d-create-result) { margin: 0; }
+:is(#image-create-status, #video-create-status, #music-create-status, #model3d-create-status, #website-create-status) { margin: 0; }
+:is(#image-create-result, #video-create-result, #music-create-result, #model3d-create-result, #website-create-result) { margin: 0; }
 :is(#image-create-preview, #video-create-preview) {
   display: block;
   width: 100%;
@@ -2376,6 +2376,19 @@ button.message-quote:hover { background: var(--ot-bg-accent); }
 }
 #music-create-preview { display: block; width: 100%; }
 .media-create-links { margin-top: .6rem; }
+#website-create-dialog { width: min(42rem, calc(100vw - 2rem)); }
+#website-create-status:empty, #website-create-preview-status:empty { display: none; }
+#website-create-preview-status { margin: .5rem 0 0; }
+#website-create-preview:not([hidden]) {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: clamp(12rem, 48dvh, 26rem);
+  margin-top: .65rem;
+  border: 1px solid var(--ot-line);
+  border-radius: .75rem;
+  background: var(--ot-surface-2);
+}
 .model3d-preview-frame {
   width: 100%;
   min-height: 12rem;

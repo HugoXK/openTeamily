@@ -263,6 +263,15 @@ a.catalog-create[hidden] { display: none; }
 .work-detail-content:empty { display: none; }
 .work-detail-paper #work-detail-retry { justify-self: start; }
 .work-detail-content { display: grid; gap: .65rem; min-width: 0; line-height: 1.65; }
+.work-detail-site {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: clamp(21rem, 60dvh, 42rem);
+  border: 1px solid var(--ot-line);
+  border-radius: .75rem;
+  background: #fff;
+}
 .work-detail-image { display: block; max-width: 100%; max-height: 50dvh; margin-inline: auto; object-fit: contain; }
 .work-detail-actions { padding-top: .875rem; border-top: 1px solid var(--ot-line); }
 .work-detail-actions .feed-detail-open { display: inline-flex; align-items: center; padding-inline: .5rem; }
@@ -277,6 +286,7 @@ a.catalog-create[hidden] { display: none; }
   .work-detail-view { gap: .625rem; }
   .work-detail-toolbar, .work-detail-navigation, .work-detail-actions { gap: .375rem; }
   .work-detail-toolbar button { padding-inline: .625rem; }
+  .work-detail-site { height: clamp(18rem, 50dvh, 34rem); }
 }
 .feed-detail-lines { display: grid; gap: .18rem; margin: 0; padding-left: 1.1rem; }
 .feed-detail-open { color: var(--ot-accent); font-weight: 600; text-decoration: none; }

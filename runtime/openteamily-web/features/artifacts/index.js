@@ -5,11 +5,11 @@
 // public /share/<token> pages are rendered by Bot Social (snapshot published here).
 import { defineFeature } from '../../featurekit/feature.js'
 import { HEX32, digest, refuse } from '../../featurekit/http.js'
-import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, search } from './library.js'
+import { createArtifact, createMedia, exportBytes, listFiles, load, PER_WORKSPACE, search, uniqueTitle } from './library.js'
 import { IMPORT_TABLES, MIGRATIONS } from './schema.js'
 import { routes } from './routes.js'
 import { importMedia } from './media.js'
-import { emptyBoard, MAX_GENERATED_VIDEO_BYTES, MAX_MEDIA_BYTES, publicKind } from './model.js'
+import { emptyBoard, MAX_GENERATED_VIDEO_BYTES, MAX_MEDIA_BYTES, publicKind, validTitle } from './model.js'
 import { sniffMime } from './render.js'
 import { GLB_MIME, MAX_GLB_BYTES } from '../../lib/glb.js'
 import { exportOffice } from './office.js'
@@ -59,6 +59,18 @@ export default defineFeature({
     },
     async generatedModel3d(input, call) {
       return generatedMedia(ctx, input, call, 'model3d', GLB_MIME, 'glb', MAX_GLB_BYTES)
+    },
+    async generatedWebsite(input, call) {
+      if (!call?.internal) refuse(404, 'not_found', 'Internal endpoint')
+      const {workspace_id: workspace, job_id: id, title, body} = input ?? {}
+      if (!HEX32.test(workspace || '') || !HEX32.test(id || '')) refuse(400, 'invalid', 'Invalid generation')
+      const key = 'website-' + id
+      const saved = ctx.store.get('SELECT id FROM artifacts WHERE workspace_id=? AND key_hash=?', workspace, digest('artifact:' + key))
+      if (saved || body === undefined) return saved
+      if (!validTitle(title)) refuse(400, 'invalid', 'Invalid website title')
+      const name = uniqueTitle(ctx.store, workspace, title.trim(), id)
+      const result = createArtifact(ctx, workspace, {kind: 'website', title: name, body}, key)
+      return {id: result.body.artifact.id}
     },
     async saveChatMessage(input, call) {
       if (!call?.internal) refuse(403, 'forbidden', 'Save chat messages from their conversation')

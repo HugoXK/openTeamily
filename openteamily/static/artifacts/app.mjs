@@ -1,4 +1,4 @@
-import { readWorkspaceChoices } from '../shell/dsbot-api.mjs';
+import { readWorkspaceChoices, servedByDsBot } from '../shell/dsbot-api.mjs';
 import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { bindModel3dPreview } from '../shell/model3d-preview.mjs';
 // Authorized saved-result links select a real workspace and fetch the actual editor record.
@@ -710,6 +710,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   const model3dPreview = bindModel3dPreview(document.getElementById('media-model3d-toggle'),
     document.getElementById('media-model3d-preview'), document.getElementById('media-model3d-status'));
 
+  const websitePreview = document.getElementById('website-preview');
+  const websiteControls = document.getElementById('website-preview-controls');
+  const websiteToggle = document.getElementById('website-preview-toggle');
+  const websiteStatus = document.getElementById('website-preview-status');
+  let websiteSource = '';
+  let websiteRevision = null;
+  let websiteInteractive = false;
+
+  function renderWebsitePreview(interactive = false) {
+    websiteInteractive = interactive && websiteRevision !== null;
+    websitePreview.hidden = !websiteSource;
+    websitePreview.setAttribute('sandbox', websiteInteractive ? 'allow-scripts' : '');
+    if (websiteSource) websitePreview.src = websiteInteractive ? websiteSource + '?revision=' + websiteRevision : websiteSource;
+    else websitePreview.removeAttribute('src');
+    if (websiteControls) websiteControls.hidden = websiteRevision === null;
+    if (websiteToggle) {
+      websiteToggle.textContent = websiteInteractive ? '关闭互动预览' : '打开互动预览';
+      websiteToggle.setAttribute('aria-pressed', String(websiteInteractive));
+    }
+    if (websiteStatus) {
+      websiteStatus.textContent = websiteInteractive ? `正在预览已保存的版本 ${websiteRevision}。` : '';
+      websiteStatus.hidden = !websiteInteractive;
+    }
+  }
+
+  function setWebsitePreview(item = null) {
+    const eligible = item?.kind === 'website' && item.id && workspaceId();
+    websiteSource = eligible ? `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/preview` : '';
+    websiteRevision = eligible && servedByDsBot(document) && item.body?.trim()
+      && Number.isSafeInteger(item.revision) && item.revision > 0 ? item.revision : null;
+    renderWebsitePreview();
+  }
+
+  websiteToggle?.addEventListener('click', () => renderWebsitePreview(!websiteInteractive));
+
   function fillEditor(item) {
     form.elements.title.value = item && item.title ? item.title : '';
     form.elements.body.value = item && typeof item.body === 'string' ? item.body : '';
@@ -813,17 +848,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       source.hidden = true;
       source.textContent = '';
     }
-    const preview = document.getElementById('website-preview');
-    if (kind === 'website' && item && item.id && workspaceId()) {
-      preview.hidden = false;
-      preview.setAttribute('sandbox', '');
-      preview.removeAttribute('srcdoc');
-      preview.src = `/v1/workspaces/${workspaceId()}/artifacts/${item.id}/preview`;
-    } else {
-      preview.hidden = true;
-      preview.removeAttribute('src');
-      preview.removeAttribute('srcdoc');
-    }
+    setWebsitePreview(item);
   }
 
   function closeNewMenu() {
@@ -1385,6 +1410,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (pendingDeleteCancel) pendingDeleteCancel();
     closeNewMenu();
     model3dPreview.setSource('');
+    setWebsitePreview();
     current = item;
     listPanel.hidden = true;
     form.hidden = false;
@@ -1596,6 +1622,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const session = await request('GET', '/v1/auth/session');
     if (seq !== workspaceLoad) return;
     if (session.status === 401) {
+      setWebsitePreview();
       loginPanel.hidden = false;
       mainPanel.hidden = true;
       show('', '');
@@ -1696,6 +1723,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   workspaceSelect.addEventListener('change', () => {
     if (pendingDeleteCancel) pendingDeleteCancel();
     model3dPreview.setSource('');
+    setWebsitePreview();
     meetingLoadedFor = '';
     meetingItems = [];
     meetingError = '';
@@ -1907,6 +1935,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   document.getElementById('cancel-editor').addEventListener('click', async () => {
     if (pendingDeleteCancel) pendingDeleteCancel();
     model3dPreview.setSource('');
+    setWebsitePreview();
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
@@ -1945,6 +1974,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   form.addEventListener('submit', async event => {
     event.preventDefault();
     if (savingArtifact) return;
+    if (websiteInteractive) renderWebsitePreview();
     savingArtifact = true;
     const saveButtons = ['save-artifact', 'document-save', 'sheet-save', 'slides-save'].map(id => document.getElementById(id)).filter(Boolean);
     for (const button of saveButtons) button.disabled = true;
@@ -2475,6 +2505,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     model3dPreview.setSource('');
+    setWebsitePreview();
     current = null;
     form.hidden = true;
     listPanel.hidden = false;
@@ -2618,6 +2649,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     model3dPreview.setSource('');
+    setWebsitePreview();
     current = null;
     await load();
   });

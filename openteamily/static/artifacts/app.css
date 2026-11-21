@@ -300,10 +300,33 @@ body.app-workspace:not(.chat-open) > main > #main-panel {
 }
 
 #website-preview {
+  box-sizing: border-box;
   width: 100%;
   min-height: 16rem;
   border: 1px solid var(--ot-line);
+  border-radius: 0.75rem;
   background: var(--ot-surface);
+}
+
+#website-preview[sandbox~="allow-scripts"] {
+  height: clamp(21rem, 60vh, 42rem);
+}
+
+#website-preview-controls:not([hidden]) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+}
+
+#website-preview-status {
+  margin: 0;
+}
+
+#body-label textarea {
+  box-sizing: border-box;
+  max-width: 100%;
+  font-family: ui-monospace, monospace;
 }
 
 #discover-form {

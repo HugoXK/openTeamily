@@ -900,6 +900,16 @@ export function mount(document, { fetcher = globalThis.fetch.bind(globalThis), l
 
   async function renderWorkPreview(entry) {
     const item = entry.item;
+    if (item.kind === 'website' && item.site_available === true) {
+      const frame = document.createElement('iframe');
+      frame.className = 'work-detail-site';
+      frame.title = (item.title || '网站') + ' · 互动预览';
+      frame.setAttribute('sandbox', 'allow-scripts');
+      frame.setAttribute('referrerpolicy', 'no-referrer');
+      frame.src = '/w/' + item.slug + '/site';
+      detail.preview.append(frame);
+      return;
+    }
     if (item.kind === 'model3d') {
       const file = publicWorkPath(item) + '/file';
       entry.model = attachModel3dDetail(detail.preview, item.slug, file);

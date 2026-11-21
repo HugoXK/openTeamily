@@ -8,6 +8,7 @@ import {
   unlinkMedia, updateArtifact, view, versionView,
 } from './library.js'
 import { decodeUpload } from './media.js'
+import { WEBSITE_HTML, websitePreviewRevision } from '../../lib/website-preview.js'
 import { publicKind, SLIDES_SCHEMA, TITLE_MAX, validTitle } from './model.js'
 import { normalizeSlides } from './structured.js'
 import { decodeWorkbook, normalizeWorkbook, WORKBOOK_SCHEMA, workbookText } from './workbook.js'
@@ -74,8 +75,20 @@ export async function dispatch(req, workspaceId, artifactId, action) {
     return { body: { removed: view(row, false) } }
   }
   if (action === 'preview') {
-    if (req.method !== 'GET' || req.queryString) refuse(400, 'invalid', 'Invalid artifact request')
-    return content(row, context.featureDir, { preview: true })
+    if (req.method !== 'GET') refuse(400, 'invalid', 'Invalid artifact request')
+    const website = publicKind(row) === 'website'
+    if (!req.queryString) {
+      const result = content(row, context.featureDir, { preview: true })
+      return website ? { ...result, inline: true } : result
+    }
+    const revision = websitePreviewRevision(req.query)
+    if (!website || revision === null) refuse(400, 'invalid', 'Invalid artifact request')
+    if (revision !== row.revision) refuse(409, 'conflict', 'Open the current saved website revision')
+    return {
+      status: 200, raw: row.body,
+      headers: { 'content-type': WEBSITE_HTML },
+      filename: 'website-preview.html',
+    }
   }
   if (action === 'file') {
     if (req.queryString) refuse(400, 'invalid', 'Invalid artifact request')
