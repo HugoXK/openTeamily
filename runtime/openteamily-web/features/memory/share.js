@@ -46,8 +46,11 @@ async function publish(req, row, page) {
 
 async function retire(req, rows) {
   for (const row of rows) {
+    // Take the public snapshot down first: a local "revoked" flag must never
+    // outrun the store that actually serves the link. A failed delete leaves
+    // this row revoked=0 and throws, so the caller can report the truth.
+    await sharedBotSocial(req.host).del('/v1/ot/public-shares/' + row.token_hash)
     req.store.run('UPDATE memory_shares SET revoked=1 WHERE id=?', row.id)
-    await sharedBotSocial(req.host).del('/v1/ot/public-shares/' + row.token_hash).catch(() => {})
   }
 }
 
@@ -67,8 +70,16 @@ async function create(req, workspaceId, pageId) {
   }
   // Sharing again replaces the old link: the earlier snapshots are taken down
   // after the new one is live, so a failure above leaves the old link working.
-  await retire(req, activeShares(req.store, workspaceId, pageId).filter((old) => old.id !== id))
-  return { status: 201, body: { share: shareView(row, token) } }
+  // If taking the old ones down now fails, the new link stays valid and the
+  // still-live old link is reported instead of being silently marked revoked.
+  let warnings
+  try {
+    await retire(req, activeShares(req.store, workspaceId, pageId).filter((old) => old.id !== id))
+  } catch (error) {
+    req.host?.log?.(`memory share: old snapshot delete failed: ${String(error?.message ?? error).slice(0, 200)}`)
+    warnings = ['old_share_still_live']
+  }
+  return { status: 201, body: { share: shareView(row, token), ...(warnings ? { warnings } : {}) } }
 }
 
 async function state(req, workspaceId, pageId) {
@@ -84,8 +95,16 @@ async function revoke(req, workspaceId, pageId) {
   requireBodyKeys(await req.json(), [])
   const row = latest(req.store, workspaceId, pageId)
   if (!row) refuse(404, 'not_found', 'Share not found')
-  if (row.revoked) return { body: { share: shareView(row) } }
-  await retire(req, [row])
+  // Normally one link is active; a reshare whose old-link delete failed can
+  // leave two, so revoking retires every still-active link for this page.
+  const active = activeShares(req.store, workspaceId, pageId)
+  if (!active.length) return { body: { share: shareView(row) } }
+  try {
+    await retire(req, active)
+  } catch (error) {
+    req.host?.log?.(`memory share revoke: snapshot delete failed: ${String(error?.message ?? error).slice(0, 200)}`)
+    refuse(503, 'unavailable', 'Bot Social did not take the snapshot down; the share link is still live, retry')
+  }
   return { body: { share: shareView(req.store.get('SELECT * FROM memory_shares WHERE id=?', row.id)) } }
 }
 
@@ -114,5 +133,10 @@ export async function republishShare(req, page) {
 // A deleted page must not leave a readable public snapshot behind.
 export async function retireShares(req, workspaceId, pageId) {
   const rows = req.store.all('SELECT * FROM memory_shares WHERE workspace_id=? AND page_id=? AND revoked=0', workspaceId, pageId)
-  await retire(req, rows)
+  try {
+    await retire(req, rows)
+  } catch (error) {
+    req.host?.log?.(`memory share: page snapshot delete failed: ${String(error?.message ?? error).slice(0, 200)}`)
+    refuse(503, 'unavailable', 'Bot Social did not take the page snapshot down; the page was not deleted, retry')
+  }
 }

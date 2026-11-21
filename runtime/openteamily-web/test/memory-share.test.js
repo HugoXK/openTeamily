@@ -203,3 +203,57 @@ test('without a reachable Bot Social no link is created and nothing is left shar
   assert.equal(made.status, 503, JSON.stringify(made.body))
   assert.equal((await bot.call('memory', 'GET', sharePath(page.id))).body.share, null)
 })
+
+test('a failed snapshot delete keeps the share active and revoke answers 503 until it really goes', async (t) => {
+  const social = useFakeSocial(t)
+  const bot = await boot()
+  const page = await mkPage(bot, '撤不下来', '失败的撤销不能假装成功。')
+  const share = (await bot.call('memory', 'POST', sharePath(page.id), {})).body.share
+  const token = tokenFrom(share)
+  const request = social.request
+  social.request = async (method, path, body, options) => {
+    if (method === 'DELETE') throw new Error('disconnected')
+    return request.call(social, method, path, body, options)
+  }
+  const failed = await bot.call('memory', 'POST', sharePath(page.id) + '/revoke', {})
+  assert.equal(failed.status, 503, JSON.stringify(failed.body))
+  assert.match(String(failed.body?.error?.message), /snapshot|not taken down|retry|Bot Social/i)
+  // The link is still live, so the local record must not claim it is revoked.
+  const state = await bot.call('memory', 'GET', sharePath(page.id))
+  assert.equal(state.body.share.active, true)
+  assert.equal(state.body.share.revoked, false)
+  assert.ok(social.published(token))
+  // Once Bot Social answers again the same revoke finishes the job.
+  social.request = request
+  const retried = await bot.call('memory', 'POST', sharePath(page.id) + '/revoke', {})
+  assert.equal(retried.status, 200, JSON.stringify(retried.body))
+  assert.equal(retried.body.share.revoked, true)
+  assert.equal(social.published(token), null)
+})
+
+test('a failed retire of the old link after resharing is reported, not silently claimed', async (t) => {
+  const social = useFakeSocial(t)
+  const bot = await boot()
+  const page = await mkPage(bot, '重新分享', '旧链接撤不掉要说出来。')
+  const first = (await bot.call('memory', 'POST', sharePath(page.id), {})).body.share
+  const firstToken = tokenFrom(first)
+  const request = social.request
+  social.request = async (method, path, body, options) => {
+    if (method === 'DELETE') throw new Error('disconnected')
+    return request.call(social, method, path, body, options)
+  }
+  const second = await bot.call('memory', 'POST', sharePath(page.id), {})
+  assert.equal(second.status, 201, JSON.stringify(second.body))
+  assert.deepEqual(second.body.warnings, ['old_share_still_live'])
+  const secondToken = tokenFrom(second.body.share)
+  // The new link works; the old one is still live and its row still says active.
+  assert.ok(social.published(secondToken))
+  assert.ok(social.published(firstToken))
+  social.request = request
+  const state = await bot.call('memory', 'GET', sharePath(page.id))
+  assert.equal(state.body.share.active, true)
+  const revoked = await bot.call('memory', 'POST', sharePath(page.id) + '/revoke', {})
+  assert.equal(revoked.status, 200, JSON.stringify(revoked.body))
+  const live = social.rows
+  assert.equal([...live.values()].filter((row) => !row.revoked).length, 0)
+})
