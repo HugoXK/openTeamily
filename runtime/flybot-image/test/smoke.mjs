@@ -77,16 +77,9 @@ try {
   const processOwner = docker(['exec', server, 'stat', '-c', '%u:%g', '/proc/1']).stdout.trim()
   assert.equal(processOwner, '1000:1000', 'PID 1 must run as 1000:1000')
 
-  // The management task loop is shipped in the image and started by launch.mjs.
-  // This smoke does not inject a runtime key or a management server, so the
-  // loop must no-op. That is not a proof of real model inference.
-  const loopFile = docker(['exec', server, 'test', '-f', '/opt/openteamily/runtime/flybot-image/agent-loop.mjs'], { allowFailure: true })
-  assert.equal(loopFile.status, 0, 'image must ship agent-loop.mjs next to launch.mjs')
-  assert.match(
-    combined,
-    /agent-loop: no runtime key file; skip management task loop/,
-    'launch must start the management task loop, which no-ops without a key file',
-  )
+  const imageRuntime = '/opt/openteamily/runtime/flybot-image'
+  docker(['exec', server, 'test', '-f', imageRuntime + '/agent-bootstrap.mjs'])
+  docker(['exec', server, 'test', '!', '-e', imageRuntime + '/agent-loop.mjs'])
 
   const profileJson = docker(['exec', server, 'node', '--input-type=module', '-e',
     "import { readFileSync } from 'node:fs'; process.stdout.write(readFileSync('/data/profiles/web/package.json','utf8'))",

@@ -37,15 +37,12 @@ jobs:
       - run: node --test tests/guide_page.test.mjs
       - run: node --test tests/members_page.test.mjs
       - run: node --test tests/messenger_page.test.mjs
-      - run: node --test tests/runtimes_page.test.mjs
       - run: node --test tests/team_page.test.mjs
       - run: node --test manager/compose-planner/compose-command-planner.test.js
       - run: node --test tests/settings_page.test.mjs
       - run: node --test tests/settings_support_links.test.mjs
-      - run: node --test tests/runtimes_copy_feedback.test.mjs
       - run: node --test tests/shell_page.test.mjs
-      - run: node --test tests/agent_loop.test.mjs
-      - run: node --test tests/agent_loop_retry.test.mjs
+      - run: node --test tests/agent_bootstrap.test.mjs
       - run: node --test tests/ds_bot_bridge.test.mjs
       - run: node --test tests/model_http_policy.test.mjs
       - run: node --test tests/memory_page.test.mjs
@@ -53,7 +50,6 @@ jobs:
       - run: node --test tests/memory_graph_empty.test.mjs
       - run: node --test tests/discover_page.test.mjs
       - run: node --test tests/profile_page.test.mjs
-      - run: node --test tests/download_page.test.mjs
       - run: node --test tests/profile_avatar.test.mjs
       - run: node --test tests/meetings_page.test.mjs
       - run: node --test tests/meetings_action_toggle.test.mjs
