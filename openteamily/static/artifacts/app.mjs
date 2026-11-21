@@ -308,6 +308,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   let currentUser = null;
   let workspaceLoad = 0;
   let current = null;
+  let discoverRequest = 0;
+  let discoverSlugEdits = 0;
   let draftKind = 'document';
   let catalogKind = 'all';
   let catalogScope = 'all';
@@ -1486,30 +1488,41 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     document.getElementById('share-once').textContent = '';
     const versionPanel = document.getElementById('version-panel');
     versionPanel.hidden = !current || !current.id;
-    const discoverPanel = document.getElementById('discover-panel');
-    if (discoverPanel) discoverPanel.hidden = !current || !current.id;
+    const discover = loadDiscover({reset: true});
     if (current && current.id) {
-      await loadShares();
-      await loadVersions();
-      await loadDiscover();
+      await Promise.all([discover, loadShares(), loadVersions()]);
     } else {
       document.getElementById('share-list').textContent = '';
       document.getElementById('version-list').textContent = '';
     }
   }
 
-  async function loadDiscover() {
+  async function loadDiscover({reset = false} = {}) {
     const panel = document.getElementById('discover-panel');
     const status = document.getElementById('discover-status');
     const slugInput = document.getElementById('discover-slug');
     const revoke = document.getElementById('revoke-discover');
     if (!panel) return;
-    if (!current || !current.id || !workspaceId()) {
+    const item = current;
+    const workspace = workspaceId();
+    const token = ++discoverRequest;
+    if (!item?.id || !workspace) {
       panel.hidden = true;
       return;
     }
+    if (reset) {
+      if (slugInput) slugInput.value = suggestedDiscoverSlug(item.title);
+      if (revoke) revoke.hidden = true;
+      if (status) {
+        status.hidden = false;
+        status.textContent = '正在读取公开状态…';
+      }
+    }
+    const edits = discoverSlugEdits;
     panel.hidden = false;
-    const listed = await request('GET', `/v1/workspaces/${workspaceId()}/artifacts/${current.id}/discover`);
+    const listed = await request('GET', `/v1/workspaces/${workspace}/artifacts/${item.id}/discover`)
+      .catch(() => ({status: 0}));
+    if (token !== discoverRequest || current !== item || workspaceId() !== workspace) return;
     if (listed.status !== 200) {
       if (status) {
         status.hidden = false;
@@ -1518,7 +1531,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return;
     }
     const row = listed.body.discover || {};
-    if (slugInput) slugInput.value = row.slug || suggestedDiscoverSlug(current.title);
+    if (slugInput && edits === discoverSlugEdits) slugInput.value = row.slug || suggestedDiscoverSlug(item.title);
     if (revoke) revoke.hidden = !row.listed;
     if (status) {
       status.hidden = false;
@@ -2147,6 +2160,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       show('error', messageFor(result.body.error, '保存失败。'));
       return;
     }
+    const isNew = !current?.id;
     if (artifactSendOrigin?.item === current) artifactSendOrigin.item = result.body.artifact;
     current = result.body.artifact;
     draftKind = current.kind || draftKind;
@@ -2154,11 +2168,8 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     form.inert = false;
     document.getElementById('remove-artifact').hidden = false;
     document.getElementById('share-panel').hidden = false;
-    const discoverPanel = document.getElementById('discover-panel');
-    if (discoverPanel) discoverPanel.hidden = false;
     show('ok', '已保存。');
-    await loadShares();
-    await loadDiscover();
+    await Promise.all([loadShares(), loadDiscover({reset: isNew})]);
     } catch { show('error', '网络错误，未能确认保存结果。请重新打开作品检查后再重试。'); }
     finally {
       form.inert = false;
@@ -2626,6 +2637,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
   // plain group with a button handler (Enter in the slug field publishes too).
   const publishDiscover = document.getElementById('publish-discover');
   const discoverSlug = document.getElementById('discover-slug');
+  discoverSlug?.addEventListener('input', () => { discoverSlugEdits += 1; });
   if (publishDiscover) {
     if (discoverSlug) discoverSlug.addEventListener('keydown', event => {
       if (event.key === 'Enter') { event.preventDefault(); publishDiscover.click(); }

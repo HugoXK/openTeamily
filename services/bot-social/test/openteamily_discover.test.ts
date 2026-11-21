@@ -112,6 +112,39 @@ test("public listing pages need no token and hide unlisted works", async () => {
   assert.equal((await fetch(`${S.base}/v1/ot/public/listings/essay-${tag}`)).status, 404);
 });
 
+test("publication notifications resolve the current listing by ID and disappear when it is unlisted", async () => {
+  const [publisher, follower, other] = await Promise.all([
+    home(S.base, "renamed-publisher"), home(S.base, "renamed-follower"), home(S.base, "reused-address"),
+  ]);
+  const inbox = "/v1/ot/notifications";
+  await follower.ok("POST", "/v1/ot/follows", { handle: publisher.handle });
+  const original = { kind: "agent", ref: "original_agent", slug: "original-published-slug", title: "Initial title" };
+  const listing = await publisher.ok("PUT", "/v1/ot/listings", original);
+  const [notice] = (await follower.ok("GET", inbox)).notifications;
+  assert.equal(notice.data.listing_id, listing.id);
+  assert.equal(notice.data.slug, original.slug);
+
+  const renamed = { ...original, slug: "updated-published-slug", title: "Current title" };
+  const updated = await publisher.ok("PUT", "/v1/ot/listings", renamed);
+  assert.equal(updated.id, listing.id);
+  const reused = await other.ok("PUT", "/v1/ot/listings", { kind: "work", ref: "replacement_work",
+    work_kind: "document", slug: original.slug, title: "Different listing" });
+  assert.notEqual(reused.id, listing.id);
+  const inboxPage = await follower.ok("GET", inbox + "?personal=1&latest=1&unread=1");
+  assert.equal(inboxPage.unread, 1);
+  assert.equal(inboxPage.notifications.length, 1);
+  const [actual] = inboxPage.notifications;
+  assert.deepEqual([actual.id, actual.seq], [notice.id, notice.seq]);
+  assert.deepEqual([actual.data.listing_id, actual.data.slug, actual.data.title, actual.data.kind, actual.data.listing_kind],
+    [listing.id, renamed.slug, renamed.title, "agent", "agent"]);
+
+  await publisher.ok("DELETE", "/v1/ot/listings/" + listing.id);
+  assert.deepEqual(await follower.ok("GET", inbox + "?latest=1"), { notifications: [], unread: 0 });
+  assert.equal((await follower.call("POST", inbox + "/read", { notification_id: actual.id })).status, 404);
+  assert.deepEqual(await follower.ok("POST", inbox + "/read", { all: true }), { marked: 0, unread: 0 });
+  assert.equal((await follower.ok("GET", "/v1/ot/discover/" + original.slug)).id, reused.id);
+});
+
 test("published chats stay paired, use the publisher inbox, and stop receiving replies after revocation", async () => {
   const publisher = await home(S.base, "public-chat-publisher");
   const visitor = await home(S.base, "public-chat-visitor");

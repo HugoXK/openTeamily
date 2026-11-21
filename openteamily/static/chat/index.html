@@ -64,7 +64,7 @@
       <button type="button" id="search-close" hidden title="关闭搜索">‹</button>
       <button type="button" id="session-filter" class="toolbar-icon" title="会话筛选" aria-label="会话筛选：全部" aria-expanded="false" aria-controls="session-filter-label">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M4 6h16v2H4V6zm3 5h10v2H7v-2zm3 5h4v2h-4v-2z"/></svg>
-      </button><button type="button" id="notifications-toggle" class="toolbar-icon" aria-expanded="false" aria-controls="notifications-panel" title="通知：在群聊或单聊里被 @ 提及" aria-label="通知">
+      </button><button type="button" id="notifications-toggle" class="toolbar-icon" aria-expanded="false" aria-controls="notifications-panel" title="通知" aria-label="通知">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 3a6 6 0 0 0-6 6v3.6L4.3 16h15.4L18 12.6V9a6 6 0 0 0-6-6zm-2.2 15a2.3 2.3 0 0 0 4.4 0H9.8z"/></svg>
         <span id="notification-count" class="unread-badge" hidden></span>
       </button><label id="session-filter-label" hidden>会话类型
@@ -110,6 +110,7 @@
         <label>类型 <select id="notifications-kind"><option value="all">所有通知</option><option value="mention">提及我的消息</option></select></label>
         <label><input type="checkbox" id="notifications-unread"> 仅未读</label>
       </div>
+      <p id="notifications-status" class="note" role="status" hidden></p>
       <ul id="notification-list"></ul>
       <p id="notifications-empty" class="note" hidden>暂无通知。</p>
     </section>

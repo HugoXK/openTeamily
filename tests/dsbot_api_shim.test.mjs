@@ -166,6 +166,29 @@ test('a missing moved feature never falls back to platform execution', async () 
   assert.deepEqual(calls, ['/b/api/openteamily']);
 });
 
+test('moved notification read requests retain keepalive on the actual DS-Bot fetch', async () => {
+  const calls = [];
+  const win = {
+    document: {querySelector: () => ({}), addEventListener() {}},
+    location: {origin: ORIGIN},
+    async fetch(url, options) {
+      calls.push({url, options});
+      return Response.json({ok: true, value: {status: 200, body: {unread_count: 0}}});
+    },
+  };
+  install(win);
+  const path = `/v1/workspaces/${WS}/notifications/read`;
+  const post = {method: 'POST', body: JSON.stringify({notification_id: ID})};
+  await win.fetch(path, {...post, keepalive: true});
+  await win.fetch(new Request(ORIGIN + path, {...post, keepalive: true}));
+  await win.fetch(path, post);
+  assert.deepEqual(calls.map(call => call.url), Array(3).fill('/b/api/openteamily'));
+  assert.deepEqual(calls.map(call => call.options.keepalive), [true, true, undefined]);
+  assert.deepEqual(JSON.parse(calls[0].options.body), {endpoint: 'social/v1', payload: {
+    method: 'POST', path, body: {notification_id: ID},
+  }});
+});
+
 test('work detail and comment paths stay within the viewer’s Discover plugin', () => {
   const base = '/v1/discover/works/work-demo';
   const id = 'otwc_' + '0'.repeat(26);
