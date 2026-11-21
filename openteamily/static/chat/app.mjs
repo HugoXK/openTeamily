@@ -321,7 +321,7 @@ export const RUNTIME_WAIT_ERRORS = {
 
 export function sendNotice(reply) {
   const code = reply && reply.error_code;
-  if (code === 'model-unconfigured') return {kind: 'error', text: '消息已保存。配置模型 API 后，智能体才能回复。'};
+  if (code === 'model-unconfigured') return {kind: 'error', text: '消息已保存，当前没有可用的模型。'};
   if (code === 'no_agent') return {kind: 'error', text: '消息已保存，正在等待已连接的运行时。'};
   if (code === 'runtime_starting') return {kind: 'ok', text: '消息已保存。' + RUNTIME_WAIT_ERRORS[code] + '。'};
   if (RUNTIME_WAIT_ERRORS[code]) return {kind: 'error', text: '消息已保存。' + RUNTIME_WAIT_ERRORS[code] + '。'};
@@ -1688,11 +1688,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       body.setAttribute('aria-live', 'off');
       body.hidden = true;
     } else if (failed && item.error_code === 'model-unconfigured') {
-      body.textContent = uiLabel('这个智能体还没有可用模型。', 'This agent has no model configured.');
+      body.textContent = uiLabel('当前没有可用的模型。', 'No model is currently available.');
       const configure = document.createElement('a');
       configure.className = 'chat-model-settings';
       configure.href = '/settings#model-api';
-      configure.textContent = uiLabel('配置模型 API', 'Configure model API');
+      configure.textContent = uiLabel('查看模型设置', 'View model settings');
       body.append(configure);
     } else {
       renderMessageBody(document, body, item.role === 'user' ? (item.body || '') : statusLabel(item), chatPreferences);

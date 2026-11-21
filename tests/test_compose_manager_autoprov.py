@@ -6,11 +6,13 @@ import json
 import unittest
 
 import test_compose_manager as base
+from openteamily import model_api
 from openteamily.lifecycle import ManagerAuth, ManagerIdentity
 from openteamily.dsbot_gateway import ensure_schema, owner_runtime_readiness, record_upstream
 from openteamily.manager.__main__ import main
-from openteamily.manager.engine import Registry
-from openteamily.manager.safety import ManagerError
+from openteamily.manager.engine import ComposeEngine, Registry, Runner
+from openteamily.manager.safety import ManagerError, write_new
+from openteamily.manager.worker import ManagerWorker
 from openteamily.runtime_autoprovision import AutoProvisionPolicy
 from openteamily.security import digest
 from tests.test_management import Client
@@ -46,7 +48,7 @@ class AutoProvisionPollTests(unittest.TestCase):
         self.assertEqual(tuple(first[0])[1:], ('running', 'start', 1))
         state = user.call('POST', '/v1/personal-agent')['body']['personal_agent']['runtime_provisioning']
         self.assertEqual((state['state'], state['instance_id']), ('existing', first[0]['instance_id']))
-        return state['instance_id']
+        return user, state['instance_id']
 
     def poll(self):
         out = io.StringIO()
@@ -59,7 +61,7 @@ class AutoProvisionPollTests(unittest.TestCase):
         self.put_model_api('platform', 'synthetic-platform-fixture-key')
         with self.store.transaction() as db:
             ensure_schema(db)
-        auto = self.auto_instance()
+        _, auto = self.auto_instance()
         self.cfg['auto_instances'] = {'image': base.IMAGE, 'healthcheck': None}
         self.cfg['instances'] = {}
         self.cfgpath.write_text(json.dumps(self.cfg))
@@ -87,6 +89,54 @@ class AutoProvisionPollTests(unittest.TestCase):
         manager_cfg = json.loads(self.cfgpath.read_text())
         self.assertNotIn(auto, manager_cfg['instances'])  # never written back
 
+    def test_new_accounts_inherit_platform_model_and_restart_picks_up_rotation(self):
+        client = self.start_http()
+        original = 'synthetic-platform-fixture-key'
+        rotated = 'rotated-platform-fixture-key'
+        self.put_model_api('platform', original)
+        carol, first = self.auto_instance()
+        dana, second = self.auto_instance('dana', peer='127.0.0.10')
+        self.assertNotEqual(first, second)
+        self.assertEqual(carol.call('GET', f'/v1/instances/{second}')['status'], 404)
+        self.assertEqual(dana.call('GET', f'/v1/instances/{first}')['status'], 404)
+
+        def start(iid):
+            # The Docker stub keeps a single project's state per fixture directory.
+            root = self.root / iid
+            root.mkdir(mode=0o700)
+            path = root / 'manager.json'
+            write_new(path, {**self.cfg, 'instances': {},
+                             'auto_instances': {'image': base.IMAGE, 'healthcheck': None}})
+            registry = Registry(str(path))
+            snapshot = client.snapshot(iid)
+            self.assertEqual(snapshot['volume_ref'], 'ot-' + iid)
+            registry.adopt(iid, snapshot)
+            engine = ComposeEngine(registry, Runner(registry, enabled=True))
+            worker = ManagerWorker(client, registry, engine)
+            boot = worker.run_once(iid)
+            self.assertEqual(boot['observed'], 'running')
+            secret = engine.secret_path(iid)
+            self.assertEqual(secret.relative_to(root).as_posix(), f'secrets/model-api-{iid}.json')
+            payload = json.loads(secret.read_text())
+            self.assertEqual((payload['source'], payload['api_key']), ('platform', original))
+            self.assertNotIn(original, json.dumps(boot))
+            return worker, secret, boot['process_ref']
+
+        first_worker, first_secret, first_process = start(first)
+        _, second_secret, _ = start(second)
+        self.assertNotEqual(first_secret, second_secret)
+        with self.store.transaction() as db:
+            blob = model_api.wrap(model_api.wrapping_key(self.store), rotated)
+            db.execute("UPDATE model_api_configs SET key_blob=?, revision=revision+1 WHERE scope='platform'", (blob,))
+        restart = carol.call('POST', f'/v1/instances/{first}/restart', {'operation_id': 'rotate-platform-model-0001'})
+        self.assertEqual(restart['status'], 202)
+        receipt = first_worker.run_once(first)
+        self.assertEqual(receipt['observed'], 'running')
+        self.assertNotEqual(receipt['process_ref'], first_process)
+        self.assertEqual(json.loads(first_secret.read_text())['api_key'], rotated)
+        self.assertEqual(json.loads(second_secret.read_text())['api_key'], original)
+        self.assertNotIn(rotated, json.dumps(receipt))
+
     def test_signup_remains_valid_when_personal_workspace_has_no_capacity(self):
         self.enable_auto()
         self.app.config = replace(self.app.config, max_workspaces=1)
@@ -102,7 +152,7 @@ class AutoProvisionPollTests(unittest.TestCase):
 
     def test_without_template_auto_instance_is_skipped(self):
         self.start_http()
-        auto = self.auto_instance(static=True)
+        _, auto = self.auto_instance(static=True)
         code, result = self.poll()
         self.assertEqual(code, 0, result)
         by_id = {r['instance_id']: r for r in result['results']}
