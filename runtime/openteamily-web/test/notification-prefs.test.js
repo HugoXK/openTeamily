@@ -31,46 +31,54 @@ const row = (id, kind, read, data = {}) => ({
 // follow notice that must never be collateral damage, a team notice, and a read
 // row so the unread accounting is visible.
 const inbox = () => ({
-  unread: 3,
+  unread: 4,
   notifications: [
     row('n1', 'messenger.mention', false, { excerpt: '@ann 看一下这个' }),
     row('n2', 'discover.published', false, { listing_id: 'l1', title: '周报' }),
     row('n3', 'team.member_joined', false),
     row('n4', 'messenger.added', true),
+    // No producer emits this kind today (the twelve kinds Bot Social writes are
+    // listed above the map); the artifacts library already names the kind
+    // (`features/artifacts/library.js`), so the row proves the map is wired for it
+    // while the filter still changes nothing in production.
+    row('n5', 'artifact', false, { title: '周报草稿' }),
   ],
 })
 
 test('提及我 off drops the mention row and the matching unread, and nothing else', () => {
   const page = notificationPage(inbox(), { mentions: false, task_completion: true, artifacts: true })
   assert.deepEqual(page.items.map(item => item.kind),
-                   ['discover.published', 'team.member_joined', 'messenger.added'])
-  assert.equal(page.unread_count, 2, 'only the mention unread left the count')
+                   ['discover.published', 'team.member_joined', 'messenger.added', 'artifact'])
+  assert.equal(page.unread_count, 3, 'only the mention unread left the count')
   assert.equal(page.limit, 200)
 })
 
-test('a follow notice is not a work notice: it survives every switch being off', () => {
-  const page = notificationPage(inbox(), { mentions: false, task_completion: false, artifacts: false })
-  assert.deepEqual(page.items.map(item => item.id), ['n2', 'n3', 'n4'],
-                   'discover.published and the team row are untouched')
-  assert.equal(page.unread_count, 2)
+test('作品通知 off drops only the work row: a follow notice and a team notice survive', () => {
+  const page = notificationPage(inbox(), { mentions: true, task_completion: false, artifacts: false })
+  assert.deepEqual(page.items.map(item => item.id), ['n1', 'n2', 'n3', 'n4'],
+                   'discover.published, team.member_joined and messenger.added are all kept')
+  assert.deepEqual(page.items.map(item => item.kind),
+                   ['messenger.mention', 'discover.published', 'team.member_joined', 'messenger.added'],
+                   'only the artifact row is a work notice')
+  assert.equal(page.unread_count, 3, 'the artifact row was unread, so the count drops by exactly one')
 })
 
 test('提及我 back on shows the same row again, so the filter never drops data', () => {
   const off = notificationPage(inbox(), { mentions: false })
-  assert.deepEqual(off.items.map(item => item.id), ['n2', 'n3', 'n4'])
+  assert.deepEqual(off.items.map(item => item.id), ['n2', 'n3', 'n4', 'n5'])
   const on = notificationPage(inbox(), { mentions: true })
-  assert.deepEqual(on.items.map(item => item.id), ['n1', 'n2', 'n3', 'n4'], 'the same rows come back')
+  assert.deepEqual(on.items.map(item => item.id), ['n1', 'n2', 'n3', 'n4', 'n5'], 'the same rows come back')
   assert.deepEqual(on.items.find(item => item.id === 'n1'),
                    { conversation_id: 'c'.repeat(32), excerpt: '@ann 看一下这个',
                      id: 'n1', seq: 1, kind: 'messenger.mention',
                      created: 1700000000, read: false })
-  assert.equal(on.unread_count, 3)
+  assert.equal(on.unread_count, 4)
 })
 
 test('defaults keep every row and the unread count Bot Social reported', () => {
   const page = notificationPage(inbox(), {})
-  assert.deepEqual(page.items.map(item => item.id), ['n1', 'n2', 'n3', 'n4'])
-  assert.equal(page.unread_count, 3)
+  assert.deepEqual(page.items.map(item => item.id), ['n1', 'n2', 'n3', 'n4', 'n5'])
+  assert.equal(page.unread_count, 4)
   assert.equal(page.limit, 200)
 })
 
@@ -103,13 +111,13 @@ test('the inbox endpoint filters by the stored preference, and restores on switc
     },
   }
   const list = async (query = '') => (await social(host).endpoints.v1({ method: 'GET', path: INBOX, query })).body
-  assert.deepEqual((await list()).items.map(item => item.id), ['n1', 'n2', 'n3', 'n4'])
+  assert.deepEqual((await list()).items.map(item => item.id), ['n1', 'n2', 'n3', 'n4', 'n5'])
   assert.equal((await settingsCall(f, 'PUT', PREFS, { changes: { mentions: false } })).status, 200)
   const off = await list()
-  assert.deepEqual(off.items.map(item => item.id), ['n2', 'n3', 'n4'])
-  assert.equal(off.unread_count, 2)
+  assert.deepEqual(off.items.map(item => item.id), ['n2', 'n3', 'n4', 'n5'])
+  assert.equal(off.unread_count, 3)
   assert.equal((await settingsCall(f, 'PUT', PREFS, { changes: { mentions: true } })).status, 200)
   const on = await list()
-  assert.deepEqual(on.items.map(item => item.id), ['n1', 'n2', 'n3', 'n4'])
-  assert.equal(on.unread_count, 3)
+  assert.deepEqual(on.items.map(item => item.id), ['n1', 'n2', 'n3', 'n4', 'n5'])
+  assert.equal(on.unread_count, 4)
 })
