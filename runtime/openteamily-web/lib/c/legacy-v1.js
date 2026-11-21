@@ -97,6 +97,8 @@ function conversationItem(row, me, env, workspaceId) {
     title: row.title || '',
     created: unix(row.created_at),
     updated: unix(row.updated_at),
+    activity_version: row.activity_version ?? null,
+    last_seq: row.last_seq ?? 0,
     preview: row.last_message && !row.last_message.retracted ? (row.last_message.body || '') : '',
     unread_count: row.unread ?? 0,
     muted: !!row.muted,
@@ -121,6 +123,7 @@ function messageItem(row, me, env, workspaceId) {
     revision: row.revision || 1,
     edited: unix(row.edited_at) || null,
     retracted: !!row.retracted,
+    ...(row.reactions?.length ? {reactions: row.reactions} : {}),
     ...(row.voice ? { voice: row.voice } : {}),
     ...(row.reply_jobs?.length ? {reply_jobs: row.reply_jobs} : {}),
     ...(row.attachment ? { attachment: {...row.attachment, id: row.id,
@@ -559,8 +562,14 @@ function messengerRoutes(host, wakeReplies) {
         return wrap(async () => {
           const bs = client(host)
           const {personal, team} = await messengerScope(host, bs, match[1])
+          const scope = {scope: personal ? 'personal' : 'member', team_id: team?.id}
+          const q = parseQuery(query)
+          if (q.get('view') === 'activity') {
+            const data = await bs.get('/v1/ot/conversations' + qs({...scope, view: 'activity', since: q.get('since')}))
+            return [200, data]
+          }
           const me = await meOf(bs, env)
-          const data = await bs.get('/v1/ot/conversations' + qs({scope: personal ? 'personal' : 'member', team_id: team?.id}))
+          const data = await bs.get('/v1/ot/conversations' + qs(scope))
           const items = (data.conversations || []).filter(c => personal ? (c.public_agent || accountConversation(c)) : !c.public_agent)
             .map(c => conversationItem(c, me, env, match[1]))
           return [200, { items, cursor: null }]
@@ -606,12 +615,12 @@ function messengerRoutes(host, wakeReplies) {
           const scope = await messengerScope(host, bs, match[1], match[2])
           const me = await meOf(bs, env)
           const conv = scope.conversation || await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}`)
-          const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({ limit: 100 }))
+          const page = await bs.get(`/v1/ot/conversations/${seg(match[2], 'conversation_id')}/messages` + qs({limit: 100, pins: 1}))
           return [200, {
             conversation: conversationItem(conv, me, env, match[1]),
             items: (page.messages || []).map((m) => messageItem({ ...m, conversation_id: conv.id }, me, env, match[1])),
             agent_replies: [],
-            pinned_messages: [],
+            pinned_messages: page.pinned_messages || [],
             cursor: page.next_before ?? null,
           }]
         })
@@ -780,10 +789,8 @@ function messengerExtraRoutes(host, wakeReplies) {
       async handle({ match, body }) {
         return wrap(async () => {
           const bs = client(host); await messengerScope(host, bs, match[1], match[2], match[3])
-          await bs.post(`${msg(match[3])}/pin`, { on: body?.pinned !== false })
-          const me = await meOf(bs, env)
-          const pinned = (await page(bs, match[2])).filter((m) => m.pinned).map((m) => messageItem({ ...m, conversation_id: match[2] }, me, env, match[1]))
-          return [200, { pinned: body?.pinned !== false, pinned_messages: pinned }]
+          const data = await bs.post(`${msg(match[3])}/pin`, { on: body?.pinned !== false })
+          return [200, { pinned: data.pinned, pinned_messages: data.pinned_messages || [] }]
         })
       },
     },
@@ -801,8 +808,8 @@ function messengerExtraRoutes(host, wakeReplies) {
       method: 'DELETE', path: re('\\/messages\\/([A-Za-z0-9._-]{1,80})'),
       async handle({ match }) {
         return wrap(async () => {
-          const bs = client(host); await messengerScope(host, bs, match[1], match[2], match[3])
-          await bs.del(msg(match[3]))
+          const bs = client(host); await messengerScope(host, bs, match[1], match[2])
+          await bs.post(`${msg(match[3])}/hide`, {conversation_id: match[2]})
           return [204, {}]
         })
       },
