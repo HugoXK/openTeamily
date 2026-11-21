@@ -583,6 +583,12 @@
       <button type="button" id="chat-back-to-latest" hidden>回到最新消息</button>
     </div>
     <p id="public-chat-status" class="note" role="status" hidden></p>
+    <details id="public-draft-recovery" hidden>
+      <summary id="public-draft-recovery-summary">首页草稿已保留</summary>
+      <p class="note">已有草稿过长。可复制下方的首页草稿，编辑后发送。</p>
+      <textarea id="public-draft-recovery-text" rows="3" readonly aria-label="首页草稿"></textarea>
+      <button type="button" id="public-draft-recovery-clear">清除首页草稿</button>
+    </details>
     <form id="chat-form" method="post" action="/v1/workspaces">
       <div class="composer">
         <div id="chat-reply-preview" class="composer-reply" hidden>

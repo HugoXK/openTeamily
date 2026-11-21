@@ -9,7 +9,7 @@ import { mountWorkspaceEvents } from '../shell/workspace-events.mjs';
 import { mountChatActivity } from './activity.mjs';
 import { stageMeetingFromChat } from '../shell/meeting-link.mjs';
 import { mountPublicDraft } from './public-draft.mjs';
-import { publicAgentIntentFromHash, publicAgentContinuation } from '../shell/public-agent-link.mjs';
+import { consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening } from '../shell/public-agent-link.mjs';
 import { mountMessageUtilities, renderMessageText } from './utilities.mjs';
 export const SEARCH_JUMP_HIGHLIGHT_MS = 2400;
 import { csrfCookie, canManage, idempotencyKey, statusLabel } from '../agents/app.mjs';
@@ -3241,7 +3241,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     return open === socialOpen && workspaceId() === wid;
   }
 
-  async function openSocialConversation(conversationId, {acknowledge = true, refresh = false} = {}) {
+  async function openSocialConversation(conversationId, {acknowledge = true, refresh = false, publicStartCurrent} = {}) {
     stopReplyProgress();
     const open = ++socialOpen;
     const wid = workspaceId();
@@ -3253,7 +3253,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     currentSource = 'social';
     stopPolling();
     const result = await request('GET', `${socialBase()}/${conversationId}`).catch(() => ({status: 0, body: {}}));
-    if (open !== socialOpen || workspaceId() !== wid || currentSource !== 'social') return false;
+    if (open !== socialOpen || workspaceId() !== wid || currentSource !== 'social' || (publicStartCurrent && !publicStartCurrent())) return false;
     if (result.status !== 200) {
       if (refresh) {
         scheduleSocialPoll(currentConversation);
@@ -3263,6 +3263,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
       return false;
     }
     const updated = result.body.conversation;
+    if (publicStartCurrent && (updated?.id !== conversationId || !updated.public_agent || updated.public_agent.open === false)) return false;
     if (refresh && servedByDsbot && (!viewingSocialMessages() || readingSocialContext() || pendingSends.get(sendScope())?.active)) {
       if (viewingSocialMessages() && liveBanner && updated.activity_version !== currentConversation?.activity_version) liveBanner.hidden = false;
       scheduleSocialPoll(currentConversation);
@@ -3812,6 +3813,11 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     if (!owner || !continuation || publicAgentContinuation(publicAgentIntentFromHash(location.hash)) !== continuation) return;
     const scope = owner + continuation;
     if (launchAttempt?.scope === scope && launchAttempt.busy) return;
+    const opening = intent.draft && publicAgentOpening(document.defaultView, intent);
+    if (intent.draft && !opening) {
+      publicStartError(intent, '找不到首页草稿或草稿已过期，请返回公开主页。');
+      return;
+    }
     const quick = intent.quickStart !== undefined;
     const attempt = {scope, busy: true};
     launchAttempt = attempt;
@@ -3819,11 +3825,13 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     const retry = () => startPublicConversation(intent);
     const active = () => launchAttempt === attempt && currentUser?.id === owner
       && publicAgentContinuation(publicAgentIntentFromHash(location.hash)) === continuation;
+    const previousOpen = socialOpen;
     show('loading', quick ? '正在准备快捷开场…' : '正在打开公开智能体…');
     try {
-      const payload = quick ? {quick_start: intent.quickStart, quick_start_version: intent.version} : {};
+      const payload = opening ? {listing_id: opening.listingId}
+        : quick ? {quick_start: intent.quickStart, quick_start_version: intent.version} : {};
       const result = await request('POST', '/v1/discover/agents/' + intent.slug + '/start', payload);
-      if (!active()) return;
+      if (!active() || socialOpen !== previousOpen) return;
       const {workspace_id, conversation_id, draft_text} = result.body || {};
       if (![200, 201].includes(result.status) || !/^[A-Za-z0-9._-]{1,80}$/.test(conversation_id || '')
           || !workspaces.some(space => space.id === workspace_id) || (quick && (typeof draft_text !== 'string' || !draft_text.trim() || draft_text.length > 80))) {
@@ -3832,11 +3840,22 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         return;
       }
       workspaceSelect.value = workspace_id;
-      if (await openSocialConversation(conversation_id, {acknowledge: false})) {
+      if (await openSocialConversation(conversation_id, {acknowledge: false, publicStartCurrent: active})) {
         completed = true;
-        if (quick && launchAttempt === attempt && currentUser?.id === owner
-            && currentSource === 'social' && currentConversation?.id === conversation_id && workspaceId() === workspace_id
-            && publicDraft.fill(draft_text)) {
+        const current = launchAttempt === attempt && currentUser?.id === owner && currentSource === 'social'
+          && currentConversation?.id === conversation_id && workspaceId() === workspace_id;
+        if (!current) return;
+        if (opening) {
+          const available = publicAgentOpening(document.defaultView, intent);
+          const filled = available?.listingId === opening.listingId && publicDraft.fillOpening(available.text);
+          if (filled) {
+            consumePublicAgentOpening(document.defaultView, intent);
+            if (filled === 'filled') show('ok', '首页草稿已填入输入框，可编辑后发送。', {announceOnly: true});
+            else show('', '');
+          } else {
+            publicStartError(intent, '无法恢复首页草稿，请返回公开主页。');
+          }
+        } else if (quick && publicDraft.fill(draft_text)) {
           show('ok', '开场已填入输入框，可编辑后发送。', {announceOnly: true});
         } else {
           show('', '');

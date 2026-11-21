@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import {webcrypto} from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { mergeSessions, SEARCH_TABS, initial, chatIdentity, applyChatIdentity, composeSelectedLabel, filterMemberChoices, composeCreateEnabled, composeGroupPayload, GROUP_CREATE_INTRO, GROUP_CREATE_MODES, mount, messageSearchQuery, wrapBold, inlineBold, dueReminders, reminderDueLabel } from '../openteamily/static/chat/app.mjs';
 
-import {publicAgentIntentFromHash, publicAgentContinuation} from '../openteamily/static/shell/public-agent-link.mjs';
+import {consumePublicAgentOpening, publicAgentIntentFromHash, publicAgentContinuation, publicAgentOpening, stagePublicAgentOpening} from '../openteamily/static/shell/public-agent-link.mjs';
+import {mountPublicAgentComposer} from '../openteamily/static/shell/public-agent-composer.mjs';
 import {mountPublicDraft} from '../openteamily/static/chat/public-draft.mjs';
 
 const alice = 'a'.repeat(32);
@@ -1142,18 +1144,92 @@ test('a wide chat leaves the grid classes alone when search opens and closes', a
 });
 
 const openingVersion = 'a'.repeat(64);
+const publicListingId = 'otl_' + 'A'.repeat(26);
+const openingToken = 'c'.repeat(32);
 
-test('public agent continuation only allows a slug and an exact versioned starter', () => {
+test('public agent continuation only allows a slug, with an optional exclusive starter or opaque token', () => {
   const intent = {slug:'writing-demo', quickStart:0, version:openingVersion};
   const hash = '#public-agent=writing-demo&quick-start=0&quick-start-version=' + openingVersion;
   assert.equal(publicAgentContinuation(intent), hash);
   assert.deepEqual(publicAgentIntentFromHash(hash), intent);
   assert.deepEqual(publicAgentIntentFromHash('#public-agent=writing-demo'), {slug:'writing-demo'});
+  const staged = '#public-agent=writing-demo&draft=' + openingToken;
+  assert.equal(publicAgentContinuation({slug:'writing-demo', draft:openingToken}), staged);
+  assert.deepEqual(publicAgentIntentFromHash(staged), {slug:'writing-demo', draft:openingToken});
+  assert.equal(publicAgentContinuation({...intent, draft:openingToken}), '');
   for (const bad of [
     '#public-agent=writing-demo&quick-start=0', '#public-agent=writing-demo&quick-start-version=' + openingVersion,
     '#public-agent=%2F%2Fevil.test', '?start=1', hash + '&next=https://evil.test',
     hash + '&quick-start=2', hash.replace('=0', '=5'), hash.replace(openingVersion,'x'),
+    hash + '&draft=' + openingToken, staged + '&draft=' + openingToken,
+    staged.replace(openingToken, 'private%20draft'),
   ]) assert.equal(publicAgentIntentFromHash(bad), null, bad);
+});
+
+function publicOpeningView() {
+  const saved = new Map();
+  return {saved, view: {crypto:webcrypto, sessionStorage: {
+    get length() { return saved.size; },
+    key: index => [...saved.keys()][index],
+    getItem: key => saved.get(key) ?? null,
+    setItem: (key, value) => saved.set(key, value),
+    removeItem: key => saved.delete(key),
+  }}};
+}
+
+test('public homepage drafts expire, stay in the original tab and are consumed once', () => {
+  const {saved, view} = publicOpeningView();
+  const params = {slug:'writing-demo', listingId:publicListingId, text:'首页草稿 & <draft>？'};
+  const hash = stagePublicAgentOpening(view, params);
+  const intent = publicAgentIntentFromHash(hash);
+  assert.match(hash, /^#public-agent=writing-demo&draft=[a-f0-9]{32}$/);
+  assert.equal(publicAgentOpening(publicOpeningView().view, intent), null);
+  assert.equal(publicAgentOpening(view, {...intent, slug:'other-agent'}), null);
+  assert.equal(publicAgentOpening(view, intent).text, params.text);
+  assert.equal(publicAgentOpening(view, intent).listingId, publicListingId);
+  consumePublicAgentOpening(view, intent);
+  assert.equal(publicAgentOpening(view, intent), null);
+  const expired = publicAgentIntentFromHash(stagePublicAgentOpening(view, params));
+  const key = [...saved.keys()][0];
+  saved.set(key, JSON.stringify({...JSON.parse(saved.get(key)), expiresAt:Date.now() - 1}));
+  assert.equal(publicAgentOpening(view, expired), null);
+  assert.equal(saved.size, 0);
+  assert.equal(stagePublicAgentOpening(view, {...params, text:'a'.repeat(4001)}), '');
+});
+
+test('homepage composer only navigates with an opaque fragment and reports storage failure inline', async () => {
+  const {view} = publicOpeningView();
+  const {doc, el} = fakeChatDocument('<form id="public-agent-composer"></form><p id="public-agent-composer-status" hidden></p>');
+  const form = el('public-agent-composer');
+  const textarea = new FakeElement('textarea');
+  const button = new FakeElement('button');
+  const pageEvents = [];
+  const destinations = [];
+  form.dataset = {slug:'writing-demo', listingId:publicListingId};
+  form.querySelector = selector => selector === 'textarea[name="message"]' ? textarea : button;
+  view.addEventListener = (_name, handler) => pageEvents.push(handler);
+  view.location = {assign: path => destinations.push(path)};
+  doc.defaultView = view;
+  mountPublicAgentComposer(doc);
+  assert.equal(button.disabled, true);
+  textarea.value = '你好，整理一下这份资料';
+  await fire(textarea, 'input');
+  assert.equal(button.disabled, false);
+  let prevented = false;
+  const event = {preventDefault: () => { prevented = true; }};
+  const storage = view.sessionStorage;
+  view.sessionStorage = null;
+  await fire(form, 'submit', event);
+  assert.equal(prevented, true);
+  assert.equal(el('public-agent-composer-status').hidden, false);
+  assert.equal(destinations.length, 0);
+  view.sessionStorage = storage;
+  await fire(form, 'submit', event);
+  assert.match(destinations[0], /^\/login#public-agent=writing-demo&draft=[a-f0-9]{32}$/);
+  assert.equal(button.disabled, true);
+  pageEvents[0]({persisted:true});
+  assert.equal(button.disabled, false);
+  assert.equal(el('public-agent-composer-status').hidden, true);
 });
 
 test('a versioned public quick start opens a conversation and stages the composer without sending', async () => {
@@ -1194,6 +1270,61 @@ test('a versioned public quick start opens a conversation and stages the compose
   } finally { restore(); }
 });
 
+test('homepage draft survives start and conversation retry, then attaches once to the verified thread', async () => {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  const {view} = publicOpeningView();
+  doc.defaultView = view;
+  doc.querySelector = selector => selector === 'meta[name="openteamily-instance"]' ? {} : null;
+  const typed = '我的首页草稿\n两行都要保留。';
+  const hash = stagePublicAgentOpening(view, {slug:'writing-demo', listingId:publicListingId, text:typed});
+  const intent = publicAgentIntentFromHash(hash);
+  const conversation = {id:'otc_home_open', kind:'group', title:'文档助手', public_agent:{open:true}, members:[]};
+  const calls = [];
+  let starts = 0;
+  let details = 0;
+  const {fetcher: fallback} = chatFetcher();
+  const fetcher = async (path, options = {}) => {
+    calls.push({path, method:options.method || 'GET', body:options.body});
+    if (path === '/v1/discover/agents/writing-demo/start') {
+      assert.deepEqual(JSON.parse(options.body), {listing_id:publicListingId});
+      return ++starts === 1 ? json(503, {}) : json(200, {workspace_id:'ws-1', conversation_id:conversation.id});
+    }
+    if (path === '/v1/workspaces/ws-1/social/conversations/' + conversation.id) {
+      return ++details === 1 ? json(503, {}) : json(200, {conversation, items:[]});
+    }
+    return fallback(path);
+  };
+  const restore = installChatGlobals({narrow:true});
+  globalThis.location.hash = hash;
+  globalThis.history.replaceState = (_state, _title, href) => {
+    globalThis.location.hash = href.includes('#') ? '#' + href.split('#').pop() : '';
+  };
+  try {
+    view.sessionStorage.setItem(
+      'openteamily.public-agent-draft:' + JSON.stringify(['user-1','ws-1','social',undefined,conversation.id]),
+      '已有对话草稿',
+    );
+    await mount(doc, {fetcher});
+    assert.equal(starts, 1);
+    assert.equal(details, 0);
+    assert.equal(publicAgentOpening(view, intent).text, typed);
+    let retry = el('status').children.findLast(node => node.id === 'public-agent-retry');
+    await fire(retry, 'click');
+    assert.equal(details, 1);
+    assert.equal(publicAgentOpening(view, intent).text, typed);
+    retry = el('status').children.findLast(node => node.id === 'public-agent-retry');
+    await fire(retry, 'click');
+    await settle();
+    assert.equal(starts, 3);
+    assert.equal(details, 2);
+    assert.equal(el('chat-body').value, '已有对话草稿\n\n' + typed);
+    assert.equal(el('chat-body').focused, true);
+    assert.equal(publicAgentOpening(view, intent), null);
+    assert.equal(globalThis.location.hash, '#workspace=ws-1&social=' + conversation.id);
+    assert.ok(calls.every(({method,path,body}) => !(method === 'POST' && path.endsWith('/messages')) && !String(body).includes('首页草稿')));
+  } finally { restore(); }
+});
+
 test('public draft preserves the edited text for its owner and thread, clearing when sent', async () => {
   const saved = new Map();
   const defaultView = {sessionStorage:{getItem:key => saved.get(key) || null,
@@ -1216,6 +1347,33 @@ test('public draft preserves the edited text for its owner and thread, clearing 
   field('chat-body').value = '';
   restored.persist();
   assert.equal(saved.size,0);
+});
+
+test('an over-limit homepage draft stays recoverable without changing the owner and thread composer', async () => {
+  const {view} = publicOpeningView();
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.defaultView = view;
+  const draft = mountPublicDraft(doc);
+  draft.enter('alice/thread', true);
+  const existing = '旧'.repeat(4000);
+  const typed = '新草稿';
+  assert.equal(draft.fill(existing), true);
+  assert.equal(draft.fillOpening(typed), 'saved');
+  assert.equal(el('chat-body').value, existing);
+  assert.equal(el('public-draft-recovery').hidden, false);
+  assert.equal(el('public-draft-recovery-text').value, typed);
+  draft.enter('bob/thread', true);
+  assert.equal(el('public-draft-recovery').hidden, true);
+  assert.equal(el('public-draft-recovery-text').value, '');
+  const {doc: reloaded, el: field} = fakeChatDocument(chatHtml());
+  reloaded.defaultView = view;
+  const restored = mountPublicDraft(reloaded);
+  restored.enter('alice/thread', true);
+  assert.equal(field('chat-body').value, existing);
+  assert.equal(field('public-draft-recovery-text').value, typed);
+  await fire(field('public-draft-recovery-clear'), 'click');
+  assert.equal(field('public-draft-recovery').hidden, true);
+  assert.equal(field('chat-body').value, existing);
 });
 
 test('message search tab switches await the in-flight query and newer queries win', async () => {

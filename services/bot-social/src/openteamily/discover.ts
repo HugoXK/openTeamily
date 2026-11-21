@@ -42,6 +42,7 @@ ${WORK_COMMENTS_SCHEMA}
 export const CATEGORIES = ["content-creation", "customer-support", "data-analysis", "design", "education", "engineering", "finance", "it-security", "investment", "legal", "life", "marketing", "operations", "product", "recruiting", "research", "sales"];
 export const WORK_KINDS = ["document", "website", "whiteboard", "media", "image", "audio", "video", "slides", "dashboard", "model3d"];
 const SLUG = /^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/;
+const LISTING_ID = /^otl_[0-9ABCDEFGHJKMNPQRSTVWXYZ]{26}$/;
 const RESERVED = new Set(["settings", "team", "members", "v1", "discover", "agents", "chat", "messenger", "space", "artifacts", "memory", "automations", "runtimes", "profile", "download", "install", "shell", "share", "a", "d", "api", "login", "logout", "search", "w", "works", "feed"]);
 const REF = /^[A-Za-z0-9._:-]{1,80}$/;
 const SNAPSHOT_MAX = 200_000;
@@ -117,8 +118,9 @@ function publicPage(ot: OtContext, l: any, view: any) {
   const creator = view.creator?.display_name || view.creator?.handle || "";
   const title = String(view.title || view.slug);
   const site = l.kind === "work" && view.site_available === true;
+  const canChat = l.kind === "agent" && Boolean(l.chat_enabled);
   const policy = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';"
-    + (site ? " frame-src 'self';" : "");
+    + (site ? " frame-src 'self';" : "") + (canChat ? " script-src 'self';" : "");
   if (l.kind === "work") {
     const download = l.work_kind === "model3d" ? `<p><a href="/w/${l.slug}/file">下载 GLB</a></p>` : "";
     const comments = workCommentsPage(ot, l, null, {limit: "4"});
@@ -178,7 +180,14 @@ ${recent ? `<ul>${recent}</ul>` : ""}
 
   const {starts, version} = publishedQuickStarts(l);
   const chatHref = `/login#public-agent=${encodeURIComponent(l.slug)}`;
-  const canChat = Boolean(l.chat_enabled);
+  const composer = canChat ? `
+<form id="public-agent-composer" method="post" data-slug="${escapeHtml(l.slug)}" data-listing-id="${escapeHtml(l.id)}">
+  <label for="public-agent-message">消息</label>
+  <textarea id="public-agent-message" name="message" rows="3" maxlength="4000" placeholder="输入第一条消息" required disabled></textarea>
+  <p id="public-agent-composer-status" role="status" hidden></p>
+  <button class="chat-action" type="submit" disabled>继续对话</button>
+  <a class="chat-fallback" href="${escapeHtml(chatHref)}">开始对话</a>
+</form>` : "";
   const choiceItems = starts.map((choice, index) => {
     const content = escapeHtml(choice);
     if (!canChat) return `<li class="starter-preview">${content}</li>`;
@@ -196,6 +205,7 @@ ${recent ? `<ul>${recent}</ul>` : ""}
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="${policy}">
 <title>${escapeHtml(title)} · OpenTeamily</title>
+${canChat ? '<script type="module" src="/shell/public-agent-composer.mjs"></script>' : ""}
 <style>
 :root{color-scheme:light;--ink:#192b28;--muted:#475b57;--surface:#fff;--line:#d7e1dd;--green:#24594b}
 *{box-sizing:border-box}
@@ -218,14 +228,23 @@ h2,h3,p{margin:0}
 .conversation h2{font-size:1.25rem;line-height:1.25}
 .help{margin:.55rem 0 1rem;color:var(--muted);font-size:.91rem}
 .chat-action{display:inline-flex;align-items:center;justify-content:center;min-height:2.85rem;padding:.55rem 1.25rem;border-radius:.65rem;background:var(--green);color:#fff;font-weight:700;text-decoration:none}
-.chat-action:hover{background:#19483c}
+.chat-action:not(:disabled):hover{background:#19483c}
+#public-agent-composer{display:grid;grid-template-columns:max-content 1fr;align-items:center;gap:.65rem .9rem}
+#public-agent-composer label,#public-agent-composer textarea,#public-agent-composer-status{grid-column:1/-1}
+#public-agent-composer label{font-weight:650;font-size:.92rem}
+#public-agent-composer textarea{width:100%;min-height:6.5rem;padding:.65rem .8rem;border:1px solid #98bead;border-radius:.65rem;color:var(--ink);background:#f8faf8;font:inherit;resize:vertical}
+#public-agent-composer textarea:focus-visible,#public-agent-composer button:focus-visible{outline:2px solid #176750;outline-offset:3px}
+#public-agent-composer button{border:0;font:inherit;font-weight:700;cursor:pointer}
+#public-agent-composer button:disabled{opacity:.55;cursor:default}
+#public-agent-composer-status{font-size:.9rem;color:#914224}
+.chat-fallback{font-size:.9rem;justify-self:start;text-underline-offset:3px}
 .starters{margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--line)}
 .starters h3{margin-bottom:.7rem;font-size:.97rem}
 .starters ul{display:grid;gap:.55rem;list-style:none;margin:0;padding:0}
 .starter,.starter-preview{display:flex;justify-content:space-between;align-items:center;gap:.8rem;min-height:2.9rem;padding:.6rem .8rem;border:1px solid var(--line);border-radius:.65rem;background:#f8faf8;overflow-wrap:anywhere}
 .starter{text-decoration:none}
 .starter:hover{border-color:#98bead;background:#edf6ed}
-@media(max-width:44rem){.agent-home{grid-template-columns:minmax(0,1fr);padding:1.65rem 1rem 2rem;gap:1.45rem}.topbar{padding-inline:1rem}.avatar{width:3rem;height:3rem;border-radius:.9rem;font-size:1.35rem}.conversation{padding:1.15rem}.chat-action{width:100%}}
+@media(max-width:44rem){.agent-home{grid-template-columns:minmax(0,1fr);padding:1.65rem 1rem 2rem;gap:1.45rem}.topbar{padding-inline:1rem}.avatar{width:3rem;height:3rem;border-radius:.9rem;font-size:1.35rem}.conversation{padding:1.15rem}#public-agent-composer{grid-template-columns:minmax(0,1fr)}.chat-action{width:100%}}
 </style>
 </head><body>
 <header class="site-header"><div class="topbar">
@@ -241,8 +260,8 @@ ${view.summary ? `<p class="description">${escapeHtml(view.summary)}</p>` : ""}
 </section>
 <section class="conversation" aria-labelledby="conversation-title">
 <h2 id="conversation-title">网页对话</h2>
-<p class="help">${canChat ? "登录后可以聊天，发布者可以查看对话。快捷开场会填入输入框。" : "该智能体暂未开放访客聊天。"}</p>
-${canChat ? `<a class="chat-action" href="${escapeHtml(chatHref)}">开始对话</a>` : ""}
+<p class="help">${canChat ? "登录后确认发送。发送的消息会与智能体发布者共享。" : "该智能体暂未开放访客聊天。"}</p>
+${composer}
 ${startList}
 </section>
 </main>
@@ -617,25 +636,33 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
   // attached; the creator's own DS-Bot answers through its agent inbox.
   app.post("/v1/ot/discover/:slug/start", async (req, reply) => {
     const me = ot.me(req);
-    const input = body(req);
+    const input = (req.body === undefined ? {} : req.body) as Record<string, unknown>;
     assert(input && typeof input === "object" && !Array.isArray(input), 400, "invalid_request", "Invalid public chat request");
-    const quick = Object.keys(input).length !== 0;
-    if (quick) {
-      assert(Object.keys(input).length === 2 && Number.isInteger(input.quick_start)
-        && input.quick_start >= 0 && input.quick_start <= 4
-        && typeof input.quick_start_version === "string" && /^[a-f0-9]{64}$/.test(input.quick_start_version),
+    const fields = Object.keys(input);
+    const selected = Object.hasOwn(input, "listing_id");
+    const listingId = input.listing_id;
+    let quickStart: { index: number; version: string } | undefined;
+    if (selected) {
+      assert(fields.length === 1 && typeof listingId === "string" && LISTING_ID.test(listingId),
+        400, "invalid_request", "无效的公开智能体。");
+    } else if (fields.length) {
+      const { quick_start: index, quick_start_version: version } = input;
+      assert(fields.length === 2 && typeof index === "number" && Number.isInteger(index) && index >= 0 && index <= 4
+        && typeof version === "string" && /^[a-f0-9]{64}$/.test(version),
       400, "invalid_request", "请选择有效的快捷开场。");
+      quickStart = { index, version };
     }
     const result = ot.tx(() => {
       const l = listedBySlug(ot, params(req).slug);
       assert(l.kind === "agent", 404, "listing_not_found", "no such listing");
+      assert(!selected || l.id === listingId, 409, "public_agent_changed", "该公开页面已更新，请返回主页重新选择智能体。");
       assert(l.chat_enabled, 409, "public_chat_closed", "该智能体未开放访客聊天。");
       assert(l.owner_id !== me.ownerId, 400, "invalid_request", "this is your own agent");
       let draftText: string | undefined;
-      if (quick) {
+      if (quickStart) {
         const {starts, version} = publishedQuickStarts(l);
-        draftText = starts[input.quick_start];
-        assert(draftText && input.quick_start_version === version, 409, "quick_start_changed", "快捷开场已更新，请返回公开主页重新选择。");
+        draftText = starts[quickStart.index];
+        assert(draftText && quickStart.version === version, 409, "quick_start_changed", "快捷开场已更新，请返回公开主页重新选择。");
       }
       const key = `agent:${l.id}:${me.ownerId}`;
       const existing = ot.get<{id: string; created_by: string}>("SELECT id, created_by FROM ot_conversations WHERE dm_key = ?", key);
@@ -650,7 +677,7 @@ export function registerDiscover(app: FastifyInstance, ot: OtContext) {
         }
         ot.run("INSERT INTO ot_conversation_agents(conversation_id, agent_ref, owner_id, name, auto_reply, created_at) VALUES (?,?,?,?,1,?)",
           id, l.ref, l.owner_id, title, now);
-        if (!quick) ot.notify(l.owner_id, "discover.conversation_started", {
+        if (!quickStart && !selected) ot.notify(l.owner_id, "discover.conversation_started", {
           listing_id: l.id, slug: l.slug, conversation_id: id, visitor: ot.profileView(me.ownerId),
         });
       } else {

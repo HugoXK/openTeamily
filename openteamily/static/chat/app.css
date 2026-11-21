@@ -2246,6 +2246,18 @@ html[data-theme-resolved="dark"] #announcement-save:hover { background: #5943b3;
   color: var(--ot-muted);
 }
 
+#public-draft-recovery {
+  order: 56;
+  max-height: 30vh;
+  overflow: auto;
+  padding: .375rem 1rem;
+  font-size: .8125rem;
+}
+
+#public-draft-recovery > summary { cursor: pointer; }
+#public-draft-recovery > p { margin: .375rem 0; }
+#public-draft-recovery > textarea { display: block; width: 100%; margin-bottom: .375rem; resize: vertical; }
+
 .message-quote,
 .composer-reply {
   min-width: 0;

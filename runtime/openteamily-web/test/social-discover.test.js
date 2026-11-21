@@ -115,6 +115,40 @@ test('catalog publication is explicit and remix copies the previewed release in 
   assert.equal(created.length, 1)
 })
 
+test('native public agent starts pass only the selected listing identity and retain stale-listing errors', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ot-cd-public-composer-'))
+  const credentialsPath = join(dir, 'connector.json')
+  writeFileSync(credentialsPath, JSON.stringify({token:'ot-fake-token',server:SERVER}), {mode:0o600})
+  const id = 'otl_' + 'A'.repeat(26)
+  const stale = 'otl_' + 'B'.repeat(26)
+  const calls = []
+  setSharedBotSocial(createBotSocial({server:SERVER,credentialsPath,fetch:async (url, init) => {
+    const input = JSON.parse(init.body)
+    assert.equal(url, SERVER + '/v1/ot/discover/draft-agent/start')
+    calls.push(input)
+    if (input.listing_id === stale) {
+      return Response.json({error:{code:'public_agent_changed',message:'Listing changed'}}, {status:409})
+    }
+    return Response.json({conversation_id:'otc_current',created:true})
+  }}))
+  const workspace = 'a'.repeat(32)
+  const native = discover({dataDir:dir,async call(endpoint) {
+    assert.equal(endpoint, 'agents/personal-binding')
+    return {workspace_id:workspace}
+  }}).endpoints.v1
+  const start = body => native({method:'POST',path:'/v1/discover/agents/draft-agent/start',body})
+  assert.equal((await start({listing_id:id,message:'private draft'})).status, 400)
+  assert.equal((await start({listing_id:id,quick_start:0,quick_start_version:'a'.repeat(64)})).status, 400)
+  assert.equal((await start({listing_id:'otl_fake'})).status, 400)
+  const opened = await start({listing_id:id})
+  assert.equal(opened.status, 200)
+  assert.deepEqual(opened.body, {conversation_id:'otc_current',created:true,workspace_id:workspace})
+  const moved = await start({listing_id:stale})
+  assert.equal(moved.status, 409)
+  assert.equal(moved.body.error.code, 'public_agent_changed')
+  assert.deepEqual(calls, [{listing_id:id},{listing_id:stale}])
+})
+
 test('native Discover forwards popularity cursors separately and publishes only the selected saved 3D revision', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ot-cd-models-'))
   const credentialsPath = join(dir, 'connector.json')
