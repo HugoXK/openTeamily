@@ -263,6 +263,13 @@ class FakeElement {
     this.children.splice(this.children.indexOf(before), 0, node);
     return node;
   }
+  after(...nodes) {
+    const parent = this.parent;
+    if (!parent) return;
+    const next = parent.children[parent.children.indexOf(this) + 1];
+    if (next) for (const node of nodes) parent.insertBefore(node, next);
+    else parent.append(...nodes);
+  }
   replaceChildren(...nodes) {
     for (const child of this.children) child.parent = null;
     this.children = [];
@@ -2778,6 +2785,317 @@ test('initial SSE cannot supersede an uncommitted session directory and lose a c
   await settle();assert.match(el('chat-title').textContent,/Deep link agent/);assert.ok(el('message-list').children.length>0,'initial snapshot refresh retains the deep-linked history');
  }finally{if(saved===undefined)delete globalThis.EventSource;else globalThis.EventSource=saved;restore();}
 });
+
+const linkWork = '1'.repeat(32);
+const linkTeam = '2'.repeat(32);
+const linkUnavailable = '3'.repeat(32);
+const linkAgent = '4'.repeat(32);
+const linkThread = '5'.repeat(32);
+const linkAgentOlder = '6'.repeat(32);
+const linkAgentLatest = '7'.repeat(32);
+const linkSocial = 'otc_' + '8'.repeat(26);
+const linkSocialOlder = 'otm_' + '9'.repeat(26);
+const linkSocialLatest = 'otm_' + 'A'.repeat(26);
+const linkNativeDirectory = '/agents?limit=100&include=conversations';
+const linkSocialDirectory = '/social/conversations?limit=100';
+const linkBase = workspace => '/v1/workspaces/' + workspace;
+const linkNativePath = `/agents/${linkAgent}/conversations/${linkThread}`;
+const linkSocialPath = '/social/conversations/' + linkSocial;
+const linkMember = {user_id: alice, username: 'alice'};
+
+function linkedChatFixture(hash, {visibility = 'visible'} = {}) {
+  const {doc, el} = fakeChatDocument(chatHtml());
+  doc.querySelector = selector => selector === 'meta[name="openteamily-instance"]' ? {} : null;
+  doc.visibilityState = visibility;
+  const restore = installChatGlobals();
+  const browser = {handlers: {}};
+  globalThis.addEventListener = (type, handler) => (browser.handlers[type] ||= []).push(handler);
+  globalThis.location.hash = hash;
+  globalThis.history.replaceState = (_state, _unused, url) => {
+    globalThis.location.hash = new URL(url, 'https://fixture.invalid').hash;
+  };
+  const scrolls = [];
+  const element = doc.createElement;
+  doc.createElement = (tag) => {
+    const node = element(tag);
+    node.scrollIntoView = (options) => scrolls.push({id: node.dataset.messageId, options});
+    return node;
+  };
+  const calls = [];
+  const routes = new Map();
+  const agent = {id: linkAgent, name: 'Linked native agent', workspace_id: linkWork, served_by: 'ds-bot'};
+  const nativeThread = {id: linkThread, agent_id: linkAgent, workspace_id: linkWork, title: 'Native history',
+    unread_count: 2, updated: 5};
+  const nativeRows = [
+    {id: linkAgentOlder, role: 'user', body: 'Earlier native message', status: 'succeeded', created: 5},
+    {id: linkAgentLatest, role: 'assistant', body: 'Latest visible native reply', status: 'succeeded', created: 10},
+  ];
+  const socialThread = (workspace) => ({id: linkSocial, workspace_id: workspace, kind: 'group', title: 'Linked group',
+    unread_count: 3, updated: 30, last_seq: 8, members: [linkMember]});
+  const socialRows = [{id: linkSocialLatest, conversation_id: linkSocial, user_id: bob, body: 'Latest group reply', seq: 8, created: 10}];
+  const socialOlder = {id: linkSocialOlder, conversation_id: linkSocial, user_id: bob, body: 'Earlier group reply', seq: 2, created: 5};
+  const fetcher = async (path, options = {}) => {
+    const call = {path, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined};
+    calls.push(call);
+    const override = routes.get(path);
+    if (override) return override(call);
+    if (path === '/v1/auth/session') return json(200, {user: {id: alice, username: 'alice'}});
+    if (path === '/v1/personal-agent') return json(200, {personal_agent: {workspace: {id: linkWork}, agent}});
+    if (path === '/v1/settings') return json(200, {settings: {values: {}}});
+    if (path === '/v1/onboarding') return json(200, {onboarding: {completed: true}});
+    if (path === '/v1/workspaces?limit=100') return json(200, {items: [
+      {id: linkWork, name: 'Personal', kind: 'personal'}, {id: linkTeam, name: 'Team', kind: 'team'},
+    ]});
+    for (const workspace of [linkWork, linkTeam]) {
+      const base = linkBase(workspace);
+      if (path === base + linkNativeDirectory) return json(200,
+        workspace === linkWork ? {items: [agent], conversations: [nativeThread]} : {items: [], conversations: []});
+      if (path === base + linkSocialDirectory) return json(200, {items: [socialThread(workspace)]});
+      if (path === base + linkSocialPath) return json(200, {conversation: socialThread(workspace), items: socialRows, cursor: 8});
+      if (path.startsWith(base + linkSocialPath + '/messages?around=')) {
+        return json(200, {items: [socialOlder], cursor: null, has_newer: true});
+      }
+      if (path === base + linkSocialPath + '/read') return json(200, {unread_count: 0});
+      if (path.startsWith(base + '/notifications') || path === base + '/members' || path.startsWith(base + '/artifacts?')) {
+        return json(200, {items: []});
+      }
+    }
+    if (path === linkBase(linkWork) + linkNativePath) return json(200, {agent, conversation: nativeThread, items: nativeRows});
+    if (path === linkBase(linkWork) + linkNativePath + '/read') return json(200, {unread_count: 0});
+    return json(404, {error: {code: 'not_found'}});
+  };
+  const navigate = (nextHash) => {
+    globalThis.location.hash = nextHash;
+    return fire(browser, 'hashchange');
+  };
+  const messages = () => el('message-list').children.map(node => node.dataset.messageId);
+  const selected = () => sessionRows(el).find(row => row?.getAttribute('aria-current') === 'true')?.dataset.conversation;
+  return {doc, el, fetcher, routes, calls, scrolls, navigate, messages, selected, agent, nativeThread, nativeRows, restore};
+}
+
+test('a linked native history and its message jump render before the unrelated Social directory returns', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const scope = linkBase(linkWork);
+  const hash = `#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}&message=${linkAgentOlder}`;
+  const fixture = linkedChatFixture(hash);
+  const directory = Promise.withResolvers();
+  const receipt = Promise.withResolvers();
+  const onboarding = Promise.withResolvers();
+  const settings = Promise.withResolvers();
+  fixture.routes.set(scope + linkSocialDirectory, () => directory.promise);
+  fixture.routes.set(scope + linkNativePath + '/read', () => receipt.promise);
+  fixture.routes.set('/v1/onboarding', () => onboarding.promise);
+  fixture.routes.set('/v1/settings', () => settings.promise);
+  try {
+    const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    assert.ok(fixture.calls.some(call => call.path === '/v1/onboarding'));
+    assert.ok(fixture.calls.some(call => call.path === '/v1/settings'));
+    assert.equal(fixture.calls.some(call => call.path === scope + linkNativePath), false, 'settings still load before detail');
+    settings.resolve(json(200, {settings: {values: {send_shortcut: 'mod_enter'}}}));
+    await settle();
+    assert.ok(fixture.calls.some(call => call.path === scope + linkSocialDirectory), 'the Social directory really is pending');
+    const personal = fixture.calls.findIndex(call => call.path === '/v1/personal-agent' && call.method === 'POST');
+    const workspaces = fixture.calls.findIndex(call => call.path === '/v1/workspaces?limit=100');
+    const detail = fixture.calls.findIndex(call => call.path === scope + linkNativePath);
+    assert.ok(personal >= 0 && personal < workspaces && workspaces < detail, 'workspace authorization precedes detail');
+    assert.equal(fixture.el('chat-body').dataset.sendShortcut, 'mod_enter');
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.equal(fixture.el('chat-title').textContent, fixture.agent.name);
+    assert.equal(fixture.el('message-list').children[0].dataset.searchJump, 'true');
+    assert.deepEqual(fixture.scrolls.map(row => row.id), [linkAgentOlder]);
+    assert.equal(globalThis.location.hash, hash);
+    assert.deepEqual(fixture.calls.filter(call => call.path.endsWith('/read')).map(call => call.body),
+      [{message_id: linkAgentLatest}], 'the native read receipt stops at the last rendered assistant reply');
+    receipt.resolve(json(200, {unread_count: 0}));
+    directory.resolve(json(200, {items: []}));
+    await loading;
+    await settle();
+    assert.equal(fixture.selected(), linkThread);
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkNativePath).length, 1);
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.equal(fixture.el('onboarding-banner').hidden, true);
+    onboarding.resolve(json(200, {onboarding: {completed: false}}));
+    await settle();
+    assert.equal(fixture.el('onboarding-banner').hidden, false);
+  } finally {
+    settings.resolve(json(200, {settings: {values: {}}}));
+    onboarding.resolve(json(200, {onboarding: {completed: true}}));
+    receipt.resolve(json(200, {unread_count: 0}));
+    directory.resolve(json(200, {items: []}));
+    fixture.restore();
+  }
+});
+
+test('a linked Social history reaches its older target without waiting for the native directory or marking unread', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  const scope = linkBase(linkWork);
+  const hash = `#workspace=${linkWork}&social=${linkSocial}&message=${linkSocialOlder}`;
+  const fixture = linkedChatFixture(hash);
+  const directory = Promise.withResolvers();
+  fixture.routes.set(scope + linkNativeDirectory, () => directory.promise);
+  try {
+    const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    assert.ok(fixture.calls.some(call => call.path === scope + linkNativeDirectory), 'the native directory really is pending');
+    assert.equal(fixture.el('chat-title').textContent, 'Linked group');
+    assert.deepEqual(fixture.messages(), [linkSocialOlder]);
+    assert.equal(fixture.el('message-list').children[0].dataset.searchJump, 'true');
+    assert.deepEqual(fixture.scrolls.map(row => row.id), [linkSocialOlder]);
+    assert.equal(globalThis.location.hash, hash);
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath + '/messages?around=' + linkSocialOlder + '&limit=50').length, 1);
+    assert.equal(fixture.calls.some(call => call.path.endsWith('/read')), false);
+    directory.resolve(json(200, {items: [], conversations: []}));
+    await loading;
+    await settle();
+    assert.equal(fixture.selected(), linkSocial);
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath).length, 1);
+    assert.equal(fixture.calls.some(call => call.path.endsWith('/read')), false);
+    assert.deepEqual(fixture.messages(), [linkSocialOlder]);
+  } finally {
+    directory.resolve(json(200, {items: [], conversations: []}));
+    fixture.restore();
+  }
+});
+
+for (const newer of [false, true]) {
+  test(`a late directory snapshot ${newer ? 'retains unread newer than' : 'does not restore unread covered by'} the linked Social read`, async () => {
+    const scope = linkBase(linkWork);
+    const fixture = linkedChatFixture(`#workspace=${linkWork}&social=${linkSocial}`);
+    const directory = Promise.withResolvers();
+    fixture.routes.set(scope + linkNativeDirectory, () => directory.promise);
+    if (newer) fixture.routes.set(scope + linkSocialDirectory, () => json(200, {items: [
+      {id: linkSocial, kind: 'group', title: 'Linked group', last_seq: 9, updated: 31, unread_count: 1, members: [linkMember]},
+    ]}));
+    try {
+      const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
+      await settle();
+      assert.deepEqual(fixture.messages(), [linkSocialLatest]);
+      assert.deepEqual(fixture.calls.find(call => call.path === scope + linkSocialPath + '/read')?.body, {seq: 8});
+      directory.resolve(json(200, {items: [], conversations: []}));
+      await loading;
+      await settle();
+      const linked = sessionRows(fixture.el).find(row => row?.dataset.conversation === linkSocial);
+      assert.ok(linked);
+      assert.equal(linked.getAttribute('aria-current'), 'true');
+      const badge = descendants(linked).find(node => node.classList.contains('unread-badge'));
+      assert.equal(badge?.textContent, newer ? '1' : undefined);
+    } finally {
+      directory.resolve(json(200, {items: [], conversations: []}));
+      fixture.restore();
+    }
+  });
+}
+
+test('a late exact native history cannot overwrite a different workspace and Social target selected by hashchange', async () => {
+  const old = linkBase(linkWork) + linkNativePath;
+  const current = linkBase(linkTeam) + linkSocialPath;
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  const wait = Promise.withResolvers();
+  const oldOnboarding = Promise.withResolvers();
+  let onboardingRequests = 0;
+  fixture.routes.set(old, () => wait.promise);
+  fixture.routes.set('/v1/onboarding', () => ++onboardingRequests === 1
+    ? oldOnboarding.promise : json(200, {onboarding: {completed: true}}));
+  try {
+    const first = mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    assert.equal(fixture.calls.filter(call => call.path === old).length, 1);
+    const newHash = `#workspace=${linkTeam}&social=${linkSocial}`;
+    await fixture.navigate(newHash);
+    await settle();
+    assert.equal(fixture.el('workspace').value, linkTeam);
+    assert.equal(fixture.calls.filter(call => call.path === current).length, 1);
+    assert.equal(fixture.el('chat-title').textContent, 'Linked group');
+    assert.deepEqual(fixture.messages(), [linkSocialLatest]);
+    assert.deepEqual(fixture.calls.find(call => call.path === current + '/read')?.body, {seq: 8});
+    oldOnboarding.resolve(json(200, {onboarding: {completed: false}}));
+    wait.resolve(json(200, {agent: fixture.agent, conversation: fixture.nativeThread, items: fixture.nativeRows}));
+    await first;
+    await settle();
+    assert.equal(globalThis.location.hash, newHash);
+    assert.equal(fixture.el('chat-title').textContent, 'Linked group');
+    assert.deepEqual(fixture.messages(), [linkSocialLatest]);
+    assert.equal(fixture.selected(), linkSocial);
+    assert.equal(fixture.el('onboarding-banner').hidden, true);
+    assert.equal(fixture.calls.some(call => call.path === old + '/read'), false);
+  } finally {
+    oldOnboarding.resolve(json(200, {onboarding: {completed: false}}));
+    wait.resolve(json(404, {error: {code: 'not_found'}}));
+    fixture.restore();
+  }
+});
+
+for (const target of ['bare agent', 'default']) {
+  test(`startup still waits for the directory before selecting a ${target} conversation`, async () => {
+    const scope = linkBase(linkWork);
+    const hash = `#workspace=${linkWork}` + (target === 'bare agent' ? `&agent=${linkAgent}` : '');
+    const fixture = linkedChatFixture(hash);
+    const directory = Promise.withResolvers();
+    fixture.routes.set(scope + linkNativeDirectory, () => directory.promise);
+    try {
+      const loading = mount(fixture.doc, {fetcher: fixture.fetcher});
+      await settle();
+      assert.ok(fixture.calls.some(call => call.path === scope + linkNativeDirectory));
+      assert.equal(fixture.calls.some(call => [scope + linkNativePath, scope + linkSocialPath].includes(call.path)), false);
+      directory.resolve(json(200, {items: [fixture.agent], conversations: [fixture.nativeThread]}));
+      await loading;
+      await settle();
+      assert.equal(fixture.selected(), target === 'bare agent' ? linkThread : linkSocial);
+      assert.equal(fixture.calls.filter(call => call.path === scope + linkNativePath).length, target === 'bare agent' ? 1 : 0);
+      assert.equal(fixture.calls.filter(call => call.path === scope + linkSocialPath).length, target === 'default' ? 1 : 0);
+    } finally {
+      directory.resolve(json(200, {items: [], conversations: []}));
+      fixture.restore();
+    }
+  });
+}
+
+test('a failed Social directory does not hide a successful native deep link in a hidden tab', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`, {visibility: 'hidden'});
+  fixture.routes.set(scope + linkSocialDirectory, () => json(503, {error: {code: 'unavailable'}}));
+  try {
+    await mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    assert.deepEqual(fixture.messages(), [linkAgentOlder, linkAgentLatest]);
+    assert.equal(fixture.selected(), linkThread);
+    assert.equal(fixture.el('conversations-status').hidden, false);
+    assert.match(fixture.el('conversations-status').textContent, /部分对话加载失败/);
+    assert.equal(fixture.calls.some(call => call.path === scope + linkNativePath + '/read'), false);
+  } finally { fixture.restore(); }
+});
+
+test('an unavailable direct target keeps its own error and the directory without opening another thread', async () => {
+  const scope = linkBase(linkWork);
+  const fixture = linkedChatFixture(`#workspace=${linkWork}&agent=${linkAgent}&conversation=${linkThread}`);
+  fixture.routes.set(scope + linkNativePath, () => json(404, {error: {code: 'not_found', message: '原会话已移除'}}));
+  try {
+    await mount(fixture.doc, {fetcher: fixture.fetcher});
+    await settle();
+    assert.equal(fixture.calls.filter(call => call.path === scope + linkNativePath).length, 1);
+    assert.equal(fixture.calls.some(call => call.path === scope + linkSocialPath), false);
+    assert.deepEqual(fixture.messages(), []);
+    assert.ok(sessionRows(fixture.el).some(row => row?.dataset.conversation === linkSocial));
+    assert.match(fixture.el('status').textContent, /原会话已移除/);
+  } finally { fixture.restore(); }
+});
+
+for (const path of [linkNativePath, linkSocialPath]) {
+  test(`an inactive workspace cannot dispatch a linked ${path === linkNativePath ? 'native' : 'Social'} target`, async () => {
+    const target = path === linkNativePath ? `agent=${linkAgent}&conversation=${linkThread}` : `social=${linkSocial}`;
+    const fixture = linkedChatFixture(`#workspace=${linkUnavailable}&${target}`);
+    try {
+      await mount(fixture.doc, {fetcher: fixture.fetcher});
+      await settle();
+      assert.equal(fixture.calls.some(call => call.path.endsWith(path)), false,
+        'the inactive link cannot be opened, including against an active workspace picked as fallback');
+      assert.equal(fixture.calls.some(call => call.path.startsWith(linkBase(linkUnavailable) + '/')), false);
+      assert.deepEqual(fixture.messages(), []);
+      assert.match(fixture.el('status').textContent, /无法访问此会话所在的工作区/);
+    } finally { fixture.restore(); }
+  });
+}
 
 const reminderRow = (id, overrides = {}) => ({
   id, title: '提醒：看这条消息', template_id: 'custom', scope: 'once', enabled: true,

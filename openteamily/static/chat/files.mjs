@@ -117,6 +117,7 @@ function uploadForm(view, url, headers, body, onProgress, timeout = 180_000) {
 export function sendPrivateAttachmentMessage(view, path, message, files, headers, onProgress) {
   const form = new view.FormData();
   form.set('body', message.body || '');
+  if (message.chat_language) form.set('chat_language', message.chat_language);
   if (message.reply_language) form.set('reply_language', message.reply_language);
   for (const file of files) form.append('file',file);
   return uploadForm(view,path,headers,form,onProgress,240_000);

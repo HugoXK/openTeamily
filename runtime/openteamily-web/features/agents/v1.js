@@ -4,6 +4,7 @@
 import { FeatureError } from '../../featurekit/http.js'
 import { PRIVATE_FILE_BYTES, PRIVATE_FILE_COUNT } from './files.js'
 import { createV1Endpoint } from '../../featurekit/v1.js'
+import { CHAT_LANGUAGE_NAMES } from '../settings/settings.js'
 
 const HEX = '([0-9a-f]{32})'
 
@@ -93,8 +94,11 @@ export function agentsV1({ endpoints, log }) {
     { pattern: new RegExp(`^/v1/workspaces/${HEX}/agents/${HEX}/conversations/${HEX}/messages$`), handle: wrap(async (req, workspaceId, id, conversationId) => {
       if (req.method !== 'POST') throw new FeatureError(400, 'invalid', 'Invalid conversation request')
       const body = await req.json(Math.ceil(PRIVATE_FILE_BYTES / 3) * 4 + PRIVATE_FILE_COUNT * 4 + 192*1024)
+      const code = body.chat_language
+      const replyLanguage = typeof code === 'string' && Object.hasOwn(CHAT_LANGUAGE_NAMES, code)
+        ? CHAT_LANGUAGE_NAMES[code] : body.reply_language
       const payload = {workspace_id:workspaceId,id,agent_id:id,conversation_id:conversationId,
-        text:body.body ?? body.text,reply_language:body.reply_language,attachments:body.attachments,
+        text:body.body ?? body.text,reply_language:replyLanguage,attachments:body.attachments,
         idempotency_key:req.headers.get('idempotency-key'),return_failed:true}
       const project = result => ({message:publicMessage(result.message, workspaceId, id),
         reply:publicMessage(result.reply, workspaceId, id)})
