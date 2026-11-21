@@ -564,7 +564,7 @@ async function mountSettingsPage({secrets, prefs, prefsFail} = {}) {
   }
   return {
     doc, calls, items, prefs: storedPrefs,
-    notify: ['mentions', 'task_completion', 'artifacts'].map(key => [key, doc.getElementById(
+    notify: ['mentions', 'artifacts'].map(key => [key, doc.getElementById(
       'notify-' + key.replace('_', '-'))]),
     notifyState: doc.getElementById('notification-prefs-state'),
     list: doc.getElementById('skill-secret-list'),
@@ -781,7 +781,7 @@ test('the notification switches load the server preference and save one change',
   const {doc, calls, prefs, notify, notifyState} =
     await mountSettingsPage({prefs: {mentions: true, task_completion: false, artifacts: true}});
   assert.deepEqual(notify.map(([key, input]) => [key, input.checked]),
-                   [['mentions', true], ['task_completion', false], ['artifacts', true]]);
+                   [['mentions', true], ['artifacts', true]]);
   const mentions = notify[0][1];
   mentions.checked = false;
   doc.fire('change', {target: mentions});
@@ -796,7 +796,7 @@ test('the notification switches load the server preference and save one change',
 test('a failed notification save puts the switch back and shows the server reason', async () => {
   const {doc, prefs, notify, notifyState} =
     await mountSettingsPage({prefs: {mentions: true, task_completion: true, artifacts: true}, prefsFail: true});
-  const artifacts = notify[2][1];
+  const artifacts = notify[1][1];
   assert.equal(artifacts.checked, true);
   artifacts.checked = false;
   doc.fire('change', {target: artifacts});

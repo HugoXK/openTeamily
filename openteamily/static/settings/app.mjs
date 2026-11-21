@@ -597,12 +597,12 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
     await syncComposio();
   }
 
-  // One switch per notification category. The server enforces the choice: a
-  // failed save puts the switch back and shows the reason the server returned,
-  // and a category that is off produces no item on the next read.
+  // One switch per notification category the page exposes. The inbox read path
+  // honours the stored choice: a failed save puts the switch back and shows the
+  // reason the server returned, and a category that is off produces no row on
+  // the next read. 任务完成提醒 stays on the general settings document above.
   const NOTIFY_PREFS = [
     ['mentions', 'notify-mentions'],
-    ['task_completion', 'notify-task-completion'],
     ['artifacts', 'notify-artifacts'],
   ];
 
@@ -634,7 +634,7 @@ export function mount(document, {fetcher = globalThis.fetch.bind(globalThis)} = 
         }
         const stored = (saved.body.prefs || {})[category];
         input.checked = stored !== false;
-        if (state) state.textContent = input.checked ? '这类通知已开启。' : '这类通知已关闭，服务端不再产生这类通知。';
+        if (state) state.textContent = input.checked ? '这类通知已开启。' : '这类通知已关闭，不再出现在列表与未读数里。';
       };
     }
   }
